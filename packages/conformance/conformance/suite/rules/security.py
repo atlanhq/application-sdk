@@ -63,11 +63,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "are committed in plaintext and cannot be rotated or scoped per deployment.\n"
             "\n"
             "Before choosing a fix, check whether the literal is an actual credential or a\n"
-            'non-secret absence sentinel (for example, ``"None"``). If you confirm the\n'
-            "consumer treats the sentinel and its replacement as the same absent state, use\n"
-            "Python ``None`` or the field's declared empty default; preserve that behavior and\n"
-            "do not resolve a secret that does not exist. For an actual credential, resolve\n"
-            "it at runtime via ``context.resolve_credential(ref)`` / a ``CredentialRef``\n"
+            'non-secret absence sentinel (for example, ``"None"``). If you confirm every\n'
+            "reader of the value treats the sentinel and its replacement as the same absent\n"
+            "state, use Python ``None`` or the field's declared empty default; preserve that\n"
+            "behavior and do not resolve a secret that does not exist. For an actual\n"
+            "credential, resolve it at runtime via ``context.resolve_credential(ref)`` /\n"
+            "a ``CredentialRef``\n"
             "(``application_sdk.credentials``) or the ``SecretStore`` protocol\n"
             "(``application_sdk.infrastructure.secrets``).\n"
             "\n"

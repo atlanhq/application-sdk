@@ -122,12 +122,13 @@ above.  `classification` is always `"judgment"` for both S-rules.  Read the full
 function/class context around `finding.line` before drafting.
 
 - **S001 HardcodedCredential** — a string literal is stored as a credential-named
-  variable, keyword argument, or dict value.  Read the full consumer context and
+  variable, keyword argument, or dict value.  Trace every reader of the value and
   identify what the literal means before choosing a fix:
 
   1. **Absence sentinel** — if the literal is a non-secret marker for no credential
-     (for example, `"None"`), confirm that the consumer treats both the marker and
-     Python `None` (or the field's declared empty default) as the same absent state.
+     (for example, `"None"`), confirm that every reader of the value — not just the
+     nearest one — treats both the marker and Python `None` (or the field's declared
+     empty default) as the same absent state.
      Replace the marker with that native absence value/default, preserving behavior;
      do not resolve a secret that does not exist.  Return `outcome = "fix"`.
 
