@@ -1687,17 +1687,21 @@ class TestPreflightVerifyStorageWiring:
             create_worker(_make_mock_client())
         return seen
 
-    def test_default_reaches_the_gate_as_on(self, monkeypatch) -> None:
-        class _PlainApp(App):
+    def test_declared_true_reaches_the_gate(self, monkeypatch) -> None:
+        """The ClassVar is the opt-in: declaring it must switch the gate on."""
+
+        class _VerifyingApp(App):
+            preflight_verify_storage = True
+
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
         assert self._captured_verify_storage(monkeypatch) == [True]
 
-    def test_explicit_false_reaches_the_gate_as_off(self, monkeypatch) -> None:
-        class _OptedOutApp(App):
-            preflight_verify_storage = False
+    def test_default_is_off(self, monkeypatch) -> None:
+        """An app that declares nothing must not be probing storage."""
 
+        class _PlainApp(App):
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
@@ -1713,30 +1717,19 @@ class TestPreflightVerifyStorageWiring:
         """
         assert _resolve_verify_storage(None) is False
 
-    def test_resolver_defaults_to_on_for_an_app_with_no_override(self) -> None:
-        class _Plain(App):
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert _resolve_verify_storage(_Plain) is True
-
-    def test_resolver_honours_explicit_false(self) -> None:
-        class _Off(App):
-            preflight_verify_storage = False
-
-            async def run(self, input: _WorkerInput) -> _WorkerOutput:
-                return _WorkerOutput()
-
-        assert _resolve_verify_storage(_Off) is False
-
-    def test_resolver_honours_explicit_true(self) -> None:
+    def test_resolver_reads_the_declared_classvar(self) -> None:
         class _On(App):
             preflight_verify_storage = True
 
             async def run(self, input: _WorkerInput) -> _WorkerOutput:
                 return _WorkerOutput()
 
+        class _Off(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
         assert _resolve_verify_storage(_On) is True
+        assert _resolve_verify_storage(_Off) is False
 
 
 class _GateRoutedInput:

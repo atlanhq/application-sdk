@@ -1050,40 +1050,40 @@ class App(ABC):
     :attr:`preflight_gate_mode` decides that one. Assign it without an
     annotation (``preflight_warmup_mode = PreflightGateMode.HARD``)."""
 
-    preflight_verify_storage: ClassVar[bool] = True
+    preflight_verify_storage: ClassVar[bool] = False
     """Also verify the run's artifact object store(s) in the preflight gate.
 
-    ``True`` (default) probes every store the run will upload artifacts to — a
-    write, a HEAD, and a **multipart-forced** write — for every app, in-cluster
-    or SDR. ``False`` opts out, e.g. for a small-artifact-only workload that
-    never touches multipart.
+    ``False`` (default) keeps the gate source-only. ``True`` opts in to probing
+    every store the run will upload artifacts to — a write, a HEAD, and a
+    **multipart-forced** write. The multipart probe matters because uploads
+    above the writer's part size (8 MiB default,
+    ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``) go out as multipart, and a store
+    can accept plain PUTs while rejecting multipart initiation (GCS does
+    exactly this for the whole window of a bucket relocation; a production RCA
+    traced multi-hour extractions dying at the final upload to that
+    condition). A failed probe — after the gate's retry attempts are exhausted
+    — appends a typed platform-attributed check and downgrades a ``READY`` or
+    ``PARTIAL`` verdict to ``NOT_READY``. In hard mode it blocks only when its
+    category is in ``GATE_BLOCKING_CATEGORIES``: in-cluster stores are
+    Atlan-side and map to ``DEPENDENCY_UNAVAILABLE``, which is reported as
+    ``would_block``; in SDR mode a missing binding, denied grant or rejected
+    credential on the customer's bucket blocks. Soft mode only reports it.
 
-    On by default because a run that cannot upload its artifacts is doomed
-    however healthy the source is, and the probe costs under a second against
-    healthy storage. The multipart probe matters because uploads above the
-    writer's part size (8 MiB default, ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``)
-    go out as multipart, and a store can accept plain PUTs while rejecting
-    multipart initiation (GCS does exactly this for the whole window of a bucket
-    relocation; a production RCA traced multi-hour extractions dying at the
-    final upload to that condition). The probe is stricter than a
-    small-artifact-only workload's real writes, which never touch multipart.
-
-    A failed probe — after the gate's retry attempts are exhausted — appends a
-    typed platform-attributed check and downgrades a ``READY`` or ``PARTIAL``
-    verdict to ``NOT_READY``. In hard mode it blocks only when its category is in
-    ``GATE_BLOCKING_CATEGORIES``: in-cluster stores are Atlan-side and map to
-    ``DEPENDENCY_UNAVAILABLE``, which is reported as ``would_block``; in SDR mode
-    a missing binding, denied grant or rejected credential on the customer's
-    bucket blocks. Soft mode only reports it.
+    Deliberately opt-in while the fleet's probe precision is measured: the probe
+    costs under a second per run against healthy storage, but a hard-mode SDR
+    app turning this on is trusting a storage canary to abort real runs — and the
+    probe is stricter than a small-artifact-only workload's real writes, which
+    never touch multipart at all.
 
     **Deployment prerequisite.** The probed buckets must carry an
     abort-incomplete-multipart-upload lifecycle rule. A probe cancelled between
     multipart initiate and complete — the gate's own timeout does exactly this —
     leaves hidden partial parts that the provider bills until they are aborted,
-    once per run rather than once per worker boot. The SDK cannot clean them up
-    itself: ``obstore`` owns the upload id inside ``put_async`` and exposes no
-    abort call, so there is nothing to cancel against. Confirm the lifecycle rule
-    on every bucket in the deployment; the SDK neither checks nor reports it."""
+    and now once per run rather than once per worker boot. The SDK cannot clean
+    them up itself: ``obstore`` owns the upload id inside ``put_async`` and
+    exposes no abort call, so there is nothing to cancel against. Confirm the
+    lifecycle rule on every bucket in the deployment before setting this
+    ``True``; the SDK neither checks nor reports it."""
 
     artifact_validation_mode: ClassVar[Literal["hard", "soft"]] = "soft"
     """Artifact-validation posture (ADR-0020). ``"soft"`` (default) never blocks.

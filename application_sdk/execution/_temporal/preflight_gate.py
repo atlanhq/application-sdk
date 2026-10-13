@@ -13,11 +13,11 @@ overrunning the budget, or a provably absent credential. Failures of the gate's 
 **plumbing** — its credential-resolution frame and the secret-store lookups inside
 it — propagate instead, so the workflow fails open in either mode; a platform blip
 must never fail a healthy run. The line is drawn by *who raised*, never by the
-error's category: a handler cannot declare its source to be plumbing. The
-artifact-store verification (``preflight_verify_storage``, on by default, per-app opt-out)
-is *not* plumbing: a store that refuses the probe is a verdict on the run,
-deferred once to the next attempt and then blocking in hard mode, including when
-that retry is killed and only the deferred evidence survives in the chain.
+error's category: a handler cannot declare its source to be plumbing. The opt-in
+artifact-store verification (``preflight_verify_storage``) is *not* plumbing: a
+store that refuses the probe is a verdict on the run, deferred once to the next
+attempt and then blocking in hard mode, including when that retry is killed and
+only the deferred evidence survives in the chain.
 
 Enforcement lives here because the activity bounds the handler itself and so
 usually survives to classify the failure. When it does not — a probe that stalls
@@ -1715,12 +1715,12 @@ def _defers_to_retry(
 # connectivity failure — blocking a hard-mode run for its own starvation.
 _STORAGE_CHECK_MIN_SECONDS = 15.0
 
-# Name and sentinel ``code`` for the advisory row emitted when storage
-# verification was on but the probes did not run. Distinct from a probe *failure*: a consumer counting
+# Name and sentinel ``code`` for the advisory row emitted when the opt-in was set
+# but the probes did not run. Distinct from a probe *failure*: a consumer counting
 # failed ``objectStoreAccess:*`` checks — the connector-pulse precision
 # measurement soft mode exists for — must not read "never measured" as "the store
-# rejected the write". The row stays ``passed=False`` (an owner who left verification
-# on has a real gap to close) and never downgrades the verdict, since nothing was measured
+# rejected the write". The row stays ``passed=False`` (an owner who opted in has a
+# real gap to close) and never downgrades the verdict, since nothing was measured
 # and so nothing was disproved.
 STORAGE_UNVERIFIED_CHECK_NAME = "objectStoreAccess:skipped"
 OBJECT_STORE_UNVERIFIED_CODE = "OBJECT_STORE_NOT_VERIFIED"
@@ -1729,7 +1729,7 @@ OBJECT_STORE_UNVERIFIED_CODE = "OBJECT_STORE_NOT_VERIFIED"
 def _unverified_storage_check(message: str, *, app_owner: bool) -> PreflightCheck:
     """Build the advisory row for storage the gate could not verify.
 
-    Every path that leaves storage unmeasured goes through here, so the three
+    Every path that leaves the opt-in unmeasured goes through here, so the three
     of them cannot drift into two visible and one silent: a budget too small to
     start the probes, no infrastructure context to probe, and the checker itself
     failing. ``app_owner`` picks the locus — a budget the app declared is the
@@ -1841,7 +1841,7 @@ async def _append_storage_checks(
     the slot cannot change that). **Never raises**: any unexpected failure logs
     and leaves the handler's verdict as it was.
 
-    Every path that leaves storage unmeasured — too little budget, no
+    Every path that leaves the opt-in unmeasured — too little budget, no
     infrastructure context, a crashed checker — appends the
     :func:`_unverified_storage_check` advisory row. Only the
     ``NOT_READY``-already case is silent, because the run is blocked or reported
@@ -1864,8 +1864,7 @@ async def _append_storage_checks(
                 remaining,
                 _STORAGE_CHECK_MIN_SECONDS,
             )
-            # Visible, not a debug-level nothing: verification is on by
-            # default, so
+            # Visible, not a debug-level nothing: the owner opted in, so
             # 'storage verified clean' and 'storage never probed' must be
             # distinguishable in the check matrix (and to connector-pulse).
             result.checks.append(
@@ -1889,7 +1888,7 @@ async def _append_storage_checks(
         )
         if not probes:
             # No infrastructure context to probe. Same visibility rule as the
-            # budget skip: an owner with verification on must never read an empty check
+            # budget skip: an opted-in owner must never read an empty check
             # matrix as a clean bill of health.
             logger.info(
                 "Run-path storage checks found no store to probe; storage "
@@ -2118,9 +2117,9 @@ def build_preflight_gate_activity(
     parameter keeps the name ``handler`` it shipped with, so ``handler=``
     callers keep working; any ``PreflightTransport`` is accepted.
 
-    ``verify_storage`` is the resolved ``App.preflight_verify_storage`` (on by
-    default for every app, ``False`` opts out) and says whether to also probe the
-    run's artifact object store(s) after the handler's source verdict — see :func:`_append_storage_checks`.
+    ``verify_storage`` is the per-app opt-in (``App.preflight_verify_storage``)
+    to also probe the run's artifact object store(s) after the handler's source
+    verdict — see :func:`_append_storage_checks`.
 
     Registered unconditionally by the worker (independent of the SDR opt-out)
     because the gate is mandatory. Binds the same per-invocation handler context
@@ -2433,17 +2432,17 @@ def build_preflight_gate_activity(
             # Floor of the remaining budget, and the one number the handler is told —
             # the timeout message quotes it too, so what we enforce, what we report,
             # and what we blame are all the same value. With storage verification
-            # on, the storage floor is reserved out of the *advertised*
+            # opted in, the storage floor is reserved out of the *advertised*
             # number: a handler that sizes its probes to this field — exactly what
             # the docs say to do — must still leave the storage check its floor,
-            # or the verification silently degrades to a skip.
+            # or the opt-in silently degrades to a skip.
             #
             # Capped at half the remaining budget, the same shape as
             # :func:`_min_handler_seconds`: an uncapped reserve starves the source
             # check on a small declared budget (a 10s budget would hand the handler
             # 1s, then blame the source for the timeout — precisely what the
             # credential-resolution guard above exists to prevent), and the storage
-            # dimension is the extra, never the thing that squeezes out the
+            # dimension is the opt-in extra, never the thing that squeezes out the
             # check the gate exists for. When the cap bites, the storage check takes
             # its skip path and says so in a visible row.
             reserved = (
@@ -2532,7 +2531,7 @@ def build_preflight_gate_activity(
                         retryable=False,
                     )
                 )
-            # Default-on in SDR, per-app overridable: the handler certified the source; now certify the
+            # Per-app opt-in: the handler certified the source; now certify the
             # stores this run will upload artifacts to, in whatever budget is left.
             # Appends checks and may downgrade READY → NOT_READY, so it must run
             # before the verdict evaluation below. Never raises; see its docstring
