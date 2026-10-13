@@ -2,10 +2,10 @@
 
 Atlan's ``qualifiedName`` is the identity primitive for every asset (dedup,
 lineage, linking).  Building it by hand with an f-string — ``f"{connection_qualified_name}/{db}"``
-— scatters the grammar (segments, order, separator, escaping) across every
-connector.  A single grammar change then breaks each connector independently and
-silently.  Construct qualifiedNames through the canonical pyatlan asset
-``.creator()`` factories (which own the grammar) instead of string formatting.
+— at each call site scatters the grammar (segments, order, separator), so an
+identity and the references to it can drift apart.  Keep each grammar in one
+helper in ``app/qualified_names.py``, derived from the pyatlan asset
+``.creator()`` when that gives the identical string.
 
 Per-file.  Heuristic, WARN-tier: flag an f-string that both (a) interpolates a
 ``*qualified_name`` / ``*_qn`` value and (b) contains a ``/`` path separator —
@@ -107,10 +107,11 @@ def check_p028(
                     rule_id="P028",
                     node=node,
                     message=(
-                        "qualifiedName built by hand with an f-string — Atlan's "
-                        "qualifiedName grammar should not be duplicated across "
-                        "connectors. Construct assets via the pyatlan asset "
-                        ".creator() factories, which own the grammar."
+                        "qualifiedName built by hand with an f-string — keep each "
+                        "qualifiedName grammar in one helper in app/qualified_names.py; "
+                        "derive it from the pyatlan asset .creator() when that gives "
+                        "the identical string, else keep the f-string there with a "
+                        "justified ignore."
                     ),
                     directives=directives,
                 )

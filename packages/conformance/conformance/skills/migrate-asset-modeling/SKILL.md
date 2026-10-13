@@ -68,7 +68,7 @@ so the skill proves parity before it finishes.
 
 | Rule | Fires on | Stops when |
 |---|---|---|
-| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the qualifiedName comes from `X.creator(...).qualified_name` or `Process.generate_qualified_name(...)`, or the site carries a justified ignore |
+| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the qualifiedName comes from a helper in `app/qualified_names.py` that returns `X.creator(...).qualified_name`, or keeps the f-string with a justified ignore |
 | P052 | `.to_nested_bytes()`, `.to_nested_dict()`, pyatlan_v9 `to_atlas_format`, or `to_atlas_format_dict`, in `app/` (not `app/generated/`) | the entity goes through `entity_bytes` |
 | P055 | a pyatlan_v9 mapper populating the list end of a 1-to-N relationship — `Table(columns=...)`, `process.fabric_activities = [...]`, `schema.tables.append(...)` | each child sets its single reference to the parent (`column.table = RelatedTable(...)`) and the parent's list is left unset |
 | O002 | any `.dict()` call in a module that imports pyatlan asset models | `.dict()` is gone, or the module no longer imports asset models |
@@ -126,8 +126,14 @@ def bi_process_qn(connection_qn: str, question_id: Any) -> str:
 asset.metabase_collection = RelatedMetabaseCollection(qualified_name=collection_qn)
 ```
 
-Process identity — `Process.generate_qualified_name(..., process_id=...)`
-returns `f"{connection_qualified_name}/{process_id}"`.
+Process identity — the same shape as the BIProcess helper above: the
+f-string stays in one helper with a justified ignore.
+`Process.generate_qualified_name(..., process_id=...)` returns
+`f"{connection_qualified_name}/{process_id}"` after it checks that `name`,
+`inputs` and `outputs` are non-empty. It does not own the `process_id`
+grammar, a caller that has only ids must pass placeholder inputs, and a blank
+`process_id` makes it return a hash instead. A helper already built on it
+clears P028 and can stay.
 
 Serialization (`atlan-openapi-app` `app/connector.py`):
 
@@ -197,11 +203,12 @@ helper and lists their lines.
   to get the **string** only; never emit that creator-built asset, because
   its `name` is then the id. Some families have no creators at all; check per
   asset type.
-- **process** — a Process or ColumnProcess identity with the grammar
-  `{connection_qn}/{process_id}`:
-  `Process.generate_qualified_name(name=..., connection_qualified_name=..., inputs=<non-empty>, outputs=<non-empty>, process_id=...)`.
-  Without `process_id` it returns a hash, not the app's grammar; with an
-  empty `inputs` or `outputs` it raises.
+- **process** — a Process or ColumnProcess identity, whatever its grammar
+  (`{connection_qn}/{process_id}`, a suffix on the output qn, a hash). The
+  app owns the grammar, so it is centralised like **centralise** below.
+  Do not move it to `Process.generate_qualified_name`: with `process_id` it
+  only prefixes the connection, and without it the hash changes every
+  existing process qualifiedName.
 - **decode** — code that takes a qualifiedName apart (`split("/")`,
   `"/".join(parts[:-1])`). It does not build an identity, so it is not a
   P028 site. Keep it unchanged, or derive the ids from the source record
@@ -217,9 +224,22 @@ helper and lists their lines.
 - **centralise** — no creator owns the grammar. Move every such f-string into
   one `app/qualified_names.py` with one helper per shape and one justified
   ignore per helper.
-- **identity change** — the only creator produces a different string. This
-  changes asset identity (duplicates or orphaned assets). Owner decision; do
-  not apply.
+- **identity change** — a creator exists but produces a different string
+  for some input the app can receive (it derives a segment differently, or
+  raises on a reachable blank id). Moving that site to the creator changes
+  asset identity (duplicates or orphaned assets). Choose one, and say which
+  in the PR description:
+  - **guard, then creator** — when the differing input is only a blank or
+    missing id, and the asset or reference it produces today is junk
+    (for example `…/topic/` or `conn///`): skip that row before the helper
+    is called and use the creator. Name every asset or reference that
+    disappears; check the published asset counts before and after.
+  - **centralise** — when the creator derives a segment from somewhere
+    else, or when the blank-id output is not junk: keep the f-string in the
+    helper with an ignore that names the creator and the input it would
+    change.
+  - **owner decision** — when neither is clear: leave the site unsuppressed
+    and list it in the PR description.
 
 For P052, O002 and O004 sites, record the serialization call and the model
 generation. For P052, the envelope keeps the released wire shape:
@@ -239,15 +259,13 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
 2. **O003** — add the return annotation (`-> Table`, a union, or `Optional`).
 3. **P028** — put every qualifiedName helper in one `app/qualified_names.py`:
    `lru_cache` helpers that return `X.creator(...).qualified_name` for the
-   **creator** sites, `generate_qualified_name` helpers for the **process**
-   sites, and the f-string helpers with their ignores for the **centralise**
-   sites. Call sites use the helpers. In a dict-mapper app the helpers return
+   **creator** sites, and f-string helpers with their ignores for the
+   **process** and **centralise** sites. Apply the choice made for each
+   **identity change** site. Call sites use the helpers. In a dict-mapper app the helpers return
    strings only, and the emitted dicts keep their shape. Give each
-   **not an identity** site its reasoned ignore in place. Leave **identity
-   change** and **decode** sites untouched and **unsuppressed**: they stay
-   P028 findings, listed in the PR description, until the owner decides (for
-   example to reject blank ids in `run()`, which makes the creator rewrite
-   safe).
+   **not an identity** site its reasoned ignore in place. Leave **decode**
+   sites, and **identity change** sites routed to the owner, untouched and
+   **unsuppressed**: they stay P028 findings, listed in the PR description.
 4. **P052 / O002** — serialize every entity with
    `entity_bytes(asset, envelope=ENTITY_ENVELOPE, entity_type=...)`, one module-level
    policy. Pass `connection_name=` and `last_sync=` unless the mapper already
