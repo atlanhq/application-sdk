@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Annotated
 
+import pytest
 from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
@@ -491,3 +493,226 @@ class TestLazyMaterialization:
         # Lazy field is untouched — still durable, no local_path.
         assert result.lazy.is_durable is True
         assert result.lazy.local_path is None
+
+
+class TestPersistRefusesSensitivePaths:
+    """FND-3796: the interceptor's persist applies ``App.upload()``'s guard.
+
+    Both now run on one upload engine, which checks the root it is handed. A
+    task returning a ref to a credentials directory had it uploaded before.
+    """
+
+    async def test_a_credentials_directory_is_not_uploaded(
+        self, tmp_path: Path
+    ) -> None:
+        import pytest
+
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        store = create_memory_store()
+        aws = tmp_path / ".aws"
+        aws.mkdir()
+        (aws / "credentials").write_bytes(b"[default]\n")
+        output = _TaskOutput(ref=FileReference(local_path=str(aws), is_durable=False))
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(store, output, output_path="artifacts/run")
+
+        assert await list_keys("", store, normalize=False) == []
+
+    async def test_an_env_file_is_not_uploaded(self, tmp_path: Path) -> None:
+        import pytest
+
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        env = tmp_path / ".env"
+        env.write_bytes(b"TOKEN=placeholder\n")
+        output = _TaskOutput(ref=FileReference(local_path=str(env), is_durable=False))
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(create_memory_store(), output)
+
+    async def test_a_temp_directory_is_still_persisted(self) -> None:
+        """The paths tasks really return — system temp dirs (``/private/var``
+        on macOS) — pass the guard."""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "part-0.json").write_bytes(b"{}")
+            output = _TaskOutput(ref=FileReference(local_path=d, is_durable=False))
+
+            persisted = await persist_file_refs(
+                create_memory_store(), output, output_path="artifacts/run"
+            )
+
+        assert persisted.ref.is_durable is True
+        assert persisted.ref.manifest_path is not None
+
+
+class TestDirectoryUploadGuardCoversTheTree:
+    """lens F-8a73a1 / F-4c4d7a on #4332: the guard checked only the root.
+
+    An exact protected root (``/etc``) slipped past the ``"/etc/"`` prefix, and
+    an ordinary directory holding a ``.env`` or ``.aws/credentials`` uploaded
+    them. Both the interceptor's persist and ``transfer.upload`` refuse now.
+    """
+
+    @staticmethod
+    def _tree_with(tmp_path: Path, rel: str) -> Path:
+        root = tmp_path / "export"
+        (root / "data").mkdir(parents=True)
+        (root / "data" / "part-0.json").write_bytes(b"{}")
+        secret = root / rel
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_bytes(b"placeholder\n")
+        return root
+
+    @pytest.mark.parametrize(
+        "rel", [".env", "nested/.env.local", ".aws/credentials", "x/.ssh/id_rsa"]
+    )
+    @pytest.mark.parametrize("path", ["persist", "upload"])
+    async def test_a_sensitive_file_inside_the_tree_refuses_the_upload(
+        self, tmp_path: Path, rel: str, path: str
+    ) -> None:
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.errors import UnsafeUploadPathError
+        from application_sdk.storage.transfer import upload
+
+        store = create_memory_store()
+        root = self._tree_with(tmp_path, rel)
+
+        with pytest.raises(UnsafeUploadPathError) as excinfo:
+            if path == "persist":
+                await persist_file_refs(
+                    store,
+                    _TaskOutput(
+                        ref=FileReference(local_path=str(root), is_durable=False)
+                    ),
+                    output_path="artifacts/run",
+                )
+            else:
+                await upload(str(root), "out/", store=store)
+
+        assert excinfo.value.unsafe_path == str(root / rel)
+        # Refused before any byte moved.
+        assert await list_keys("", store, normalize=False) == []
+
+    @pytest.mark.parametrize(
+        "pattern",
+        # The native spelling, built by the OS's own separator, and the
+        # ``/`` spelling the docs use: each must block on every platform.
+        [os.sep + "secrets" + os.sep, "/secrets/"],
+        ids=["native-separator", "forward-slash"],
+    )
+    async def test_a_user_blocked_pattern_inside_the_tree_refuses_the_upload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
+    ) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", pattern)
+        root = self._tree_with(tmp_path, str(Path("secrets") / "token.txt"))
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(
+                create_memory_store(),
+                _TaskOutput(ref=FileReference(local_path=str(root), is_durable=False)),
+                output_path="artifacts/run",
+            )
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only system paths")
+    @pytest.mark.parametrize("root", ["/etc", "/etc/", "/dev"])
+    async def test_an_exact_protected_root_is_refused(self, root: str) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+        from application_sdk.storage.transfer import upload
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(
+                create_memory_store(),
+                _TaskOutput(ref=FileReference(local_path=root, is_durable=False)),
+                output_path="artifacts/run",
+            )
+        with pytest.raises(UnsafeUploadPathError):
+            await upload(root, "out/", store=create_memory_store())
+
+
+class TestGuardRefusesRootsUnderSensitiveAncestors:
+    """lens F-afaa64 on #4332: a directory root *inside* ``.env*`` passed.
+
+    The root check tested ``.env*`` only when the root was a file, and the
+    tree check sees only paths below the root, so ``/tmp/.env.local/output``
+    and everything in it was uploaded.
+    """
+
+    @pytest.mark.parametrize(
+        "ancestor", [".env", ".env.local", ".aws", ".ssh"], ids=lambda a: a
+    )
+    @pytest.mark.parametrize("path", ["persist", "upload"])
+    async def test_a_root_below_a_sensitive_directory_is_refused(
+        self, tmp_path: Path, ancestor: str, path: str
+    ) -> None:
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.errors import UnsafeUploadPathError
+        from application_sdk.storage.transfer import upload
+
+        root = tmp_path / ancestor / "output"
+        root.mkdir(parents=True)
+        (root / "part-0.json").write_bytes(b"{}")
+        store = create_memory_store()
+
+        with pytest.raises(UnsafeUploadPathError):
+            if path == "persist":
+                await persist_file_refs(
+                    store,
+                    _TaskOutput(
+                        ref=FileReference(local_path=str(root), is_durable=False)
+                    ),
+                    output_path="artifacts/run",
+                )
+            else:
+                await upload(str(root), "out/", store=store)
+
+        assert await list_keys("", store, normalize=False) == []
+
+
+class TestBlockedPathPatternsAreSeparatorAgnostic:
+    """``ATLAN_UPLOAD_FILE_BLOCKED_PATHS`` matches whichever separator either
+    side was written with. It compared against ``str(path)``, so on Windows a
+    pattern written ``/custom/secrets/`` never matched. Pure paths make the
+    Windows case run on every CI runner, not only the Windows jobs."""
+
+    @pytest.mark.parametrize(
+        "pattern", ["/secrets/", "\\secrets\\"], ids=["forward", "backslash"]
+    )
+    @pytest.mark.parametrize(
+        "path",
+        [
+            PureWindowsPath("C:/work/export/secrets/token.txt"),
+            PurePosixPath("/work/export/secrets/token.txt"),
+        ],
+        ids=["windows", "posix"],
+    )
+    def test_either_spelling_matches_either_platform(
+        self, monkeypatch: pytest.MonkeyPatch, pattern: str, path: PurePath
+    ) -> None:
+        from application_sdk.storage.reference import (
+            _is_user_blocked,
+            _parse_blocked_paths,
+        )
+
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", pattern)
+
+        assert _is_user_blocked(path, _parse_blocked_paths())
+
+    def test_an_unrelated_path_is_not_blocked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.reference import (
+            _is_user_blocked,
+            _parse_blocked_paths,
+        )
+
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "/secrets/")
+
+        assert not _is_user_blocked(
+            PureWindowsPath("C:/work/export/secretsauce/t.txt"),
+            _parse_blocked_paths(),
+        )

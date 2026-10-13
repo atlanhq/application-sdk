@@ -11,6 +11,16 @@ Batch upload/download
 * ``delete_prefix(prefix)``                — delete all objects under prefix
 * ``list_keys(prefix)``                    — list object keys under prefix
 
+These two are deliberately not on the ``FileReference`` engines that
+``persist`` / ``transfer.upload`` and ``materialize`` / ``transfer.download``
+share (FND-3796). They mirror state directories (RocksDB, DuckDB, parquet
+datasets) for readers that glob the tree, so they must not leave local
+``.sha256`` markers or write a manifest, and ``download_prefix`` keeps its own
+etag sync index, strip/full layouts and suffix filter. The engines' value —
+markers, manifest digests, the per-path materialize lock — is what a mirror
+must not have. Both already share the transfer primitives (``upload_file`` /
+``download_file_chunked``) and the sidecar verification.
+
 Param order convention: source first, destination second.
 ``upload_prefix(local_dir, prefix)`` and ``download_prefix(prefix, local_dir)``
 both follow this — the data source is always the first positional argument.

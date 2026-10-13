@@ -1728,6 +1728,7 @@ class App(ABC):
                     _source_store=source_store,
                     _app_prefix=app_prefix,
                     _tier=input.tier,
+                    _output_path=run_prefix,
                 )
             except Exception as exc:
                 if fatal:
