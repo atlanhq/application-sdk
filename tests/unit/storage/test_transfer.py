@@ -556,9 +556,14 @@ class TestDownloadDirectory:
 
         dest = tmp_path / "dest"
         dl = await download("sc/", str(dest), store=store)
-        # Only 1 real file — sidecar should not appear in file_count or on disk
+        # Only 1 real file — the stored sidecar object is not data, so it is
+        # neither counted nor downloaded. What sits beside the file locally is
+        # the materialise cache marker the engine writes (FND-3795): its digest
+        # of the downloaded bytes, which upload excludes and a later
+        # materialise of this ref reuses instead of downloading again.
         assert dl.ref.file_count == 1
-        assert not (dest / "data.txt.sha256").exists()
+        local_marker = dest / "data.txt.sha256"
+        assert local_marker.read_text().strip() == hashlib.sha256(b"data").hexdigest()
 
     async def test_path_traversal_in_listed_key_rejected(self, store, tmp_path) -> None:
         """A listed key containing ``..`` must not write outside dest_dir.

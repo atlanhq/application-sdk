@@ -91,7 +91,11 @@ Without that field the next task would list an empty prefix in the wrong bucket
 and fail with AAF-STR-009. Every other ref, including those from a single-store
 deployment where both names alias one store, has `store=DEPLOYMENT`. Do not set
 the field by hand. It records where the bytes are, and the SDK sets it.
-The tag is honoured only for refs produced inside the run. A workflow's start
+`App.download()` and the interceptor share one transfer engine. Passing
+`dl.ref` to a task on the same worker therefore costs one listing and a local
+re-hash, not a second download, because `download()` leaves the same local
+`.sha256` markers that materialise does. The tag is honoured only for refs
+produced inside the run. A workflow's start
 input (including `continue_with`) and every `@update` argument have any
 `store=UPSTREAM` reset to `DEPLOYMENT`, so to consume another
 app's upstream output, call `App.download()` on it.

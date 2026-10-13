@@ -613,10 +613,11 @@ class TestMaterializeFileReference:
             "application_sdk.storage.integrity.sha256_file",
             return_value=_hash_bytes(b"payload"),
         ) as sha256_file:
-            result = await _materialize_single_file(store, ref, None)
+            result, downloaded = await _materialize_single_file(store, ref, None)
 
         sha256_file.assert_called_once()
         assert result is ref
+        assert downloaded == 0
 
     async def test_single_file_materialize_heads_the_key_once(
         self, store, tmp_path

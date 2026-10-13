@@ -43,10 +43,12 @@ import asyncio
 import os
 import tempfile
 import time
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
@@ -70,6 +72,26 @@ logger = get_logger(__name__)
 
 # Files at or above this size emit transfer events at INFO; smaller files use DEBUG.
 _INFO_LOG_THRESHOLD = 10 * 1024 * 1024  # 10 MiB
+
+
+class _Reuse(Enum):
+    """When the transfer engine may keep a local copy instead of downloading.
+
+    ``materialize_file_reference`` and ``transfer.download`` share one engine
+    (``_materialize_single_file`` / ``_materialize_directory``); this is the one
+    policy on which they differ. A manifest digest, when there is one, always
+    decides, whatever the policy.
+
+    * ``VERIFIED`` — materialise: reuse a local copy that hashes to its local
+      ``.sha256`` sidecar (directory) or to the stored digest (single file).
+    * ``REMOTE_DIGEST`` — ``download(skip_if_exists=True)``: reuse a local copy
+      that hashes to its local sidecar or, failing that, to the stored digest.
+    * ``NEVER`` — ``download(skip_if_exists=False)``: always download.
+    """
+
+    VERIFIED = "verified"
+    REMOTE_DIGEST = "remote_digest"
+    NEVER = "never"
 
 
 def _make_storage_path(
@@ -504,7 +526,8 @@ async def materialize_file_reference(
         items = await _read_manifest_items(store, ref)
         local_directory = _resolve_local_directory(ref, local_dir)
         async with _materialize_guard(local_directory):
-            return await _materialize_directory(store, ref, items, local_directory)
+            out, _ = await _materialize_directory(store, ref, items, local_directory)
+            return out
 
     # Determine single-file vs directory by listing sub-keys under the path.
     # Sizes come back with the listing so the directory branch can chunk large
@@ -531,12 +554,13 @@ async def materialize_file_reference(
             )
         local_directory = _resolve_local_directory(ref, local_dir)
         async with _materialize_guard(local_directory):
-            return await _materialize_directory(
+            out, _ = await _materialize_directory(
                 store,
                 ref,
                 [(obj, None) for obj in data_objects],
                 local_directory,
             )
+            return out
 
     # An empty listing does not mean "nothing is there". ``list_keys`` appends a
     # trailing slash before listing, so a real single object at the exact key
@@ -623,13 +647,15 @@ async def materialize_file_reference(
         # with a 0-byte object it materialises those zero bytes as before.
 
     if ref.local_path is None:
-        return await _materialize_single_file(
+        out, _ = await _materialize_single_file(
             store, ref, local_dir, remote_meta=remote_meta
         )
+        return out
     async with _materialize_guard(ref.local_path):
-        return await _materialize_single_file(
+        out, _ = await _materialize_single_file(
             store, ref, local_dir, remote_meta=remote_meta
         )
+        return out
 
 
 def _resolve_local_directory(ref: FileReference, local_dir: str | None) -> str:
@@ -764,8 +790,11 @@ async def _materialize_single_file(
     local_dir: str | None,
     *,
     remote_meta: tuple[int, str | None] | None = None,
-) -> FileReference:
+    reuse: _Reuse = _Reuse.VERIFIED,
+) -> tuple[FileReference, int]:
     """Materialise one durable single-file ref (see ``materialize_file_reference``).
+
+    Returns the local ref and how many files were downloaded (0 on reuse).
 
     Callers with a stable ``ref.local_path`` hold the per-path materialise
     lock around this call; the fast-path re-check below is therefore the
@@ -802,7 +831,11 @@ async def _materialize_single_file(
     # directory-backed ref away from here, so this is the second line of
     # defence for a ref that reaches this helper by another path.
     stored_hash: str | None = None
-    if ref.local_path is not None and Path(ref.local_path).is_file():
+    if (
+        reuse is not _Reuse.NEVER
+        and ref.local_path is not None
+        and Path(ref.local_path).is_file()
+    ):
         local_hash = await integrity.sha256_file(Path(ref.local_path))
         stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 
@@ -816,7 +849,7 @@ async def _materialize_single_file(
                 local_path=ref.local_path,
                 is_cache_hit=True,
             )
-            return ref
+            return ref, 0
         # Otherwise (no stored sidecar OR hash mismatch) fall through
         # to re-download — conservative since we cannot verify.
 
@@ -960,12 +993,15 @@ async def _materialize_single_file(
         chunks_total=_chunks_total,
         tier=str(ref.tier),
     )
-    return FileReference(
-        local_path=out_path,
-        is_durable=True,
-        storage_path=ref.storage_path,
-        tier=ref.tier,
-        store=ref.store,
+    return (
+        FileReference(
+            local_path=out_path,
+            is_durable=True,
+            storage_path=ref.storage_path,
+            tier=ref.tier,
+            store=ref.store,
+        ),
+        1,
     )
 
 
@@ -974,8 +1010,13 @@ async def _materialize_directory(
     ref: FileReference,
     items: list[tuple[DataObject, str | None]],
     local_directory: str,
-) -> FileReference:
+    *,
+    reuse: _Reuse = _Reuse.VERIFIED,
+) -> tuple[FileReference, int]:
     """Materialise a durable directory-prefix ref (see ``materialize_file_reference``).
+
+    Returns the local ref and how many files were downloaded (the rest were
+    reused under *reuse*).
 
     Callers hold the per-path materialise lock on *local_directory*, so two
     activities sharing one directory ref neither duplicate downloads nor
@@ -1015,7 +1056,19 @@ async def _materialize_directory(
     prefix = ref.storage_path.rstrip("/") + "/"
 
     async def _download_one(obj: DataObject, expected_sha256: str | None) -> bool:
-        """Download one file from the prefix. Returns True if skipped (cache hit)."""
+        """Download one file from the prefix. Returns True if skipped (cache hit).
+
+        One file resolved — reused or downloaded — is one unit of progress
+        (ADR-0018), so a large directory keeps the stall watchdog fed.
+        """
+        try:
+            return await _download_one_unmarked(obj, expected_sha256)
+        finally:
+            current_progress_tracker().mark_progress("storage.download_file")
+
+    async def _download_one_unmarked(
+        obj: DataObject, expected_sha256: str | None
+    ) -> bool:
         key = obj.key
         rel = key.removeprefix(prefix)
         # Reject keys whose resolved path escapes local_directory.
@@ -1031,18 +1084,28 @@ async def _materialize_directory(
         # With a manifest the reference digest is the manifest's, not the
         # local sidecar's: a file left by an earlier pass agrees with its own
         # sidecar and may still not be the file this hand-off names.
-        if dest_path.exists() and (
-            expected_sha256 is not None or dest_sidecar.exists()
-        ):
+        if (
+            reuse is not _Reuse.NEVER or expected_sha256 is not None
+        ) and dest_path.exists():
             try:
-                local_hash = await integrity.sha256_file(dest_path)
-                reference = (
-                    expected_sha256
-                    if expected_sha256 is not None
-                    else dest_sidecar.read_text(encoding="utf-8").strip()
+                reference: str | None
+                if expected_sha256 is not None:
+                    reference = expected_sha256
+                elif dest_sidecar.exists():
+                    reference = dest_sidecar.read_text(encoding="utf-8").strip()
+                elif reuse is _Reuse.REMOTE_DIGEST:
+                    reference = await integrity.read_expected_digest(
+                        store, key, sidecar_present=obj.has_sidecar
+                    )
+                else:
+                    reference = None
+                local_hash = (
+                    await integrity.sha256_file(dest_path)
+                    if reference is not None
+                    else None
                 )
-                if local_hash == reference:
-                    if expected_sha256 is not None:
+                if reference is not None and local_hash == reference:
+                    if not dest_sidecar.exists() or expected_sha256 is not None:
                         await run_in_thread(_write_local_sidecar, dest, local_hash)
                     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
@@ -1131,14 +1194,17 @@ async def _materialize_directory(
         duration_ms=int((time.monotonic() - _t0) * 1000),
         tier=str(ref.tier),
     )
-    return FileReference(
-        local_path=local_directory,
-        is_durable=True,
-        storage_path=ref.storage_path,
-        file_count=len(data_keys),
-        tier=ref.tier,
-        manifest_path=ref.manifest_path,
-        store=ref.store,
+    return (
+        FileReference(
+            local_path=local_directory,
+            is_durable=True,
+            storage_path=ref.storage_path,
+            file_count=len(data_keys),
+            tier=ref.tier,
+            manifest_path=ref.manifest_path,
+            store=ref.store,
+        ),
+        len(data_keys) - skipped,
     )
 
 

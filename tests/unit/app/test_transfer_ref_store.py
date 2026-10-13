@@ -137,6 +137,32 @@ class TestDownloadHandoffAcrossStores:
 
         assert _names(out.qi_records.local_path) == set(_FILES)
 
+    async def test_same_worker_handoff_downloads_nothing_twice(self) -> None:
+        """download() and materialise are one engine, so the second read reuses.
+
+        ``download()`` leaves each file's local ``.sha256`` marker, which is
+        exactly what materialise checks before fetching. Before the two shared
+        an engine, the task after a ``download()`` on the same worker fetched
+        every byte again.
+        """
+        import application_sdk.storage.ops as ops
+
+        deployment, upstream = create_memory_store(), create_memory_store()
+        await _seed(upstream)
+        app = _make_app(deployment, upstream)
+        dl = await app.download(DownloadInput(storage_path=PREFIX))
+
+        with mock.patch.object(
+            ops, "download_file_chunked", side_effect=AssertionError("re-download")
+        ):
+            out = await materialize_file_refs(
+                deployment,
+                _BuildLineageInput(qi_records=dl.ref),
+                upstream_store=upstream,
+            )
+
+        assert _names(out.qi_records.local_path) == set(_FILES)
+
     async def test_the_handoff_check_still_fires_for_a_deployment_ref(
         self, tmp_path: Path
     ) -> None:
