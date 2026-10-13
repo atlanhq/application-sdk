@@ -127,23 +127,32 @@ class TestUploadDirectory:
     async def test_upload_directory_error_propagation(
         self, store, tmp_path, monkeypatch
     ) -> None:
-        """Error in one upload propagates correctly from asyncio.gather."""
+        """Error in one upload propagates out of the directory fan-out.
+
+        Patched on ``reference._persist_file``: since FND-3796 a directory
+        upload runs on the persist engine, whose per-file step that is (it was
+        ``transfer._upload_one``).
+        """
         (tmp_path / "ok.txt").write_bytes(b"fine")
         (tmp_path / "fail.txt").write_bytes(b"boom")
 
-        from application_sdk.storage import transfer as transfer_mod
+        from application_sdk.storage import reference as reference_mod
 
-        _original = transfer_mod._upload_one
+        _original = reference_mod._persist_file
 
-        async def _failing_upload_one(st, local_file, store_key, **kwargs):
+        async def _failing_persist_file(st, local_file, store_key, **kwargs):
             if "fail.txt" in str(local_file):
                 raise RuntimeError("simulated upload failure")
             return await _original(st, local_file, store_key, **kwargs)
 
-        monkeypatch.setattr(transfer_mod, "_upload_one", _failing_upload_one)
+        monkeypatch.setattr(reference_mod, "_persist_file", _failing_persist_file)
 
-        with pytest.raises(RuntimeError, match="simulated upload failure"):
+        # The engine's fan-out (``_run_bounded``) re-raises a lone
+        # ``StorageError`` bare and surfaces anything else whole, as a group —
+        # the contract ``transfer.download`` has had since FND-3795.
+        with pytest.raises(ExceptionGroup) as excinfo:
             await upload(str(tmp_path), "errtest", store=store)
+        assert excinfo.group_contains(RuntimeError, match="simulated upload failure")
 
 
 class TestUploadDirectoryLocalSidecars:
@@ -176,11 +185,13 @@ class TestUploadDirectoryLocalSidecars:
         self, store, tmp_path, monkeypatch
     ) -> None:
         # Pin the order the race needs: sidecar first, one upload at a time.
+        # The walk is the upload engine's (``reference._list_upload_files``)
+        # since FND-3796, so the listing it filters is patched there.
         self._with_local_sidecar(tmp_path, "0.json", b'{"a": 1}')
-        from application_sdk.storage import transfer as transfer_mod
+        from application_sdk.storage import reference as reference_mod
 
         monkeypatch.setattr(
-            transfer_mod,
+            reference_mod,
             "safe_list_directory",
             lambda path: [path / "0.json.sha256", path / "0.json"],
         )
@@ -828,11 +839,14 @@ class TestUploadDirectorySourceStoreReconcile:
         (local / "column").mkdir(parents=True)
         (local / "column" / "entities.json").write_bytes(b"C")
 
-        # Patch the reconcile branch's actual call site (``transfer.list_data_keys``,
-        # invoked via ``_list_source_data_keys``) rather than the lower-level
-        # ``batch.list_keys`` it delegates to — a direct guard that survives an
-        # inlining refactor of ``list_data_keys``.
-        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
+        # Patch the reconcile branch's actual call site
+        # (``transfer.list_data_objects``, invoked via ``_list_source_objects``)
+        # rather than the lower-level ``batch.list_keys`` it delegates to — a
+        # direct guard that survives an inlining refactor. (It listed keys via
+        # ``list_data_keys`` until FND-3796 needed each object's size for the
+        # manifest; the stale name now fails to patch rather than spying on
+        # nothing.)
+        with patch("application_sdk.storage.transfer.list_data_objects") as spy:
             await upload(
                 str(local),
                 storage_path="d/transformed",
@@ -967,7 +981,8 @@ class TestUploadDirectorySourceStoreReconcile:
         (local / "column").mkdir(parents=True)
         (local / "column" / "entities.json").write_bytes(b"C")
 
-        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
+        # The reconcile branch's source listing (see the same-store test above).
+        with patch("application_sdk.storage.transfer.list_data_objects") as spy:
             out = await upload(
                 str(local),
                 storage_path="d/transformed",
@@ -1278,3 +1293,143 @@ class TestDownloadOnTheSharedEngine:
             await download("cx/key.json", store=store)
 
         assert list(scratch.iterdir()) == []
+
+
+class TestUploadOnTheSharedEngine:
+    """FND-3796: upload() runs on the persist engine; its own contract holds.
+
+    The two regressions FND-3795's lens round 5 found when download moved onto
+    its engine, checked for upload up front: a dedup trusting a local marker
+    where the old loop asked the store, and an owned temp file surviving a
+    cancellation.
+    """
+
+    async def test_skip_if_exists_uploads_a_file_changed_since_its_marker(
+        self, store, tmp_path
+    ) -> None:
+        """The local marker says what was uploaded last time, not what is there now.
+
+        After the first upload the marker and the store's sidecar agree. A
+        dedup that read the marker instead of hashing the file would match
+        them and skip the changed bytes.
+        """
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "data.txt").write_bytes(b"old")
+        await upload(str(src), "mk/", store=store)
+        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"old")
+
+        (src / "data.txt").write_bytes(b"new")
+        up = await upload(str(src), "mk/", store=store, skip_if_exists=True)
+
+        assert up.synced is True
+        dest = tmp_path / "dest"
+        await download("mk/", str(dest), store=store)
+        assert (dest / "data.txt").read_bytes() == b"new"
+        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"new")
+
+    async def test_a_cancelled_store_copy_leaves_no_temp_file(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.transfer import _upload_from_store
+
+        await _put("cc/key.json", b"{}", store)
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+
+        with (
+            patch(
+                "application_sdk.storage.ops.download_file_chunked",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _upload_from_store(
+                store, "cc/key.json", create_memory_store(), "cc/key.json"
+            )
+
+        assert list(scratch.iterdir()) == []
+
+    async def test_the_manifest_lands_in_the_run_file_refs_namespace(
+        self, store, tmp_path
+    ) -> None:
+        """Where persist puts its own: ``{run}/file_refs/{uuid}.sdk-manifest``."""
+        from application_sdk.storage.reference import _fetch_manifest
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.json").write_bytes(b"{}")
+        (src / "sub").mkdir()
+        (src / "sub" / "b.json").write_bytes(b"[]")
+        run = "artifacts/apps/x/workflows/wf/run"
+
+        up = await upload(str(src), _app_prefix=run, _output_path=run, store=store)
+
+        assert up.ref.manifest_path is not None
+        assert up.ref.manifest_path.startswith(f"{run}/file_refs/")
+        assert up.ref.manifest_path.endswith(".sdk-manifest")
+        manifest = await _fetch_manifest(store, up.ref.manifest_path)
+        assert manifest is not None
+        assert {(e.path, e.sha256) for e in manifest.files} == {
+            ("a.json", _hash_bytes(b"{}")),
+            ("sub/b.json", _hash_bytes(b"[]")),
+        }
+
+    async def test_retained_upload_without_a_run_prefix_writes_no_manifest(
+        self, store, tmp_path
+    ) -> None:
+        """A direct caller with no run context: the ref lists, as before."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.json").write_bytes(b"{}")
+
+        up = await upload(str(src), "plain/", store=store)
+
+        assert up.ref.manifest_path is None
+        assert up.ref.file_count == 1
+
+    async def test_reconciled_copies_are_in_the_manifest(self, tmp_path) -> None:
+        """A partial local tree plus the source store's rest is one hand-off."""
+        from application_sdk.contracts.types import FileReference
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.reference import materialize_file_reference
+
+        source, target = create_memory_store(), create_memory_store()
+        await _put("pfx/transformed/table/entities.json", b"T", source)
+        await _put("pfx/transformed/column/entities.json", b"C", source)
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+        run = "artifacts/apps/x/workflows/wf/run"
+
+        up = await upload(
+            str(local),
+            store=target,
+            _source_ref=FileReference(
+                local_path=str(local), storage_path="pfx/transformed"
+            ),
+            _source_store=source,
+            _app_prefix=run,
+            _output_path=run,
+        )
+        assert up.ref.manifest_path is not None
+        assert up.ref.file_count == 2
+        # A stray object under the prefix is outside the hand-off.
+        await _put(f"{run}/stray.json", b"{}", target)
+
+        out = await materialize_file_reference(
+            target,
+            up.ref.model_copy(update={"local_path": str(tmp_path / "other")}),
+        )
+
+        assert out.local_path is not None
+        got = {
+            p.relative_to(out.local_path).as_posix()
+            for p in Path(out.local_path).rglob("*")
+            if p.is_file() and not p.name.endswith(".sha256")
+        }
+        assert got == {"table/entities.json", "column/entities.json"}

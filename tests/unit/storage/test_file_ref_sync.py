@@ -491,3 +491,56 @@ class TestLazyMaterialization:
         # Lazy field is untouched — still durable, no local_path.
         assert result.lazy.is_durable is True
         assert result.lazy.local_path is None
+
+
+class TestPersistRefusesSensitivePaths:
+    """FND-3796: the interceptor's persist applies ``App.upload()``'s guard.
+
+    Both now run on one upload engine, which checks the root it is handed. A
+    task returning a ref to a credentials directory had it uploaded before.
+    """
+
+    async def test_a_credentials_directory_is_not_uploaded(
+        self, tmp_path: Path
+    ) -> None:
+        import pytest
+
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        store = create_memory_store()
+        aws = tmp_path / ".aws"
+        aws.mkdir()
+        (aws / "credentials").write_bytes(b"[default]\n")
+        output = _TaskOutput(ref=FileReference(local_path=str(aws), is_durable=False))
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(store, output, output_path="artifacts/run")
+
+        assert await list_keys("", store, normalize=False) == []
+
+    async def test_an_env_file_is_not_uploaded(self, tmp_path: Path) -> None:
+        import pytest
+
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        env = tmp_path / ".env"
+        env.write_bytes(b"TOKEN=placeholder\n")
+        output = _TaskOutput(ref=FileReference(local_path=str(env), is_durable=False))
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(create_memory_store(), output)
+
+    async def test_a_temp_directory_is_still_persisted(self) -> None:
+        """The paths tasks really return — system temp dirs (``/private/var``
+        on macOS) — pass the guard."""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "part-0.json").write_bytes(b"{}")
+            output = _TaskOutput(ref=FileReference(local_path=d, is_durable=False))
+
+            persisted = await persist_file_refs(
+                create_memory_store(), output, output_path="artifacts/run"
+            )
+
+        assert persisted.ref.is_durable is True
+        assert persisted.ref.manifest_path is not None

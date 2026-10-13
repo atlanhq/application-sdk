@@ -318,11 +318,14 @@ class TestCleanupCannotReplaceTheTransferResult:
             patch("application_sdk.storage.chunked.os.replace", new=record_and_publish),
             patch.object(Path, "unlink", deny_part_unlink),
         ):
-            transferred, reason = await _upload_from_store(
+            # A third element, the copied object's digest, since FND-3796:
+            # the directory engine's manifest records it.
+            transferred, reason, sha256 = await _upload_from_store(
                 store, "copy/ok.bin", target, "copy/ok.bin"
             )
 
         assert (transferred, reason) == (True, "uploaded")
+        assert sha256 is not None
         assert parts, "the chunked path never published — test proves nothing"
 
     async def test_small_file_delegate_survives_undeletable_stale_staging(

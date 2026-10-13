@@ -111,7 +111,7 @@ route:
 
 | | |
 |---|---|
-| **Produced by** | `persist_file_reference()`'s directory branch in `application_sdk/storage/reference.py`; model `DirectoryManifest` in `application_sdk/storage/_manifest.py` |
+| **Produced by** | The upload engine's directory pass, `_persist_directory()` in `application_sdk/storage/reference.py`, behind both `persist_file_reference()` and `transfer.upload()` / `App.upload()`; model `DirectoryManifest` in `application_sdk/storage/_manifest.py` |
 | **Served at** | `FileReference.manifest_path` on every durable directory ref, in Temporal payloads passed between tasks — and between apps when one app's output is another's input |
 | **Format** | JSON `{"version": 1, "files": [{"path", "sha256", "size_bytes"}]}`; `path` is relative to the ref's `storage_path` prefix, `/`-separated; `sha256` is lowercase hex |
 | **Read by** | `materialize_file_reference()` and `App.verify_refs()` in consuming apps on an SDK that knows the field. An app on an older SDK drops `manifest_path` on decode and lists the data prefix instead (see below), so it never reads the manifest |
@@ -126,7 +126,14 @@ it is read instead of listing the prefix.
   and is never inside the data prefix or beside it. The suffix must never be
   `.json`: publish converters and apps glob run prefixes with `**/*.json` and
   would parse it as asset records (the same constraint as the current-state
-  `.sdk-manifest` below). A consumer must read
+  `.sdk-manifest` below). One case is unavoidable: `App.upload()`'s default
+  directory prefix is the run root itself (`RETAINED`, no `storage_subdir`),
+  and the run's `file_refs/` namespace sits under it. There the manifest is
+  inside the data prefix, in the SDK-owned `file_refs/` subtree that already
+  holds interceptor-persisted refs and their manifests, so an older SDK listing
+  that prefix already sees objects of the same kind. Without a run prefix (a
+  direct `transfer.upload()` call), a `RETAINED` upload writes no manifest and
+  its ref lists as before. A consumer must read
   `manifest_path` and never compute it from `storage_path`. Do not move the
   manifest inside the prefix: an SDK that predates manifests lists the prefix
   and would read it as a data file.

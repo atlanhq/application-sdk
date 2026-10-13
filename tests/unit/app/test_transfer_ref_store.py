@@ -257,6 +257,88 @@ class TestUploadNamesItsStore:
         assert up.ref.store is StoreTarget.DEPLOYMENT
 
 
+class TestUploadHandoffOnTheSameWorker:
+    """FND-3796: ``upload()`` and persist are one engine, as download is.
+
+    Before they shared one, an ``App.upload()`` directory ref carried no
+    manifest and left no local markers, so the next task on the same worker
+    listed the prefix and fetched every byte back.
+    """
+
+    @staticmethod
+    def _write_tree(root: Path) -> None:
+        root.mkdir()
+        for name, data in {**_FILES, "part-2.json": b'{"c": 3}\n'}.items():
+            (root / name).write_bytes(data)
+
+    @pytest.mark.parametrize("two_store", [True, False])
+    async def test_upload_then_materialize_downloads_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, two_store: bool
+    ) -> None:
+        import application_sdk.storage.ops as ops
+
+        monkeypatch.setattr(
+            "application_sdk.constants.DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED", False
+        )
+        deployment = create_memory_store()
+        upstream = create_memory_store() if two_store else None
+        src = tmp_path / "out"
+        self._write_tree(src)
+        app = _make_app(deployment, upstream)
+
+        up = await app.upload(UploadInput(local_path=str(src)))
+
+        with mock.patch.object(
+            ops, "download_file_chunked", side_effect=AssertionError("re-download")
+        ):
+            out = await materialize_file_refs(
+                deployment,
+                _BuildLineageInput(qi_records=up.ref),
+                upstream_store=upstream,
+            )
+        assert _names(out.qi_records.local_path) == set(_FILES) | {"part-2.json"}
+        # What makes the reuse possible: the persist engine's manifest and
+        # the local marker beside each file.
+        assert up.ref.manifest_path is not None
+        assert up.ref.manifest_path.endswith(".sdk-manifest")
+        assert {p.name for p in src.glob("*.sha256")} == {
+            "part-0.json.sha256",
+            "part-1.json.sha256",
+            "part-2.json.sha256",
+        }
+
+    async def test_a_stray_object_under_the_prefix_is_not_handed_off(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The #4318 protection now covers ``upload()`` refs: the manifest decides.
+
+        ``App.upload()``'s default prefix is the run root, which other writers
+        share. Listing it hands the next task whatever else is there.
+        """
+        monkeypatch.setattr(
+            "application_sdk.constants.DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED", False
+        )
+        deployment, upstream = create_memory_store(), create_memory_store()
+        src = tmp_path / "out"
+        self._write_tree(src)
+        app = _make_app(deployment, upstream)
+
+        up = await app.upload(UploadInput(local_path=str(src)))
+        assert up.ref.storage_path is not None
+        await _put(f"{up.ref.storage_path}stray.json", b"{}\n", upstream)
+
+        out = await materialize_file_refs(
+            deployment,
+            _BuildLineageInput(
+                qi_records=up.ref.model_copy(
+                    update={"local_path": str(tmp_path / "other")}
+                )
+            ),
+            upstream_store=upstream,
+        )
+        assert _names(out.qi_records.local_path) == set(_FILES) | {"part-2.json"}
+
+
 class TestStoreFieldOnTheWire:
     def test_a_payload_without_the_field_reads_as_deployment(self) -> None:
         """What a producer on an older SDK sends: no ``store`` key at all."""

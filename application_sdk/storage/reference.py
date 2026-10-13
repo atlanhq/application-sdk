@@ -43,6 +43,7 @@ import asyncio
 import os
 import tempfile
 import time
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -93,6 +94,110 @@ class _Reuse(Enum):
     VERIFIED = "verified"
     REMOTE_DIGEST = "remote_digest"
     NEVER = "never"
+
+
+class _Dedup(Enum):
+    """When the upload engine may skip sending a file the store already holds.
+
+    ``persist_file_reference`` and ``transfer.upload`` share one engine
+    (``_persist_file`` / ``_persist_directory``); this is the one policy on
+    which they differ — the upload-side counterpart of :class:`_Reuse`.
+
+    * ``NEVER`` — persist, and ``upload(skip_if_exists=False)``: always upload.
+    * ``REMOTE_DIGEST`` — ``upload(skip_if_exists=True)``: skip a file whose
+      local bytes hash to the store's ``{key}.sha256`` sidecar, and only when
+      the data object itself is in the store too (a sidecar can outlive its
+      data). The local file is always hashed: its local marker only says what
+      was uploaded or downloaded last time, not what the file holds now.
+    """
+
+    NEVER = "never"
+    REMOTE_DIGEST = "remote_digest"
+
+
+@dataclass(frozen=True)
+class _StoreCopy:
+    """One object a directory upload copies store-to-store, not from local disk.
+
+    ``transfer.upload`` decides which objects these are (its cross-pod
+    reconcile and its local-absent fallback); the engine moves them alongside
+    the local files so the manifest, written last, covers both.
+    """
+
+    source_store: ObjectStore
+    source: DataObject
+    """The object as listed in *source_store* — the listing proves it is there."""
+    rel: str
+    """Its key relative to the target prefix, ``/``-separated."""
+
+
+@dataclass(frozen=True)
+class _Persisted:
+    """What a directory pass through the upload engine produced."""
+
+    file_count: int
+    transferred: int
+    """Files whose bytes crossed the wire; the rest were deduplicated."""
+    manifest_path: str | None
+    """``None`` when no manifest was asked for, or one entry's digest is unknown."""
+
+
+# System directories that must never be uploaded.
+_SENSITIVE_SYSTEM_PREFIXES = (
+    "/etc/",
+    "/proc/",
+    "/sys/",
+    "/dev/",
+    "/root/",
+    "/private/etc/",
+)
+
+# Hidden credential/config directories that must never be uploaded.
+_SENSITIVE_DIR_NAMES = frozenset({".aws", ".ssh", ".gnupg", ".kube", ".vault"})
+
+# File name prefixes for environment/secret files.
+_SENSITIVE_FILE_PREFIXES = (".env",)
+
+
+def _parse_blocked_paths() -> list[str]:
+    """Parse ATLAN_UPLOAD_FILE_BLOCKED_PATHS env var (comma-separated patterns)."""
+    val = os.environ.get("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "")
+    return [p.strip() for p in val.split(",") if p.strip()] if val else []
+
+
+def _validate_upload_path(path: Path) -> None:
+    """Block uploads from sensitive system paths, credential dirs, and env files.
+
+    Checked once per upload, on the root handed to the engine — the file, or
+    the directory — so ``App.upload()`` and the interceptor's persist refuse
+    the same paths (FND-3796). Files inside an uploaded directory are not
+    checked one by one.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        UnsafeUploadPathError,
+    )
+
+    if ".." in path.parts:
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+    resolved = path.resolve()
+    resolved_str = str(resolved)
+
+    if resolved_str.startswith(_SENSITIVE_SYSTEM_PREFIXES):
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+    if any(part in _SENSITIVE_DIR_NAMES for part in resolved.parts):
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+    if resolved.is_file() and resolved.name.startswith(_SENSITIVE_FILE_PREFIXES):
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+    # User-defined blocked paths via ATLAN_UPLOAD_FILE_BLOCKED_PATHS (comma-separated).
+    # Each entry is matched as a substring against the full resolved path.
+    # e.g. ATLAN_UPLOAD_FILE_BLOCKED_PATHS="/custom/secrets/,.vault,.credentials"
+    user_blocked = _parse_blocked_paths()
+    if any(pattern in resolved_str for pattern in user_blocked):
+        raise UnsafeUploadPathError(unsafe_path=str(path))
 
 
 def _make_storage_path(
@@ -210,6 +315,223 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
         )
 
 
+def _list_upload_files(root: Path) -> list[Path]:
+    """Every file a directory upload sends: the tree minus local ``.sha256`` markers.
+
+    A local marker is a materialize-time cache key, not data. Uploaded, it
+    would land on the store-side sidecar key of its own data file; with
+    ``skip_if_exists`` the data file's dedup check could then read that
+    sidecar, match, and skip the data upload entirely. Blocking (fsync +
+    scandir): call it through ``run_in_thread``.
+    """
+    return [
+        fp for fp in safe_list_directory(root) if not integrity.is_sidecar_key(fp.name)
+    ]
+
+
+async def _persist_file(
+    store: ObjectStore,
+    local: Path,
+    key: str,
+    *,
+    dedup: _Dedup,
+    data_present: bool | None = None,
+    sidecar_present: bool | None = None,
+) -> tuple[str, bool]:
+    """Upload one local file under *key* and stamp its local ``.sha256`` marker.
+
+    The upload engine's per-file step, shared by ``persist_file_reference``
+    and ``transfer.upload``. The store-side ``{key}.sha256`` sidecar is
+    ``upload_file``'s job (FND-306); the local marker beside *local* is what
+    lets a materialize of the returned ref on this worker reuse the file
+    instead of downloading it back (FND-3796). No path guard here: callers
+    check the root they were handed once, with :func:`_validate_upload_path`.
+
+    *data_present* / *sidecar_present* carry what a listing of the target
+    already established, so a directory pass pays no per-file probe; ``None``
+    means unknown and the dedup check probes for itself.
+
+    Returns ``(sha256, transferred)`` — the file's digest either way.
+    """
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        exists,
+        upload_file,
+    )
+
+    try:
+        # data_present=False: nothing to dedup against, so skip the local hash too.
+        if dedup is _Dedup.REMOTE_DIGEST and data_present is not False:
+            local_digest = await integrity.sha256_file(local)
+            remote_digest = await integrity.read_expected_digest(
+                store, key, sidecar_present=sidecar_present
+            )
+            if remote_digest == local_digest and (
+                data_present or await exists(key, store, normalize=False)
+            ):
+                await run_in_thread(_write_local_sidecar, str(local), local_digest)
+                return local_digest, False
+        sha256 = await upload_file(key, local, store, normalize=False)
+        # compute_hash defaults to True, so the digest is always returned here.
+        assert sha256 is not None
+        await run_in_thread(_write_local_sidecar, str(local), sha256)
+        return sha256, True
+    finally:
+        # One file resolved — uploaded or deduplicated — is one unit of
+        # progress (ADR-0018): an idempotent retry that skips thousands of
+        # matching files is doing real work and must not read as a stall.
+        current_progress_tracker().mark_progress("storage.upload_file")
+
+
+async def _list_target_objects(
+    prefix: str, store: ObjectStore
+) -> dict[str, DataObject] | None:
+    """List the data objects already under a directory upload's target *prefix*.
+
+    One LIST answers, for every file of a deduplicating directory upload,
+    both whether its data object is in the store and whether its sidecar is —
+    instead of a sidecar HEAD per file, plus a data HEAD per matching file.
+
+    Returns ``None`` when the target cannot be listed (e.g. a policy that grants
+    put/get but not list), so the caller falls back to per-file probes rather
+    than failing an upload that never needed a LIST before.
+    """
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_data_objects,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+    )
+
+    try:
+        objects = await list_data_objects(prefix, store, normalize=False)
+    except StorageError:
+        logger.warning(
+            "Could not list upload target prefix '%s' — falling back to "
+            "per-file existence checks for skip_if_exists",
+            prefix,
+            exc_info=True,
+        )
+        return None
+    return {obj.key: obj for obj in objects}
+
+
+async def _persist_directory(
+    store: ObjectStore,
+    root: Path | None,
+    files: list[Path],
+    prefix: str,
+    *,
+    dedup: _Dedup,
+    manifest_path: str | None,
+    copies: list[_StoreCopy] | None = None,
+    max_concurrency: int,
+) -> _Persisted:
+    """Upload a directory: *files* under *root*, plus *copies*, then the manifest.
+
+    The upload engine's directory pass, shared by ``persist_file_reference``
+    and ``transfer.upload`` (FND-3796). Each local file goes through
+    :func:`_persist_file`, so it gets its store sidecar and its local marker;
+    each :class:`_StoreCopy` goes through ``transfer._upload_from_store``.
+    Transfers run concurrently, and the first failure cancels and drains the
+    rest.
+
+    Last, and only after every object landed, the manifest — the exact file
+    set, with each digest and size — is written at *manifest_path*: its
+    presence is the proof the hand-off is complete (FND-3762). It is skipped
+    when *manifest_path* is ``None``, or when a copy's digest is unknown (a
+    same-object copy reads no sidecar); the ref then lists, as before.
+
+    Args:
+        root: The directory *files* sit under, already checked with
+            :func:`_validate_upload_path`; ``None`` when there is nothing local.
+        files: From :func:`_list_upload_files` — no local markers.
+        prefix: Target prefix, with or without a trailing ``/``.
+    """
+    from application_sdk.storage._concurrency import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _gather_with_semaphore,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
+    )
+    from application_sdk.storage.transfer import (  # noqa: PLC0415 — circular: transfer imports this module's engine lazily too
+        _upload_from_store,
+    )
+
+    base = prefix.rstrip("/") + "/" if prefix.strip("/") else ""
+    copies = copies or []
+
+    # One LIST of the target replaces the per-file sidecar HEAD and lets the
+    # dedup check confirm each data object exists. An empty prefix would
+    # list the whole store, so that case keeps the per-file probes.
+    listed: dict[str, DataObject] | None = None
+    if dedup is _Dedup.REMOTE_DIGEST and files and base:
+        listed = await _list_target_objects(base, store)
+
+    async def _one_local(file_path: Path) -> tuple[ManifestEntry, bool]:
+        assert root is not None  # files is empty without a root
+        relative = str(file_path.relative_to(root)).replace(os.sep, "/")
+        key = f"{base}{relative}"
+        data_present: bool | None = None
+        sidecar_present: bool | None = None
+        if listed is not None:
+            obj = listed.get(key)
+            data_present = obj is not None
+            sidecar_present = obj.has_sidecar if obj is not None else False
+        sha256, transferred = await _persist_file(
+            store,
+            file_path,
+            key,
+            dedup=dedup,
+            data_present=data_present,
+            sidecar_present=sidecar_present,
+        )
+        size = (await run_in_thread(file_path.stat)).st_size
+        return (
+            ManifestEntry(path=relative, sha256=sha256, size_bytes=size),
+            transferred,
+        )
+
+    async def _one_copy(copy: _StoreCopy) -> tuple[ManifestEntry | None, bool]:
+        transferred, _, sha256 = await _upload_from_store(
+            copy.source_store,
+            copy.source.key,
+            store,
+            f"{base}{copy.rel}",
+            source_listed=True,
+        )
+        entry = (
+            ManifestEntry(path=copy.rel, sha256=sha256, size_bytes=copy.source.size)
+            if sha256 is not None
+            else None
+        )
+        return entry, transferred
+
+    sem = asyncio.Semaphore(max_concurrency)
+    results = await _gather_with_semaphore(
+        [*(_one_local(fp) for fp in files), *(_one_copy(c) for c in copies)], sem
+    )
+    transferred = sum(1 for _, moved in results if moved)
+
+    entries = [entry for entry, _ in results if entry is not None]
+    if manifest_path is not None and base and len(entries) == len(results):
+        manifest = DirectoryManifest(files=sorted(entries, key=lambda e: e.path))
+        await _put(
+            manifest_path, manifest.model_dump_json().encode(), store, normalize=False
+        )
+    elif manifest_path is not None:
+        logger.debug(
+            "No manifest for upload prefix '%s': the prefix is empty or a copied "
+            "object's digest is unknown, so the ref lists the prefix",
+            base,
+        )
+        manifest_path = None
+    return _Persisted(
+        file_count=len(results),
+        transferred=transferred,
+        manifest_path=manifest_path,
+    )
+
+
 async def persist_file_reference(
     store: ObjectStore,
     ref: FileReference,
@@ -253,12 +575,11 @@ async def persist_file_reference(
         ValueError: If ``ref.tier`` is ``RETAINED`` and *output_path* is not
             provided.
     """
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        MAX_CONCURRENT_STORAGE_TRANSFERS,
+    )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageError,
-    )
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _put,
-        upload_file,
     )
 
     if ref.is_durable:
@@ -271,6 +592,9 @@ async def persist_file_reference(
         )
 
     local = Path(ref.local_path)
+    # The same guard App.upload() applies: a task returning a ref to a
+    # credentials directory must not have it uploaded either (FND-3796).
+    _validate_upload_path(local)
 
     # Structured kwargs in the logger calls below are intentional: every key used
     # (storage_path, local_path, file_count, file_size_bytes, bytes_uploaded,
@@ -282,9 +606,9 @@ async def persist_file_reference(
         # ── Directory upload ───────────────────────────────────────────────
         # Same precedence as the single-file branch: explicit ``key`` →
         # pinned ``ref.storage_path`` → generated UUID prefix. A pinned
-        # prefix is safe only because of the manifest written below: a
-        # consumer reads exactly the manifest's entries, so leftovers from an
-        # earlier attempt under the same prefix are inert (FND-3762).
+        # prefix is safe only because of the manifest the engine writes
+        # last: a consumer reads exactly the manifest's entries, so leftovers
+        # from an earlier attempt under the same prefix are inert (FND-3762).
         pinned = key or ref.storage_path
         if pinned:
             _require_run_scoped_pin(ref, pinned, output_path)
@@ -303,12 +627,7 @@ async def persist_file_reference(
         )
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
-        files = await run_in_thread(safe_list_directory, local)
-        # Local ``.sha256`` sidecars are a materialize-time cache key, not
-        # data. Uploading one would land on the store-side sidecar key of its
-        # data file, so a directory that was persisted or materialized before
-        # must not ship its sidecars as artifacts.
-        files = [fp for fp in files if not integrity.is_sidecar_key(fp.name)]
+        files = await run_in_thread(_list_upload_files, local)
         _t0 = time.monotonic()
         # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
@@ -319,41 +638,15 @@ async def persist_file_reference(
             tier=str(ref.tier),
         )
 
-        entries: list[ManifestEntry] = []
-
-        async def _upload_one(file_path: Path) -> None:
-            relative = str(file_path.relative_to(local)).replace(os.sep, "/")
-            file_key = f"{prefix}{relative}"
-            # upload_file validates the write and writes the store-side
-            # ``{key}.sha256`` sidecar itself (FND-306) — one implementation of
-            # the sidecar protocol, shared by every upload path. The local
-            # sidecar mirrors the single-file branch: without it a same-pod
-            # materialize of this prefix re-downloads every file (FND-3213).
-            sha256 = await upload_file(file_key, file_path, store, normalize=False)
-            # compute_hash defaults to True, so the digest is always returned here.
-            assert sha256 is not None
-            size = (await run_in_thread(file_path.stat)).st_size
-            entries.append(ManifestEntry(path=relative, sha256=sha256, size_bytes=size))
-            await run_in_thread(_write_local_sidecar, str(file_path), sha256)
-
         try:
-            from application_sdk.constants import (  # noqa: PLC0415
-                MAX_CONCURRENT_STORAGE_TRANSFERS,
-            )
-            from application_sdk.storage._concurrency import (  # noqa: PLC0415
-                _gather_with_semaphore,
-            )
-
-            sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
-            await _gather_with_semaphore([_upload_one(fp) for fp in files], sem)
-            # Last, and only after every data object landed: a manifest's
-            # presence is the proof the hand-off is complete.
-            manifest = DirectoryManifest(files=sorted(entries, key=lambda e: e.path))
-            await _put(
-                manifest_path,
-                manifest.model_dump_json().encode(),
+            persisted = await _persist_directory(
                 store,
-                normalize=False,
+                local,
+                files,
+                prefix,
+                dedup=_Dedup.NEVER,
+                manifest_path=manifest_path,
+                max_concurrency=MAX_CONCURRENT_STORAGE_TRANSFERS,
             )
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
@@ -370,8 +663,8 @@ async def persist_file_reference(
         logger.info(
             "file_ref.persist.complete",
             storage_path=prefix,
-            manifest_path=manifest_path,
-            file_count=len(files),
+            manifest_path=persisted.manifest_path,
+            file_count=persisted.file_count,
             duration_ms=int((time.monotonic() - _t0) * 1000),
             tier=str(ref.tier),
         )
@@ -379,9 +672,9 @@ async def persist_file_reference(
             local_path=ref.local_path,
             is_durable=True,
             storage_path=prefix,
-            file_count=len(files),
+            file_count=persisted.file_count,
             tier=ref.tier,
-            manifest_path=manifest_path,
+            manifest_path=persisted.manifest_path,
         )
 
     else:
@@ -416,14 +709,9 @@ async def persist_file_reference(
         )
 
         try:
-            # upload_file validates the write and writes the store-side
-            # ``{key}.sha256`` sidecar itself (FND-306); only the *local*
-            # sidecar — a materialize-time cache key, not part of the store
-            # protocol — is this module's business.
-            sha256 = await upload_file(storage_path, local, store, normalize=False)
-            # compute_hash defaults to True, so the digest is always returned here.
-            assert sha256 is not None
-            await run_in_thread(_write_local_sidecar, ref.local_path, sha256)
+            sha256, _ = await _persist_file(
+                store, local, storage_path, dedup=_Dedup.NEVER
+            )
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
