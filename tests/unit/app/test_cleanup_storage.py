@@ -12,7 +12,10 @@ from application_sdk.app.base import App, TaskStateAccessor, _app_state, _app_st
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import StorageCleanupInput, StorageCleanupOutput
+from application_sdk.contracts.storage import DownloadInput
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.ops import _put
 
 
 @dataclass
@@ -610,3 +613,187 @@ class TestCleanupStorageDirectoryManifest:
         _, deleted = await _run_cleanup_capturing_deletes(refs, [])
 
         assert self._MANIFEST not in deleted
+
+
+class TestCleanupStorageSparesDownloadedKeys:
+    """FND-3815: ``App.download`` reads keys the app does not own.
+
+    The interceptor tracks the ref ``download`` returns. It used to be
+    TRANSIENT, so end-of-run cleanup deleted the downloaded key from the
+    deployment store — in a single-store deployment that is the shared
+    bucket, so a platform object (the connection cache) was gone for every
+    later run. Real in-memory stores, the real tracker, the real delete.
+    """
+
+    _KEY = "artifacts/apps/producer/workflows/wf-0/run-0/output/part-0.json"
+    _DATA = b'{"a": 1}\n'
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        _clear_app_state()
+
+    def _app(self, deployment: Any, upstream: Any | None) -> App:
+        from application_sdk.app.context import AppContext
+
+        app = _make_app()
+        app._context = AppContext(
+            app_name="test",
+            app_version="0.1.0",
+            run_id="r1",
+            _storage=deployment,
+            _upstream_storage=upstream,
+        )
+        return app
+
+    async def _download_then_cleanup(
+        self, app: App, input: DownloadInput
+    ) -> StorageCleanupOutput:
+        from application_sdk.execution._temporal.activities import _track_file_refs
+
+        dl = await app.download(input)
+        # What the activity interceptor does with a task's output refs.
+        _track_file_refs("wf-test", dl.ref)
+        with mock.patch(
+            "application_sdk.app.base._get_execution_id_from_task",
+            return_value="wf-test",
+        ):
+            return await app.cleanup_storage(StorageCleanupInput())
+
+    @staticmethod
+    async def _exists(store: Any, key: str) -> bool:
+        from application_sdk.storage.ops import exists
+
+        return await exists(key, store, normalize=False)
+
+    @pytest.mark.asyncio
+    async def test_single_store_download_survives_cleanup(self) -> None:
+        store = create_memory_store()
+        await _put(self._KEY, self._DATA, store)
+
+        result = await self._download_then_cleanup(
+            self._app(store, None), DownloadInput(storage_path=self._KEY)
+        )
+
+        assert await self._exists(store, self._KEY)
+        assert result.deleted_count == 0
+
+    @pytest.mark.asyncio
+    async def test_single_store_explicit_transient_download_is_cleaned(
+        self,
+    ) -> None:
+        """The opt-in still works, so the test above is not a dead cleanup."""
+        store = create_memory_store()
+        await _put(self._KEY, self._DATA, store)
+
+        await self._download_then_cleanup(
+            self._app(store, None),
+            DownloadInput(storage_path=self._KEY, tier=StorageTier.TRANSIENT),
+        )
+
+        assert not await self._exists(store, self._KEY)
+
+    @pytest.mark.asyncio
+    async def test_redownload_of_a_runs_transient_ref_is_still_cleaned(
+        self,
+    ) -> None:
+        """Re-materialising the run's own TRANSIENT ref keeps its tier.
+
+        A RETAINED download ref would alias the producer's TRANSIENT ref, and
+        the durable-alias rule would then leak the run's own output.
+        """
+        from application_sdk.execution._temporal.activities import _track_file_refs
+
+        store = create_memory_store()
+        key = "file_refs/abc123.parquet"
+        await _put(key, self._DATA, store)
+        produced = FileReference(storage_path=key, is_durable=True)
+        _track_file_refs("wf-test", produced)
+
+        await self._download_then_cleanup(
+            self._app(store, None), DownloadInput(ref=produced)
+        )
+
+        assert not await self._exists(store, key)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("input_tier", "ref_tier", "expected"),
+        [
+            (None, None, StorageTier.RETAINED),
+            (None, StorageTier.TRANSIENT, StorageTier.TRANSIENT),
+            (None, StorageTier.PERSISTENT, StorageTier.PERSISTENT),
+            (StorageTier.TRANSIENT, StorageTier.PERSISTENT, StorageTier.TRANSIENT),
+        ],
+    )
+    async def test_download_ref_tier(
+        self,
+        input_tier: StorageTier | None,
+        ref_tier: StorageTier | None,
+        expected: StorageTier,
+    ) -> None:
+        store = create_memory_store()
+        await _put(self._KEY, self._DATA, store)
+        ref = (
+            None
+            if ref_tier is None
+            else FileReference(storage_path=self._KEY, is_durable=True, tier=ref_tier)
+        )
+
+        dl = await self._app(store, None).download(
+            DownloadInput(
+                storage_path="" if ref else self._KEY, ref=ref, tier=input_tier
+            )
+        )
+
+        assert dl.ref.tier is expected
+
+    @pytest.mark.asyncio
+    async def test_explicit_path_other_than_the_ref_is_retained(self) -> None:
+        store = create_memory_store()
+        await _put(self._KEY, self._DATA, store)
+        ref = FileReference(storage_path="file_refs/other.parquet", is_durable=True)
+
+        dl = await self._app(store, None).download(
+            DownloadInput(storage_path=self._KEY, ref=ref)
+        )
+
+        assert dl.ref.tier is StorageTier.RETAINED
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tier", [StorageTier.RETAINED, StorageTier.TRANSIENT])
+    async def test_two_store_download_never_deletes_from_deployment(
+        self, tier: StorageTier
+    ) -> None:
+        """Even a TRANSIENT upstream ref: its bytes were never in deployment."""
+        deployment, upstream = create_memory_store(), create_memory_store()
+        await _put(self._KEY, self._DATA, upstream)
+        await _put(self._KEY, b"deployment's own object\n", deployment)
+
+        result = await self._download_then_cleanup(
+            self._app(deployment, upstream),
+            DownloadInput(storage_path=self._KEY, tier=tier),
+        )
+
+        assert await self._exists(deployment, self._KEY)
+        assert await self._exists(upstream, self._KEY)
+        assert result.deleted_count == 0
+
+    @pytest.mark.asyncio
+    async def test_transient_ref_under_connection_cache_is_not_deleted(
+        self,
+    ) -> None:
+        store = create_memory_store()
+        key = "connection-cache/example-connection.sqlite"
+        await _put(key, b"sqlite", store)
+
+        await self._download_then_cleanup(
+            self._app(store, None),
+            DownloadInput(storage_path=key, tier=StorageTier.TRANSIENT),
+        )
+
+        assert await self._exists(store, key)

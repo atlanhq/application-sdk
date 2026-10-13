@@ -867,6 +867,7 @@ async def download(
     *,
     skip_if_exists: bool = False,
     store: ObjectStore | None = None,
+    tier: StorageTier = StorageTier.RETAINED,
 ) -> DownloadOutput:
     """Download a key or prefix from the object store to a local path.
 
@@ -886,6 +887,9 @@ async def download(
         local_path: Local destination.  Defaults to a temp file/directory.
         skip_if_exists: Skip files whose local SHA-256 matches the stored sidecar.
         store: Object store to use, or ``None`` to resolve from infrastructure.
+        tier: Tier of the returned ref. ``RETAINED`` by default, so a ref a
+            task returns is never deleted by ``App.cleanup_storage``: the
+            caller reads bytes it does not own (FND-3815).
 
     Returns:
         :class:`~application_sdk.contracts.storage.DownloadOutput`
@@ -931,7 +935,7 @@ async def download(
         # With no local_path the engine picks a fresh temp name, and removes
         # it (and any transfer staging) if the download fails (BLDX-1155 #5).
         ref = FileReference(
-            storage_path=norm_path, is_durable=True, local_path=local_path
+            storage_path=norm_path, is_durable=True, local_path=local_path, tier=tier
         )
         if local_path is None:
             out, downloaded = await _materialize_single_file(
@@ -966,6 +970,7 @@ async def download(
         storage_path=prefix,
         is_durable=True,
         file_count=len(data_objects),
+        tier=tier,
     )
     async with _materialize_guard(str(dest_dir)):
         out, downloaded = await _materialize_directory(
