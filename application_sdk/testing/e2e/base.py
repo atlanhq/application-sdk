@@ -1055,6 +1055,13 @@ class BaseE2ETest:
     # files. Set to "" to write nothing.
     evidence_dir: ClassVar[str] = "results/e2e-evidence"
 
+    # Where a passing run writes one product link per landed asset type, so a
+    # reviewer can open what the change published instead of searching the
+    # tenant. Same ``results/`` reasoning as ``evidence_dir``. Written before
+    # teardown, which is the only window the assets exist in. Set to "" to
+    # write nothing.
+    preview_links_dir: ClassVar[str] = "results/e2e-preview"
+
     ae_poll_interval_seconds: ClassVar[int] = 10
     ae_poll_timeout_seconds: ClassVar[int] = 600
     # Fail-fast stall guard (test-harness only — this module is never imported
@@ -4108,9 +4115,9 @@ class BaseE2ETest:
 
         outcome = await poll_until(
             _read,
-            settled=lambda read: read is not None
-            and bool(read.dag)
-            and _supersedes(read.version, seed),
+            settled=lambda read: (
+                read is not None and bool(read.dag) and _supersedes(read.version, seed)
+            ),
             budget=self._deployed_manifest_budget(),
             label=f"the DAG AE published for slug {slug}",
         )
@@ -5340,6 +5347,62 @@ class BaseE2ETest:
                 except Exception as failure:
                     self._collect_failure_evidence(failure, outcome)
                     raise
+        self._write_preview_links()
+
+    def _write_preview_links(self) -> None:
+        """Write a product link to one landed asset per type, for a reviewer.
+
+        Runs only after every DAG run passed and before teardown purges the
+        connection. Reporting, never a gate: any failure here is logged and the
+        run's verdict stands.
+        """
+        if not self.preview_links_dir or not self.dag_outcomes:
+            return
+        types = tuple(t for t, n in self.dag_outcomes[-1].asset_counts.items() if n > 0)
+        if not types:
+            return
+        try:
+            links = run_sync(self._preview_links_async(types))
+            out = Path(self.preview_links_dir) / f"{type(self).__name__}.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            body = {
+                "suite": type(self).__name__,
+                "connection_qualified_name": self.connection_qualified_name,
+                "links": links,
+            }
+            out.write_bytes(
+                orjson.dumps(body, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
+            )
+            logger.info(
+                "Preview links under %s: %d of %d landed types",
+                self.connection_qualified_name,
+                len(links),
+                len(types),
+            )
+        # conformance: ignore[E004] reporting only; a missing link must not turn a passing run red
+        except Exception:
+            logger.warning(
+                "Could not write preview links under %s",
+                self.connection_qualified_name,
+                exc_info=True,
+            )
+
+    async def _preview_links_async(self, types: tuple[str, ...]) -> dict[str, str]:
+        auth = self._auth if getattr(self, "_auth", None) else self._read_tenant_auth()
+        async with self._atlas_client() as client:
+            reading = await atlas.sample_guids(
+                client, self.connection_qualified_name, types
+            )
+        if not isinstance(reading, Settled):
+            logger.warning(
+                "GUID samples under %s could not be read; no preview links",
+                self.connection_qualified_name,
+            )
+            return {}
+        return {
+            t: f"{auth.base_url}/assets/{guid}/overview"
+            for t, guid in reading.value.items()
+        }
 
     def assert_dag_outcome(self, dag: ResolvedDAG, outcome: FullDAGOutcome) -> None:
         """Grade one run of one entrypoint DAG.

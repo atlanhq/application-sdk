@@ -101,6 +101,7 @@ __all__ = [
     "poll_for_connection",
     "read_asset_attributes",
     "sample_asset_attributes",
+    "sample_guids",
     "sample_qualified_names",
     # Leaf
     "UnknownConnectorTypeError",
@@ -523,6 +524,63 @@ async def sample_qualified_names(
         attempts=attempts,
         elapsed=elapsed,
         value=dict(zip(type_names, sampled, strict=True)),
+    )
+
+
+async def sample_guids(
+    client: AsyncAtlanClient,
+    connection_qualified_name: str,
+    type_names: Sequence[str],
+) -> Reading[Mapping[str, str]]:
+    """One landed asset's GUID per type under the connection.
+
+    Backs the preview links a run publishes for a reviewer: the product opens
+    an asset by GUID, and the qualified-name samples carry none. A type with no
+    landed asset is absent from the result rather than mapped to an empty
+    string, so a caller never builds a link to nothing.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        connection_qualified_name: Connection to sample under.
+        type_names: Atlan type names to sample.
+
+    Returns:
+        :class:`~application_sdk.testing.harness.outcome.Settled` carrying type
+        name -> GUID, or
+        :class:`~application_sdk.testing.harness.outcome.Indeterminate` when the
+        search could not be read.
+    """
+    from pyatlan.model.assets import Asset  # noqa: PLC0415
+    from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+    label = f"guid samples under {connection_qualified_name}"
+    started = time.monotonic()
+    prefix = f"{connection_qualified_name}/"
+    connection_qn = connection_qualified_name
+
+    async def _sample_one(type_name: str) -> str | None:
+        request = (
+            FluentSearch()
+            .where(FluentSearch.active_assets())
+            .where(Asset.QUALIFIED_NAME.startswith(prefix))
+            .where(Asset.CONNECTION_QUALIFIED_NAME.eq(connection_qn))
+            .where(Asset.TYPE_NAME.eq(type_name))
+            .include_on_results(Asset.QUALIFIED_NAME)
+        ).to_request()
+        request.dsl.size = 1
+        results = await client.asset.search(request)
+        return next((a.guid for a in results.current_page() or [] if a.guid), None)
+
+    try:
+        sampled = await asyncio.gather(*(_sample_one(tn) for tn in type_names))
+    except Exception as error:
+        return _unreadable(label, started, error)
+    name, attempts, elapsed = _one_shot(label, started)
+    return Settled(
+        label=name,
+        attempts=attempts,
+        elapsed=elapsed,
+        value={tn: guid for tn, guid in zip(type_names, sampled, strict=True) if guid},
     )
 
 

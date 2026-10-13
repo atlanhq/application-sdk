@@ -303,3 +303,32 @@ class TestAtlasClient:
         assert "api_key" not in built[0]
         assert built[1]["api_key"] == "tok"
         assert "oauth_client_id" not in built[1]
+
+
+class TestGuidSamples:
+    """The GUIDs behind a run's preview links. A link is built per entry, so a
+    type that landed nothing must be absent, not mapped to an empty GUID."""
+
+    async def test_each_type_maps_to_one_landed_guid(self) -> None:
+        client = _client(
+            lambda _r: FakeSearchResult(
+                [FakeAsset(f"{_QN}/a", guid="g-1"), FakeAsset(f"{_QN}/b", guid="g-2")]
+            )
+        )
+        outcome = await atlas.sample_guids(client, _QN, ("Table", "Column"))
+        assert isinstance(outcome, Settled)
+        assert outcome.value == {"Table": "g-1", "Column": "g-1"}
+
+    async def test_a_type_that_landed_nothing_is_absent(self) -> None:
+        def _by_type(request: Any) -> FakeSearchResult:
+            if "Column" in repr(request.dsl):
+                return FakeSearchResult([])
+            return FakeSearchResult([FakeAsset(f"{_QN}/a", guid="g-1")])
+
+        outcome = await atlas.sample_guids(_client(_by_type), _QN, ("Table", "Column"))
+        assert isinstance(outcome, Settled)
+        assert outcome.value == {"Table": "g-1"}
+
+    async def test_a_failed_search_is_indeterminate_not_empty(self) -> None:
+        outcome = await atlas.sample_guids(_client(_boom), _QN, ("Table",))
+        assert isinstance(outcome, Indeterminate)

@@ -3480,6 +3480,33 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
+      # ── Preview links for the PR comment ─────────────────────────────────
+      # Each passing e2e leg uploads the product links it wrote to the assets
+      # it published (sdr-e2e's "Upload preview links"). Rendered into one
+      # section of the comment below. Reporting only, so both steps fail open:
+      # no artifact, or no helper, is an empty section.
+      - name: Download e2e preview links
+        if: always() && github.event_name == 'pull_request' && needs.e2e.result == 'success'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: e2e-preview-${{ inputs.app-name }}*
+          path: e2e-preview-artifacts
+
+      - name: Render e2e preview links
+        id: preview
+        if: always() && github.event_name == 'pull_request' && needs.e2e.result == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          [ -f .github/scripts/render_preview_links.py ] || exit 0
+          delim="PREVIEW_$(openssl rand -hex 16)"
+          {
+            echo "markdown<<${delim}"
+            python3 .github/scripts/render_preview_links.py e2e-preview-artifacts
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
       # ── Hold this gate to the commit's e2e verdict (FND-3650) ────────────
       #
       # A run started by an unrelated label skips e2e (FND-48), and a skipped
@@ -3538,6 +3565,8 @@ jobs:
             | e2e | ${{ steps.e2e-verdict.outputs.e2e-status || steps.gate.outputs.e2e-status }} | per-suite results + live logs in the run |
 
             **Overall:** ${{ steps.e2e-verdict.outputs.passed == 'false' && '❌ Some failed' || steps.gate.outputs.overall-status }} —[view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            ${{ steps.preview.outputs.markdown }}
         continue-on-error: true
 
       # ── Repair an evicted sibling run on this same commit (FND-2167) ─────

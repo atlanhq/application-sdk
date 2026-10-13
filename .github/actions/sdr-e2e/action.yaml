@@ -1483,6 +1483,20 @@ runs:
         retention-days: 14
         overwrite: true
 
+    # The product links a passing full-DAG run wrote for a reviewer
+    # (BaseE2ETest._write_preview_links), on their own so the Tests Gate can
+    # put them on the PR comment without downloading each leg's container
+    # logs. Reporting only: absent when the run wrote none.
+    - name: Upload preview links
+      if: always() && hashFiles('results/e2e-preview/*.json') != ''
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: e2e-preview-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}
+        path: results/e2e-preview/
+        retention-days: 14
+        overwrite: true
+
     # No explicit `createCommitStatus` step: the workflow job already
     # surfaces a check_run on the PR (e.g. `E2E Full Tests (system
     # apps)` or `SDR Integration Tests (testcontainer)`). Posting an

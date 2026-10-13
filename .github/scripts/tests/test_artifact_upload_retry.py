@@ -87,6 +87,11 @@ EXEMPT = {
         "actions-cost-report",
     ): "weekly scheduled report; nothing gates on it, and the alert and "
     "Kryptonite publish do not read the artifact",
+    (
+        "actions/sdr-e2e/action.yaml",
+        "e2e-preview-${{ inputs.app-name }}${{ inputs.artifact-suffix != '' && format('-{0}', inputs.artifact-suffix) || '' }}",
+    ): "reviewer preview links; continue-on-error, and a miss only drops the "
+    "comment's preview section",
 }
 
 # Files that are not valid YAML, so their steps cannot be inspected. Empty, and

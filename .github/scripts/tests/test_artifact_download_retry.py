@@ -74,6 +74,10 @@ EXEMPT = {
         "integration-test-results*",
     ): "scorecard evidence; a miss degrades the report and gates nothing",
     (
+        "workflows/tests-reusable.yaml",
+        "e2e-preview-${{ inputs.app-name }}*",
+    ): "reviewer preview links for the comment; a miss drops that section only",
+    (
         "workflows/conformance-upload-sarif-reusable.yaml",
         "conformance-${{ matrix.slug }}-sarif*",
     ): "workflow_run consumer; nothing gates on it and there is no queue entry to eject",
@@ -390,9 +394,9 @@ def test_a_companion_fetching_a_different_artifact_is_not_a_retry():
     ]
     first_attempts, retries = _classify(steps)
     companion = retries["download"][0]
-    assert _selector(companion) != _selector(
-        first_attempts[0]
-    ), "the fixture must differ in selector, or it proves nothing"
+    assert _selector(companion) != _selector(first_attempts[0]), (
+        "the fixture must differ in selector, or it proves nothing"
+    )
 
 
 def test_a_retry_in_another_job_does_not_satisfy_the_pairing():
