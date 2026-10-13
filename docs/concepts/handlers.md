@@ -226,6 +226,17 @@ Raise a typed `AuthError`, `AppPermissionDeniedError` or `NotFoundError` for a f
 
 The other fields are for the user and the poll cadence; nothing branches on them. `source_state` is the source's own label (`RESUMING`): the gate puts it on the run's health line and in the exhausted-ceiling error, so it is what the user reads while they wait. `queued_queries` is how many statements are waiting for a slot, a count rather than a duration. `next_poll_seconds` is the source's own suggestion for when to ask again; the gate honours it with a 5s floor and never polls past the ceiling, and without it backs off from 5s, doubling to 30s.
 
+#### Network source probes (experimental)
+
+`application_sdk.handler.source_probes.probe_source_network(endpoints)` checks DNS and TCP for each `SourceEndpoint`, then TLS only for `TlsMode.DIRECT`: `NEGOTIATED` lists the TLS probe as `unsupported`, and `NONE` produces no TLS result. It returns a `SourceProbeReport`. Each probe runs only if the previous applicable probe passed, and is bounded by its own timeout (5s / 5s / 10s by default). The report's `checks` are ordinary `PreflightCheck` rows with typed errors under canonical names (`sourceDns`, `sourceTcp`, `sourceTls`). A probe that did not run is listed in `skipped`, never reported as a failed row.
+
+* Rows carry no host name, resolved address or raw socket text.
+* The TLS probe always verifies certificates against the SDK trust store; there is no option to skip verification.
+* A host that resolves only to loopback, link-local or other non-routable addresses is refused before any connection is made.
+* Declare `tls=TlsMode.NEGOTIATED` for protocols that upgrade to TLS inside their own wire protocol (PostgreSQL, MySQL, SQL Server). A raw handshake proves nothing for those, so the TLS probe is listed as `unsupported`.
+
+Nothing in the SDK merges these rows into a verdict yet. [ADR-0021](../adr/0021-source-validation.md) describes the design and the path to wiring them into the gate.
+
 **Tell the setup UI.** An app with a warmup also sets `warmup: true` on the SageV2 widget in its contract, so the setup form runs the warmup flow (poll `/warmup`, then `/check` with `tiers=["warmup"]`). The handler service checks the two agree at startup: for each entry point, it compares the served form's SageV2 `ui.warmup` with whether that entry point has a warmup (a module `warmup` hook, or an app handler overriding `Handler.warmup`), and logs a WARNING naming the entry point on a mismatch. The flag is never added at serve time; the contract is its source. A form with no SageV2 widget is not compared.
 
 ### MetadataInput / MetadataOutput
