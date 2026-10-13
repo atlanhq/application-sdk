@@ -254,6 +254,38 @@ for group in groups:
     assert "L006" in _ids(src)
 
 
+def test_l006_fires_when_finally_continue_overrides_break() -> None:
+    src = """
+from loguru import logger
+
+while True:
+    try:
+        logger.info("done")
+        break
+    finally:
+        continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_silent_when_finally_only_cleans_up() -> None:
+    src = """
+from loguru import logger
+
+while True:
+    try:
+        fetch()
+        logger.info("done")
+        break
+    finally:
+        for conn in conns:
+            if conn.idle:
+                continue
+            conn.close()
+"""
+    assert "L006" not in _ids(src)
+
+
 def test_l006_silent_for_terminal_summary_in_bounded_outer_loop() -> None:
     src = """
 from loguru import logger

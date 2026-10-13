@@ -37,11 +37,38 @@ def _is_terminal_break_summary(
     if index + 1 >= len(statements) or not isinstance(statements[index + 1], ast.Break):
         return False
 
+    child: ast.AST = statement
     ancestor: ast.AST | None = suite
     while ancestor is not None:
         if isinstance(ancestor, (ast.For, ast.AsyncFor, ast.While)):
             return ancestor is loop
+        # A ``finally: continue`` overrides the break and re-runs the loop.
+        if (
+            isinstance(ancestor, (ast.Try, ast.TryStar))
+            and not any(child is value for value in ancestor.finalbody)
+            and _continues_enclosing_loop(ancestor.finalbody)
+        ):
+            return False
+        child = ancestor
         ancestor = parents.get(ancestor)
+    return False
+
+
+def _continues_enclosing_loop(statements: list[ast.stmt]) -> bool:
+    """True when *statements* contain a ``continue`` for the enclosing loop."""
+    pending: list[ast.AST] = list(statements)
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.Continue):
+            return True
+        # A continue in a nested loop's body targets that loop; one in its
+        # ``else`` still targets ours.  Nested scopes cannot continue ours.
+        if isinstance(current, (ast.For, ast.AsyncFor, ast.While)):
+            pending.extend(current.orelse)
+        elif not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            pending.extend(ast.iter_child_nodes(current))
     return False
 
 
