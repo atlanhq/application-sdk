@@ -38,13 +38,18 @@ from application_sdk.handler.source_probe_errors import (
     SourceConnectRefusedError,
     SourceConnectTimeoutError,
     SourceDnsUnavailableError,
+    SourceEndpointLabelsError,
     SourceHostMalformedError,
     SourceHostNotFoundError,
+    SourceProbeTrustStoreError,
     SourceTlsCertificateError,
     SourceTlsHandshakeError,
     SourceTlsTimeoutError,
     SourceUnreachableError,
 )
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 #: Canonical check names. One name per question, whatever the app: the fleet
 #: had 22 names for "can we reach it", which made it impossible to compare.
@@ -294,8 +299,11 @@ async def _close(writer: asyncio.StreamWriter) -> None:
     writer.close()
     try:
         await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
-    except (OSError, TimeoutError, ssl.SSLError):
-        pass
+    except (OSError, TimeoutError) as exc:  # ssl.SSLError is an OSError
+        # The probe already has its answer; a slow or unclean close is not news.
+        logger.debug(
+            "Source probe connection close did not complete: %s", type(exc).__name__
+        )
 
 
 async def _probe_tcp(
@@ -313,13 +321,15 @@ async def _probe_tcp(
                     _, writer = await asyncio.open_connection(
                         str(address), endpoint.port
                     )
-                except OSError as exc:
+                except OSError as exc:  # conformance: ignore[E009] not hidden: the first error becomes this probe's typed row
                     first_error = first_error or exc
                     continue
                 await _close(writer)
                 state.connected = address
                 return _row(SOURCE_TCP_CHECK, endpoint, started, None)
-    except TimeoutError as exc:
+    except (
+        TimeoutError
+    ) as exc:  # conformance: ignore[E009] not hidden: reported as the TCP timeout row
         first_error = first_error or exc
     assert first_error is not None  # the loop ran at least once: DNS passed
     return _row(
@@ -336,7 +346,7 @@ def _verifying_context() -> ssl.SSLContext:
         else ssl.create_default_context()
     )
     if context.verify_mode is not ssl.CERT_REQUIRED or not context.check_hostname:
-        raise RuntimeError("source TLS probe refuses a non-verifying SSL context")
+        raise SourceProbeTrustStoreError()
     return context
 
 
@@ -397,6 +407,11 @@ async def _probe_endpoint(
         try:
             row = await probe(endpoint, state, timeouts, policy)
         except Exception:  # noqa: BLE001 — our defect: fail open, never a row
+            logger.warning(
+                "Source probe %s raised; reported as broken, not as a source failure",
+                base,
+                exc_info=True,
+            )
             report.broken.append(_check_name(base, endpoint))
             row = None
         if row is not None:
@@ -431,7 +446,7 @@ async def probe_source_network(
         A report whose rows are ready to append to ``PreflightOutput.checks``.
 
     Raises:
-        ValueError: Several endpoints without distinct labels — a declaration
+        SourceEndpointLabelsError: Several endpoints without distinct labels — a declaration
             defect, so it fails loudly rather than producing ambiguous rows.
     """
     _require_distinct_labels(endpoints)
@@ -457,4 +472,4 @@ def _require_distinct_labels(endpoints: Sequence[SourceEndpoint]) -> None:
         return
     labels = [e.label for e in endpoints]
     if None in labels or len(set(labels)) != len(labels):
-        raise ValueError("several source endpoints need distinct labels")
+        raise SourceEndpointLabelsError()

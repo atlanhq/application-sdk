@@ -22,6 +22,7 @@ import pytest
 
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.handler import source_probes
+from application_sdk.handler.source_probe_errors import SourceEndpointLabelsError
 from application_sdk.handler.source_probes import (
     SOURCE_DNS_CHECK,
     SOURCE_TCP_CHECK,
@@ -446,7 +447,7 @@ async def test_several_endpoints_are_labelled_and_independent(
 
 @pytest.mark.parametrize("labels", [(None, None), ("a", "a"), ("a", None)])
 async def test_several_endpoints_need_distinct_labels(labels: tuple[str | None, ...]):
-    with pytest.raises(ValueError, match="distinct labels"):
+    with pytest.raises(SourceEndpointLabelsError):
         await probe_source_network(
             [SourceEndpoint(host=_HOST, port=443, label=label) for label in labels]
         )

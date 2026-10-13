@@ -25,6 +25,8 @@ from application_sdk.handler.source_probes import (
     probe_source_network,
 )
 
+pytestmark = pytest.mark.integration
+
 _BOUNDS = NetworkProbeTimeouts(dns_seconds=2, tcp_seconds=2, tls_seconds=2)
 
 

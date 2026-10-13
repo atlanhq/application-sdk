@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors.leaves import (
+    InternalError,
     InvalidInputError,
     NotFoundError,
     PreconditionError,
@@ -124,3 +125,27 @@ class SourceTlsTimeoutError(SourceUnavailableError):
 
     code: ClassVar[str] = "SOURCE_UNAVAILABLE_TLS_TIMEOUT"
     message: str = "The TLS handshake with the source timed out"
+
+
+@dataclass(kw_only=True)
+class SourceEndpointLabelsError(InternalError):
+    """Several endpoints were declared without distinct labels.
+
+    A declaration defect in the app, raised before any probe runs: without
+    labels, two endpoints' rows would carry the same check name.
+    """
+
+    code: ClassVar[str] = "INTERNAL_SOURCE_ENDPOINT_LABELS"
+    message: str = "Several source endpoints need distinct labels"
+
+
+@dataclass(kw_only=True)
+class SourceProbeTrustStoreError(InternalError):
+    """The SDK trust store handed the TLS probe a context that does not verify.
+
+    Our defect, never the source's: the probe refuses to handshake rather than
+    report a certificate it did not check as valid.
+    """
+
+    code: ClassVar[str] = "INTERNAL_SOURCE_PROBE_TRUST_STORE"
+    message: str = "The source TLS probe refuses a trust store that does not verify"
