@@ -767,19 +767,20 @@ unversioned. A run started before this phase recorded the check activity as its 
 so on replay it takes the unpatched branch: one check dispatch with every tier and no probe, exactly
 what it recorded. Every new run records the patch marker.
 
-#### Verifying artifact storage (opt-in)
+#### Verifying artifact storage
 
 The handler certifies the *source*; nothing certifies the store the run will upload its
-artifacts to — and a run that cannot upload is doomed however healthy the source is. Setting
-`preflight_verify_storage = True` opts the app into probing every configured artifact store
-inside the gate, in whatever budget the handler left: a plain write, a HEAD, and a
+artifacts to — and a run that cannot upload is doomed however healthy the source is. The gate
+therefore probes every configured artifact store for every app, in-cluster or SDR, in whatever
+budget the handler left; the probe costs under a second against healthy storage. Setting
+`preflight_verify_storage = False` opts out. The probe is: a plain write, a HEAD, and a
 **multipart-forced** write. The multipart probe matters because uploads above the writer's part
 size (8 MiB by default; `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`) go out as multipart, and a store
 can accept plain PUTs while rejecting multipart initiation — GCS does exactly this for the whole
 window of a bucket relocation, a condition a production RCA traced under multi-hour extractions
 dying at their final upload. The probe is deliberately stricter than a small-artifact-only
-workload's real writes; an app whose artifacts never exceed the part size should weigh that
-before opting in. A mid-run relocation (starting after the gate passed) is covered separately:
+workload's real writes; an app whose artifacts never exceed the part size can opt out. A mid-run
+relocation (starting after the gate passed) is covered separately:
 both object-store write paths — `upload_file` and `_put`, so `put_json` and friends too —
 classify the rejection as `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION` with a platform-attributed
 hint instead of a generic storage failure. The failure also carries the backend's own verdict as
@@ -789,15 +790,15 @@ evidence (`http_status`, `provider_code`, and a credential-free `target`); see
 ```python
 class MyConnector(App):
     preflight_gate_mode = "hard"
-    preflight_verify_storage = True   # a run that cannot upload should not extract
+    preflight_verify_storage = False  # opt out; the default probes the artifact store
 ```
 
 !!! warning "Deployment prerequisite: abort-incomplete-multipart lifecycle rule"
 
-    Every probed bucket must carry an abort-incomplete-multipart-upload lifecycle rule before
-    you set this `True`. A probe cancelled between multipart initiate and complete — which the
+    Every probed bucket must carry an abort-incomplete-multipart-upload lifecycle rule unless
+    you set this `False`. A probe cancelled between multipart initiate and complete — which the
     gate's own timeout does — leaves hidden partial parts the provider bills until they are
-    aborted, and with this opt-in that happens once per run rather than once per worker boot.
+    aborted, and with the probe on that happens once per run rather than once per worker boot.
     The SDK cannot clean them up: `obstore` owns the upload id inside `put_async` and exposes no
     abort call, so there is no handle to cancel against. The SDK neither checks this rule nor
     reports its absence — confirm it out of band.
@@ -808,7 +809,7 @@ relocation rejection stamped `DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION`) and do
 blocks; soft mode reports it as `would_block`.
 
 The storage floor is reserved out of the budget advertised to the handler
-(`PreflightInput.timeout_seconds`), capped at half of it — the opt-in extra never squeezes out the
+(`PreflightInput.timeout_seconds`), capped at half of it — the storage probe never squeezes out the
 source check the gate exists for, so an app declaring a small `preflight_gate_timeout_seconds`
 keeps a usable handler budget and simply gets the skip below. Every path that leaves storage
 unmeasured — too little budget, no infrastructure context, a checker that failed — appends a
