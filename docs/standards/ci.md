@@ -170,6 +170,38 @@ Evaluation uses [`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py), a
 deliberately partial evaluator that raises on anything it does not model rather
 than guessing.
 
+## Bot-opened PRs are never labelled
+
+**Rule:** a lane that opens PRs from a bot (the conformance resync lane,
+`conformance_resync.py`) must not add labels to them, on open or on any later
+update. Identify lane PRs by **head branch + author** — for the resync lane,
+`bot/conformance-resync` + `atlan-conformance-sync[bot]` — which is what every
+consumer (the resync approval gate, the Renovate auto-approve routing,
+Connector Pulse) already matches on.
+
+**Why:** every label add is a `labeled` event, and the connector `tests.yaml`
+keeps `labeled` in its triggers for `e2e` (see above). Labelling a PR a second
+after opening it starts a second Tests run on the same head SHA; the unit job's
+`cancel-in-progress` concurrency group lets that run cancel the first one's
+unit job, and the cancelled run's `Tests Gate` concludes FAILURE. GitHub counts
+every run of a required context, so the PR stays `BLOCKED` and auto-merge never
+enqueues it, even though the second run is green. FND-3832 found this on most
+open resync PRs.
+
+If a human-readable cue is wanted, put it in the PR title (resync PRs already
+start with `chore(conformance): resync`).
+
+The same rule covers Renovate: the fleet preset applies no labels (FND-2201),
+and classifies its PRs by branch slug instead.
+
+Enforced by
+[`test_no_bot_pr_labels.py`](../../.github/scripts/tests/test_no_bot_pr_labels.py),
+which sweeps `.github/`, `renovate-config/` and the conformance bootstrap
+templates for every way code adds a PR label, and parses each Renovate config
+for `labels` / `addLabels` / `:label` presets. Sites that predate it are
+grandfathered by exact count, each with its reason. A new site fails, and so
+does a removed one until its count is updated.
+
 ## CI cost
 
 Cost is part of authoring a workflow, not an afterthought. Review it at the
