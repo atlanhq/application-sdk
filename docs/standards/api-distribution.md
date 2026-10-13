@@ -108,8 +108,9 @@ extras = ["sql", "aws"]
   `AppError`.
 - `check` runs in CI and fails, in those files, on an absolute `from app`
   import, a worker-only import `fix` would move, or a read of
-  `APPLICATION_NAME`. On the host that constant is the host's own name; a
-  handler uses `self.context.app_name`.
+  `APPLICATION_NAME` / `ATLAN_APPLICATION_NAME`. On the host that names the
+  host itself; a handler uses `self.context.app_name`. It also fails for an app
+  with a `compute_manifest` hook, which the host cannot serve.
 - `build --out DIR` stages the files as `<app>_api/*`, generates
   `pyproject.toml` (deps and the `atlan.app_api` entry point) and
   `__init__.py`, then builds the wheel the host installs.
@@ -118,6 +119,22 @@ The tests-reusable `api-member` job runs `check`, builds the wheel, installs it
 alone, and mounts it with `application_sdk.handler.asgi.build_asgi_app`, exactly
 as the host does. The reference is atlan-mysql-app#778; see the
 `api-server-consolidation-migration` skill.
+
+## Routes the host serves
+
+Once an app sets `routeToCommonAPIServer`, every Heracles call for it lands on
+the host, so `build_asgi_app` serves the same routes the worker's handler
+service does for it, from one shared implementation each:
+
+| Routes | Module | On the host |
+|---|---|---|
+| `auth`, `check`, `warmup`, `metadata` | `handler/routes.py` | The app's handler. |
+| `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is `derive_task_queue(app, deployment)`, with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` before `ATLAN_DEPLOYMENT_NAME`: the queue the app's worker polls. Static manifests only: `check` refuses an app with a `compute_manifest` hook. |
+| `config/{id}` (GET/POST), `file` | `handler/object_routes.py` | One S3 bucket from `S3_BUCKET` / `S3_REGION` (the `aws` extra, ambient AWS identity). A config is keyed `persistent-artifacts/apps/<app>/<type>/<id>/config.json` with the hosted app's name, the key its worker reads. 503 without `S3_BUCKET`. |
+
+The worker registers the same modules with its own lookups (the app registry,
+its Dapr-configured store), and `test_metadata_route_parity.py` /
+`test_object_routes_host.py` pin that the two answer alike.
 
 ## App routes
 
