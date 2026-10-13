@@ -5,6 +5,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gen_app_api as gen  # noqa: E402
@@ -160,6 +162,7 @@ def test_fix_removes_logging_from_handler_code(tmp_path: Path) -> None:
         "            'failed: %s',\n"
         "            e,\n"
         "        )\n"
+        "        raise C() from e\n"
         "    logger.info('done')\n"
         "    return None\n",
     )
@@ -173,22 +176,77 @@ def test_fix_removes_logging_from_handler_code(tmp_path: Path) -> None:
         "    try:\n"
         "        return x()\n"
         "    except ValueError as e:\n"
-        "        pass\n"
+        "        raise C() from e\n"
         "    return None\n"
     )
 
 
-def test_fix_refuses_to_leave_a_dangling_logger(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("handler", "problem"),
+    [
+        (
+            "import logging\nlogger = logging.getLogger(__name__)\n"
+            "def f():\n    y = 1; logger.info('x')\n    return y\n",
+            "shares its line with other statements",
+        ),
+        (
+            "from application_sdk.observability.metrics_adaptor import get_logger, get_metrics\n"
+            "M = get_metrics()\n",
+            "imports get_logger together with ['get_metrics']",
+        ),
+        (
+            "import logging\nclass H:\n    def __init__(self):\n"
+            "        self.logger = logging.getLogger(__name__)\n",
+            "a logger stored on an attribute",
+        ),
+        (
+            "import logging\nlogger = logging.getLogger(__name__)\n"
+            "def f():\n    try:\n        return 1\n    except ValueError:\n"
+            "        logger.error('x')\n",
+            "leaves `except: pass`",
+        ),
+    ],
+)
+def test_fix_refuses_unsafe_deletions_and_changes_nothing(
+    tmp_path: Path, handler: str, problem: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _app(tmp_path, handler)
+    assert gen.main(["fix", "--root", str(root)]) == 1
+    assert problem in capsys.readouterr().out
+    assert (root / "app/handler.py").read_text() == handler
+
+
+def test_fix_keeps_an_annotated_logger_out_and_reports_each_deletion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     root = _app(
         tmp_path,
-        "import logging\nlogger = logging.getLogger(__name__)\nhelper(logger)\nfrom .client import C\n",
+        "import logging\nlogger: logging.Logger = logging.getLogger(__name__)\n"
+        "def f():\n    logger.info('x')\n    return 1\n",
     )
-    try:
-        gen.main(["fix", "--root", str(root)])
-    except ValueError as exc:
-        assert "still used" in str(exc)
-    else:
-        raise AssertionError("fix left a reference to a removed logger")
+    assert gen.main(["fix", "--root", str(root)]) == 0
+    assert "logger" not in (root / "app/handler.py").read_text()
+    out = capsys.readouterr().out
+    assert "removed app/handler.py:4: logger.info('x')" in out
+
+
+def test_check_reports_logging_in_the_handler_module(tmp_path: Path) -> None:
+    root = _app(tmp_path, "import logging\nfrom .client import C\nlogging.info('x')\n")
+    problems = gen.check(root, gen.load(root))
+    assert any(
+        "app/handler.py:3: logs in the hosted handler module (P058)" in p
+        for p in problems
+    )
+
+
+def test_fix_refuses_to_leave_a_dangling_logger(tmp_path: Path) -> None:
+    handler = (
+        "import logging\nlogger = logging.getLogger(__name__)\nhelper(logger)\n"
+        "from .client import C\n"
+    )
+    root = _app(tmp_path, handler)
+    assert gen.main(["fix", "--root", str(root)]) == 1
+    assert (root / "app/handler.py").read_text() == handler
 
 
 def test_fix_keeps_logging_in_shared_files_and_moves_the_logger_import(
@@ -318,3 +376,31 @@ def test_the_content_hash_moves_only_with_what_the_host_installs(
     assert gen.content_hash(root, config) == before
     (root / "app/client.py").write_text("from .failures import Boom\nX = 1\n")
     assert gen.content_hash(root, config) != before
+
+
+def test_the_api_floor_is_the_sdk_version_the_app_locks(tmp_path: Path) -> None:
+    root = _app(tmp_path, "from .client import C\n")
+    (root / "uv.lock").write_text(
+        'version = 1\n\n[[package]]\nname = "atlan-application-sdk"\nversion = "3.46.0"\n'
+        'source = { registry = "https://pypi.org/simple" }\n'
+    )
+    pyproject = gen._pyproject(gen.load(root))  # noqa: SLF001
+    assert '"atlan-application-sdk-api[sql]>=3.46.0,<4.0.0",' in pyproject
+
+
+def test_without_a_lock_the_declared_range_is_kept(tmp_path: Path) -> None:
+    root = _app(tmp_path, "from .client import C\n")
+    assert '"atlan-application-sdk-api[sql]>=3.40.0,<4.0.0",' in gen._pyproject(
+        gen.load(root)
+    )  # noqa: SLF001
+
+
+def test_fix_leaves_import_text_inside_strings_alone(tmp_path: Path) -> None:
+    handler = (
+        '"""Usage::\n\n    from app.client import C\n"""\n' "from app.client import C\n"
+    )
+    root = _app(tmp_path, handler)
+    assert gen.main(["fix", "--root", str(root)]) == 0
+    assert (root / "app/handler.py").read_text() == (
+        '"""Usage::\n\n    from app.client import C\n"""\nfrom .client import C\n'
+    )

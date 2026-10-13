@@ -28,9 +28,12 @@ Usage, from the app repo root::
 
 ``fix`` deletes logging only from the handler module itself (P058). The other
 listed files also run on the worker, so their logging stays; only their logger
-import moves to a path the host has (:data:`KNOWN_MOVES`).
-    python3 <sdk>/.github/scripts/gen_app_api.py build --out dist-api [--member api]
-    python3 <sdk>/.github/scripts/gen_app_api.py hash    # content hash; the host's pin-bump gate
+import moves to a path the host has (:data:`KNOWN_MOVES`). It refuses, changing
+nothing, where a deletion would be unsafe: a log call sharing a line with other
+code, a ``get_logger`` import mixed with other names, a logger stored on an
+attribute, or an ``except`` block that would be left as ``pass``. It prints
+each deletion as ``file:line`` and fails on any unused import, unused variable
+or undefined name it introduced (ruff F401/F841/F821). Needs Python 3.11+.
 
 ``check`` is a no-op for an app without ``[tool.atlan-app-api]``. ``build`` with
 ``--member`` and no config builds that directory as-is (an app that keeps its
@@ -104,6 +107,7 @@ class Config:
     sdk_spec: str  # the root's atlan-application-sdk specifier, e.g. >=3.40,<4
     api_source: dict | None  # root [tool.uv.sources] atlan-application-sdk-api
     service: str = ""  # [tool.atlan-app-api].name, when the Service is not <project>
+    sdk_locked: str = ""  # the atlan-application-sdk version in the app's uv.lock
 
     @property
     def name(self) -> str:  # mysql: the app's Service name, which the host routes on
@@ -144,6 +148,7 @@ def load(root: Path) -> Config | None:
         sdk_spec=sdk_spec,
         api_source=sources.get("atlan-application-sdk-api"),
         service=str(section.get("name", "")),
+        sdk_locked=_locked_version(root, "atlan-application-sdk"),
     )
 
 
@@ -237,9 +242,22 @@ def fix_absolute_imports(root: Path, files: list[str]) -> list[str]:
             dots = "." * (depth - common + 1)
             return f"{match.group(1)}from {dots}{'.'.join(target[common:])} import"
 
-        new = re.sub(r"^(\s*)from (app(?:\.\w+)+) import", relative, text, flags=re.M)
-        for old, replacement in KNOWN_MOVES.items():
-            new = new.replace(old, replacement)
+        # Only lines where the parser sees an absolute ``from ... import``: the
+        # same text inside a string or docstring (a usage example) is left alone.
+        starts = {
+            node.lineno
+            for node in ast.walk(ast.parse(text, filename=rel))
+            if isinstance(node, ast.ImportFrom) and node.level == 0
+        }
+        lines = text.splitlines(keepends=True)
+        for number in starts:
+            line = re.sub(
+                r"^(\s*)from (app(?:\.\w+)+) import", relative, lines[number - 1]
+            )
+            for old, replacement in KNOWN_MOVES.items():
+                line = line.replace(old, replacement)
+            lines[number - 1] = line
+        new = "".join(lines)
         if new != text:
             path.write_text(new, encoding="utf-8")
             changed.append(rel)
@@ -253,24 +271,44 @@ _LOG_METHODS = frozenset(
 _CONTEXT_LOG_METHODS = frozenset({"log_debug", "log_info", "log_warning", "log_error"})
 
 
+_LOGGER_FACTORIES = frozenset({"get_logger", "getLogger"})
+
+
+def _called(call: ast.Call) -> str:
+    func = call.func
+    return func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+
+
+def _binds_logger(node: ast.stmt) -> bool:
+    """``x = get_logger(...)`` / ``x: T = getLogger(...)`` (any target)."""
+    value = getattr(node, "value", None)
+    return (
+        isinstance(node, (ast.Assign, ast.AnnAssign))
+        and isinstance(value, ast.Call)
+        and _called(value) in _LOGGER_FACTORIES
+    )
+
+
+def _targets(node: ast.stmt) -> list[ast.expr]:
+    return list(node.targets) if isinstance(node, ast.Assign) else [node.target]  # type: ignore[attr-defined]
+
+
 def _logger_names(tree: ast.Module) -> set[str]:
-    """Names bound to a logger: ``x = get_logger(...)`` / ``logging.getLogger(...)``."""
+    """Names bound to a logger, plus the conventional ones."""
     names = {"logger", "log", "_logger", "LOGGER"}
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            func = node.value.func
-            called = (
-                func.attr
-                if isinstance(func, ast.Attribute)
-                else getattr(func, "id", "")
-            )
-            if called in {"get_logger", "getLogger"}:
-                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        if isinstance(node, ast.stmt) and _binds_logger(node):
+            names.update(t.id for t in _targets(node) if isinstance(t, ast.Name))
     return names
 
 
 def logging_statements(tree: ast.Module) -> list[ast.stmt]:
-    """Every statement in handler code that only logs, binds a logger, or imports one."""
+    """Every statement in handler code that only logs, binds a logger, or imports one.
+
+    Imports count only when every name they bring in is a logger
+    (``logging``, ``loguru``, ``get_logger``); :func:`unsafe_logging` refuses
+    the mixed ones instead of deleting a name that is still used.
+    """
     loggers = _logger_names(tree)
     found: list[ast.stmt] = []
     for node in ast.walk(tree):
@@ -286,41 +324,83 @@ def logging_statements(tree: ast.Module) -> list[ast.stmt]:
                     found.append(node)
                 elif func.attr in _CONTEXT_LOG_METHODS:
                     found.append(node)  # self.context.log_info(...)
-        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-            func = node.value.func
-            called = (
-                func.attr
-                if isinstance(func, ast.Attribute)
-                else getattr(func, "id", "")
-            )
-            if called in {"get_logger", "getLogger"}:
+        elif isinstance(node, ast.stmt) and _binds_logger(node):
+            if all(isinstance(t, ast.Name) for t in _targets(node)):
                 found.append(node)
-        elif isinstance(node, ast.Import) and any(
-            a.name in {"logging", "loguru"} for a in node.names
+        elif isinstance(node, ast.Import) and all(
+            a.name.split(".")[0] in {"logging", "loguru"} for a in node.names
         ):
             found.append(node)
         elif isinstance(node, ast.ImportFrom) and (
             (node.module or "").split(".")[0] in {"logging", "loguru"}
-            or any(a.name == "get_logger" for a in node.names)
-            or (node.module or "").startswith("application_sdk.observability")
+            or all(a.name in _LOGGER_FACTORIES for a in node.names)
         ):
             found.append(node)
     return found
 
 
-def strip_logging(root: Path, files: list[str]) -> list[str]:
-    """Delete logging statements from the listed Python files; return those changed.
+def unsafe_logging(tree: ast.Module, text: str, rel: str) -> list[str]:
+    """Logging ``fix`` will not delete on its own; each needs a decision by hand."""
+    lines = text.splitlines()
+    doomed = logging_statements(tree)
+    doomed_ids = {id(n) for n in doomed}
+    problems = []
+    for node in doomed:
+        before = lines[node.lineno - 1][: node.col_offset]
+        after = lines[(node.end_lineno or node.lineno) - 1][node.end_col_offset or 0 :]
+        if before.strip() or after.split("#", 1)[0].strip():
+            problems.append(
+                f"{rel}:{node.lineno}: shares its line with other statements"
+            )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.stmt) and _binds_logger(node):
+            if not all(isinstance(t, ast.Name) for t in _targets(node)):
+                problems.append(
+                    f"{rel}:{node.lineno}: a logger stored on an attribute "
+                    "(e.g. self.logger); remove it and its uses by hand"
+                )
+        elif isinstance(node, ast.ImportFrom) and (
+            (node.module or "").split(".")[0] not in {"logging", "loguru"}
+        ):
+            names = {a.name for a in node.names}
+            if names & _LOGGER_FACTORIES and names - _LOGGER_FACTORIES:
+                problems.append(
+                    f"{rel}:{node.lineno}: imports get_logger together with "
+                    f"{sorted(names - _LOGGER_FACTORIES)}; split the import by hand"
+                )
+        elif isinstance(node, ast.ExceptHandler):
+            stmts = [s for s in node.body if isinstance(s, ast.stmt)]
+            if stmts and all(id(s) in doomed_ids for s in stmts):
+                problems.append(
+                    f"{rel}:{node.lineno}: removing its log leaves `except: pass`, "
+                    "which swallows the failure; raise a typed AppError (or return "
+                    "a failed result) there, then rerun fix"
+                )
+    return problems
 
-    A block left empty gets ``pass``. Handler code reports through its return
-    value or a typed AppError, and the SDK's routes log the outcome.
+
+def strip_logging(root: Path, files: list[str]) -> list[tuple[str, int, str]]:
+    """Delete logging statements from the listed Python files.
+
+    Returns ``(file, line, first line of the statement)`` for every deletion.
+    Refuses, changing nothing, when :func:`unsafe_logging` finds anything. A
+    block left empty (other than an ``except``, which is refused) gets
+    ``pass``. Handler code reports through its return value or a typed
+    AppError, and the SDK's routes log the outcome.
     """
-    changed = []
+    plans = []
+    problems: list[str] = []
     for rel in files:
         if not rel.endswith(".py"):
             continue
-        path = root / rel
-        text = path.read_text(encoding="utf-8")
+        text = (root / rel).read_text(encoding="utf-8")
         tree = ast.parse(text, filename=rel)
+        problems += unsafe_logging(tree, text, rel)
+        plans.append((rel, text, tree))
+    if problems:
+        raise ValueError("fix changed nothing:\n  " + "\n  ".join(problems))
+    deleted: list[tuple[str, int, str]] = []
+    for rel, text, tree in plans:
         doomed = logging_statements(tree)
         if not doomed:
             continue
@@ -347,6 +427,10 @@ def strip_logging(root: Path, files: list[str]) -> list[str]:
                     first = gone[0]
                     indent = lines[first.lineno - 1][: first.col_offset]
                     replace[first.lineno - 1] = f"{indent}pass\n"
+        deleted += [
+            (rel, s.lineno, lines[s.lineno - 1].strip())
+            for s in sorted(doomed, key=lambda s: s.lineno)
+        ]
         for start, end in sorted(set(spans), reverse=True):
             new = [replace[start]] if start in replace else []
             lines[start:end] = new
@@ -357,8 +441,8 @@ def strip_logging(root: Path, files: list[str]) -> list[str]:
         bound = {
             t.id
             for n in doomed
-            if isinstance(n, ast.Assign)
-            for t in n.targets
+            if isinstance(n, (ast.Assign, ast.AnnAssign))
+            for t in _targets(n)
             if isinstance(t, ast.Name)
         }
         left = sorted(
@@ -373,9 +457,66 @@ def strip_logging(root: Path, files: list[str]) -> list[str]:
                 f"{rel}: a removed logger is still used on line(s) {left}; "
                 "remove those uses by hand, then rerun fix"
             )
-        path.write_text(new_text, encoding="utf-8")
-        changed.append(rel)
-    return changed
+        (root / rel).write_text(new_text, encoding="utf-8")
+    return deleted
+
+
+def ruff_findings(root: Path, files: list[str]) -> set[tuple[str, str]] | None:
+    """ruff's unused-import, unused-variable and undefined-name findings in
+    *files*, as ``(file, message)`` without line numbers (deletions shift them).
+    ``None`` when ruff is not installed."""
+    ruff = shutil.which("ruff")
+    targets = [f for f in files if f.endswith(".py")]
+    if ruff is None:
+        return None
+    if not targets:
+        return set()
+    out = subprocess.run(
+        [
+            ruff,
+            "check",
+            "--no-fix",
+            "--select",
+            "F401,F841,F821",
+            "--output-format",
+            "concise",
+            *targets,
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    found = set()
+    for line in out.stdout.splitlines():
+        parts = line.split(":", 3)
+        if len(parts) == 4 and parts[1].isdigit():
+            found.add((parts[0], parts[3].strip()))
+    return found
+
+
+def _locked_version(root: Path, name: str) -> str:
+    """*name*'s version in the app's ``uv.lock``, or ``""`` (no lock, or not from a registry)."""
+    lock = root / "uv.lock"
+    if not lock.is_file():
+        return ""
+    data = tomllib.loads(lock.read_text(encoding="utf-8"))
+    for package in data.get("package", []):
+        if package.get("name") == name and "registry" in package.get("source", {}):
+            return str(package.get("version", ""))
+    return ""
+
+
+def _floored(spec: str, locked: str) -> str:
+    """*spec* with its lower bound raised to the locked version the app tests against.
+
+    The app declares a range for ``atlan-application-sdk`` but locks and tests
+    one version; the host must not resolve the api distribution below that.
+    Upper bounds and exclusions are kept.
+    """
+    if not locked:
+        return spec
+    keep = [c.strip() for c in spec.split(",") if c.strip().startswith(("<", "!="))]
+    return ",".join([f">={locked}", *keep])
 
 
 def _api_requirement(config: Config) -> str:
@@ -389,7 +530,7 @@ def _api_requirement(config: Config) -> str:
             else ""
         )
         return f"atlan-application-sdk-api{extras} @ git+{source['git']}@{ref}{sub}"
-    return f"atlan-application-sdk-api{extras}{config.sdk_spec}"
+    return f"atlan-application-sdk-api{extras}{_floored(config.sdk_spec, config.sdk_locked)}"
 
 
 def _pyproject(config: Config) -> str:
@@ -562,6 +703,14 @@ def check(root: Path, config: Config) -> list[str]:
             for n, line in enumerate(text.splitlines(), 1)
             if _APPLICATION_NAME.search(line)
         )
+    handler = _module_file(root, config.handler_module)
+    if handler:
+        text = (root / handler).read_text(encoding="utf-8")
+        problems.extend(
+            f"{handler}:{n.lineno}: logs in the hosted handler module (P058); "
+            "run `fix`, or report through the result or a typed AppError"
+            for n in logging_statements(ast.parse(text, filename=handler))
+        )
     problems.extend(
         f"{hook}: compute_manifest runs app code per request; the consolidated "
         "host serves static manifests only, so this app cannot be hosted yet"
@@ -571,6 +720,10 @@ def check(root: Path, config: Config) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 11):
+        sys.exit(
+            "gen_app_api.py needs Python 3.11+ (tomllib); run it with `uv run --python 3.11`"
+        )
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=["fix", "check", "build", "stage", "hash"])
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -609,11 +762,32 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "fix":
-        for rel in strip_logging(args.root, [handler_file(args.root, config)]):
-            print(f"gen_app_api: removed logging statements from {rel}")
+        handler = handler_file(args.root, config)
+        before_files, _ = closure(args.root, config)
+        before = ruff_findings(args.root, before_files)
+        try:
+            deleted = strip_logging(args.root, [handler])
+        except ValueError as exc:
+            print(f"::error::{exc}")
+            return 1
+        for rel, line, code in deleted:
+            print(f"gen_app_api: removed {rel}:{line}: {code}")
         files, _ = closure(args.root, config)
-        for rel in fix_absolute_imports(args.root, files):
+        rewritten = fix_absolute_imports(args.root, files)
+        for rel in rewritten:
             print(f"gen_app_api: rewrote imports in {rel}")
+        after = ruff_findings(args.root, files)
+        if before is None or after is None:
+            print(
+                "gen_app_api: ruff not found; run `ruff check --select "
+                "F401,F841,F821` on the changed files before committing"
+            )
+        else:
+            introduced = sorted(after - before)
+            for rel, message in introduced:
+                print(f"::error::fix left {rel}: {message} (clean it up by hand)")
+            if introduced:
+                return 1
     problems = check(args.root, config)
     for problem in problems:
         print(f"::error::{problem}")
