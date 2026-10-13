@@ -594,7 +594,13 @@ def create_activity_from_task(
 
                 # Materialise any durable FileReferences in the input before the task runs.
                 if store is not None and has_refs_to_materialize(input_data):
-                    input_data = await materialize_file_refs(store, input_data)
+                    input_data = await materialize_file_refs(
+                        store,
+                        input_data,
+                        upstream_store=(
+                            infra.upstream_storage if infra is not None else None
+                        ),
+                    )
 
                 # Consumer side, after materialise: the bytes this task is about to
                 # read are on local disk now, so re-validate them on read. This is

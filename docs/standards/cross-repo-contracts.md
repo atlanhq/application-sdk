@@ -141,6 +141,42 @@ it is read instead of listing the prefix.
   `StorageIntegrityError` rather than misreading it. Bumping it needs a reader
   that accepts both, shipped first.
 
+## The `FileReference` store tag (`store`)
+
+| | |
+|---|---|
+| **Produced by** | `App.download()` / `App.upload()` in `application_sdk/app/base.py` (`_tag_ref_store`), which set `StoreTarget.UPSTREAM` when they read from or wrote to a distinct upstream store |
+| **Served at** | `FileReference.store` in Temporal payloads, as `"deployment"` or `"upstream"` |
+| **Read by** | `materialize_file_refs()` / `fetch()` (via `_resolve_ref_store` in `application_sdk/storage/file_ref_sync.py`), which pick the store a ref is materialised from |
+| **Pinned by** | `tests/unit/app/test_transfer_ref_store.py` |
+
+- **The field is additive and must stay optional, defaulting to `deployment`.**
+  A producer on an older SDK sends no `store`. It is read as `deployment`, which
+  is where that SDK's interceptor always read. A consumer on an older SDK drops
+  the field and reads `deployment` as before.
+- **Do not rename the two values.** They are `StoreTarget`'s string values, and
+  `VerifyRefsInput.store` shares them.
+- **An `upstream` ref with no upstream store bound reads the deployment store.**
+  This mirrors `App.download()`'s own `upstream_storage or storage` routing.
+- **The tag works only inside one run, so it does not cross app boundaries.**
+  Every payload that enters a run from outside has `store=upstream` reset to
+  `deployment` on every ref: the start input (`_validate_workflow_input`, which
+  also covers `continue_with`) and every `@update` argument (the interaction
+  relay). Signals and queries carry no payload. Honouring the tag on those
+  payloads would let any external caller materialise any key in the upstream
+  bucket. The reset reaches typed fields, model extras, and plain dicts shaped
+  like a dumped ref (`storage_path`, `is_durable` and `store` keys). The dicts
+  are covered because an app may round-trip refs through untyped state with
+  `model_dump()` and `FileReference(**raw)` across `continue_with`. A ref that one app outputs and
+  another app takes as input therefore reads the deployment store, as before
+  this field existed. That consumer should go through `App.download(ref=...)`,
+  which routes to upstream itself.
+- **The fix needs the consuming worker on an SDK that knows the field.** Within
+  one app, `download()`/`upload()` and the task they hand off to run on the
+  same worker build, so one SDK bump covers both sides. Do not rely on an older
+  worker honouring the tag during a rolling deploy: it drops the field and
+  reads the deployment store.
+
 ## The connection-scoped `persistent-artifacts` layout
 
 | | |

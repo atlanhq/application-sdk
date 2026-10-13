@@ -49,13 +49,16 @@ class StoreTarget(StrEnum):
 
     * ``DEPLOYMENT`` — the store bound to this deployment
       (``context.storage``).  This is where the activity interceptor
-      persists and materialises every ``FileReference`` on the
-      task-to-task path, in **both** deployment shapes.
+      persists every ``FileReference`` on the task-to-task path, in
+      **both** deployment shapes, and materialises every ref whose
+      ``store`` is not ``UPSTREAM``.
     * ``UPSTREAM`` — Atlan's own bucket (``context.upstream_storage``),
       configured only in SDR deployments and the destination
       ``App.upload`` / ``App.download`` route to when it is present.
       Falls back to the deployment store when no upstream binding
-      exists, mirroring ``App.upload``'s routing.
+      exists, mirroring ``App.upload``'s routing.  A ref those two hand
+      back from a distinct upstream store carries ``store=UPSTREAM``, and
+      the interceptor materialises it from there.
 
     Pick ``DEPLOYMENT`` to assert something about what the interceptor
     wrote; pick ``UPSTREAM`` to assert something about what the publish
@@ -467,6 +470,14 @@ class FileReference(BaseModel, frozen=True):
             ignored. ``None`` for single-file refs and for directory refs
             from producers that predate manifests; those fall back to
             listing ``storage_path``.
+        store: Which object store holds the bytes ``storage_path`` names.
+            ``DEPLOYMENT`` (default) for every ref the interceptor persists.
+            ``App.download`` / ``App.upload`` set ``UPSTREAM`` when they read
+            from or wrote to a *distinct* upstream store (SDR two-store), so
+            a downstream task materialises from the store that has the data
+            rather than listing an empty prefix in the deployment store. An
+            app on an older SDK drops the field on decode and reads the
+            deployment store, as it always did.
     """
 
     local_path: str | None = None
@@ -476,6 +487,7 @@ class FileReference(BaseModel, frozen=True):
     tier: StorageTier = StorageTier.TRANSIENT
     auto_materialize: bool = True
     manifest_path: str | None = None
+    store: StoreTarget = StoreTarget.DEPLOYMENT
 
     @staticmethod
     def from_local(

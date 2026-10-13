@@ -930,6 +930,13 @@ async def download(
     download is treated as a prefix/directory operation.  Otherwise it is
     treated as a single-file download.
 
+    The bytes move through the same engine as ``materialize_file_reference``
+    — path containment, chunked range GETs, digest verification, the per-path
+    lock — and each downloaded file gets a local ``{file}.sha256`` marker
+    beside it. That marker is what lets a task that receives the returned ref
+    on the same worker reuse the files instead of downloading them again;
+    upload ignores it.
+
     Args:
         storage_path: Store key (single file) or prefix (directory) to fetch.
         local_path: Local destination.  Defaults to a temp file/directory.
@@ -944,12 +951,23 @@ async def download(
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
-        _safe_join_under,
         normalize_key,
+    )
+    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: reference imports storage siblings that import this module
+        _materialize_directory,
+        _materialize_guard,
+        _materialize_single_file,
+        _Reuse,
     )
 
     resolved = _resolve_store(store)
     norm_path = normalize_key(storage_path)
+    # The bytes move through the same engine the interceptor materialises
+    # with, so what this leaves on disk — files plus their local ``.sha256``
+    # sidecars — is what a later materialise of the returned ref recognises
+    # and reuses instead of downloading a second time (FND-3795). Only the
+    # routing below is download's own.
+    reuse = _Reuse.REMOTE_DIGEST if skip_if_exists else _Reuse.NEVER
 
     # Determine if this is a single-key or prefix download.
     # Heuristic: if the caller passed a trailing "/", or if listing with the
@@ -966,94 +984,52 @@ async def download(
 
     if not is_prefix:
         # ── Single file ────────────────────────────────────────────────────
-        owns_temp = False
-        if local_path is not None:
-            dest = Path(local_path)
-        else:
-            suffix = Path(norm_path).suffix or ""
-            fd, tmp = tempfile.mkstemp(suffix=suffix)
-            os.close(fd)
-            dest = Path(tmp)
-            owns_temp = True
-
-        try:
-            # resume=False for owned temps: mkstemp yields a fresh name per
-            # call, so a checkpoint sidecar could never be reused — it would
-            # only be stranded under /tmp on failure. Caller-supplied stable
-            # destinations keep the default (env-driven) resume behaviour.
-            transferred, reason = await _download_one(
-                resolved,
-                norm_path,
-                dest,
-                skip_if_exists=skip_if_exists,
-                resume=False if owns_temp else None,
-            )
-        # conformance: ignore[E004] cleanup-only handler that always re-raises; no logging needed here
-        except BaseException:
-            # Don't leave an empty temp file behind on download failure
-            # (BLDX-1155 #5).
-            if owns_temp:
-                try:
-                    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                        _discard_transfer_state,
-                    )
-
-                    dest.unlink(missing_ok=True)
-                    # Belt-and-braces: never strand either staging file for a
-                    # temp destination either — see the matching cleanup in
-                    # _upload_from_store for why this defers to the writer's
-                    # own discard rather than re-spelling the deletions.
-                    _discard_transfer_state(dest)
-                except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
-                    pass
-            raise
+        # With no local_path the engine picks a fresh temp name, and removes
+        # it (and any transfer staging) if the download fails (BLDX-1155 #5).
         ref = FileReference(
-            local_path=str(dest),
-            storage_path=norm_path,
-            is_durable=True,
-            file_count=1,
+            storage_path=norm_path, is_durable=True, local_path=local_path
         )
-        return DownloadOutput(ref=ref, synced=transferred, reason=reason)
-
-    else:
-        # ── Directory / prefix ─────────────────────────────────────────────
-        prefix = norm_path.rstrip("/") + "/"
-        # Listing carries per-object sizes, so large files chunk without a
-        # per-file HEAD (BLDX-1513); it also records which objects have a
-        # SHA-256 sidecar, so integrity verification costs no extra probe
-        # (FND-306). Sidecars themselves are excluded by the helper.
-        data_objects = await list_data_objects(prefix, resolved, normalize=False)
-
-        if local_path is not None:
-            dest_dir = Path(local_path)
-        else:
-            dest_dir = Path(tempfile.mkdtemp())
-
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        strip = prefix
-
-        transferred_count = 0
-        for obj in data_objects:
-            rel = obj.key.removeprefix(strip)
-            # Reject keys whose resolved path escapes dest_dir (e.g. via ".." segments).
-            local_file = _safe_join_under(dest_dir, rel)
-            ok, _ = await _download_one(
-                resolved,
-                obj.key,
-                local_file,
-                skip_if_exists=skip_if_exists,
-                file_size=obj.size,
-                etag=obj.etag,
-                sidecar_present=obj.has_sidecar,
+        if local_path is None:
+            out, downloaded = await _materialize_single_file(
+                resolved, ref, None, reuse=reuse
             )
-            if ok:
-                transferred_count += 1
-
-        reason = "downloaded" if transferred_count > 0 else "skipped:hash_match"
-        ref = FileReference(
-            local_path=str(dest_dir),
-            storage_path=prefix,
-            is_durable=True,
-            file_count=len(data_objects),
+        else:
+            async with _materialize_guard(local_path):
+                out, downloaded = await _materialize_single_file(
+                    resolved, ref, None, reuse=reuse
+                )
+        current_progress_tracker().mark_progress("storage.download_file")
+        return DownloadOutput(
+            ref=out,
+            synced=downloaded > 0,
+            reason="downloaded" if downloaded else "skipped:hash_match",
         )
-        return DownloadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
+
+    # ── Directory / prefix ─────────────────────────────────────────────────
+    prefix = norm_path.rstrip("/") + "/"
+    # Listing carries per-object sizes, so large files chunk without a
+    # per-file HEAD (BLDX-1513); it also records which objects have a
+    # SHA-256 sidecar, so integrity verification costs no extra probe
+    # (FND-306). Sidecars themselves are excluded by the helper. Unlike a
+    # materialise, a download declares no file count: an empty prefix is an
+    # empty directory, not a failed hand-off.
+    data_objects = await list_data_objects(prefix, resolved, normalize=False)
+    dest_dir = Path(local_path) if local_path is not None else Path(tempfile.mkdtemp())
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    ref = FileReference(
+        local_path=str(dest_dir),
+        storage_path=prefix,
+        is_durable=True,
+        file_count=len(data_objects),
+    )
+    async with _materialize_guard(str(dest_dir)):
+        out, downloaded = await _materialize_directory(
+            resolved,
+            ref,
+            [(obj, None) for obj in data_objects],
+            str(dest_dir),
+            reuse=reuse,
+        )
+    reason = "downloaded" if downloaded > 0 else "skipped:hash_match"
+    return DownloadOutput(ref=out, synced=downloaded > 0, reason=reason)

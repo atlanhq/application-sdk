@@ -739,9 +739,10 @@ class TestOwnedTempCleanupRemovesBothStagingFiles:
 
         from application_sdk.storage import reference, transfer
 
+        # transfer.download owns no temp cleanup since FND-3795: its owned
+        # temps are created and discarded by _materialize_single_file.
         for func in (
             transfer._upload_from_store,
-            transfer.download,
             reference._materialize_single_file,
         ):
             source = inspect.getsource(func)
