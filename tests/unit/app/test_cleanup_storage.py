@@ -13,7 +13,7 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import StorageCleanupInput, StorageCleanupOutput
 from application_sdk.contracts.storage import DownloadInput
-from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _put
 
@@ -782,6 +782,47 @@ class TestCleanupStorageSparesDownloadedKeys:
         assert await self._exists(deployment, self._KEY)
         assert await self._exists(upstream, self._KEY)
         assert result.deleted_count == 0
+
+    @pytest.mark.asyncio
+    async def test_prefix_sweep_still_removes_runs_deployment_copy(self) -> None:
+        """Opt-in sweep owns the run prefix, whatever store the ref names.
+
+        ``App.upload`` dual-writes the same run-prefix key to both stores and
+        returns an UPSTREAM ref. Skipping that key in the sweep would leak the
+        run's own deployment copy; the upstream copy is never touched.
+        """
+        from application_sdk.execution._temporal.activities import _track_file_refs
+
+        run_prefix = "artifacts/apps/test/workflows/wf-test/r1"
+        key = f"{run_prefix}/transformed/0.json"
+        deployment, upstream = create_memory_store(), create_memory_store()
+        await _put(key, self._DATA, deployment)
+        await _put(key, self._DATA, upstream)
+        _track_file_refs(
+            "wf-test",
+            FileReference(
+                storage_path=key,
+                is_durable=True,
+                tier=StorageTier.RETAINED,
+                store=StoreTarget.UPSTREAM,
+            ),
+        )
+
+        with (
+            mock.patch(
+                "application_sdk.app.base._get_execution_id_from_task",
+                return_value="wf-test",
+            ),
+            mock.patch(
+                "application_sdk.execution.build_output_path", return_value=run_prefix
+            ),
+        ):
+            await self._app(deployment, upstream).cleanup_storage(
+                StorageCleanupInput(include_prefix_cleanup=True)
+            )
+
+        assert not await self._exists(deployment, key)
+        assert await self._exists(upstream, key)
 
     @pytest.mark.asyncio
     async def test_transient_ref_under_connection_cache_is_not_deleted(

@@ -2353,9 +2353,12 @@ class App(ABC):
            way to remove ``RETAINED`` refs.
 
         Objects under ``PROTECTED_STORAGE_PREFIXES`` (``persistent-artifacts/``,
-        ``connection-cache/``) are never deleted, and neither is any key of a
-        ref tagged ``store=UPSTREAM``: those bytes are in the upstream store,
-        not the deployment store this task deletes from.
+        ``connection-cache/``) are never deleted. Pass 1 also skips every ref
+        tagged ``store=UPSTREAM``: those bytes are in the upstream store, not
+        the deployment store this task deletes from. Pass 2 does not consult
+        refs: every deployment key under this run's prefix belongs to this
+        run, including the deployment copy ``App.upload`` dual-writes beside
+        an UPSTREAM ref in a two-store deployment.
 
         If no object store is configured (local dev), returns immediately with
         zero counts.  Individual delete errors increment ``error_count`` but
@@ -2444,8 +2447,8 @@ class App(ABC):
                 if any(storage_path.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
                     skipped += 1
                     continue
-                # The bytes live in the upstream store, which this run never
-                # owns; the same key in ``store`` is someone else's object.
+                # The ref names the upstream store; this task deletes only from
+                # the deployment store, where the same key is not this ref's.
                 if (
                     getattr(ref, "store", StoreTarget.DEPLOYMENT)
                     == StoreTarget.UPSTREAM
