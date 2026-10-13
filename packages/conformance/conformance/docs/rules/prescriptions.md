@@ -1428,15 +1428,16 @@ helper derives it from the creator, which also rejects blank segments.
   differently or raises on a reachable blank input), in which case the reason names the
   creator or says none exists, and the f-string lives in one helper per name shape (by
   convention in app/qualified_names.py; the detector does not check the location) rather
-  than being repeated. Or the f-string is a Process / ColumnProcess identity in one
-  helper per process shape: `generate_qualified_name(process_id=...)` only prefixes the
-  connection and needs placeholder inputs, so a helper that calls it and a helper that
-  keeps the f-string with a reason naming it are both accepted when they produce the
-  qualifiedName the app emits today. Or the f-string is not an identity at all (an
-  object-store key or prefix starting with the qn, a trailing-`/` match prefix, a
-  log/exception message or display text), and the reason names what the string is. A
-  directive on a non-process site whose creator produces the identical string for every
-  reachable input is unremediated: that helper returns the creator's `.qualified_name`.
+  than being repeated. Or the f-string is a Process / ColumnProcess / BIProcess identity
+  in one helper per process shape: `generate_qualified_name(process_id=...)` only
+  prefixes the connection and needs placeholder inputs, so a helper that calls it and a
+  helper that keeps the f-string with a reason naming it are both accepted when they
+  produce the qualifiedName the app emits today. Or the f-string is not an identity at
+  all (an object-store key or prefix starting with the qn, a trailing-`/` match prefix,
+  a log/exception message or display text), and the reason names what the string is. A
+  directive on a non-process identity site whose creator produces the identical string
+  for every reachable input is unremediated: that helper returns the creator's
+  `.qualified_name`.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
@@ -1453,13 +1454,13 @@ Fix: keep each qualifiedName grammar in one helper per name shape and call the h
 from every site (by convention all in `app/qualified_names.py`; the detector does not
 check the location). A helper returns `X.creator(...).qualified_name` when that creator
 produces the identical string for every input the app can receive; otherwise it keeps
-the f-string with `# conformance: ignore[P028] <reason>`.  A Process / ColumnProcess
-helper may do either: `generate_qualified_name` with `process_id` only prefixes the
-connection, needs placeholder inputs, and returns a hash instead when `process_id` is
-blank, so both shapes are accepted when they produce the qualifiedName the app emits
-today.  A `process_id` f-string is itself flagged only when it interpolates a
-qualifiedName and contains a `/` literal (`f"{model_qn}@allmodule"` is not flagged); a
-flagged one takes the same ignore.
+the f-string with `# conformance: ignore[P028] <reason>`.  A Process / ColumnProcess /
+BIProcess helper may do either: `generate_qualified_name` with `process_id` only
+prefixes the connection, needs placeholder inputs, and returns a hash instead when
+`process_id` is blank, so both shapes are accepted when they produce the qualifiedName
+the app emits today.  A `process_id` f-string is itself flagged only when it
+interpolates a qualifiedName and contains a `/` literal (`f"{model_qn}@allmodule"` is
+not flagged); a flagged one takes the same ignore.
 
 Not an identity — suppress with a reason: an f-string that embeds a qualifiedName but
 does not build an asset identity is a false positive of this name-and-`/` heuristic.

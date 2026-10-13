@@ -53,7 +53,8 @@ P028, P052, P055, O002, O003, O004. These rules name this skill as their
 `remediation_reference`, and `/remediate` hands their findings here. When the
 skill is done, run
 `atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004` and
-confirm none of these rule ids is still reported.
+confirm none of these rule ids is still reported, except the P028
+**identity change** sites the developer chose to leave open.
 
 ## Why this matters
 
@@ -71,7 +72,7 @@ so the skill proves parity before it finishes.
 
 | Rule | Fires on | Stops when |
 |---|---|---|
-| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the site calls a helper that returns `X.creator(...).qualified_name`, or the helper keeps the f-string with a justified ignore, or (Process / ColumnProcess) calls `generate_qualified_name(process_id=...)` and gives the qualifiedName the app emits today (the detector does not check where the helper lives; `app/qualified_names.py` is the convention) |
+| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the site calls a helper that returns `X.creator(...).qualified_name`, or the helper keeps the f-string with a justified ignore, or (Process / ColumnProcess / BIProcess) calls `generate_qualified_name(process_id=...)` and gives the qualifiedName the app emits today (the detector does not check where the helper lives; `app/qualified_names.py` is the convention) |
 | P052 | `.to_nested_bytes()`, `.to_nested_dict()`, pyatlan_v9 `to_atlas_format`, or `to_atlas_format_dict`, in `app/` (not `app/generated/`) | the entity goes through `entity_bytes` |
 | P055 | a pyatlan_v9 mapper populating the list end of a 1-to-N relationship — `Table(columns=...)`, `process.fabric_activities = [...]`, `schema.tables.append(...)` | each child sets its single reference to the parent (`column.table = RelatedTable(...)`) and the parent's list is left unset |
 | O002 | any `.dict()` call in a module that imports pyatlan asset models | `.dict()` is gone, or the module no longer imports asset models |
@@ -284,9 +285,10 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    in a `generate_qualified_name` helper. Apply the choice the developer made
    at Stop 1 for each **identity change** site. Call sites use the helpers. In a dict-mapper app the helpers return
    strings only, and the emitted dicts keep their shape. Give each
-   **not an identity** site its reasoned ignore in place. Leave **decode**
-   sites, and **identity change** sites left open, untouched and
-   **unsuppressed**: they stay P028 findings, listed in the PR description.
+   **not an identity** site its reasoned ignore in place. Leave **identity
+   change** sites left open untouched and **unsuppressed**: they stay P028
+   findings, listed in the PR description. **decode** sites are not P028
+   sites; leave them as Step 1 says.
 4. **P052 / O002** — serialize every entity with
    `entity_bytes(asset, envelope=ENTITY_ENVELOPE, entity_type=...)`, one module-level
    policy. Pass `connection_name=` and `last_sync=` unless the mapper already
@@ -341,7 +343,8 @@ Two stops, developer decides at each:
 
 1. **After Step 1** — the inventory: every site, its class, the grammar
    comparison for each creator rewrite, the envelope for each serialization
-   site, and each **identity change** site with its options. No edits yet.
+   site, each **identity change** site with its options, and each P055
+   child that is emitted only through its parent's list. No edits yet.
 2. **After Step 3** — the evidence: the re-detect output, the test result,
    the parity diff and the new parity test. Then hand off for PR review.
 

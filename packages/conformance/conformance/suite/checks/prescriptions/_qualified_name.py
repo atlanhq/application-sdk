@@ -114,7 +114,8 @@ def check_p028(
                         ".creator() when that gives the identical string, else keep "
                         "the f-string there with an ignore whose reason says which "
                         "case applies (no identical creator, a process identity, or "
-                        "not an identity)."
+                        "not an identity); a string that is not an identity keeps "
+                        "its ignore in place, not in a helper."
                     ),
                     directives=directives,
                 )

@@ -135,7 +135,7 @@ external to the scanned source.  P028 (hand-built qualifiedName f-string) propos
 one helper per name shape (by convention in `app/qualified_names.py`; the
 detector does not check the location), derived from the pyatlan
 `.creator()` where that gives the identical string for every reachable input and
-an f-string with a justified ignore otherwise (a Process / ColumnProcess helper
+an f-string with a justified ignore otherwise (a Process / ColumnProcess / BIProcess helper
 may instead call `generate_qualified_name(process_id=...)` when that gives the
 qualifiedName the app emits today), a rewrite performed by the
 `migrate-asset-modeling` skill (its `remediation_reference`); the SDK has no
