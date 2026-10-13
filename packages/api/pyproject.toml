@@ -61,6 +61,7 @@ core = [
     "application_sdk.credentials.errors",
     "application_sdk.credentials.spec",
     "application_sdk.credentials.ingress",
+    "application_sdk.credentials.types",
     "application_sdk.common.concurrency",
     "application_sdk.common.logger",
     "application_sdk.templates.contracts",

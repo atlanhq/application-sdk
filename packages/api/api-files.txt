@@ -45,6 +45,7 @@ application_sdk/credentials/extra.py
 application_sdk/credentials/ingress.py
 application_sdk/credentials/ref.py
 application_sdk/credentials/spec.py
+application_sdk/credentials/types.py
 application_sdk/credentials/utils.py
 application_sdk/errors/__init__.py
 application_sdk/errors/base.py
