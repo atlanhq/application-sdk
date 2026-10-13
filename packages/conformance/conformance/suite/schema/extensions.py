@@ -108,9 +108,6 @@ class AtlanRuleProperties(BaseModel):
     cases_ref: str | None = None
     """``catalog.RuleDefinition.cases_ref``, carried as ``atlan/casesRef``."""
 
-    owner: str | None = None
-    """``catalog.RuleDefinition.owner``, carried as ``atlan/owner``."""
-
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
@@ -140,8 +137,6 @@ class AtlanRuleProperties(BaseModel):
             )
         if self.cases_ref is not None:
             out["atlan/casesRef"] = self.cases_ref
-        if self.owner is not None:
-            out["atlan/owner"] = self.owner
         return out
 
     @classmethod
@@ -166,7 +161,6 @@ class AtlanRuleProperties(BaseModel):
             if (ref := props.get("atlan/remediationReference")) is not None
             else None,
             cases_ref=props.get("atlan/casesRef"),
-            owner=props.get("atlan/owner"),
         )
 
 

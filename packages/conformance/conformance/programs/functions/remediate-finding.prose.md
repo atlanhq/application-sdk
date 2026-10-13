@@ -13,8 +13,7 @@ description: >
 - `finding` (object, required) — a finding as returned by `detect-violations`:
   `rule_id`, `area`, `file`, `line`, `column`, `message`, `hint`,
   `autofixable`, `disposition`, `fingerprint`, `forces_external_influence`,
-  `canonical_reference`, `remediation_reference`, `cases_ref`, `owner`,
-  `case`.  `autofixable` is the rule's classification —
+  `canonical_reference`, `remediation_reference`, `cases_ref`, `case`.  `autofixable` is the rule's classification —
   `true` means an *auto-fixable* rule the lane may apply a prescription for,
   `false` means a *migration* rule that is never applied by this function
   (see *Reference apps, impact analysis and verification* below).
@@ -97,9 +96,8 @@ description: >
   which files in this app would have to change, the external skill or
   migration guide to run when the rule names one, and any owner decision the
   migration needs.  When the rule has `cases_ref`, the brief starts with the
-  case id and its route (`apply`, `draft` or `escalate`), or, for a site no
-  case covers, `escalate` to `finding.owner` with each condition and why it
-  failed.  The loop carries it into residue verbatim so the
+  case id and the evidence that confirms it, or, for a site no case covers,
+  each condition and why it failed.  The loop carries it into residue verbatim so the
   connector's migration sub-issue starts from it rather than from nothing.
 - `remediation_reference` — for a migration rule, `finding.remediation_reference`
   passed through unchanged, so the loop can group residue by the skill,
@@ -404,9 +402,9 @@ sanctioned channel, silently disabling the gate is not.
   If `finding.case` is set, read only that case's section.  Otherwise read
   the index, check every row against the site, and pick the row whose
   evidence you can cite; then read only that section.  If no row matches, or
-  you cannot cite the evidence, the case is `escalate` to `finding.owner`
-  (residue reason `no-cited-evidence`).  Still apply nothing: the brief names
-  the case, its route and the cited evidence, and follows the section.
+  you cannot cite the evidence, no case applies (residue reason
+  `no-cited-evidence`).  Still apply nothing: the brief names the case and
+  the cited evidence, and follows the section.
 
 ### Dispatch by area
 

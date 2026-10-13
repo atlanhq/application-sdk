@@ -171,14 +171,9 @@ class RuleDefinition(BaseModel):
     """The rule's cases file, a path relative to the ``conformance`` package
     (``cases/P001.md``).  It lists every known case as *condition → action*:
     a header with the done-bar, an index with one row per case (condition,
-    evidence to cite, route), and one section per case.  A site that matches
-    no case, or whose condition the remediator cannot cite evidence for, goes
-    to ``owner``.  Migration rules only; the file's structure is checked by
-    ``tests/test_cases_files.py``."""
-
-    owner: str | None = None
-    """Who decides a site that matches no case in ``cases_ref``: a role such
-    as ``"app-owner"``, or a team.  Required when ``cases_ref`` is set."""
+    how to confirm it), and one section per case.  A site that matches no
+    case is not remediable from the file.  Migration rules only; the file's
+    structure is checked by ``tests/test_cases_files.py``."""
 
     short_description: str = ""
     full_description: str = ""
@@ -330,19 +325,12 @@ class RuleDefinition(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _cases_name_an_owner(self) -> RuleDefinition:
-        """A cases file routes unmatched sites to ``owner``, so it needs one;
-        an auto-fixable rule is applied by the lane and has no cases."""
-        if self.cases_ref is None:
-            return self
-        if self.autofixable:
+    def _cases_are_for_migration_rules(self) -> RuleDefinition:
+        """An auto-fixable rule's fix is its prescription or command, not cases."""
+        if self.cases_ref is not None and self.autofixable:
             raise ValueError(
                 f"{self.id}: cases_ref is for migration rules; an auto-fixable "
                 f"rule names a prescription or command instead."
-            )
-        if not self.owner:
-            raise ValueError(
-                f"{self.id}: cases_ref needs an owner for the sites no case covers."
             )
         return self
 
@@ -369,7 +357,6 @@ class RuleDefinition(BaseModel):
             canonical_reference=self.canonical_reference or None,
             remediation_reference=self.remediation_reference,
             cases_ref=self.cases_ref,
-            owner=self.owner,
         )
         return ReportingDescriptor(
             id=self.id,

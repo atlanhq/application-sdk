@@ -89,8 +89,6 @@ description: >
   - `cases_ref` — string or null (from `atlan/casesRef`). The rule's cases
     file, relative to the conformance package: every known case as
     *condition → action* (layout in `cases/README.md`).
-  - `owner` — string or null (from `atlan/owner`). Who decides a site that
-    matches no case in `cases_ref`.
   - `hint` — string or null (from `atlan/hint`).
   - `case` — string or null (from the result's `atlan/case`). The entry in
     `cases_ref` the checker proved for this site; null when it cannot tell.
@@ -173,8 +171,8 @@ Tag each result's area by reading the first letter of `result.rule_id`:
 
 Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate`,
 `atlan/forcesExternalInfluence` (default `false` if absent),
-`atlan/canonicalReference`, `atlan/remediationReference`, `atlan/casesRef`
-and `atlan/owner` (each default `null` if absent) from
+`atlan/canonicalReference`, `atlan/remediationReference` and
+`atlan/casesRef` (each default `null` if absent) from
 `run.tool.driver.rules[result.rule_index].properties`, and `atlan/hint` and
 `atlan/case` from `result.properties`.  Return `sarif_path` and the structured `findings` list.
 
