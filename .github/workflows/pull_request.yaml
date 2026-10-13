@@ -674,6 +674,7 @@ jobs:
     needs:
       [
         changes,
+        e2e-request,
         matrix-builder,
         build-sdk-base-image,
         merge-sdk-base-image,
@@ -687,8 +688,8 @@ jobs:
       # Reading this PR's current head, so a poll for checks that will never
       # exist stops early. Missing, the read 403s, the poll warns and waits the
       # full budget — the old behaviour, which is why this is easy to drop and
-      # never notice.
-      pull-requests: read
+      # never notice. Write: the sticky `/e2e` comment's verdict (FND-3839).
+      pull-requests: write
     steps:
       # An un-opted bump-version PR (FND-3748) skipped every upstream job; fail
       # here, before the upstream check would read those skips as a pass.
@@ -748,6 +749,26 @@ jobs:
             --sha "$SHA" \
             --names-json "$NAMES_JSON" \
             --pr-number "$PR_NUMBER"
+
+      # The PR's sticky `/e2e` comment gets the verdict: one row per connector
+      # e2e check on the head commit (FND-3839). A view of those checks, never
+      # the verdict itself, so fail-open; only when e2e was asked for here.
+      - name: Post the /e2e verdict on the PR
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          needs.e2e-request.outputs.requested == 'true' &&
+          steps.upstream.outputs.dispatched == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 .github/scripts/test_command_comment.py
+          --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
+          sdk-e2e-verdict
 
   # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
   # create_store_from_binding + CloudStore against real buckets/vaults using the

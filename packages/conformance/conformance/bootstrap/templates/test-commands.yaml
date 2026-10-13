@@ -72,5 +72,5 @@ jobs:
       actions: write # dispatch the requested runs; re-run Release Gate
       statuses: write # the `gate-check` status
       issues: write # reply to the comment
-      pull-requests: read # the PR's head commit and branch
+      pull-requests: write # the PR's head commit and branch; the sticky comment
     uses: atlanhq/application-sdk/.github/workflows/test-commands-reusable.yaml@main

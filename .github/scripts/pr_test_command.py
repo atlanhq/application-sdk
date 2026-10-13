@@ -75,6 +75,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Callable
+from urllib.parse import quote
 
 #: A cheap first filter on the comment's ``author_association``. It is a
 #: relationship, not a role — ``MEMBER`` is any org member, even one with only
@@ -225,6 +226,11 @@ class Plan:
     reply: str
     dispatches: tuple = ()
     pending_status: tuple = ()  # (context, description), posted before dispatch
+    #: Nothing to do (already passed / already running): a 👍, no comment.
+    noop: bool = False
+    #: Filled by run_dispatch for the comment: the commit and run links.
+    sha: str = ""
+    links: tuple = ()
 
 
 def plan_dispatch(
@@ -252,6 +258,7 @@ def plan_dispatch(
             False,
             f"A test run for `{sha7}` is already in progress, so this request "
             f"was not started again: {listed}",
+            noop=True,
         )
 
     if request.command == E2E:
@@ -274,6 +281,7 @@ def plan_dispatch(
                 False,
                 f"e2e already passed on `{sha7}`; nothing to do. "
                 "Comment `/e2e force` to run it again anyway.",
+                noop=True,
             )
         behind = (
             f" Note: this branch is {pr.behind_by} commit(s) behind `{pr.base_ref}`, "
@@ -288,7 +296,20 @@ def plan_dispatch(
             "that commit. A push makes it stale: comment `/e2e` again on the new head."
             + behind,
             dispatches=(
-                Dispatch(TESTS_WORKFLOW, {"run_e2e": "only", "head_sha": pr.head_sha}),
+                Dispatch(
+                    TESTS_WORKFLOW,
+                    {
+                        "run_e2e": "only",
+                        "head_sha": pr.head_sha,
+                        # Lets the run edit this PR's `/e2e` comment as it goes;
+                        # only sent when the branch's file declares it.
+                        **(
+                            {"pr_number": str(pr.number)}
+                            if "pr_number" in (dispatch_inputs(tests) or ())
+                            else {}
+                        ),
+                    },
+                ),
             ),
         )
 
@@ -308,6 +329,7 @@ def plan_dispatch(
             False,
             f"The release gate already passed on `{sha7}`; nothing to do. "
             "Comment `/gate-check force` to run it again anyway.",
+            noop=True,
         )
     dispatches = []
     for workflow in GATE_CHECK_WORKFLOWS:
@@ -443,6 +465,9 @@ class RerunPlan:
     reply: str
     marker: tuple = ()  # (context, state, description)
     workflows: tuple = ()  # files whose newest run on the commit must see it
+    noop: bool = False
+    sha: str = ""
+    links: tuple = ()
 
 
 def plan_rerun(request: Request, pr: PullRequest, statuses: dict) -> RerunPlan:
@@ -457,6 +482,7 @@ def plan_rerun(request: Request, pr: PullRequest, statuses: dict) -> RerunPlan:
                 False,
                 f"e2e was already requested on `{sha7}`. Comment `/e2e force` "
                 "to run it again.",
+                noop=True,
             )
         return RerunPlan(
             True,
@@ -474,6 +500,7 @@ def plan_rerun(request: Request, pr: PullRequest, statuses: dict) -> RerunPlan:
             False,
             f"`{sha7}` is already opted in to the release gate. Comment "
             "`/gate-check force` to re-run it.",
+            noop=True,
         )
     return RerunPlan(
         True,
@@ -626,6 +653,14 @@ class GitHub:
             "jobs",
         )
 
+    def _paged_list(self, path: str) -> list:
+        """Every page of an endpoint that returns a bare JSON array."""
+        pages = self._json(["--paginate", "--slurp", path])
+        rows: list = []
+        for page in pages or []:
+            rows.extend(page if isinstance(page, list) else [page])
+        return rows
+
     def _paged(self, path: str, key: str) -> list:
         """Every page of a list endpoint. A decision such as "nothing is in
         flight" must not rest on whichever 100 rows came first."""
@@ -672,6 +707,51 @@ class GitHub:
 
     def comment(self, pr: int, body: str) -> None:
         self.post(f"repos/{self.repo}/issues/{pr}/comments", {"body": body})
+
+    def check_runs(self, sha: str) -> list:
+        """Every check run on ``sha``, newest suite's last."""
+        return self._paged(
+            f"repos/{self.repo}/commits/{sha}/check-runs?per_page=100&filter=latest",
+            "check_runs",
+        )
+
+    def find_open_pr(self, branch: str) -> int:
+        """Number of the open PR from ``branch`` in this repository (0: none)."""
+        owner = self.repo.split("/")[0]
+        rows = self._paged_list(
+            f"repos/{self.repo}/pulls?state=open&per_page=100"
+            f"&head={owner}:{quote(branch, safe='')}"
+        )
+        return int(rows[0]["number"]) if rows else 0
+
+    def find_comment(self, pr: int, marker: str) -> int:
+        """Id of the newest comment on ``pr`` carrying ``marker`` (0: none)."""
+        rows = self._paged_list(f"repos/{self.repo}/issues/{pr}/comments?per_page=100")
+        found = [r for r in rows if marker in (r.get("body") or "")]
+        return int(max(found, key=lambda r: r["id"])["id"]) if found else 0
+
+    def update_comment(self, comment_id: int, body: str) -> None:
+        self._json(
+            [
+                "-X",
+                "PATCH",
+                f"repos/{self.repo}/issues/comments/{comment_id}",
+                "-f",
+                f"body={body}",
+            ]
+        )
+
+    def react(self, comment_id: int, content: str) -> None:
+        """Best effort: a reaction is a courtesy, never load-bearing."""
+        if not comment_id:
+            return
+        try:
+            self.post(
+                f"repos/{self.repo}/issues/comments/{comment_id}/reactions",
+                {"content": content},
+            )
+        except GitHubError as error:
+            print(f"::warning::could not react: {error}", file=sys.stderr)
 
     def rerun(self, run_id: int) -> None:
         self._json(["-X", "POST", f"repos/{self.repo}/actions/runs/{run_id}/rerun"])
@@ -721,9 +801,38 @@ def run_dispatch(github: GitHub, request: Request, run_url: str) -> Plan:
         # window where the run exists but the commit says nothing.
         for context, description in plan.pending_status:
             github.status(pr.head_sha, context, "pending", description, run_url)
-        for d in plan.dispatches:
-            github.dispatch(d.workflow, pr.head_ref, d.inputs)
-    return plan
+        try:
+            for d in plan.dispatches:
+                github.dispatch(d.workflow, pr.head_ref, d.inputs)
+        except GitHubError:
+            # A pending status nothing will ever settle would hold Release Gate
+            # at "still running" forever; say it failed to start instead.
+            for context, _ in plan.pending_status:
+                github.status(
+                    pr.head_sha,
+                    context,
+                    "error",
+                    "the request could not be dispatched; comment it again",
+                    run_url,
+                )
+            raise
+    return replace(
+        plan,
+        sha=pr.head_sha,
+        links=tuple(
+            (d.workflow, actions_link(github.repo, d.workflow, pr.head_ref))
+            for d in plan.dispatches
+        ),
+    )
+
+
+def actions_link(repo: str, workflow: str, branch: str) -> str:
+    """The Actions list of ``workflow``'s runs on ``branch``. A dispatch
+    returns no run id, so this is the stable place a reader finds the run."""
+    return (
+        f"https://github.com/{repo}/actions/workflows/{workflow}"
+        f"?query=branch%3A{quote(branch, safe='')}"
+    )
 
 
 def rerun_targets(
@@ -801,14 +910,28 @@ def run_rerun(
     wait_seconds: int,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
+    announce: Callable[[RerunPlan], None] | None = None,
 ) -> RerunPlan:
     pr = github.pull(request.pr)
     states = {k: v[0] for k, v in github.statuses(pr.head_sha).items()}
-    plan = plan_rerun(request, pr, states)
+    plan = replace(
+        plan_rerun(request, pr, states),
+        sha=pr.head_sha,
+    )
     if not plan.act:
         return plan
+    plan = replace(
+        plan,
+        links=tuple(
+            (w, actions_link(github.repo, w, pr.head_ref)) for w in plan.workflows
+        ),
+    )
     context, state, description = plan.marker
     github.status(pr.head_sha, context, state, description, run_url)
+    if announce is not None:
+        # Before the (possibly long) wait for runs to finish, so the PR shows
+        # the request straight away.
+        announce(plan)
     marker_at = github.status_created_at(pr.head_sha, context)
     if marker_at is None:
         raise GitHubError(f"the `{context}` marker did not read back on {pr.head_sha}")
@@ -857,6 +980,9 @@ def main(argv: list | None = None) -> int:
 
     github = GitHub(args.repo)
     if not request.run:
+        # Unauthorised: the person needs to know why, so a short reply. It is
+        # not this command's state, so the sticky comment is left alone.
+        github.react(request.comment_id, "confused")
         github.comment(request.pr, f"`{request.command}` ignored: {request.reason}.")
         return 0
     admin_only = args.gate_check_requires_admin and request.command == GATE_CHECK
@@ -867,6 +993,7 @@ def main(argv: list | None = None) -> int:
             else github.can_push(request.actor)
         )
     except GitHubError as error:
+        github.react(request.comment_id, "confused")
         github.comment(
             request.pr,
             f"`{request.command}` ignored: could not verify @{request.actor}'s role on "
@@ -876,21 +1003,75 @@ def main(argv: list | None = None) -> int:
         return 1
     if not allowed:
         refusal = ADMIN_REFUSAL if admin_only else ROLE_REFUSAL
+        github.react(request.comment_id, "confused")
         github.comment(request.pr, f"`{request.command}` ignored: {refusal}.")
         return 0
+
+    import test_command_comment as sticky  # noqa: PLC0415 — it imports this module
+
+    def show(plan: Plan | RerunPlan, stage: str) -> None:
+        sticky.try_upsert(
+            github,
+            request.pr,
+            sticky.CommentState(
+                command=request.command.lstrip("/"),
+                stage=stage,
+                sha=plan.sha,
+                actor=request.actor,
+                links=(
+                    *(sticky.Link(name, url) for name, url in plan.links),
+                    sticky.Link("command run", args.run_url),
+                ),
+                note=plan.reply,
+            ),
+        )
+
     try:
         if args.mode == "dispatch":
-            reply = run_dispatch(github, request, args.run_url).reply
+            plan = run_dispatch(github, request, args.run_url)
+            if plan.act:
+                show(plan, sticky.REQUESTED)
         else:
-            reply = run_rerun(github, request, args.run_url, args.wait_seconds).reply
+            plan = run_rerun(
+                github,
+                request,
+                args.run_url,
+                args.wait_seconds,
+                announce=lambda started: show(started, sticky.REQUESTED),
+            )
     except GitHubError as error:
-        github.comment(
-            request.pr,
-            f"`{request.command}` could not be started: {error}\n\n[command run]({args.run_url})",
-        )
+        github.react(request.comment_id, "confused")
         print(f"::error::{error}", file=sys.stderr)
+        # The sticky may already say "requested" (rerun mode announces before
+        # waiting); never leave it claiming a request that did not start.
+        try:
+            head = github.pull(request.pr).head_sha
+        except GitHubError:
+            head = ""
+        if head:
+            show(
+                RerunPlan(False, f"Could not be started: {error}", sha=head),
+                sticky.NOT_STARTED,
+            )
+        else:
+            try:
+                github.comment(
+                    request.pr,
+                    f"`{request.command}` could not be started: {error}"
+                    f"\n\n[command run]({args.run_url})",
+                )
+            except GitHubError as reply_error:
+                print(f"::warning::could not reply: {reply_error}", file=sys.stderr)
         return 1
-    github.comment(request.pr, f"{reply}\n\n[command run]({args.run_url})")
+    if plan.act:
+        github.react(request.comment_id, "rocket")
+    elif plan.noop:
+        # Already passed or already running: the sticky comment already says
+        # so, and another comment would only be noise.
+        github.react(request.comment_id, "+1")
+    else:
+        github.react(request.comment_id, "confused")
+        show(plan, sticky.NOT_STARTED)
     return 0
 
 

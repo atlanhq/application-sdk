@@ -249,6 +249,15 @@ on:
           push landed between the comment and the dispatch — e2e stands down
           rather than testing, and recording a verdict on, a different commit.
           Empty = no check.
+      pr-number:
+        required: false
+        type: string
+        default: ""
+        description: |
+          The PR a `/e2e` comment came from (FND-3839). The e2e-only run edits
+          that PR's sticky `/e2e` comment as it goes — running, then the
+          suite × cloud verdict. Empty = no comment (the commit status is the
+          verdict either way).
       e2e-label-trigger:
         required: false
         type: boolean
@@ -1433,6 +1442,41 @@ jobs:
           set -euo pipefail
           echo "::error::e2e was requested but no suites were discovered under '${{ inputs.e2e-test-path }}' (expected test_*.py). Failing so this is not a silent pass."
           exit 1
+
+      # ── Show the `/e2e` request as running (FND-3839) ──────────────────────
+      # Edits the PR's sticky `/e2e` comment in place. A view of the request,
+      # not its verdict (that is the `e2e` status), so fail-open.
+      - name: Fetch the comment driver
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'only' &&
+          inputs.pr-number != ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-comment
+          persist-credentials: false
+
+      - name: Show the /e2e request as running on the PR
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'only' &&
+          inputs.pr-number != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          LEGS: ${{ steps.discover.outputs.leg-count }}
+        run: >-
+          python3 application-sdk-comment/.github/scripts/test_command_comment.py
+          --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
+          e2e-running --legs "$LEGS"
 
   # ── Full-DAG e2e (system apps — extract→qi→publish→lineage) ─────────────
   # One matrix leg per discovered suite × cloud. fail-fast:false so one leg's
@@ -3372,6 +3416,9 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+      # Lists this run's own jobs for the `/e2e` comment's suite × cloud
+      # table (FND-3839). Every scaffolded caller grants it.
+      actions: read
       # The `e2e` commit status the consumer's Release Gate reads once the
       # label is consumed (below). Every scaffolded caller already grants it —
       # the e2e job declares it too — so asking here clamps nothing.
@@ -3637,6 +3684,32 @@ jobs:
             --repo "$REPO" \
             --head-sha "$HEAD_SHA" \
             --self-run-id "$SELF_RUN_ID"
+
+      # The PR's sticky `/e2e` comment gets the verdict, with one row per
+      # suite × cloud read from this run's own jobs (FND-3839). A view of the
+      # `e2e` status just recorded, never the verdict itself, so fail-open.
+      - name: Post the /e2e verdict on the PR
+        if: >-
+          always() && needs.discover-e2e.result != 'skipped' &&
+          github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'only' &&
+          inputs.pr-number != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CLOUDS: ${{ needs.discover-e2e.outputs.clouds }}
+          VERDICT: >-
+            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+            && needs.e2e.result || 'error' }}
+        run: >-
+          python3 .github/scripts/test_command_comment.py
+          --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
+          e2e-verdict --run-id "$RUN_ID" --verdict "$VERDICT" --clouds "$CLOUDS"
 
       # A dispatched e2e run (`/e2e`, `/gate-check`) is not the run that owns
       # the required `tests / Tests Gate` — the PR's own pull_request run is,

@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import bump_pr_opt_in  # noqa: E402
 import pr_test_command as ptc  # noqa: E402
+import test_command_comment as sticky  # noqa: E402
 from conformance.bootstrap import render as bootstrap_render  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -247,6 +248,29 @@ class TestPlanE2e:
         # The `e2e` verdict is written by the run itself, not posted up front.
         assert plan.pending_status == ()
         assert SHA[:7] in plan.reply
+
+    def test_pr_number_is_sent_only_when_declared(self) -> None:
+        """An undeclared input 422s the whole dispatch."""
+        declared = TESTS_YAML.replace(
+            "      head_sha: {}\n", "      head_sha: {}\n      pr_number: {}\n"
+        )
+        plan = ptc.plan_dispatch(
+            _request(), _pr(), {}, [], _texts({"tests.yaml": declared})
+        )
+        assert plan.dispatches[0].inputs == {
+            "run_e2e": "only",
+            "head_sha": SHA,
+            "pr_number": "12",
+        }
+        plan = ptc.plan_dispatch(_request(), _pr(), {}, [], _texts())
+        assert "pr_number" not in plan.dispatches[0].inputs
+
+    def test_a_mention_of_pr_number_is_not_a_declaration(self) -> None:
+        mentioned = TESTS_YAML + "# pr_number is set by test-commands\n"
+        plan = ptc.plan_dispatch(
+            _request(), _pr(), {}, [], _texts({"tests.yaml": mentioned})
+        )
+        assert "pr_number" not in plan.dispatches[0].inputs
 
     def test_missing_tests_yaml(self) -> None:
         plan = ptc.plan_dispatch(_request(), _pr(), {}, [], {"tests.yaml": None})
@@ -504,7 +528,9 @@ class FakeApi:
 
     Writes are recorded in order in ``writes`` (so tests can assert the pending
     status precedes the dispatch), and a status write is also readable back
-    through both status endpoints, as on GitHub.
+    through both status endpoints, as on GitHub. PR comments are kept in
+    ``comments``: a POST adds one, a PATCH edits it, and the listing reads them
+    back, so the sticky comment's find-then-edit runs for real.
     """
 
     def __init__(
@@ -520,8 +546,10 @@ class FakeApi:
         status_created_at: str = _iso(30),
         behind_by: Any = 0,
         role: str = "write",
+        comments: list[dict[str, Any]] | None = None,
     ) -> None:
         self.pull = pull or _pull_body()
+        self.comments = list(comments or [])
         self.role = role
         self.behind_by = behind_by
         self.status_rows = list(statuses or [])  # newest first
@@ -551,6 +579,15 @@ class FakeApi:
                 args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "-f"
             )
             self.writes.append((path, fields))
+            method = args[args.index("-X") + 1]
+            if method == "PATCH" and "/issues/comments/" in path:
+                comment_id = int(path.rsplit("/", 1)[1])
+                for row in self.comments:
+                    if row["id"] == comment_id:
+                        row["body"] = fields["body"]
+            elif path.endswith("/comments"):
+                next_id = max((c["id"] for c in self.comments), default=1000) + 1
+                self.comments.append({"id": next_id, "body": fields["body"]})
             if "/statuses/" in path:
                 self.status_rows.insert(
                     0,
@@ -569,6 +606,8 @@ class FakeApi:
         path = next(a for a in args[1:] if a.startswith("repos/"))
         if "/pulls/" in path:
             return self._done(args, self.pull)
+        if "/issues/" in path and "/comments?" in path:
+            return self._done(args, [list(self.comments)])
         if "/collaborators/" in path and path.endswith("/permission"):
             push = self.role in ("admin", "maintain", "write")
             admin = self.role == "admin"
@@ -626,6 +665,14 @@ class FakeApi:
 
     def dispatches(self) -> list[tuple[str, dict[str, str]]]:
         return [(p, f) for p, f in self.writes if p.endswith("/dispatches")]
+
+    def reactions(self) -> list[str]:
+        return [f["content"] for p, f in self.writes if p.endswith("/reactions")]
+
+    def sticky(self, command: str = "e2e") -> list[dict[str, Any]]:
+        """The PR comments carrying ``command``'s sticky marker."""
+        mark = sticky.marker(command)
+        return [c for c in self.comments if mark in c["body"]]
 
 
 def _pull_body(
@@ -1143,6 +1190,42 @@ class TestRunRerun:
         with pytest.raises(ptc.GitHubError, match="did not read back"):
             ptc.run_rerun(ptc.GitHub(REPO, api), _request(), RUN_URL, 60)
 
+    def test_announces_after_the_marker_and_before_waiting(self) -> None:
+        """The PR shows the request at once, not after a 30-minute wait."""
+        api = self._api(ptc.GATE_CHECK, runs={"sdk-gate.yaml": _completing_after(3)})
+        clock = FakeClock()
+        seen: list[tuple[int, int, ptc.RerunPlan]] = []
+
+        def announce(plan: ptc.RerunPlan) -> None:
+            seen.append((len(api.writes), len(clock.sleeps), plan))
+
+        ptc.run_rerun(
+            ptc.GitHub(REPO, api),
+            _request(ptc.GATE_CHECK),
+            RUN_URL,
+            600,
+            sleep=clock.sleep,
+            clock=clock.clock,
+            announce=announce,
+        )
+        ((writes, sleeps, plan),) = seen
+        assert writes == 1  # just the marker
+        assert sleeps == 0
+        assert clock.sleeps  # and the wait did happen afterwards
+        assert plan.sha == SHA
+        assert dict(plan.links) == {
+            w: ptc.actions_link(REPO, w, BUMP) for w in ptc.SDK_GATE_CHECK_WORKFLOWS
+        }
+
+    def test_refusal_is_not_announced(self) -> None:
+        api = self._api(statuses=[{"context": "e2e-request", "state": "success"}])
+        seen: list[ptc.RerunPlan] = []
+        plan = ptc.run_rerun(
+            ptc.GitHub(REPO, api), _request(), RUN_URL, 60, announce=seen.append
+        )
+        assert seen == []
+        assert plan.noop is True and plan.sha == SHA
+
     def test_refused_request_writes_nothing(self) -> None:
         api = self._api(statuses=[{"context": "e2e-request", "state": "success"}])
         plan = ptc.run_rerun(ptc.GitHub(REPO, api), _request(), RUN_URL, 60)
@@ -1211,8 +1294,11 @@ class TestMain:
         assert outputs == {"run": "false", "comment_id": "99", "pr": "12"}
         (body,) = _comments(api)
         assert body.startswith("`/e2e` ignored:")
-        # Refused before any read: an untrusted comment costs one API call.
-        assert len(api.calls) == 1
+        assert api.reactions() == ["confused"]
+        # Not this command's state: the sticky comment is left alone.
+        assert api.sticky() == []
+        # Refused before any read: a reaction and a reply, nothing else.
+        assert len(api.calls) == 2
 
     @pytest.mark.parametrize("role", ["read", "triage"])
     def test_read_and_triage_roles_are_refused(self, run_main, role: str) -> None:
@@ -1225,6 +1311,8 @@ class TestMain:
         assert api.dispatches() == []
         (body,) = _comments(api)
         assert ptc.ROLE_REFUSAL in body
+        assert api.reactions() == ["confused"]
+        assert api.sticky() == []
         assert not any("/pulls/" in " ".join(c) for c in api.calls)
 
     @pytest.mark.parametrize("role", ["write", "maintain", "admin"])
@@ -1288,38 +1376,151 @@ class TestMain:
         (body,) = _comments(api)
         assert "could not verify" in body
 
-    def test_refused_plan_is_replied_and_succeeds(self, run_main) -> None:
+    def test_refused_plan_shows_not_started_with_the_reason(self, run_main) -> None:
         api = FakeApi(texts={"tests.yaml": "on:\n  workflow_dispatch:\n"})
         rc, outputs = run_main(_event(), api)
         assert rc == 0
         assert outputs["run"] == "true"
-        (body,) = _comments(api)
-        assert "Rebase" in body and RUN_URL in body
         assert api.dispatches() == []
+        assert api.reactions() == ["confused"]
+        ((comment),) = api.sticky()
+        assert "🚫 not started" in comment["body"]
+        assert "Rebase" in comment["body"] and RUN_URL in comment["body"]
+        # The sticky is the only comment: no separate reply.
+        assert len(_comments(api)) == 1
 
-    def test_dispatch_success_replies(self, run_main) -> None:
+    def test_dispatch_success_shows_requested(self, run_main) -> None:
         api = FakeApi(texts=_texts())
         rc, _ = run_main(_event(), api)
         assert rc == 0
         assert len(api.dispatches()) == 1
+        assert api.reactions() == ["rocket"]
         (body,) = _comments(api)
-        assert body.startswith(f"Started e2e on `{SHA[:7]}`")
+        assert body.startswith(sticky.marker("e2e"))
+        assert f"⏳ requested on `{SHA[:7]}`" in body
+        assert "requested by @a-human" in body
+        # The Actions list of the dispatched workflow on the PR branch: a
+        # dispatch returns no run id, so this is where the run is found.
+        assert ptc.actions_link(REPO, "tests.yaml", "feat/x") in body
 
-    def test_rerun_mode(self, run_main) -> None:
+    def test_an_existing_sticky_is_edited_in_place(self, run_main) -> None:
+        """One comment per command: the latest request replaces the last."""
+        old = {"id": 500, "body": f"{sticky.marker('e2e')}\nold verdict"}
+        other = {"id": 501, "body": f"{sticky.marker('gate-check')}\nother"}
+        api = FakeApi(texts=_texts(), comments=[old, other])
+        rc, _ = run_main(_event(), api)
+        assert rc == 0
+        assert _comments(api) == []  # nothing POSTed
+        patches = [p for p, _ in api.writes if p.endswith("/issues/comments/500")]
+        assert patches == [f"repos/{REPO}/issues/comments/500"]
+        ((comment),) = api.sticky()
+        assert comment["id"] == 500 and "⏳ requested" in comment["body"]
+        assert other["body"].endswith("other")  # the other command's is untouched
+
+    def test_the_newest_sticky_is_the_one_edited(self, run_main) -> None:
+        mark = sticky.marker("e2e")
+        api = FakeApi(
+            texts=_texts(),
+            comments=[{"id": 7, "body": mark}, {"id": 9, "body": mark}],
+        )
+        run_main(_event(), api)
+        assert [
+            p
+            for p, _ in api.writes
+            if "/issues/comments/" in p and not p.endswith("/reactions")
+        ] == [f"repos/{REPO}/issues/comments/9"]
+
+    @pytest.mark.parametrize(
+        ("statuses", "runs"),
+        [
+            ([{"context": "e2e", "state": "success", "description": ""}], {}),
+            (
+                [],
+                {
+                    "tests.yaml": [
+                        _run(1, status="in_progress", event="workflow_dispatch")
+                    ]
+                },
+            ),
+        ],
+        ids=["already-passed", "already-running"],
+    )
+    def test_noop_is_a_thumbs_up_and_no_comment(
+        self, run_main, statuses: list, runs: dict
+    ) -> None:
+        """The sticky already says so; another comment would be noise."""
+        api = FakeApi(texts=_texts(), statuses=statuses, runs=runs)
+        rc, _ = run_main(_event(), api)
+        assert rc == 0
+        assert api.reactions() == ["+1"]
+        assert _comments(api) == []
+        assert not any(
+            "/issues/comments/" in p and not p.endswith("/reactions")
+            for p, _ in api.writes
+        )
+        assert api.dispatches() == []
+
+    def test_rerun_mode_shows_requested(self, run_main) -> None:
         api = FakeApi()
         rc, _ = run_main(_event(), api, mode="rerun")
         assert rc == 0
         assert api.writes[0][1]["context"] == "e2e-request"
+        assert api.reactions() == ["rocket"]
         (body,) = _comments(api)
-        assert body.startswith("Requested e2e")
+        assert "⏳ requested" in body and "Requested e2e" in body
+
+    def test_rerun_noop_is_a_thumbs_up(self, run_main) -> None:
+        api = FakeApi(statuses=[{"context": "e2e-request", "state": "success"}])
+        rc, _ = run_main(_event(), api, mode="rerun")
+        assert rc == 0
+        assert api.reactions() == ["+1"]
+        assert _comments(api) == []
 
     def test_github_error_is_reported_and_fails(self, run_main, capsys) -> None:
+        """The sticky must never be left claiming a request that did not
+        start: the failure shows there as "not started", with the error."""
         api = FakeApi(texts=_texts(), fail=("/dispatches",))
         rc, _ = run_main(_event(), api)
         assert rc == 1
+        assert api.reactions() == ["confused"]
         (body,) = _comments(api)
-        assert body.startswith("`/e2e` could not be started:")
+        assert "not started" in body and "Could not be started" in body
         assert "::error::" in capsys.readouterr().err
+
+    def test_github_error_with_no_readable_pr_falls_back_to_a_reply(
+        self, run_main
+    ) -> None:
+        # The fake fails every call naming the PR path, so the reply fails
+        # too: the command must still exit 1 rather than crash.
+        api = FakeApi(texts=_texts(), fail=("/pulls/",))
+        rc, _ = run_main(_event(), api)
+        assert rc == 1
+        posts = [
+            c
+            for c in api.calls
+            if "-X" in c and c[c.index("-X") + 2].endswith("/comments")
+        ]
+        assert posts and "could not be started" in " ".join(posts[0])
+
+    def test_a_failed_gate_check_dispatch_does_not_leave_the_status_pending(
+        self,
+    ) -> None:
+        """Release Gate would otherwise read "still running" forever."""
+        api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), fail=("/dispatches",))
+        with pytest.raises(ptc.GitHubError):
+            ptc.run_dispatch(ptc.GitHub(REPO, api), _request(ptc.GATE_CHECK), RUN_URL)
+        states = [f["state"] for p, f in api.writes if "/statuses/" in p]
+        assert states == ["pending", "error"]
+
+    def test_a_failed_reaction_or_sticky_write_does_not_fail_the_command(
+        self, run_main, capsys
+    ) -> None:
+        """Both are views; the dispatch is what was asked for."""
+        api = FakeApi(texts=_texts(), fail=("/reactions", "/comments"))
+        rc, _ = run_main(_event(), api)
+        assert rc == 0
+        assert len(api.dispatches()) == 1
+        assert "::warning::" in capsys.readouterr().err
 
 
 # ── cross-file contracts ───────────────────────────────────────────────────

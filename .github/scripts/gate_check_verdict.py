@@ -68,6 +68,8 @@ class Verdict:
     description: str = ""
     target_url: str = ""
     reason: str = ""
+    #: (workflow, conclusion, url) per gated workflow, for the PR comment.
+    rows: tuple = ()
 
 
 def resolve(expected: list, runs: dict, requested_at: datetime | None) -> Verdict:
@@ -82,6 +84,7 @@ def resolve(expected: list, runs: dict, requested_at: datetime | None) -> Verdic
         # commit is indistinguishable from this request's own (lens F-3dd6c5).
         return Verdict(False, reason="the request time could not be read")
     failed = []
+    rows = []
     first_url = ""
     for workflow in expected:
         candidates = [
@@ -95,18 +98,27 @@ def resolve(expected: list, runs: dict, requested_at: datetime | None) -> Verdic
         if newest.get("status") != "completed":
             return Verdict(False, reason=f"{workflow} is still running")
         first_url = first_url or newest.get("html_url", "")
+        rows.append((workflow, newest.get("conclusion"), newest.get("html_url", "")))
         if newest.get("conclusion") != "success":
             failed.append(
                 (workflow, newest.get("conclusion"), newest.get("html_url", ""))
             )
     if failed:
         names = ", ".join(f"{w} ({c})" for w, c, _ in failed)
-        return Verdict(True, "failure", f"failed: {names}", failed[0][2])
-    return Verdict(True, "success", f"passed: {' '.join(expected)}", first_url)
+        return Verdict(
+            True, "failure", f"failed: {names}", failed[0][2], rows=tuple(rows)
+        )
+    return Verdict(
+        True, "success", f"passed: {' '.join(expected)}", first_url, rows=tuple(rows)
+    )
 
 
 def settle(
-    github: GitHub, sha: str, *, sleep: Callable[[float], None] = time.sleep
+    github: GitHub,
+    sha: str,
+    *,
+    branch: str = "",
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Verdict:
     statuses = github.statuses(sha)
     state, description = statuses.get(GATE_CHECK_CONTEXT, ("", ""))
@@ -127,6 +139,7 @@ def settle(
             verdict.description,
             verdict.target_url,
         )
+        show_verdict(github, sha, branch, verdict)
     elif state in FINAL_STATES:
         # Already recorded — possibly by a callback whose Release Gate re-run
         # failed. Re-check the Release Gate rather than exiting (F-76a87b).
@@ -139,6 +152,45 @@ def settle(
 
 
 FINAL_STATES = ("success", "failure", "error")
+
+
+def show_verdict(github: GitHub, sha: str, branch: str, verdict: Verdict) -> None:
+    """Edit the PR's sticky `/gate-check` comment with the verdict. A view of
+    the status just written, so it is best effort and never raises."""
+    if not branch:
+        return
+    import test_command_comment as sticky  # noqa: PLC0415
+
+    try:
+        pr = github.find_open_pr(branch)
+    except GitHubError as error:
+        print(
+            f"::warning::could not find the PR for {branch}: {error}", file=sys.stderr
+        )
+        return
+    if not pr:
+        return
+    passed = verdict.state == "success"
+    failed = sum(1 for _, conclusion, _ in verdict.rows if conclusion != "success")
+    link = sticky.Link("runs" if passed else "first failure", verdict.target_url)
+    sticky.try_upsert(
+        github,
+        pr,
+        sticky.CommentState(
+            command=sticky.GATE_CHECK,
+            stage=sticky.PASSED if passed else sticky.FAILED,
+            sha=sha,
+            summary=(
+                f"{len(verdict.rows)} workflow(s) passed"
+                if passed
+                else f"{failed} of {len(verdict.rows)} workflow(s) failed"
+            ),
+            links=(link,) if verdict.target_url else (),
+            details_title="Results",
+            details=sticky.gate_check_table(list(verdict.rows)),
+            note="Release Gate is re-run to read this verdict.",
+        ),
+    )
 
 
 def _read_verdict(run: dict, verdict_at: datetime | None) -> bool:
@@ -211,9 +263,12 @@ def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", required=True)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument(
+        "--branch", default="", help="workflow_run.head_branch, to find the PR"
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        verdict = settle(GitHub(args.repo), args.head_sha)
+        verdict = settle(GitHub(args.repo), args.head_sha, branch=args.branch)
     except GitHubError as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1

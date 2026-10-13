@@ -52,7 +52,7 @@ jobs:
       actions: write # workflow_dispatch, and reading runs on the head commit
       statuses: write # the pending `gate-check` status
       issues: write # the reply comment and the reaction
-      pull-requests: read # the PR's head SHA, branch and fork status
+      pull-requests: write # the PR's head SHA, branch, fork status; the sticky comment
     steps:
       - name: Check out application-sdk's command scripts (trusted code only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -101,6 +101,7 @@ jobs:
       contents: read
       actions: write # read the dispatched runs; re-run Release Gate
       statuses: write # the final `gate-check` status
+      pull-requests: write # find the PR; edit its sticky `/gate-check` comment
     steps:
       - name: Check out application-sdk's command scripts (trusted code only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,4 +117,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-        run: python3 .github/scripts/gate_check_verdict.py --repo "$REPO" --head-sha "$HEAD_SHA"
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: >-
+          python3 .github/scripts/gate_check_verdict.py
+          --repo "$REPO" --head-sha "$HEAD_SHA" --branch "$HEAD_BRANCH"

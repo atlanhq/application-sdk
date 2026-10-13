@@ -105,6 +105,13 @@ on:
         required: false
         default: ""
         type: string
+      pr_number:
+        description: |
+          The PR a `/e2e` comment came from, set by test-commands.yaml so the
+          run can edit that PR's `/e2e` comment as it goes. Empty = none.
+        required: false
+        default: ""
+        type: string
       e2e_clouds:
         description: |
           Cloud providers to run the e2e suites against, comma-separated
@@ -210,6 +217,7 @@ jobs:
       distinct-id: ${{ inputs.distinct_id }}
       run-e2e: ${{ inputs.run_e2e }}
       head-sha: ${{ inputs.head_sha }}
+      pr-number: ${{ inputs.pr_number }}
       # This file no longer subscribes to `labeled`, so the reusable must not
       # read the `e2e` / `gate-check` labels either: a stale label on a push
       # would otherwise still start e2e in the PR's own run.

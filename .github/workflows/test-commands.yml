@@ -64,7 +64,7 @@ jobs:
       actions: write # re-run the runs that predate the marker
       statuses: write # the `e2e-request` / `gate-check` marker
       issues: write # the reply and the reaction
-      pull-requests: read # the PR's head commit and branch
+      pull-requests: write # the PR's head commit and branch; the sticky comment
     steps:
       - name: Check out the command scripts (default branch, trusted)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

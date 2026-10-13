@@ -170,6 +170,17 @@ that FND-48 added stopped the jobs, never the runs. A comment creates no
   per PR so two comments cannot both pass that check. An e2e-only run skips the
   unit and integration tiers its PR run already measured.
 
+**What the PR shows.** One sticky comment per command (`/e2e`, `/gate-check`),
+found by a hidden `<!-- test-commands:<command> -->` marker and edited in place
+through the request — requested, running, then the verdict with an expandable
+suite × cloud (or per-workflow) table. It shows the latest request only.
+Reactions answer the comment at once: 👀 seen, 🚀 started, 👍 nothing to do
+(already passed or running), 😕 refused; a refusal for a reason (behind the
+base, an old `tests.yaml`) shows in the sticky, an unauthorised one gets a short
+reply. The comment is a view, never state: the commit status is the verdict
+gates read, so a failed or deleted comment changes nothing
+(`test_command_comment.py`).
+
 **Gates read the status, and are re-run when it lands.** The PR run's
 `Tests Gate` holds to the `e2e` status (`e2e_commit_verdict.py`). A dispatched
 e2e run re-runs that gate job when it disagrees with the verdict

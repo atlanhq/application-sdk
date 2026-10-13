@@ -136,11 +136,17 @@ def test_the_scripts_checkout_is_pinned_to_this_workflows_sha(
         if str(s.get("uses", "")).startswith("actions/checkout@")
         and s.get("with", {}).get("repository") == "atlanhq/application-sdk"
     ]
-    assert len(checkouts) == 1, (
+    # Every SDK checkout here runs code, so every one is pinned. The second is
+    # the `/e2e` comment driver (FND-3839), in its own path.
+    for checkout in checkouts:
+        assert checkout["with"]["ref"] == "${{ job.workflow_sha }}"
+        assert checkout["with"]["persist-credentials"] is False
+    keys = [c for c in checkouts if c["with"].get("path") == "application-sdk-scripts"]
+    assert len(keys) == 1, (
         "the keys script has to be fetched from the SDK: the cloud-planning job "
         "checks out the CALLER's tree, which has no .github/scripts of ours"
     )
-    with_ = checkouts[0]["with"]
+    with_ = keys[0]["with"]
     assert with_["ref"] == "${{ job.workflow_sha }}"
     assert with_["path"] == "application-sdk-scripts"
     assert with_["sparse-checkout"] == ".github/scripts"

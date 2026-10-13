@@ -32,6 +32,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import gate_check_verdict as gcv  # noqa: E402
+import test_command_comment as tcc  # noqa: E402
 from pr_test_command import GitHub, GitHubError  # noqa: E402
 
 REPO = "atlanhq/atlan-example-app"
@@ -128,6 +129,10 @@ class TestResolve:
             "success",
             "passed: tests.yaml checks.yml",
             "https://example.invalid/runs/1",
+            rows=(
+                ("tests.yaml", "success", "https://example.invalid/runs/1"),
+                ("checks.yml", "success", "https://example.invalid/runs/2"),
+            ),
         )
 
     def test_mixed_failures_name_each_and_link_the_first(self) -> None:
@@ -312,6 +317,159 @@ class TestSettle:
         )
         assert gcv.settle(GitHub(REPO, api), SHA).final is False
         assert any("event=workflow_dispatch" in p for p in api.paths)
+
+
+class TestSettleShowsTheVerdict:
+    def _record(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+        shown: list[tuple[str, str]] = []
+        monkeypatch.setattr(
+            gcv,
+            "show_verdict",
+            lambda github, sha, branch, verdict: shown.append((branch, verdict.state)),
+        )
+        return shown
+
+    def test_a_fresh_verdict_is_shown_on_the_branch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        shown = self._record(monkeypatch)
+        api = FakeApi(
+            status=("pending", "running: tests.yaml"),
+            runs={"tests.yaml": [[_run(1)]], gcv.RELEASE_GATE_WORKFLOW: [[_gate(8)]]},
+        )
+        gcv.settle(GitHub(REPO, api), SHA, branch="bump-version-main")
+        assert shown == [("bump-version-main", "success")]
+
+    def test_a_recorded_verdict_is_not_shown_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Every later callback re-checks the gate; the comment is not re-edited."""
+        shown = self._record(monkeypatch)
+        api = FakeApi(
+            status=("success", "passed: tests.yaml"),
+            status_created_at=_iso(40),
+            runs={gcv.RELEASE_GATE_WORKFLOW: [[_gate(8, started=41)]]},
+        )
+        gcv.settle(GitHub(REPO, api), SHA, branch="bump-version-main")
+        assert shown == []
+
+    def test_main_passes_the_branch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: list[str] = []
+
+        def fake_settle(github: GitHub, sha: str, *, branch: str = "") -> gcv.Verdict:
+            seen.append(branch)
+            return gcv.Verdict(False, reason="x")
+
+        monkeypatch.setattr(gcv, "settle", fake_settle)
+        gcv.main(["--repo", REPO, "--head-sha", SHA, "--branch", "bump-version-main"])
+        assert seen == ["bump-version-main"]
+
+
+class StickyApi:
+    """`gh api` for show_verdict: the open-PR lookup and the comment endpoints."""
+
+    def __init__(
+        self,
+        *,
+        prs: list[dict[str, Any]] | None = None,
+        comments: list[dict[str, Any]] | None = None,
+        fail: tuple[str, ...] = (),
+    ) -> None:
+        self.prs = prs if prs is not None else [{"number": 12}]
+        self.comments = comments or []
+        self.fail = fail
+        self.paths: list[str] = []
+        self.posted: list[tuple[str, str]] = []
+        self.patched: list[tuple[str, str]] = []
+
+    def __call__(self, args: list[str]) -> subprocess.CompletedProcess:
+        joined = " ".join(args)
+        if any(needle in joined for needle in self.fail):
+            return subprocess.CompletedProcess(args, 1, "", "boom")
+        if "-X" in args:
+            path = args[args.index("-X") + 2]
+            body = next(a for a in args if a.startswith("body=")).split("=", 1)[1]
+            target = self.patched if "PATCH" in args else self.posted
+            target.append((path, body))
+            return subprocess.CompletedProcess(args, 0, "{}", "")
+        path = next(a for a in args[1:] if a.startswith("repos/"))
+        self.paths.append(path)
+        if "/pulls?" in path:
+            out: Any = [self.prs]
+        elif "/comments?" in path:
+            out = [self.comments]
+        else:
+            raise AssertionError(f"unexpected gh call: {args}")
+        return subprocess.CompletedProcess(args, 0, json.dumps(out), "")
+
+
+FAILED_VERDICT = gcv.Verdict(
+    True,
+    "failure",
+    "failed: checks.yml (failure)",
+    "https://example.invalid/runs/2",
+    rows=(
+        ("tests.yaml", "success", "https://example.invalid/runs/1"),
+        ("checks.yml", "failure", "https://example.invalid/runs/2"),
+    ),
+)
+
+
+class TestShowVerdict:
+    def test_posts_the_gate_check_sticky_on_the_open_pr(self) -> None:
+        api = StickyApi()
+        gcv.show_verdict(GitHub(REPO, api), SHA, "bump-version/main", FAILED_VERDICT)
+        # The PR is looked up by `owner:branch`, URL-quoted.
+        assert any(
+            "state=open" in p and "head=atlanhq:bump-version%2Fmain" in p
+            for p in api.paths
+        )
+        ((path, body),) = api.posted
+        assert path == f"repos/{REPO}/issues/12/comments"
+        assert body.startswith(tcc.marker(tcc.GATE_CHECK))
+        assert f"❌ failed on `{SHA[:7]}`" in body
+        assert "1 of 2 workflow(s) failed" in body
+        assert "[first failure](https://example.invalid/runs/2)" in body
+        assert "| `checks.yml` | [❌](https://example.invalid/runs/2) |" in body
+
+    def test_edits_an_existing_sticky(self) -> None:
+        mark = tcc.marker(tcc.GATE_CHECK)
+        api = StickyApi(
+            comments=[
+                {"id": 4, "body": f"{mark}\nrequested"},
+                {"id": 5, "body": tcc.marker(tcc.E2E)},
+            ]
+        )
+        passed = gcv.Verdict(
+            True,
+            "success",
+            "passed: tests.yaml",
+            "https://example.invalid/runs/1",
+            rows=(("tests.yaml", "success", "https://example.invalid/runs/1"),),
+        )
+        gcv.show_verdict(GitHub(REPO, api), SHA, "bump-version-main", passed)
+        assert api.posted == []
+        ((path, body),) = api.patched
+        assert path == f"repos/{REPO}/issues/comments/4"
+        assert "✅ passed" in body and "1 workflow(s) passed" in body
+        assert "[runs](https://example.invalid/runs/1)" in body
+
+    def test_no_branch_does_nothing(self) -> None:
+        api = StickyApi()
+        gcv.show_verdict(GitHub(REPO, api), SHA, "", FAILED_VERDICT)
+        assert api.paths == [] and api.posted == []
+
+    def test_no_open_pr_does_nothing(self) -> None:
+        api = StickyApi(prs=[])
+        gcv.show_verdict(GitHub(REPO, api), SHA, "bump-version-main", FAILED_VERDICT)
+        assert api.posted == [] and api.patched == []
+
+    @pytest.mark.parametrize("failing", ["/pulls?", "/comments?", "POST"])
+    def test_never_raises(self, capsys, failing: str) -> None:
+        """The status is already written; the comment is only its view."""
+        api = StickyApi(fail=(failing,))
+        gcv.show_verdict(GitHub(REPO, api), SHA, "bump-version-main", FAILED_VERDICT)
+        assert "::warning::" in capsys.readouterr().err
 
 
 class TestRerunReleaseGate:
