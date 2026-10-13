@@ -8,6 +8,43 @@ from ._base import _MixinBase
 from ._helpers import get_logger_method, loop_is_bounded
 
 
+def _is_terminal_break_summary(
+    node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While
+) -> bool:
+    """True when a bare log statement immediately precedes a break from *loop*."""
+    parents = {
+        child: parent
+        for parent in ast.walk(loop)
+        for child in ast.iter_child_nodes(parent)
+    }
+    statement = parents.get(node)
+    if not isinstance(statement, ast.Expr) or statement.value is not node:
+        return False
+    suite = parents.get(statement)
+    if suite is None:
+        return False
+    statements = next(
+        (
+            values
+            for _, values in ast.iter_fields(suite)
+            if isinstance(values, list) and any(value is statement for value in values)
+        ),
+        None,
+    )
+    if statements is None:
+        return False
+    index = next(index for index, value in enumerate(statements) if value is statement)
+    if index + 1 >= len(statements) or not isinstance(statements[index + 1], ast.Break):
+        return False
+
+    ancestor: ast.AST | None = suite
+    while ancestor is not None:
+        if isinstance(ancestor, (ast.For, ast.AsyncFor, ast.While)):
+            return ancestor is loop
+        ancestor = parents.get(ancestor)
+    return False
+
+
 class LevelMixin(_MixinBase):
     """Rule methods for L006, L007, L017 (log-level category)."""
 
@@ -32,6 +69,13 @@ class LevelMixin(_MixinBase):
             # While loops are always flagged — bound is not statically obvious
             pass
         elif loop_is_bounded(innermost, self._bounded_loop_caps):  # type: ignore[arg-type]
+            return
+        enclosing_loops_are_bounded = all(
+            isinstance(loop, (ast.For, ast.AsyncFor))
+            and loop_is_bounded(loop, self._bounded_loop_caps)
+            for loop in self._loop_stack[:-1]
+        )
+        if enclosing_loops_are_bounded and _is_terminal_break_summary(node, innermost):
             return
         self._add(
             "L006",

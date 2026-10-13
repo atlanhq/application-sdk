@@ -209,6 +209,51 @@ def test_l006_fires_in_while_loop() -> None:
     assert "L006" in _ids(src)
 
 
+def test_l006_silent_for_mutually_exclusive_terminal_break_summaries() -> None:
+    src = """
+from loguru import logger
+
+def read_batches():
+    while True:
+        batch = next_batch()
+        if not batch:
+            logger.info("read complete")
+            break
+        for record in batch:
+            consume(record)
+        if len(batch) < page_limit:
+            logger.info("read complete")
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_per_item_info_before_conditional_break() -> None:
+    src = """
+from loguru import logger
+
+for item in items:
+    logger.info("processing %s", item)
+    if is_last(item):
+        break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_terminal_summary_repeated_by_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+for group in groups:
+    while True:
+        batch = next_batch(group)
+        if not batch:
+            logger.info("group complete")
+            break
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_silent_in_bounded_range() -> None:
     src = "from loguru import logger\nfor i in range(5):\n    logger.info('item')\n"
     assert "L006" not in _ids(src)
