@@ -3422,7 +3422,9 @@ jobs:
       pull-requests: write
       contents: read
       # Lists this run's own jobs for the `/e2e` comment's suite × cloud
-      # table (FND-3839). Every scaffolded caller grants it.
+      # table (FND-3839), and reads the release run's e2e preview artifacts,
+      # the baseline the "what changed" table compares against. Every
+      # scaffolded caller grants it.
       actions: read
       # The `e2e` commit status the consumer's Release Gate reads once the
       # label is consumed (below). Every scaffolded caller already grants it —
@@ -3498,6 +3500,32 @@ jobs:
           pattern: e2e-preview-${{ inputs.app-name }}*
           path: e2e-preview-artifacts
 
+      # The baseline: the latest passing release (`bump-version*`) run of this
+      # workflow, which runs the default branch's code. Its preview files carry
+      # the asset counts this PR's are compared against.
+      - name: Find the release-baseline run
+        id: baseline
+        if: always() && github.event_name == 'pull_request' && needs.e2e.result == 'success'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [ -f .github/scripts/preview_baseline_run.py ] || exit 0
+          echo "run-id=$(python3 .github/scripts/preview_baseline_run.py "$REPO" "$RUN_ID")" >> "$GITHUB_OUTPUT"
+
+      - name: Download release-baseline preview links
+        if: always() && steps.baseline.outputs.run-id != ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: e2e-preview-${{ inputs.app-name }}*
+          path: e2e-preview-baseline
+          run-id: ${{ steps.baseline.outputs.run-id }}
+          github-token: ${{ github.token }}
+
       - name: Render e2e preview links
         id: preview
         if: always() && github.event_name == 'pull_request' && needs.e2e.result == 'success'
@@ -3508,7 +3536,7 @@ jobs:
           delim="PREVIEW_$(openssl rand -hex 16)"
           {
             echo "markdown<<${delim}"
-            python3 .github/scripts/render_preview_links.py e2e-preview-artifacts
+            python3 .github/scripts/render_preview_links.py e2e-preview-artifacts e2e-preview-baseline
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 

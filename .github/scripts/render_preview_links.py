@@ -12,8 +12,13 @@ trusted: a link is rendered only when it is an https URL of the exact
 ``/assets/<guid>/overview`` shape, a type or suite name only when it is a plain
 identifier, and anything else is dropped rather than escaped.
 
+It also compares each leg's per-type asset counts with the same leg's counts
+in a baseline run (the latest passing release e2e), so a reviewer can see what
+the change landed that the default branch does not, or that it landed nothing
+different at all.
+
 Usage:
-    python3 render_preview_links.py <artifacts-root>
+    python3 render_preview_links.py <artifacts-root> [<baseline-root>]
 
 Prints the markdown (empty when there is nothing to show) to stdout.
 """
@@ -98,12 +103,103 @@ def render(found: list[tuple[str, str, list[tuple[str, str]], str | None]]) -> s
     return "\n".join(lines)
 
 
+Counts = dict[tuple[str, str], dict[str, int]]
+
+
+def collect_counts(root: Path) -> Counts:
+    """(leg, suite) -> per-type asset counts, from each preview file under
+    *root*. Same untrusted-input rules as :func:`collect`."""
+    found: Counts = {}
+    for path in sorted(root.glob("*/*.json")):
+        try:
+            body = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        counts = body.get("asset_counts") if isinstance(body, dict) else None
+        if not isinstance(counts, dict):
+            continue
+        suite = str(body.get("suite", path.stem))
+        if not _NAME.match(suite):
+            continue
+        found[(_leg(path.parent.name), suite)] = {
+            t: n
+            for t, n in counts.items()
+            if isinstance(t, str)
+            and _NAME.match(t)
+            and isinstance(n, int)
+            and not isinstance(n, bool)
+            and n >= 0
+        }
+    return found
+
+
+def render_diff(current: Counts, baseline: Counts | None) -> str:
+    """How this run's asset counts differ from the baseline run's.
+
+    The baseline is the latest passing release (`bump-version`) e2e in the same
+    repo, which runs the default branch's code. A run whose counts match the
+    baseline on every leg is called out: the e2e passed, but its source may not
+    exercise the change at all.
+    """
+    if not current:
+        return ""
+    if baseline is None:
+        return (
+            "_No baseline to compare asset counts against: no passing release "
+            "(`bump-version`) e2e run with preview files was found._"
+        )
+    rows: list[str] = []
+    compared = 0
+    for key in sorted(current):
+        before = baseline.get(key)
+        if before is None:
+            continue
+        compared += 1
+        now = current[key]
+        for t in sorted(set(before) | set(now)):
+            b, a = before.get(t, 0), now.get(t, 0)
+            if a != b:
+                rows.append(f"| {key[0]} | {key[1]} | {t} | {b} | {a} | {a - b:+d} |")
+    if not compared:
+        return "_No baseline for these legs: the release run's legs did not match._"
+    if not rows:
+        return (
+            "> ⚠️ **Asset counts match the release baseline exactly on every leg.** "
+            "The e2e passed, but its test source may not exercise this change: "
+            "check the preview links above for the change itself."
+        )
+    return "\n".join(
+        [
+            "### What changed vs the last release e2e",
+            "",
+            "| Leg | Suite | Asset type | Release | This PR | Δ |",
+            "|---|---|---|---|---|---|",
+            *rows,
+        ]
+    )
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: render_preview_links.py <artifacts-root>", file=sys.stderr)
+    if len(argv) not in (2, 3):
+        print(
+            "usage: render_preview_links.py <artifacts-root> [<baseline-root>]",
+            file=sys.stderr,
+        )
         return 2
     root = Path(argv[1])
-    print(render(collect(root)) if root.is_dir() else "")
+    if not root.is_dir():
+        print("")
+        return 0
+    baseline_root = Path(argv[2]) if len(argv) == 3 else None
+    baseline = (
+        collect_counts(baseline_root)
+        if baseline_root is not None
+        and baseline_root.is_dir()
+        and any(baseline_root.iterdir())
+        else None
+    )
+    sections = [render(collect(root)), render_diff(collect_counts(root), baseline)]
+    print("\n\n".join(section for section in sections if section))
     return 0
 
 

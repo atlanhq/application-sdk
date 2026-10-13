@@ -75,6 +75,7 @@ def test_each_landed_type_gets_a_link_to_one_of_its_assets(
     body = _written(tmp_path)
     assert body["links"] == {"Table": f"{_BASE}/assets/g-1/overview"}
     assert body["connection_qualified_name"] == _QN
+    assert body["asset_counts"] == {"Table": 4}
 
 
 def test_a_type_with_no_landed_asset_gets_no_link(

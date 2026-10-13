@@ -15,6 +15,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import preview_baseline_run as baseline
 import render_preview_links as mod
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -93,3 +94,51 @@ def test_the_tests_gate_comment_carries_the_preview_section() -> None:
         s for s in steps if s.get("name") == "Post unified test-summary comment on PR"
     )
     assert "steps.preview.outputs.markdown" in comment["with"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# What changed vs the release baseline
+# ---------------------------------------------------------------------------
+
+
+def _counts(root: Path, counts: dict[str, object]) -> mod.Counts:
+    _write(root, {"suite": "ExampleE2E", "links": {}, "asset_counts": counts})
+    return mod.collect_counts(root)
+
+
+def test_a_changed_count_is_listed_with_its_delta(tmp_path: Path) -> None:
+    now = _counts(tmp_path / "pr", {"Table": 5, "ColumnProcess": 3})
+    before = _counts(tmp_path / "base", {"Table": 5})
+    md = mod.render_diff(now, before)
+    assert "| ColumnProcess | 0 | 3 | +3 |" in md
+    assert "| Table |" not in md
+
+
+def test_counts_identical_to_the_baseline_are_called_out(tmp_path: Path) -> None:
+    """A change whose e2e lands exactly what the default branch lands passed
+    without showing the change: the comment must say so, not stay silent."""
+    now = _counts(tmp_path / "pr", {"Table": 5})
+    before = _counts(tmp_path / "base", {"Table": 5})
+    assert "match the release baseline exactly" in mod.render_diff(now, before)
+
+
+def test_no_baseline_is_stated(tmp_path: Path) -> None:
+    now = _counts(tmp_path / "pr", {"Table": 5})
+    assert "No baseline" in mod.render_diff(now, None)
+
+
+def test_a_non_integer_count_is_ignored(tmp_path: Path) -> None:
+    got = _counts(tmp_path, {"Table": "5", "View": True, "Column": -1, "Schema": 2})
+    assert got == {("atlan-example-app-example-e2e-aws", "ExampleE2E"): {"Schema": 2}}
+
+
+def test_the_baseline_is_the_newest_passing_release_run_but_not_this_one() -> None:
+    runs = [
+        {"id": 9, "conclusion": "success", "head_branch": "bump-version-main"},
+        {"id": 8, "conclusion": "success", "head_branch": "feature/x"},
+        {"id": 7, "conclusion": "failure", "head_branch": "bump-version-main"},
+        {"id": 6, "conclusion": "success", "head_branch": "bump-version-main"},
+    ]
+    assert baseline.pick(runs, current_run_id=1) == 9
+    assert baseline.pick(runs, current_run_id=9) == 6
+    assert baseline.pick(runs[1:3], current_run_id=1) is None

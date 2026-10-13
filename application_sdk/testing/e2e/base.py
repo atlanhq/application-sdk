@@ -5376,6 +5376,10 @@ class BaseE2ETest:
                 "suite": type(self).__name__,
                 "connection_qualified_name": self.connection_qualified_name,
                 "links": links,
+                # What the run landed, so the PR comment can say how this run
+                # differs from the baseline run's file of the same name.
+                "asset_counts": dict(self.dag_outcomes[-1].asset_counts),
+                "lineage_present": self.dag_outcomes[-1].lineage_present,
             }
             if links and (until := self._hold_for_preview()):
                 body["expires_at"] = preview_hold.stamp(until)

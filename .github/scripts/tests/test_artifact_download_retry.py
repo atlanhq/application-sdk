@@ -77,6 +77,8 @@ EXEMPT = {
         "workflows/tests-reusable.yaml",
         "e2e-preview-${{ inputs.app-name }}*",
     ): "reviewer preview links for the comment; a miss drops that section only",
+    # The same pattern serves both downloads in tests-passed: this run's preview
+    # files and the release baseline's (by run-id). Both are comment-only.
     (
         "workflows/conformance-upload-sarif-reusable.yaml",
         "conformance-${{ matrix.slug }}-sarif*",
