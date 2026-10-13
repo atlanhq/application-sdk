@@ -161,8 +161,8 @@ levels: set `treeSelection = true` on the widget instead (step 3).
 `AgentCredentialSpec` for `agent_json`; a `BaseMetadataConfig` subclass for wizard
 metadata; `FilterMap` for flat filter maps; `TreeSelection`
 (`application_sdk.contracts.types`) for a tree-widget selection (`APITree` and similar)
-read at any depth, which a generated contract gets from `treeSelection = true` on the
-widget; for an extraction app's include/exclude filters it extends
+read below its second level, which a generated contract gets from `treeSelection = true`
+on the widget; for an extraction app's include/exclude filters it extends
 `TreeSelectionExtractionInput`, whose filters are `TreeSelection | str`; a small
 `BaseModel` for a dict whose keys are known.  Absorb legacy wire shapes with a
 `mode='before'` validator.

@@ -138,7 +138,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "reference, never inline); ``AgentCredentialSpec`` for ``agent_json``; a\n"
             "``BaseMetadataConfig`` subclass for wizard metadata; ``FilterMap`` for flat\n"
             "filter maps; ``TreeSelection`` (``application_sdk.contracts.types``) for a\n"
-            "tree-widget selection (``APITree`` and similar) read at any depth, which a\n"
+            "tree-widget selection (``APITree`` and similar) read below its second level, which a\n"
             "generated contract gets from ``treeSelection = true`` on the widget; for an\n"
             "extraction app's include/exclude filters it extends ``TreeSelectionExtractionInput``,\n"
             "whose filters are ``TreeSelection | str``; a small\n"

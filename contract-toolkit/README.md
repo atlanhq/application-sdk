@@ -95,6 +95,7 @@ The SDK auto-serves these from `ATLAN_CONTRACT_GENERATED_DIR`, defaulting to `ap
 The `examples/` directory contains executable contracts that teach stable toolkit patterns.
 
 - [`examples/minimal/`](examples/minimal/) — smallest possible contract; uses all defaults. Start here.
+- [`examples/tree-filters/`](examples/tree-filters/) — extraction app whose include/exclude filters are tree pickers with `treeSelection = true`; `AppInputContract` extends `TreeSelectionExtractionInput`.
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).

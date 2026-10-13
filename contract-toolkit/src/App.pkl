@@ -478,6 +478,10 @@ local filterWidgets: Map<String, Widgets.UIElement> =
   else (uiConfig?.properties ?? Map())
     .filter((k, _) -> Set("include_filter", "exclude_filter").contains(toPyFieldName(k)))
 
+local function isTreeWidget(u: Widgets.UIElement): Boolean =
+  u is Widgets.APITree
+    || (u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).baseWidgetType == "apitree")
+
 local function setsTreeSelection(u: Widgets.UIElement): Boolean =
   (u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).treeSelection)
     || (u is Widgets.APITree && (u as Widgets.APITree).treeSelection)
@@ -5063,11 +5067,9 @@ local _treeSelectionWidgetCheck: Any =
   else throw("ConditionalInput \(bad.join(", ")) sets treeSelection; "
     + "treeSelection applies only to baseWidgetType = \"apitree\".")
 
-// Both filter fields come from one base class, so one filter widget cannot be a
-// tree selection while the other is not.
 local _treeFilterModeCheck: Any =
-  if (filterWidgets.values.map((u) -> setsTreeSelection(u)).toSet().length <= 1) null
-  else throw("include-filter and exclude-filter must both set treeSelection or neither: "
+  if (filterWidgets.values.filter((u) -> isTreeWidget(u)).map((u) -> setsTreeSelection(u)).toSet().length <= 1) null
+  else throw("include-filter and exclude-filter tree widgets must both set treeSelection or neither: "
     + "it selects TreeSelectionExtractionInput, which types both filters as TreeSelection | str.")
 
 local _legacyWorkflowTypesPlacementCheck: Any =

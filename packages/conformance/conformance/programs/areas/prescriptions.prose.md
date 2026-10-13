@@ -329,7 +329,7 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      | `agent_json` | `AgentCredentialSpec` |
      | wizard metadata | a `BaseMetadataConfig` subclass, or a bounded `dict[str, str]` |
      | flat filters | `FilterMap` (`application_sdk.templates.contracts`) |
-     | a tree-widget selection (`APITree` and similar) read at any depth | `TreeSelection` (`application_sdk.contracts.types`); generated contracts get it from `treeSelection = true` on the widget |
+     | a tree-widget selection (`APITree` and similar) read below its second level | `TreeSelection` (`application_sdk.contracts.types`); generated contracts get it from `treeSelection = true` on the widget |
      | an extraction app's include/exclude filters as a tree | extend `TreeSelectionExtractionInput` (`application_sdk.templates.contracts`), whose filters are `TreeSelection \| str`; generated contracts get it from `treeSelection = true` on both filter widgets |
      | a dict with known keys | a small `BaseModel` with those fields |
 

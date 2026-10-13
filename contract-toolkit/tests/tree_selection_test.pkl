@@ -80,6 +80,7 @@ local filterApiTreeOn = filterApp(apiTree(true), apiTree(true))
 local includeFilterOnly = (treeApp(apiTree(false))) {
   uiConfig { tasks { ["Metadata"] { inputs { ["include-filter"] = conditional(true, "apitree") } } } }
 }
+local treeIncludeTextExclude = filterApp(apiTree(true), new App.TextInput { title = "Exclude regex" })
 local filterMixed = filterApp(conditional(true, "apitree"), conditional(false, "apitree"))
 
 facts {
@@ -112,8 +113,6 @@ facts {
       == conditionalOff.output.files["app/generated/manifest.json"].text
   }
 
-  // ExtractionInput declares include_filter / exclude_filter as FilterMap | str,
-  // which keeps two levels of a tree, so the filter widgets generate no field.
   ["Filter widgets without treeSelection keep ExtractionInput"] {
     inputPy(filterOff).contains("\nclass AppInputContract(ExtractionInput):\n")
     inputPy(filterOff).contains("from application_sdk.templates.contracts import ExtractionInput\n")
@@ -135,9 +134,18 @@ facts {
     inputPy(includeFilterOnly).contains("\nclass AppInputContract(TreeSelectionExtractionInput):\n")
   }
 
-  ["Filter widgets that disagree on treeSelection are refused"] {
+  ["Filter tree widgets that disagree on treeSelection are refused"] {
     module.catch(() -> inputPy(filterMixed))
-      .contains("include-filter and exclude-filter must both set treeSelection or neither")
+      .contains("include-filter and exclude-filter tree widgets must both set treeSelection or neither")
+  }
+
+  ["A tree include filter beside a non-tree exclude widget is allowed"] {
+    inputPy(treeIncludeTextExclude).contains("\nclass AppInputContract(TreeSelectionExtractionInput):\n")
+  }
+
+  ["The tree-filters example extends TreeSelectionExtractionInput"] {
+    read("../examples/tree-filters/app/generated/_input.py").text
+      .contains("\nclass AppInputContract(TreeSelectionExtractionInput):\n")
   }
 
   ["Filter treeSelection: workflow config and manifest are identical"] {
