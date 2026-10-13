@@ -24,6 +24,7 @@ before the bare ``ATLAN_DEPLOYMENT_NAME`` (the host's per-app env convention).
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import importlib
 import os
 from pathlib import Path
@@ -38,6 +39,11 @@ from application_sdk.handler.metadata_routes import (
     MetadataSource,
     generated_dir_of,
     register_metadata_routes,
+)
+from application_sdk.handler.object_routes import (
+    S3ObjectStore,
+    host_object_source,
+    register_object_routes,
 )
 from application_sdk.handler.routes import (
     LoggingPreflightObserver,
@@ -62,6 +68,20 @@ def app_env(app_name: str, key: str, default: str = "") -> str:
     if value is not None:
         return value
     return os.environ.get(key, default)
+
+
+@functools.cache
+def default_object_store() -> S3ObjectStore | None:
+    """The host's object store, built once from ``S3_BUCKET`` / ``S3_REGION``.
+
+    One bucket and one client for every hosted app: each app's configs live
+    under its own ``persistent-artifacts/apps/<app>/`` prefix in that bucket.
+    """
+    return S3ObjectStore.from_env()
+
+
+#: ``build_asgi_app(object_store=...)`` default: build the store from env.
+_FROM_ENV: Any = object()
 
 
 def _package_generated_dir(app_package: str) -> Path | None:
@@ -96,6 +116,7 @@ def build_asgi_app(
     app_package: str = "app",
     blocking_threads: int = DEFAULT_BLOCKING_THREADS,
     generated_dir: Path | None = None,
+    object_store: S3ObjectStore | None = _FROM_ENV,
 ) -> FastAPI:
     """A FastAPI app serving ``handler`` as ``app_name``.
 
@@ -104,7 +125,9 @@ def build_asgi_app(
     ``run_in_thread`` calls in its requests run on the app's own pool of
     ``blocking_threads`` threads, kept on ``app.state.blocking_executor`` for
     the host to shut down. The metadata routes are served when the app ships a
-    generated folder (``generated_dir``, else ``<app_package>/generated``).
+    generated folder (``generated_dir``, else ``<app_package>/generated``). The
+    config and file routes use ``object_store`` (by default
+    :func:`default_object_store`) and answer 503 without one.
     """
     app = FastAPI(title=app_name)
     app.state.app_name = app_name
@@ -146,6 +169,8 @@ def build_asgi_app(
                 deployment_name=_deployment,
             ),
         )
+    store = default_object_store() if object_store is _FROM_ENV else object_store
+    register_object_routes(app, host_object_source(app_name, store))
     # The app's own routers go last, so one that redefines an SDK route is refused.
     include_app_routers_on(app, handler, app_name)
     return app

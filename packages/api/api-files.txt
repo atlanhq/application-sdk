@@ -59,6 +59,7 @@ application_sdk/handler/context.py
 application_sdk/handler/contracts.py
 application_sdk/handler/manifest.py
 application_sdk/handler/metadata_routes.py
+application_sdk/handler/object_routes.py
 application_sdk/handler/request_contract.py
 application_sdk/handler/routes.py
 application_sdk/handler/service_errors.py

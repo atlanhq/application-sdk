@@ -32,31 +32,29 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import json
-import mimetypes
 import os
 import re
-import shutil
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from types import ModuleType
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import orjson
 import temporalio.service
-from fastapi import FastAPI, File, Form, HTTPException
-from fastapi import Path as PathParam
-from fastapi import Query, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import (  # noqa: F401 — re-exported (served here before object_routes)
+    run_in_thread,
+)
 from application_sdk.common._generated_tree import (  # noqa: F401 — MANIFEST_STEM, choose_form_configmap, names_entrypoint re-exported (served here before metadata_routes)
     MANIFEST_STEM,
     choose_form_configmap,
@@ -80,7 +78,7 @@ from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.errors import PreconditionError
 from application_sdk.handler.base import Handler
 from application_sdk.handler.context import HandlerContext
-from application_sdk.handler.contracts import (
+from application_sdk.handler.contracts import (  # noqa: F401 — FileUploadResponse re-exported (served here before object_routes)
     EventTriggerConfig,
     FileUploadResponse,
     SubscriptionConfig,
@@ -489,6 +487,10 @@ from application_sdk.handler.metadata_routes import (  # noqa: E402
     decode_fe_inputs,
     entrypoint_form,
     register_metadata_routes,
+)
+from application_sdk.handler.object_routes import (  # noqa: E402
+    ObjectRoutesSource,
+    register_object_routes,
 )
 
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
@@ -1502,142 +1504,32 @@ def _register_workflow_routes(
             ) from None
 
     # ------------------------------------------------------------------
-    # Config (state store)
+    # Config (object store) and file upload (shared with the host)
     # ------------------------------------------------------------------
 
-    @app.get("/workflows/v1/config/{config_id}")
-    async def get_workflow_config(
-        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
-        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
-    ) -> JSONResponse:
-        """Fetch workflow config from object store."""
-        config = await _config_load_from_objectstore(config_id, config_type=type)
-
-        if config is None and _storage is None:
-            raise HTTPException(
-                status_code=503,
-                detail="No object store configured",
-            )
-        if config is None:
-            raise HTTPException(
-                status_code=404, detail=f"Config not found: {config_id}"
-            )
-        return JSONResponse(
-            content=_wrap_response(
-                cast("dict[str, Any]", config),
-                message="Workflow configuration fetched successfully",
-            )
-        )
-
-    @app.post("/workflows/v1/config/{config_id}")
-    async def update_workflow_config(
-        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
-        request: Request,
-        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
-    ) -> JSONResponse:
-        """Save workflow config to object store."""
-        body = await request.json()
-
-        if type == "workflows":
-            warnings.warn(
-                "Saving config with type='workflows' is deprecated; "
-                "use a specific config type instead. "
-                "Will be removed in v4.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        saved = await _config_save_to_objectstore(config_id, body, config_type=type)
-
-        if not saved:
-            raise HTTPException(
-                status_code=503,
-                detail="No object store configured",
-            )
-        return JSONResponse(
-            content=_wrap_response(
-                cast("dict[str, Any]", body),
-                message="Workflow configuration updated successfully",
-            )
-        )
-
-    # ------------------------------------------------------------------
-    # File upload
-    # ------------------------------------------------------------------
-
-    @app.post("/workflows/v1/file")
-    async def upload_file(
-        file: UploadFile = File(...),
-        filename: str | None = Form(None),
-        prefix: str | None = Form(None),
-        contentType: str | None = Form(None),
-    ) -> JSONResponse:
-        if _storage is None:
-            raise HTTPException(status_code=503, detail="Storage not configured")
-
+    async def _upload_to_storage(key: str, local_path: str) -> None:
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
             upload_file as _upload_file,
         )
 
-        raw_name = filename or file.filename or "upload"
-        # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
-        extension = _SAFE_EXT_RE.sub("", PurePosixPath(raw_name).suffix.lstrip("."))[
-            :16
-        ]
-        resolved_type = (
-            contentType
-            or file.content_type
-            or (mimetypes.guess_type(raw_name)[0] if raw_name else None)
-            or "application/octet-stream"
-        )
+        await _upload_file(key, local_path, _storage)
 
-        file_id = str(uuid4())
-        effective_prefix = prefix or "workflow_file_upload"
-        stored_name = f"{file_id}.{extension}" if extension else file_id
-        key = f"{effective_prefix}/{stored_name}"
-
-        # Stream the upload: drain the spooled temp file to a named temp file,
-        # then stream-upload to the object store (avoids materialising in memory).
-        fd, tmp_path = tempfile.mkstemp(suffix=f".{extension}" if extension else "")
-        safe_tmp_path = _validated_temp_path(tmp_path)
-        try:
-            os.close(fd)
-
-            def _drain_to_tmp() -> int:
-                with open(safe_tmp_path, "wb") as dst:
-                    shutil.copyfileobj(file.file, dst)
-                return os.path.getsize(safe_tmp_path)
-
-            file_size = await run_in_thread(_drain_to_tmp)
-            await _upload_file(key, safe_tmp_path, _storage)
-        finally:
-            try:
-                os.unlink(safe_tmp_path)
-            except FileNotFoundError:  # conformance: ignore[E002] temp file already removed; nothing to clean up
-                pass
-
-        now_ms = int(datetime.now(UTC).timestamp() * 1000)
-        response_obj = FileUploadResponse(
-            id=file_id,
-            version="1",
-            is_active=True,
-            created_at=now_ms,
-            updated_at=now_ms,
-            file_name=stored_name,
-            raw_name=raw_name,
-            key=key,
-            extension=extension,
-            content_type=resolved_type,
-            file_size=file_size,
-            is_uploaded=True,
-            uploaded_at=datetime.now(UTC).isoformat(),
-        )
-        return JSONResponse(
-            content=_wrap_response(
-                response_obj.model_dump(by_alias=True),
-                message="File uploaded successfully",
-            )
-        )
+    # Every operation reads this module's _storage per request.
+    register_object_routes(
+        app,
+        ObjectRoutesSource(
+            configured=lambda: _storage is not None,
+            load_config=lambda config_id, config_type: _config_load_from_objectstore(
+                config_id, config_type=config_type
+            ),
+            save_config=lambda config_id,
+            body,
+            config_type: _config_save_to_objectstore(
+                config_id, body, config_type=config_type
+            ),
+            upload_file=_upload_to_storage,
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Dapr pub/sub and event-triggered workflow endpoints
