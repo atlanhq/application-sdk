@@ -454,6 +454,7 @@ EXPECTED_CALLERS = {
     ("sdk-resolve.yml", "redirect-to-lens", "React to disabled trigger"),
     ("auto-fix-vulnerabilities.yaml", "auto-fix", "React to comment"),
     ("capability-manifest-regen.yaml", "regen", "React to comment"),
+    ("remediate-dispatch.yaml", "dispatch", "React to comment"),
 }
 
 

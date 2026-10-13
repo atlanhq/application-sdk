@@ -50,6 +50,7 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "build-and-publish.yaml",
     "stale.yml",
     "generated-freshness.yaml",
+    "remediate-comment.yml",
 )
 
 # Opt-in managed shim (FND-3336): installed only under ``bootstrap
