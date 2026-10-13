@@ -461,6 +461,42 @@
     },
     {
       "kind": "class",
+      "marker_via": "decorator",
+      "message": "application_sdk.storage.transfer.InternalError is deprecated, matches no error the SDK raises, and will be removed in v4.0. Use application_sdk.errors.InternalError instead.",
+      "migration_target": true,
+      "module": "application_sdk.storage.transfer",
+      "removal_version": "4.0",
+      "symbol": "InternalError"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.storage.transfer.is_sidecar_key is deprecated, does nothing, and will be removed in v4.0. Use application_sdk.storage.integrity.is_sidecar_key instead.",
+      "migration_target": true,
+      "module": "application_sdk.storage.transfer",
+      "removal_version": "4.0",
+      "symbol": "is_sidecar_key"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.storage.transfer.list_data_keys is deprecated, does nothing, and will be removed in v4.0. Use application_sdk.storage.batch.list_data_keys instead.",
+      "migration_target": true,
+      "module": "application_sdk.storage.transfer",
+      "removal_version": "4.0",
+      "symbol": "list_data_keys"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "application_sdk.storage.transfer.safe_list_directory is deprecated, does nothing, and will be removed in v4.0. Use os.walk instead; the SDK's own walker is private.",
+      "migration_target": true,
+      "module": "application_sdk.storage.transfer",
+      "removal_version": "4.0",
+      "symbol": "safe_list_directory"
+    },
+    {
+      "kind": "class",
       "marker_via": "warn",
       "message": " subclasses BaseMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
       "migration_target": true,

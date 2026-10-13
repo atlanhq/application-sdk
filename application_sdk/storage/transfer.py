@@ -42,10 +42,13 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from typing_extensions import deprecated
+
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.errors import InternalError as _InternalError
 from application_sdk.observability.logger_adaptor import get_logger
 
 # The batch key listers are imported at top level, unlike the other
@@ -69,6 +72,106 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.contracts.storage import DownloadOutput, UploadOutput
+    from application_sdk.storage.ops import BoundStore
+
+
+# ── Deprecated names ─────────────────────────────────────────────────────────
+# These four were this module's own imports, and so importable from it, until
+# FND-3796 moved the upload loop into the persist engine and left them unused.
+# A consumer audit across the atlanhq fleet found no app importing any of them
+# from here, so rather than keep working aliases that new code could pick up,
+# each is a deprecated no-op that keeps the name importable until v4.0.
+
+
+@deprecated(
+    "application_sdk.storage.transfer.InternalError is deprecated, matches no "
+    "error the SDK raises, and will be removed in v4.0. Use "
+    "application_sdk.errors.InternalError instead."
+)
+class InternalError(_InternalError):
+    """Deprecated inert subclass kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of
+        :class:`application_sdk.errors.InternalError`. The SDK raises the
+        real class, never this subclass, so ``except`` on it catches nothing
+        the SDK raises — use :class:`application_sdk.errors.InternalError`.
+    """
+
+
+@deprecated(
+    "application_sdk.storage.transfer.is_sidecar_key is deprecated, does "
+    "nothing, and will be removed in v4.0. Use "
+    "application_sdk.storage.integrity.is_sidecar_key instead."
+)
+def is_sidecar_key(key: str) -> bool:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of
+        :func:`application_sdk.storage.integrity.is_sidecar_key`, which FND-3796
+        left unused — call that instead.
+
+    Args:
+        key: Ignored.
+
+    Returns:
+        Always ``False``.
+    """
+    del key
+    return False
+
+
+@deprecated(
+    "application_sdk.storage.transfer.list_data_keys is deprecated, does "
+    "nothing, and will be removed in v4.0. Use "
+    "application_sdk.storage.batch.list_data_keys instead."
+)
+async def list_data_keys(
+    prefix: str = "",
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> list[str]:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of
+        :func:`application_sdk.storage.batch.list_data_keys`, which FND-3796
+        left unused — call that instead.
+
+    Args:
+        prefix: Ignored.
+        store: Ignored.
+        normalize: Ignored.
+
+    Returns:
+        Always an empty list: nothing is listed.
+    """
+    del prefix, store, normalize
+    return []
+
+
+@deprecated(
+    "application_sdk.storage.transfer.safe_list_directory is deprecated, does "
+    "nothing, and will be removed in v4.0. Use os.walk instead; the SDK's "
+    "own walker is private."
+)
+def safe_list_directory(path: Path) -> list[Path]:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of the SDK's
+        private directory walker, which FND-3796 left unused here.
+
+    Args:
+        path: Ignored.
+
+    Returns:
+        Always an empty list: nothing is listed.
+    """
+    del path
+    return []
 
 
 async def _cross_store_sha256_match(

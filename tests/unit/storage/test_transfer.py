@@ -1433,3 +1433,25 @@ class TestUploadOnTheSharedEngine:
             if p.is_file() and not p.name.endswith(".sha256")
         }
         assert got == {"table/entities.json", "column/entities.json"}
+
+
+class TestDeprecatedReexports:
+    """FND-3796: four names ``transfer`` no longer imports stay importable.
+
+    A fleet audit found no app using them from here, so each is a deprecated
+    no-op until v4.0 rather than a working alias new code could adopt.
+    """
+
+    async def test_each_name_warns_and_does_nothing(self, tmp_path) -> None:
+        from application_sdk.errors import InternalError as RealInternalError
+        from application_sdk.storage import transfer
+
+        (tmp_path / "a.json").write_bytes(b"{}")
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            assert transfer.is_sidecar_key("a.json.sha256") is False
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            assert transfer.safe_list_directory(tmp_path) == []
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            assert await transfer.list_data_keys("", create_memory_store()) == []
+        # Inert as a catch target: the SDK raises the real class.
+        assert not issubclass(RealInternalError, transfer.InternalError)
