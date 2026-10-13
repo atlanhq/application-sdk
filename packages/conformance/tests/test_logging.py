@@ -254,6 +254,20 @@ for group in groups:
     assert "L006" in _ids(src)
 
 
+def test_l006_silent_for_terminal_summary_in_bounded_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+for attempt in range(3):
+    while True:
+        batch = next_batch(attempt)
+        if not batch:
+            logger.info("attempt complete")
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
 def test_l006_silent_in_bounded_range() -> None:
     src = "from loguru import logger\nfor i in range(5):\n    logger.info('item')\n"
     assert "L006" not in _ids(src)
