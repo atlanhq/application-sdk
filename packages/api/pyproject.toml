@@ -25,6 +25,10 @@ aws = [
     "httpx>=0.27.0,<0.29.0",
     "python-dotenv>=1.1.0,<2.0.0",
 ]
+# Never needed to serve a handler: the input-contract models import pyatlan_v9
+# only inside ConnectionRef's Atlas conversion helpers, which the host never
+# calls. Declared so those function-level imports are an extra's, as on the worker.
+pyatlan = ["pyatlan>=11.3,<12"]
 
 [build-system]
 requires = ["hatchling"]
@@ -59,6 +63,8 @@ core = [
     "application_sdk.credentials.ingress",
     "application_sdk.common.concurrency",
     "application_sdk.common.logger",
+    "application_sdk.templates.contracts",
+    "application_sdk.handler.metadata_routes",
 ]
 sql = [
     "application_sdk.clients.sql",

@@ -66,7 +66,7 @@ from __future__ import annotations
 
 import os
 
-from application_sdk.constants import load_build_info
+from application_sdk._build_info import load_build_info
 
 __all__ = [
     "BUILD_ID_ENV",

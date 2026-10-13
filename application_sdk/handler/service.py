@@ -57,13 +57,13 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common._generated_tree import (
+from application_sdk.common._generated_tree import (  # noqa: F401 — MANIFEST_STEM, choose_form_configmap, names_entrypoint re-exported (served here before metadata_routes)
     MANIFEST_STEM,
     choose_form_configmap,
     eligible_form_configmaps,
     names_entrypoint,
 )
-from application_sdk.common.build_identity import (
+from application_sdk.common.build_identity import (  # noqa: F401 — re-exported (served here before metadata_routes)
     BUILD_IDENTITY_CONFIGMAP_ID,
     build_identity,
 )
@@ -71,7 +71,7 @@ from application_sdk.common.dispatch import (
     canonical_workflow_type,
     resolve_dispatch_workflow_id,
 )
-from application_sdk.common.task_queue import (
+from application_sdk.common.task_queue import (  # noqa: F401 — resolve_manifest_tokens re-exported (served here before metadata_routes)
     resolve_manifest_tokens,
     task_queue_from_env,
 )
@@ -370,21 +370,9 @@ CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
 
 def _entrypoint_form(entrypoint: str) -> tuple[Path | None, list[Path]]:
-    """The generated setup form served for *entrypoint*, and the files it was
-    chosen from.
-
-    Searches both generated layouts: multi-entrypoint apps nest each form under
-    ``CONTRACT_GENERATED_DIR/<entrypoint>/``, single-entrypoint apps emit it
-    flat in ``CONTRACT_GENERATED_DIR``. The nested directory wins. Within a
-    directory :func:`choose_form_configmap` decides. ``(None, [])`` when no
-    eligible form exists.
-    """
-    for search_dir in (CONTRACT_GENERATED_DIR / entrypoint, CONTRACT_GENERATED_DIR):
-        candidates = eligible_form_configmaps(search_dir)
-        target = choose_form_configmap(candidates, entrypoint)
-        if target is not None:
-            return target, candidates
-    return None, []
+    """The generated setup form served for *entrypoint* (see
+    :func:`application_sdk.handler.metadata_routes.entrypoint_form`)."""
+    return entrypoint_form(CONTRACT_GENERATED_DIR, entrypoint)
 
 
 def generated_entrypoints() -> list[str]:
@@ -495,6 +483,14 @@ def warn_on_warmup_flag_drift(
 # separate, deliberate decision).
 
 
+from application_sdk.handler.metadata_routes import (  # noqa: E402
+    MAX_FE_INPUTS_BYTES,
+    MetadataSource,
+    decode_fe_inputs,
+    entrypoint_form,
+    register_metadata_routes,
+)
+
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
 # in get_manifest() before any filesystem path is constructed.
@@ -601,32 +597,13 @@ def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
 # GUIDs / tags) is ~5 KB — so 8 KB leaves headroom without rejecting legitimate
 # forms. Anything materially larger should move to a POST body (tracked
 # follow-up) rather than grow the query string.
-_MAX_FE_INPUTS_BYTES = 8192
+_MAX_FE_INPUTS_BYTES = MAX_FE_INPUTS_BYTES
 
 
 def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
-    """Decode the ``fe_inputs`` query payload (JSON, sent URL-encoded by
-    Heracles for dynamic-manifest apps). Returns ``{}`` when absent; raises
-    ``HTTPException(413)`` when it exceeds :data:`_MAX_FE_INPUTS_BYTES` and
-    ``HTTPException(400)`` when present but malformed."""
-    if not raw:
-        return {}
-    if len(raw.encode("utf-8")) > _MAX_FE_INPUTS_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"fe_inputs exceeds the {_MAX_FE_INPUTS_BYTES}-byte limit",
-        )
-    try:
-        # orjson.JSONDecodeError subclasses json.JSONDecodeError, so the
-        # existing except clause still catches malformed input.
-        parsed = orjson.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=400, detail="fe_inputs must be a JSON object")
-    return parsed
+    """Decode the ``fe_inputs`` query payload (see
+    :func:`application_sdk.handler.metadata_routes.decode_fe_inputs`)."""
+    return decode_fe_inputs(raw, _MAX_FE_INPUTS_BYTES)
 
 
 # Allowed characters for config_id and config_type path components.
@@ -1839,653 +1816,80 @@ def _register_workflow_routes(
         app.add_api_route(_sub_route, _sub.handler, methods=["POST"])
 
     # ------------------------------------------------------------------
-    # ConfigMap endpoints
+    # ConfigMaps, manifest and input contract (shared with the host)
     # ------------------------------------------------------------------
 
-    @app.get("/workflows/v1/configmap/{config_map_id}")
-    async def get_configmap(config_map_id: str) -> JSONResponse:
-        # 0. The reserved build-identity id (FND-1684).
-        #
-        # Answered BEFORE the generated-file scan, deliberately: an app that
-        # happens to ship `atlan-build-identity.json` would otherwise shadow the
-        # one fact only a running pod can report — and it would shadow it with a
-        # committed file, which is exactly the class of answer that cannot tell
-        # this build apart from one shipped months ago.
-        #
-        # Served on THIS route rather than a new one because
-        # `/api/service/configmaps/{name}` is already proxied by Heracles. A new
-        # route would need a new proxy rule, in a repo the e2e fix does not
-        # otherwise touch, before CI could read any of this.
-        #
-        # `build_id` is "" for an image that carries no stamp. That is a valid
-        # answer, not an error: the reader has to distinguish "this pod reports a
-        # different build" from "this pod cannot report one", and a 404 here
-        # would collapse the second into "no such route".
-        if config_map_id == BUILD_IDENTITY_CONFIGMAP_ID:
-            identity: dict[str, Any] = {
-                "build_id": build_identity(),
-                "app_name": _workflow_config.app_name,
-            }
-            return JSONResponse(
-                content=_wrap_response(
-                    cast(
-                        "dict[str, Any]",
-                        {
-                            "kind": "ConfigMap",
-                            "apiVersion": "v1",
-                            "metadata": {"name": config_map_id},
-                            # Same envelope as a real configmap — `data.config`
-                            # is a JSON string — so a generic client needs no
-                            # special case here, with the parsed keys repeated
-                            # alongside it for one that does.
-                            "data": {
-                                "config": orjson.dumps(identity).decode(),
-                                **identity,
-                            },
-                        },
-                    ),
-                    message="Build identity fetched successfully",
-                )
-            )
-
-        # 1. Direct match against any generated configmap file stem.
-        #    The setup form normally requests the form file by its stem
-        #    (e.g. "snowflake-crawler"), which lands here.
-        available_configmaps: list[str] = []
-        target: Path | None = None
-        if CONTRACT_GENERATED_DIR.exists():
-            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
-                available_configmaps.append(json_file.stem)
-                if json_file.stem == config_map_id:
-                    target = json_file
-                    break
-
-        # 2. Default-entrypoint fallback (aligns with PR #1965 semantics
-        #    used by /workflows/v1/start and /workflows/v1/input-contract).
-        #    The marketplace UI sometimes builds the configmap URL from the
-        #    app/marketplace id (e.g. "atlan-snowflake", bare "snowflake")
-        #    rather than the entrypoint-form stem. In that case, resolve to
-        #    the app's default entrypoint and serve its form configmap.
-        #    When ep resolution fails or the ep directory has no eligible
-        #    form configmap, target stays None and the handler returns 404.
-        if target is None:
-            try:
-                _, ep = _resolve_app_entrypoint(
-                    _workflow_config.app_name, None, unknown_ep_status=404
-                )
-            except HTTPException:
-                # No default entrypoint resolvable (the only HTTPException
-                # _resolve_app_entrypoint raises), so the handler falls through
-                # to a 404. Warning, not debug: this is exc_info-worthy
-                # telemetry an operator should see in production, not just
-                # local control flow.
-                logger.warning(
-                    "No default entrypoint for app %s; serving configmap 404",
-                    _workflow_config.app_name,
-                    exc_info=True,
-                )
-                ep = None
-            if ep is not None:
-                # Locate the entrypoint's form configmap across BOTH generated
-                # layouts:
-                #   * multi-entrypoint (bundle) apps nest each entrypoint's form
-                #     under CONTRACT_GENERATED_DIR/<ep.name>/ (see
-                #     EntryPointMetadata: kebab name on the wire and on disk);
-                #   * single-entrypoint apps emit it FLAT in CONTRACT_GENERATED_DIR
-                #     itself (e.g. `openapi.json` alongside `manifest.json`).
-                # Search the nested dir first, then fall back to the flat dir, so
-                # an app-id request (e.g. "atlan-openapi", which the marketplace
-                # UI builds instead of the form stem) resolves for either shape.
-                # Previously only the nested layout was searched, so a flat
-                # single-entrypoint app 404'd on an app-id request even though its
-                # form file was present — a blank setup wizard in the UI.
-                #
-                # Within each directory `choose_form_configmap` decides: a form
-                # that names the entrypoint (`<ep.name>.json`, or the connector
-                # convention `<source>-<ep.name>.json`), else the only file that
-                # survives the non-form exclusion (`manifest.json`,
-                # `artifact_schemas.json`, the `{atlan,csa}-connectors-*`
-                # credential templates), else the alphabetically first.
-                #
-                # That last step is a guess, and it stays: it is the
-                # compatibility path for apps whose form name the SDK cannot
-                # recognise, and 404ing them to avoid a hypothetical would break
-                # working apps. FND-1682 was not the guess being reachable — it
-                # was `artifact_schemas.json` being eligible at all, which
-                # NON_FORM_STEMS now fixes. What the guess still owes an
-                # operator is *visibility*: it produced an HTTP 200 carrying a
-                # document with no `properties`, so a blank setup wizard looked
-                # identical to a working app from the logs, the network tab and
-                # pod stderr alike. Hence the warning below — the next
-                # unrecognised sibling shows up in the logs on the first
-                # request, before anyone opens the wizard.
-                target, candidates = _entrypoint_form(ep.name)
-                if target is not None:
-                    if len(candidates) > 1 and not names_entrypoint(
-                        target.stem, ep.name
-                    ):
-                        # conformance: ignore[L009] logs caller-invisible context (the rejected candidates) that no HTTP response carries.
-                        logger.warning(
-                            "ConfigMap form chosen alphabetically for entrypoint "
-                            "%s: %d generated files are eligible and none is "
-                            "named for it, so %s.json was served as the setup "
-                            "form (candidates=%s). If that is the wrong file, "
-                            "name the form <entrypoint>.json or "
-                            "<source>-<entrypoint>.json in the app's contract.",
-                            ep.name,
-                            len(candidates),
-                            target.stem,
-                            [c.stem for c in candidates],
-                        )
-
-        if target is not None:
-            with open(target, encoding="utf-8") as f:
-                raw = json.load(f)
-            data: dict[str, Any] = {
-                "config": orjson.dumps(raw.get("config", raw)).decode()
-            }
-            # Some configmaps (e.g., connector apps) carry a top-level
-            # `defaultConnectorType`; surface it alongside `config` when present.
-            default_connector_type = raw.get("defaultConnectorType")
-            if default_connector_type is not None:
-                data["defaultConnectorType"] = default_connector_type
-            configmap = {
-                "kind": "ConfigMap",
-                "apiVersion": "v1",
-                "metadata": {"name": config_map_id},
-                "data": data,
-            }
-            return JSONResponse(
-                content=_wrap_response(
-                    cast("dict[str, Any]", configmap),
-                    message="ConfigMap fetched successfully",
-                )
-            )
-
-        # conformance: ignore[L009] logs caller-invisible context (the available configmaps) that the generic 404 HTTPException detail does not carry.
-        logger.warning(
-            "ConfigMap not found: requested=%s available=%s",
-            config_map_id,
-            sorted(available_configmaps),
+    def _registry_default_entrypoint() -> str:
+        _, ep = _resolve_app_entrypoint(
+            _workflow_config.app_name, None, unknown_ep_status=404
         )
-        raise HTTPException(
-            status_code=404, detail=f"ConfigMap '{config_map_id}' not found"
+        return ep.name
+
+    def _registry_explicit_entrypoints() -> list[str]:
+        # Resolved INDEPENDENTLY of the default: a servable multi-entrypoint
+        # app must not 404 just because the builder marked no default. A
+        # connector that implements run() AND declares explicit @entrypoints
+        # gets run() forced as its default, but run() has no generated manifest
+        # dir — so the explicit ones, alphabetically, are the fallback.
+        from application_sdk.app.registry import (  # noqa: PLC0415
+            AppNotFoundError,
+            AppRegistry,
         )
 
-    @app.get("/workflows/v1/configmaps")
-    async def list_configmaps() -> JSONResponse:
-        # Everything this endpoint's sibling will serve by exact stem, minus
-        # the DAG manifest, which `/workflows/v1/manifest` owns.
-        #
-        # Deliberately NOT `is_form_configmap`, and the difference is worth
-        # stating because the two look interchangeable. That predicate answers
-        # "which single file is the setup form", for the fallback that has to
-        # pick exactly one. This answers "which names does this endpoint
-        # respond to", and the credential templates it excludes are ones the
-        # UI genuinely fetches — the setup form's `credential` widget requests
-        # `atlan-connectors-<source>` as its own configmap. Filtering them here
-        # would drop names that work.
-        #
-        # The manifest stem comes from `_generated_tree` rather than a literal:
-        # a hand-spelled `"manifest"` here was the last copy of that vocabulary
-        # left in this module after FND-1682, and one divergent spelling is all
-        # the artifact_schemas bug needed.
-        seen: set[str] = set()
-        configmap_ids: list[str] = []
-        if CONTRACT_GENERATED_DIR.exists():
-            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
-                stem = json_file.stem
-                if stem == MANIFEST_STEM or stem in seen:
-                    continue
-                seen.add(stem)
-                configmap_ids.append(stem)
-        return JSONResponse(
-            content=_wrap_response(
-                cast("dict[str, Any]", {"configmaps": configmap_ids}),
-                message="ConfigMaps listed successfully",
-            )
-        )
-
-    # ------------------------------------------------------------------
-    # Manifest endpoint
-    # ------------------------------------------------------------------
-
-    def _resolve_manifest_placeholders(raw: bytes, source: str) -> bytes:
-        """Substitute the manifest's ``{app_name}`` / ``{deployment_name}`` tokens.
-
-        Delegates to :func:`application_sdk.common.task_queue.resolve_manifest_tokens`,
-        handing it the queue this process was configured with — the same value
-        ``create_worker`` receives, in every mode. The served ``task_queue`` is
-        therefore *stamped from* what the worker polls rather than independently
-        re-derived from the same env and hoped to match. Re-deriving is what let
-        AE submit to a queue nothing polled (FND-195 / CONNECT-183).
-
-        An ``{app_name}`` token means the app's committed manifest predates the
-        toolkit's bake (#2271 / #2478) — worth a WARNING even when this fills it,
-        because any other writer of that DAG gets no such backstop. With nothing
-        to fill it from, the token is served as-is and logged at ERROR:
-        deliberately not papered over with ``constants.APPLICATION_NAME``'s
-        ``"default"``, since ``atlan-default-<deployment>`` reads as a legitimate
-        queue and hangs the run silently, whereas a literal ``{app_name}`` in the
-        DAG is greppable and immediately diagnosable.
-        """
-        resolution = resolve_manifest_tokens(
-            raw,
-            task_queue=_workflow_config.task_queue or None,
-            # _workflow_config.app_name is populated from app_class._app_name and
-            # is empty for a handler served without an app class; the app_name
-            # argument carries the same value in that case.
-            app_name=_workflow_config.app_name or app_name or None,
-            deployment_fallback=DEPLOYMENT_NAME or "default",
-        )
-        if resolution.unresolved_app_name:
-            # conformance: ignore[L009] not a request-boundary handler — the manifest is
-            # still served (the token is the diagnostic); this log is the operator's signal.
-            logger.error(
-                "Manifest for %s carries an unresolved {app_name} token and no app "
-                "name is available (neither a registered app class nor "
-                "ATLAN_APPLICATION_NAME), so the SDK is serving the literal token "
-                "rather than inventing a name that would look legitimate and be "
-                "polled by nobody. Failure attribution for runs started from this "
-                "manifest will be blank, and any task_queue the SDK could not stamp "
-                "(stamped queue: %r) targets no worker. Set ATLAN_APPLICATION_NAME "
-                "on the deployment, or regenerate the contract so the toolkit bakes "
-                "the app name.",
-                source,
-                resolution.task_queue,
-            )
-        elif resolution.had_app_name_token:
-            logger.warning(
-                "Manifest for %s shipped an unbaked {app_name} token; filled with "
-                "%r for this response. The committed manifest is stale — bump the "
-                "contract toolkit and regenerate contracts, since any writer of "
-                "this DAG that does not go through this route gets no such fallback.",
-                source,
-                resolution.app_name,
-            )
-        return resolution.raw
-
-    async def _serve_entrypoint_manifest(
-        entrypoint_name: str,
-        fe_inputs: str | dict[str, Any] | None,
-    ) -> Response:
-        """Read <entrypoint>/manifest.json, substitute placeholders, run the
-        optional ``compute_manifest`` hook, and return the Response.
-
-        Shared by the explicit-``?entrypoint=`` branch and the default-
-        entrypoint fallback below — avoids duplicating the placeholder /
-        hook logic across both code paths.
-
-        ``fe_inputs`` arrives either as the raw URL-encoded JSON string (GET,
-        subject to :data:`_MAX_FE_INPUTS_BYTES`) or as an already-parsed dict
-        (POST body, unbounded). It stays undecoded until the hook actually
-        needs it — see the decode site below.
-        """
-        # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
-        # The Path objects in the dict come from glob(), not from user input, so
-        # the path that reaches read_bytes() is never tainted by the HTTP param.
-        # glob("*/manifest.json") only returns direct children of CONTRACT_GENERATED_DIR,
-        # so no is_relative_to guard is needed.
-        registry: dict[str, Path] = {
-            p.parent.name: p for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
-        }
-        ep_manifest = registry.get(entrypoint_name)
-        if ep_manifest is None:
-            # Multi-entrypoint (bundle) apps nest each entrypoint's manifest
-            # under <ep.name>/manifest.json (matched above). Single-entrypoint
-            # apps emit it FLAT at CONTRACT_GENERATED_DIR/manifest.json, with no
-            # per-entrypoint subdir. Heracles/AE always sends ?entrypoint=<name>
-            # on package-workflow submit, so without this fallback a flat
-            # single-entrypoint app 404s ("No manifest found for entrypoint")
-            # and the platform surfaces it as a 500 on submit — blocking every
-            # run. Mirrors the flat-layout fallback in get_configmap and the
-            # no-?entrypoint branch of get_manifest.
-            flat_manifest = CONTRACT_GENERATED_DIR / "manifest.json"
-            if flat_manifest.is_file():
-                ep_manifest = flat_manifest
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No manifest found for entrypoint {entrypoint_name!r}",
-                )
-        raw = _resolve_manifest_placeholders(
-            ep_manifest.read_bytes(), f"entrypoint {entrypoint_name!r}"
-        )
-
-        # Dynamic-manifest hook: if the app defines
-        # `app.<entrypoint_snake>.core.compute_manifest`, hand the
-        # static manifest + decoded `fe_inputs` to it and use the
-        # returned dict as the response body. Apps that don't define
-        # the hook get the static manifest unchanged (current behavior).
-        compute = _discover_compute_manifest(entrypoint_name)
-        if compute is not None:
-            # Decode lazily and only here: an app with no hook has always
-            # ignored fe_inputs, so decoding at the route would start 413-ing
-            # static apps that work today. A dict came from the POST body, where
-            # the query-string cap does not apply.
-            fe_inputs_decoded = (
-                fe_inputs
-                if isinstance(fe_inputs, dict)
-                else _decode_fe_inputs(fe_inputs)
-            )
-            manifest_dict = orjson.loads(raw)
-            try:
-                # The hook is async-only (discovery rejects sync defs), so
-                # await it directly. Authors doing CPU/IO-bound work inside
-                # (SQL generation, full DAG rewrite) own offloading it — e.g.
-                # `from application_sdk.execution.heartbeat import run_in_thread`
-                # then `await run_in_thread(...)` — rather than the SDK
-                # guessing on their behalf.
-                computed = await compute(manifest_dict, fe_inputs_decoded)
-            except HTTPException:
-                raise
-            except Exception:
-                # Don't leak the hook's internals (stack/SQL/paths) to the
-                # caller — mirror the other handler routes' generic 500.
-                # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
-                logger.error(
-                    "compute_manifest hook failed for entrypoint %r",
-                    entrypoint_name,
-                    exc_info=True,
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
-            if not isinstance(computed, dict):
-                # conformance: ignore[L009] logs caller-invisible context (the actual returned type) that the generic 500 HTTPException detail omits.
-                logger.error(
-                    "compute_manifest for entrypoint %r returned %s, expected dict",
-                    entrypoint_name,
-                    type(computed).__name__,
-                )
-                raise HTTPException(status_code=500, detail="Internal server error")
-            # Reconcile the hook's output, not just the static file. The hook
-            # *replaces* the manifest wholesale, so without this second pass
-            # everything it emits — a task_queue, a freshly generated node, a
-            # token it re-introduced — is served unreconciled, and FND-195's
-            # guarantee silently does not hold for exactly the apps that need it
-            # most: a bundle's marketplace entry points have their DAG computed
-            # per submission by this hook.
-            #
-            # Idempotent, so the pre-hook pass above stays (the hook should see
-            # resolved values it may key on): after that pass no template
-            # remains, so this one is a no-op unless the hook introduced
-            # something new. Note it catches unresolved *tokens*, not a hook
-            # that hardcodes a concrete-but-wrong queue — that string has no
-            # token to match, and normalising every `atlan-*` queue would
-            # rewrite the legitimate cross-app dispatch nodes this deliberately
-            # leaves alone. Conformance O005 is the guard for that shape.
-            raw = _resolve_manifest_placeholders(
-                orjson.dumps(computed),
-                f"entrypoint {entrypoint_name!r} (compute_manifest output)",
-            )
-
-        return Response(content=raw, media_type="application/json")
-
-    async def _serve_manifest(
-        entrypoint: str | None,
-        fe_inputs: str | dict[str, Any] | None,
-    ) -> Response:
-        """Resolve the entrypoint and serve its manifest.
-
-        Transport-agnostic: GET hands in the raw query string, POST the parsed
-        body dict. Everything downstream is identical and lives here once so the
-        two methods cannot drift.
-        """
-        if entrypoint:
-            # Guard 1 (400): reject obviously-malformed names before touching disk.
-            if not _ENTRYPOINT_NAME_RE.match(entrypoint):
-                raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-            return await _serve_entrypoint_manifest(entrypoint, fe_inputs)
-
-        # No entrypoint param: single-entrypoint path
-        if manifest is not None:
-            # Same reconciliation as the disk branches. A programmatic
-            # AppManifest is the one shape with no contract-toolkit bake behind
-            # it — the DAG was hand-built in Python — so every argument for
-            # "the toolkit already resolved this" is inapplicable here, and it
-            # is the branch most likely to carry an unresolved template rather
-            # than the least. Serving it verbatim also left this route with two
-            # behaviours across three manifest sources, which is the drift this
-            # module exists to remove (FND-195).
-            raw = _resolve_manifest_placeholders(
-                manifest.model_dump_json().encode(), "programmatic manifest"
-            )
-            return Response(content=raw, media_type="application/json")
-        manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
-        if manifest_path.exists():
-            # Disk: contract-generated file — serve raw bytes with placeholder
-            # substitution. No parse/reserialize: the file is already valid JSON,
-            # validated at build time by the contract tooling.
-            raw = _resolve_manifest_placeholders(
-                manifest_path.read_bytes(), "root manifest"
-            )
-            return Response(content=raw, media_type="application/json")
-
-        # Default-entrypoint fallback (aligns with PR #1965 semantics used
-        # by /workflows/v1/start and /workflows/v1/input-contract — same
-        # treatment we apply to /workflows/v1/configmap above). Multi-
-        # entrypoint apps don't have a root manifest.json by design: each
-        # entrypoint has its own under <ep.name>/manifest.json. When the
-        # caller (e.g. Heracles/AE pre-validation) omits ?entrypoint=, fall
-        # back to the app's default entrypoint instead of 404-ing.
         try:
-            app_meta, default_ep = _resolve_app_entrypoint(
-                _workflow_config.app_name, None, unknown_ep_status=404
-            )
-        except HTTPException:
-            # No *default* entrypoint resolvable. Don't give up on the fallback:
-            # resolve the app's metadata INDEPENDENTLY of default resolution so
-            # the explicit-entrypoint alphabetical fallback below still applies.
-            # A servable multi-entrypoint app must not 404 just because the
-            # builder didn't mark a default — that invariant is off-screen and
-            # load-bearing, and this keeps the fallback robust to it changing.
-            # Warning, not debug: exc_info-worthy telemetry for operators.
-            logger.warning(
-                "No default entrypoint for app %s; trying explicit-entrypoint "
-                "fallback before serving 404",
-                _workflow_config.app_name,
-                exc_info=True,
-            )
-            default_ep = None
-            try:
-                from application_sdk.app.registry import (  # noqa: PLC0415
-                    AppNotFoundError,
-                    AppRegistry,
-                )
+            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
+        except AppNotFoundError:
+            return []
+        return [
+            ep.name
+            for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
+            if not ep.implicit
+        ]
 
-                app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
-            except AppNotFoundError:
-                # App genuinely not registered — no fallback possible, 404.
-                app_meta = None
-
-        # Candidate order: the resolved default first, then every *explicit*
-        # (non-implicit) entrypoint alphabetically. The second group matters
-        # for a connector that both implements run() (via the
-        # SqlMetadataExtractor template) AND declares explicit @entrypoints:
-        # the framework forces the implicit run() as the default (see
-        # app/entrypoint.py — "run() + @entrypoint(s) → run() always"), but
-        # run() has no generated manifest dir, so serving it 404s. Rather than
-        # 404 the whole route, fall back to the explicit entrypoints, ordered
-        # alphabetically — the same tie-break the framework uses when multiple
-        # @entrypoints carry no marked default. For a SQL bundle app this
-        # resolves to `crawler` (c < m < …), the connector's primary path.
-        candidates: list[str] = []
-        if default_ep is not None:
-            candidates.append(default_ep.name)
-        if app_meta is not None:
-            candidates.extend(
-                ep.name
-                for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
-                if not ep.implicit and ep.name not in candidates
-            )
-        for cand in candidates:
-            try:
-                return await _serve_entrypoint_manifest(cand, fe_inputs)
-            except HTTPException as exc:
-                if exc.status_code != 404:
-                    raise
-                # This candidate has no manifest file on disk — try the next.
-
-        raise HTTPException(status_code=404, detail="No manifest available")
-
-    @app.get("/workflows/v1/manifest")
-    async def get_manifest(
-        entrypoint: str | None = None,
-        fe_inputs: str | None = None,
-    ) -> Response:
-        """Serve a manifest with ``fe_inputs`` as a query parameter.
-
-        Retained: the playground, connector integration tests and the
-        AE/marketplace probes fetch manifests this way and send no
-        ``fe_inputs``. Callers that do should use ``POST`` — the query string
-        caps the payload at :data:`_MAX_FE_INPUTS_BYTES` (CSA-539).
-        """
-        return await _serve_manifest(entrypoint, fe_inputs)
-
-    @app.post("/workflows/v1/manifest")
-    async def post_manifest(request: Request) -> Response:
-        """Serve a manifest with ``fe_inputs`` in the request body.
-
-        Body: ``{"entrypoint": str | null, "fe_inputs": {...}, "user_id": str | null}``
-        — all optional. ``{}``, ``null`` and an absent body are all equivalent to
-        a bare GET. ``fe_inputs`` must be a JSON object, not a JSON *string*: a
-        caller porting a GET query param must pass the decoded object.
-
-        Exists because ``fe_inputs`` on the query string is bounded by the
-        request line: an ~11 KB payload was rejected with 413 before
-        ``compute_manifest`` ran, and past ~64 KB the URL is silently truncated
-        (CSA-539). A body has neither limit. ``user_id`` is accepted and ignored
-        so callers that already send it (as a GET query param, where it is
-        likewise ignored) keep working.
-        """
-        raw = await request.body()
-        if not raw.strip():
-            # Absent/empty body means "no inputs", same as a bare GET. Callers
-            # fall back only on 405, so 400-ing this would hard-fail them.
-            body: Any = {}
-        else:
-            try:
-                body = await request.json()
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=400, detail=f"Request body is not valid JSON: {exc}"
-                ) from exc
-        if body is None:
-            body = {}
-        if not isinstance(body, dict):
-            raise HTTPException(
-                status_code=400, detail="Request body must be a JSON object"
-            )
-
-        entrypoint = body.get("entrypoint")
-        if entrypoint is not None and not isinstance(entrypoint, str):
-            raise HTTPException(status_code=400, detail="entrypoint must be a string")
-
-        fe_inputs = body.get("fe_inputs")
-        if fe_inputs is None:
-            fe_inputs = {}
-        if not isinstance(fe_inputs, dict):
-            # Same contract as the GET path, so a mis-shaped payload gets the
-            # same answer on either transport.
-            raise HTTPException(
-                status_code=400, detail="fe_inputs must be a JSON object"
-            )
-
-        return await _serve_manifest(entrypoint, fe_inputs)
-
-    # ------------------------------------------------------------------
-    # Backwards-compatibility alias — TACTICAL, remove once Heracles /
-    # Automation Engine is updated to call /workflows/v1/manifest instead.
-    # v2 exposed an unversioned /manifest endpoint; v3 moved it to the
-    # canonical versioned path above.  Until the orchestrator is patched,
-    # this alias keeps existing deployments working.
-    # TODO(v3-cleanup): delete this route after Heracles/AE migration (BLDX-804).
-    # ------------------------------------------------------------------
-
-    @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy(
-        entrypoint: str | None = None,
-        fe_inputs: str | None = None,
-    ) -> Response:
-        """Unversioned alias for ``GET /workflows/v1/manifest``.
-
-        .. deprecated::
-            This route exists **only** for backwards-compatibility with
-            Heracles / Automation Engine, which still calls the v2-era
-            unversioned ``/manifest`` path.  It will be removed once those
-            orchestrators have been updated to use ``/workflows/v1/manifest``.
-            Do **not** add new callers of this endpoint.
-        """
-        return await get_manifest(entrypoint=entrypoint, fe_inputs=fe_inputs)
-
-    @app.post("/manifest", include_in_schema=False)
-    async def post_manifest_legacy(request: Request) -> Response:
-        """Unversioned alias for ``POST /workflows/v1/manifest``.
-
-        .. deprecated::
-            Same deprecation as the GET alias above. Exists so callers can
-            migrate method and path independently — they all call the
-            unversioned path today, and v2-era images serve only this path.
-            Do **not** add new callers.
-        """
-        return await post_manifest(request)
-
-    # ------------------------------------------------------------------
-    # Input-contract endpoint
-    # ------------------------------------------------------------------
-
-    @app.get("/workflows/v1/input-contract")
-    async def get_input_contract(entrypoint: str | None = None) -> Response:
-        """Return the input contract (JSON Schema) for an entry point.
-
-        This is the app's machine-readable input contract: exactly
-        ``AppInputContract.model_json_schema()`` for the selected entry point —
-        the same Pydantic model that ``/workflows/v1/start`` validates against.
-        Heracles consumes it to validate caller inputs and to discover which
-        fields are credentials (a field whose schema is a ``$ref`` to the
-        ``CredentialRef``/``AgentCredentialSpec`` def).
-
-        Entry-point resolution mirrors ``/workflows/v1/start``: an explicit
-        ``?entrypoint=`` selects it; a single-entry-point app resolves
-        automatically; a multi-entry-point app requires the param.
-        """
-        if entrypoint is not None and not _ENTRYPOINT_NAME_RE.match(entrypoint):
-            raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-
+    def _registry_input_contract(entrypoint: str | None) -> Any:
         try:
             _, ep = _resolve_app_entrypoint(
                 _workflow_config.app_name, entrypoint, unknown_ep_status=404
             )
         except HTTPException as exc:
             # Registry miss — the entry point may be a *marketplace* (bundle)
-            # entry point that exists only as a generated contract dir on disk
-            # (its registry entrypoints are the DAG-node workflows, not the
-            # marketplace name). Filesystem-resolve it like the manifest and
-            # configmap routes already do; re-raise when it isn't one.
+            # entry point that exists only as a generated contract dir on disk.
+            # Filesystem-resolve it like the manifest and configmap routes do;
+            # re-raise when it isn't one.
             if exc.status_code != 404 or not entrypoint:
                 raise
             contract = _marketplace_entrypoint_contract(entrypoint)
             if contract is None:
                 raise
-            return Response(
-                content=orjson.dumps(contract.model_json_schema()),
-                media_type="application/json",
-            )
-
-        # Prefer the generated AppInputContract (rich, validatable, credential
-        # refs) over the entry point's thin runtime input_type. See
-        # _published_input_contract.
+            return contract
+        # Prefer the generated AppInputContract over the entry point's thin
+        # runtime input_type. See _published_input_contract.
         input_type = _published_input_contract(ep)
         if input_type is None:
             raise HTTPException(
                 status_code=500, detail="Entry point has no input type."
             )
+        return input_type
 
-        return Response(
-            content=orjson.dumps(input_type.model_json_schema()),
-            media_type="application/json",
-        )
+    # Every lookup reads this module's globals per request, so a process
+    # reconfigured after startup (and a test that repoints them) is seen.
+    register_metadata_routes(
+        app,
+        MetadataSource(
+            generated_dir=lambda: CONTRACT_GENERATED_DIR,
+            app_name=lambda: _workflow_config.app_name,
+            fallback_app_name=app_name,
+            task_queue=lambda: _workflow_config.task_queue,
+            deployment_name=lambda: DEPLOYMENT_NAME,
+            default_entrypoint=_registry_default_entrypoint,
+            explicit_entrypoints=_registry_explicit_entrypoints,
+            input_contract=_registry_input_contract,
+            compute_manifest=lambda ep: _discover_compute_manifest(ep),
+            programmatic_manifest=manifest,
+            log=lambda: logger,
+            max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Dev-only: local credential provisioning

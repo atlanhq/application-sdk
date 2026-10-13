@@ -252,3 +252,46 @@ def test_check_refuses_the_app_name_env_var(tmp_path: Path) -> None:
     )
     problems = gen.check(root, gen.load(root))
     assert len(problems) == 1 and problems[0].startswith("app/handler.py:2:")
+
+
+def test_stage_ships_the_generated_contract_files_only(tmp_path: Path) -> None:
+    root = _app(tmp_path / "repo", "from .client import C\n")
+    gen_dir = root / "app/generated"
+    gen_dir.mkdir()
+    (gen_dir / "__init__.py").write_text("from .scaffold import X\n")
+    (gen_dir / "manifest.json").write_text("{}")
+    (gen_dir / "demo.json").write_text("{}")
+    (gen_dir / "_input.py").write_text("AppInputContract = None\n")
+    (gen_dir / "_e2e_base.py").write_text("import application_sdk.testing\n")
+    (gen_dir / "crawler").mkdir()
+    (gen_dir / "crawler/manifest.json").write_text("{}")
+    out = tmp_path / "staged"
+    gen.stage(root, gen.load(root), out)
+    shipped = sorted(
+        p.relative_to(out / "atlan_demo_api/generated").as_posix()
+        for p in (out / "atlan_demo_api/generated").rglob("*")
+        if p.is_file()
+    )
+    assert shipped == [
+        "__init__.py",
+        "_input.py",
+        "crawler/manifest.json",
+        "demo.json",
+        "manifest.json",
+    ]
+    # Not the app's own __init__.py, which may import e2e tooling.
+    assert (out / "atlan_demo_api/generated/__init__.py").read_text() == ""
+
+
+def test_check_refuses_a_compute_manifest_hook(tmp_path: Path) -> None:
+    root = _app(tmp_path, "from .client import C\n")
+    (root / "app/crawler").mkdir()
+    (root / "app/crawler/core.py").write_text(
+        "async def compute_manifest(manifest, fe_inputs):\n    return manifest\n"
+    )
+    problems = gen.check(root, gen.load(root))
+    assert problems == [
+        "app/crawler/core.py: compute_manifest runs app code per request; the "
+        "consolidated host serves static manifests only, so this app cannot be "
+        "hosted yet"
+    ]

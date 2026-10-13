@@ -51,7 +51,6 @@ Example:
     >>> print(f"Running application {APPLICATION_NAME}")
 """
 
-import json
 import math
 import os
 import warnings
@@ -112,53 +111,9 @@ DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 # touches — can now answer the same question.
 
 
-def load_build_info(path: str | None = None) -> dict[str, str]:
-    """Read the build-identity file the reusable CI bakes into the image.
-
-    ``build-and-publish-app.yaml`` writes ``app/atlan_build.json`` into the
-    build context and the template Dockerfile's ``COPY app/ app/`` carries it
-    into the image. Keys: ``app_version`` (the exact string Global Marketplace
-    stores as ``versions.version``), ``commit_sha``, ``build_id`` (the immutable
-    image tag, the same value ``ATLAN_BUILD_ID`` carries on the e2e path),
-    ``image``, ``built_at``.
-
-    Missing or malformed file → ``{}``; callers fall back to the env vars.
-    ``ATLAN_BUILD_INFO_PATH`` overrides the lookup for non-template layouts.
-
-    Public because :mod:`application_sdk.app.build_identity` reads the same file
-    through it. A second parser there would be a second place for the key names
-    to drift from what CI writes.
-    """
-    if path:
-        candidates = [path]
-    else:
-        override = os.getenv("ATLAN_BUILD_INFO_PATH", "")
-        generated_dir = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
-        candidates = (
-            [override]
-            if override
-            else [
-                "app/atlan_build.json",
-                os.path.join(
-                    os.path.dirname(generated_dir.rstrip("/")) or ".",
-                    "atlan_build.json",
-                ),
-            ]
-        )
-    for candidate in candidates:
-        try:
-            with open(candidate, encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return {
-                str(k): str(v)
-                for k, v in data.items()
-                if isinstance(v, (str, int, float)) and not isinstance(v, bool)
-            }
-    return {}
-
+from application_sdk._build_info import (  # noqa: E402 — public here as before
+    load_build_info,
+)
 
 _BUILD_INFO = load_build_info()
 

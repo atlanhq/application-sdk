@@ -410,6 +410,41 @@ def _pyproject(config: Config) -> str:
     )
 
 
+#: The contract toolkit's output the host serves: setup forms and manifests
+#: (``*.json``) and the input contracts (``_input.py``). Everything else in
+#: ``app/generated/`` (e2e scaffolding) stays out of the wheel.
+GENERATED = "app/generated"
+
+
+def generated_files(root: Path) -> list[str]:
+    """The files of ``app/generated/`` the host's metadata routes read."""
+    base = root / GENERATED
+    if not base.is_dir():
+        return []
+    return sorted(
+        p.relative_to(root).as_posix()
+        for p in base.rglob("*")
+        if p.is_file() and (p.suffix == ".json" or p.name == "_input.py")
+    )
+
+
+def compute_manifest_hooks(root: Path) -> list[str]:
+    """``app/<entrypoint>/core.py`` files defining ``compute_manifest``.
+
+    The host serves static manifests only: a hook runs app code at request time,
+    which the host's api-only install cannot be trusted to import.
+    """
+    return sorted(
+        p.relative_to(root).as_posix()
+        for p in (root / APP).glob("*/core.py")
+        if re.search(
+            r"^\s*(async\s+)?def\s+compute_manifest\b",
+            p.read_text(encoding="utf-8"),
+            re.M,
+        )
+    )
+
+
 def stage(root: Path, config: Config, where: Path) -> list[str]:
     """Write the host package's source tree into ``where``; return the app files."""
     files, absolute = closure(root, config)
@@ -423,12 +458,23 @@ def stage(root: Path, config: Config, where: Path) -> list[str]:
         target = package / rel.removeprefix(APP + "/")
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / rel, target)
+    for rel in generated_files(root):
+        target = package / rel.removeprefix(APP + "/")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / rel, target)
+        if target.name == "_input.py":
+            # Importable as <package>.generated[.<entrypoint>]._input, with none
+            # of the app's own generated/__init__.py (it may import e2e tooling).
+            for parent in target.relative_to(package).parents:
+                init = package / parent / "__init__.py"
+                if parent != Path(".") and not init.exists():
+                    init.write_text("")
     module = config.handler_module.removeprefix(APP + ".")
     (package / "__init__.py").write_text(
         _INIT.format(name=config.name, module=module, cls=config.handler_class)
     )
     (where / "pyproject.toml").write_text(_pyproject(config))
-    return files
+    return files + generated_files(root)
 
 
 def build(root: Path, out: Path, member: str | None = None) -> Path:
@@ -488,6 +534,11 @@ def check(root: Path, config: Config) -> list[str]:
             for n, line in enumerate(text.splitlines(), 1)
             if _APPLICATION_NAME.search(line)
         )
+    problems.extend(
+        f"{hook}: compute_manifest runs app code per request; the consolidated "
+        "host serves static manifests only, so this app cannot be hosted yet"
+        for hook in compute_manifest_hooks(root)
+    )
     return problems
 
 

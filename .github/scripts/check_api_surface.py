@@ -50,6 +50,7 @@ PROVIDED_BY = {
     "opentelemetry": "opentelemetry_sdk",
     "certifi": "httpx",
     "botocore": "boto3",
+    "pyatlan_v9": "pyatlan",
 }
 
 
