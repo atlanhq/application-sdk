@@ -232,7 +232,33 @@ on:
         required: false
         type: string
         default: ""
-        description: Set to 'true' to trigger the e2e job from workflow_dispatch.
+        description: |
+          On workflow_dispatch: 'true' runs the full DAG including e2e (the
+          SDK's cross-repo dispatch, and a `/gate-check` comment); 'only' runs
+          e2e alone (a `/e2e` comment, FND-3839) — unit and integration are
+          skipped because the PR's own run measured them, and the caller
+          reports this run under `e2e / …` so it never touches the required
+          `tests / …` contexts.
+      head-sha:
+        required: false
+        type: string
+        default: ""
+        description: |
+          The PR head commit a `/e2e` or `/gate-check` comment was made on
+          (FND-3839). When the dispatched branch tip is not this commit — a
+          push landed between the comment and the dispatch — e2e stands down
+          rather than testing, and recording a verdict on, a different commit.
+          Empty = no check.
+      e2e-label-trigger:
+        required: false
+        type: boolean
+        default: true
+        description: |
+          Whether the `e2e` / `gate-check` PR labels still request e2e on a
+          pull_request run. True for callers that predate FND-3839 and still
+          subscribe to `labeled`; the current scaffold passes false, because
+          e2e is a `/e2e` comment now and a stale label must not start e2e in
+          the PR's own run. Removed once the fleet has resynced.
       two-store:
         required: false
         type: boolean
@@ -589,6 +615,10 @@ jobs:
   # integration job spins up, so a PR greens in seconds of test time.
   unit:
     name: Unit
+    # An e2e-only run (a `/e2e` comment) skips the tier its PR run already
+    # measured. The run reports under `e2e / …`, so this skip never reaches a
+    # required `tests / …` context (FND-3839).
+    if: inputs.run-e2e != 'only'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -766,12 +796,14 @@ jobs:
     # condition as the integration job below, so detection never runs for a
     # tier that won't.
     if: >-
-      always() &&
+      always() && inputs.run-e2e != 'only' &&
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
-        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+        ( inputs.e2e-label-trigger &&
+          contains(github.event.pull_request.labels.*.name, 'e2e') &&
           (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
-        ( startsWith(github.head_ref, 'bump-version') &&
+        ( inputs.e2e-label-trigger &&
+          startsWith(github.head_ref, 'bump-version') &&
           contains(github.event.pull_request.labels.*.name, 'gate-check') &&
           (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
     runs-on: ubuntu-slim
@@ -814,14 +846,16 @@ jobs:
     # event only the `e2e` label itself counts, so adding any other label does
     # not re-run the tier.
     if: >-
-      always() &&
+      always() && inputs.run-e2e != 'only' &&
       needs.detect-integration.result == 'success' &&
       needs.detect-integration.outputs.count != '0' &&
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
-        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+        ( inputs.e2e-label-trigger &&
+          contains(github.event.pull_request.labels.*.name, 'e2e') &&
           (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
-        ( startsWith(github.head_ref, 'bump-version') &&
+        ( inputs.e2e-label-trigger &&
+          startsWith(github.head_ref, 'bump-version') &&
           contains(github.event.pull_request.labels.*.name, 'gate-check') &&
           (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
     runs-on: ubuntu-latest
@@ -1126,11 +1160,20 @@ jobs:
     # type is unaffected, so a real push still re-triggers. GitHub has no
     # trigger-level label filter, so the workflow RUN is still created — it now
     # skips in seconds instead of holding tenants for 20–40 minutes. FND-48.
+    #
+    # On workflow_dispatch, 'only' is a `/e2e` comment and 'true' the full DAG
+    # (FND-3839). Either stands down when the branch moved past the commit the
+    # comment was made on: that commit is no longer the PR's head, and the
+    # commit that IS was not the one asked about.
     if: |
       inputs.enable-e2e && (
-        (github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'true') ||
         (
-          github.event_name == 'pull_request' &&
+          github.event_name == 'workflow_dispatch' &&
+          (inputs.run-e2e == 'true' || inputs.run-e2e == 'only') &&
+          (inputs.head-sha == '' || inputs.head-sha == github.sha)
+        ) ||
+        (
+          github.event_name == 'pull_request' && inputs.e2e-label-trigger &&
           (
             (
               contains(github.event.pull_request.labels.*.name, 'e2e') &&
@@ -1245,14 +1288,21 @@ jobs:
       # with success / failure / error. Fail-open: a run that never sees
       # `pending` while the PR carries `e2e` still fails closed after a short
       # wait (e2e_commit_verdict.py).
+      #
+      # A connector's own dispatch (a `/e2e` or `/gate-check` comment — no
+      # application-sdk-ref) owns the verdict for the commit it tests, exactly
+      # as a labelled PR run does (FND-3839). The SDK's cross-repo dispatch
+      # tests this repo's main against an SDK commit, so it writes nothing here.
       - name: Mark the e2e verdict pending on the head commit
-        if: github.event_name == 'pull_request'
+        if: >-
+          github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == '')
         continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh api -X POST "repos/${REPO}/statuses/${HEAD_SHA}" \
@@ -1416,6 +1466,10 @@ jobs:
   # always()), so a wake FAILURE still lets a hermetic-fallback connector fall
   # back — the failure surfaces as a named ::error:: here and, for a
   # fallback:false connector, as the fetch's now-legible `resource_paused`.
+  #
+  # On an e2e-only run (a `/e2e` comment, FND-3839) detect-integration is skipped
+  # on purpose, so the e2e count alone decides — counting a skipped detection's
+  # empty output as "suites present" would wake the source for nothing.
   wake-dataforge-source:
     name: Wake dataforge source
     needs: [detect-integration, discover-e2e]
@@ -1437,8 +1491,9 @@ jobs:
       inputs.dataforge-lifecycle &&
       inputs.dataforge-datasource != '' &&
       inputs.dataforge-mode == 'resource' &&
-      needs.detect-integration.result == 'success' &&
-      (needs.detect-integration.outputs.count != '0' ||
+      (needs.detect-integration.result == 'success' ||
+       (inputs.run-e2e == 'only' && needs.detect-integration.result == 'skipped')) &&
+      ((needs.detect-integration.result == 'success' && needs.detect-integration.outputs.count != '0') ||
        (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1761,7 +1816,9 @@ jobs:
       # a connector's own github.token can already do that.
       contents: read
     outputs:
-      superseded: ${{ steps.recheck.outputs.superseded }}
+      # Either question answering "yes" stands the run down. Each is "false"
+      # on every doubt, so a missing answer leases exactly as before.
+      superseded: ${{ (steps.recheck.outputs.superseded == 'true' || steps.branch.outputs.superseded == 'true') && 'true' || 'false' }}
     steps:
       - name: Recheck the dispatched SDK ref
         id: recheck
@@ -1774,6 +1831,36 @@ jobs:
           # disagree, and so a connector whose app-name and repo differ (every
           # one of them: "openapi" vs "atlan-openapi-app") still finds its claim.
           app: ${{ github.event.repository.name }}
+
+      # A connector's own dispatch (`/e2e`, `/gate-check`) tests its branch
+      # tip at dispatch time; if the branch has moved since, the PR's head is
+      # a newer commit and this one should not take a tenant (FND-3839).
+      - name: Check out the branch-recheck driver
+        if: github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == ''
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Recheck the dispatched branch
+        id: branch
+        if: github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == ''
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          BRANCH: ${{ github.ref_name }}
+          TESTED_SHA: ${{ github.sha }}
+        run: >-
+          python3 .github/scripts/e2e_branch_recheck.py
+          --repo "$REPO" --event-name "$EVENT_NAME"
+          --branch "$BRANCH" --tested-sha "$TESTED_SHA" >> "$GITHUB_OUTPUT"
 
   lease-tenant:
     name: Tenant lease
@@ -2895,6 +2982,10 @@ jobs:
           # stops a future re-wiring of the e2e `if` from greening the gate by
           # skipping it (FND-701).
           superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
+          # Identical to the Tests Gate's inputs (one verdict, two callers).
+          # Always "false" here — the SDK's dispatch runs the full DAG — but
+          # spelled the same so the two calls cannot drift.
+          e2e-only: ${{ inputs.run-e2e == 'only' }}
 
       # Body only — this step emits no verdict; the completion step below takes
       # the gate's. Its CLI stays frozen: this script is checked out from the
@@ -3000,7 +3091,9 @@ jobs:
     # status-check function GitHub applies an implicit success() that a skipped
     # need does not satisfy.
     needs: [unit, detect-integration, integration, discover-e2e, e2e]
-    if: always() && github.event_name != 'pull_request'
+    # Not on an e2e-only run: it skips the unit and integration tiers on
+    # purpose, and a scorecard row reading them as absent would be wrong.
+    if: always() && github.event_name != 'pull_request' && inputs.run-e2e != 'only'
     runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
@@ -3321,12 +3414,16 @@ jobs:
           # stops a future re-wiring of the e2e `if` from greening the gate by
           # skipping it (FND-701).
           superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
+          # A `/e2e` run skips unit on purpose (FND-3839).
+          e2e-only: ${{ inputs.run-e2e == 'only' }}
 
       # The drivers for the e2e-verdict hold and both sibling-run repairs below.
       # Fail-open for the repairs; the hold fails closed without it, because its
       # enforce step treats a missing `passed` as a failure.
       - name: Check out the gate's helper drivers
-        if: always() && github.event_name == 'pull_request'
+        if: >-
+          always() && (github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == ''))
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -3367,7 +3464,8 @@ jobs:
           # `labeled` filter: true means this run skipped e2e only because the
           # event was an unrelated label.
           AWAITING_LABEL_RUN: >-
-            ${{ (contains(github.event.pull_request.labels.*.name, 'e2e') ||
+            ${{ inputs.e2e-label-trigger &&
+            (contains(github.event.pull_request.labels.*.name, 'e2e') ||
             (startsWith(github.head_ref, 'bump-version') &&
             contains(github.event.pull_request.labels.*.name, 'gate-check'))) &&
             github.event.pull_request.head.repo.fork != true &&
@@ -3482,23 +3580,26 @@ jobs:
       # gate keeps its green verdict from the `labeled` run. Both are
       # fail-open for the same reason as the repair step above: this job IS
       # the required check, and housekeeping must not redden it.
+      # A connector's own dispatch (`/e2e`, `/gate-check`; no
+      # application-sdk-ref) owns its commit's verdict the same way (FND-3839).
       - name: Record the e2e verdict on the head commit
         if: >-
-          always() && github.event_name == 'pull_request' &&
-          needs.discover-e2e.result != 'skipped'
+          always() && needs.discover-e2e.result != 'skipped' &&
+          (github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == ''))
         continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           STATE: >-
             ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
             && needs.e2e.result || 'error' }}
           DESCRIPTION: >-
             ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
             && format('End-to-end suite {0} on this commit', needs.e2e.result)
-            || 'No e2e verdict on this commit (cancelled, tenant busy, or setup failed); add the e2e label again' }}
+            || 'No e2e verdict on this commit (cancelled, tenant busy, or setup failed); comment /e2e again' }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # The driver skips the write when a newer e2e attempt has already
@@ -3537,13 +3638,43 @@ jobs:
             --head-sha "$HEAD_SHA" \
             --self-run-id "$SELF_RUN_ID"
 
+      # A dispatched e2e run (`/e2e`, `/gate-check`) is not the run that owns
+      # the required `tests / Tests Gate` — the PR's own pull_request run is,
+      # and it may have concluded before this verdict existed: green before
+      # e2e was even requested, or red after giving up on `pending`. Re-run
+      # just that gate job when it disagrees with the verdict; it holds to the
+      # `e2e` status, so the re-run reads what this run recorded (FND-3839).
+      # Waits (bounded) for a PR run still in flight. Fail-open and
+      # PAT-backed for the same reasons as the repairs above.
+      - name: Reconcile the PR run's gate with this verdict
+        if: >-
+          always() && needs.discover-e2e.result != 'skipped' &&
+          github.event_name == 'workflow_dispatch' && inputs.application-sdk-ref == ''
+        continue-on-error: true
+        timeout-minutes: 11
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+          SELF_RUN_ID: ${{ github.run_id }}
+          VERDICT: >-
+            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+            && needs.e2e.result || 'error' }}
+        run: |
+          python3 .github/scripts/rerun_deferred_gate.py \
+            --repo "$REPO" \
+            --head-sha "$HEAD_SHA" \
+            --self-run-id "$SELF_RUN_ID" \
+            --verdict "$VERDICT"
+
       # Whenever this run acted on the label — `discover-e2e` ran rather than
       # skipped — whatever the verdict: a failed run is retried by adding the
       # label again, same as a passed one. A 404 means a sibling run already
       # removed it, which is the outcome wanted.
       - name: Remove the e2e label
         if: >-
-          always() && github.event_name == 'pull_request' &&
+          always() && github.event_name == 'pull_request' && inputs.e2e-label-trigger &&
           needs.discover-e2e.result != 'skipped'
         continue-on-error: true
         shell: bash

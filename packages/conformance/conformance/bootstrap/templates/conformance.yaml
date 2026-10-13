@@ -2,10 +2,7 @@ name: "Conformance"
 
 on:
   pull_request:
-    # `labeled` lets `gate-check` start the opt-in run on a bump-version PR
-    # (FND-3748); the concurrency group below already makes it run-unique, and
-    # on any other PR the job skips label events.
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
   merge_group: {}
   push:
     branches: [main]
@@ -21,7 +18,8 @@ on:
   schedule:
     - cron: "17 3 * * *"
   # Lets a human force an out-of-band refresh right after a conformance
-  # release lands, without waiting for the next cron tick.
+  # release lands, without waiting for the next cron tick. A `/gate-check`
+  # comment on a bump-version PR dispatches it too (FND-3839).
   workflow_dispatch: {}
 
 permissions:
@@ -53,15 +51,16 @@ concurrency:
 
 jobs:
   suite:
-    # Bump-version PR CI is opt-in (FND-3748): it runs only once a reviewer
-    # adds `gate-check` (`e2e` is still honoured while the fleet resyncs).
-    # Skipping this CALLER job costs no runner and never creates its required
-    # context, so a fresh bump commit sits at "Expected" — Release Gate says
-    # why — rather than reading a skipped check as a pass. The release
-    # automation clears the label before each push, so every bump commit needs
-    # its own opt-in.
+    # Bump-version PR CI is opt-in (FND-3748): its pull_request run skips here,
+    # and a `/gate-check` comment dispatches this workflow on the bump branch
+    # instead (head_ref is empty on a dispatch, so it runs). Skipping this
+    # CALLER job costs no runner and never creates its required context, so a
+    # fresh bump commit sits at "Expected" — Release Gate says why — rather
+    # than reading a skipped check as a pass. No `labeled` trigger: a label
+    # add on the same commit started a second run that evicted the first
+    # (FND-3839).
     if: >-
-      (github.event.action != 'labeled' && !startsWith(github.head_ref, 'bump-version')) || (startsWith(github.head_ref, 'bump-version') && ((contains(github.event.pull_request.labels.*.name, 'gate-check') && (github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || (contains(github.event.pull_request.labels.*.name, 'e2e') && (github.event.action != 'labeled' || github.event.label.name == 'e2e'))))
+      !startsWith(github.head_ref, 'bump-version')
     uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
 <% if conformance_private_git_deps %>    # private-git-deps needs ORG_PAT_GITHUB from the reusable's declared secrets.
     secrets: inherit

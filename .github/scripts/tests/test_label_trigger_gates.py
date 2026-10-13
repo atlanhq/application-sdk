@@ -14,6 +14,14 @@ The fix is one extra term per gate:
 
     (github.event.action != 'labeled' || github.event.label.name == 'x')
 
+FND-3839 then removed the trigger itself: e2e and the bump-PR opt-in are PR
+comments (`/e2e`, `/gate-check`), and no workflow or scaffold subscribes to
+`labeled` any more (:func:`test_no_test_workflow_or_scaffold_subscribes_to_labeled`).
+application-sdk's own e2e jobs follow the `e2e-request` commit status instead
+of a label. The reusable's label gates stay, behind `e2e-label-trigger`, for
+connector callers that predate the resync — so the FND-48 guards below still
+apply to them.
+
 Two layers of guard here, because each catches what the other cannot:
 
 * :func:`test_every_label_gate_reachable_by_a_labeled_event_is_event_aware`
@@ -37,9 +45,29 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _gha_expr import evaluate  # noqa: E402
+import pr_test_command  # noqa: E402
+from _gha_expr import evaluate as _evaluate  # noqa: E402
+from _gha_expr import evaluate_operand  # noqa: E402
 from conformance.bootstrap import render as bootstrap_render  # noqa: E402
+
+#: tests-reusable.yaml's inputs as a caller that predates FND-3839 passes them:
+#: it still subscribes to `labeled`, so the label gates below must keep working
+#: for it until the fleet has resynced. Tests override per case.
+_LEGACY_CALLER_INPUTS = {
+    "enable-e2e": True,
+    "run-e2e": "",
+    "head-sha": "",
+    "e2e-label-trigger": True,
+}
+
+
+def evaluate(expression: str, contexts: dict[str, Any]) -> Any:
+    contexts = dict(contexts)
+    contexts["inputs"] = {**_LEGACY_CALLER_INPUTS, **(contexts.get("inputs") or {})}
+    return _evaluate(expression, contexts)
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github/workflows"
@@ -109,7 +137,7 @@ def _can_receive_a_labeled_event(workflow: dict[str, Any]) -> bool:
     """Whether a `labeled` action can reach this workflow's gates.
 
     A reusable (`workflow_call`) workflow cannot see its callers' trigger lists,
-    and the SDK's own bootstrap template ships `labeled` in every connector's
+    and connectors not yet resynced past FND-3839 still ship `labeled` in their
     `tests.yaml`, so a reusable must always be treated as reachable. A workflow
     with its own `pull_request` trigger is judged on its declared types; one that
     lists only `closed` (the release-on-merge shape) genuinely cannot be hit.
@@ -279,46 +307,117 @@ def test_discover_e2e_only_reacts_to_the_e2e_label_being_added() -> None:
     )
 
 
-def test_build_sdk_base_image_only_reacts_to_the_e2e_label_being_added() -> None:
-    _assert_gate(
-        _gate("pull_request.yaml", "build-sdk-base-image"),
-        "e2e",
-        {"needs": _CHANGES_SDK},
-    )
+# ── application-sdk's PR Checks follow `e2e-request`, not a label (FND-3839) ──
+#
+# A `/e2e` comment posts an `e2e-request` status on the head commit and re-runs
+# the e2e-request job, whose answer every PR-time e2e job reads. Labels are not
+# consulted at all, so no label event — there are none any more — and no stale
+# label can start a live-tenant suite.
+
+#: Each PR-time e2e job with `needs` that are otherwise green, so a scenario
+#: isolates the request rather than being skipped by an unrelated term.
+_SDK_E2E_JOBS: dict[str, dict[str, Any]] = {
+    "build-sdk-base-image": {},
+    "connector-tests": {
+        "matrix-builder": {"result": "success"},
+        "build-sdk-base-image": {"result": "success"},
+        "merge-sdk-base-image": {"result": "success"},
+    },
+    "sdr-k8s-e2e": {},
+    "storage-integration": {},
+}
 
 
-def test_connector_tests_only_reacts_to_the_e2e_label_being_added() -> None:
-    _assert_gate(
-        _gate("pull_request.yaml", "connector-tests"),
-        "e2e",
-        {
-            "needs": {
-                **_CHANGES_SDK,
-                "matrix-builder": {"result": "success"},
-                "build-sdk-base-image": {"result": "success"},
-                "merge-sdk-base-image": {"result": "success"},
-            }
+def _sdk_needs(job: str, *, requested: str, storage: str = "false") -> dict[str, Any]:
+    return {
+        "changes": {
+            "result": "success",
+            "outputs": {
+                "sdk": "true",
+                "container": "false",
+                "ci": "false",
+                "storage": storage,
+            },
         },
-    )
+        "e2e-request": {"outputs": {"requested": requested}},
+        **_SDK_E2E_JOBS[job],
+    }
 
 
-def test_sdr_k8s_e2e_only_reacts_to_the_e2e_label_being_added() -> None:
-    _assert_gate(
-        _gate("pull_request.yaml", "sdr-k8s-e2e"), "e2e", {"needs": _CHANGES_SDK}
-    )
+@pytest.mark.parametrize("job", list(_SDK_E2E_JOBS))
+@pytest.mark.parametrize(
+    ("requested", "runs"),
+    [
+        ("true", True),
+        ("false", False),
+        # e2e-request failed or was skipped: no answer is not a request.
+        ("", False),
+    ],
+)
+def test_sdk_e2e_jobs_follow_the_e2e_request(
+    job: str, requested: str, runs: bool
+) -> None:
+    expression = _gate("pull_request.yaml", job)
+    github = _pull_request("synchronize", ())
+    needs = _sdk_needs(job, requested=requested)
+    assert evaluate(expression, {"github": github, "needs": needs}) is runs
 
 
-def test_storage_integration_only_reacts_to_the_e2e_label_being_added() -> None:
-    """FND-1153: the real-cloud storage suite rides the 'e2e' release tier.
+@pytest.mark.parametrize("job", list(_SDK_E2E_JOBS))
+@pytest.mark.parametrize("labels", [("e2e",), ("gate-check",), ("e2e", "gate-check")])
+def test_sdk_e2e_jobs_ignore_labels(job: str, labels: tuple[str, ...]) -> None:
+    """A label left on the PR, from before FND-3839 or added by habit, is inert."""
+    expression = _gate("pull_request.yaml", job)
+    assert "labels.*.name" not in expression
+    github = _pull_request("synchronize", labels)
+    needs = _sdk_needs(job, requested="false")
+    assert evaluate(expression, {"github": github, "needs": needs}) is False
 
-    It briefly moved onto the merge-queue-blocking SDK Gate and had to come
-    back: the Entra federated credential has no subject for a
-    `gh-readonly-queue/*` ref, so every queue entry red-lined on AADSTS700213
-    before a test ran. Asserting the label here pins the tier — a silent flip
-    back to a private 'storage-integration' label would make the suite opt-in
-    via a label nothing applies, which is how it went ~never-run before.
-    """
-    _assert_gate(_gate("pull_request.yaml", "storage-integration"), "e2e", {})
+
+@pytest.mark.parametrize("job", list(_SDK_E2E_JOBS))
+def test_sdk_e2e_jobs_wait_for_the_request(job: str) -> None:
+    """Re-running e2e-request (what `/e2e` does) re-runs only its dependents;
+    a job that does not depend on it would never see the answer change."""
+    workflow = _load(_WORKFLOW_DIR / "pull_request.yaml")
+    assert "e2e-request" in workflow["jobs"][job]["needs"]
+
+
+@pytest.mark.parametrize(
+    ("storage", "requested", "runs"),
+    [
+        ("true", "false", True),
+        ("false", "true", True),
+        ("true", "true", True),
+        ("false", "false", False),
+    ],
+)
+def test_storage_integration_runs_on_a_storage_change_or_an_e2e_request(
+    storage: str, requested: str, runs: bool
+) -> None:
+    """FND-1153 kept the real-cloud storage suite off the merge queue (the
+    Entra federated credential has no subject for a `gh-readonly-queue/*`
+    ref), which left it opt-in via a label nothing applied. FND-3839 runs it
+    unasked on a PR that can affect storage, and on any `/e2e` request."""
+    expression = _gate("pull_request.yaml", "storage-integration")
+    needs = _sdk_needs("storage-integration", requested=requested, storage=storage)
+    github = _pull_request("synchronize", ())
+    assert evaluate(expression, {"github": github, "needs": needs}) is runs
+
+
+def test_storage_integration_stays_off_the_merge_queue() -> None:
+    expression = _gate("pull_request.yaml", "storage-integration")
+    needs = _sdk_needs("storage-integration", requested="true", storage="true")
+    assert evaluate(expression, {"github": _merge_group(), "needs": needs}) is False
+
+
+def test_storage_integration_waits_for_a_successful_changes_job() -> None:
+    """`always()` lets it run past a skipped e2e-request; without the explicit
+    `changes` result it would also run past a failed path filter."""
+    expression = _gate("pull_request.yaml", "storage-integration")
+    needs = _sdk_needs("storage-integration", requested="true", storage="true")
+    needs["changes"]["result"] = "failure"
+    github = _pull_request("synchronize", ())
+    assert evaluate(expression, {"github": github, "needs": needs}) is False
 
 
 # ── FND-851: integration on an `e2e`-labelled PR even under a merge queue ───
@@ -500,38 +599,81 @@ def test_a_workflow_dispatch_with_run_e2e_still_runs_the_suite() -> None:
     assert evaluate(expression, contexts) is False
 
 
-@pytest.mark.parametrize("job", ["connector-tests", "sdr-k8s-e2e"])
-def test_the_merge_queue_path_is_unaffected_by_the_label_term(job: str) -> None:
-    """merge_group has no labels and no `labeled` action; it must still run."""
-    contexts = {
-        "github": _merge_group(),
-        "needs": {
-            **_CHANGES_SDK,
-            "matrix-builder": {"result": "success"},
-            # Skipped on the merge-queue path — the gate tolerates that by design.
-            "build-sdk-base-image": {"result": "skipped"},
-            "merge-sdk-base-image": {"result": "skipped"},
-        },
+#: GHA's status-check functions. A job `if:` that calls none of them gets an
+#: implicit `success() &&`, which a SKIPPED need fails — before the rest of the
+#: expression is even looked at.
+_STATUS_FUNCTION = re.compile(r"\b(always|success|failure|cancelled)\(\)")
+
+
+def _merge_queue_needs(changed: str, *, changes_result: str = "success") -> dict:
+    outputs = {"sdk": "false", "container": "false", "ci": "false"}
+    outputs[changed] = "true"
+    return {
+        "changes": {"result": changes_result, "outputs": outputs},
+        "matrix-builder": {"result": "success"},
+        # Skipped on the merge-queue path — the gate tolerates that by design.
+        "build-sdk-base-image": {"result": "skipped"},
+        "merge-sdk-base-image": {"result": "skipped"},
+        # pull_request only, so always skipped here.
+        "e2e-request": {"result": "skipped", "outputs": {}},
     }
-    assert evaluate(_gate("pull_request.yaml", job), contexts) is True
 
 
-@pytest.mark.parametrize(
-    ("job", "extra"),
-    [
-        ("build-sdk-base-image", {"needs": _CHANGES_SDK}),
-        ("sdr-k8s-e2e", {"needs": _CHANGES_SDK}),
-    ],
-)
-def test_forks_and_dependabot_are_still_excluded(
-    job: str, extra: dict[str, Any]
-) -> None:
-    """The fix adds a term; it must not have loosened the existing ones."""
+@pytest.mark.parametrize("job", ["connector-tests", "sdr-k8s-e2e"])
+def test_merge_queue_e2e_survives_the_skipped_e2e_request(job: str) -> None:
+    """merge_group runs e2e unconditionally, and e2e-request is pull_request
+    only, so it is ALWAYS skipped in the queue.
+
+    A job that `needs` it without calling a status function gets GitHub's
+    implicit `success()`, which a skipped need fails: the job is skipped
+    before its `if:` is read, and the queue merges with no e2e at all. That
+    is what sdr-k8s-e2e shipped with. The evaluator cannot see the implicit
+    term, so the expression evaluating true proves nothing on its own — the
+    status function has to be pinned explicitly.
+    """
+    workflow = _load(_WORKFLOW_DIR / "pull_request.yaml")
+    needs = workflow["jobs"][job]["needs"]
+    assert "e2e-request" in needs
     expression = _gate("pull_request.yaml", job)
-    fork = _pull_request("labeled", ("e2e",), added="e2e", fork=True)
-    assert evaluate(expression, {"github": fork, **extra}) is False
-    bot = _pull_request("labeled", ("e2e",), added="e2e", login="dependabot[bot]")
-    assert evaluate(expression, {"github": bot, **extra}) is False
+    assert _STATUS_FUNCTION.search(expression), (
+        f"{job} needs the always-skipped-in-the-queue e2e-request but calls no "
+        "status function, so GitHub skips it on every merge_group run"
+    )
+    for changed in ("sdk", "container", "ci"):
+        contexts = {"github": _merge_group(), "needs": _merge_queue_needs(changed)}
+        assert evaluate(expression, contexts) is True, changed
+
+
+def test_sdr_k8s_e2e_still_needs_a_successful_changes_job() -> None:
+    """`always()` also runs past a FAILED need; without the explicit `changes`
+    result a broken path filter (empty outputs) would decide the job."""
+    expression = _gate("pull_request.yaml", "sdr-k8s-e2e")
+    for result in ("failure", "cancelled", "skipped"):
+        needs = _merge_queue_needs("sdk", changes_result=result)
+        assert evaluate(expression, {"github": _merge_group(), "needs": needs}) is False
+
+
+def test_merge_queue_e2e_still_needs_a_relevant_change() -> None:
+    for job in ("connector-tests", "sdr-k8s-e2e"):
+        needs = _merge_queue_needs("sdk")
+        needs["changes"]["outputs"]["sdk"] = "false"
+        contexts = {"github": _merge_group(), "needs": needs}
+        assert evaluate(_gate("pull_request.yaml", job), contexts) is False, job
+
+
+@pytest.mark.parametrize("job", list(_SDK_E2E_JOBS))
+def test_forks_and_dependabot_are_still_excluded(job: str) -> None:
+    """No secrets on those runs. Pinned with the request present, so the
+    exclusion terms alone have to keep the job off; e2e-request also refuses
+    them, and either layer failing must not start a live-tenant suite."""
+    expression = _gate("pull_request.yaml", job)
+    needs = _sdk_needs(job, requested="true", storage="true")
+    human = _pull_request("synchronize", ())
+    assert evaluate(expression, {"github": human, "needs": needs}) is True
+    fork = _pull_request("synchronize", (), fork=True)
+    assert evaluate(expression, {"github": fork, "needs": needs}) is False
+    bot = _pull_request("synchronize", (), login="dependabot[bot]")
+    assert evaluate(expression, {"github": bot, "needs": needs}) is False
 
 
 def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None:
@@ -563,3 +705,229 @@ def test_the_e2e_concurrency_groups_still_refuse_to_cancel_in_progress() -> None
         assert (
             workflow["jobs"][name]["concurrency"]["cancel-in-progress"] is False
         ), name
+
+
+# ── The done-when criterion of FND-3839 ──────────────────────────────────────
+
+
+def _pull_request_types(workflow: dict[str, Any]) -> dict[str, list[str]]:
+    triggers = _triggers(workflow)
+    found: dict[str, list[str]] = {}
+    for event in ("pull_request", "pull_request_target"):
+        if event in triggers:
+            found[event] = list((triggers[event] or {}).get("types") or [])
+    return found
+
+
+def test_no_test_workflow_or_scaffold_subscribes_to_labeled() -> None:
+    """A `labeled` / `unlabeled` subscription is how a bot label became a
+    duplicate run on the same commit — one whose concurrency group evicted the
+    real run and left a failed required check (FND-48, FND-3832). Requests are
+    PR comments now; nothing should be listening for labels.
+
+    Covers application-sdk's own workflows and every scaffold as a connector
+    receives it. If a workflow genuinely has to react to a label, it needs a
+    reason recorded here, not a silent allowlist entry.
+    """
+    offenders: list[str] = []
+    swept = 0
+    for path, workflow in _sweep_targets():
+        if workflow is None:
+            continue
+        swept += 1
+        for event, types in _pull_request_types(workflow).items():
+            hits = sorted({"labeled", "unlabeled"} & set(types))
+            if hits:
+                offenders.append(f"{path.name}: {event} {hits}")
+    assert swept, "the sweep found no workflows; its globs have drifted"
+    assert not offenders, f"these still subscribe to label events: {offenders}"
+
+
+# ── tests-reusable: the post-FND-3839 request paths ──────────────────────────
+
+
+#: The resynced scaffold's inputs on its own pull_request run.
+_SCAFFOLD_INPUTS = {"e2e-label-trigger": False}
+
+
+def test_the_resynced_scaffold_never_starts_e2e_from_a_label() -> None:
+    """`e2e-label-trigger: false` — the scaffold no longer subscribes to
+    `labeled`, so a label still on the PR must not start e2e on a push: e2e
+    is a `/e2e` dispatch, and the PR's own run would double it."""
+    expression = _gate("tests-reusable.yaml", "discover-e2e")
+    for label in ("e2e", "gate-check"):
+        for description, github, _expected in _scenarios(label):
+            github = {**github, "head_ref": "bump-version-main"}
+            contexts = {"github": github, "inputs": _SCAFFOLD_INPUTS}
+            assert evaluate(expression, contexts) is False, (label, description)
+
+
+@pytest.mark.parametrize("job", ["detect-integration", "integration"])
+def test_the_resynced_scaffold_ignores_labels_for_queued_integration(job: str) -> None:
+    """A queued repo skips integration on PRs; a label must not re-enable it
+    there, and the no-queue path must not lose it."""
+    expression = _gate("tests-reusable.yaml", job)
+    for enabled in (True, False):
+        extra = (
+            _queue_needs(enabled=enabled)
+            if job == "detect-integration"
+            else _integration_needs(enabled=enabled)
+        )
+        for description, github, _expected in _scenarios("e2e"):
+            contexts = {"github": github, "inputs": _SCAFFOLD_INPUTS, **extra}
+            assert evaluate(expression, contexts) is (not enabled), (
+                enabled,
+                description,
+            )
+
+
+def _dispatch(sha: str = "tip") -> dict[str, Any]:
+    return {"event_name": "workflow_dispatch", "sha": sha, "event": {}}
+
+
+@pytest.mark.parametrize("run_e2e", ["true", "only"])
+@pytest.mark.parametrize(
+    ("head_sha", "runs"),
+    [
+        ("", True),
+        ("tip", True),
+        # A push landed between the comment and the dispatch: the branch tip
+        # is not the commit the request was made on.
+        ("older", False),
+    ],
+)
+def test_a_dispatch_stands_e2e_down_when_the_branch_moved(
+    run_e2e: str, head_sha: str, runs: bool
+) -> None:
+    """Testing — and recording a verdict on — a commit nobody asked about
+    would green the wrong head (FND-3839)."""
+    expression = _gate("tests-reusable.yaml", "discover-e2e")
+    contexts = {
+        "github": _dispatch(),
+        "inputs": {"run-e2e": run_e2e, "head-sha": head_sha},
+    }
+    assert evaluate(expression, contexts) is runs
+
+
+@pytest.mark.parametrize(
+    ("job", "needs"),
+    [
+        ("unit", {}),
+        ("detect-integration", {}),
+        (
+            "integration",
+            {"detect-integration": {"result": "success", "outputs": {"count": "1"}}},
+        ),
+        ("scorecard", {}),
+    ],
+)
+@pytest.mark.parametrize(("run_e2e", "runs"), [("only", False), ("true", True)])
+def test_an_e2e_only_run_skips_the_tiers_its_pr_run_measured(
+    job: str, needs: dict[str, Any], run_e2e: str, runs: bool
+) -> None:
+    """`/e2e` dispatches `run-e2e: only`. Unit and integration already ran on
+    the PR's own run, which owns the required `tests / …` contexts; this run
+    reports under `e2e / …`. The full-DAG dispatch (`/gate-check`, the SDK
+    fan-out) keeps every tier."""
+    expression = _gate("tests-reusable.yaml", job)
+    contexts = {
+        "github": _dispatch(),
+        "inputs": {"run-e2e": run_e2e},
+        "needs": needs,
+    }
+    assert evaluate(expression, contexts) is runs
+
+
+def test_an_e2e_only_run_still_runs_e2e() -> None:
+    expression = _gate("tests-reusable.yaml", "discover-e2e")
+    contexts = {"github": _dispatch(), "inputs": {"run-e2e": "only"}}
+    assert evaluate(expression, contexts) is True
+
+
+@pytest.mark.parametrize(
+    ("run_e2e", "detect", "wakes"),
+    [
+        # e2e-only skips detection on purpose; e2e still needs the source.
+        ("only", "skipped", True),
+        # Elsewhere a skipped detection is not a reason to wake anything.
+        ("true", "skipped", False),
+        ("", "skipped", False),
+    ],
+)
+def test_an_e2e_only_run_still_wakes_the_dataforge_source(
+    run_e2e: str, detect: str, wakes: bool
+) -> None:
+    expression = _gate("tests-reusable.yaml", "wake-dataforge-source")
+    contexts = {
+        "inputs": {
+            "run-e2e": run_e2e,
+            "dataforge-lifecycle": True,
+            "dataforge-datasource": "ds",
+            "dataforge-mode": "resource",
+        },
+        "needs": {
+            "detect-integration": {"result": detect, "outputs": {}},
+            "discover-e2e": {"result": "success", "outputs": {"count": "1"}},
+        },
+    }
+    assert evaluate(expression, contexts) is wakes
+
+
+@pytest.mark.parametrize("job", ["tests-passed", "report-to-sdk"])
+def test_both_gate_evaluations_excuse_unit_only_on_an_e2e_only_run(job: str) -> None:
+    """The skipped unit job of an e2e-only run would otherwise red the gate;
+    one verdict, two callers, so both must pass the same flag."""
+    workflow = _load(_WORKFLOW_DIR / "tests-reusable.yaml")
+    steps = [
+        step
+        for step in workflow["jobs"][job]["steps"]
+        if "verify-test-gate" in str(step.get("uses", ""))
+    ]
+    assert len(steps) == 1, f"{job} should evaluate the gate exactly once"
+    flag = steps[0]["with"]["e2e-only"]
+    assert flag == "${{ inputs.run-e2e == 'only' }}"
+
+
+# ── The tests.yaml scaffold's side of the contract ───────────────────────────
+
+
+def _tests_caller() -> dict[str, Any]:
+    workflow = _rendered_template(_TEMPLATE_DIR / "tests.yaml")
+    assert workflow is not None
+    return workflow["jobs"]["tests"]
+
+
+@pytest.mark.parametrize(
+    ("run_e2e", "name"), [("only", "e2e"), ("true", "tests"), ("", "tests")]
+)
+def test_an_e2e_only_run_reports_under_e2e_not_tests(run_e2e: str, name: str) -> None:
+    """GitHub resolves a required check to the NEWEST run on the commit and
+    counts a skipped job as a pass. An e2e-only run publishing a skipped
+    `tests / Unit` would therefore override a real unit failure from the PR's
+    own run, so it must report under another prefix."""
+    caller = _tests_caller()
+    expression = caller["name"]
+    assert expression.startswith("${{") and expression.endswith("}}")
+    rendered = evaluate_operand(
+        expression[3:-2].strip(), {"inputs": {"run_e2e": run_e2e}}
+    )
+    assert rendered == name
+
+
+def test_the_scaffold_turns_the_label_trigger_off_and_forwards_the_head() -> None:
+    caller = _tests_caller()
+    assert caller["with"]["e2e-label-trigger"] is False
+    assert caller["with"]["head-sha"] == "${{ inputs.head_sha }}"
+    assert caller["with"]["run-e2e"] == "${{ inputs.run_e2e }}"
+    inputs = _triggers(_rendered_template(_TEMPLATE_DIR / "tests.yaml") or {})[
+        "workflow_dispatch"
+    ]["inputs"]
+    assert "head_sha" in inputs and "run_e2e" in inputs
+
+
+def test_the_e2e_only_marker_matches_what_test_commands_checks_for() -> None:
+    """pr_test_command refuses `/e2e` on a branch whose tests.yaml lacks the
+    `e2e` caller name; if the template's spelling drifts from the marker it
+    greps for, every `/e2e` is refused as "rebase onto main"."""
+    text = (_TEMPLATE_DIR / "tests.yaml").read_text(encoding="utf-8")
+    assert pr_test_command.E2E_ONLY_MARKER in text

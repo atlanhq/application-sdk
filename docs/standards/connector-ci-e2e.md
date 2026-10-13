@@ -158,85 +158,54 @@ The distinguishing axis is **how much of the DAG runs**, and therefore wall time
 
 Neither leg is the place credential resolution is proven. That is `tests/unit/credentials/` in this repo — see the table in [The SDR base class](#the-sdr-base-class).
 
-### What the `e2e` label actually gates
+### Requesting e2e: the `/e2e` comment
 
-Adding the `e2e` label starts the suite. The label is a **one-shot request**:
-when the run finishes, the `Tests Gate` job removes it (FND-3411), whatever the
-verdict. To run e2e again — after a push, or to retry a failure — add the label
-again. Before this, a label left on a PR re-ran the live-tenant suite on every
-later push, usually days after anyone wanted it.
+Comment `/e2e` on the PR to run the suite on its head commit (FND-3839). The
+request is **one-shot and bound to that commit**: the verdict lands as the `e2e`
+commit status on it, and a push makes a new commit with no verdict, so comment
+`/e2e` again on the new head. `/e2e force` re-runs a commit that already passed.
+Only people with the Write, Maintain or Admin role on the repo can trigger it; bot and fork PRs are
+refused.
 
-Two details of the removal matter:
+What happens, in the connector repo:
 
-- It uses the run's own `github.token`, so the `unlabeled` event starts no
-  workflow run — nothing re-fires on it.
-- Before removing the label, the gate records the verdict as an `e2e` commit
-  status on the PR head: `success` or `failure`, or `error` when the run acted
-  on the label but produced no verdict (cancelled, tenant busy, install
-  failed). The consumer's
-  [Release Gate](release-flow.md) reads that status once the label is gone. The
-  status is bound to the commit, so a push re-blocks a release PR until the
-  label is re-added.
+1. `test-commands.yaml` (scaffolded; logic in application-sdk's
+   `test-commands-reusable.yaml` and `pr_test_command.py`) checks the request.
+   It refuses when a run for the commit is already in flight, when the commit's
+   `e2e` already passed, or when the branch's `tests.yaml` predates `/e2e`
+   (rebase onto the default branch). It never checks out PR code.
+2. It dispatches `tests.yaml` on the PR branch with `run_e2e: only` and the
+   commit's `head_sha`. That run skips unit and integration — the PR's own run
+   measured them — and reports as `e2e / …`, never under the required
+   `tests / …` checks, so it cannot override them (GitHub reads a required check
+   from the newest run, and a skipped job counts as a pass).
+3. The run stands down if the branch moved past `head_sha` before it started, or
+   before it reached the tenant lease (`e2e_branch_recheck.py`), so the tenant
+   goes to the newest commit's run instead.
+4. Otherwise `Discover e2e suites` posts `e2e = pending` on the commit, and the
+   gate replaces it with `success`, `failure` or `error` (no verdict: cancelled,
+   tenant busy, install failed).
+5. The PR run's `tests / Tests Gate` holds to that status
+   (`e2e_commit_verdict.py`): `success` passes, `failure` and `error` fail,
+   `pending` is waited on for up to 10 minutes, and no status passes — e2e is
+   not required on a normal PR. When the verdict lands, the dispatched run
+   re-runs that gate job if it disagrees (`rerun_deferred_gate.py --verdict`,
+   needs `ORG_PAT_GITHUB`; without the PAT, re-run it by hand).
 
-application-sdk's own `PR Checks` does the same in its `consume-e2e-label` job,
-after `Connector Tests Gate` and the other label-gated jobs finish.
+A failed e2e is cleared by pushing a fix, or by `/e2e` on the same commit once
+the cause is fixed elsewhere (a tenant outage). On a release PR, `/gate-check`
+runs the full release gate including e2e — see [release-flow.md](release-flow.md).
 
-While the label is on the PR, a push (`synchronize`) re-runs the suite. What does
-**not** re-run it is an unrelated label add — `size/`, `area/`, dependency and review-state labels churn
-constantly on an open PR, and every one of those used to re-fire the whole
-matrix (FND-48).
+**No labels.** `tests.yaml` does not subscribe to `labeled`: a label add used to
+start a second `Tests` run on the same commit, whose unit job cancelled the
+first run's and left a failed required check on the PR (FND-48, FND-2167,
+FND-3832). A repo not yet resynced still runs e2e from the `e2e` label as
+before; `tests-reusable.yaml` keeps that path behind `e2e-label-trigger` until
+the fleet has resynced. See [ci.md](ci.md#test-legs-are-requested-by-pr-comment-never-by-label).
 
-The `Discover e2e suites` gate in `tests-reusable.yaml` therefore asks two
-questions, not one:
-
-```yaml
-contains(github.event.pull_request.labels.*.name, 'e2e') &&
-(github.event.action != 'labeled' || github.event.label.name == 'e2e')
-```
-
-You will still see a *workflow run* appear for every label add — GitHub has no
-trigger-level label filter, so the run is created and then skips within seconds.
-That is expected; it costs no tenant time and nothing queues behind it. Do not
-"fix" it by removing `labeled` from your `tests.yaml` trigger list: that is what
-makes adding the label start a run in the first place. See
-[`docs/standards/ci.md`](ci.md#label-gates-must-be-event-aware).
-
-Note that a genuine re-trigger still **queues** behind an in-flight run rather
-than cancelling it (`cancel-in-progress: false`). That is deliberate —
-cancelling mid-run abandons a live Automation Engine run and leaves tenant state
-behind — and it is a separate decision from the gating above.
-
-### Every run on a commit honours its e2e verdict
-
-A run started by an unrelated label skips e2e, but it is still a `Tests` run on
-the same commit. GitHub reads the required `tests / Tests Gate` from the newest
-check suite on the commit, so before FND-3650 that run's green gate overrode the
-run that was actually running e2e. A PR could merge mid-suite, or over a failed
-suite.
-
-The `e2e` commit status now carries the verdict across runs:
-
-1. The run that acts on the label posts `e2e = pending` from `Discover e2e
-   suites`, and its gate always replaces it with `success`, `failure` or `error`.
-2. Any other PR run whose own gate passed holds it on that status
-   (`e2e_commit_verdict.py`). `success` passes. `failure` and `error` fail, even
-   after the label is consumed. `pending` is waited on for up to 10 minutes.
-   No status passes, because e2e is not required on a normal PR, unless the PR
-   carries `e2e` and the run skipped only because of the unrelated-label
-   filter. Then a missing status fails after a short wait.
-3. If the wait runs out, that gate fails. When the acting run records its
-   verdict, it re-runs that gate (`rerun_deferred_gate.py`, needs
-   `ORG_PAT_GITHUB`), which then reads the final status. Without the PAT,
-   re-run the failed job by hand.
-
-If the label starts two attempts on one commit, the newest attempt decides
-(each status links the run that posted it), and an older attempt that finishes
-later does not write its verdict. Each recorder re-checks after writing: if an
-older attempt's row has become the newest `e2e` status, it re-posts the newest
-attempt's latest row, so the combined status the Release Gate reads matches.
-
-A failed e2e is cleared by pushing a fix or by adding the label again. Removing
-the label does not clear it, because the verdict belongs to the commit.
+A genuine re-request still **queues** behind an in-flight leg rather than
+cancelling it (`cancel-in-progress: false`): cancelling mid-run abandons a live
+Automation Engine run and leaves tenant state behind (FND-252).
 
 ### One dispatch per commit, however many events GitHub sends
 
@@ -826,9 +795,9 @@ check-run body and emits no `conclusion` at all. Every half is pinned by
 must feed one action with identical inputs, and each must `need` every job it
 judges. If you add a job to the gate, add it to both.
 
-The `tests.yaml` job in each connector runs unit + integration tests unconditionally. The full-DAG `e2e` job inside `tests.yaml` runs only when the SDK PR carries the `e2e` label — controlled via the `run_e2e` workflow input (`"true"` / `"false"`) passed by the dispatcher.
+The `tests.yaml` job in each connector runs unit + integration tests unconditionally. The full-DAG `e2e` job inside `tests.yaml` runs only when e2e was requested on the SDK PR (a `/e2e` comment, or the merge queue) — controlled via the `run_e2e` workflow input (`"true"` / `"false"`) passed by the dispatcher.
 
-Mechanism: `codex-/return-dispatch@v4` in `e2e-apps/action.yaml` fires `workflow_dispatch` on the target repo, passing `application_sdk_ref` (the SDK PR's head SHA, used by the connector to re-pin the SDK before running tests), `run_e2e` (derived from whether the SDK PR has the `e2e` label), and `distinct_id` (the dispatching SHA — see below).
+Mechanism: `codex-/return-dispatch@v4` in `e2e-apps/action.yaml` fires `workflow_dispatch` on the target repo, passing `application_sdk_ref` (the SDK PR's head SHA, used by the connector to re-pin the SDK before running tests), `run_e2e` (true when e2e was requested on the SDK PR with `/e2e`, or on a merge-queue entry), and `distinct_id` (the dispatching SHA — see below).
 
 Since v4 the action reads the dispatched run's id straight out of the `workflow_dispatch` API response, so the run is identified in seconds. v3 had to trawl the dispatched run's step *names* for a `distinct-id <sha>` marker, which is why the dispatcher used to pass `workflow_timeout_seconds` / `workflow_job_steps_retry_seconds` — both are gone. Receivers still carry the `distinct-id <sha>` echo step, but it is now a human breadcrumb only: nothing reads the step name.
 
@@ -1993,7 +1962,7 @@ Three `ClassVar`s tune it, and the defaults suit every connector:
 ## Onboarding checklist for a new connector
 
 1. **Action manifest**: `app.yaml` at repo root (3 lines).
-2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on the `e2e` label or `run_e2e=true` dispatch input).
+2. **Unified workflow**: copy `.github/workflows/tests.yaml` from mysql-app; swap connector references. This single file covers unit + integration tests (always) and full-DAG e2e (on a `/e2e` PR comment or a `run_e2e=true` dispatch input). Re-run `bootstrap --resync` rather than copying by hand: it also writes `test-commands.yaml`, which `/e2e` needs.
 3. **Config dir**: create `.github/sdr-e2e/` (new) or `.github/e2e/` (legacy). Files: `docker-compose.ci.yml`, `e2e-full-docker-compose.yaml`, `e2e-full-components/`, `seed.sql`, `make-secrets.py`, `make-secrets-e2e-full.py`. On a bundle app whose entrypoints need different source containers, name the overlay per suite instead — `.github/e2e/<suite>-docker-compose.yaml`, see [When the entrypoints are not equally testable](#when-the-entrypoints-are-not-equally-testable-fnd-1865).
 4. **Tests**: unit + integration tests under `tests/unit/` and `tests/integration/`; full-DAG e2e under `tests/e2e/` (`SQLAppE2ETest` subclass for SQL connectors, otherwise the generated `BaseE2ETest` subclass — see [Which harness](#which-harness)). On a bundle app, one `tests/e2e/test_*.py` **per entrypoint** — see [Multi-entrypoint (bundle) apps](#multi-entrypoint-bundle-apps-one-suite-per-entrypoint).
 5. **Repo secrets**: set the 7 entries from the table above.

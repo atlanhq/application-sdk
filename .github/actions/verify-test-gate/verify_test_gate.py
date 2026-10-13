@@ -152,6 +152,15 @@ def stood_down(superseded: str) -> bool:
     return superseded.strip().lower() == "true"
 
 
+def is_e2e_only(e2e_only: str) -> bool:
+    """Whether this run was requested as e2e-only (``run-e2e: only``).
+
+    Only the literal "true" counts, so a caller pinned at @main that never
+    passes the input keeps requiring unit.
+    """
+    return e2e_only.strip().lower() == "true"
+
+
 def evaluate(
     unit: str,
     integration: str,
@@ -164,6 +173,7 @@ def evaluate(
     prepare_tenant: str = "skipped",
     lease_tenant: str = "skipped",
     superseded: str = "false",
+    e2e_only: str = "false",
 ) -> list[str]:
     """Return human-readable failure reasons (empty ⇒ the gate passes).
 
@@ -175,7 +185,12 @@ def evaluate(
     all would report.
     """
     errors: list[str] = []
-    if unit != "success":
+    # An e2e-only run (a `/e2e` comment, FND-3839) skips unit on purpose: the
+    # PR's own pull_request run already measured it, and that run owns the
+    # required `tests / …` contexts. Only `skipped` is excused — a unit job
+    # that ran and failed here still fails.
+    unit_excused = is_e2e_only(e2e_only) and unit == "skipped"
+    if unit != "success" and not unit_excused:
         errors.append(f"unit tests did not succeed (result={unit})")
     # detect-integration gates the integration job's `if`. A *failure* there
     # (checkout/glob flake) drops integration to a skip, which the check below
@@ -406,6 +421,7 @@ def render(
     prepare_tenant: str = "skipped",
     lease_tenant: str = "skipped",
     superseded: str = "false",
+    e2e_only: str = "false",
 ) -> dict[str, str]:
     """Compute the gate's outputs: pass/fail + the display status strings.
 
@@ -437,6 +453,7 @@ def render(
         prepare_tenant,
         lease_tenant,
         superseded,
+        e2e_only,
     )
     blocked_by_cancellation = errors and cancelled_only(
         unit,
@@ -534,6 +551,13 @@ def main(argv: list[str] | None = None) -> int:
         'and defaulting to "false" so callers pinned at @main that have not '
         "wired the job keep the previous behaviour.",
     )
+    parser.add_argument(
+        "--e2e-only",
+        default="false",
+        help='"true" when the run was requested as e2e-only (a `/e2e` comment). '
+        "A skipped unit job is then expected rather than a failure. Optional and "
+        'defaulting to "false" for callers pinned at @main.',
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     # Annotate each failure reason (shows on the gate step regardless of the
@@ -550,6 +574,7 @@ def main(argv: list[str] | None = None) -> int:
         args.prepare_tenant,
         args.lease_tenant,
         args.superseded,
+        args.e2e_only,
     ):
         print(f"::error::{reason}", file=sys.stderr)
 
@@ -582,6 +607,7 @@ def main(argv: list[str] | None = None) -> int:
         args.prepare_tenant,
         args.lease_tenant,
         args.superseded,
+        args.e2e_only,
     ).items():
         print(f"{key}={value}")
     return 0

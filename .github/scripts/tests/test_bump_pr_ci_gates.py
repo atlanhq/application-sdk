@@ -1,22 +1,33 @@
-"""Bump-version PR CI is opt-in via the `gate-check` label (FND-3748).
+"""Bump-version PR CI is opt-in via a `/gate-check` comment (FND-3748, FND-3839).
+
+The opt-in used to be a `gate-check` label, which needed every gated workflow to
+subscribe to `labeled` — and so created a duplicate run on the same commit for
+every label any bot added. It is now a PR comment, handled two ways:
+
+* connector repos: `/gate-check` DISPATCHES the gated shims on the bump branch
+  (pr_test_command.py). The PR run's caller job skips on `bump-version*`, and a
+  dispatch has an empty `head_ref`, so the same `if:` runs it;
+* application-sdk: `/gate-check` posts a `gate-check` commit status and RE-RUNS
+  the runs on the commit, which read that status live (bump_pr_opt_in.py).
 
 Evaluates the real `if:` expressions lifted out of the workflow YAML and the
 bootstrap templates against synthetic payloads, so a gate wired one paren out
 (`&&` binds tighter than `||` in GHA) fails here rather than in the fleet:
 
-* app shims skip their CALLER job on an un-opted bump PR — free, and no
-  required context is created — and run on the event that adds `gate-check`;
-* shims that newly subscribe to `labeled` still start nothing for a label on
-  an ordinary PR;
-* `gate-check` implies e2e on a bump PR (apps and SDK `bump-version-main`), but
+* app shims skip their CALLER job on a bump PR's own run — free, and no
+  required context is created — run on the `/gate-check` dispatch, and ignore a
+  `gate-check` label;
+* `/gate-check` implies e2e on a bump PR (apps and SDK `bump-version-main`), but
   never triggers tenant e2e on the conformance / contract-toolkit lanes;
 * the SDK's inline required gates fail closed until opted in, rather than
-  skipping (a skipped required check reads as a pass);
-* every bump workflow clears the opt-in BEFORE it pushes.
+  skipping (a skipped required check reads as a pass), and every SDK workflow
+  `/gate-check` re-runs reads the opt-in from the commit;
+* legacy app repos still have their label cleared before each bump push.
 """
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -26,8 +37,11 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from _gha_expr import evaluate  # noqa: E402
+import bump_pr_opt_in  # noqa: E402
+import pr_test_command  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 from conformance.bootstrap import render as bootstrap_render  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -74,6 +88,7 @@ def _ctx(
     labels: tuple[str, ...] = (),
     added: str | None = None,
     event: str = "pull_request",
+    ref_name: str = "",
     **extra: Any,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
@@ -90,6 +105,7 @@ def _ctx(
         "github": {
             "event_name": event,
             "head_ref": head_ref,
+            "ref_name": ref_name,
             "actor": "someone",
             "event": payload,
         }
@@ -98,90 +114,122 @@ def _ctx(
     return contexts
 
 
+def _interpolate(template: str, contexts: dict[str, Any]) -> str:
+    """Render a `prefix-${{ expr }}-…` string the way GitHub does."""
+    return re.sub(
+        r"\$\{\{(.*?)\}\}",
+        lambda m: str(evaluate_operand(m.group(1).strip(), contexts)),
+        template,
+    )
+
+
+def _dispatch(branch: str) -> dict[str, Any]:
+    """A `/gate-check` dispatch: no PR payload, and `head_ref` is empty."""
+    return {
+        "github": {
+            "event_name": "workflow_dispatch",
+            "head_ref": "",
+            "ref_name": branch,
+            "ref": f"refs/heads/{branch}",
+            "actor": "someone",
+            "event": {},
+        }
+    }
+
+
 BUMP = "bump-version-main"
 OPTED = ("release", "gate-check")
 
-#: (description, context, runs) for a shim CALLER job. `tests.yaml` keeps
-#: today's label behaviour on an ordinary PR; the others start nothing there.
+#: tests-reusable.yaml's inputs as a caller predating FND-3839 passes them (it
+#: still opts in with the label), and as the resynced scaffold does.
+_LEGACY_INPUTS = {
+    "enable-e2e": True,
+    "run-e2e": "",
+    "head-sha": "",
+    "e2e-label-trigger": True,
+}
+_SCAFFOLD_INPUTS = {**_LEGACY_INPUTS, "e2e-label-trigger": False}
+
+#: (description, context, runs) for a shim CALLER job.
 _CALLER_SCENARIOS = [
     ("ordinary PR push", _ctx("feat/x"), True),
     ("ordinary PR opened", _ctx("feat/x", action="opened"), True),
     ("merge queue", _ctx("", event="merge_group", action="checks_requested"), True),
     ("push to main", _ctx("", event="push", action=""), True),
-    ("un-opted bump push", _ctx(BUMP, labels=("release",)), False),
-    ("un-opted bump opened", _ctx(BUMP, action="opened", labels=("release",)), False),
-    (
-        "gate-check added",
-        _ctx(BUMP, action="labeled", labels=OPTED, added="gate-check"),
-        True,
-    ),
-    (
-        "unrelated label on an opted-in bump PR",
-        _ctx(BUMP, action="labeled", labels=(*OPTED, "size/S"), added="size/S"),
-        False,
-    ),
-    (
-        "legacy e2e opt-in",
-        _ctx(BUMP, action="labeled", labels=("release", "e2e"), added="e2e"),
-        True,
-    ),
-    (
-        "release label added by automation",
-        _ctx(BUMP, action="labeled", labels=("release",), added="release"),
-        False,
-    ),
+    ("bump PR push", _ctx(BUMP, labels=("release",)), False),
+    ("bump PR opened", _ctx(BUMP, action="opened", labels=("release",)), False),
+    # A label no longer opts in: the bump PR's own run never runs the gate,
+    # whatever it carries. Only the dispatch below does.
+    ("bump PR carrying a stale gate-check label", _ctx(BUMP, labels=OPTED), False),
+    ("bump PR carrying a legacy e2e label", _ctx(BUMP, labels=("e2e",)), False),
+    ("/gate-check dispatch on the bump branch", _dispatch(BUMP), True),
+    ("/gate-check dispatch on a subpackage lane", _dispatch("bump-version-x"), True),
+]
+
+#: The connector shims a `/gate-check` dispatches, with their caller job.
+_GATED_SHIMS = [
+    ("tests.yaml", "tests"),
+    ("checks.yml", "pre-commit"),
+    ("conformance.yaml", "suite"),
+    ("vulnerability-scan.yml", "scan"),
 ]
 
 
-@pytest.mark.parametrize(
-    ("template", "job"),
-    [("checks.yml", "pre-commit"), ("conformance.yaml", "suite")],
-)
+@pytest.mark.parametrize(("template", "job"), _GATED_SHIMS)
 @pytest.mark.parametrize(("desc", "ctx", "runs"), _CALLER_SCENARIOS)
-def test_newly_labeled_shims_gate_their_caller(
+def test_shims_gate_their_caller_on_the_dispatch_not_the_pr_run(
     template: str, job: str, desc: str, ctx: dict[str, Any], runs: bool
 ) -> None:
     assert evaluate(_job_if(TEMPLATES / template, job), ctx) is runs, desc
 
 
-@pytest.mark.parametrize(
-    ("template", "job"),
-    [("checks.yml", "pre-commit"), ("conformance.yaml", "suite")],
-)
-def test_newly_labeled_shims_skip_label_events_on_ordinary_prs(
-    template: str, job: str
+@pytest.mark.parametrize(("template", "_job"), _GATED_SHIMS)
+def test_gated_shims_can_be_dispatched_and_never_subscribe_to_labels(
+    template: str, _job: str
 ) -> None:
-    ctx = _ctx("feat/x", action="labeled", labels=("size/S",), added="size/S")
-    assert evaluate(_job_if(TEMPLATES / template, job), ctx) is False
-
-
-@pytest.mark.parametrize(
-    "template", ["checks.yml", "conformance.yaml", "vulnerability-scan.yml"]
-)
-def test_newly_labeled_shims_subscribe_to_labeled(template: str) -> None:
+    """Without `workflow_dispatch` the `/gate-check` comment has nothing to
+    start; with `labeled` every bot label would start a duplicate run."""
     on = _load(TEMPLATES / template)[True]
-    assert "labeled" in on["pull_request"]["types"]
+    assert "workflow_dispatch" in on
+    types = (on.get("pull_request") or {}).get("types") or []
+    assert "labeled" not in types and "unlabeled" not in types
 
 
-@pytest.mark.parametrize(("desc", "ctx", "runs"), _CALLER_SCENARIOS)
-def test_tests_shim_gates_its_caller(
-    desc: str, ctx: dict[str, Any], runs: bool
+def test_gate_check_dispatches_exactly_the_gated_shims() -> None:
+    """The command's list and this file's must not drift: a shim the command
+    skips never runs its gate, and one it dispatches that skips the dispatch
+    burns a run for nothing."""
+    assert set(pr_test_command.GATE_CHECK_WORKFLOWS) == {t for t, _ in _GATED_SHIMS}
+
+
+def test_the_verdict_listens_for_every_gated_shim_by_name() -> None:
+    """`workflow_run` matches on each workflow's `name:`, not its file. A name
+    missing here leaves `gate-check` pending forever on a bump PR that has it."""
+    listened = set(
+        _load(TEMPLATES / "test-commands.yaml")[True]["workflow_run"]["workflows"]
+    )
+    names = {_load(TEMPLATES / template)["name"] for template, _ in _GATED_SHIMS}
+    assert names == listened
+
+
+@pytest.mark.parametrize(
+    ("template", "group"),
+    [
+        ("checks.yml", lambda w: w["jobs"]["pre-commit"]["concurrency"]["group"]),
+        ("vulnerability-scan.yml", lambda w: w["concurrency"]["group"]),
+    ],
+)
+def test_a_gate_check_dispatch_never_shares_the_pr_runs_cancel_group(
+    template: str, group: Any
 ) -> None:
-    assert evaluate(_job_if(TEMPLATES / "tests.yaml", "tests"), ctx) is runs, desc
-
-
-def test_tests_shim_keeps_label_events_on_ordinary_prs() -> None:
-    """The reusable filters these (FND-48); the caller must not change that."""
-    ctx = _ctx("feat/x", action="labeled", labels=("e2e",), added="e2e")
-    assert evaluate(_job_if(TEMPLATES / "tests.yaml", "tests"), ctx) is True
-
-
-def test_label_runs_never_share_the_heads_cancel_group() -> None:
-    """A label event must not cancel the head's in-flight run (FND-218)."""
-    checks = _load(TEMPLATES / "checks.yml")["jobs"]["pre-commit"]["concurrency"]
-    assert "github.event.action == 'labeled' && github.run_id" in checks["group"]
-    scan = _load(TEMPLATES / "vulnerability-scan.yml")["concurrency"]
-    assert "github.event.action == 'labeled' && github.run_id" in scan["group"]
+    """The dispatch and the PR's own run must not evict one another (FND-218)."""
+    expression = group(_load(TEMPLATES / template))
+    pr = _ctx(BUMP)
+    pr["github"].update(ref="refs/pull/7/merge", workflow="W")
+    pr["github"]["event"]["pull_request"]["number"] = 7
+    dispatch = _dispatch(BUMP)
+    dispatch["github"]["workflow"] = "W"
+    assert _interpolate(expression, pr) != _interpolate(expression, dispatch)
 
 
 # ── tests-reusable: gate-check implies e2e on a bump PR only ─────────────────
@@ -197,64 +245,137 @@ def test_label_runs_never_share_the_heads_cancel_group() -> None:
         ("feat/x", ("e2e",), "e2e", True),
     ],
 )
-def test_discover_e2e_accepts_gate_check_on_a_bump_pr(
+def test_a_legacy_caller_still_accepts_the_gate_check_label_on_a_bump_pr(
     head_ref: str, labels: tuple[str, ...], added: str, runs: bool
 ) -> None:
+    """Callers that predate FND-3839 opt in with the label until they resync."""
     ctx = _ctx(head_ref, action="labeled", labels=labels, added=added)
-    ctx["inputs"] = {"enable-e2e": True, "run-e2e": ""}
+    ctx["inputs"] = _LEGACY_INPUTS
+    expr = _job_if(WORKFLOWS / "tests-reusable.yaml", "discover-e2e")
+    assert evaluate(expr, ctx) is runs
+
+
+def test_the_resynced_scaffold_ignores_the_gate_check_label() -> None:
+    ctx = _ctx(BUMP, action="labeled", labels=OPTED, added="gate-check")
+    ctx["inputs"] = _SCAFFOLD_INPUTS
+    expr = _job_if(WORKFLOWS / "tests-reusable.yaml", "discover-e2e")
+    assert evaluate(expr, ctx) is False
+
+
+@pytest.mark.parametrize(
+    ("head_sha", "runs"),
+    [
+        ("", True),
+        ("tip", True),
+        # A push landed between the comment and the dispatch: the tip is not
+        # the commit the reviewer opted in.
+        ("older", False),
+    ],
+)
+def test_a_gate_check_dispatch_runs_e2e_on_the_commented_commit(
+    head_sha: str, runs: bool
+) -> None:
+    """`/gate-check` dispatches tests.yaml with `run_e2e: true` (full DAG)."""
+    ctx = _dispatch(BUMP)
+    ctx["github"]["sha"] = "tip"
+    ctx["inputs"] = {**_SCAFFOLD_INPUTS, "run-e2e": "true", "head-sha": head_sha}
     expr = _job_if(WORKFLOWS / "tests-reusable.yaml", "discover-e2e")
     assert evaluate(expr, ctx) is runs
 
 
 @pytest.mark.parametrize("job", ["detect-integration", "integration"])
-def test_queued_repo_integration_accepts_gate_check_on_a_bump_pr(job: str) -> None:
+def test_queued_repo_integration_on_a_bump_pr(job: str) -> None:
+    """A queued repo skips integration on PRs; the release gate must not."""
     needs = {
         "detect-merge-queue": {"outputs": {"enabled": "true"}},
         "detect-integration": {"result": "success", "outputs": {"count": "2"}},
     }
-    expr = _job_if(WORKFLOWS / "tests-reusable.yaml", job)
-    opted = _ctx(BUMP, action="labeled", labels=OPTED, added="gate-check", needs=needs)
+    expr = _job_if(WORKFLOWS / "tests-reusable.yaml", job).replace("always() &&", "", 1)
+    opted = _ctx(
+        BUMP,
+        action="labeled",
+        labels=OPTED,
+        added="gate-check",
+        needs=needs,
+        inputs=_LEGACY_INPUTS,
+    )
     plain = _ctx(
         "feat/x",
         action="labeled",
         labels=("gate-check",),
         added="gate-check",
         needs=needs,
+        inputs=_LEGACY_INPUTS,
     )
-    assert evaluate(expr.replace("always() &&", "", 1), opted) is True
-    assert evaluate(expr.replace("always() &&", "", 1), plain) is False
+    assert evaluate(expr, opted) is True
+    assert evaluate(expr, plain) is False
+    # The resynced path: the `/gate-check` dispatch is not a pull_request, so
+    # integration runs regardless of the queue.
+    dispatch = {**_dispatch(BUMP), "needs": needs}
+    dispatch["inputs"] = {**_SCAFFOLD_INPUTS, "run-e2e": "true"}
+    assert evaluate(expr, dispatch) is True
 
 
 # ── SDK repo ─────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
-    ("job", "head_ref", "runs"),
+    ("head_ref", "requested"),
     [
-        ("sdr-k8s-e2e", BUMP, True),
-        ("sdr-k8s-e2e", "bump-version-conformance", False),
-        ("sdr-k8s-e2e", "bump-version-contract-toolkit", False),
-        ("sdr-k8s-e2e", "feat/x", False),
-        ("storage-integration", BUMP, True),
-        ("storage-integration", "bump-version-conformance", False),
+        (BUMP, True),
+        ("bump-version-conformance", False),
+        ("bump-version-contract-toolkit", False),
+        ("feat/x", False),
     ],
 )
 def test_sdk_tenant_e2e_follows_gate_check_on_the_sdk_lane_only(
-    job: str, head_ref: str, runs: bool
+    monkeypatch: pytest.MonkeyPatch, head_ref: str, requested: bool
 ) -> None:
-    """Conformance / toolkit releases never pay for tenant e2e (FND-3748)."""
-    ctx = _ctx(
-        head_ref,
-        action="labeled",
-        labels=OPTED,
-        added="gate-check",
-        needs={
-            "changes": {
-                "outputs": {"sdk": "false", "container": "false", "ci": "false"}
-            }
-        },
+    """Conformance / toolkit releases never pay for tenant e2e (FND-3748).
+
+    Two halves: e2e-request decides from the commit's statuses (here: opted in
+    with `/gate-check`, no `/e2e`), and every tenant-e2e job follows its answer.
+    """
+    states = {bump_pr_opt_in.GATE_CHECK_CONTEXT: "success"}
+    monkeypatch.setattr(
+        bump_pr_opt_in, "commit_status", lambda _r, _s, context: states.get(context, "")
     )
-    assert evaluate(_job_if(WORKFLOWS / "pull_request.yaml", job), ctx) is runs
+    answer, _ = bump_pr_opt_in.is_e2e_requested(
+        "o/r", head_ref, "sha", fork=False, author="a-human"
+    )
+    assert answer is requested
+
+    needs = {
+        "changes": {
+            "result": "success",
+            "outputs": {
+                "sdk": "false",
+                "container": "false",
+                "ci": "false",
+                "storage": "false",
+            },
+        },
+        "e2e-request": {"outputs": {"requested": str(answer).lower()}},
+    }
+    ctx = _ctx(head_ref, needs=needs)
+    for job in ("sdr-k8s-e2e", "storage-integration"):
+        assert evaluate(_job_if(WORKFLOWS / "pull_request.yaml", job), ctx) is (
+            requested
+        ), job
+
+
+def test_sdk_e2e_request_reads_the_head_commit() -> None:
+    """Live from the commit: `/e2e` and `/gate-check` re-run this job on a run
+    that started before the marker, and a re-run replays the old payload."""
+    path = WORKFLOWS / "pull_request.yaml"
+    job = _load(path)["jobs"]["e2e-request"]
+    assert evaluate(job["if"], _ctx("feat/x")) is True
+    assert evaluate(job["if"], _ctx("", event="merge_group")) is False
+    assert job["permissions"]["statuses"] == "read"
+    step = _step(path, "e2e-request", "Read the e2e request on the head commit")
+    assert "bump_pr_opt_in.py e2e-requested" in step["run"]
+    assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    assert step["env"]["HEAD_REF"] == "${{ github.head_ref }}"
 
 
 @pytest.mark.parametrize(
@@ -303,52 +424,97 @@ def test_sdk_inline_gates_fail_closed_until_opted_in(
     }
     assert evaluate(_strip(found["if"]), ctx) is fails
     assert "exit 1" in found["run"]
+    assert "/gate-check" in found["run"]
     steps = _load(path)["jobs"][job]["steps"]
     assert steps.index(found) == 0, "must fail before anything reads skips as passes"
 
 
-@pytest.mark.parametrize("workflow", ["sdk-gate.yaml", "pull_request.yaml"])
-def test_sdk_opt_in_reads_live_labels(workflow: str) -> None:
-    step = _step(WORKFLOWS / workflow, "changes", "Check the bump-PR CI opt-in")
+@pytest.mark.parametrize(
+    ("workflow", "job"),
+    [
+        ("sdk-gate.yaml", "changes"),
+        ("pull_request.yaml", "changes"),
+        ("codeql.yaml", "opt-in"),
+    ],
+)
+def test_sdk_opt_in_reads_the_head_commit(workflow: str, job: str) -> None:
+    """A re-run replays the original payload, so only the commit's live
+    `gate-check` status can carry an opt-in made after the run started."""
+    step = _step(WORKFLOWS / workflow, job, "Check the bump-PR CI opt-in")
     assert "bump_pr_opt_in.py check" in step["run"]
+    assert '--sha "$HEAD_SHA"' in step["run"]
+    assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
 
 
-def test_sdk_gate_does_not_subscribe_to_labeled() -> None:
-    """Its required check is inline: a label-event skip would read as a pass."""
-    on = _load(WORKFLOWS / "sdk-gate.yaml")[True]
-    assert "labeled" not in (on["pull_request"] or {}).get("types", [])
+def test_gate_check_reruns_every_sdk_workflow_that_reads_the_opt_in() -> None:
+    """The comment re-runs a fixed list; a workflow that reads the opt-in but
+    is missing from it stays un-opted forever (its required check red), and
+    one that is listed but never reads it re-runs for nothing."""
+    readers = {
+        path.name
+        for path in WORKFLOWS.glob("*.y*ml")
+        if "bump_pr_opt_in.py check" in path.read_text(encoding="utf-8")
+    }
+    assert readers == set(pr_test_command.SDK_GATE_CHECK_WORKFLOWS)
 
 
 @pytest.mark.parametrize(
-    ("head_ref", "added", "runs"),
-    [
-        (BUMP, "gate-check", True),
-        ("bump-version-conformance", "gate-check", True),
-        (BUMP, "size/S", False),
-        ("feat/x", "gate-check", False),
-    ],
+    "workflow", ["sdk-gate.yaml", "pull_request.yaml", "codeql.yaml"]
 )
-def test_gate_check_reruns_sdk_gate(head_ref: str, added: str, runs: bool) -> None:
-    path = WORKFLOWS / "bump-pr-gate-check.yaml"
-    ctx = _ctx(head_ref, action="labeled", labels=(added,), added=added)
-    assert evaluate(_job_if(path, "rerun-sdk-gate"), ctx) is runs
-    run = _load(path)["jobs"]["rerun-sdk-gate"]["steps"][-1]["run"]
-    assert "--workflow sdk-gate.yaml" in run
+def test_sdk_opt_in_workflows_do_not_subscribe_to_labeled(workflow: str) -> None:
+    """A label event would add a run whose skips read as passes (sdk-gate's
+    required check is inline) — and it opts nothing in any more."""
+    on = _load(WORKFLOWS / workflow)[True]
+    assert "labeled" not in (on["pull_request"] or {}).get("types", [])
 
 
 @pytest.mark.parametrize("job", ["analyze", "lint"])
 @pytest.mark.parametrize(
     ("ctx", "runs"),
     [
-        (_ctx("feat/x"), True),
-        (_ctx(BUMP, labels=("release",)), False),
-        (_ctx(BUMP, action="labeled", labels=OPTED, added="gate-check"), True),
+        # Off a bump PR the opt-in job is skipped and its output empty.
+        (_ctx("feat/x", needs={"opt-in": {"outputs": {}}}), True),
+        (
+            _ctx(
+                BUMP,
+                labels=("release",),
+                needs={"opt-in": {"outputs": {"opted_in": "false"}}},
+            ),
+            False,
+        ),
+        # A stale label means nothing; the status read by opt-in decides.
+        (
+            _ctx(
+                BUMP, labels=OPTED, needs={"opt-in": {"outputs": {"opted_in": "false"}}}
+            ),
+            False,
+        ),
+        (_ctx(BUMP, needs={"opt-in": {"outputs": {"opted_in": "true"}}}), True),
+        # The opt-in job failed: no output, so the bump PR stays gated.
+        (_ctx(BUMP, needs={"opt-in": {"outputs": {}}}), False),
     ],
 )
 def test_codeql_waits_for_the_opt_in_on_bump_prs(
     job: str, ctx: dict[str, Any], runs: bool
 ) -> None:
     assert evaluate(_job_if(WORKFLOWS / "codeql.yaml", job), ctx) is runs
+
+
+@pytest.mark.parametrize(
+    ("ctx", "runs"),
+    [
+        (_ctx(BUMP), True),
+        (_ctx("bump-version-conformance"), True),
+        # Everywhere else it costs nothing: skipped, and analyze/lint run.
+        (_ctx("feat/x"), False),
+        (_ctx("", event="merge_group"), False),
+        (_ctx("", event="push"), False),
+    ],
+)
+def test_codeql_opt_in_job_runs_only_on_bump_prs(
+    ctx: dict[str, Any], runs: bool
+) -> None:
+    assert evaluate(_job_if(WORKFLOWS / "codeql.yaml", "opt-in"), ctx) is runs
 
 
 @pytest.mark.parametrize(
@@ -361,15 +527,20 @@ def test_script_tests_never_run_on_bump_prs(head_ref: str, runs: bool) -> None:
     )
 
 
-# ── The opt-in is cleared before every bump push ──────────────────────────────
+# ── Legacy app repos: the label is still cleared before every bump push ──────
+#
+# A connector repo whose shims predate FND-3839 still reads the `gate-check`
+# LABEL, and the `synchronize` a push fires carries the PR's labels at that
+# instant, so a stale opt-in would start full CI on the new commit. A resynced
+# repo opts in with a commit status, which a push leaves behind by
+# construction; there the clear is a no-op. The SDK's own release workflows
+# never read the label any more, so they no longer clear it.
 
 
-@pytest.mark.parametrize(
-    ("workflow", "job"),
-    [("release.yaml", "bump-version"), ("release-version-bump.yaml", "bump-version")],
-)
-def test_release_bump_clears_the_opt_in_before_pushing(workflow: str, job: str) -> None:
-    steps = _load(WORKFLOWS / workflow)["jobs"][job]["steps"]
+def test_release_bump_clears_the_opt_in_before_pushing() -> None:
+    steps = _load(WORKFLOWS / "release-version-bump.yaml")["jobs"]["bump-version"][
+        "steps"
+    ]
     names = [s.get("name") for s in steps]
     reset = names.index("Reset the bump PR's CI opt-in")
     push = names.index("Commit and push bump branch")
@@ -377,12 +548,3 @@ def test_release_bump_clears_the_opt_in_before_pushing(workflow: str, job: str) 
     assert "bump_pr_opt_in.py clear" in steps[reset]["run"]
     # Runs exactly when the push does.
     assert steps[push]["if"] in steps[reset]["if"]
-
-
-@pytest.mark.parametrize(
-    "workflow", ["conformance-release.yml", "contract-toolkit-release.yml"]
-)
-def test_subpackage_release_clears_the_opt_in_before_pushing(workflow: str) -> None:
-    text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-    clear = text.index("bump_pr_opt_in.py clear")
-    assert clear < text.index('git push origin "${BUMP_BRANCH}"')

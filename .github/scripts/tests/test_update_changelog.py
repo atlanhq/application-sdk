@@ -485,7 +485,7 @@ class TestSectionsForRepo:
     def test_every_gated_shim_carries_the_marker(self, template: str) -> None:
         """The coupling: the resync that gates a repo is what flips its notes."""
         text = (_TEMPLATES / template).read_text(encoding="utf-8")
-        assert update_changelog.OPT_IN_MARKER in text
+        assert any(marker in text for marker in update_changelog.OPT_IN_MARKERS)
 
 
 class TestSectionsWiring:

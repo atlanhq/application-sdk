@@ -1149,8 +1149,8 @@ state that reason.
 
 > Workflow calls the SDK's sdr-e2e action directly instead of delegating to tests-reusable.yaml
 
-**Rationale:** The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns the e2e label gate,
-the discover-e2e-suites matrix (one leg per tests/e2e/test_*.py), the per-leg
+**Rationale:** The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns the e2e request
+gate, the discover-e2e-suites matrix (one leg per tests/e2e/test_*.py), the per-leg
 ATLAN_DEPLOYMENT_NAME derivation that keeps worker and harness on one Temporal queue,
 the GHCR image build, the sdr-e2e invocation with the full-DAG
 config-dir/secrets-script/components-dir/compose-overlay set, the two-store posture, and

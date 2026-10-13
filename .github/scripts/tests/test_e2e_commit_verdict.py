@@ -10,6 +10,10 @@ layers of the fix:
 * the workflow wiring, by evaluating the real ``if:`` and env expressions lifted
   from ``tests-reusable.yaml`` against the scenarios the issue lists. A correct
   driver behind a gate that never reaches it fixes nothing.
+
+Since FND-3839 the resynced scaffold requests e2e with a `/e2e` comment that
+dispatches its own run, so its PR runs never act and always hold; the label
+scenarios still apply to callers that predate the resync.
 """
 
 from __future__ import annotations
@@ -338,10 +342,23 @@ def _pr(labels: list[str], action: str, label: str | None = None, **pr: Any) -> 
     return {"event_name": "pull_request", "event": event}
 
 
-def _discover_runs(workflow: dict[str, Any], github: dict) -> bool:
+#: tests-reusable.yaml's inputs from a caller that predates FND-3839 and still
+#: requests e2e with the `e2e` label, and from the resynced scaffold, which
+#: requests it with a `/e2e` comment and passes `e2e-label-trigger: false`.
+_LEGACY_INPUTS = {
+    "enable-e2e": True,
+    "run-e2e": "false",
+    "head-sha": "",
+    "e2e-label-trigger": True,
+}
+_SCAFFOLD_INPUTS = {**_LEGACY_INPUTS, "e2e-label-trigger": False}
+
+
+def _discover_runs(
+    workflow: dict[str, Any], github: dict, inputs: dict[str, Any] = _LEGACY_INPUTS
+) -> bool:
     return evaluate(
-        workflow["jobs"]["discover-e2e"]["if"],
-        {"github": github, "inputs": {"enable-e2e": True, "run-e2e": "false"}},
+        workflow["jobs"]["discover-e2e"]["if"], {"github": github, "inputs": inputs}
     )
 
 
@@ -359,9 +376,12 @@ def _hold_runs(
     )
 
 
-def _awaiting(gate_job: dict[str, Any], github: dict) -> Any:
+def _awaiting(
+    gate_job: dict[str, Any], github: dict, inputs: dict[str, Any] = _LEGACY_INPUTS
+) -> Any:
     return evaluate_operand(
-        _hold(gate_job)["env"]["AWAITING_LABEL_RUN"], {"github": github}
+        _hold(gate_job)["env"]["AWAITING_LABEL_RUN"],
+        {"github": github, "inputs": inputs},
     )
 
 
@@ -408,6 +428,24 @@ def test_every_non_acting_run_holds_and_the_acting_run_does_not(
     )
     if not acts:
         assert _awaiting(gate_job, github) is awaiting
+
+
+@pytest.mark.parametrize("name", list(_SCENARIOS))
+def test_under_the_resynced_scaffold_no_pr_run_acts_and_every_one_holds(
+    workflow: dict[str, Any], gate_job: dict[str, Any], name: str
+) -> None:
+    """With `e2e-label-trigger: false` (FND-3839) a PR run never starts e2e —
+    a `/e2e` dispatch does — so every PR run holds its gate to the commit's
+    `e2e` status, and none waits for a label run that will never come.
+
+    Not awaiting matters: the settle window fails the gate when no `pending`
+    appears, which for a label nothing acts on any more would red every PR
+    that happens to carry a stale `e2e` label.
+    """
+    github, _acts, _awaiting_legacy = _SCENARIOS[name]
+    assert _discover_runs(workflow, github, _SCAFFOLD_INPUTS) is False
+    assert _hold_runs(gate_job, github, discover="skipped", gate_passed="true")
+    assert _awaiting(gate_job, github, _SCAFFOLD_INPUTS) is False
 
 
 def test_a_failed_gate_does_not_wait_on_e2e(gate_job: dict[str, Any]) -> None:
@@ -501,6 +539,64 @@ def test_the_acting_run_marks_the_verdict_pending_first(
     step = steps[index]
     assert "state=pending" in step["run"]
     assert "context=e2e" in step["run"]
-    assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
-    assert evaluate(step["if"], {"github": {"event_name": "pull_request"}})
-    assert not evaluate(step["if"], {"github": {"event_name": "workflow_dispatch"}})
+
+
+@pytest.mark.parametrize(
+    ("event_name", "sdk_ref", "marks"),
+    [
+        ("pull_request", "", True),
+        # A `/e2e` or `/gate-check` dispatch on the connector's own branch
+        # (FND-3839): the PR run's held gate must see it start.
+        ("workflow_dispatch", "", True),
+        # The SDK's cross-repo fan-out tests main for an SDK commit; a
+        # `pending` here would hold an unrelated PR on this commit.
+        ("workflow_dispatch", "abc123", False),
+    ],
+)
+def test_the_pending_mark_is_written_by_every_run_that_owns_the_verdict(
+    workflow: dict[str, Any], event_name: str, sdk_ref: str, marks: bool
+) -> None:
+    """The same owners as the step that later records the verdict, so no
+    `pending` is ever left without a run that replaces it."""
+    steps = workflow["jobs"]["discover-e2e"]["steps"]
+    step = next(
+        s
+        for s in steps
+        if s.get("name") == "Mark the e2e verdict pending on the head commit"
+    )
+    contexts = {
+        "github": {"event_name": event_name},
+        "inputs": {"application-sdk-ref": sdk_ref},
+    }
+    assert evaluate(step["if"], contexts) is marks
+
+
+@pytest.mark.parametrize(
+    ("github", "sha"),
+    [
+        (
+            {
+                "event_name": "pull_request",
+                "sha": "merge-ref",
+                "event": {"pull_request": {"head": {"sha": "pr-head"}}},
+            },
+            "pr-head",
+        ),
+        (
+            {"event_name": "workflow_dispatch", "sha": "branch-tip", "event": {}},
+            "branch-tip",
+        ),
+    ],
+    ids=["pull_request", "workflow_dispatch"],
+)
+def test_the_pending_mark_targets_the_tested_head(
+    workflow: dict[str, Any], github: dict[str, Any], sha: str
+) -> None:
+    """`github.sha` is the merge ref on a PR run, but the tip on a dispatch."""
+    steps = workflow["jobs"]["discover-e2e"]["steps"]
+    step = next(
+        s
+        for s in steps
+        if s.get("name") == "Mark the e2e verdict pending on the head commit"
+    )
+    assert evaluate_operand(step["env"]["HEAD_SHA"], {"github": github}) == sha

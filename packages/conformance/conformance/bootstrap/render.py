@@ -50,6 +50,9 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "build-and-publish.yaml",
     "stale.yml",
     "generated-freshness.yaml",
+    # The `/e2e` and `/gate-check` comment commands (FND-3839), which replace
+    # the `e2e` / `gate-check` PR labels.
+    "test-commands.yaml",
 )
 
 # Opt-in managed shim (FND-3336): installed only under ``bootstrap

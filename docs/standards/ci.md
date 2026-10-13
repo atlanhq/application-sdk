@@ -115,60 +115,89 @@ cross-file check that no consumer addresses a retried artifact by its base name
 alone — and `EXEMPT` there carries the reason for each upload that does not need
 the hardening.
 
-## Label gates must be event-aware
+## Test legs are requested by PR comment, never by label
 
-**Rule:** if a workflow can receive a `labeled` event, every job gated on a
-label must check *which* label fired, not only whether the PR carries it:
+**Rule:** no test workflow subscribes to `labeled` or `unlabeled`. The expensive
+legs are requested with a PR comment, and the result is a commit status on the
+head commit:
+
+| Comment | Where | What runs | Verdict |
+|---|---|---|---|
+| `/e2e` | any PR | the live-tenant e2e suite on the head commit | `e2e` status |
+| `/gate-check` | `bump-version*` PRs | the PR's full release gate (FND-3748) | `gate-check` status |
+| `… force` | either | the same, even though the commit already passed | |
+
+Only commenters with the Write, Maintain or Admin role on the repo count (read
+live from the collaborator-permission API: the comment's `author_association`
+is a relationship, not a role — `MEMBER` is any org member, even one with only
+Read). In application-sdk, `/gate-check` needs the Admin role: it gates an SDK
+release (`--gate-check-requires-admin` in `test-commands.yml`); bots and fork PRs are
+refused. The decision is in
+[`pr_test_command.py`](../../.github/scripts/pr_test_command.py), wired by
+`test-commands.yml` here and by the scaffolded `test-commands.yaml` (calling
+`test-commands-reusable.yaml`) in connector repos (FND-3839).
+
+**Why not labels:** a label add is a `pull_request` `labeled` event, and GitHub
+has no trigger-level filter for *which* label. So every label any bot added
+started another run of every subscribed workflow on the same commit. That
+second run's unit job shared the first's `cancel-in-progress` group, cancelled
+it, and the cancelled run's `Tests Gate` concluded FAILURE. GitHub resolves a
+required check to the newest run, which is luck, so PRs sat `BLOCKED` with a
+green run underneath (FND-48, FND-2167, FND-3832). The job-level label filter
+that FND-48 added stopped the jobs, never the runs. A comment creates no
+`pull_request` event, so one push is one run.
+
+**How the three properties hold:**
+
+* **Repeatable.** A request is bound to the head commit when it was made, and so
+  is the verdict. A push makes a new commit with no status, so nothing has to
+  "consume" the request. A dispatched run whose branch moved before it started
+  stands down instead of testing a different commit (`head_sha`), and one whose
+  branch moves before the tenant lease stands down there
+  (`e2e_branch_recheck.py`).
+* **No tangle.** The comment never starts a second run of the PR's own workflow.
+  In connector repos it dispatches `tests.yaml` with `run_e2e: only`, whose
+  caller job is named `e2e`, so its checks are `e2e / …`. That naming is
+  load-bearing: GitHub resolves a required check to the newest run on the
+  commit and counts a skipped job as a pass, so an e2e-only run publishing a
+  skipped `tests / Unit` would override a real unit failure. The command refuses
+  a branch whose `tests.yaml` predates the naming. In application-sdk, whose PR
+  workflows cannot be dispatched without the same collision, the comment posts a
+  marker status (`e2e-request`, `gate-check`) and re-runs the runs on the commit
+  that started before it; they read the marker live.
+* **Cost.** A commit whose verdict is already `success` is not run again, and a
+  request while one is in flight is refused; the command workflow is serialised
+  per PR so two comments cannot both pass that check. An e2e-only run skips the
+  unit and integration tiers its PR run already measured.
+
+**Gates read the status, and are re-run when it lands.** The PR run's
+`Tests Gate` holds to the `e2e` status (`e2e_commit_verdict.py`). A dispatched
+e2e run re-runs that gate job when it disagrees with the verdict
+(`rerun_deferred_gate.py --verdict`). A `/gate-check` resolves when the last
+dispatched run finishes: `gate_check_verdict.py`, on `workflow_run`, sets
+`gate-check` to `success` only if all of them passed and re-runs Release Gate,
+which passes only on that `success`.
+
+**Concurrency.** Pushes are handled by the existing per-ref groups on the unit
+and integration jobs: a new commit cancels the old commit's run, and since there
+is one run per commit, a cancel can only land on a commit that is no longer the
+head. E2e legs keep `cancel-in-progress: false` (an abandoned Automation Engine
+run has no tenant cleanup, FND-252); a superseded commit's run stands down at
+the lease instead.
+
+**Legacy callers.** Connector repos not yet resynced still subscribe to
+`labeled`, so `tests-reusable.yaml` keeps its label gates behind
+`e2e-label-trigger` (default `true`; the current scaffold passes `false`), and
+those gates must still check *which* label fired:
 
 ```yaml
-on:
-  pull_request:
-    types: [opened, synchronize, reopened, labeled]
-
-jobs:
-  expensive-thing:
-    if: |
-      contains(github.event.pull_request.labels.*.name, 'e2e') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e')
+contains(github.event.pull_request.labels.*.name, 'e2e') &&
+(github.event.action != 'labeled' || github.event.label.name == 'e2e')
 ```
 
-**Why:** `contains(...labels...)` is a **state** check — "does this PR carry
-`e2e` right now". On `opened` / `synchronize` / `reopened` that is exactly
-right. On `labeled` it is wrong, because GitHub offers no way to filter the
-trigger by which label was added: on a PR that already carries `e2e`, adding
-*any* other label satisfies the state check and re-runs the job. Bots add and
-remove size, area, dependency and review-state labels constantly, so in practice
-this fires repeatedly and at random. FND-48 was the e2e case — a 20–40 minute
-live-tenant suite, multiplied by the cross-CSP matrix, and queued rather than
-replaced because `cancel-in-progress: false` is deliberate there.
-
-The added term is inert on every other event: only a `labeled` payload carries
-`github.event.label`, so a real push (`synchronize`) still re-triggers, and
-adding — or re-adding — the label still triggers.
-
-**What it does not fix:** the workflow *run* is still created, because the
-filter is at job level and GitHub has no trigger-level label filter. The jobs
-skip within seconds, so no tenant time or runner minutes are consumed, but a
-stream of skipped runs still appears in the Actions list. Removing those means
-dropping `labeled` for an explicit signal (`workflow_dispatch`, a `/e2e`
-comment command, a re-run button) — more work, and it changes how everyone
-triggers the suite today.
-
-**Reusable workflows always count as reachable.** A `workflow_call` workflow
-cannot see its callers' trigger lists, and the connector `tests.yaml` this repo
-scaffolds ships `labeled`, so a gate inside a reusable must carry the term
-unconditionally.
-
-Both halves are enforced by
-[`test_label_trigger_gates.py`](../../.github/scripts/tests/test_label_trigger_gates.py):
-a repo-wide sweep fails any new label gate that omits the term, and a
-behavioural layer lifts each real gate out of the YAML and evaluates it against
-synthetic payloads. The second layer exists because presence is not
-correctness — `&&` binds tighter than `||` in GitHub expressions, so a term
-added one parenthesis out is a no-op that a textual check waves through.
-Evaluation uses [`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py), a
-deliberately partial evaluator that raises on anything it does not model rather
-than guessing.
+[`test_label_trigger_gates.py`](../../.github/scripts/tests/test_label_trigger_gates.py)
+enforces that term and fails any workflow or scaffold that subscribes to
+`labeled`. Both the gates and the input go once the fleet has resynced.
 
 ## Bot-opened PRs are never labelled
 
@@ -179,9 +208,10 @@ update. Identify lane PRs by **head branch + author** — for the resync lane,
 consumer (the resync approval gate, the Renovate auto-approve routing,
 Connector Pulse) already matches on.
 
-**Why:** every label add is a `labeled` event, and the connector `tests.yaml`
-keeps `labeled` in its triggers for `e2e` (see above). Labelling a PR a second
-after opening it starts a second Tests run on the same head SHA; the unit job's
+**Why:** every label add is a `labeled` event, and connector `tests.yaml`
+files not yet resynced past FND-3839 still subscribe to it (see above).
+Labelling a PR a second after opening it starts a second Tests run on the same
+head SHA there; the unit job's
 `cancel-in-progress` concurrency group lets that run cancel the first one's
 unit job, and the cancelled run's `Tests Gate` concludes FAILURE. GitHub counts
 every run of a required context, so the PR stays `BLOCKED` and auto-merge never
@@ -365,7 +395,7 @@ base-sensitive or not:
 | Caller → job | Base-sensitive? | On a queue entry | Why |
 | --- | --- | --- | --- |
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
-| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads PR labels and the head commit's `e2e` status. A release PR with neither fails on the PR and never enters the queue. |
+| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
 | `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
 | `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
@@ -1293,9 +1323,9 @@ sentence are load-bearing, and together they make a same-commit eviction able to
 block a pull request outright.
 
 A bot PR receives several `pull_request` events on one head SHA seconds apart:
-`opened`, then one `labeled` per label the bot applies. Every scaffolded
-`tests.yaml` subscribes to `labeled` (the `e2e` label needs it), so GitHub
-creates one `Tests` run per event on the same SHA and the unit job's ref-keyed
+`opened`, then one `labeled` per label the bot applies. A `tests.yaml` that
+subscribes to `labeled` — every scaffold before FND-3839, and every connector
+repo until it resyncs past it — gets one `Tests` run per event on the same SHA, and the unit job's ref-keyed
 group evicts all but one. `tests-passed` is `if: always()` — a required context
 must always report — so each evicted run publishes a **`failure`** on
 `tests / Tests Gate`. Eviction order is not run-creation order, so when the
