@@ -1025,6 +1025,135 @@ async def probe(self):
     )
 
 
+def test_p004_no_finding_when_failure_row_is_appended_to_returned_checks() -> None:
+    # The caught failure is preserved in a typed row inside the returned checks list.
+    assert "E004" not in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(
+            PreflightCheck(
+                name="connectivity",
+                passed=False,
+                error=error.to_failure_details(),
+            )
+        )
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_no_finding_when_each_classified_row_reaches_returned_checks() -> None:
+    # Branches may classify the caught error differently, but both typed rows
+    # must be carried by the early or trailing PreflightOutput.
+    assert "E004" not in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await list_schemas()
+    except Exception as exc:
+        if is_connection_limit(exc):
+            error = ConnectionLimitError(cause=exc)
+            checks.append(PreflightCheck(name="schema", passed=False, error=error.to_failure_details()))
+        else:
+            error = SchemaAccessError(cause=exc)
+            checks.append(PreflightCheck(name="schema", passed=False, error=error.to_failure_details()))
+            return PreflightOutput(checks=checks)
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_untyped_row_appended_to_returned_checks() -> None:
+    # Returning a check list is not enough: the row must carry the caught failure.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(message="unavailable")
+        checks.append(
+            PreflightCheck(
+                name="connectivity",
+                passed=False,
+                error=error.to_failure_details(),
+            )
+        )
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_typed_row_cleared_before_return() -> None:
+    # A row removed before the output is returned is no longer inspectable.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+        checks.clear()
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_typed_row_handed_to_an_opaque_sink() -> None:
+    # A custom append method is not proven to preserve its argument in the output.
+    assert "E004" in _findings(
+        """\
+class OpaqueBucket:
+    def append(self, row):
+        pass
+
+async def probe():
+    checks = OpaqueBucket()
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_unbound_broad_catch_that_only_debug_logs() -> None:
+    # A best-effort missing prefix is still a broad swallow without typed data.
+    assert "E004" in _findings(
+        """\
+async def download_type():
+    try:
+        await storage_download()
+    except Exception:
+        logger.debug("type has no objects")
+"""
+    )
+
+
+def test_p004_still_flags_debug_exc_info_without_typed_data() -> None:
+    # DEBUG does not clear E004, even when it attaches a traceback.
+    assert "E004" in _findings(
+        """\
+def safe_int(value):
+    try:
+        return convert(value)
+    except Exception as exc:
+        logger.debug("ignoring %s", exc, exc_info=True)
+"""
+    )
+
+
 def test_p004_still_flags_typed_failure_returned_without_a_binding() -> None:
     # `except Exception:` names nothing, so nothing of the caught exception can
     # be carried out — the typed row below is about the probe, not the failure.
