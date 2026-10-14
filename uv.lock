@@ -505,7 +505,7 @@ test = [
 
 [[package]]
 name = "atlan-application-sdk-api"
-version = "3.46.0"
+version = "3.47.0"
 source = { editable = "packages/api" }
 dependencies = [
     { name = "fastapi" },

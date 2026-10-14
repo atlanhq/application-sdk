@@ -31,6 +31,7 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeAliasType
 
+from application_sdk._install import worker_only_missing
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.base import (  # noqa: F401 — re-exported; defined with the contract base
     MaxItems,
@@ -508,9 +509,17 @@ class FileReference(BaseModel, frozen=True):
         # Best-effort file_count. We swallow OSError so the constructor
         # stays usable from inside Temporal sandbox where filesystem
         # inspection may not be permitted.
-        from application_sdk.storage.integrity import (  # noqa: PLC0415 — circular: storage modules import contracts.types
-            is_sidecar_key,
-        )
+        try:
+            from application_sdk.storage.integrity import (  # noqa: PLC0415 — circular: storage modules import contracts.types; absent on an api-only install
+                is_sidecar_key,
+            )
+        except ModuleNotFoundError as exc:
+            if not worker_only_missing(exc):
+                raise
+
+            def is_sidecar_key(key: str) -> bool:
+                # api-only install: no storage layer, so nothing writes sidecars
+                return False
 
         file_count = 1
         try:

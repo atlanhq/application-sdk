@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.45.0
-source-sha:    82d9b4beb49b07bc336aa6985f39d6e916e11f14
-source-date:   2026-09-29T19:55:28+05:30
+sdk-version:   3.47.0
+source-sha:    36265edd221cdc3ac309cdea20f3a4dfd7648bf2
+source-date:   2026-10-14T10:55:39+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 48 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 56 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -727,6 +727,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `get_backfill_tables(current_transformed_dir: Path, previous_current_state_dir: Path | None)`
 - **Summary:** Use DuckDB to compare current tables vs previous current-state.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
+
+#### `get_logger`
+
+- **Import:** `from application_sdk.common.logger import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
+- **Defined in:** `application_sdk/_logging.py`
 
 #### `get_persistent_artifacts_path`
 

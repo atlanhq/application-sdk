@@ -298,7 +298,8 @@ class S3ObjectStore:
         except ModuleNotFoundError:
             logger.warning(
                 "S3_BUCKET is set but boto3 is not installed, so the config and "
-                "file routes answer 503. Install atlan-application-sdk-api[aws]."
+                "file routes answer 503. Install atlan-application-sdk-api[aws].",
+                exc_info=True,
             )
             return None
 
