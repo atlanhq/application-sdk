@@ -809,7 +809,7 @@ class TestRunDispatch:
         """A gate must never see a dispatched run on a commit that says nothing."""
         api = FakeApi(pull=_pull_body(BUMP), texts=_texts())
         plan = ptc.run_dispatch(
-            ptc.GitHub(REPO, api), _request(ptc.GATE_CHECK), RUN_URL
+            ptc.GitHub(REPO, api, dispatch_run=api), _request(ptc.GATE_CHECK), RUN_URL
         )
         assert plan.act is True
         paths = [p for p, _ in api.writes]
@@ -881,7 +881,7 @@ class TestRunDispatch:
     def test_gate_check_reads_behind_by_and_refuses(self) -> None:
         api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), behind_by=2)
         plan = ptc.run_dispatch(
-            ptc.GitHub(REPO, api), _request(ptc.GATE_CHECK), RUN_URL
+            ptc.GitHub(REPO, api, dispatch_run=api), _request(ptc.GATE_CHECK), RUN_URL
         )
         assert plan.act is False
         assert "behind" in plan.reply
@@ -900,7 +900,11 @@ class TestRunDispatch:
         """Unknown staleness cannot vouch for what merges."""
         api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), fail=("/compare/",))
         with pytest.raises(ptc.GitHubError):
-            ptc.run_dispatch(ptc.GitHub(REPO, api), _request(ptc.GATE_CHECK), RUN_URL)
+            ptc.run_dispatch(
+                ptc.GitHub(REPO, api, dispatch_run=api),
+                _request(ptc.GATE_CHECK),
+                RUN_URL,
+            )
         assert api.writes == []
 
     def test_e2e_proceeds_when_compare_fails(self) -> None:
@@ -1244,9 +1248,21 @@ def run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         mode: str = "dispatch",
         event_name: str = "issue_comment",
         extra: tuple[str, ...] = (),
+        app: bool = True,
     ) -> tuple[int, dict[str, str]]:
         real = ptc.GitHub
-        monkeypatch.setattr(ptc, "GitHub", lambda repo: real(repo, api))
+        monkeypatch.setattr(
+            ptc,
+            "GitHub",
+            lambda repo, dispatch_run=None: real(
+                repo, api, dispatch_run=api if dispatch_run else None
+            ),
+        )
+        # A resynced caller passes the fleet App secrets (FND-3934).
+        if app:
+            monkeypatch.setenv("DISPATCH_TOKEN", "app-token")
+        else:
+            monkeypatch.delenv("DISPATCH_TOKEN", raising=False)
         out = tmp_path / "output"
         out.write_text("")
         monkeypatch.setenv("GITHUB_OUTPUT", str(out))
@@ -1277,6 +1293,25 @@ def run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 def _comments(api: FakeApi) -> list[str]:
     return [f["body"] for p, f in api.writes if p.endswith("/comments")]
+
+
+class TestDispatchIdentity:
+    def test_only_the_dispatch_uses_the_app_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[tuple[str, str]] = []
+
+        def runner(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess:
+            token = (kwargs.get("env") or {}).get("GH_TOKEN", "job-token")
+            seen.append((cmd[3] if len(cmd) > 3 else cmd[2], token))
+            return subprocess.CompletedProcess(cmd, 0, "{}", "")
+
+        monkeypatch.setattr(ptc, "_RUNNER", runner)
+        github = ptc.GitHub(REPO, dispatch_run=ptc.gh_as("app-token"))
+        github.dispatch("tests.yaml", BUMP, {})
+        github.status(SHA, "gate-check", "pending", "x", RUN_URL)
+        assert seen[0] == ("POST", "app-token")
+        assert seen[1][1] == "job-token"
 
 
 class TestMain:
@@ -1403,30 +1438,24 @@ class TestMain:
         # dispatch returns no run id, so this is where the run is found.
         assert ptc.actions_link(REPO, "tests.yaml", "feat/x") in body
 
-    def test_gate_check_dispatch_hands_its_commit_to_the_wait_job(
-        self, run_main
-    ) -> None:
-        """FND-3934: the dispatched runs' completions never fire
-        `workflow_run`, so gate-check-wait settles the verdict from these."""
+    def test_gate_check_without_the_app_is_refused(self, run_main) -> None:
+        """FND-3934: dispatched as GITHUB_TOKEN, the runs would fire no
+        `workflow_run` and the pending status would never settle."""
         api = FakeApi(pull=_pull_body(BUMP), texts=_texts())
-        rc, outputs = run_main(_event("/gate-check"), api)
+        rc, _ = run_main(_event("/gate-check"), api, app=False)
         assert rc == 0
-        assert api.dispatches()
-        assert outputs["gate_check_sha"] == SHA
-        assert outputs["gate_check_branch"] == BUMP
-
-    def test_e2e_starts_no_wait(self, run_main) -> None:
-        _, outputs = run_main(_event(), FakeApi(texts=_texts()))
-        assert "gate_check_sha" not in outputs
-
-    def test_a_gate_check_that_dispatched_nothing_starts_no_wait(
-        self, run_main
-    ) -> None:
-        passed = [{"context": "gate-check", "state": "success"}]
-        api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), statuses=passed)
-        _, outputs = run_main(_event("/gate-check"), api)
         assert api.dispatches() == []
-        assert "gate_check_sha" not in outputs
+        assert not [p for p, _ in api.writes if "/statuses/" in p]
+        assert api.reactions() == ["confused"]
+        ((comment),) = api.sticky("gate-check")
+        assert "--resync" in comment["body"]
+
+    def test_e2e_runs_without_the_app(self, run_main) -> None:
+        """`/e2e`'s verdict comes from the run itself, not `workflow_run`."""
+        api = FakeApi(texts=_texts())
+        rc, _ = run_main(_event(), api, app=False)
+        assert rc == 0
+        assert len(api.dispatches()) == 1
 
     def test_an_existing_sticky_is_edited_in_place(self, run_main) -> None:
         """One comment per command: the latest request replaces the last."""
@@ -1533,7 +1562,11 @@ class TestMain:
         """Release Gate would otherwise read "still running" forever."""
         api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), fail=("/dispatches",))
         with pytest.raises(ptc.GitHubError):
-            ptc.run_dispatch(ptc.GitHub(REPO, api), _request(ptc.GATE_CHECK), RUN_URL)
+            ptc.run_dispatch(
+                ptc.GitHub(REPO, api, dispatch_run=api),
+                _request(ptc.GATE_CHECK),
+                RUN_URL,
+            )
         states = [f["state"] for p, f in api.writes if "/statuses/" in p]
         assert states == ["pending", "error"]
 
@@ -1546,6 +1579,9 @@ class TestMain:
         assert rc == 0
         assert len(api.dispatches()) == 1
         assert "::warning::" in capsys.readouterr().err
+
+
+FLEET_APP_SECRETS = ("FLEET_APP_ID", "FLEET_APP_PRIVATE_KEY")
 
 
 # ── cross-file contracts ───────────────────────────────────────────────────
@@ -1613,25 +1649,38 @@ class TestContracts:
             for scope, level in job["permissions"].items():
                 assert rank[caller.get(scope, "none")] >= rank[level], (name, scope)
 
-    def test_the_gate_check_wait_job_is_wired_to_the_command(self) -> None:
-        """FND-3934: the verdict comes from this job, not `workflow_run`."""
+    def test_the_template_passes_only_the_fleet_app_secrets(self) -> None:
+        """FND-3934: without them `/gate-check` is refused; with `inherit`
+        every org secret would reach a comment-triggered job."""
+        job = yaml.safe_load(_render("test-commands.yaml"))["jobs"]["commands"]
+        assert job["secrets"] == {
+            name: f"${{{{ secrets.{name} }}}}" for name in FLEET_APP_SECRETS
+        }
+        reusable = yaml.safe_load(
+            (WORKFLOWS / "test-commands-reusable.yaml").read_text(encoding="utf-8")
+        )
+        declared = _on(reusable)["workflow_call"]["secrets"]
+        assert set(declared) == set(FLEET_APP_SECRETS)
+
+    def test_the_app_token_is_scoped_and_used_only_to_dispatch(self) -> None:
         jobs = yaml.safe_load(
             (WORKFLOWS / "test-commands-reusable.yaml").read_text(encoding="utf-8")
         )["jobs"]
-        outputs = jobs["command"]["outputs"]
-        assert set(outputs) == {"gate_check_sha", "gate_check_branch"}
-        step_ids = {step.get("id") for step in jobs["command"]["steps"]}
-        for value in outputs.values():
-            assert value.split(".")[1] in step_ids
-        wait = jobs["gate-check-wait"]
-        assert wait["needs"] == "command"
-        assert "needs.command.outputs.gate_check_sha" in wait["if"]
-        # Slim jobs die at 15 minutes; the gate (with e2e) runs far longer.
-        assert wait["runs-on"] != "ubuntu-slim"
-        run = wait["steps"][-1]["run"]
-        assert "--wait-minutes" in run
-        minutes = int(run.split("--wait-minutes")[1].split()[0])
-        assert wait["timeout-minutes"] > minutes
+        steps = jobs["command"]["steps"]
+        (mint,) = [s for s in steps if "create-github-app-token" in s.get("uses", "")]
+        assert "/gate-check" in mint["if"]
+        assert mint["with"]["repositories"] == "${{ github.event.repository.name }}"
+        permissions = {
+            k: v for k, v in mint["with"].items() if k.startswith("permission-")
+        }
+        assert permissions == {"permission-actions": "write"}
+        users = [
+            s["name"]
+            for job in jobs.values()
+            for s in job["steps"]
+            if "steps.app-token" in json.dumps(s)
+        ]
+        assert users == ["Run the command"]
 
     def test_sdk_e2e_request_job_name(self) -> None:
         doc = yaml.safe_load(

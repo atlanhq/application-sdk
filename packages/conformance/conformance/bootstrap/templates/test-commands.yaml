@@ -74,3 +74,9 @@ jobs:
       issues: write # reply to the comment
       pull-requests: write # the PR's head commit and branch; the sticky comment
     uses: atlanhq/application-sdk/.github/workflows/test-commands-reusable.yaml@main
+    # Only these two, not `inherit`. A `/gate-check` dispatch is made as the
+    # fleet App: runs dispatched with GITHUB_TOKEN never fire the
+    # `workflow_run` above, so the verdict would never land (FND-3934).
+    secrets:
+      FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
+      FLEET_APP_PRIVATE_KEY: ${{ secrets.FLEET_APP_PRIVATE_KEY }}

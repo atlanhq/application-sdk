@@ -28,9 +28,23 @@ name: Test commands (reusable)
 #   * Everything uses the caller's GITHUB_TOKEN, scoped by the caller's
 #     `permissions:`. Comments posted with it start no workflow, so the bot's
 #     replies cannot re-trigger this file.
+#   * Except one call: a `/gate-check` dispatch is made as the fleet GitHub
+#     App (FLEET_APP_ID / FLEET_APP_PRIVATE_KEY, passed by the caller). GitHub
+#     starts no workflow from an event GITHUB_TOKEN caused, so a run it
+#     dispatched never fires the `workflow_run` that settles the verdict
+#     (FND-3934). The token is minted for this one repository with
+#     `actions: write` only, after the cheap pre-filter, and handed to the
+#     dispatch call alone; `/e2e` never mints one.
 
 on:
   workflow_call:
+    secrets:
+      # Optional so a caller not yet resynced still runs `/e2e`; without them
+      # `/gate-check` is refused with a "resync" reply (pr_test_command.py).
+      FLEET_APP_ID:
+        required: false
+      FLEET_APP_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -47,16 +61,15 @@ jobs:
       startsWith(github.event.comment.body, '/gate-check'))
     runs-on: ubuntu-slim
     timeout-minutes: 10
-    outputs:
-      # Set only when a `/gate-check` was dispatched; gate-check-wait settles it.
-      gate_check_sha: ${{ steps.command.outputs.gate_check_sha }}
-      gate_check_branch: ${{ steps.command.outputs.gate_check_branch }}
     permissions:
       contents: read # read the PR branch's workflow files through the API
       actions: write # workflow_dispatch, and reading runs on the head commit
       statuses: write # the pending `gate-check` status
       issues: write # the reply comment and the reaction
       pull-requests: write # the PR's head SHA, branch, fork status; the sticky comment
+    env:
+      # `secrets` cannot appear in a step `if:`; this can.
+      HAS_FLEET_APP: ${{ secrets.FLEET_APP_ID != '' && secrets.FLEET_APP_PRIVATE_KEY != '' }}
     steps:
       - name: Check out application-sdk's command scripts (trusted code only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,10 +89,23 @@ jobs:
           REACTION: eyes
         run: python3 .github/scripts/react_to_comment.py
 
+      - name: Mint the /gate-check dispatch token
+        id: app-token
+        if: >-
+          env.HAS_FLEET_APP == 'true' &&
+          startsWith(github.event.comment.body, '/gate-check')
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+
       - name: Run the command
-        id: command
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
@@ -92,53 +118,10 @@ jobs:
           --mode dispatch
           --run-url "$RUN_URL"
 
-  gate-check-wait:
-    name: Gate-check verdict (wait)
-    # The `/gate-check` verdict. The dispatch above is made with GITHUB_TOKEN,
-    # and GitHub starts no workflow from an event that token caused, so the
-    # dispatched runs' completions never fire the caller's `workflow_run`
-    # (FND-3934): this job polls them instead. It holds a runner for the gate's
-    # duration, and the caller's per-PR concurrency slot with it, so a second
-    # `/gate-check` on the PR waits for this one to finish.
-    needs: command
-    if: needs.command.outputs.gate_check_sha != ''
-    # Not ubuntu-slim: slim jobs are killed at 15 minutes, and the gate runs
-    # the e2e suite, whose tenant lease alone may wait up to 90.
-    runs-on: ubuntu-latest
-    timeout-minutes: 190
-    permissions:
-      contents: read
-      actions: write # read the dispatched runs; re-run Release Gate
-      statuses: write # the final `gate-check` status
-      pull-requests: write # find the PR; edit its sticky `/gate-check` comment
-    steps:
-      - name: Check out application-sdk's command scripts (trusted code only)
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - name: Wait for the dispatched runs and settle the verdict
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ needs.command.outputs.gate_check_sha }}
-          HEAD_BRANCH: ${{ needs.command.outputs.gate_check_branch }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: >-
-          python3 .github/scripts/gate_check_verdict.py
-          --repo "$REPO" --head-sha "$HEAD_SHA" --branch "$HEAD_BRANCH"
-          --wait-minutes 180 --run-url "$RUN_URL"
-
   gate-check-verdict:
     name: Gate-check verdict
-    # Backstop only: a run a person dispatched by hand does fire
-    # `workflow_run`; a `/gate-check` dispatch never does (gate-check-wait
-    # above). Every ordinary PR run's completion skips here at job level,
-    # which bills no runner.
+    # Only runs a `/gate-check` dispatched can settle anything; every ordinary
+    # PR run's completion skips here at job level, which bills no runner.
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
