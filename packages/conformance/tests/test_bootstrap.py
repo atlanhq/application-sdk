@@ -2151,16 +2151,17 @@ def test_parse_bootstrap_args_system_deps_rejects_shell_metacharacters(
     assert "invalid package name" in capsys.readouterr().err
 
 
-def test_checks_yml_without_deps_declares_no_inputs() -> None:
+def test_checks_yml_without_deps_declares_only_the_bump_skip() -> None:
     """The <% if %> tags hug their content so an un-taken block leaves no stray
     blank line -- a one-line whitespace difference here would surface as C002
-    drift in every already-bootstrapped repo (none of which passes this flag)."""
+    drift in every already-bootstrapped repo (none of which passes this flag).
+    The `with:` block always carries `skip-on-bump-pr` (FND-3947)."""
     rendered = render("checks.yml")
     assert "system_deps" not in rendered
-    # The concurrency block is the last thing in the job, with nothing (not even
-    # an empty line) where the conditional `with:` sat.
     assert rendered.endswith(
         "cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}\n"
+        "    with:\n"
+        "      skip-on-bump-pr: true\n"
     )
 
 
@@ -3547,6 +3548,9 @@ def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
         # Hardcoded `false` by the template: the scaffold no longer subscribes
         # to `labeled`, so it must not read labels either (FND-3839).
         "e2e-label-trigger",
+        # Hardcoded `true`: the scaffold always skips every reusable job on a
+        # bump PR's own run, so the required contexts resolve (FND-3947).
+        "skip-on-bump-pr",
         # Policy drop, not a slot — see redundant_install_app_to_tenant.
         "install-app-to-tenant",
     }

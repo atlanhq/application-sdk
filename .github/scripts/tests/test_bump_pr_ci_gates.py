@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import bump_pr_opt_in  # noqa: E402
 import pr_test_command  # noqa: E402
+from _bump_skip import BUMP_SKIP_TERM  # noqa: E402
 from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 from conformance.bootstrap import render as bootstrap_render  # noqa: E402
 
@@ -178,12 +179,6 @@ _GATED_SHIMS = [
     ("vulnerability-scan.yml", "scan", "build-and-scan.yaml"),
 ]
 _GATED_REUSABLES = [reusable for _, _, reusable in _GATED_SHIMS]
-
-#: The term every job in a gated reusable starts with (FND-3947).
-BUMP_SKIP_TERM = (
-    "!(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && "
-    "startsWith(github.head_ref, 'bump-version'))"
-)
 
 
 def _with_input(ctx: dict[str, Any], skip: bool | None) -> dict[str, Any]:

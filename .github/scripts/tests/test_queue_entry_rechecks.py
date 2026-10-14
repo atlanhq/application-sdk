@@ -28,6 +28,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _bump_skip import without_bump_skip  # noqa: E402
 from _gha_expr import evaluate  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -67,7 +68,7 @@ def test_gated_jobs_skip_only_on_the_skip_answer(name: str, answer: str) -> None
                 "scope": {"outputs": {"scan": ""}},
             }
         }
-        runs = evaluate(job["if"], contexts)
+        runs = evaluate(without_bump_skip(job["if"]), contexts)
         assert runs is (
             answer != skip_value
         ), f"{name}:{job_id} with {output}={answer!r}: runs={runs}"
