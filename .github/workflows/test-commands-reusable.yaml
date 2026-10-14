@@ -28,9 +28,24 @@ name: Test commands (reusable)
 #   * Everything uses the caller's GITHUB_TOKEN, scoped by the caller's
 #     `permissions:`. Comments posted with it start no workflow, so the bot's
 #     replies cannot re-trigger this file.
+#   * Except one call: a `/gate-check` dispatch is made as the fleet GitHub
+#     App (FLEET_APP_ID / FLEET_APP_PRIVATE_KEY, passed by the caller). GitHub
+#     starts no workflow from an event GITHUB_TOKEN caused, so a run it
+#     dispatched never fires the `workflow_run` that settles the verdict
+#     (FND-3934). The token is minted only after a read-only preflight has
+#     authorised the commenter (the same checks the command makes), for this
+#     one repository with `actions: write` only, and handed to the dispatch
+#     call alone; `/e2e` never mints one.
 
 on:
   workflow_call:
+    secrets:
+      # Optional so a caller not yet resynced still runs `/e2e`; without them
+      # `/gate-check` is refused with a "resync" reply (pr_test_command.py).
+      FLEET_APP_ID:
+        required: false
+      FLEET_APP_PRIVATE_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -53,6 +68,9 @@ jobs:
       statuses: write # the pending `gate-check` status
       issues: write # the reply comment and the reaction
       pull-requests: write # the PR's head SHA, branch, fork status; the sticky comment
+    env:
+      # `secrets` cannot appear in a step `if:`; this can.
+      HAS_FLEET_APP: ${{ secrets.FLEET_APP_ID != '' && secrets.FLEET_APP_PRIVATE_KEY != '' }}
     steps:
       - name: Check out application-sdk's command scripts (trusted code only)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,9 +90,43 @@ jobs:
           REACTION: eyes
         run: python3 .github/scripts/react_to_comment.py
 
+      # Read-only: the same role and request checks the command makes, so a
+      # commenter the command would refuse never causes a token to be minted.
+      - name: Authorize the /gate-check dispatch token
+        id: authorize
+        if: >-
+          env.HAS_FLEET_APP == 'true' &&
+          startsWith(github.event.comment.body, '/gate-check')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 .github/scripts/pr_test_command.py
+          --repo "$REPO"
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"
+          --mode dispatch
+          --run-url "$RUN_URL"
+          --authorize-only
+
+      - name: Mint the /gate-check dispatch token
+        id: app-token
+        if: steps.authorize.outputs.gate_check_authorized == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: write
+
       - name: Run the command
         env:
           GH_TOKEN: ${{ github.token }}
+          DISPATCH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}

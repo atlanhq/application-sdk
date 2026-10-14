@@ -59,6 +59,14 @@ live from the collaborator-permission API, because a comment's
 member, even one with only Read). Bots are refused (no comment loops), and fork
 PRs are refused (a fork's branch is not in this repository to dispatch on).
 
+The dispatch alone is made as the fleet GitHub App (``DISPATCH_TOKEN``, minted
+by the caller for this one repository with `actions: write` only); every other
+call uses the job's GITHUB_TOKEN. GitHub starts no workflow from an event
+GITHUB_TOKEN caused, so a run it dispatched never fires the `workflow_run` that
+settles `/gate-check` (FND-3934). Without the App token `/gate-check` is
+refused rather than left pending forever; `/e2e` still runs, since its verdict
+comes from the run itself.
+
 Kept out of the workflow YAML per docs/standards/ci.md and tested in
 tests/test_pr_test_command.py.
 """
@@ -88,6 +96,12 @@ ROLE_REFUSAL = (
 )
 ADMIN_REFUSAL = (
     "only people with the Admin role on this repository can request the " "release gate"
+)
+
+NO_APP_REFUSAL = (
+    "`/gate-check` needs this repository's `test-commands.yaml` to pass the fleet "
+    "App secrets, so its verdict can arrive. Run `atlan-application-sdk-conformance "
+    "bootstrap --resync` on the default branch, then comment `/gate-check` again."
 )
 
 E2E = "/e2e"
@@ -548,14 +562,39 @@ def gh(args: list) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess(["gh", *args], 124, "", "timed out")
 
 
+def gh_as(token: str) -> GhFn:
+    """`gh` authenticated as ``token`` instead of the job's GH_TOKEN."""
+
+    def run(args: list) -> subprocess.CompletedProcess:
+        try:
+            return _RUNNER(
+                ["gh", *args],
+                capture_output=True,
+                text=True,
+                timeout=GH_TIMEOUT_S,
+                env={**os.environ, "GH_TOKEN": token},
+            )
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(["gh", *args], 124, "", "timed out")
+
+    return run
+
+
 class GitHubError(RuntimeError):
     pass
 
 
 class GitHub:
-    def __init__(self, repo: str, run: GhFn = gh) -> None:
+    def __init__(
+        self, repo: str, run: GhFn = gh, dispatch_run: GhFn | None = None
+    ) -> None:
         self.repo = repo
         self._run = run
+        #: Only the dispatch may use a different identity (FND-3934): GitHub
+        #: starts no `workflow_run` from a run GITHUB_TOKEN dispatched, so the
+        #: `/gate-check` verdict callback needs the dispatch made as an App.
+        self._dispatch_run = dispatch_run or run
+        self.dispatches_as_app = dispatch_run is not None
 
     def _json(self, args: list):
         result = self._run(["api", *args])
@@ -688,7 +727,7 @@ class GitHub:
         ]
         for key, value in inputs.items():
             args += ["-f", f"inputs[{key}]={value}"]
-        result = self._run(["api", *args])
+        result = self._dispatch_run(["api", *args])
         if result.returncode != 0:
             raise GitHubError(f"dispatch {workflow}: {result.stderr.strip()}")
 
@@ -796,6 +835,10 @@ def run_dispatch(github: GitHub, request: Request, run_url: str) -> Plan:
     wanted = (TESTS_WORKFLOW,) if request.command == E2E else GATE_CHECK_WORKFLOWS
     texts = {w: github.workflow_text(w, pr.head_sha) for w in wanted}
     plan = plan_dispatch(request, pr, states, active, texts)
+    if plan.act and plan.pending_status and not github.dispatches_as_app:
+        # Dispatched as GITHUB_TOKEN, the runs' completions would fire no
+        # `workflow_run`, and nothing would ever settle the pending status.
+        return replace(plan, act=False, reply=NO_APP_REFUSAL, sha=pr.head_sha)
     if plan.act:
         # The pending status goes up first so a gate reading it never sees a
         # window where the run exists but the commit says nothing.
@@ -968,30 +1011,38 @@ def main(argv: list | None = None) -> int:
         help="Only the Admin role may run /gate-check (application-sdk's "
         "release gate). Every other command needs Write, Maintain or Admin.",
     )
+    parser.add_argument(
+        "--authorize-only",
+        action="store_true",
+        help="Decide only whether this is an authorised `/gate-check` and emit "
+        "gate_check_authorized; read-only, posts nothing. The caller mints the "
+        "App dispatch token only when it is true (FND-3934).",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     with open(args.event_path, encoding="utf-8") as handle:
         event = json.load(handle)
     request = decide(args.event_name, event)
+    admin_only = args.gate_check_requires_admin and request.command == GATE_CHECK
+    if args.authorize_only:
+        return _authorize_only(GitHub(args.repo), request, admin_only)
     _emit(run=str(request.run).lower(), comment_id=request.comment_id, pr=request.pr)
     if not request.command:
         _notice(request.reason)
         return 0
 
-    github = GitHub(args.repo)
+    dispatch_token = os.environ.get("DISPATCH_TOKEN", "")
+    github = GitHub(
+        args.repo, dispatch_run=gh_as(dispatch_token) if dispatch_token else None
+    )
     if not request.run:
         # Unauthorised: the person needs to know why, so a short reply. It is
         # not this command's state, so the sticky comment is left alone.
         github.react(request.comment_id, "confused")
         github.comment(request.pr, f"`{request.command}` ignored: {request.reason}.")
         return 0
-    admin_only = args.gate_check_requires_admin and request.command == GATE_CHECK
     try:
-        allowed = (
-            github.is_admin(request.actor)
-            if admin_only
-            else github.can_push(request.actor)
-        )
+        allowed = _role_allows(github, request, admin_only)
     except GitHubError as error:
         github.react(request.comment_id, "confused")
         github.comment(
@@ -1072,6 +1123,26 @@ def main(argv: list | None = None) -> int:
     else:
         github.react(request.comment_id, "confused")
         show(plan, sticky.NOT_STARTED)
+    return 0
+
+
+def _role_allows(github: GitHub, request: Request, admin_only: bool) -> bool:
+    return (
+        github.is_admin(request.actor) if admin_only else github.can_push(request.actor)
+    )
+
+
+def _authorize_only(github: GitHub, request: Request, admin_only: bool) -> int:
+    """The preflight for minting the App dispatch token: the same checks the
+    command makes, with no side effect. Any doubt is "no" — the command step
+    then reports the reason itself."""
+    allowed = False
+    if request.run and request.command == GATE_CHECK:
+        try:
+            allowed = _role_allows(github, request, admin_only)
+        except GitHubError as error:
+            print(f"::warning::{error}", file=sys.stderr)
+    _emit(gate_check_authorized=str(allowed).lower())
     return 0
 
 
