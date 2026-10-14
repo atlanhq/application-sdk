@@ -1115,16 +1115,24 @@ class QueryIntelligenceNode extends DAGNode {
   /// Column / field containing schema name.
   schemaKey: String = "SCHEMA_NAME"
 
-  /// Column / field containing record timestamp. Use `""` to disable.
+  /// Deprecated: QI no longer filters records by timestamp. The arg is still
+  /// emitted for back-compat but is ignored by the QI app.
+  @Deprecated { message = "QI no longer filters records by timestamp; this field is ignored." }
   timestampKey: String = "START_TIME"
 
-  /// Input format — `parquet` for miner-style inputs, `json` for crawler-style inputs.
+  /// Input format — `parquet` for miner-style inputs, `json` for crawler-style
+  /// inputs. Frozen at `parquet` here: apps still amending this legacy module
+  /// must keep the output they generate today. `App.pkl` defaults to `json`.
   mineOutputType: "parquet"|"json" = "parquet"
 
-  /// Parsing strategy used by QI.
+  /// Deprecated: parsing strategy is tuned internally by QI based on workload.
+  /// The arg is still emitted for back-compat but is ignored.
+  @Deprecated { message = "Parsing mode is now tuned internally by QI; this field is ignored." }
   parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
 
-  /// Optional vendor-specific filter flag.
+  /// Deprecated: QI no longer accepts a vendor-specific input filter. The arg
+  /// is still emitted when set but is dropped by the QI app's input model.
+  @Deprecated { message = "QI no longer filters input records; this field is ignored." }
   extraFilter: String?
 
   /// Optional indirect lineage flag.
@@ -1151,22 +1159,31 @@ class QueryIntelligenceNode extends DAGNode {
   /// `null` (default) omits the arg so the QI Pydantic default applies.
   ignoreOrphans: Boolean|String? = null
 
-  /// Optional passthrough columns list.
+  /// Deprecated: all columns/fields are preserved in JSON mode (the default).
+  /// The arg is still emitted when set but is ignored by the QI app.
+  @Deprecated { message = "All columns/fields are preserved in JSON mode; this field is ignored." }
   columnsToPreserve: String?
 
   /// Optional related-assets output prefix.
   relatedAssetsOutputPrefix: String?
 
-  /// Optional parser artifacts tarball key.
+  /// Deprecated: parser artifacts are no longer consumed via this key. The arg
+  /// is still emitted when set but is ignored.
+  @Deprecated { message = "No longer used by QI." }
   parserArtifactsKey: String?
 
-  /// Optional connection cache object-store key.
+  /// Deprecated: QI resolves the connection cache internally; it is no longer
+  /// addressed by a per-workflow object-store key. The arg is still emitted
+  /// when set but is ignored.
+  @Deprecated { message = "QI resolves the connection cache internally; this field is ignored." }
   connectionCacheKey: String?
 
   /// Optional current-state prefix for schema-aware parsing.
   currentStatePrefix: String?
 
-  /// Optional instance name for parser-specific routing.
+  /// Deprecated: instance name is read from QI app environment variables, not
+  /// per-workflow inputs. The arg is still emitted when set but is ignored.
+  @Deprecated { message = "Instance name is read from QI app environment, not workflow args; this field is ignored." }
   instanceName: String?
 
   hidden _qiArgsCheck: Any =
