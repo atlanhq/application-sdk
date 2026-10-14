@@ -2,6 +2,20 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.49.0] - 2026-10-14
+
+### Features
+
+- FND-3733 TreeSelectionExtractionInput for tree-picker filters (#4349) ([a678fce](https://github.com/atlanhq/application-sdk/commit/a678fce))
+- flag Atlas entities emitted as raw dicts instead of pyatlan_v9 assets (FND-3929) (#4371) ([23dc6c0](https://github.com/atlanhq/application-sdk/commit/23dc6c0))
+
+### Bug fixes
+
+- FND-3914 P001 reports a subclass that inherits the class-keyword opt-out (#4356) ([dc14441](https://github.com/atlanhq/application-sdk/commit/dc14441))
+- dispatch /gate-check as the fleet App so its verdict settles [FND-3934] (#4373) ([d9e2527](https://github.com/atlanhq/application-sdk/commit/d9e2527))
+- make T004, T008, T013, T014, T015 and T023 migration rules (suggest-only) (#4370) ([79e3b0e](https://github.com/atlanhq/application-sdk/commit/79e3b0e))
+- route S001/S002 to a person; S002 skips standalone utility scripts (#4369) ([219fd5e](https://github.com/atlanhq/application-sdk/commit/219fd5e))
+
 ## [0.48.0] - 2026-10-13
 
 ### Features
