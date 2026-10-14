@@ -1,5 +1,29 @@
 # Changelog
 
+## v3.48.0 (October 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.47.0...v3.48.0
+
+### Features
+
+- FND-3733 TreeSelectionExtractionInput for tree-picker filters (#4349) (by @sachi-atlan in [a678fce](https://github.com/atlanhq/application-sdk/commit/a678fce))
+
+### Bug Fixes
+
+- default root status to ACTIVE in entity_bytes [FND-3928] (#4372) (by @cmgrote in [8fccef5](https://github.com/atlanhq/application-sdk/commit/8fccef5))
+- retry idempotent binding reads after the sidecar is warm, and name an empty cause (#4368) (by @connectivity-ai[bot] in [49f3677](https://github.com/atlanhq/application-sdk/commit/49f3677))
+- ship log lines emitted from threads without an event loop [FND-3940] (#4136) (by @Lalit3716-atlan in [2fbe173](https://github.com/atlanhq/application-sdk/commit/2fbe173))
+- FND-3938 drop childless S3 folder markers from object-store listings (#4374) (by @sachi-atlan in [a37f74f](https://github.com/atlanhq/application-sdk/commit/a37f74f))
+
+### Chores
+
+- lock file maintenance (#4360) (by @renovate[bot] in [bf21a13](https://github.com/atlanhq/application-sdk/commit/bf21a13))
+- lock file maintenance (#4364) (by @renovate[bot] in [5f0f92d](https://github.com/atlanhq/application-sdk/commit/5f0f92d))
+- lock file maintenance (#4365) (by @renovate[bot] in [693d1a5](https://github.com/atlanhq/application-sdk/commit/693d1a5))
+- update github-actions (#4363) (by @renovate[bot] in [b02ce8d](https://github.com/atlanhq/application-sdk/commit/b02ce8d))
+- lock file maintenance (#4367) (by @renovate[bot] in [80c542c](https://github.com/atlanhq/application-sdk/commit/80c542c))
+
+
 ## v3.47.0 (October 13, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.46.0...v3.47.0
