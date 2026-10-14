@@ -321,7 +321,9 @@ class CloudStore:
         # Lowercase once so endswith checks are case-insensitive (e.g. ".JSON" matches ".json").
         lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
-            items = await _list_items(self._store, list_prefix or None)
+            items = await _list_items(
+                self._store, list_prefix or None, suffixes=suffix_filter or ()
+            )
             return sorted(
                 path
                 for path, _, _ in items
@@ -341,7 +343,9 @@ class CloudStore:
         and version-pin the range GETs — without a HEAD."""
         lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
-            items = await _list_items(self._store, list_prefix or None)
+            items = await _list_items(
+                self._store, list_prefix or None, suffixes=suffix_filter or ()
+            )
             return sorted(
                 (path, size, etag)
                 for path, size, etag in items

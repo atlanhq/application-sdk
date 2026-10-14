@@ -36,7 +36,6 @@ to target a specific store instead.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import hashlib
 import logging
@@ -45,6 +44,7 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, TypedDict
 
@@ -710,6 +710,7 @@ async def _list_items(
     prefix: str | None,
     *,
     include_markers: bool = False,
+    suffixes: Iterable[str] = (),
 ) -> list[tuple[str, int, str | None]]:
     """Collect listing results under *prefix*, optionally filtering GCS directory markers.
 
@@ -721,8 +722,9 @@ async def _list_items(
 
     A zero-byte object is excluded when its path is a strict path-prefix of at least
     one other listed key — i.e. it acts as a parent directory for real files.
-    Zero-byte objects that remain are then probed with a HEAD; one that is not
-    found is an S3 ``folder/`` marker with no children and is dropped too.
+    Before that filter, each zero-byte object is probed with a HEAD; one that is
+    not found is an S3 ``folder/`` marker listed without its trailing slash and
+    is dropped, so it is neither returned nor counted as a parent.
 
     Args:
         store: An obstore-compatible store instance.
@@ -731,6 +733,8 @@ async def _list_items(
             every object including zero-byte markers.  Use this when the caller must
             operate on *all* objects (e.g. ``delete_prefix``) so that no orphan
             objects are left behind on any store backend.
+        suffixes: Case-insensitive key suffixes the caller keeps. When given,
+            only zero-byte objects ending in one of them are probed.
 
     Returns:
         ``(path, size, e_tag)`` tuples in listing order (``e_tag`` may be
@@ -746,42 +750,53 @@ async def _list_items(
         return all_items
     # Offloaded: two passes over the whole listing with no await in between,
     # which at 100k keys holds the event loop (and the activity heartbeat).
-    items = await run_in_thread(_drop_directory_markers, all_items)
-    return await _drop_childless_markers(store, items)
+    phantoms = await _childless_marker_paths(store, all_items, suffixes)
+    if phantoms:
+        all_items = [item for item in all_items if item[0] not in phantoms]
+    return await run_in_thread(_drop_directory_markers, all_items)
 
 
-async def _drop_childless_markers(
+async def _childless_marker_paths(
     store: ObjectStore,
     items: list[tuple[str, int, str | None]],
-) -> list[tuple[str, int, str | None]]:
-    """Drop zero-byte listed paths that a HEAD reports as not found.
+    suffixes: Iterable[str],
+) -> set[str]:
+    """Return zero-byte listed paths that a HEAD reports as missing.
 
-    An S3 ``folder/`` marker with no children lists without its trailing
-    slash, so it looks like a zero-byte file whose listed path does not exist.
+    An S3 ``folder/`` marker lists without its trailing slash, so its listed
+    path does not exist. Only the error class decides: obstore error text
+    carries the key, so a substring match would misread a key like
+    ``dt=20240404/_SUCCESS`` on a 403 or 503.
     """
-    candidates = [path for path, size, _ in items if size == 0]
+    lsuffixes = tuple(suffix.lower() for suffix in suffixes)
+    candidates = [
+        path
+        for path, size, _ in items
+        if size == 0 and (not lsuffixes or path.lower().endswith(lsuffixes))
+    ]
     if not candidates:
-        return items
+        return set()
     from application_sdk.constants import (  # noqa: PLC0415
         MAX_CONCURRENT_STORAGE_TRANSFERS,
     )
+    from application_sdk.storage._concurrency import _run_bounded  # noqa: PLC0415
 
-    sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
+    async def _is_missing(path: str) -> bool:
+        try:
+            await obstore.head_async(store, path)
+        except FileNotFoundError:
+            return True
+        # conformance: ignore[E004] probe only; any other error keeps the key and the download reports it
+        except Exception as exc:
+            return _ObstoreNotFoundError is not None and isinstance(
+                exc, _ObstoreNotFoundError
+            )
+        return False
 
-    async def _is_phantom(path: str) -> bool:
-        async with sem:
-            try:
-                await obstore.head_async(store, path)
-            # conformance: ignore[E004] probe only; a non-404 error keeps the key and the download reports it
-            except Exception as exc:
-                return _is_not_found(exc)
-            return False
-
-    flags = await asyncio.gather(*[_is_phantom(path) for path in candidates])
-    phantoms = {path for path, phantom in zip(candidates, flags) if phantom}
-    if not phantoms:
-        return items
-    return [item for item in items if item[0] not in phantoms]
+    flags = await _run_bounded(
+        [_is_missing(path) for path in candidates], MAX_CONCURRENT_STORAGE_TRANSFERS
+    )
+    return {path for path, missing in zip(candidates, flags) if missing}
 
 
 def _drop_directory_markers(

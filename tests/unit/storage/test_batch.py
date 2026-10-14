@@ -88,10 +88,25 @@ class TestListKeys:
 
     async def test_drops_childless_folder_marker(self, store) -> None:
         await _put("dump/base/a.json", b"{}", store, normalize=False)
-        await _put("dump/zero.json", b"", store, normalize=False)
+        await _put("dump/_SUCCESS", b"", store, normalize=False)
         with _list_with_phantom("dump/empty"):
             keys = await list_keys("dump/", store, normalize=False)
-        assert keys == ["dump/base/a.json", "dump/zero.json"]
+        assert keys == ["dump/_SUCCESS", "dump/base/a.json"]
+
+    async def test_childless_marker_does_not_hide_its_real_parent(self, store) -> None:
+        await _put("dump/flag", b"", store, normalize=False)
+        with _list_with_phantom("dump/flag/x"):
+            keys = await list_keys("dump/", store, normalize=False)
+        assert keys == ["dump/flag"]
+
+    async def test_probes_only_keys_matching_suffix(self, store) -> None:
+        await _put("dump/a.json", b"", store, normalize=False)
+        await _put("dump/_SUCCESS", b"", store, normalize=False)
+        head = AsyncMock(wraps=obstore.head_async)
+        with patch.object(obstore, "head_async", head):
+            keys = await list_keys("dump/", store, normalize=False, suffix=".json")
+        assert keys == ["dump/a.json"]
+        assert [call.args[1] for call in head.call_args_list] == ["dump/a.json"]
 
     async def test_include_markers_keeps_childless_folder_marker(self, store) -> None:
         await _put("dump/a.json", b"{}", store, normalize=False)
@@ -115,16 +130,22 @@ class TestListKeys:
             "dump/zero.json",
         ]
 
-    async def test_keeps_zero_byte_key_when_probe_fails_otherwise(self, store) -> None:
-        await _put("dump/a.json", b"{}", store, normalize=False)
-        with (
-            _list_with_phantom("dump/empty"),
-            patch.object(
-                obstore, "head_async", AsyncMock(side_effect=OSError("HTTP 503"))
+    @pytest.mark.parametrize(
+        "error",
+        [
+            OSError("HTTP 503"),
+            PermissionError(
+                "Error performing HEAD /bucket/dt=20240404/_SUCCESS: 403 Forbidden"
             ),
-        ):
-            keys = await list_keys("dump/", store, normalize=False)
-        assert "dump/empty" in keys
+        ],
+    )
+    async def test_keeps_real_key_when_probe_fails_otherwise(
+        self, store, error
+    ) -> None:
+        await _put("dt=20240404/_SUCCESS", b"", store, normalize=False)
+        with patch.object(obstore, "head_async", AsyncMock(side_effect=error)):
+            keys = await list_keys("dt=20240404/", store, normalize=False)
+        assert keys == ["dt=20240404/_SUCCESS"]
 
 
 # ---------------------------------------------------------------------------

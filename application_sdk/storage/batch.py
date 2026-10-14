@@ -131,15 +131,18 @@ async def list_keys(
             Pass ``False`` to use *prefix* exactly as supplied.
         include_markers: When ``False`` (default), zero-byte objects that act
             as GCS-style directory markers (i.e. they have at least one child
-            key under them) are excluded from results.  Pass ``True`` to
+            key under them) and S3 ``folder/`` markers with no children are
+            excluded from results.  Pass ``True`` to
             bypass this filter and receive every object including markers —
             useful when the caller needs to operate on all objects regardless
             of size (e.g. ``delete_prefix``).
 
     Returns:
         Sorted list of matching object keys.  By default, zero-byte objects
-        that act as GCS-style directory markers are excluded; zero-byte files
-        with no children are returned normally.  Marker detection is
+        that act as GCS-style directory markers are excluded, and so are S3
+        ``folder/`` markers with no children (a zero-byte key whose HEAD is
+        not found); other zero-byte files with no children are returned
+        normally.  Marker detection is
         single-pass: a zero-byte object is only identified as a marker if its
         children appear in the same listing call (i.e. they share the
         requested *prefix*).
@@ -153,7 +156,10 @@ async def list_keys(
 
     try:
         items = await _list_items(
-            resolved, prefix or None, include_markers=include_markers
+            resolved,
+            prefix or None,
+            include_markers=include_markers,
+            suffixes=(suffix,) if suffix else (),
         )
         return await run_in_thread(_sorted_keys, items, suffix)
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
@@ -188,7 +194,9 @@ async def list_keys_with_meta(
     prefix = _normalize_listing_prefix(prefix, normalize)
 
     try:
-        items = await _list_items(resolved, prefix or None)
+        items = await _list_items(
+            resolved, prefix or None, suffixes=(suffix,) if suffix else ()
+        )
         return await run_in_thread(_sorted_items, items, suffix)
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
