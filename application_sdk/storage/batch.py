@@ -142,9 +142,8 @@ async def list_keys(
         that act as GCS-style directory markers are excluded, and so are S3
         ``folder/`` markers with no children (a zero-byte key whose HEAD is
         not found); other zero-byte files with no children are returned
-        normally.  Marker detection is
-        single-pass: a zero-byte object is only identified as a marker if its
-        children appear in the same listing call (i.e. they share the
+        normally.  A zero-byte object is only identified as a GCS-style
+        marker if its children appear in the same listing call (i.e. they share the
         requested *prefix*).
 
     Raises:

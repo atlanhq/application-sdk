@@ -751,9 +751,17 @@ async def _list_items(
     # Offloaded: two passes over the whole listing with no await in between,
     # which at 100k keys holds the event loop (and the activity heartbeat).
     phantoms = await _childless_marker_paths(store, all_items, suffixes)
+    return await run_in_thread(_drop_markers, all_items, phantoms)
+
+
+def _drop_markers(
+    all_items: list[tuple[str, int, str | None]],
+    phantoms: set[str],
+) -> list[tuple[str, int, str | None]]:
+    """Drop *phantoms*, then the directory markers among the remaining items."""
     if phantoms:
         all_items = [item for item in all_items if item[0] not in phantoms]
-    return await run_in_thread(_drop_directory_markers, all_items)
+    return _drop_directory_markers(all_items)
 
 
 async def _childless_marker_paths(
@@ -768,12 +776,9 @@ async def _childless_marker_paths(
     carries the key, so a substring match would misread a key like
     ``dt=20240404/_SUCCESS`` on a 403 or 503.
     """
-    lsuffixes = tuple(suffix.lower() for suffix in suffixes)
-    candidates = [
-        path
-        for path, size, _ in items
-        if size == 0 and (not lsuffixes or path.lower().endswith(lsuffixes))
-    ]
+    candidates = await run_in_thread(
+        _zero_byte_paths, items, tuple(suffix.lower() for suffix in suffixes)
+    )
     if not candidates:
         return set()
     from application_sdk.constants import (  # noqa: PLC0415
@@ -797,6 +802,18 @@ async def _childless_marker_paths(
         [_is_missing(path) for path in candidates], MAX_CONCURRENT_STORAGE_TRANSFERS
     )
     return {path for path, missing in zip(candidates, flags) if missing}
+
+
+def _zero_byte_paths(
+    items: list[tuple[str, int, str | None]],
+    lsuffixes: tuple[str, ...],
+) -> list[str]:
+    """Zero-byte listed paths, limited to *lsuffixes* (lowercase) when given."""
+    return [
+        path
+        for path, size, _ in items
+        if size == 0 and (not lsuffixes or path.lower().endswith(lsuffixes))
+    ]
 
 
 def _drop_directory_markers(
