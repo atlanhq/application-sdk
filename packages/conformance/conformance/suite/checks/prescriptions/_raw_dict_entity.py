@@ -1,11 +1,13 @@
 """P058 RawDictEntity — app emits an Atlas entity built as a raw dict.
 
-``application_sdk.common.asset_serialization.entity_bytes`` applies the SDK's
-central entity fixes to ``pyatlan_v9`` assets — among them a top-level
-``status: ACTIVE`` (FND-3928), without which Atlas leaves a soft-deleted entity
-DELETED when it reappears.  A hand-built ``{"typeName": ..., "attributes": ...}``
-dict gets none of that unless its author remembers every key, and the failure
-is silent.
+A hand-built ``{"typeName": ..., "attributes": ...}`` dict is the app's own
+wire shape: no ``pyatlan_v9`` creator computes its qualifiedName and no model
+checks its keys.  Passed to
+``application_sdk.common.asset_serialization.entity_bytes`` it still gets the
+seam's injected fields; written any other way it gets none of the SDK's
+central fixes — among them the top-level ``status: ACTIVE`` default
+(FND-3928), without which Atlas leaves a soft-deleted entity DELETED when it
+reappears, and nothing reports it.
 
 Per-file, in hand-written app code only (``app/`` minus ``app/generated/``).
 
@@ -55,6 +57,7 @@ _ENTITY_KEYS: frozenset[str] = frozenset({"typeName", "attributes"})
 _ELEMENT_SINKS: dict[str, int] = {"append": 0, "insert": 1}
 
 _SEAM = "entity_bytes"
+_SEAM_PARAM = "asset"
 _MAPPER_PREFIX = "map_"
 
 _HINT = (
@@ -96,6 +99,11 @@ def _entity_type_name(node: ast.expr) -> str | None:
     if isinstance(type_name, ast.Constant) and isinstance(type_name.value, str):
         return type_name.value
     return "?"
+
+
+def _keyword(call: ast.Call, name: str) -> ast.expr | None:
+    """The value of keyword argument *name* in *call*, or ``None``."""
+    return next((kw.value for kw in call.keywords if kw.arg == name), None)
 
 
 @dataclass
@@ -190,8 +198,11 @@ class _Visitor(ast.NodeVisitor):
             if isinstance(func, ast.Attribute)
             else None
         )
-        if name == _SEAM and node.args:
-            self._emit(node.args[0])
+        if name == _SEAM:
+            # ``asset`` is positional-or-keyword: ``entity_bytes(asset=D)``.
+            asset = node.args[0] if node.args else _keyword(node, _SEAM_PARAM)
+            if asset is not None:
+                self._emit(asset)
         self.generic_visit(node)
 
     def visit_Yield(self, node: ast.Yield) -> None:
@@ -230,8 +241,9 @@ def check_p058(
                 rule_id="P058",
                 node=node,
                 message=(
-                    f"{what} built as a raw dict — it skips what `entity_bytes` "
-                    "applies to pyatlan assets, including top-level "
+                    f"{what} built as a raw dict — no pyatlan_v9 model checks "
+                    "its shape, and written around `entity_bytes` it also "
+                    "misses the SDK's central fixes, including top-level "
                     '`status: "ACTIVE"`, so a soft-deleted entity that reappears '
                     f"stays DELETED. {_HINT}."
                 ),

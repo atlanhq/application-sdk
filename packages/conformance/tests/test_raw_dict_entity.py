@@ -73,6 +73,7 @@ def test_fires_on_dataplex_aspect_type_append() -> None:
         'out.extend({"typeName": "Table", "attributes": a} for a in rows)\n',
         'line = entity_bytes({"typeName": "Table", "attributes": {}})\n',
         'line = sdk.entity_bytes({"typeName": "Table", "attributes": {}})\n',
+        'line = entity_bytes(asset={"typeName": "Table", "attributes": {}})\n',
         'out.append(dict(typeName="Table", attributes={}))\n',
         'def rows():\n    yield {"typeName": "Table", "attributes": {}}\n',
         'def map_table(r):\n    return {"typeName": "Table", "attributes": {}}\n',
@@ -84,6 +85,7 @@ def test_fires_on_dataplex_aspect_type_append() -> None:
         "extend-genexp",
         "entity-bytes",
         "entity-bytes-attr",
+        "entity-bytes-asset-kwarg",
         "dict-call",
         "yield",
         "mapper-return",
@@ -130,6 +132,73 @@ def test_one_finding_per_dict_emitted_twice() -> None:
             log.append(e)
     """
     assert len(_p058(src)) == 1
+
+
+def test_entity_bytes_kwarg_through_a_local_name() -> None:
+    src = """
+        def f(out):
+            e = {"typeName": "Table", "attributes": {}}
+            out.write(entity_bytes(asset=e, entity_type="table"))
+    """
+    assert [f.line for f in _p058(src)] == [3]
+
+
+# ── Canonical reference: atlan-openapi-app ──────────────────────────────────────
+
+#: Excerpt of atlan-openapi-app ``app/asset_mapper.py`` — the mapper P058 cites
+#: as its canonical reference: a pyatlan_v9 creator, returned as an asset.
+_OPENAPI_ASSET_MAPPER = """
+    from pyatlan_v9.model.assets import APISpec
+
+
+    def map_api_spec(record, connection_qn, workflow_id, workflow_type, workflow_run_at_ms) -> APISpec:
+        asset = APISpec.creator(name=record.title, connection_qualified_name=connection_qn)
+        if record.spec_url:
+            asset.api_spec_url = record.spec_url
+        return asset
+"""
+
+#: Excerpt of atlan-openapi-app ``app/connector.py`` ``_transform_blocking`` —
+#: every mapper result is written through ``entity_bytes``.
+_OPENAPI_TRANSFORM = """
+    from application_sdk.common.asset_serialization import entity_bytes
+
+    from app.asset_mapper import map_api_spec, map_connection
+
+
+    def _transform_blocking(input, connection, output_file, conn_qn):
+        with output_file.open("wb") as out_f:
+            if input.emit_connection:
+                out_f.write(
+                    entity_bytes(
+                        map_connection(connection),
+                        entity_type="connection",
+                        envelope=ENTITY_ENVELOPE,
+                    )
+                    + b"\\n"
+                )
+            for record in _iter_jsonl(input.api_spec_file, OpenAPISpecRecord):
+                asset = map_api_spec(record, conn_qn, "wf", "app", 0)
+                out_f.write(
+                    entity_bytes(asset, entity_type="api_spec", envelope=ENTITY_ENVELOPE)
+                    + b"\\n"
+                )
+"""
+
+
+def test_silent_on_canonical_reference() -> None:
+    assert _p058(_OPENAPI_ASSET_MAPPER, "app/asset_mapper.py") == []
+    assert _p058(_OPENAPI_TRANSFORM, "app/connector.py") == []
+
+
+def test_canonical_reference_regressed_to_a_raw_dict_fires() -> None:
+    # Guards the excerpt: the same mapper building a dict must be flagged.
+    regressed = _OPENAPI_ASSET_MAPPER.replace(
+        "asset = APISpec.creator(name=record.title, connection_qualified_name=connection_qn)",
+        'asset = {"typeName": "APISpec", "attributes": {"name": record.title}}',
+    )
+    assert regressed != _OPENAPI_ASSET_MAPPER
+    assert len(_p058(regressed, "app/asset_mapper.py")) == 1
 
 
 # ── Negative: the same shape where it is not an emitted entity ─────────────────
