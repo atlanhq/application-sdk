@@ -187,7 +187,7 @@ def test_checks_with_block_is_valid_in_every_combination(
     job = yaml.safe_load(
         render("checks.yml", system_deps=system_deps, checks_private_git_deps=private)
     )["jobs"]["pre-commit"]
-    expected = {}
+    expected: dict[str, object] = {"skip-on-bump-pr": True}
     if system_deps:
         expected["system_deps"] = system_deps
     if private:

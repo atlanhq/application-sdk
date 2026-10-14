@@ -29,6 +29,19 @@ name: Pre-commit Checks (reusable)
 on:
   workflow_call:
     inputs:
+      skip-on-bump-pr:
+        description: >-
+          Skip every job on a bump-version PR's own `pull_request` run (FND-3947).
+          Each job still files its check run, as `skipped`, under its full
+          `<caller job> / <job name>` context, so the PR's required checks
+          resolve without billing a runner. Release Gate stays the blocker: it
+          fails until a `/gate-check` verdict passes on the head commit, and
+          `/gate-check` dispatches the caller, which this does not skip. Only
+          a caller whose Release Gate reads that verdict may set it: a caller
+          whose Release Gate passes on a label would let a skipped run through.
+        type: boolean
+        required: false
+        default: false
       system_deps:
         description: >-
           Space-separated apt packages to install before `setup-deps` runs
@@ -71,7 +84,9 @@ jobs:
   # merge-queue entry re-runs").
   queue-diff:
     name: Queue tree diff
-    if: github.event_name == 'merge_group'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (github.event_name == 'merge_group')
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -112,7 +127,9 @@ jobs:
     # job too. The one skip is an identical queue tree; the skipped job still
     # files its `Pre-commit` check run, which a required context counts as a
     # pass. Keep `name:` static so that run carries the same context string.
-    if: ${{ !cancelled() && needs.queue-diff.outputs.identical != 'true' }}
+    if: >-
+      ${{ !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (!cancelled() && needs.queue-diff.outputs.identical != 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

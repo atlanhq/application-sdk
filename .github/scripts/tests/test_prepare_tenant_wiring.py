@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import e2e_tenant_app as app  # noqa: E402
+from _bump_skip import without_bump_skip  # noqa: E402
 from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
 # The lease knobs used to live on a composite action's `inputs:`; the driver's own
@@ -511,7 +512,10 @@ def test_release_runs_whenever_any_lease_leg_may_hold_a_tenant(
     ownership before deleting, so a leg that never acquired no-ops."""
     expression = _load_gate("release-tenant")
     assert (
-        evaluate(expression, {"needs": {"lease-tenant": {"result": lease_result}}})
+        evaluate(
+            without_bump_skip(expression),
+            {"needs": {"lease-tenant": {"result": lease_result}}},
+        )
         is should_release
     )
 

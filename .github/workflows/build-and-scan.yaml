@@ -27,6 +27,19 @@ name: Build & Scan
 on:
   workflow_call:
     inputs:
+      skip-on-bump-pr:
+        description: >-
+          Skip every job on a bump-version PR's own `pull_request` run (FND-3947).
+          Each job still files its check run, as `skipped`, under its full
+          `<caller job> / <job name>` context, so the PR's required checks
+          resolve without billing a runner. Release Gate stays the blocker: it
+          fails until a `/gate-check` verdict passes on the head commit, and
+          `/gate-check` dispatches the caller, which this does not skip. Only
+          a caller whose Release Gate reads that verdict may set it: a caller
+          whose Release Gate passes on a label would let a skipped run through.
+        type: boolean
+        required: false
+        default: false
       ref:
         description: "Branch or SHA to checkout and build (default: caller's ref)"
         required: false
@@ -131,7 +144,9 @@ jobs:
   # empty output (skipped or failed job) is not `'false'`, so the scan runs.
   scope:
     name: Scan scope
-    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && inputs.image == '' && inputs.ref == ''
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && inputs.image == '' && inputs.ref == '')
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -186,7 +201,9 @@ jobs:
   queue-diff:
     name: Queue tree diff
     needs: [scope]
-    if: ${{ !cancelled() && github.event_name == 'merge_group' && inputs.image == '' && inputs.ref == '' && needs.scope.outputs.scan != 'false' }}
+    if: >-
+      ${{ !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (!cancelled() && github.event_name == 'merge_group' && inputs.image == '' && inputs.ref == '' && needs.scope.outputs.scan != 'false') }}
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -247,7 +264,9 @@ jobs:
   build:
     name: Build Image
     needs: [scope, queue-diff]
-    if: ${{ !cancelled() && needs.scope.outputs.scan != 'false' && needs.queue-diff.outputs.image_changed != 'false' }}
+    if: >-
+      ${{ !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (!cancelled() && needs.scope.outputs.scan != 'false' && needs.queue-diff.outputs.image_changed != 'false') }}
     runs-on: ubuntu-latest
     # The job cap is a hard limit from job start, and continue-on-error does
     # not survive it: a job that times out during the Endor scan fails the
@@ -677,7 +696,9 @@ jobs:
     # the PR head's. There are no results to check, and the skipped `Security
     # Gate` counts as a pass.
     needs: [scope, queue-diff, build]
-    if: always() && !cancelled() && needs.scope.outputs.scan != 'false' && needs.queue-diff.outputs.image_changed != 'false'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() && !cancelled() && needs.scope.outputs.scan != 'false' && needs.queue-diff.outputs.image_changed != 'false')
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:

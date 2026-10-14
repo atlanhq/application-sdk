@@ -430,6 +430,7 @@ def test_vulnerability_scan_default_render_has_no_lfs_line() -> None:
     assert rendered.endswith(
         "    uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main\n"
         "    with:\n"
+        "      skip-on-bump-pr: true\n"
         "      image: ${{ needs.candidate.outputs.candidate_image }}\n"
         "      mark_scanned: ${{ needs.candidate.outputs.candidate_image != '' }}\n"
         "    secrets: inherit\n"
@@ -1526,3 +1527,87 @@ def test_build_publish_lfs_coexists_with_use_ghcr_base() -> None:
     assert "lfs: true" in rendered
     assert extract_build_publish_lfs(rendered) == "true"
     assert extract_use_ghcr_base(rendered) == "true"
+
+
+# --- the retired bump-version `if:` on the `tests` job (FND-3947) ------------
+
+
+def _canonical_with_tests_if(*body: str) -> tuple[str, str]:
+    """(a canonical tests.yaml with ``if: >-`` + *body* put back on the
+    ``tests`` job, the current render it resyncs to)."""
+    rendered = render(
+        "tests.yaml",
+        **extract_tests_yaml_params(_with_inputs('      app-name: "widget"')),
+    )
+    job = rendered.index("\n  tests:\n")
+    at = rendered.index("\n    permissions:\n", job) + 1
+    block = "".join(f"{line}\n" for line in ("    if: >-", *body))
+    return rendered[:at] + block + rendered[at:], rendered
+
+
+@pytest.mark.parametrize(
+    "condition",
+    extract_mod.RETIRED_TESTS_JOB_CONDITIONS,
+    ids=["fnd-3839", "fnd-3748"],
+)
+def test_a_retired_bump_condition_is_dropped_not_refused(condition: str) -> None:
+    """The canonical render has no ``if`` key any more; refusing on it would
+    freeze every repo out of the resync that carries the fix."""
+    existing, rendered = _canonical_with_tests_if(f"      {condition}")
+    assert "\n    if:" not in rendered
+    assert extract_mod.retired_tests_job_condition(existing) == condition
+    assert unpreserved_tests_yaml_declarations(existing, rendered) == []
+
+
+def test_a_retired_condition_folded_over_two_lines_still_matches() -> None:
+    existing, _ = _canonical_with_tests_if(
+        "      !startsWith(github.head_ref,", "      'bump-version')"
+    )
+    assert extract_mod.retired_tests_job_condition(existing) == (
+        "!startsWith(github.head_ref, 'bump-version')"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A repo's own extra clause.
+        ("      !startsWith(github.head_ref, 'bump-version') && github.actor != 'x'",),
+        # A different condition altogether.
+        ("      github.actor != 'dependabot[bot]'",),
+    ],
+    ids=["extra-clause", "own-condition"],
+)
+def test_a_repo_own_tests_condition_still_refuses(body: tuple[str, ...]) -> None:
+    existing, rendered = _canonical_with_tests_if(*body)
+    assert extract_mod.retired_tests_job_condition(existing) == ""
+    assert "if" in unpreserved_tests_yaml_declarations(existing, rendered)
+
+
+def test_a_second_if_keeps_the_refusal() -> None:
+    """The carve-out excuses the one canonical ``if:``; a repo job with its own
+    ``if:`` would be deleted by the re-render too."""
+    existing, rendered = _canonical_with_tests_if(
+        f"      {extract_mod.RETIRED_TESTS_JOB_CONDITIONS[0]}"
+    )
+    existing += "  extra:\n    if: github.event_name == 'push'\n    runs-on: x\n"
+    assert extract_mod.retired_tests_job_condition(existing) == ""
+    assert "if" in unpreserved_tests_yaml_declarations(existing, rendered)
+
+
+def test_the_resync_guard_accepts_every_retired_condition() -> None:
+    """The fleet resync's lost-line guard (application-sdk's
+    resync_approval_conditions.py) and bootstrap's own refusal must excuse the
+    same retired conditions, or one holds what the other lets through."""
+    import pathlib
+    import sys
+
+    scripts = pathlib.Path(__file__).resolve().parents[3] / ".github/scripts"
+    sys.path.insert(0, str(scripts))
+    try:
+        import resync_approval_conditions as resync
+    finally:
+        sys.path.remove(str(scripts))
+    accepted = resync.ACCEPTED_LINE_DROPS[".github/workflows/tests.yaml"]
+    assert set(extract_mod.RETIRED_TESTS_JOB_CONDITIONS) <= set(accepted)
+    assert "if: >-" in accepted

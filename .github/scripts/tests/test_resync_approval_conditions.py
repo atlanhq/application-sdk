@@ -1160,3 +1160,25 @@ def test_call_turns_a_timeout_into_a_gh_error():
 
     with pytest.raises(resync.GhError, match="timed out"):
         resync.call(runner, ["gh", "api", "x"])
+
+
+# FND-3947: the bump-version skip moved inside the reusable, so the canonical
+# `tests` job has no `if:` at all.
+
+
+@pytest.mark.parametrize(
+    ("types", "condition"),
+    [(NEW_TYPES, NEW_CONDITION), (OLD_TYPES, OLD_LABEL_CONDITION)],
+    ids=["fnd-3839-template", "fnd-3748-template"],
+)
+def test_the_dropped_tests_job_condition_is_accepted(types, condition):
+    backup = _tests_yaml(types, condition)
+    new = _tests_yaml(NEW_TYPES, None)
+    assert "if: >-" in resync.lost_setting_lines(backup, new, TESTS_YAML)
+    assert _lost(backup, new) == []
+
+
+def test_a_customised_condition_is_held_when_the_if_goes():
+    custom = NEW_CONDITION + " && github.actor != 'release-bot'"
+    backup = _tests_yaml(NEW_TYPES, custom)
+    assert _lost(backup, _tests_yaml(NEW_TYPES, None)) == [custom]

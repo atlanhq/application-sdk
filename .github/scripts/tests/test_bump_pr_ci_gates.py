@@ -5,8 +5,10 @@ subscribe to `labeled` — and so created a duplicate run on the same commit for
 every label any bot added. It is now a PR comment, handled two ways:
 
 * connector repos: `/gate-check` DISPATCHES the gated shims on the bump branch
-  (pr_test_command.py). The PR run's caller job skips on `bump-version*`, and a
-  dispatch has an empty `head_ref`, so the same `if:` runs it;
+  (pr_test_command.py). The PR's own run passes `skip-on-bump-pr: true`, which
+  skips every job inside the reusable, so each required `<caller> / <job>`
+  check files as `skipped` (FND-3947). A dispatch is not a `pull_request`, so
+  it runs everything;
 * application-sdk: `/gate-check` posts a `gate-check` commit status and RE-RUNS
   the runs on the commit, which read that status live (bump_pr_opt_in.py).
 
@@ -14,9 +16,10 @@ Evaluates the real `if:` expressions lifted out of the workflow YAML and the
 bootstrap templates against synthetic payloads, so a gate wired one paren out
 (`&&` binds tighter than `||` in GHA) fails here rather than in the fleet:
 
-* app shims skip their CALLER job on a bump PR's own run — free, and no
-  required context is created — run on the `/gate-check` dispatch, and ignore a
-  `gate-check` label;
+* app shims always run their caller job and skip every job INSIDE the
+  reusable on a bump PR's own run: free, and every required context still
+  resolves. They run on the `/gate-check` dispatch and ignore a `gate-check`
+  label;
 * `/gate-check` implies e2e on a bump PR (apps and SDK `bump-version-main`), but
   never triggers tenant e2e on the conformance / contract-toolkit lanes;
 * the SDK's inline required gates fail closed until opted in, rather than
@@ -41,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import bump_pr_opt_in  # noqa: E402
 import pr_test_command  # noqa: E402
+from _bump_skip import BUMP_SKIP_TERM  # noqa: E402
 from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 from conformance.bootstrap import render as bootstrap_render  # noqa: E402
 
@@ -150,7 +154,7 @@ _LEGACY_INPUTS = {
 }
 _SCAFFOLD_INPUTS = {**_LEGACY_INPUTS, "e2e-label-trigger": False}
 
-#: (description, context, runs) for a shim CALLER job.
+#: (description, context, whether the reusable's jobs run) for a gated shim.
 _CALLER_SCENARIOS = [
     ("ordinary PR push", _ctx("feat/x"), True),
     ("ordinary PR opened", _ctx("feat/x", action="opened"), True),
@@ -166,26 +170,102 @@ _CALLER_SCENARIOS = [
     ("/gate-check dispatch on a subpackage lane", _dispatch("bump-version-x"), True),
 ]
 
-#: The connector shims a `/gate-check` dispatches, with their caller job.
+#: The connector shims a `/gate-check` dispatches: (template, caller job,
+#: reusable it calls).
 _GATED_SHIMS = [
-    ("tests.yaml", "tests"),
-    ("checks.yml", "pre-commit"),
-    ("conformance.yaml", "suite"),
-    ("vulnerability-scan.yml", "scan"),
+    ("tests.yaml", "tests", "tests-reusable.yaml"),
+    ("checks.yml", "pre-commit", "checks-reusable.yaml"),
+    ("conformance.yaml", "suite", "conformance-reusable.yaml"),
+    ("vulnerability-scan.yml", "scan", "build-and-scan.yaml"),
 ]
+_GATED_REUSABLES = [reusable for _, _, reusable in _GATED_SHIMS]
 
 
-@pytest.mark.parametrize(("template", "job"), _GATED_SHIMS)
-@pytest.mark.parametrize(("desc", "ctx", "runs"), _CALLER_SCENARIOS)
-def test_shims_gate_their_caller_on_the_dispatch_not_the_pr_run(
-    template: str, job: str, desc: str, ctx: dict[str, Any], runs: bool
+def _with_input(ctx: dict[str, Any], skip: bool | None) -> dict[str, Any]:
+    inputs = {} if skip is None else {"skip-on-bump-pr": skip}
+    return {**ctx, "inputs": inputs}
+
+
+@pytest.mark.parametrize(("template", "job", "_reusable"), _GATED_SHIMS)
+@pytest.mark.parametrize(("desc", "ctx", "_runs"), _CALLER_SCENARIOS)
+def test_shims_run_their_caller_job_on_every_event(
+    template: str,
+    job: str,
+    _reusable: str,
+    desc: str,
+    ctx: dict[str, Any],
+    _runs: bool,
 ) -> None:
-    assert evaluate(_job_if(TEMPLATES / template, job), ctx) is runs, desc
+    """A skipped CALLER job files only `<caller>`, never the required
+    `<caller> / <job>` names, so a bump PR sat at "Expected" forever: GitHub
+    does not count the `/gate-check` dispatch toward a PR's required checks."""
+    caller = _load(TEMPLATES / template)["jobs"][job]
+    condition = caller.get("if")
+    assert condition is None or "head_ref" not in str(condition), template
+    if condition is not None:
+        ctx = {**ctx, "needs": {"candidate": {"result": "skipped"}}}
+        assert evaluate(_strip(condition), ctx) is True, desc
 
 
-@pytest.mark.parametrize(("template", "_job"), _GATED_SHIMS)
+@pytest.mark.parametrize(("template", "job", "_reusable"), _GATED_SHIMS)
+def test_shims_ask_their_reusable_to_skip_the_bump_pr_run(
+    template: str, job: str, _reusable: str
+) -> None:
+    assert _load(TEMPLATES / template)["jobs"][job]["with"]["skip-on-bump-pr"] is True
+
+
+@pytest.mark.parametrize("reusable", _GATED_REUSABLES)
+def test_every_job_in_a_gated_reusable_starts_with_the_bump_skip(
+    reusable: str,
+) -> None:
+    """Every job, including the `always()` gates: one left out would run after
+    its needs were skipped, and either bill a runner or fail the check."""
+    jobs = _load(WORKFLOWS / reusable)["jobs"]
+    missing = [
+        name
+        for name, job in jobs.items()
+        if not _strip(job.get("if", "")).startswith(BUMP_SKIP_TERM + " &&")
+    ]
+    assert missing == []
+
+
+@pytest.mark.parametrize("reusable", _GATED_REUSABLES)
+def test_the_skip_is_off_unless_the_caller_asks(reusable: str) -> None:
+    """The SDK's sdk-gate calls conformance-reusable on its own bump PRs, and a
+    pre-FND-3839 shim runs tests-reusable on a labelled bump PR whose Release
+    Gate passes on the label. Neither may see a skip it did not ask for."""
+    spec = _load(WORKFLOWS / reusable)[True]["workflow_call"]["inputs"][
+        "skip-on-bump-pr"
+    ]
+    assert spec["type"] == "boolean" and spec["default"] is False
+
+
+@pytest.mark.parametrize("reusable", _GATED_REUSABLES)
+@pytest.mark.parametrize(("desc", "ctx", "runs"), _CALLER_SCENARIOS)
+@pytest.mark.parametrize("skip", [True, False, None])
+def test_the_bump_skip_term_fires_only_on_an_opted_bump_pr_run(
+    reusable: str, desc: str, ctx: dict[str, Any], runs: bool, skip: bool | None
+) -> None:
+    expected = runs or skip is not True
+    for name, job in _load(WORKFLOWS / reusable)["jobs"].items():
+        term = _strip(job["if"])[: len(BUMP_SKIP_TERM)]
+        assert evaluate(term, _with_input(ctx, skip)) is expected, (name, desc)
+
+
+@pytest.mark.parametrize("reusable", _GATED_REUSABLES)
+def test_an_opted_bump_pr_run_skips_every_job_whatever_its_needs(
+    reusable: str,
+) -> None:
+    """`&&` short-circuits, so the rest of the condition (needs results,
+    `always()`) cannot rescue a job on the bump PR's own run."""
+    ctx = _with_input(_ctx(BUMP, labels=OPTED), True)
+    for name, job in _load(WORKFLOWS / reusable)["jobs"].items():
+        assert evaluate(_strip(job["if"]), ctx) is False, name
+
+
+@pytest.mark.parametrize(("template", "_job", "_reusable"), _GATED_SHIMS)
 def test_gated_shims_can_be_dispatched_and_never_subscribe_to_labels(
-    template: str, _job: str
+    template: str, _job: str, _reusable: str
 ) -> None:
     """Without `workflow_dispatch` the `/gate-check` comment has nothing to
     start; with `labeled` every bot label would start a duplicate run."""
@@ -199,7 +279,7 @@ def test_gate_check_dispatches_exactly_the_gated_shims() -> None:
     """The command's list and this file's must not drift: a shim the command
     skips never runs its gate, and one it dispatches that skips the dispatch
     burns a run for nothing."""
-    assert set(pr_test_command.GATE_CHECK_WORKFLOWS) == {t for t, _ in _GATED_SHIMS}
+    assert set(pr_test_command.GATE_CHECK_WORKFLOWS) == {t for t, _, _ in _GATED_SHIMS}
 
 
 def test_the_verdict_listens_for_every_gated_shim_by_name() -> None:
@@ -208,7 +288,7 @@ def test_the_verdict_listens_for_every_gated_shim_by_name() -> None:
     listened = set(
         _load(TEMPLATES / "test-commands.yaml")[True]["workflow_run"]["workflows"]
     )
-    names = {_load(TEMPLATES / template)["name"] for template, _ in _GATED_SHIMS}
+    names = {_load(TEMPLATES / template)["name"] for template, _, _ in _GATED_SHIMS}
     assert names == listened
 
 
