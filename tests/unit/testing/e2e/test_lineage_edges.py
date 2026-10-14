@@ -156,16 +156,12 @@ class TestResolution:
                 )
             )
 
-    def test_edges_on_a_run_without_lineage_are_rejected(self) -> None:
-        with pytest.raises(InvalidLineageEdgeDeclarationError) as exc:
-            _suite().resolve_dag(DAGSpec(expect_lineage=False))
-        assert "expect_lineage=False" in str(exc.value)
-
-    def test_a_run_without_lineage_may_clear_the_inherited_edges(self) -> None:
-        resolved = _suite().resolve_dag(
-            DAGSpec(expect_lineage=False, expected_lineage_edges={})
-        )
-        assert resolved.expected_lineage_edges == {}
+    def test_edges_resolve_on_a_run_that_does_not_expect_lineage(self) -> None:
+        # expect_lineage only relaxes the DAG gate and the presence check; the
+        # run is submitted the same, and a BI connector's transform publishes
+        # its processes with the lineage nodes skipped.
+        resolved = _suite().resolve_dag(DAGSpec(expect_lineage=False))
+        assert resolved.expected_lineage_edges == {_EDGE_KEY: 2}
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +220,25 @@ class TestGrading:
     def test_a_suite_that_declares_nothing_grades_nothing(self) -> None:
         read = LineageEdgeCounts(counts={_EDGE: 0})
         _suite(_NoEdges)._assert_full_dag_outcome(_outcome(read))  # must not raise
+
+
+class TestFixtureSuites:
+    """Suites that crawl once in a fixture and assert piecemeal never reach
+    ``_assert_full_dag_outcome``, so the edges need their own entry point."""
+
+    def test_an_unmet_edge_is_reported_to_a_fixture_suite(self) -> None:
+        read = LineageEdgeCounts(counts={_EDGE: 1}, scanned=10)
+        [line] = _suite()._evaluate_lineage_edges(_outcome(read).lineage_edge_reads)
+        assert _EDGE_KEY in line and "observed 1" in line and "expected >= 2" in line
+
+    def test_a_met_edge_reports_nothing(self) -> None:
+        read = LineageEdgeCounts(counts={_EDGE: 2}, scanned=10)
+        assert _suite()._evaluate_lineage_edges(read) == []
+
+    def test_an_unreadable_read_raises_rather_than_reporting_zero(self) -> None:
+        read = Unreadable(cause=RuntimeError("atlas is down"))
+        with pytest.raises(AtlasReadIndeterminateError):
+            _suite()._evaluate_lineage_edges(read)
 
 
 # ---------------------------------------------------------------------------

@@ -1383,10 +1383,16 @@ only among its inputs does not count — direction is part of the claim.
   belong to another connection — a warehouse column feeding a BI field — so only
   the process has to sit under this connection.
 * **Rejected at resolution:** a key that is not two type names joined by `->`,
-  the same edge declared twice, a floor below 1, or edges declared on a run with
-  `expect_lineage = False` (the AE skips the lineage nodes there, so no edge
-  could land). `DAGSpec(expected_lineage_edges=...)` overrides the class
-  attribute per run, like every other knob.
+  the same edge declared twice, or a floor below 1.
+  `DAGSpec(expected_lineage_edges=...)` overrides the class attribute per run,
+  like every other knob.
+* **Independent of `expect_lineage`.** That knob relaxes the DAG gate and the
+  presence check only; a BI connector's transform publishes its processes with
+  the lineage nodes skipped, and those edges are graded all the same.
+* **Fixture suites** that crawl once and assert piecemeal never reach the full
+  assertion ladder; they call
+  `h._evaluate_lineage_edges(outcome.lineage_edge_reads)`, which returns one
+  failure line per unmet edge, like `_evaluate_asset_expectations`.
 * **An edge observed 0 times is a failure**, naming the edge, its floor and the
   observed count.
 * **Unreadable is not zero.** A failed search is an `AtlasReadIndeterminateError`,

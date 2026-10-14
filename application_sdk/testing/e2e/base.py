@@ -358,34 +358,20 @@ def _edge_key(edge: LineageEdge) -> str:
     return f"{edge[0]} -> {edge[1]}"
 
 
-def _normalise_lineage_edges(
-    declared: Mapping[str, int], *, expect_lineage: bool
-) -> dict[str, int]:
+def _normalise_lineage_edges(declared: Mapping[str, int]) -> dict[str, int]:
     """Validate a lineage-edge declaration and key it canonically.
 
     Args:
         declared: ``"Source -> Target"`` -> minimum process count, as a suite
             writes it.
-        expect_lineage: The run's resolved ``expect_lineage``.
 
     Returns:
         The same floors keyed by :func:`_edge_key`.
 
     Raises:
         InvalidLineageEdgeDeclarationError: A key is malformed, two keys name
-            the same edge, a floor is not an integer >= 1, or edges are declared
-            on a run that does not expect lineage at all.
+            the same edge, or a floor is not an integer >= 1.
     """
-    if declared and not expect_lineage:
-        raise InvalidLineageEdgeDeclarationError(
-            message=(
-                "expected_lineage_edges is declared on a run with "
-                "expect_lineage=False. The AE skips the lineage nodes on such a "
-                "run, so no declared edge could land. Clear expected_lineage_edges "
-                "for this run (DAGSpec(expected_lineage_edges={})) or expect "
-                "lineage."
-            ),
-        )
     normalised: dict[str, int] = {}
     for key, floor in declared.items():
         canonical = _edge_key(_parse_lineage_edge(key))
@@ -1447,9 +1433,9 @@ class BaseE2ETest:
     #     processes than the reader's scan cap leaves an unreached floor
     #     ungraded (an Atlas-read error, not a failure) rather than failing on a
     #     partial count.
-    #   * Requires ``expect_lineage``: with lineage disabled the AE skips the
-    #     lineage nodes, so a declared edge could never land. A run that sets
-    #     ``expect_lineage=False`` must also clear this knob.
+    #   * Independent of ``expect_lineage``, which only relaxes the DAG gate and
+    #     the presence check. A BI connector's transform publishes its
+    #     processes even with the lineage nodes skipped.
     #
     # Empty = skip (no extra Atlas call).
     expected_lineage_edges: ClassVar[dict[str, int]] = {}
@@ -3466,12 +3452,7 @@ class BaseE2ETest:
             expected_lineage_edges=_normalise_lineage_edges(
                 self.expected_lineage_edges
                 if spec.expected_lineage_edges is None
-                else spec.expected_lineage_edges,
-                expect_lineage=(
-                    self.expect_lineage
-                    if spec.expect_lineage is None
-                    else spec.expect_lineage
-                ),
+                else spec.expected_lineage_edges
             ),
             # ``getattr`` rather than the attribute: ``_validate_dag_runs``
             # resolves every declared run inside ``setup_method``, *before* the
@@ -5236,6 +5217,30 @@ class BaseE2ETest:
             _render_finding(finding)
             for finding in self._asset_findings(asset_counts, total_assets=total_assets)
         ]
+
+    def _evaluate_lineage_edges(self, edge_reads: LineageEdgeRead | None) -> list[str]:
+        """Evaluate ``expected_lineage_edges`` against the observed edge counts.
+
+        For suites that crawl once in a fixture and assert piecemeal, which
+        never reach the full assertion ladder. Pass the outcome's
+        ``lineage_edge_reads``.
+
+        Args:
+            edge_reads: What the edge read answered, or ``None`` when none was
+                taken (graded as zero processes).
+
+        Returns:
+            One failure line per declared edge below its floor; empty when every
+            edge met it or none is declared.
+
+        Raises:
+            AtlasReadIndeterminateError: An edge could not be graded, because the
+                read failed or the scan stopped at its cap below the floor. Never
+                reported as a count of zero.
+        """
+        findings = evaluate_lineage_edges(edge_reads, self._asset_expectations())
+        self._raise_if_ungraded(findings)
+        return [_render_finding(finding) for finding in findings]
 
     def _validate_asset_locations(
         self, asset_qn_samples: Mapping[str, SampleRead]
