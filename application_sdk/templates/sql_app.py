@@ -128,6 +128,9 @@ from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    SqlTreeFilterInputUnsupportedError,
+)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -136,6 +139,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     PrimeAuthOutput,
     TransformInput,
     TransformOutput,
+    TreeSelectionExtractionInput,
 )
 from application_sdk.templates.sql_app_errors import (
     SqlProbeTimeoutError,
@@ -556,6 +560,8 @@ class SqlApp(App):
         Returns:
             An instance of *input_cls* populated from *src*.
         """
+        if isinstance(src, TreeSelectionExtractionInput):
+            raise SqlTreeFilterInputUnsupportedError()
         return input_cls(
             workflow_id=src.workflow_id,
             connection=src.connection,

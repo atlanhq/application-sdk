@@ -857,6 +857,62 @@ def test_p001_an_opt_out_guarding_no_unsafe_field_says_removing_it_is_the_fix() 
     assert "remove the opt-out" in message
 
 
+def test_p001_treats_tree_selection_as_payload_safe() -> None:
+    src = (
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+        "    tree_or_str: TreeSelection | str = ''\n"
+    )
+    message = _p001_message(src)
+    assert "every field it declares is already payload-safe" in message
+    assert "does not define" not in message
+
+
+def test_p001_does_not_trust_a_local_definition_named_like_an_sdk_type() -> None:
+    src = (
+        "TreeSelection = TypeAliasType('TreeSelection', dict[str, Any])\n\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+    )
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "tree: `TreeSelection`, a type this file does not define" in message
+
+
+@pytest.mark.parametrize(
+    "import_line",
+    [
+        pytest.param("from app.types import Tree as TreeSelection", id="renamed"),
+        pytest.param("from app.types import TreeSelection", id="foreign-module"),
+        pytest.param("from .types import TreeSelection", id="relative"),
+        pytest.param(
+            "from application_sdk.contracts.types import FilterMap as TreeSelection",
+            id="sdk-renamed",
+        ),
+    ],
+)
+def test_p001_does_not_trust_an_imported_type_bound_to_an_sdk_name(
+    import_line: str,
+) -> None:
+    src = (
+        f"{import_line}\n\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+    )
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "tree: `TreeSelection`, a type this file does not define" in message
+
+
+def test_p001_trusts_an_sdk_name_imported_from_the_sdk() -> None:
+    src = (
+        "from application_sdk.contracts.types import TreeSelection\n\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+    )
+    assert "every field it declares is already payload-safe" in _p001_message(src)
+
+
 def test_p001_names_each_unsafe_field_and_why() -> None:
     src = (
         "class ExtractInput(Input, allow_unbounded_fields=True):\n"

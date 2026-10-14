@@ -154,13 +154,19 @@ sends never justify it.
 2. *Drop an override of an SDK base field.*  Re-declaring `connection` as `dict[str,
 Any]` over `ConnectionRef`, or filters as `dict[str, Any]` over `FilterMap | str`, is
 how most `Any` arrives.  Deleting the override inherits the safe type and keeps the wire
-shape.
+shape.  `FilterMap` keeps two levels, so a tree widget the app reads deeper loses those
+levels: set `treeSelection = true` on the widget instead (step 3).
 
 3. *Use the SDK's types in the same outer shape.*  `ConnectionRef`; `CredentialRef` or
 `credential_guid` (credentials cross tasks by reference, never inline);
 `AgentCredentialSpec` for `agent_json`; a `BaseMetadataConfig` subclass for wizard
-metadata; `FilterMap` for filter maps; a small `BaseModel` for a dict whose keys are
-known.  Absorb legacy wire shapes with a `mode='before'` validator.
+metadata; `FilterMap` for flat filter maps; `TreeSelection`
+(`application_sdk.contracts.types`) for a tree-widget selection (`APITree` and similar)
+read below its second level, which a generated contract gets from `treeSelection = true`
+on the widget; for an extraction app's include/exclude filters it extends
+`TreeSelectionExtractionInput`, whose filters are `TreeSelection | str`; a small
+`BaseModel` for a dict whose keys are known.  Absorb legacy wire shapes with a
+`mode='before'` validator.
 
 4. *Bound a collection of safe values* with `Annotated[..., MaxItems(n)]`, `n` taken
 from the field's real cardinality.  Every nested `dict` or `list` needs its own bound.
@@ -172,17 +178,20 @@ This is the fix that holds at 2MB.
 6. *Retire a field nothing populates*: mark it `deprecated=True` with `x-lifecycle:
 sunset`, regenerate the ledger, then remove it from source.
 
-**Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias, or a
-nested `BaseModel(extra='allow')` pass the check while bounding nothing; reach for them
-only as an owner's recorded decision. `MaxItems` never makes `Any` safe.  Removing the
-opt-out while an `Any` field remains raises `PayloadSafetyError` at class definition, so
-the app stops importing: import the module after the change, because a base class or
-mixin the detector cannot see may carry the `Any`.
+**Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias with
+no bound (`TreeSelection` bounds every level), or a nested `BaseModel(extra='allow')`
+pass the check while bounding nothing; reach for them only as an owner's recorded
+decision.  Changing a `dict` to a `str` (a `mode='before'` validator that JSON-encodes
+it) is not a fix either: it hides the shape from the check and bounds nothing.
+`MaxItems` never makes `Any` safe.  Removing the opt-out while an `Any` field remains
+raises `PayloadSafetyError` at class definition, so the app stops importing: import the
+module after the change, because a base class or mixin the detector cannot see may carry
+the `Any`.
 
 **Generated contracts** (`app/generated/`) are fixed at their source: the
 `contract/*.pkl` widget, or the toolkit when it emits `dict[str, Any]` for a widget
-(`APITree` and similar).  Never hand-edit the generated file, and never let a
-post-generate hook re-insert the opt-out.
+(`APITree` and similar; set `treeSelection = true`).  Never hand-edit the generated
+file, and never let a post-generate hook re-insert the opt-out.
 
 **Narrowing changes what the app accepts.**  Before narrowing, list the shapes the field
 really carries (its normaliser, its producers, the next task's contract) and confirm
