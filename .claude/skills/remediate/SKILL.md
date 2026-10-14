@@ -426,7 +426,10 @@ Residue entries for migration rules carry `remediation_reference`
   4. Record in residue every file the skill changed under `tests/` and any
      `uv.lock` change, for human review.
 - `kind = guide` — apply nothing. Report the rule ids with the guide path
-  `$(dirname "$PROGRAMS")/<target>`.
+  `$(dirname "$PROGRAMS")/<target>`. When the guide is the finding's own area
+  file (S001/S002 → `security.prose.md`), also show each finding's proposal
+  from its `migration_brief` (the draft edit or suppression directive) for
+  the developer to accept or reject.
 - `kind = decision` — apply nothing. Report the rule ids, who decides
   (`target`) and the choice (`note`).
 
