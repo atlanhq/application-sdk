@@ -32,9 +32,10 @@ name: Test commands (reusable)
 #     App (FLEET_APP_ID / FLEET_APP_PRIVATE_KEY, passed by the caller). GitHub
 #     starts no workflow from an event GITHUB_TOKEN caused, so a run it
 #     dispatched never fires the `workflow_run` that settles the verdict
-#     (FND-3934). The token is minted for this one repository with
-#     `actions: write` only, after the cheap pre-filter, and handed to the
-#     dispatch call alone; `/e2e` never mints one.
+#     (FND-3934). The token is minted only after a read-only preflight has
+#     authorised the commenter (the same checks the command makes), for this
+#     one repository with `actions: write` only, and handed to the dispatch
+#     call alone; `/e2e` never mints one.
 
 on:
   workflow_call:
@@ -89,11 +90,31 @@ jobs:
           REACTION: eyes
         run: python3 .github/scripts/react_to_comment.py
 
-      - name: Mint the /gate-check dispatch token
-        id: app-token
+      # Read-only: the same role and request checks the command makes, so a
+      # commenter the command would refuse never causes a token to be minted.
+      - name: Authorize the /gate-check dispatch token
+        id: authorize
         if: >-
           env.HAS_FLEET_APP == 'true' &&
           startsWith(github.event.comment.body, '/gate-check')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 .github/scripts/pr_test_command.py
+          --repo "$REPO"
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"
+          --mode dispatch
+          --run-url "$RUN_URL"
+          --authorize-only
+
+      - name: Mint the /gate-check dispatch token
+        id: app-token
+        if: steps.authorize.outputs.gate_check_authorized == 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}

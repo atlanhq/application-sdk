@@ -1314,6 +1314,63 @@ class TestDispatchIdentity:
         assert seen[1][1] == "job-token"
 
 
+class TestAuthorizeOnly:
+    """lens F-56a231: the App dispatch token is minted only when this
+    read-only preflight says the commenter may run `/gate-check`."""
+
+    PREFLIGHT = ("--authorize-only",)
+
+    @pytest.mark.parametrize("role", ["write", "maintain", "admin"])
+    def test_an_authorised_gate_check_says_yes(self, run_main, role: str) -> None:
+        api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), role=role)
+        rc, outputs = run_main(_event("/gate-check"), api, extra=self.PREFLIGHT)
+        assert rc == 0
+        assert outputs == {"gate_check_authorized": "true"}
+        assert api.writes == []
+
+    @pytest.mark.parametrize("role", ["read", "triage", "none"])
+    def test_an_unauthorised_commenter_says_no(self, run_main, role: str) -> None:
+        api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), role=role)
+        rc, outputs = run_main(_event("/gate-check"), api, extra=self.PREFLIGHT)
+        assert rc == 0
+        assert outputs == {"gate_check_authorized": "false"}
+        assert api.writes == []
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            _event("/gate-check", user_type="Bot"),
+            _event("/gate-check", association="NONE"),
+            _event("/e2e"),
+            _event("lgtm"),
+        ],
+        ids=["bot", "outsider", "e2e", "not-a-command"],
+    )
+    def test_anything_but_a_gate_check_request_says_no(
+        self, run_main, event: dict[str, Any]
+    ) -> None:
+        api = FakeApi(texts=_texts())
+        _, outputs = run_main(event, api, extra=self.PREFLIGHT)
+        assert outputs == {"gate_check_authorized": "false"}
+        assert api.writes == []
+
+    def test_an_unreadable_role_says_no(self, run_main) -> None:
+        api = FakeApi(texts=_texts(), fail=("/collaborators/",))
+        rc, outputs = run_main(_event("/gate-check"), api, extra=self.PREFLIGHT)
+        assert rc == 0
+        assert outputs == {"gate_check_authorized": "false"}
+        assert api.writes == []
+
+    def test_admin_only_applies(self, run_main) -> None:
+        api = FakeApi(texts=_texts(), role="write")
+        _, outputs = run_main(
+            _event("/gate-check"),
+            api,
+            extra=(*self.PREFLIGHT, "--gate-check-requires-admin"),
+        )
+        assert outputs == {"gate_check_authorized": "false"}
+
+
 class TestMain:
     def test_non_command_is_silent(self, run_main) -> None:
         api = FakeApi()
@@ -1668,7 +1725,15 @@ class TestContracts:
         )["jobs"]
         steps = jobs["command"]["steps"]
         (mint,) = [s for s in steps if "create-github-app-token" in s.get("uses", "")]
-        assert "/gate-check" in mint["if"]
+        # Minted only after the read-only preflight authorised the commenter
+        # (lens F-56a231), never on the comment prefix alone.
+        (authorize,) = [s for s in steps if s.get("id") == "authorize"]
+        assert steps.index(authorize) < steps.index(mint)
+        assert "--authorize-only" in authorize["run"]
+        assert "DISPATCH_TOKEN" not in authorize.get("env", {})
+        assert mint["if"].strip() == (
+            "steps.authorize.outputs.gate_check_authorized == 'true'"
+        )
         assert mint["with"]["repositories"] == "${{ github.event.repository.name }}"
         permissions = {
             k: v for k, v in mint["with"].items() if k.startswith("permission-")

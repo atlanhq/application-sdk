@@ -1011,11 +1011,21 @@ def main(argv: list | None = None) -> int:
         help="Only the Admin role may run /gate-check (application-sdk's "
         "release gate). Every other command needs Write, Maintain or Admin.",
     )
+    parser.add_argument(
+        "--authorize-only",
+        action="store_true",
+        help="Decide only whether this is an authorised `/gate-check` and emit "
+        "gate_check_authorized; read-only, posts nothing. The caller mints the "
+        "App dispatch token only when it is true (FND-3934).",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     with open(args.event_path, encoding="utf-8") as handle:
         event = json.load(handle)
     request = decide(args.event_name, event)
+    admin_only = args.gate_check_requires_admin and request.command == GATE_CHECK
+    if args.authorize_only:
+        return _authorize_only(GitHub(args.repo), request, admin_only)
     _emit(run=str(request.run).lower(), comment_id=request.comment_id, pr=request.pr)
     if not request.command:
         _notice(request.reason)
@@ -1031,13 +1041,8 @@ def main(argv: list | None = None) -> int:
         github.react(request.comment_id, "confused")
         github.comment(request.pr, f"`{request.command}` ignored: {request.reason}.")
         return 0
-    admin_only = args.gate_check_requires_admin and request.command == GATE_CHECK
     try:
-        allowed = (
-            github.is_admin(request.actor)
-            if admin_only
-            else github.can_push(request.actor)
-        )
+        allowed = _role_allows(github, request, admin_only)
     except GitHubError as error:
         github.react(request.comment_id, "confused")
         github.comment(
@@ -1118,6 +1123,26 @@ def main(argv: list | None = None) -> int:
     else:
         github.react(request.comment_id, "confused")
         show(plan, sticky.NOT_STARTED)
+    return 0
+
+
+def _role_allows(github: GitHub, request: Request, admin_only: bool) -> bool:
+    return (
+        github.is_admin(request.actor) if admin_only else github.can_push(request.actor)
+    )
+
+
+def _authorize_only(github: GitHub, request: Request, admin_only: bool) -> int:
+    """The preflight for minting the App dispatch token: the same checks the
+    command makes, with no side effect. Any doubt is "no" — the command step
+    then reports the reason itself."""
+    allowed = False
+    if request.run and request.command == GATE_CHECK:
+        try:
+            allowed = _role_allows(github, request, admin_only)
+        except GitHubError as error:
+            print(f"::warning::{error}", file=sys.stderr)
+    _emit(gate_check_authorized=str(allowed).lower())
     return 0
 
 
