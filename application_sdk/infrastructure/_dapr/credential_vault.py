@@ -281,8 +281,13 @@ class DaprCredentialVault:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
             except BindingError as exc:
                 if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
+                    # str() of a dropped connection (e.g. ReadError) is empty,
+                    # so name the cause by type as well.
                     raise ColdStartRaceError(
-                        message=f"Upstream credential-config store unreachable: {exc.cause}",
+                        message=(
+                            "Upstream credential-config store unreachable: "
+                            f"{type(exc.cause).__name__} {exc.cause}"
+                        ).rstrip(),
                         cause=exc.cause,
                     ) from exc
                 raise
@@ -499,8 +504,8 @@ class DaprCredentialVault:
             SecretStoreUnavailableError: If the store failed *without* the
                 budget being spent (the transient case) — only reachable once
                 this component has already answered once, so
-                ``retry_past_dapr_cold_start`` short-circuits its wait. Also
-                hash-labelled.
+                ``retry_past_dapr_cold_start`` skips the cold-start wait and
+                gives it only the short warm retry. Also hash-labelled.
         """
         value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
         try:
@@ -523,9 +528,9 @@ class DaprCredentialVault:
             # A *steady-state* blip, not an exhausted budget: budget exhaustion
             # always raises DaprSidecarUnreachableError and is caught above, so
             # the only way a bare ColdStartRaceError reaches here is
-            # retry_past_dapr_cold_start short-circuiting its wait — this
+            # retry_past_dapr_cold_start skipping its cold-start wait — this
             # component has already answered once, so the error propagates from
-            # `call()` without any retry. Either way the store did not answer,
+            # `call()` after only the short warm retry. Either way the store did not answer,
             # which is not "this field isn't a secret" (that case is already
             # collapsed to {} by _get_secret without raising). Propagate so the
             # caller raises a typed CredentialVaultError instead of silently
