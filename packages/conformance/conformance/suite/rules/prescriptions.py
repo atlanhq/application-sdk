@@ -107,8 +107,8 @@ RULES: tuple[RuleDefinition, ...] = (
         short_description="Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety",
         full_description=(
             "An ``Input``/``Output`` contract subclass that sets ``allow_unbounded_fields=True``\n"
-            "(or a truthy ``_allow_unbounded_fields`` class attribute, set on the class or\n"
-            "inherited from a class in the same file) opts out of the SDK's\n"
+            "(or a truthy ``_allow_unbounded_fields`` class attribute), on the class or\n"
+            "inherited from a class in the same file, opts out of the SDK's\n"
             "payload-safety check, so untyped or unbounded fields can cross task boundaries\n"
             "and fail at Temporal's 2MB limit in the tenant with the largest source.  Each\n"
             "finding names the fields this class declares that block removing it (the\n"

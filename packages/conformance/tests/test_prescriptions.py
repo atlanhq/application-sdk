@@ -959,9 +959,21 @@ def test_p001_fires_on_the_class_attribute_opt_out() -> None:
     assert "_allow_unbounded_fields class attribute" in message
     assert "filters: `Any`" in message
     assert (
-        _ids("class Q(Input):\n    _allow_unbounded_fields = False\n    x: str = ''\n")
+        _ids(
+            "class Q(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n    x: str = ''\n"
+        )
         == []
     )
+
+
+def test_p001_fires_on_a_plain_falsy_attribute_on_a_contract() -> None:
+    # Pydantic stores a non-ClassVar underscore assignment as a private attribute, and the class
+    # reads it back as that truthy descriptor, so validation is skipped despite the literal False.
+    src = "class Q(Input):\n    _allow_unbounded_fields = False\n    x: Any = None\n"
+    message = _p001_message(src)
+    assert "class attribute (line 2)" in message
+    assert "truthy whatever it holds" in message and "ClassVar[bool]" in message
+    assert "does NOT set" not in message
 
 
 def test_p001_class_attribute_opt_out_honours_a_directive() -> None:
@@ -1023,7 +1035,8 @@ def test_p001_the_last_class_attribute_assignment_decides() -> None:
     assert "class attribute (line 3)" in message and "payload: `bytes`" in message
     assert (
         _ids(
-            "class C(Input):\n    _allow_unbounded_fields = True\n    _allow_unbounded_fields = False\n"
+            "class C(Input):\n    _allow_unbounded_fields = True\n"
+            "    _allow_unbounded_fields: ClassVar[bool] = False\n"
         )
         == []
     )
@@ -1041,6 +1054,184 @@ def test_p001_fires_on_a_contract_inheriting_the_attribute_from_a_mixin() -> Non
     assert findings[0].line == 3
     assert "inherited from OptOutMixin" in findings[0].message
     assert "items: `dict[...]` without MaxItems" in findings[0].message
+
+
+_KEYWORD_PARENT = (
+    "class ArgsInput(Input, allow_unbounded_fields=True):\n"
+    "    args: dict[str, Any] = {}\n"
+)
+
+
+def _p001_by_line(src: str) -> dict[int, str]:
+    return {f.line: f.message for f in scan_text(src, "x.py") if f.rule_id == "P001"}
+
+
+def test_p001_fires_on_a_subclass_inheriting_the_class_keyword_opt_out() -> None:
+    # The keyword sets _allow_unbounded_fields on the class, so a subclass that does
+    # not repeat it is still opted out at runtime.
+    src = _KEYWORD_PARENT + (
+        "class TagsInput(ArgsInput):\n    refs: list[FileReference] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "inherits the payload-safety opt-out from ArgsInput" in found[3]
+    assert "refs: `list[...]` without MaxItems" in found[3]
+    assert "args:" not in found[3]
+    assert "before ArgsInput drops its opt-out" in found[3]
+
+
+def test_p001_reports_an_inheriting_subclass_only_for_the_fields_it_adds() -> None:
+    # The parent's own finding covers a subclass that adds only safe fields.
+    src = _KEYWORD_PARENT + (
+        "class Mid(ArgsInput):\n    a: int = 0\n"
+        "class Leaf(Mid):\n    refs: list[str] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 5]
+    assert "from ArgsInput" in found[5]
+
+
+def test_p001_a_falsy_keyword_does_not_opt_a_subclass_back_in() -> None:
+    # Input.__init_subclass__ only ever sets the attribute to True, so
+    # allow_unbounded_fields=False leaves the parent's opt-out in force: the
+    # subclass imports fine, and is still exempt.
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput, allow_unbounded_fields=False):\n    extra: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "from ArgsInput" in found[3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_a_plain_falsy_attribute_on_a_contract_does_not_end_the_inherited_opt_out() -> (
+    None
+):
+    # Pydantic stores a non-ClassVar underscore assignment as a private attribute, so
+    # the class still reads the parent's True and imports without validation.
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput):\n    _allow_unbounded_fields = False\n    n: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_a_classvar_falsy_attribute_ends_the_inherited_opt_out() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput):\n"
+        "    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "    n: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "does NOT set" in found[3]
+
+
+def test_p001_the_first_base_that_sets_the_attribute_decides_like_the_mro() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Off(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "class C(Off, ArgsInput):\n    refs: list[str] = []\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1]
+
+
+def test_p001_a_mixin_falsy_on_the_contract_keeps_the_mixin_opt_out() -> None:
+    src = (
+        "class M:\n    _allow_unbounded_fields = True\n"
+        "class C(M, Input):\n    _allow_unbounded_fields = False\n    a: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "inherited from M" in found[3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_reports_a_mixin_opt_out_once_and_descendants_only_for_what_they_add() -> (
+    None
+):
+    # The first contract inheriting the mixin carries the finding; suppressing it must not
+    # leave a BLOCK on a descendant that adds only safe fields.
+    src = (
+        "class M:\n    _allow_unbounded_fields = True\n"
+        "class Parent(Input, M):\n    a: int = 0\n"
+        "class Child(Parent):\n    note: str = ''\n"
+        "class Leaf(Child):\n    refs: list[str] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3, 7]
+    assert "inherited from M" in found[3]
+    assert (
+        "from Parent" in found[7] and "refs: `list[...]` without MaxItems" in found[7]
+    )
+
+
+def test_p001_a_plain_falsy_attribute_on_a_contract_reads_through_to_an_off_base() -> (
+    None
+):
+    # The private attribute leaves the class namespace, so the base's ClassVar False is what
+    # the class reads: still enforced.
+    src = (
+        "class Off(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "class D(Off):\n    _allow_unbounded_fields = False\n    a: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "does NOT set" in found[3]
+
+
+def test_p001_a_plain_mixin_falsy_attribute_ends_the_opt_out_before_the_parent() -> (
+    None
+):
+    src = _KEYWORD_PARENT + (
+        "class Off:\n    _allow_unbounded_fields = False\n"
+        "class C(Off, ArgsInput):\n    z: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 5]
+    assert "does NOT set" in found[5]
+
+
+def test_p001_a_nested_class_does_not_shadow_a_module_level_base() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Holder:\n    class ArgsInput(Input):\n        n: int = 0\n"
+        "class C(ArgsInput):\n    refs: list[str] = []\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1, 6]
+
+
+def test_p001_a_redefined_class_name_resolves_to_the_definition_in_force() -> None:
+    src = _KEYWORD_PARENT + (
+        "class C1(ArgsInput):\n    a: list[str] = []\n"
+        "class ArgsInput(Input):\n    n: int = 0\n"
+        "class C2(ArgsInput):\n    b: dict[str, Any] = {}\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3, 7]
+    assert "does NOT set" in found[7]
+
+
+def test_p001_resolves_a_long_inheritance_chain_in_one_pass() -> None:
+    src = _KEYWORD_PARENT + "".join(
+        f"class C{i}({'ArgsInput' if i == 0 else f'C{i - 1}'}):\n    n{i}: int = 0\n"
+        for i in range(1500)
+    )
+    assert sorted(_p001_by_line(src)) == [1]
+
+
+def test_p001_inverse_fires_on_an_any_field_in_an_indirect_contract() -> None:
+    src = (
+        "class Base(Input):\n    n: int = 0\n"
+        "class Sub(Base):\n    extra: dict[str, Any] = {}\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "does NOT set" in found[3]
+
+
+def test_p001_is_silent_on_a_safe_subclass_of_an_enforced_contract() -> None:
+    src = "class Base(Input):\n    n: int = 0\nclass Sub(Base):\n    s: str = ''\n"
+    assert _p001_by_line(src) == {}
 
 
 # ── P002 CategoryFieldOverride ─────────────────────────────────────────────────

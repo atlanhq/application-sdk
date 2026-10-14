@@ -16,8 +16,13 @@ as safe, and a known SDK name imported from anywhere but its trusted origin (or
 renamed onto it) is treated as that unknown import. Many opt-outs guard nothing: every declared field is already safe, and
 the finding says so, because removing the opt-out is then the whole fix.
 
-The check stays inside one file: an attribute opt-out inherited from a class in
-another module is not seen.
+Either form is inherited: ``__init_subclass__`` stores the keyword as the class
+attribute, so a subclass that does not repeat it stays opted out, and a falsy
+keyword on the subclass does not opt it back in. Nor does a falsy attribute on a
+contract unless it is annotated ``ClassVar``: pydantic keeps any other underscore
+assignment as a private attribute, which is truthy. The check follows this through
+every class in the same file, and reports a subclass of an opted-out contract only
+for the fields it adds; an opt-out inherited from another module is not seen.
 
 The rule also catches the INVERSE, which is how a well-meaning remediation
 breaks an app: drop the opt-out from a class that still has an ``Any``-typed
@@ -323,10 +328,19 @@ def _listed(items: list[tuple[str, str]]) -> str:
 
 
 def _optout_message(
-    name: str, via: str, groups: dict[str, list[tuple[str, str]]]
+    name: str,
+    via: str,
+    groups: dict[str, list[tuple[str, str]]],
+    inherited_from: str | None = None,
 ) -> str:
-    head = f"Contract '{name}' opts out of payload-safety enforcement via {via}"
     refused, open_ended, unknown = groups[_REFUSED], groups[_OPEN], groups[_UNKNOWN]
+    if inherited_from:
+        head = (
+            f"Contract '{name}' inherits the payload-safety opt-out from {inherited_from} via {via}, "
+            "so the fields it adds are not checked either"
+        )
+    else:
+        head = f"Contract '{name}' opts out of payload-safety enforcement via {via}"
     if not (refused or open_ended or unknown):
         return (
             f"{head}, but every field it declares is already payload-safe. Fix: remove the opt-out "
@@ -348,9 +362,15 @@ def _optout_message(
             "Fields typed with names this file cannot resolve; check each before removing the opt-out: "
             f"{_listed(unknown)}."
         )
+    if inherited_from:
+        parts.append(
+            f"They must be payload-safe before {inherited_from} drops its opt-out (its own P001 "
+            "finding), or this class raises PayloadSafetyError at import."
+        )
     if refused or open_ended:
         parts.append(
-            "Fix each, then remove the opt-out: drop an override of a field the SDK base already types "
+            ("Fix each" if inherited_from else "Fix each, then remove the opt-out")
+            + ": drop an override of a field the SDK base already types "
             "(connection: ConnectionRef; include/exclude filters: FilterMap | str, or treeSelection = true "
             "on a tree widget read below its second level); model passthrough data "
             "(metadata: a BaseMetadataConfig subclass; credentials by reference: credential_guid or "
@@ -358,23 +378,26 @@ def _optout_message(
             "Annotated[..., MaxItems(n)]; pass data that grows with the source system by FileReference. "
             "MaxItems never makes Any safe."
         )
-    else:
+    elif not inherited_from:
         parts.append(
             "If those types are payload-safe, remove the opt-out, then import the module to confirm."
         )
     parts.append(
-        "Keep the opt-out only as a last resort, with '# conformance: ignore[P001] <reason>' naming the "
-        "alternatives tried."
+        (
+            "If they cannot be, add '# conformance: ignore[P001] <reason>' here too, naming the "
+            "alternatives tried."
+        )
+        if inherited_from
+        else (
+            "Keep the opt-out only as a last resort, with '# conformance: ignore[P001] <reason>' "
+            "naming the alternatives tried."
+        )
     )
     return " ".join(parts)
 
 
-def _attribute_optout(node: ast.ClassDef) -> ast.stmt | None:
-    """The statement leaving ``_allow_unbounded_fields`` truthy on the class, if any.
-
-    The last assignment in the class body is the one the runtime sees, so an earlier falsy one
-    does not hide a later truthy one.
-    """
+def _attribute_last(node: ast.ClassDef) -> tuple[ast.stmt, ast.expr] | None:
+    """The last ``_allow_unbounded_fields`` assignment in the class body, the one the runtime sees."""
     last: tuple[ast.stmt, ast.expr] | None = None
     for stmt in node.body:
         if isinstance(stmt, ast.Assign):
@@ -385,12 +408,77 @@ def _attribute_optout(node: ast.ClassDef) -> ast.stmt | None:
             continue
         if any(isinstance(t, ast.Name) and t.id == _OPTOUT_ATTR for t in targets):
             last = (stmt, value)
+    return last
+
+
+def _is_falsy_literal(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and not node.value
+
+
+def _becomes_private_attr(stmt: ast.stmt, is_contract: bool) -> bool:
+    """True if Pydantic turns this underscore assignment into a private attribute.
+
+    On a contract, a non-``ClassVar`` underscore assignment becomes a ``ModelPrivateAttr``, and
+    reading it from the class returns that descriptor, which is truthy whatever literal it holds.
+    """
+    return is_contract and not (
+        isinstance(stmt, ast.AnnAssign) and _is_classvar_annotation(stmt.annotation)
+    )
+
+
+def _attribute_optout(node: ast.ClassDef, is_contract: bool) -> ast.stmt | None:
+    """The statement leaving ``_allow_unbounded_fields`` truthy on the class, if any.
+
+    The last assignment in the class body is the one the runtime sees, so an earlier falsy one
+    does not hide a later truthy one. On a contract a falsy literal still counts unless it is a
+    ``ClassVar`` (see ``_becomes_private_attr``).
+    """
+    last = _attribute_last(node)
     if last is None:
         return None
     stmt, value = last
-    if isinstance(value, ast.Constant) and not value.value:
+    if _is_falsy_literal(value) and not _becomes_private_attr(stmt, is_contract):
         return None
     return stmt
+
+
+def _attribute_turns_off(node: ast.ClassDef, is_contract: bool) -> bool:
+    """True if the class's last ``_allow_unbounded_fields`` assignment really leaves it falsy."""
+    return (
+        _attribute_last(node) is not None
+        and _attribute_optout(node, is_contract) is None
+    )
+
+
+def _module_scope_classes(node: ast.Module) -> list[ast.ClassDef]:
+    """Classes whose name binds at module level (not inside a function or another class)."""
+    out: list[ast.ClassDef] = []
+    stack: list[ast.AST] = list(node.body)
+    while stack:
+        current = stack.pop()
+        if isinstance(current, ast.ClassDef):
+            out.append(current)
+        elif not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+        ):
+            stack.extend(
+                child
+                for child in ast.iter_child_nodes(current)
+                if isinstance(child, ast.stmt)
+            )
+    return out
+
+
+def _keyword_optout(node: ast.ClassDef) -> bool:
+    """True if the class passes a truthy ``allow_unbounded_fields`` keyword.
+
+    ``Input``/``Output.__init_subclass__`` only ever sets the attribute to True, so a falsy
+    keyword is not a decision: the class keeps whatever its bases set.
+    """
+    return any(
+        kw.arg == "allow_unbounded_fields" and not _is_falsy_literal(kw.value)
+        for kw in node.keywords
+    )
 
 
 def _base_names(node: ast.ClassDef) -> list[str]:
@@ -452,11 +540,15 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         self._findings: list[Finding] = []
         self._types = _Types({}, set())
         #: Classes that set a truthy _allow_unbounded_fields themselves.
-        self._attr_optout: dict[str, ast.stmt] = {}
-        #: Classes that inherit the attribute from a class in this file: class -> where it is set.
-        self._inherited: dict[str, str] = {}
+        self._attr_optout: dict[ast.ClassDef, ast.stmt] = {}
+        #: Classes that set the opt-out with the class keyword.
+        self._keyword_optout: set[ast.ClassDef] = set()
+        #: Classes that reach Input/Output through bases defined in this file.
+        self._contracts: set[ast.ClassDef] = set()
+        #: Classes that inherit the opt-out from a class in this file: class -> where it is set.
+        self._inherited: dict[ast.ClassDef, ast.ClassDef] = {}
         #: Attribute-setting classes whose opt-out is reported on the contracts that inherit it.
-        self._reported_on_subclass: set[str] = set()
+        self._reported_on_subclass: set[ast.ClassDef] = set()
 
     def visit_Module(self, node: ast.Module) -> None:
         """Read what the class checks need from the whole file first: type aliases, the classes it
@@ -479,7 +571,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                 aliases[stmt.target.id] = stmt.value
             elif type(stmt).__name__ == "TypeAlias":  # `type X = ...` (Python 3.12+)
                 aliases[stmt.name.id] = stmt.value  # type: ignore[attr-defined]
-        classes = {c.name: c for c in ast.walk(node) if isinstance(c, ast.ClassDef)}
+        all_classes = [c for c in ast.walk(node) if isinstance(c, ast.ClassDef)]
         local_names = frozenset(
             t.id
             for stmt in node.body
@@ -487,52 +579,51 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             for t in (stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target])
             if isinstance(t, ast.Name)
         ) | _untrusted_import_bindings(node)
-        self._types = _Types(aliases, set(classes), local_names)
-        self._attr_optout = {
-            name: stmt
-            for name, c in classes.items()
-            if (stmt := _attribute_optout(c)) is not None
-        }
-        changed = True
-        while changed:
-            changed = False
-            for name, c in classes.items():
-                if name in self._attr_optout or name in self._inherited:
-                    continue
-                for base in _base_names(c):
-                    source = (
-                        base if base in self._attr_optout else self._inherited.get(base)
-                    )
-                    if source:
-                        self._inherited[name] = source
-                        changed = True
-                        break
+        self._types = _Types(aliases, {c.name for c in all_classes}, local_names)
+        self._keyword_optout = {c for c in all_classes if _keyword_optout(c)}
+
+        # One pass in source order: a base is defined before the class that names it, so each
+        # base is already resolved, and a later redefinition of a name does not reach back.
+        # ``source`` maps a class to the class whose finding covers its opt-out: the class that
+        # sets it, or for a non-contract mixin, the first contract that inherits it, so the
+        # contracts below that one are reported only for what they add.
+        module_scope = set(_module_scope_classes(node))
+        bound: dict[str, ast.ClassDef] = {}
+        off = object()
+        source: dict[ast.ClassDef, object] = {}
+        for c in sorted(all_classes, key=lambda c: (c.lineno, c.col_offset)):
+            bases = [bound[b] for b in _base_names(c) if b in bound]
+            if _is_contract_subclass(c) or any(b in self._contracts for b in bases):
+                self._contracts.add(c)
+            found = next((source[b] for b in bases if b in source), None)
+            stmt = _attribute_optout(c, c in self._contracts)
+            last = _attribute_last(c)
+            if found is not None and last is not None and _is_falsy_literal(last[1]):
+                # Pydantic takes a private attribute out of the class namespace, so a lookup
+                # reaches the base that sets the attribute before the truthy descriptor.
+                stmt = None
+            if stmt is not None:
+                self._attr_optout[c] = stmt
+            if c in self._keyword_optout or c in self._attr_optout:
+                source[c] = c
+            elif _attribute_turns_off(c, c in self._contracts):
+                source[c] = off
+            elif found is not None:
+                source[c] = found
+                if found is not off:
+                    self._inherited[c] = found  # type: ignore[assignment]
+                    if c in self._contracts and found not in self._contracts:
+                        source[c] = c
+            if c in module_scope:
+                bound[c.name] = c
         self._reported_on_subclass = {
-            source
-            for name, source in self._inherited.items()
-            if _is_contract_subclass(classes[name])
-        }
-        self._reported_on_subclass -= {
-            n for n, c in classes.items() if _is_contract_subclass(c)
-        }
+            s for c, s in self._inherited.items() if c in self._contracts
+        } - self._contracts
         self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        # Do not couple the two checks through for/else: a falsy literal
-        # (False/None/0/"") is a genuine opt-back-in at runtime
-        # (``if allow_unbounded_fields:`` is false, so validation still
-        # runs and raises PayloadSafetyError). The inverse must still fire.
         opted_out = False
-        for kw in node.keywords:
-            if kw.arg != "allow_unbounded_fields":
-                continue
-            # The opt-out is active for ANY truthy value: Input/Output's
-            # __init_subclass__ does ``if allow_unbounded_fields:``.  So
-            # ``=True``, ``=1`` and dynamic values (``=FLAG``, ``=(expr)``) all
-            # opt out.  Only an explicit literal-falsy value (False/None/0/"")
-            # is a genuine opt-back-in and must NOT be flagged as an opt-out.
-            if isinstance(kw.value, ast.Constant) and not kw.value.value:
-                break
+        if node in self._keyword_optout:
             self._findings.append(
                 make_finding(
                     filename=self._filename,
@@ -545,28 +636,46 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                 )
             )
             opted_out = True
-            break
         via = None
-        if not opted_out and node.name in self._attr_optout:
-            if node.name not in self._reported_on_subclass:
-                via = f"the {_OPTOUT_ATTR} class attribute (line {self._attr_optout[node.name].lineno})"
+        inherited_from = None
+        if not opted_out and node in self._attr_optout:
+            if node not in self._reported_on_subclass:
+                stmt = self._attr_optout[node]
+                via = f"the {_OPTOUT_ATTR} class attribute (line {stmt.lineno})"
+                last = _attribute_last(node)
+                if last is not None and _is_falsy_literal(last[1]):
+                    via += (
+                        ", which Pydantic stores as a private attribute that is truthy whatever "
+                        "it holds (annotate it ClassVar[bool] to keep the literal)"
+                    )
             opted_out = (
                 True  # a mixin's opt-out is reported on the contracts that inherit it
             )
-        elif (
-            not opted_out
-            and node.name in self._inherited
-            and _is_contract_subclass(node)
-        ):
-            via = f"the {_OPTOUT_ATTR} attribute inherited from {self._inherited[node.name]}"
+        elif not opted_out and node in self._inherited and node in self._contracts:
+            source = self._inherited[node]
             opted_out = True
+            fields = self._types.fields(node)
+            if source not in self._contracts:
+                via = f"the {_OPTOUT_ATTR} attribute inherited from {source.name}"
+            elif any(fields.values()):
+                # A contract source carries its own finding, which also covers a subclass
+                # that adds only safe fields; report the subclass only for what it adds.
+                how = (
+                    "the allow_unbounded_fields=True keyword"
+                    if source in self._keyword_optout
+                    else f"the {_OPTOUT_ATTR} attribute"
+                )
+                via = how
+                inherited_from = source.name
         if via:
             self._findings.append(
                 make_finding(
                     filename=self._filename,
                     rule_id="P001",
                     node=node,
-                    message=_optout_message(node.name, via, self._types.fields(node)),
+                    message=_optout_message(
+                        node.name, via, self._types.fields(node), inherited_from
+                    ),
                     directives=self._directives,
                 )
             )
@@ -576,7 +685,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
 
     def _check_missing_optout(self, node: ast.ClassDef) -> None:
         """A contract with an ``Any`` field and no opt-out cannot be imported."""
-        if not _is_contract_subclass(node):
+        if node not in self._contracts:
             return
         fields = _any_typed_fields(node)
         if not fields:
