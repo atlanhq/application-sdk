@@ -95,10 +95,11 @@ Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
 **Judgment rules** (`classification = "judgment"`; route to residue).  Every
-T-series rule is classified auto-fixable except T004, T008, T013, T014, T015
-and T023, which are suggest-only (migration, `autofixable = false`): their fix
-needs a decision the lane cannot verify, and each one's entry below says what
-a person checks before applying it.  The write
+T-series rule is classified auto-fixable except T004, T008, T013, T014, T015,
+T023, T025 and T026 (`autofixable = false`).  T004, T008, T013, T014, T015 and
+T023 are suggest-only (migration): their fix needs a decision the lane cannot
+verify, and each one's entry below says what a person checks before applying
+it.  T025 and T026 are covered in their own entries below.  The write
 scope still excludes `tests/` and `.github/`, so until the lane's write scope
 is widened every T-series result is a **fully worked proposal** — the exact
 decorator, marker, file move or config change, mirrored from the test layout
@@ -413,9 +414,11 @@ residue for a human to apply, not an applied edit:
   `classification` is `"judgment"` — selecting a safe floor requires the
   repo's actual current unit coverage, which isn't in the finding.
   **Suggest-only (migration; `autofixable = false`).** A person applies this.
-  The unit coverage floor that gates CI is the `tests-reusable.yaml` caller's
-  `unit-coverage-fail-under` input under `.github/`, which a person sets;
-  `fail_under` in `pyproject.toml` alone does not gate the unit tier.
+  The unit coverage floor that gates CI lives under `.github/`, which a person
+  sets: for a `tests-reusable.yaml` caller it is the
+  `unit-coverage-fail-under` input; for a direct `connector-unit-tests` caller
+  it is that job's `fail-under:` input (both described above).  `fail_under`
+  in `pyproject.toml` alone does not gate the unit tier.
 
 
 - **T015 CoverageOmitsProductCode** — `[tool.coverage.run].omit` excludes
