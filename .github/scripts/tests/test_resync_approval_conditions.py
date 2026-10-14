@@ -478,6 +478,35 @@ def test_yaml_hash_that_is_not_a_comment_still_counts(old, new):
     assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
 
 
+@pytest.mark.parametrize(
+    "header, body_indent",
+    [
+        ("      run: |", "        "),
+        ("      - run: >-", "          "),
+        ("      run: | # script", "        "),
+        ("      - |", "        "),
+    ],
+)
+def test_yaml_hash_in_a_block_scalar_body_is_text_not_a_comment(header, body_indent):
+    # A `#` inside a block scalar is part of the value, so a change after it
+    # is a real change even when the line looks like `key: value # ...`.
+    backup = f"{header}\n{body_indent}setting: enabled #old\n"
+    new = f"{header}\n{body_indent}setting: enabled #new\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == [
+        "setting: enabled #old"
+    ]
+
+
+def test_yaml_comment_after_a_block_scalar_ends_is_still_a_comment():
+    backup = (
+        "      run: |\n"
+        "        echo hi # kept\n"
+        "      private-git-deps: true  # dropped by the render\n"
+    )
+    new = "      run: |\n        echo hi # kept\n      private-git-deps: true\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == []
+
+
 def test_inline_comments_are_compared_in_files_that_are_not_yaml():
     for path in ("pyproject.toml", "README.md"):
         assert resync.lost_setting_lines("a = 1  # x\n", "a = 1\n", path) == [
