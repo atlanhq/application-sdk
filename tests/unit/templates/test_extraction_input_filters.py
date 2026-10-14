@@ -550,15 +550,29 @@ class TestTreeSelectionExtractionInput:
         assert result.include_filter == value
 
     @pytest.mark.parametrize(
-        "value",
-        [None, "", "^prod$", '{"^db$": ["^sch$"]}', '"DB1","DB2"'],
+        ("value", "expected"),
+        [
+            ('{"cat": {"ns": {"t": {}}}}', {"cat": {"ns": {"t": {}}}}),
+            (' {"default": {}}', {"default": {}}),
+            ("{}", {}),
+        ],
     )
-    def test_non_dict_inputs_match_extraction_input(self, value):
+    def test_json_object_string_is_decoded_into_the_tree(self, value, expected):
+        result = TreeSelectionExtractionInput.model_validate({"include_filter": value})
+        assert result.include_filter == expected
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, "", "^prod$", '"DB1","DB2"', "{not json", "[1]"],
+    )
+    def test_non_json_object_inputs_match_extraction_input(self, value):
         expected = ExtractionInput.model_validate({"exclude_filter": value})
         result = TreeSelectionExtractionInput.model_validate({"exclude_filter": value})
         assert result.exclude_filter == expected.exclude_filter
 
-    @pytest.mark.parametrize("value", [{"db": ["schema"]}, ["db"]])
+    @pytest.mark.parametrize(
+        "value", [{"db": ["schema"]}, ["db"], '{"^db$": ["^sch$"]}']
+    )
     def test_filter_map_shapes_are_refused(self, value):
         with pytest.raises(ValidationError):
             TreeSelectionExtractionInput.model_validate({"include_filter": value})
@@ -569,6 +583,7 @@ class TestTreeSelectionExtractionInput:
             {"a;drop": {}},
             {"a": {"b--": {}}},
             {"a": {"b": {"c": {"d": {"e": {"f": {}}}}}}},
+            '{"a;drop": {}}',
         ],
     )
     def test_sql_injection_check_still_applies(self, value):
@@ -579,3 +594,18 @@ class TestTreeSelectionExtractionInput:
         result = TreeSelectionExtractionInput()
         assert result.include_filter == ""
         assert result.exclude_filter == ""
+
+    @pytest.mark.parametrize("builder", ["sql_app", "sql_metadata_extractor"])
+    def test_sql_templates_refuse_tree_selection_input(self, builder):
+        from application_sdk.templates._template_errors import (
+            SqlTreeFilterInputUnsupportedError,
+        )
+        from application_sdk.templates.sql_app import SqlApp
+        from application_sdk.templates.sql_metadata_extractor import _task_input
+
+        src = TreeSelectionExtractionInput(include_filter={"cat": {"ns": {"t": {}}}})
+        with pytest.raises(SqlTreeFilterInputUnsupportedError):
+            if builder == "sql_app":
+                SqlApp.build_task_input(ExtractionTaskInput, src)
+            else:
+                _task_input(ExtractionTaskInput, src, cred_ref=None)

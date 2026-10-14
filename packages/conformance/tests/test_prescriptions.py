@@ -868,6 +868,17 @@ def test_p001_treats_tree_selection_as_payload_safe() -> None:
     assert "does not define" not in message
 
 
+def test_p001_does_not_trust_a_local_definition_named_like_an_sdk_type() -> None:
+    src = (
+        "TreeSelection = TypeAliasType('TreeSelection', dict[str, Any])\n\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+    )
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "tree: `TreeSelection`, a type this file does not define" in message
+
+
 def test_p001_names_each_unsafe_field_and_why() -> None:
     src = (
         "class ExtractInput(Input, allow_unbounded_fields=True):\n"

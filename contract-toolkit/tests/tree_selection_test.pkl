@@ -81,6 +81,7 @@ local includeFilterOnly = (treeApp(apiTree(false))) {
   uiConfig { tasks { ["Metadata"] { inputs { ["include-filter"] = conditional(true, "apitree") } } } }
 }
 local treeIncludeTextExclude = filterApp(apiTree(true), new App.TextInput { title = "Exclude regex" })
+local treeIncludeSqlTreeExclude = filterApp(apiTree(true), conditional(false, "sqltree"))
 local filterMixed = filterApp(conditional(true, "apitree"), conditional(false, "apitree"))
 
 facts {
@@ -136,7 +137,17 @@ facts {
 
   ["Filter tree widgets that disagree on treeSelection are refused"] {
     module.catch(() -> inputPy(filterMixed))
-      .contains("include-filter and exclude-filter tree widgets must both set treeSelection or neither")
+      .contains("Filter widget(s) exclude-filter must be tree widgets that also set treeSelection, or a TextInput.")
+  }
+
+  ["A non-tree, non-text filter widget beside a tree filter is refused"] {
+    module.catch(() -> inputPy(treeIncludeSqlTreeExclude))
+      .contains("Filter widget(s) exclude-filter must be tree widgets that also set treeSelection, or a TextInput.")
+  }
+
+  ["Filter widgets without treeSelection are not checked"] {
+    inputPy(filterApp(apiTree(false), conditional(false, "sqltree")))
+      .contains("\nclass AppInputContract(ExtractionInput):\n")
   }
 
   ["A tree include filter beside a non-tree exclude widget is allowed"] {

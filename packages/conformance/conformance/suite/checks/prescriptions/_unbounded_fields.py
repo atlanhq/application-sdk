@@ -173,9 +173,15 @@ class _Types:
     would have them remove the opt-out and break the import.
     """
 
-    def __init__(self, aliases: dict[str, ast.expr], local_classes: set[str]) -> None:
+    def __init__(
+        self,
+        aliases: dict[str, ast.expr],
+        local_classes: set[str],
+        local_names: frozenset[str] = frozenset(),
+    ) -> None:
         self._aliases = aliases
         self._local = local_classes
+        self._local_names = local_names
 
     def judge(
         self,
@@ -241,7 +247,9 @@ class _Types:
             ]
         if isinstance(node, ast.Name) and name in self._aliases and name not in seen:
             return self.judge(self._aliases[name], bounded=bounded, seen=seen | {name})
-        if name in _KNOWN_SAFE or name in self._local:
+        if name in self._local or (
+            name in _KNOWN_SAFE and name not in self._local_names
+        ):
             return []
         return [(_UNKNOWN, f"`{name}`, a type this file does not define")]
 
@@ -310,7 +318,7 @@ def _optout_message(
         parts.append(
             "Fix each, then remove the opt-out: drop an override of a field the SDK base already types "
             "(connection: ConnectionRef; include/exclude filters: FilterMap | str, or treeSelection = true "
-            "on a tree widget read below its first level); model passthrough data "
+            "on a tree widget read below its second level); model passthrough data "
             "(metadata: a BaseMetadataConfig subclass; credentials by reference: credential_guid or "
             "CredentialRef, never inline); bound a dict or list of safe values with "
             "Annotated[..., MaxItems(n)]; pass data that grows with the source system by FileReference. "
@@ -438,7 +446,14 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             elif type(stmt).__name__ == "TypeAlias":  # `type X = ...` (Python 3.12+)
                 aliases[stmt.name.id] = stmt.value  # type: ignore[attr-defined]
         classes = {c.name: c for c in ast.walk(node) if isinstance(c, ast.ClassDef)}
-        self._types = _Types(aliases, set(classes))
+        local_names = frozenset(
+            t.id
+            for stmt in node.body
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign))
+            for t in (stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target])
+            if isinstance(t, ast.Name)
+        )
+        self._types = _Types(aliases, set(classes), local_names)
         self._attr_optout = {
             name: stmt
             for name, c in classes.items()

@@ -5068,9 +5068,13 @@ local _treeSelectionWidgetCheck: Any =
     + "treeSelection applies only to baseWidgetType = \"apitree\".")
 
 local _treeFilterModeCheck: Any =
-  if (filterWidgets.values.filter((u) -> isTreeWidget(u)).map((u) -> setsTreeSelection(u)).toSet().length <= 1) null
-  else throw("include-filter and exclude-filter tree widgets must both set treeSelection or neither: "
-    + "it selects TreeSelectionExtractionInput, which types both filters as TreeSelection | str.")
+  let (bad = filterWidgets
+    .filter((_, u) -> !(isTreeWidget(u) && setsTreeSelection(u)) && !(u is Widgets.TextInput))
+    .keys.toList().sort())
+  if (!treeFilterMode || bad.isEmpty) null
+  else throw("treeSelection on a filter widget selects TreeSelectionExtractionInput, which types "
+    + "include_filter and exclude_filter as TreeSelection | str. Filter widget(s) \(bad.join(", ")) "
+    + "must be tree widgets that also set treeSelection, or a TextInput.")
 
 local _legacyWorkflowTypesPlacementCheck: Any =
   if (legacyWorkflowTypes.isEmpty)

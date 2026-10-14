@@ -31,6 +31,9 @@ from application_sdk.credentials.ingress import (
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.observability.logger_adaptor import get_logger
+
+_logger = get_logger(__name__)
 
 # Type alias for SQL filter maps: database-regex → list of schema-regexes.
 # Example: {"^prod$": ["^analytics$", "^reporting$"]}
@@ -359,16 +362,27 @@ _TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA: dict[str, JsonValue] = {
 def _coerce_tree_filter_value(v: Any) -> Any:
     """Coerce filter input to ``TreeSelection | str`` without collapsing the tree.
 
-    Same as :func:`_coerce_filter_value` for ``None`` and strings. A dict keeps
-    every level. A list, or a dict with list values, is a ``FilterMap`` of regex
-    patterns rather than a selection of named nodes, so it is passed through for
-    ``TreeSelection`` to refuse instead of being mapped onto tree keys.
+    ``None`` becomes ``""`` and a legacy quoted-CSV string is normalised, as in
+    :func:`_coerce_filter_value`. A JSON-object string, the shape the Automation
+    Engine sends, is decoded so the tree is validated as ``TreeSelection``; any
+    other string stays a string. A dict keeps every level. A list, or a dict with
+    list values, is a ``FilterMap`` of regex patterns rather than a selection of
+    named nodes, so it is passed through for ``TreeSelection`` to refuse instead
+    of being mapped onto tree keys.
     """
     if v is None:
         return ""
-    if isinstance(v, str):
-        return normalize_legacy_filter_value(v)
-    return v
+    if not isinstance(v, str):
+        return v
+    normalized = normalize_legacy_filter_value(v)
+    if not normalized.lstrip().startswith("{"):
+        return normalized
+    try:
+        parsed = orjson.loads(normalized)
+    except orjson.JSONDecodeError:
+        _logger.debug("Tree filter string is not valid JSON; keeping it as a string")
+        return normalized
+    return parsed if isinstance(parsed, dict) else normalized
 
 
 class TreeSelectionExtractionInput(ExtractionInput):
@@ -378,11 +392,11 @@ class TreeSelectionExtractionInput(ExtractionInput):
     APITree selection to two levels. Apps whose picker emits a deeper tree
     (``{catalog: {namespace: {table: {}}}}``) and that read the filter themselves
     extend this class instead: the filters are ``TreeSelection | str`` and keep
-    every level. ``None`` and string inputs are handled as in ``ExtractionInput``,
-    and the SQL-injection check still applies (it refuses nesting deeper than its
-    depth limit). ``SqlMetadataExtractor`` copies the filters into
-    ``ExtractionTaskInput``, which collapses them again, so this class is for apps
-    that read the filters directly. The contract toolkit selects it when the
+    every level. A JSON-object string is decoded into the tree; ``None`` and other
+    strings are handled as in ``ExtractionInput``. The SQL-injection check still
+    applies (it refuses nesting deeper than its depth limit). This class is for
+    apps that read the filters directly: the SQL extraction templates refuse it,
+    because their task inputs keep two levels. The contract toolkit selects it when the
     ``include-filter`` / ``exclude-filter`` widgets set ``treeSelection = true``.
     """
 

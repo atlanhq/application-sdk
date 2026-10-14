@@ -47,6 +47,7 @@ from application_sdk.templates._template_errors import (
     SqlCredentialRefMissingError,
     SqlMetadataExtractorNotImplementedError,
     SqlSecretStoreMissingError,
+    SqlTreeFilterInputUnsupportedError,
 )
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_metadata import (
@@ -65,6 +66,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchTablesOutput,
     TransformInput,
     TransformOutput,
+    TreeSelectionExtractionInput,
 )
 
 if TYPE_CHECKING:
@@ -83,6 +85,8 @@ def _task_input(
     cred_ref: CredentialRef | None,
 ) -> _ET:
     """Build a typed task input from the top-level extraction input."""
+    if isinstance(src, TreeSelectionExtractionInput):
+        raise SqlTreeFilterInputUnsupportedError()
     return input_cls(
         workflow_id=src.workflow_id,
         connection=src.connection,

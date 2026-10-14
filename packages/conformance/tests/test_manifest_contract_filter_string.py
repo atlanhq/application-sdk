@@ -147,6 +147,16 @@ def test_k021_fires_on_annotated_dict_filter(tmp_path: Path) -> None:
     assert _flagged(_run(tmp_path, src), "K021") == {"include_filter"}
 
 
+def test_k021_fires_on_bare_tree_selection_filter(tmp_path: Path) -> None:
+    src = _app_src("    include_filter: TreeSelection = {}\n")
+    assert _flagged(_run(tmp_path, src), "K021") == {"include_filter"}
+
+
+def test_k021_silent_on_tree_selection_or_str_filter(tmp_path: Path) -> None:
+    src = _app_src("    include_filter: TreeSelection | str = ''\n")
+    assert _flagged(_run(tmp_path, src), "K021") == set()
+
+
 def test_k021_fires_on_exclude_filter_too(tmp_path: Path) -> None:
     """Both the include_* and exclude_* prefixes are in scope."""
     src = _app_src(
