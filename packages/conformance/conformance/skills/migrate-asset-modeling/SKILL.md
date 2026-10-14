@@ -2,17 +2,18 @@
 name: migrate-asset-modeling
 description: >
   Move a connector app's asset modeling onto the canonical shape the
-  conformance asset-modeling rules check: qualifiedNames from pyatlan_v9
-  creators instead of hand-built f-strings (P028), every entity serialized
+  conformance asset-modeling rules check: each qualifiedName grammar in one
+  helper, derived from the pyatlan_v9 creator when that gives the identical
+  string, instead of f-strings repeated at call sites (P028), every entity serialized
   through the SDK's entity_bytes seam instead of to_nested_bytes /
   to_nested_dict / to_atlas_format / .dict() (P052, O002), asset mappers
   with a return annotation (O003), and asset models imported from
   pyatlan_v9.model.assets instead of the legacy pyatlan.model.assets
   (O004), and 1-to-N links written from the child's single reference rather
   than the parent's list (P055). The skill inventories every site, decides per site whether a
-  creator owns the grammar (rewrite), no creator owns it (centralise into
-  one module plus a justified ignore), or the change would alter asset
-  identity or wire shape (owner decision), then applies the agreed changes
+  creator produces the identical string (creator helper), no creator does
+  (centralise into one module plus a justified ignore), or the change would
+  alter asset identity or wire shape (developer decision), then applies the agreed changes
   and proves them with re-detection, the test suite and an output diff.
   The done-bar is identity parity: every qualifiedName the app emits after
   the change equals the one it emitted before, unless the developer
@@ -31,12 +32,12 @@ optional_triggers:
   - "pyatlan_v9 migration"
   - "to_nested_bytes replacement"
 owner: connector-platform-team
-last_updated: "2026-10-07"
+last_updated: "2026-10-13"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
 outputs:
-  - app code with qualifiedNames taken from pyatlan_v9 creators, or centralised in one qualified-names module with a justified ignore per helper
+  - app code with one qualifiedName helper per name shape in one module, each returning the pyatlan_v9 creator's string or keeping the f-string with a justified ignore
   - app code that serializes every entity with entity_bytes(asset, envelope=...)
   - asset mappers with return annotations; asset imports from pyatlan_v9.model.assets
   - asset mappers that link each child to its parent from the child side (1-to-N relationships)
@@ -52,13 +53,16 @@ P028, P052, P055, O002, O003, O004. These rules name this skill as their
 `remediation_reference`, and `/remediate` hands their findings here. When the
 skill is done, run
 `atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004` and
-confirm none of these rule ids is still reported.
+confirm none of these rule ids is still reported, except the P028
+**identity change** sites the developer chose to leave open.
 
 ## Why this matters
 
-A qualifiedName is an asset's identity. When an app builds it by hand, the
-grammar lives in many places and drifts; pyatlan's `creator()` factories own
-it in one place. `entity_bytes` is the one seam where the SDK injects
+A qualifiedName is an asset's identity. When an app builds it at each call
+site, the grammar lives in many places, and an identity and the references
+to it can drift apart. One helper per name shape keeps one source of truth;
+where a pyatlan `creator()` produces the identical string, the helper takes
+it from the creator, which also rejects blank segments. `entity_bytes` is the one seam where the SDK injects
 `connectionName`, applies the entity envelope and strips the placeholder guid
 that every creator sets (SDK 3.39.0). An entity serialized another
 way misses every central fix. Both changes can alter what the app publishes,
@@ -68,7 +72,7 @@ so the skill proves parity before it finishes.
 
 | Rule | Fires on | Stops when |
 |---|---|---|
-| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the qualifiedName comes from `X.creator(...).qualified_name` or `Process.generate_qualified_name(...)`, or the site carries a justified ignore |
+| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the site calls a helper that returns `X.creator(...).qualified_name`, or the helper keeps the f-string with a justified ignore, or (Process / ColumnProcess / BIProcess) calls `generate_qualified_name(process_id=...)` and gives the qualifiedName the app emits today (the detector does not check where the helper lives; `app/qualified_names.py` is the convention) |
 | P052 | `.to_nested_bytes()`, `.to_nested_dict()`, pyatlan_v9 `to_atlas_format`, or `to_atlas_format_dict`, in `app/` (not `app/generated/`) | the entity goes through `entity_bytes` |
 | P055 | a pyatlan_v9 mapper populating the list end of a 1-to-N relationship — `Table(columns=...)`, `process.fabric_activities = [...]`, `schema.tables.append(...)` | each child sets its single reference to the parent (`column.table = RelatedTable(...)`) and the parent's list is left unset |
 | O002 | any `.dict()` call in a module that imports pyatlan asset models | `.dict()` is gone, or the module no longer imports asset models |
@@ -110,14 +114,22 @@ def map_api_spec(record: SpecRecord, connection_qn: str) -> APISpec:
     return APISpec.creator(name=record.title, connection_qualified_name=connection_qn)
 ```
 
-No creator owns the grammar — one module, one justified ignore per helper,
-directly above the f-string (`atlan-metabase-app` `app/qualified_names.py`):
+No creator produces the identical string — the f-string stays in one
+helper, with one justified ignore directly above it (none of the reference
+apps has this case, so the shape is shown on its own):
 
 ```python
-def bi_process_qn(connection_qn: str, question_id: Any) -> str:
-    # conformance: ignore[P028] bespoke BIProcess qualifiedName (questions_dashboards/{id}) — no pyatlan_v9 creator owns this grammar; centralised here as the single source of truth.
-    return f"{connection_qn}/questions_dashboards/{question_id}"
+def report_qn(connection_qn: str, report_id: str) -> str:
+    # conformance: ignore[P028] no pyatlan_v9 creator for <AssetType>; single source of truth for {connection_qn}/report/{id}
+    return f"{connection_qn}/report/{report_id}"
 ```
+
+Process identity — `atlan-metabase-app` `app/qualified_names.py`
+`process_qn` / `column_process_qn` call
+`Process.generate_qualified_name(..., process_id=...)` with placeholder
+inputs. Such a helper clears P028 and stays, unless its `process_id` is
+itself an f-string that interpolates a qualifiedName and contains a `/`
+literal; that one takes the same ignore.
 
 1-to-N link from the child side — the parent's list stays unset
 (`atlan-metabase-app` `app/asset_mapper.py`):
@@ -126,8 +138,14 @@ def bi_process_qn(connection_qn: str, question_id: Any) -> str:
 asset.metabase_collection = RelatedMetabaseCollection(qualified_name=collection_qn)
 ```
 
-Process identity — `Process.generate_qualified_name(..., process_id=...)`
-returns `f"{connection_qualified_name}/{process_id}"`.
+A process helper may instead keep the f-string with an ignore that names
+`Process.generate_qualified_name`, the same shape as `report_qn` above; both
+shapes are accepted when they produce the qualifiedName the app emits today.
+`Process.generate_qualified_name(..., process_id=...)` returns
+`f"{connection_qualified_name}/{process_id}"` after it checks that `name`,
+`connection_qualified_name`, `inputs` and `outputs` are non-empty
+(`ColumnProcess` also checks `parent`): it does not own the `process_id`
+grammar, and a blank `process_id` makes it return its own hash instead.
 
 Serialization (`atlan-openapi-app` `app/connector.py`):
 
@@ -197,21 +215,50 @@ helper and lists their lines.
   to get the **string** only; never emit that creator-built asset, because
   its `name` is then the id. Some families have no creators at all; check per
   asset type.
-- **process** — a Process or ColumnProcess identity with the grammar
-  `{connection_qn}/{process_id}`:
-  `Process.generate_qualified_name(name=..., connection_qualified_name=..., inputs=<non-empty>, outputs=<non-empty>, process_id=...)`.
-  Without `process_id` it returns a hash, not the app's grammar; with an
-  empty `inputs` or `outputs` it raises.
+- **process** — an f-string that builds a Process or ColumnProcess identity
+  (`{connection_qn}/{process_id}`, a suffix on the output qn, or a hash the
+  app computes such as `f"{connection_qn}/{sha1}"`). The app owns the
+  grammar. Keep it in one helper per process shape, in either accepted
+  shape: the f-string with an ignore that names
+  `Process.generate_qualified_name`, or a helper that calls
+  `generate_qualified_name(process_id=...)` with placeholder inputs. Both
+  are correct when they give the qualifiedName the app emits today. Never
+  call it without `process_id`: pyatlan's own hash changes every existing
+  process qualifiedName. A `process_id` f-string is itself a finding only
+  when it interpolates a qualifiedName and contains a `/` literal
+  (`f"{model_qn}@allmodule"` is not); it takes the same ignore.
 - **decode** — code that takes a qualifiedName apart (`split("/")`,
   `"/".join(parts[:-1])`). It does not build an identity, so it is not a
   P028 site. Keep it unchanged, or derive the ids from the source record
   instead; never re-encode the grammar there.
-- **centralise** — no creator owns the grammar. Move every such f-string into
-  one `app/qualified_names.py` with one helper per shape and one justified
-  ignore per helper.
-- **identity change** — the only creator produces a different string. This
-  changes asset identity (duplicates or orphaned assets). Owner decision; do
-  not apply.
+- **not an identity** — an f-string that embeds a qualifiedName but is not an
+  asset identity: an object-store key or prefix that starts with the qn
+  (`f"{connection_qn}/lineage_current_state"`), a trailing-`/` match prefix
+  (`f"{qn}/"` used with `startswith`), or a log/exception message or display
+  text. Suppress it on the line with
+  `# conformance: ignore[P028] <reason>`, where the reason names what the
+  string is (for example `object-store key, not a qualifiedName`). Never
+  rewrite it through a creator.
+- **centralise** — no `pyatlan_v9` creator exists for the asset type. Move
+  every such f-string into one `app/qualified_names.py` with one helper per
+  shape and one justified ignore per helper. A creator that exists but
+  produces a different string is an **identity change**, not this class.
+- **identity change** — a creator exists but produces a different string
+  for some input the app can receive (it derives a segment differently, or
+  raises on a reachable blank id). Moving that site to the creator changes
+  asset identity (duplicates or orphaned assets). Do not choose: list each
+  site at Stop 1 with the options that apply, and the developer decides.
+  - **guard, then creator** — offer it only when the differing input is a
+    blank or missing id and the asset or reference it produces today is
+    junk (for example `…/topic/` or `conn///`). Name every asset or
+    reference that would disappear. If the developer accepts, skip those
+    rows before the helper is called, use the creator, and compare the
+    published asset counts before and after.
+  - **keep the f-string** — keep the f-string in the helper with an ignore
+    that names the creator and the input it would change. This keeps identity
+    parity and is the default when the developer does not accept a change.
+  - **leave open** — the site stays unsuppressed and is listed in the PR
+    description.
 
 For P052, O002 and O004 sites, record the serialization call and the model
 generation. For P052, the envelope keeps the released wire shape:
@@ -229,16 +276,19 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    pinned on purpose to the legacy `AtlasTransformer` keeps the import with
    an ignore that names that pin.
 2. **O003** — add the return annotation (`-> Table`, a union, or `Optional`).
-3. **P028** — put every qualifiedName helper in one `app/qualified_names.py`:
+3. **P028** — put every qualifiedName helper in one `app/qualified_names.py`
+   (a convention the detector does not check: it lets a reviewer see every
+   grammar in one place):
    `lru_cache` helpers that return `X.creator(...).qualified_name` for the
-   **creator** sites, `generate_qualified_name` helpers for the **process**
-   sites, and the f-string helpers with their ignores for the **centralise**
-   sites. Call sites use the helpers. In a dict-mapper app the helpers return
-   strings only, and the emitted dicts keep their shape. Leave **identity
-   change** and **decode** sites untouched and **unsuppressed**: they stay
-   P028 findings, listed in the PR description, until the owner decides (for
-   example to reject blank ids in `run()`, which makes the creator rewrite
-   safe).
+   **creator** sites, f-string helpers with their ignores for the
+   **centralise** sites, and for the **process** sites that are not already
+   in a `generate_qualified_name` helper. Apply the choice the developer made
+   at Stop 1 for each **identity change** site. Call sites use the helpers. In a dict-mapper app the helpers return
+   strings only, and the emitted dicts keep their shape. Give each
+   **not an identity** site its reasoned ignore in place. Leave **identity
+   change** sites left open untouched and **unsuppressed**: they stay P028
+   findings, listed in the PR description. **decode** sites are not P028
+   sites; leave them as Step 1 says.
 4. **P052 / O002** — serialize every entity with
    `entity_bytes(asset, envelope=ENTITY_ENVELOPE, entity_type=...)`, one module-level
    policy. Pass `connection_name=` and `last_sync=` unless the mapper already
@@ -260,10 +310,12 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
 ## Step 3 — Prove it
 
 1. `atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004 --exit-zero --output <file>`
-   — no finding left except the agreed ignores and the owner-decision sites
-   (expected, unsuppressed). The checker does not see the hand-built helpers
-   from Step 1 (for example a `_qn(*parts)` join): grep their call sites and
-   confirm each is migrated or listed as an owner decision.
+   — no finding left except the agreed ignores and the **identity change**
+   sites left open (expected, unsuppressed). **decode** sites are not P028
+   findings, so they do not appear here. The checker
+   does not see the hand-built helpers from Step 1 (for example a
+   `_qn(*parts)` join): grep their call sites and confirm each is migrated or
+   listed in the PR description as left open.
 2. The test suite passes, with no failure that was not in the baseline.
 3. Parity: regenerate the output from Step 0.3 and compare, as multisets
    (counts, not sets: an anonymised fixture can repeat a qualifiedName), both
@@ -291,7 +343,8 @@ Two stops, developer decides at each:
 
 1. **After Step 1** — the inventory: every site, its class, the grammar
    comparison for each creator rewrite, the envelope for each serialization
-   site, and the list of owner decisions. No edits yet.
+   site, each **identity change** site with its options, and each P055
+   child that is emitted only through its parent's list. No edits yet.
 2. **After Step 3** — the evidence: the re-detect output, the test result,
    the parity diff and the new parity test. Then hand off for PR review.
 

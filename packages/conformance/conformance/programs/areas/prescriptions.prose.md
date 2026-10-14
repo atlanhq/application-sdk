@@ -132,9 +132,19 @@ every other site to residue (see its entry below).  P027 (app_state read with no
 populating writer) describes a structural fix — route the data through the typed
 entrypoint/task contract — that no local edit can perform, and the writer may be
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
-constructing assets via the pyatlan `.creator()` factories, a semantic rewrite
-performed by the `migrate-asset-modeling` skill (its `remediation_reference`);
-the SDK has no qualifiedName seam, the creators own the grammar.  All three draft a proposal for
+one helper per name shape (by convention in `app/qualified_names.py`; the
+detector does not check the location), derived from the pyatlan
+`.creator()` where that gives the identical string for every reachable input and
+an f-string with a justified ignore otherwise (a Process / ColumnProcess / BIProcess helper
+may instead call `generate_qualified_name(process_id=...)` when that gives the
+qualifiedName the app emits today), a rewrite performed by the
+`migrate-asset-modeling` skill (its `remediation_reference`); the SDK has no
+qualifiedName seam.  An f-string
+that embeds a qualifiedName but is not an identity — an object-store key or
+prefix starting with the qn, a trailing-`/` match prefix, a log/exception
+message or display text — is suppressed with
+`# conformance: ignore[P028] <reason>` naming what the string is, not
+rewritten.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
