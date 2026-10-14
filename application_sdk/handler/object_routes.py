@@ -69,7 +69,7 @@ UPLOAD_PREFIX_RE = re.compile(
 _MAX_UPLOAD_PREFIX = 256
 
 # Strips any character that is not a simple alphanumeric from file extensions
-# before they are used as mkstemp suffixes, preventing taint-flow path traversal.
+# before they become part of an object-store key.
 SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
 
 
@@ -221,7 +221,9 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
 
         # Stream the upload: drain the spooled temp file to a named temp file,
         # then stream-upload to the object store (avoids materialising in memory).
-        fd, tmp_path = tempfile.mkstemp(suffix=f".{extension}" if extension else "")
+        # The temp name carries nothing from the request: the extension belongs
+        # to the object key only, and the store never reads the local suffix.
+        fd, tmp_path = tempfile.mkstemp(suffix=".upload")
         safe_tmp_path = validated_temp_path(tmp_path)
         try:
             os.close(fd)
