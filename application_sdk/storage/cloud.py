@@ -280,7 +280,7 @@ class CloudStore:
 
         sem = asyncio.Semaphore(max_concurrency)
 
-        async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
+        async def _dl(obj_key: str, size: int, etag: str | None) -> Path | None:
             async with sem:
                 # No `list_prefix and` guard here: when list_prefix == "" (a
                 # whole-bucket download), startswith("") is always True, so the
@@ -297,21 +297,29 @@ class CloudStore:
                 # Pass the listing's size + etag so large objects chunk (with
                 # version-pinned range GETs) and small ones stream — no per-file
                 # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
-                await download_file_chunked(
-                    obj_key,
-                    local_path,
-                    store=self._store,
-                    normalize=False,
-                    file_size=size,
-                    etag=etag,
-                    # External bucket: the SDK never wrote sidecars here, so
-                    # skip the per-file probe that could only ever miss.
-                    sidecar_present=False,
-                )
+                try:
+                    await download_file_chunked(
+                        obj_key,
+                        local_path,
+                        store=self._store,
+                        normalize=False,
+                        file_size=size,
+                        etag=etag,
+                        # External bucket: the SDK never wrote sidecars here, so
+                        # skip the per-file probe that could only ever miss.
+                        sidecar_present=False,
+                    )
+                except StorageNotFoundError:
+                    if size != 0:
+                        raise
+                    _log().debug("Skipped directory marker key=%s", obj_key)
+                    return None
                 return local_path
 
         results = await asyncio.gather(*[_dl(k, s, e) for k, s, e in items])
-        downloaded = list(results)
+        downloaded = [path for path in results if path is not None]
+        if not downloaded:
+            raise StorageError(f"No files found under prefix: {list_prefix!r}")
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
