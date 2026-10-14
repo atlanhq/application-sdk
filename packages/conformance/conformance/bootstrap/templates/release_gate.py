@@ -32,6 +32,13 @@ the same commit. The status is bound to the commit, so a push moves the PR onto
 a commit with no status and the gate re-blocks until ``/gate-check`` is asked
 again on the new head.
 
+Only a status ``github-actions[bot]`` created counts (FND-3947). That is the
+identity ``test-commands.yaml`` posts the verdict with (``github.token``).
+Anyone with write access can post a ``gate-check`` status through the API, and
+on a bump PR this gate is the only blocker: the gated reusables skip their jobs
+there, and a skipped required check reads as a pass. So a status from anyone
+else is ignored, never read as a verdict.
+
 An empty or unreadable state file means the lookup failed, and the gate
 FAILS on it. That is the opposite of the connector-review gate, and
 deliberate: a release that skips its gate is worse than a re-run of a
@@ -52,6 +59,7 @@ import sys
 
 RELEASE_LABEL = "release"
 BUMP_BRANCH_PREFIX = "bump-version"
+VERDICT_CREATOR = "github-actions[bot]"
 
 # Kept at module level so each line fits inside the tightest wrap in the
 # fleet and `ruff format` is a no-op at every width (see FND-445).
@@ -73,18 +81,21 @@ def parse_labels(raw: str) -> list[str]:
 
 
 def read_state(path: str) -> str:
-    """Return the status state recorded in ``path``, else ``""``.
+    """Return the newest ``gate-check`` state ``VERDICT_CREATOR`` posted, else ``""``.
 
-    ``gh api ... --jq`` prints one state per line; the combined-status
-    endpoint already reduces each context to its newest status, so at most
-    one line is expected. Take the last non-blank one regardless.
+    ``gh api .../statuses --jq`` prints one ``<state> <creator login>`` line
+    per status, newest first. The first line whose creator is
+    ``VERDICT_CREATOR`` is the verdict. A line from anyone else, or in any
+    other shape, is skipped.
     """
     file = pathlib.Path(path)
     if not path or not file.is_file():
         return ""
-    lines = [line.strip() for line in file.read_text().splitlines()]
-    states = [line for line in lines if line]
-    return states[-1] if states else ""
+    for line in file.read_text().splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == VERDICT_CREATOR:
+            return fields[0]
+    return ""
 
 
 def is_release_pr(head_ref: str, labels: list[str]) -> bool:

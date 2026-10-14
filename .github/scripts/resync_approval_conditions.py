@@ -581,6 +581,12 @@ ACCEPTED_LINE_DROPS: dict[str, tuple[str, ...]] = {
         "(github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || "
         "(contains(github.event.pull_request.labels.*.name, 'e2e') && "
         "(github.event.action != 'labeled' || github.event.label.name == 'e2e'))",
+        # FND-3947: the bump-version skip moved inside the reusable
+        # (`skip-on-bump-pr`), so the `tests` job has no `if:` at all. Either
+        # condition above goes with its `if: >-` header. Mirrors
+        # RETIRED_TESTS_JOB_CONDITIONS in conformance.bootstrap.extract.
+        "if: >-",
+        "!startsWith(github.head_ref, 'bump-version')",
     ),
 }
 
