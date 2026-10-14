@@ -112,7 +112,7 @@ _RULE_ID = "K018"
 
 # The SDK base every SQL connector's extraction contract derives from. Used as
 # the fallback anchor when no @entrypoint is declared in the app's own source.
-_EXTRACTION_INPUT_BASES = frozenset({"ExtractionInput", "TreeSelectionExtractionInput"})
+_EXTRACTION_INPUT_BASE = "ExtractionInput"
 
 # Args the Automation Engine injects into every extract node and that no
 # contract in the fleet declares — measured across 34 connector apps on
@@ -429,7 +429,7 @@ def _sole_extraction_input(
     candidates = [
         rec
         for rec in by_name.values()
-        if any(_chain_reaches(rec, by_name, b) for b in _EXTRACTION_INPUT_BASES)
+        if _chain_reaches(rec, by_name, _EXTRACTION_INPUT_BASE)
     ]
     if len(candidates) > 1:
         candidates = [
@@ -599,7 +599,7 @@ def _unwired_declarers(
 
     Used only on the inherited-``run()`` path, where none of them is bound.
     """
-    anchors = {*_EXTRACTION_INPUT_BASES, input_name}
+    anchors = {_EXTRACTION_INPUT_BASE, input_name}
     return {
         rec.name: _resolved_field_names(rec, file_aliases, by_name, by_name_all)
         for rec in by_name.values()
