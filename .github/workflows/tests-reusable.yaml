@@ -1216,6 +1216,7 @@ jobs:
       # e2e-full-reusable.yaml's plan-clouds has always guarded on the count for
       # exactly this reason.
       cloud-count: ${{ steps.discover-clouds.outputs.count }}
+      preview-hold-hours: ${{ steps.preview-hold.outputs.hours }}
       # The same cloud dimension as a flat list, for lease-tenant — which is ONE
       # job that takes every cloud's lease in order rather than a matrix leg per
       # cloud (FND-646), so it needs the list and not a matrix.
@@ -1442,6 +1443,25 @@ jobs:
           set -euo pipefail
           echo "::error::e2e was requested but no suites were discovered under '${{ inputs.e2e-test-path }}' (expected test_*.py). Failing so this is not a silent pass."
           exit 1
+
+      # A PR carrying the `e2e-preview` label asks a passing run to keep its
+      # connection for 24h, so the comment's preview links open real assets;
+      # the scheduled e2e-preview-reaper purges it after. Read through the API
+      # rather than the event payload because a `/e2e` run is a dispatch with
+      # no pull_request payload, and adding the label starts nothing on its
+      # own. Empty hours (no label, no PR, a failed read) is the usual purge.
+      - name: Read the preview-hold request
+        id: preview-hold
+        if: inputs.pr-number != '' || github.event.pull_request.number
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          echo "hours=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq 'if any(.[]; .name == "e2e-preview") then "24" else "" end')" >> "$GITHUB_OUTPUT"
 
       # ── Show the `/e2e` request as running (FND-3839) ──────────────────────
       # Edits the PR's sticky `/e2e` comment in place. A view of the request,
@@ -2435,11 +2455,9 @@ jobs:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-      # A PR carrying `e2e-preview` asks a passing run to keep its connection
-      # for 24h so the comment's preview links open something; the scheduled
-      # e2e-preview-reaper purges it after. Without the label teardown purges
-      # as usual. Read by application_sdk.testing.harness.preview_hold.
-      E2E_PREVIEW_HOLD_HOURS: ${{ contains(github.event.pull_request.labels.*.name, 'e2e-preview') && '24' || '' }}
+      # Set when the PR carries `e2e-preview` (discover-e2e reads it); empty
+      # purges as usual. Read by application_sdk.testing.harness.preview_hold.
+      E2E_PREVIEW_HOLD_HOURS: ${{ needs.discover-e2e.outputs.preview-hold-hours }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -3493,7 +3511,7 @@ jobs:
       # section of the comment below. Reporting only, so both steps fail open:
       # no artifact, or no helper, is an empty section.
       - name: Download e2e preview links
-        if: always() && github.event_name == 'pull_request' && needs.e2e.result == 'success'
+        if: always() && needs.e2e.result == 'success'
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -3505,7 +3523,9 @@ jobs:
       # the asset counts this PR's are compared against.
       - name: Find the release-baseline run
         id: baseline
-        if: always() && github.event_name == 'pull_request' && needs.e2e.result == 'success'
+        if: >-
+          always() && needs.e2e.result == 'success' &&
+          hashFiles('.github/scripts/preview_baseline_run.py') != ''
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -3513,7 +3533,6 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          [ -f .github/scripts/preview_baseline_run.py ] || exit 0
           echo "run-id=$(python3 .github/scripts/preview_baseline_run.py "$REPO" "$RUN_ID")" >> "$GITHUB_OUTPUT"
 
       - name: Download release-baseline preview links
@@ -3526,17 +3545,21 @@ jobs:
           run-id: ${{ steps.baseline.outputs.run-id }}
           github-token: ${{ github.token }}
 
+      # Rendered once to a file: the pull_request run's Tests Summary reads it
+      # as a step output, the `/e2e` verdict comment below reads the file.
       - name: Render e2e preview links
         id: preview
-        if: always() && github.event_name == 'pull_request' && needs.e2e.result == 'success'
+        if: >-
+          always() && needs.e2e.result == 'success' &&
+          hashFiles('.github/scripts/render_preview_links.py') != ''
         continue-on-error: true
         run: |
           set -euo pipefail
-          [ -f .github/scripts/render_preview_links.py ] || exit 0
+          python3 .github/scripts/render_preview_links.py e2e-preview-artifacts e2e-preview-baseline > "$RUNNER_TEMP/e2e-preview.md"
           delim="PREVIEW_$(openssl rand -hex 16)"
           {
             echo "markdown<<${delim}"
-            python3 .github/scripts/render_preview_links.py e2e-preview-artifacts e2e-preview-baseline
+            cat "$RUNNER_TEMP/e2e-preview.md"
             echo "${delim}"
           } >> "$GITHUB_OUTPUT"
 
@@ -3772,6 +3795,7 @@ jobs:
           python3 .github/scripts/test_command_comment.py
           --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
           e2e-verdict --run-id "$RUN_ID" --verdict "$VERDICT" --clouds "$CLOUDS"
+          --extra-file "$RUNNER_TEMP/e2e-preview.md"
 
       # A dispatched e2e run (`/e2e`, `/gate-check`) is not the run that owns
       # the required `tests / Tests Gate` — the PR's own pull_request run is,

@@ -221,6 +221,39 @@ class TestE2eVerdictState:
         assert "no verdict" in state.summary
         assert state.details_title == "Results"
 
+    def test_extra_markdown_follows_the_results(self) -> None:
+        """The e2e preview links ride on the verdict, after the results table
+        and before the re-run hint."""
+        state = tcc.e2e_verdict_state(
+            sha=SHA,
+            verdict="success",
+            legs=self.LEGS[:1],
+            clouds=CLOUDS,
+            run_url=RUN_URL,
+            extra="### Preview: assets this run published\n",
+        )
+        body = tcc.render(state)
+        assert (
+            body.index("</details>") < body.index("### Preview") < body.index("Re-run")
+        )
+
+
+class TestReadExtra:
+    def test_a_missing_file_is_no_extra(self, tmp_path: Path) -> None:
+        assert tcc._read_extra(str(tmp_path / "absent.md")) == ""
+
+    def test_an_oversized_file_is_dropped_so_the_verdict_still_fits(
+        self, tmp_path: Path
+    ) -> None:
+        big = tmp_path / "big.md"
+        big.write_text("x" * (tcc.MAX_EXTRA_CHARS + 1))
+        assert tcc._read_extra(str(big)) == ""
+
+    def test_a_file_is_read_whole(self, tmp_path: Path) -> None:
+        small = tmp_path / "small.md"
+        small.write_text("### Preview\n")
+        assert tcc._read_extra(str(small)) == "### Preview\n"
+
 
 class TestSdkE2eState:
     def _check(self, name: str, conclusion: str | None, url: str = "") -> dict:

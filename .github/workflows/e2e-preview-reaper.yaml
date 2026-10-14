@@ -41,17 +41,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Skip a tenant set this repo has no secret for
-        id: has-tenants
-        run: |
-          set -euo pipefail
-          if [ -n "${TENANT_MATRIX_JSON}" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; fi
-
+      # Every step skips a tenant set this repo has no secret for.
       # Two invocations, mask pass first, as in tests-reusable.yaml's e2e job:
       # registering the matrix blob as a secret does not redact the values
       # inside it.
       - name: Resolve the test tenant for this cloud
-        if: steps.has-tenants.outputs.ok == 'true'
+        if: env.TENANT_MATRIX_JSON != ''
         run: |
           set -euo pipefail
           python3 .github/scripts/resolve_e2e_tenant.py \
@@ -64,11 +59,11 @@ jobs:
             >> "$GITHUB_ENV"
 
       - name: Set up uv
-        if: steps.has-tenants.outputs.ok == 'true'
+        if: env.TENANT_MATRIX_JSON != ''
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
       - name: Purge expired holds
-        if: steps.has-tenants.outputs.ok == 'true'
+        if: env.TENANT_MATRIX_JSON != ''
         run: |
           set -euo pipefail
           uv run --frozen python -m application_sdk.testing.harness.preview_hold reap

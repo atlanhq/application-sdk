@@ -96,6 +96,33 @@ def test_the_tests_gate_comment_carries_the_preview_section() -> None:
     assert "steps.preview.outputs.markdown" in comment["with"]["message"]
 
 
+def test_the_e2e_command_verdict_carries_the_preview_section() -> None:
+    """A `/e2e` comment starts a dispatched run that never posts the Tests
+    Summary, so its verdict comment is where the links have to land."""
+    steps = yaml.safe_load(_REUSABLE.read_text())["jobs"]["tests-passed"]["steps"]
+    preview = next(s for s in steps if s.get("id") == "preview")
+    assert "pull_request" not in preview["if"]
+    assert "$RUNNER_TEMP/e2e-preview.md" in preview["run"]
+    verdict = next(
+        s for s in steps if s.get("name") == "Post the /e2e verdict on the PR"
+    )
+    assert '--extra-file "$RUNNER_TEMP/e2e-preview.md"' in verdict["run"]
+
+
+def test_the_hold_reads_the_label_from_the_api_not_the_event() -> None:
+    """A dispatched `/e2e` run has no pull_request payload to read labels from."""
+    jobs = yaml.safe_load(_REUSABLE.read_text())["jobs"]
+    hold = next(
+        s for s in jobs["discover-e2e"]["steps"] if s.get("id") == "preview-hold"
+    )
+    assert "issues/${PR_NUMBER}/labels" in hold["run"]
+    assert '"e2e-preview"' in hold["run"]
+    assert "inputs.pr-number" in hold["env"]["PR_NUMBER"]
+    assert jobs["e2e"]["env"]["E2E_PREVIEW_HOLD_HOURS"] == (
+        "${{ needs.discover-e2e.outputs.preview-hold-hours }}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # What changed vs the release baseline
 # ---------------------------------------------------------------------------

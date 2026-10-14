@@ -95,6 +95,8 @@ class CommentState:
     details_title: str = ""
     details: str = ""
     note: str = ""
+    #: Markdown shown in full after the details, e.g. the e2e preview links.
+    extra: str = ""
 
 
 def glyph(result: str | None) -> str:
@@ -125,6 +127,8 @@ def render(state: CommentState) -> str:
             "",
             "</details>",
         ]
+    if state.extra.strip():
+        lines += ["", state.extra.strip()]
     if state.stage in (PASSED, FAILED, NO_VERDICT, NOT_STARTED):
         lines += ["", _RERUN_HINT[state.command]]
     return "\n".join(lines) + "\n"
@@ -176,7 +180,7 @@ def e2e_table(legs: list, clouds: list) -> str:
 
 
 def e2e_verdict_state(
-    *, sha: str, verdict: str, legs: list, clouds: list, run_url: str
+    *, sha: str, verdict: str, legs: list, clouds: list, run_url: str, extra: str = ""
 ) -> CommentState:
     failed = sum(1 for _, _, r in legs if r not in ("success", "skipped"))
     stage = {"success": PASSED, "failure": FAILED}.get(verdict, NO_VERDICT)
@@ -196,6 +200,7 @@ def e2e_verdict_state(
         links=(Link("run", run_url),),
         details_title="Results (suite × cloud)" if clouds else "Results",
         details=e2e_table(legs, clouds),
+        extra=extra,
     )
 
 
@@ -250,6 +255,21 @@ def gate_check_table(rows: list) -> str:
 
 # ── I/O ────────────────────────────────────────────────────────────────────
 
+#: A comment body is capped at 65536 characters; the verdict itself must fit.
+MAX_EXTRA_CHARS = 20000
+
+
+def _read_extra(path: str) -> str:
+    """The extra markdown, or "" when there is none. Its writer
+    (render_preview_links.py) already validated every link and name in it."""
+    if not path:
+        return ""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    return text if len(text) <= MAX_EXTRA_CHARS else ""
+
 
 def upsert(github: GitHub, pr: int, state: CommentState) -> None:
     """Edit this command's comment on ``pr`` in place, or create it."""
@@ -286,6 +306,12 @@ def main(argv: list | None = None) -> int:
     verdict.add_argument("--run-id", required=True, type=int)
     verdict.add_argument("--verdict", required=True)
     verdict.add_argument("--clouds", default="")
+    verdict.add_argument(
+        "--extra-file",
+        default="",
+        help="markdown appended to the verdict (render_preview_links.py's "
+        "output); a missing file is no extra",
+    )
     sub.add_parser("sdk-e2e-verdict")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if not args.pr.strip().isdigit():
@@ -322,6 +348,7 @@ def main(argv: list | None = None) -> int:
             legs=legs_from_jobs(jobs, clouds),
             clouds=clouds,
             run_url=args.run_url,
+            extra=_read_extra(args.extra_file),
         )
     try_upsert(github, pr, state)
     # Always 0: this step runs inside the required gate job.
