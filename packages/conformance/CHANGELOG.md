@@ -2,6 +2,16 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.50.0] - 2026-10-14
+
+### Features
+
+- assert which asset types lineage connects (expected_lineage_edges) (#4380) ([54bee54](https://github.com/atlanhq/application-sdk/commit/54bee54))
+
+### Bug fixes
+
+- resolve bump-version PR required checks by skipping jobs inside the gated reusables (FND-3947) (#4385) ([095df87](https://github.com/atlanhq/application-sdk/commit/095df87))
+
 ## [0.49.0] - 2026-10-14
 
 ### Features
