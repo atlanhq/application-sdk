@@ -1005,20 +1005,21 @@ def test_p001_fires_on_a_subclass_inheriting_the_class_keyword_opt_out() -> None
     )
     found = _p001_by_line(src)
     assert sorted(found) == [1, 3]
-    assert "inherited from ArgsInput" in found[3]
+    assert "inherits the payload-safety opt-out from ArgsInput" in found[3]
     assert "refs: `list[...]` without MaxItems" in found[3]
     assert "args:" not in found[3]
-    assert "remove it from ArgsInput" in found[3]
+    assert "before ArgsInput drops its opt-out" in found[3]
 
 
-def test_p001_follows_the_inherited_opt_out_through_every_same_file_level() -> None:
+def test_p001_reports_an_inheriting_subclass_only_for_the_fields_it_adds() -> None:
+    # The parent's own finding covers a subclass that adds only safe fields.
     src = _KEYWORD_PARENT + (
         "class Mid(ArgsInput):\n    a: int = 0\n"
         "class Leaf(Mid):\n    refs: list[str] = []\n"
     )
     found = _p001_by_line(src)
-    assert sorted(found) == [1, 3, 5]
-    assert "inherited from ArgsInput" in found[5]
+    assert sorted(found) == [1, 5]
+    assert "from ArgsInput" in found[5]
 
 
 def test_p001_a_falsy_keyword_does_not_opt_a_subclass_back_in() -> None:
@@ -1030,21 +1031,88 @@ def test_p001_a_falsy_keyword_does_not_opt_a_subclass_back_in() -> None:
     )
     found = _p001_by_line(src)
     assert sorted(found) == [1, 3]
-    assert "inherited from ArgsInput" in found[3]
+    assert "from ArgsInput" in found[3]
     assert "does NOT set" not in found[3]
 
 
-def test_p001_a_falsy_attribute_on_the_subclass_ends_the_inherited_opt_out() -> None:
+def test_p001_a_plain_falsy_attribute_on_a_contract_does_not_end_the_inherited_opt_out() -> (
+    None
+):
+    # Pydantic stores a non-ClassVar underscore assignment as a private attribute, so
+    # the class still reads the parent's True and imports without validation.
     src = _KEYWORD_PARENT + (
-        "class Sub(ArgsInput):\n    _allow_unbounded_fields = False\n    n: int = 0\n"
+        "class Sub(ArgsInput):\n    _allow_unbounded_fields = False\n    n: Any = None\n"
     )
-    assert sorted(_p001_by_line(src)) == [1]
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_a_classvar_falsy_attribute_ends_the_inherited_opt_out() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput):\n"
+        "    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "    n: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "does NOT set" in found[3]
 
 
 def test_p001_the_first_base_that_sets_the_attribute_decides_like_the_mro() -> None:
     src = _KEYWORD_PARENT + (
-        "class Off(Input):\n    _allow_unbounded_fields = False\n"
-        "class C(Off, ArgsInput):\n    n: int = 0\n"
+        "class Off(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "class C(Off, ArgsInput):\n    refs: list[str] = []\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1]
+
+
+def test_p001_a_mixin_falsy_on_the_contract_keeps_the_mixin_opt_out() -> None:
+    src = (
+        "class M:\n    _allow_unbounded_fields = True\n"
+        "class C(M, Input):\n    _allow_unbounded_fields = False\n    a: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "inherited from M" in found[3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_a_plain_mixin_falsy_attribute_ends_the_opt_out_before_the_parent() -> (
+    None
+):
+    src = _KEYWORD_PARENT + (
+        "class Off:\n    _allow_unbounded_fields = False\n"
+        "class C(Off, ArgsInput):\n    z: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 5]
+    assert "does NOT set" in found[5]
+
+
+def test_p001_a_nested_class_does_not_shadow_a_module_level_base() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Holder:\n    class ArgsInput(Input):\n        n: int = 0\n"
+        "class C(ArgsInput):\n    refs: list[str] = []\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1, 6]
+
+
+def test_p001_a_redefined_class_name_resolves_to_the_definition_in_force() -> None:
+    src = _KEYWORD_PARENT + (
+        "class C1(ArgsInput):\n    a: list[str] = []\n"
+        "class ArgsInput(Input):\n    n: int = 0\n"
+        "class C2(ArgsInput):\n    b: dict[str, Any] = {}\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3, 7]
+    assert "does NOT set" in found[7]
+
+
+def test_p001_resolves_a_long_inheritance_chain_in_one_pass() -> None:
+    src = _KEYWORD_PARENT + "".join(
+        f"class C{i}({'ArgsInput' if i == 0 else f'C{i - 1}'}):\n    n{i}: int = 0\n"
+        for i in range(1500)
     )
     assert sorted(_p001_by_line(src)) == [1]
 
