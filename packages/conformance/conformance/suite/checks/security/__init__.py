@@ -80,6 +80,8 @@ def _has_main_guard(tree: ast.Module) -> bool:
             isinstance(test, ast.Compare)
             and isinstance(test.left, ast.Name)
             and test.left.id == "__name__"
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Eq)
             and len(test.comparators) == 1
             and isinstance(test.comparators[0], ast.Constant)
             and test.comparators[0].value == "__main__"

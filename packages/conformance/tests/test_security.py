@@ -423,6 +423,12 @@ def test_s002_still_flags_the_same_read_in_shipped_or_imported_code() -> None:
     assert _s002(no_guard, "helpers.py") == ["S002"]  # a root module other code imports
 
 
+def test_s002_a_non_equality_name_test_is_not_a_main_guard() -> None:
+    # `if __name__ != "__main__":` runs when the module is imported, so the read ships.
+    src = "import os\nif __name__ != '__main__':\n    token = os.getenv('API_TOKEN')\n"
+    assert _s002(src, "worker.py") == ["S002"]
+
+
 def test_s001_still_flags_a_hardcoded_secret_in_a_standalone_utility() -> None:
     src = _UTILITY + "password = 'hunter2-real-value'\n"
     assert [f.rule_id for f in scan_text(src, "seed_fixtures.py")] == ["S001"]
