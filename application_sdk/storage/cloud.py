@@ -321,7 +321,9 @@ class CloudStore:
         # Lowercase once so endswith checks are case-insensitive (e.g. ".JSON" matches ".json").
         lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
-            items = await _list_items(self._store, list_prefix or None)
+            items = await _list_items(
+                self._store, list_prefix or None, suffixes=suffix_filter or ()
+            )
             return sorted(
                 path
                 for path, _, _ in items
@@ -341,7 +343,9 @@ class CloudStore:
         and version-pin the range GETs — without a HEAD."""
         lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
-            items = await _list_items(self._store, list_prefix or None)
+            items = await _list_items(
+                self._store, list_prefix or None, suffixes=suffix_filter or ()
+            )
             return sorted(
                 (path, size, etag)
                 for path, size, etag in items
@@ -366,8 +370,9 @@ class CloudStore:
         Returns:
             Sorted list of matching object keys.  Zero-byte objects that act as
             GCS-style directory markers (i.e. they have at least one child key
-            under them) are excluded; zero-byte files with no children are
-            returned normally.  For raw access including markers, use the
+            under them) are excluded, and so are S3 ``folder/`` markers with
+            no children; zero-byte files with no children are returned
+            normally.  For raw access including markers, use the
             underlying :attr:`store` property directly.
         """
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""

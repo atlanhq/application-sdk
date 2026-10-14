@@ -396,6 +396,31 @@ class TestCloudStoreOps:
         with pytest.raises(StorageError, match="No files found"):
             await store.download(prefix="empty", output_dir=tmp_path / "out")
 
+    async def test_download_prefix_skips_childless_folder_marker(self, tmp_path):
+        import obstore
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("dump/base/result.json", b"{}")
+        await store.upload_bytes("dump/zero.json", b"")
+        real_list = obstore.list
+
+        async def _list(raw, prefix=None, **kwargs):
+            async for batch in real_list(raw, prefix=prefix, **kwargs):
+                yield batch
+            yield [{"path": "dump/empty", "size": 0, "e_tag": None}]
+
+        out = tmp_path / "out"
+        with patch.object(obstore, "list", _list):
+            assert await store.list("dump") == [
+                "dump/base/result.json",
+                "dump/zero.json",
+            ]
+            paths = await store.download(prefix="dump", output_dir=out)
+        assert sorted(p.relative_to(out).as_posix() for p in paths) == [
+            "base/result.json",
+            "zero.json",
+        ]
+
     async def test_download_empty_prefix_preserves_subdirectories(self, tmp_path):
         """A whole-bucket download (prefix="") must not flatten same-named files
         from different subdirectories onto one path.
