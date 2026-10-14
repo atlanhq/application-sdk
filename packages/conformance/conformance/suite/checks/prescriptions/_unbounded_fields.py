@@ -371,32 +371,39 @@ def _is_falsy_literal(node: ast.expr) -> bool:
     return isinstance(node, ast.Constant) and not node.value
 
 
-def _attribute_optout(node: ast.ClassDef) -> ast.stmt | None:
+def _becomes_private_attr(stmt: ast.stmt, is_contract: bool) -> bool:
+    """True if Pydantic turns this underscore assignment into a private attribute.
+
+    On a contract, a non-``ClassVar`` underscore assignment becomes a ``ModelPrivateAttr``, and
+    reading it from the class returns that descriptor, which is truthy whatever literal it holds.
+    """
+    return is_contract and not (
+        isinstance(stmt, ast.AnnAssign) and _is_classvar_annotation(stmt.annotation)
+    )
+
+
+def _attribute_optout(node: ast.ClassDef, is_contract: bool) -> ast.stmt | None:
     """The statement leaving ``_allow_unbounded_fields`` truthy on the class, if any.
 
     The last assignment in the class body is the one the runtime sees, so an earlier falsy one
-    does not hide a later truthy one.
+    does not hide a later truthy one. On a contract a falsy literal still counts unless it is a
+    ``ClassVar`` (see ``_becomes_private_attr``).
     """
     last = _attribute_last(node)
-    if last is None or _is_falsy_literal(last[1]):
+    if last is None:
         return None
-    return last[0]
+    stmt, value = last
+    if _is_falsy_literal(value) and not _becomes_private_attr(stmt, is_contract):
+        return None
+    return stmt
 
 
 def _attribute_turns_off(node: ast.ClassDef, is_contract: bool) -> bool:
-    """True if the class's last ``_allow_unbounded_fields`` assignment really leaves it falsy.
-
-    Pydantic turns a non-``ClassVar`` underscore assignment in a model body into a private
-    attribute, which is truthy, so on a contract only a ``ClassVar`` annotation keeps the
-    literal. A plain (non-contract) class keeps it as written.
-    """
-    last = _attribute_last(node)
-    if last is None or not _is_falsy_literal(last[1]):
-        return False
-    stmt = last[0]
-    if not is_contract:
-        return True
-    return isinstance(stmt, ast.AnnAssign) and _is_classvar_annotation(stmt.annotation)
+    """True if the class's last ``_allow_unbounded_fields`` assignment really leaves it falsy."""
+    return (
+        _attribute_last(node) is not None
+        and _attribute_optout(node, is_contract) is None
+    )
 
 
 def _module_scope_classes(node: ast.Module) -> list[ast.ClassDef]:
@@ -522,13 +529,13 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                 aliases[stmt.name.id] = stmt.value  # type: ignore[attr-defined]
         all_classes = [c for c in ast.walk(node) if isinstance(c, ast.ClassDef)]
         self._types = _Types(aliases, {c.name for c in all_classes})
-        self._attr_optout = {
-            c: stmt for c in all_classes if (stmt := _attribute_optout(c)) is not None
-        }
         self._keyword_optout = {c for c in all_classes if _keyword_optout(c)}
 
         # One pass in source order: a base is defined before the class that names it, so each
         # base is already resolved, and a later redefinition of a name does not reach back.
+        # ``source`` maps a class to the class whose finding covers its opt-out: the class that
+        # sets it, or for a non-contract mixin, the first contract that inherits it, so the
+        # contracts below that one are reported only for what they add.
         module_scope = set(_module_scope_classes(node))
         bound: dict[str, ast.ClassDef] = {}
         off = object()
@@ -537,16 +544,25 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             bases = [bound[b] for b in _base_names(c) if b in bound]
             if _is_contract_subclass(c) or any(b in self._contracts for b in bases):
                 self._contracts.add(c)
+            found = next((source[b] for b in bases if b in source), None)
+            stmt = _attribute_optout(c, c in self._contracts)
+            last = _attribute_last(c)
+            if found is not None and last is not None and _is_falsy_literal(last[1]):
+                # Pydantic takes a private attribute out of the class namespace, so a lookup
+                # reaches the base that sets the attribute before the truthy descriptor.
+                stmt = None
+            if stmt is not None:
+                self._attr_optout[c] = stmt
             if c in self._keyword_optout or c in self._attr_optout:
                 source[c] = c
             elif _attribute_turns_off(c, c in self._contracts):
                 source[c] = off
-            else:
-                found = next((source[b] for b in bases if b in source), None)
-                if found is not None:
-                    source[c] = found
-                    if found is not off:
-                        self._inherited[c] = found  # type: ignore[assignment]
+            elif found is not None:
+                source[c] = found
+                if found is not off:
+                    self._inherited[c] = found  # type: ignore[assignment]
+                    if c in self._contracts and found not in self._contracts:
+                        source[c] = c
             if c in module_scope:
                 bound[c.name] = c
         self._reported_on_subclass = {
@@ -573,7 +589,14 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         inherited_from = None
         if not opted_out and node in self._attr_optout:
             if node not in self._reported_on_subclass:
-                via = f"the {_OPTOUT_ATTR} class attribute (line {self._attr_optout[node].lineno})"
+                stmt = self._attr_optout[node]
+                via = f"the {_OPTOUT_ATTR} class attribute (line {stmt.lineno})"
+                last = _attribute_last(node)
+                if last is not None and _is_falsy_literal(last[1]):
+                    via += (
+                        ", which Pydantic stores as a private attribute that is truthy whatever "
+                        "it holds (annotate it ClassVar[bool] to keep the literal)"
+                    )
             opted_out = (
                 True  # a mixin's opt-out is reported on the contracts that inherit it
             )

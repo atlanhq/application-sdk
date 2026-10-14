@@ -903,9 +903,21 @@ def test_p001_fires_on_the_class_attribute_opt_out() -> None:
     assert "_allow_unbounded_fields class attribute" in message
     assert "filters: `Any`" in message
     assert (
-        _ids("class Q(Input):\n    _allow_unbounded_fields = False\n    x: str = ''\n")
+        _ids(
+            "class Q(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n    x: str = ''\n"
+        )
         == []
     )
+
+
+def test_p001_fires_on_a_plain_falsy_attribute_on_a_contract() -> None:
+    # Pydantic stores a non-ClassVar underscore assignment as a private attribute, and the class
+    # reads it back as that truthy descriptor, so validation is skipped despite the literal False.
+    src = "class Q(Input):\n    _allow_unbounded_fields = False\n    x: Any = None\n"
+    message = _p001_message(src)
+    assert "class attribute (line 2)" in message
+    assert "truthy whatever it holds" in message and "ClassVar[bool]" in message
+    assert "does NOT set" not in message
 
 
 def test_p001_class_attribute_opt_out_honours_a_directive() -> None:
@@ -967,7 +979,8 @@ def test_p001_the_last_class_attribute_assignment_decides() -> None:
     assert "class attribute (line 3)" in message and "payload: `bytes`" in message
     assert (
         _ids(
-            "class C(Input):\n    _allow_unbounded_fields = True\n    _allow_unbounded_fields = False\n"
+            "class C(Input):\n    _allow_unbounded_fields = True\n"
+            "    _allow_unbounded_fields: ClassVar[bool] = False\n"
         )
         == []
     )
@@ -1076,6 +1089,39 @@ def test_p001_a_mixin_falsy_on_the_contract_keeps_the_mixin_opt_out() -> None:
     assert sorted(found) == [3]
     assert "inherited from M" in found[3]
     assert "does NOT set" not in found[3]
+
+
+def test_p001_reports_a_mixin_opt_out_once_and_descendants_only_for_what_they_add() -> (
+    None
+):
+    # The first contract inheriting the mixin carries the finding; suppressing it must not
+    # leave a BLOCK on a descendant that adds only safe fields.
+    src = (
+        "class M:\n    _allow_unbounded_fields = True\n"
+        "class Parent(Input, M):\n    a: int = 0\n"
+        "class Child(Parent):\n    note: str = ''\n"
+        "class Leaf(Child):\n    refs: list[str] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3, 7]
+    assert "inherited from M" in found[3]
+    assert (
+        "from Parent" in found[7] and "refs: `list[...]` without MaxItems" in found[7]
+    )
+
+
+def test_p001_a_plain_falsy_attribute_on_a_contract_reads_through_to_an_off_base() -> (
+    None
+):
+    # The private attribute leaves the class namespace, so the base's ClassVar False is what
+    # the class reads: still enforced.
+    src = (
+        "class Off(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "class D(Off):\n    _allow_unbounded_fields = False\n    a: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "does NOT set" in found[3]
 
 
 def test_p001_a_plain_mixin_falsy_attribute_ends_the_opt_out_before_the_parent() -> (
