@@ -507,6 +507,42 @@ def _unquote_yaml_scalar(value: str) -> str:
     return inner
 
 
+def _strip_yaml_comment(value: str) -> str:
+    """``value`` without a trailing ``# ...`` comment.
+
+    As in YAML, a comment starts at a ``#`` preceded by whitespace, outside a
+    quoted scalar. A quote opens a scalar only where one can start: at the
+    beginning of ``value`` or after a flow indicator (``[{,:``). Anything this
+    cannot read as a closed quote is left as is, so a misread only ever keeps
+    a comment (a false hold), never drops a value.
+    """
+    quote = ""
+    prev = ""  # last non-blank character outside a quote
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if quote == "'":
+            if c == "'":
+                if value[i + 1 : i + 2] == "'":
+                    i += 2
+                    continue
+                quote = ""
+        elif quote == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                quote = ""
+        elif c in "\"'" and prev in ("", "[", "{", ",", ":"):
+            quote = c
+        elif c == "#" and (i == 0 or value[i - 1] in " \t"):
+            return value[:i].rstrip()
+        if not c.isspace():
+            prev = c
+        i += 1
+    return value
+
+
 def _normalise_for(path: str, line: str) -> str:
     norm = _normalise(line)
     if not path.endswith(_YAML_SUFFIXES):
@@ -514,7 +550,12 @@ def _normalise_for(path: str, line: str) -> str:
     match = _YAML_KEY_VALUE.match(norm)
     if not match:
         return norm
-    return f"{match.group(1)} {_unquote_yaml_scalar(match.group(2))}"
+    # A trailing comment is not part of the setting: the re-render drops it
+    # (FND-3945), and an unchanged value must still match.
+    value = _strip_yaml_comment(match.group(2))
+    if not value:
+        return match.group(1)
+    return f"{match.group(1)} {_unquote_yaml_scalar(value)}"
 
 
 def _description_lines(path: str, text: str) -> set[int]:
