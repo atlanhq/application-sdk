@@ -281,8 +281,13 @@ class DaprCredentialVault:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
             except BindingError as exc:
                 if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
+                    # str() of a dropped connection (e.g. ReadError) is empty,
+                    # so name the cause by type as well.
                     raise ColdStartRaceError(
-                        message=f"Upstream credential-config store unreachable: {exc.cause}",
+                        message=(
+                            "Upstream credential-config store unreachable: "
+                            f"{type(exc.cause).__name__} {exc.cause}"
+                        ).rstrip(),
                         cause=exc.cause,
                     ) from exc
                 raise
