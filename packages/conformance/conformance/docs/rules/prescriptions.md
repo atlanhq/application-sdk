@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**51 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**52 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -74,6 +74,7 @@ reassigned.
 | [P055](#p055) | `OneToManyLinkFromParent` | `warn` | `app` | `asset-modeling` | — | 0.44.0 |
 | [P056](#p056) | `UnclosedBaseClient` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
 | [P057](#p057) | `CloseOverrideSkipsSuper` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
+| [P058](#p058) | `RawDictEntity` | `warn` | `app` | `asset-modeling` | — | 0.49.0 |
 
 ---
 
@@ -153,13 +154,19 @@ sends never justify it.
 2. *Drop an override of an SDK base field.*  Re-declaring `connection` as `dict[str,
 Any]` over `ConnectionRef`, or filters as `dict[str, Any]` over `FilterMap | str`, is
 how most `Any` arrives.  Deleting the override inherits the safe type and keeps the wire
-shape.
+shape.  `FilterMap` keeps two levels, so a tree widget the app reads deeper loses those
+levels: set `treeSelection = true` on the widget instead (step 3).
 
 3. *Use the SDK's types in the same outer shape.*  `ConnectionRef`; `CredentialRef` or
 `credential_guid` (credentials cross tasks by reference, never inline);
 `AgentCredentialSpec` for `agent_json`; a `BaseMetadataConfig` subclass for wizard
-metadata; `FilterMap` for filter maps; a small `BaseModel` for a dict whose keys are
-known.  Absorb legacy wire shapes with a `mode='before'` validator.
+metadata; `FilterMap` for flat filter maps; `TreeSelection`
+(`application_sdk.contracts.types`) for a tree-widget selection (`APITree` and similar)
+read below its second level, which a generated contract gets from `treeSelection = true`
+on the widget; for an extraction app's include/exclude filters it extends
+`TreeSelectionExtractionInput`, whose filters are `TreeSelection | str`; a small
+`BaseModel` for a dict whose keys are known.  Absorb legacy wire shapes with a
+`mode='before'` validator.
 
 4. *Bound a collection of safe values* with `Annotated[..., MaxItems(n)]`, `n` taken
 from the field's real cardinality.  Every nested `dict` or `list` needs its own bound.
@@ -171,17 +178,20 @@ This is the fix that holds at 2MB.
 6. *Retire a field nothing populates*: mark it `deprecated=True` with `x-lifecycle:
 sunset`, regenerate the ledger, then remove it from source.
 
-**Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias, or a
-nested `BaseModel(extra='allow')` pass the check while bounding nothing; reach for them
-only as an owner's recorded decision. `MaxItems` never makes `Any` safe.  Removing the
-opt-out while an `Any` field remains raises `PayloadSafetyError` at class definition, so
-the app stops importing: import the module after the change, because a base class or
-mixin the detector cannot see may carry the `Any`.
+**Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias with
+no bound (`TreeSelection` bounds every level), or a nested `BaseModel(extra='allow')`
+pass the check while bounding nothing; reach for them only as an owner's recorded
+decision.  Changing a `dict` to a `str` (a `mode='before'` validator that JSON-encodes
+it) is not a fix either: it hides the shape from the check and bounds nothing.
+`MaxItems` never makes `Any` safe.  Removing the opt-out while an `Any` field remains
+raises `PayloadSafetyError` at class definition, so the app stops importing: import the
+module after the change, because a base class or mixin the detector cannot see may carry
+the `Any`.
 
 **Generated contracts** (`app/generated/`) are fixed at their source: the
 `contract/*.pkl` widget, or the toolkit when it emits `dict[str, Any]` for a widget
-(`APITree` and similar).  Never hand-edit the generated file, and never let a
-post-generate hook re-insert the opt-out.
+(`APITree` and similar; set `treeSelection = true`).  Never hand-edit the generated
+file, and never let a post-generate hook re-insert the opt-out.
 
 **Narrowing changes what the app accepts.**  Before narrowing, list the shapes the field
 really carries (its normaliser, its producers, the next task's contract) and confirm
@@ -2880,8 +2890,8 @@ on a receiver of unknown type, when   the value names the child type
 The list ends come from a table generated off the pinned pyatlan_v9 models
 (`gen-relationship-directions`): an end whose single-valued inverse is on the child
 type.  Many-to-many ends such as `Process.inputs` are not in it, and assigning `None` is
-not flagged.  Raw-dict mappers are out of scope — move them to `pyatlan_v9` first
-(O004).
+not flagged.  Raw-dict mappers are out of scope — move them to `pyatlan_v9` first (O004,
+P058).
 
 Fix: drop the list from the parent and set the single reference on each child, e.g.
 `activity.fabric_process = RelatedProcess(qualified_name=process_qn)`.  Publish then
@@ -3020,5 +3030,59 @@ subclass counts.  The check is silent unless the app's `uv.lock` resolves an SDK
 
 Land as `WARN`: a justified inline `# conformance: ignore[P057] <reason>` records a
 deliberate exception and stays visible in SARIF.
+
+---
+
+## P058 — `RawDictEntity` {#p058}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.49.0
+
+> Atlas entity built as a raw typeName/attributes dict instead of a pyatlan_v9 asset
+
+**Rationale:** A hand-built dict is the app's own wire shape: no pyatlan_v9 creator computes its
+qualifiedName and no model checks its keys. Written without entity_bytes it also misses
+every central fix the seam applies, including the top-level status ACTIVE default; Atlas
+restores a soft-deleted entity on upsert only when the payload carries it, so a
+reappearing entity stays DELETED and nothing reports it. Moving the app onto pyatlan_v9
+assets puts every entity on that seam.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/asset_mapper.py — every mapper builds its entity with a
+  `pyatlan_v9.model.assets` creator and app/connector.py writes each one through
+  `entity_bytes(...)`; no entity is assembled as a `typeName` / `attributes` dict.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
+- **Already correct when:** A justified inline `# conformance: ignore[P058] <reason>` is correct only for a type
+  `pyatlan_v9` does not model, and only when the dict carries top-level `"status":
+  "ACTIVE"` on a non-delete upsert. The reason must name the unmodelled type. A
+  directive on a type `pyatlan_v9` models is unremediated.
+
+App code under `app/` (`app/generated/` excluded) emits an Atlas entity it built as a
+raw dict — a dict display with literal `"typeName"` and `"attributes"` keys, or
+`dict(typeName=..., attributes=...)` — instead of a `pyatlan_v9.model.assets` object.
+
+Atlas encodes struct values and nested refs in the same shape, so the rule fires only
+where the dict is emitted:
+
+* `<x>.append(D)`, `<x>.insert(i, D)`, or an element of   `<x>.extend([...])` (a list /
+tuple display or comprehension); * `entity_bytes(D)`; * `yield D`; * `return D` from a
+`map_<entity>` mapper.
+
+`D` is the dict itself or a simple name bound to one in the same scope.  A dict stored
+under a subscript, nested in another dict, passed to `model_validate` or returned from a
+helper that is not a `map_` mapper is not flagged, and neither is a `typeName` without
+`attributes` (a `uniqueAttributes` ref, a search filter).
+
+Passed a dict, `entity_bytes` still stamps `connectionName` / `lastSync*`, strips a
+placeholder guid and applies the envelope; from FND-3928 it also defaults top-level
+`status` to `ACTIVE`. What it cannot add is a model: the dict's type name, attribute
+names and qualifiedName grammar stay the app's own, unchecked.  A dict written any other
+way gets none of those fixes — and Atlas restores a soft-deleted entity on upsert only
+when the payload carries `status: ACTIVE`.
+
+Fix: build the entity with the `pyatlan_v9.model.assets` creator for its type and
+serialize it with `entity_bytes`.  WARN tier — where `pyatlan_v9` does not model the
+type, keep the dict, give it top-level `"status": "ACTIVE"` on every non-delete upsert,
+and suppress with `# conformance: ignore[P058] <reason>` naming the type.
 
 ---

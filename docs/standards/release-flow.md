@@ -25,7 +25,7 @@ feat/fix commit merged to main
   a semver release, so any change to what ships — `perf`, `refactor`, `chore(deps)` — must
   appear in them. Non-conventional subjects are listed under *Other Changes*.
   *Rollout:* app repos pass `--sections auto`, which renders the full notes only once the
-  repo's own workflows carry the `gate-check` gate (below) and otherwise keeps the old
+  repo's own workflows carry the bump-PR CI gate (below) and otherwise keeps the old
   Features + Bug Fixes notes byte for byte. Rendering chores moves the bump PR on every
   Renovate merge, so each repo switches over in the same `bootstrap --resync` that gates
   its bump-PR CI — the extra pushes never run ahead of the gate. The SDK repo renders the
@@ -54,57 +54,60 @@ skipped when the open branch
 already carries the computed version (in every version file) and the same CHANGELOG section,
 date aside, **and** still merges cleanly onto the new tip. Anything the script cannot establish
 resolves to a push. A skipped branch stays on an older base; that is safe because it only edits
-version lines, the lock's own-package version and the top of the CHANGELOG, and the merge — and
-the opted-in (`gate-check`) test run, which tests the PR's merge ref — combine it with the current target.
+version lines, the lock's own-package version and the top of the CHANGELOG, and the merge
+combines it with the current target. The release gate must test that combination too, and a
+`/gate-check` run is dispatched on the branch tip rather than the PR's merge ref, so
+`/gate-check` refuses a bump branch that is behind its base (FND-3839): update the branch, or
+let the next bump push it, first.
 The PR upsert still runs on a skipped push. Bump runs are also serialised per repo and target
 (`concurrency`, queued not cancelled), so a burst of merges coalesces into the newest run.
 
-**CI on a bump PR is opt-in via the `gate-check` label** (FND-3748). Nothing heavy runs on a
-`bump-version-*` PR until a reviewer adds `gate-check`, which means "run this lane's full
-release gate":
+**CI on a bump PR is opt-in via a `/gate-check` comment** (FND-3748, FND-3839). Nothing heavy
+runs on a `bump-version-*` PR until a reviewer comments `/gate-check`, which means "run this
+lane's full release gate":
 
-| Lane | `gate-check` runs |
+| Lane | `/gate-check` runs |
 |---|---|
 | App repo `bump-version-main` | every CI workflow, including tenant e2e |
 | SDK `bump-version-main` | SDK Gate (SDK area), PR Checks including connector e2e / SDR / storage, CodeQL |
 | SDK `bump-version-conformance` / `-contract-toolkit` | SDK Gate for that area only — never tenant e2e |
 
-`e2e` stays the opt-in for ordinary PRs, and is still honoured on bump PRs while the fleet
-resyncs. The opt-in is one-shot: every bump workflow removes `gate-check` *before* it pushes a
-new bump commit (`.github/scripts/bump_pr_opt_in.py clear`) — the `synchronize` a push fires
-carries the PR's labels as they are at that instant, so removing it afterwards would start a
-full run anyway. The same call creates the label in a repo that lacks it.
+The opt-in and its verdict are the `gate-check` **commit status** on the head commit, so the
+opt-in is one-shot by construction: a new bump commit has no status. Nothing has to clear it
+before a push. (`.github/scripts/bump_pr_opt_in.py clear` still runs in the app-repo
+`release-version-bump.yaml`, for repos whose shims predate FND-3839 and still read the label.)
+Ordinary PRs request e2e with `/e2e`. See [ci.md](ci.md#test-legs-are-requested-by-pr-comment-never-by-label)
+for the command mechanics.
 
-*App repos* gate the **caller** job of every bootstrap shim (`tests.yaml`, `checks.yml`,
-`conformance.yaml`, `vulnerability-scan.yml`) on the same `if:`. A caller skipped by its `if:`
-gets no runner and creates no `<caller> / <job>` context, so an un-opted bump commit's required
-checks sit at "Expected" — Release Gate is the visible red check explaining why — rather than
-reading `skipped` as a pass. `checks.yml`, `conformance.yaml` and `vulnerability-scan.yml`
-subscribe to `labeled` for this, and skip every label event on an ordinary PR. The shims roll
-out through `bootstrap --resync`; a repo that has not resynced behaves exactly as before.
+*App repos* skip the **caller** job of every bootstrap shim (`tests.yaml`, `checks.yml`,
+`conformance.yaml`, `vulnerability-scan.yml`) on a bump PR's own `pull_request` run
+(`if: !startsWith(github.head_ref, 'bump-version')`). A skipped caller gets no runner and creates
+no `<caller> / <job>` context, so an un-opted bump commit's required checks sit at "Expected" —
+Release Gate is the visible red check explaining why — rather than reading `skipped` as a pass.
+`/gate-check` then dispatches each of those workflows on the bump branch (`workflow_dispatch`,
+where `head_ref` is empty, so the caller runs). Their checks land on the head commit exactly as a
+PR run's would; no PR run published them, so nothing collides. `vulnerability-scan.yml` builds
+its release candidate only on that dispatch. None of the shims subscribes to `labeled`.
 
 *The SDK repo* cannot use caller skips: SDK Gate and Connector Tests Gate are inline required
 jobs, and a skipped inline job files `skipped`, which reads as a pass. So both gates run and
-**fail fast** on an un-opted bump PR, and every job they compose skips. SDK Gate does not
-subscribe to `labeled` (an unrelated label on an ordinary PR would skip its inline gate over an
-earlier failure); instead `bump-pr-gate-check.yaml` re-runs the head's SDK Gate run when
-`gate-check` is added, and the re-run reads the PR's *live* labels, since a re-run replays the
-original, label-less payload.
+**fail fast** on an un-opted bump PR, and every job they compose skips. Only the Admin role
+may comment `/gate-check` here (app repos accept Write, Maintain or Admin). It posts a
+`gate-check` status on the head and re-runs SDK Gate, PR Checks and CodeQL there; each reads
+the status live (`bump_pr_opt_in.py check --sha`), since a re-run replays the original event
+payload.
 
-Release Gate deliberately still runs on every `labeled`/`unlabeled` event. It cannot be skipped
-for unrelated labels: a skipped job files a `skipped` check, a required check reads that as a
-pass, and the newest run wins — so an unrelated label would clear a real "missing `e2e`" failure.
-The job is a two-minute `ubuntu-slim` check.
-
-Release Gate passes a release PR on the `gate-check` or `e2e` label **or** on a successful
-`e2e` commit status on the PR head (`.github/scripts/release_gate.py`, vendored by bootstrap). The status
-is needed because the label is consumed: the Tests Gate removes it once the run finishes and
-records the verdict as that status first (FND-3411). The removal uses `github.token`, so it
-starts no new Release Gate run. A later run — an unrelated label, a human removing `e2e` —
-then reads the status and stays green. A push moves the head to a commit with no status, so
-the gate fails until the label is added again. A repo still on the pre-FND-3411 template keeps
-its green verdict from the `labeled` run, but any later label event turns it red; re-run
-`bootstrap --resync` to pick up the status check.
+**Release Gate passes a release PR only on a `success` `gate-check` status on its head**
+(`.github/scripts/release_gate.py`, vendored by bootstrap). In an app repo `/gate-check` posts
+it as `pending` with the list of workflows it dispatched; `gate_check_verdict.py`, run by
+`test-commands.yaml` on each of those runs' `workflow_run` completion, sets it to `success` once
+all of them passed (or `failure`, naming the ones that did not) and re-runs Release Gate, whose
+re-run replaces its earlier red. `pending` reads as "still running", `failure` as "failed", and
+no status as "comment `/gate-check`". A push moves the head to a commit with no status, so the
+gate fails until `/gate-check` is asked again. A release PR is recognised by its `bump-version*`
+branch as well as the `release` label, because the label is added after the PR opens and the
+`opened` payload can lack it. Labels never pass the gate any more, and Release Gate no longer
+subscribes to `labeled`/`unlabeled`.
 
 **Two guards decide whether a run acts at all** (`.github/scripts/release_guard.py`, called
 from `release.py` before any file is touched; each sets `skip=true`, which every mutating

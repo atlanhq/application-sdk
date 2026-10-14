@@ -1,0 +1,34 @@
+/// Tree-filters example — an extraction app whose metadata filters come from
+/// tree pickers. `treeSelection = true` on the `include-filter` /
+/// `exclude-filter` widgets makes `AppInputContract` extend the SDK's
+/// `TreeSelectionExtractionInput`, whose filters are `TreeSelection | str` and
+/// keep every level of the selected tree.
+amends "../../src/App.pkl"
+
+name = "tree-filters"
+displayName = "Tree Filters Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Metadata"] {
+      inputs {
+        ["include-filter"] = new APITree {
+          title = "Include Metadata"
+          credentialType = "atlan-connectors-tree-filters"
+          treeSelection = true
+        }
+        ["exclude-filter"] = new APITree {
+          title = "Exclude Metadata"
+          credentialType = "atlan-connectors-tree-filters"
+          treeSelection = true
+        }
+      }
+    }
+  }
+}

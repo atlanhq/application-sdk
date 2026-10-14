@@ -471,10 +471,33 @@ uiConfig: Widgets.UIConfig?
 /// different `ObjectField`s sharing a `className`.
 inputs: Mapping<InputsPkg.FieldName, InputsPkg.InputField> = new Mapping {}
 
+/// (Derived) An extraction app's `include-filter` / `exclude-filter` widgets.
+/// `ExtractionInput` declares both fields, so they generate no field of their own.
+local filterWidgets: Map<String, Widgets.UIElement> =
+  if (isSystemApp) Map()
+  else (uiConfig?.properties ?? Map())
+    .filter((k, _) -> Set("include_filter", "exclude_filter").contains(toPyFieldName(k)))
+
+local function isTreeWidget(u: Widgets.UIElement): Boolean =
+  u is Widgets.APITree
+    || (u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).baseWidgetType == "apitree")
+
+local function setsTreeSelection(u: Widgets.UIElement): Boolean =
+  (u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).treeSelection)
+    || (u is Widgets.APITree && (u as Widgets.APITree).treeSelection)
+
+/// (Derived) Whether the filter widgets set `treeSelection`. The filters are then
+/// the SDK's `TreeSelectionExtractionInput` fields (`TreeSelection | str`), which
+/// keep every level of the tree, instead of `ExtractionInput`'s `FilterMap | str`.
+local treeFilterMode: Boolean = filterWidgets.values.any((u) -> setsTreeSelection(u))
+
 /// (Derived) Base class of the generated input model. A system app's input is
 /// the args its callers pass, not an extraction run's, so it extends the SDK's
 /// plain `Input` instead of `ExtractionInput`.
-local inputBaseClass: String = if (isSystemApp) "Input" else "ExtractionInput"
+local inputBaseClass: String =
+  if (isSystemApp) "Input"
+  else if (treeFilterMode) "TreeSelectionExtractionInput"
+  else "ExtractionInput"
 
 /// (Derived) Fields the base input class already declares. A generated field
 /// with one of these names is skipped (UI) or refused (`inputs`).
@@ -525,7 +548,8 @@ inputContractToolkitImport: String = "../App.pkl"
 /// object class of one of these names would shadow it: an `Input` class, for
 /// one, would replace the SDK base `AppInputContract` extends.
 local inputReservedClassNames: Set<String> = Set(
-  "AppInputContract", "Input", "ExtractionInput", "BaseModel", "ConfigDict",
+  "AppInputContract", "Input", "ExtractionInput", "TreeSelectionExtractionInput",
+  "BaseModel", "ConfigDict",
   "Field", "ConnectionRef", "FileReference", "MaxItems", "TreeSelection",
   "CredentialRef", "Annotated", "Any", "ClassVar", "Literal"
 )
@@ -3827,7 +3851,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "from application_sdk.observability.logger_adaptor import get_logger\n"
     else "") +
     (if (inputBaseClass == "Input") "from application_sdk.contracts.base import Input\n"
-     else "from application_sdk.templates.contracts import ExtractionInput\n")
+     else "from application_sdk.templates.contracts import \(inputBaseClass)\n")
   // Module-level logger, emitted only when the coercion validator needs it, so
   // its benign "not valid JSON" fallback is observable (conformance E007) rather
   // than silently swallowed. The message never logs the value itself.
@@ -5043,6 +5067,15 @@ local _treeSelectionWidgetCheck: Any =
   else throw("ConditionalInput \(bad.join(", ")) sets treeSelection; "
     + "treeSelection applies only to baseWidgetType = \"apitree\".")
 
+local _treeFilterModeCheck: Any =
+  let (bad = filterWidgets
+    .filter((_, u) -> !(isTreeWidget(u) && setsTreeSelection(u)) && !(u is Widgets.TextInput))
+    .keys.toList().sort())
+  if (!treeFilterMode || bad.isEmpty) null
+  else throw("treeSelection on a filter widget selects TreeSelectionExtractionInput, which types "
+    + "include_filter and exclude_filter as TreeSelection | str. Filter widget(s) \(bad.join(", ")) "
+    + "must be tree widgets that also set treeSelection, or a TextInput.")
+
 local _legacyWorkflowTypesPlacementCheck: Any =
   if (legacyWorkflowTypes.isEmpty)
     null
@@ -5098,6 +5131,7 @@ output =
   let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
   let (_bundleInputNameCheck = _bundleInputClassNameCheck)
   let (_treeSelectionCheck = _treeSelectionWidgetCheck)
+  let (_treeFilterCheck = _treeFilterModeCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {

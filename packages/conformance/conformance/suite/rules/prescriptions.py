@@ -129,13 +129,20 @@ RULES: tuple[RuleDefinition, ...] = (
             "2. *Drop an override of an SDK base field.*  Re-declaring ``connection`` as\n"
             "``dict[str, Any]`` over ``ConnectionRef``, or filters as ``dict[str, Any]``\n"
             "over ``FilterMap | str``, is how most ``Any`` arrives.  Deleting the override\n"
-            "inherits the safe type and keeps the wire shape.\n"
+            "inherits the safe type and keeps the wire shape.  ``FilterMap`` keeps two\n"
+            "levels, so a tree widget the app reads deeper loses those levels: set\n"
+            "``treeSelection = true`` on the widget instead (step 3).\n"
             "\n"
             "3. *Use the SDK's types in the same outer shape.*  ``ConnectionRef``;\n"
             "``CredentialRef`` or ``credential_guid`` (credentials cross tasks by\n"
             "reference, never inline); ``AgentCredentialSpec`` for ``agent_json``; a\n"
-            "``BaseMetadataConfig`` subclass for wizard metadata; ``FilterMap`` for\n"
-            "filter maps; a small ``BaseModel`` for a dict whose keys are known.  Absorb\n"
+            "``BaseMetadataConfig`` subclass for wizard metadata; ``FilterMap`` for flat\n"
+            "filter maps; ``TreeSelection`` (``application_sdk.contracts.types``) for a\n"
+            "tree-widget selection (``APITree`` and similar) read below its second level, which a\n"
+            "generated contract gets from ``treeSelection = true`` on the widget; for an\n"
+            "extraction app's include/exclude filters it extends ``TreeSelectionExtractionInput``,\n"
+            "whose filters are ``TreeSelection | str``; a small\n"
+            "``BaseModel`` for a dict whose keys are known.  Absorb\n"
             "legacy wire shapes with a ``mode='before'`` validator.\n"
             "\n"
             "4. *Bound a collection of safe values* with ``Annotated[..., MaxItems(n)]``,\n"
@@ -150,8 +157,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "``x-lifecycle: sunset``, regenerate the ledger, then remove it from source.\n"
             "\n"
             "**Not fixes.**  ``object``, ``JsonValue``, a bare ``dict`` or ``list``, a\n"
-            "recursive alias, or a nested ``BaseModel(extra='allow')`` pass the check while\n"
-            "bounding nothing; reach for them only as an owner's recorded decision.\n"
+            "recursive alias with no bound (``TreeSelection`` bounds every level), or a\n"
+            "nested ``BaseModel(extra='allow')`` pass the check while bounding nothing;\n"
+            "reach for them only as an owner's recorded decision.  Changing a ``dict`` to\n"
+            "a ``str`` (a ``mode='before'`` validator that JSON-encodes it) is not a fix\n"
+            "either: it hides the shape from the check and bounds nothing.\n"
             "``MaxItems`` never makes ``Any`` safe.  Removing the opt-out while an ``Any``\n"
             "field remains raises ``PayloadSafetyError`` at class definition, so the app\n"
             "stops importing: import the module after the change, because a base class or\n"
@@ -159,7 +169,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Generated contracts** (``app/generated/``) are fixed at their source: the\n"
             "``contract/*.pkl`` widget, or the toolkit when it emits ``dict[str, Any]``\n"
-            "for a widget (``APITree`` and similar).  Never hand-edit the generated file,\n"
+            "for a widget (``APITree`` and similar; set ``treeSelection = true``).  Never\n"
+            "hand-edit the generated file,\n"
             "and never let a post-generate hook re-insert the opt-out.\n"
             "\n"
             "**Narrowing changes what the app accepts.**  Before narrowing, list the shapes\n"
@@ -815,7 +826,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "inverse is on the child type.  Many-to-many ends such as\n"
             "``Process.inputs`` are not in it, and assigning ``None`` is not\n"
             "flagged.  Raw-dict mappers are out of scope — move them to\n"
-            "``pyatlan_v9`` first (O004).\n"
+            "``pyatlan_v9`` first (O004, P058).\n"
             "\n"
             "Fix: drop the list from the parent and set the single reference on\n"
             "each child, e.g. ``activity.fabric_process =\n"
@@ -823,6 +834,88 @@ RULES: tuple[RuleDefinition, ...] = (
             "parent first and each child references a parent that already exists.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p055",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
+    ),
+    RuleDefinition(
+        id="P058",
+        # Pinned by tests/test_raw_dict_entity.py::test_silent_on_canonical_reference,
+        # which scans verbatim copies of both cited files (tests/fixtures/p058_openapi/).
+        canonical_reference=(
+            "atlan-openapi-app app/asset_mapper.py — every mapper builds its "
+            "entity with a `pyatlan_v9.model.assets` creator and "
+            "app/connector.py writes each one through `entity_bytes(...)`; no "
+            "entity is assembled as a `typeName` / `attributes` dict."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P058] <reason>` is "
+            "correct only for a type `pyatlan_v9` does not model, and only when "
+            'the dict carries top-level `"status": "ACTIVE"` on a non-delete '
+            "upsert. The reason must name the unmodelled type. A directive on "
+            "a type `pyatlan_v9` models is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="RawDictEntity",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.49.0",
+        rationale=(
+            "A hand-built dict is the app's own wire shape: no pyatlan_v9 "
+            "creator computes its qualifiedName and no model checks its keys. "
+            "Written without entity_bytes it also misses every central fix the "
+            "seam applies, including the top-level status ACTIVE default; "
+            "Atlas restores a soft-deleted entity on upsert only when the "
+            "payload carries it, so a reappearing entity stays DELETED and "
+            "nothing reports it. Moving the app onto pyatlan_v9 assets puts "
+            "every entity on that seam."
+        ),
+        short_description=(
+            "Atlas entity built as a raw typeName/attributes dict instead of a "
+            "pyatlan_v9 asset"
+        ),
+        full_description=(
+            "App code under ``app/`` (``app/generated/`` excluded) emits an Atlas\n"
+            "entity it built as a raw dict — a dict display with literal\n"
+            '``"typeName"`` and ``"attributes"`` keys, or\n'
+            "``dict(typeName=..., attributes=...)`` — instead of a\n"
+            "``pyatlan_v9.model.assets`` object.\n"
+            "\n"
+            "Atlas encodes struct values and nested refs in the same shape, so the\n"
+            "rule fires only where the dict is emitted:\n"
+            "\n"
+            "* ``<x>.append(D)``, ``<x>.insert(i, D)``, or an element of\n"
+            "  ``<x>.extend([...])`` (a list / tuple display or comprehension);\n"
+            "* ``entity_bytes(D)``;\n"
+            "* ``yield D``;\n"
+            "* ``return D`` from a ``map_<entity>`` mapper.\n"
+            "\n"
+            "``D`` is the dict itself or a simple name bound to one in the same\n"
+            "scope.  A dict stored under a subscript, nested in another dict,\n"
+            "passed to ``model_validate`` or returned from a helper that is not a\n"
+            "``map_`` mapper is not flagged, and neither is a ``typeName`` without\n"
+            "``attributes`` (a ``uniqueAttributes`` ref, a search filter).\n"
+            "\n"
+            "Passed a dict, ``entity_bytes`` still stamps ``connectionName`` /\n"
+            "``lastSync*``, strips a placeholder guid and applies the envelope;\n"
+            "from FND-3928 it also defaults top-level ``status`` to ``ACTIVE``.\n"
+            "What it cannot add is a model: the dict's type name, attribute names\n"
+            "and qualifiedName grammar stay the app's own, unchecked.  A dict\n"
+            "written any other way gets none of those fixes — and Atlas restores a\n"
+            "soft-deleted entity on upsert only when the payload carries\n"
+            "``status: ACTIVE``.\n"
+            "\n"
+            "Fix: build the entity with the ``pyatlan_v9.model.assets`` creator\n"
+            "for its type and serialize it with ``entity_bytes``.  WARN tier —\n"
+            "where ``pyatlan_v9`` does not model the type, keep the dict, give it\n"
+            'top-level ``"status": "ACTIVE"`` on every non-delete upsert, and\n'
+            "suppress with ``# conformance: ignore[P058] <reason>`` naming the type.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p058",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",

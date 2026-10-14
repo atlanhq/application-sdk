@@ -159,6 +159,17 @@ output is not an entity line at all (a `ConnectionRef` built from
 `to_atlas_format`) gets an inline `# conformance: ignore[P052] <reason>`
 instead.
 
+P058 (an Atlas entity built as a raw `{"typeName": ..., "attributes": ...}`
+dict and emitted — appended, extended, inserted, yielded, passed to
+`entity_bytes` or returned from a `map_<entity>` mapper) is not auto-fixable.
+The fix rebuilds the entity with the `pyatlan_v9.model.assets` creator for its
+type and serializes it through `entity_bytes`, a semantic rewrite performed by
+the `migrate-asset-modeling` skill (its `remediation_reference`).  It drafts a
+proposal for human review and never auto-applies.  A type `pyatlan_v9` does not
+model keeps its dict, which must carry top-level `"status": "ACTIVE"` on a
+non-delete upsert, with an inline `# conformance: ignore[P058] <reason>` naming
+the type.
+
 ### Requires
 
 - `scope` — repository root path.
@@ -317,7 +328,9 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      `FilterMap | str`, is how most `Any` arrives.  Deleting the override
      inherits the safe type, keeps the wire shape, and is compatible under
      B005 by construction.  The SDK's `FilterMap` coercion accepts a list, a
-     legacy string, and a one-level `APITree` tree.
+     legacy string, and a one-level `APITree` tree.  It keeps two levels, so
+     a tree the app reads deeper loses those levels: set
+     `treeSelection = true` on the widget instead (step 3).
 
   3. **Use the SDK's own types, in the same outer shape.**
      | Field carries | Type it as |
@@ -326,7 +339,9 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      | credentials | `credential_guid` / `CredentialRef`: by reference, never inline across tasks |
      | `agent_json` | `AgentCredentialSpec` |
      | wizard metadata | a `BaseMetadataConfig` subclass, or a bounded `dict[str, str]` |
-     | filters | `FilterMap` (`application_sdk.templates.contracts`) |
+     | flat filters | `FilterMap` (`application_sdk.templates.contracts`) |
+     | a tree-widget selection (`APITree` and similar) read below its second level | `TreeSelection` (`application_sdk.contracts.types`); generated contracts get it from `treeSelection = true` on the widget |
+     | an extraction app's include/exclude filters as a tree | extend `TreeSelectionExtractionInput` (`application_sdk.templates.contracts`), whose filters are `TreeSelection \| str`; generated contracts get it from `treeSelection = true` on both filter widgets |
      | a dict with known keys | a small `BaseModel` with those fields |
 
      Absorb legacy wire shapes with a `@field_validator(..., mode="before")`
@@ -362,19 +377,26 @@ above.  `classification` is always `"judgment"` for all P-series rules.
 
   7. **Generated contract with `Any`: fix the source, never the file.**  The
      `contract/*.pkl` widget decides the shape, and the toolkit emits
-     `dict[str, Any]` for widgets such as `APITree`.  Change the widget, or
+     `dict[str, Any]` for widgets such as `APITree`.  For a tree widget, set
+     `treeSelection = true`: the field generates as `TreeSelection`, and on an
+     extraction app's `include-filter` / `exclude-filter` the class extends
+     `TreeSelectionExtractionInput`.  Change the widget, or
      fix the toolkit's emission, and regenerate.  Do not hand-edit
      `app/generated/`, and do not keep a `post-generate` hook that re-inserts
      the opt-out.  When only the toolkit can fix it, say so in the proposal:
      the app cannot.
 
   **Not fixes, whatever the gate says.**  `object`, `JsonValue`, a bare
-  `dict` / `list`, a recursive `TypeAliasType`, and a nested
+  `dict` / `list`, a recursive `TypeAliasType` with no bound
+  (`TreeSelection` bounds every level), and a nested
   `BaseModel(extra="allow")` all pass `validate_payload_safety` while
   bounding nothing.  Propose one only as an owner's decision, named as such.
   A hand-rolled JSON union capped at a fixed nesting depth rejects any deeper
   live payload; prefer a JSON `str` the consumer parses when the shape is
-  genuinely open.
+  genuinely open.  Changing a `dict` the wire sends to a `str` (a
+  `mode="before"` validator that JSON-encodes it) is not that case: it hides
+  the shape from the check and bounds nothing.  A tree-widget selection has a
+  known shape; type it `TreeSelection`.
 
   **Verify before proposing:** import the module; for an `@entrypoint` field
   run the `gen-contract-ledger` / `ledger-guard` commands shown under step 8;

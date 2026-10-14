@@ -108,7 +108,7 @@ class ExtractInput(Input):
 ExtractInput(component_include_filter={"SAP": {"MM": {"MM-SRV": {}}, "FI": {}}})
 ```
 
-Each key is a selected node and its value is the selection beneath it; `{}` is a node with nothing chosen beneath it. The value is a plain nested `dict`, identical in the app and on the wire to what an untyped `dict[str, Any]` field received, so stored configs validate unchanged. It is payload-safe because every level is bounded (`MaxItems(1000)` children per node) and every leaf must be a dict. For flat database/schema filters use `FilterMap` instead. In contract-toolkit, set `treeSelection = true` on an `APITree` or apitree `ConditionalInput` to generate this type.
+Each key is a selected node and its value is the selection beneath it; `{}` is a node with nothing chosen beneath it. The value is a plain nested `dict`, identical in the app and on the wire to what an untyped `dict[str, Any]` field received, so stored configs validate unchanged. It is payload-safe because every level is bounded (`MaxItems(1000)` children per node) and every leaf must be a dict. For flat database/schema filters use `FilterMap` instead. In contract-toolkit, set `treeSelection = true` on an `APITree` or apitree `ConditionalInput` to generate this type. For an extraction app's include/exclude filters, extend `TreeSelectionExtractionInput` (`application_sdk.templates.contracts`) instead of `ExtractionInput`: its filters are `TreeSelection | str`, and the toolkit selects it when the filter widgets set `treeSelection = true`.
 
 ---
 

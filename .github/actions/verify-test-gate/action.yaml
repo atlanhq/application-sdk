@@ -90,6 +90,16 @@ inputs:
       previous behaviour — and so an unexplained skip stays an anomaly.
     required: false
     default: "false"
+  e2e-only:
+    description: |
+      "true" when the run was requested as e2e-only — `run-e2e: only`, which a
+      `/e2e` PR comment dispatches (FND-3839). Unit is skipped on purpose there:
+      the PR's own pull_request run measured it and owns the required
+      `tests / …` contexts, while this run reports under `e2e / …`. A skipped
+      unit then passes; a failed one still fails. Optional, defaulting to
+      "false", so callers pinned at @main keep requiring unit.
+    required: false
+    default: "false"
 
 outputs:
   passed:
@@ -141,6 +151,7 @@ runs:
         PREPARE_TENANT_RESULT: ${{ inputs.prepare-tenant-result }}
         E2E_RESULT: ${{ inputs.e2e-result }}
         SUPERSEDED: ${{ inputs.superseded }}
+        E2E_ONLY: ${{ inputs.e2e-only }}
       run: |
         set -euo pipefail
         python3 "${{ github.action_path }}/verify_test_gate.py" \
@@ -154,4 +165,5 @@ runs:
           --lease-tenant "$LEASE_TENANT_RESULT" \
           --prepare-tenant "$PREPARE_TENANT_RESULT" \
           --e2e "$E2E_RESULT" \
-          --superseded "$SUPERSEDED" >> "$GITHUB_OUTPUT"
+          --superseded "$SUPERSEDED" \
+          --e2e-only "$E2E_ONLY" >> "$GITHUB_OUTPUT"

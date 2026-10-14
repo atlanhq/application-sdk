@@ -30,6 +30,7 @@ _HANDLER_MODULES = (
     "application_sdk.handler",
     "application_sdk.handler.contracts",
     "application_sdk.handler.base",
+    "application_sdk.handler.source_probes",
     "application_sdk.handler.service",
     "application_sdk._runtime.offload",
 )

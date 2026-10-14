@@ -151,10 +151,12 @@ LEGACY_SECTIONS = (
     ("fixes", "Bug Fixes", ("fix",)),
 )
 
-# What marks a repo whose bump-PR CI is gated on the opt-in label: the
-# bootstrap shims carry it once the repo has resynced onto the FND-3748
-# templates, and they all arrive in the same resync.
-OPT_IN_MARKER = "'gate-check'"
+# What marks a repo whose bump-PR CI is gated on the opt-in: the bootstrap
+# shims carry one once the repo has resynced onto the FND-3748 templates, and
+# they all arrive in the same resync. `'gate-check'` is the label-era gate;
+# since FND-3839 the shims skip the bump PR's own run outright (a
+# `/gate-check` comment dispatches them instead), so the skip is the marker.
+OPT_IN_MARKERS = ("'gate-check'", "!startsWith(github.head_ref, 'bump-version')")
 _CONVENTIONAL_RE = re.compile(
     r"^(?P<type>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?:\s*(?P<desc>.*)$",
     re.IGNORECASE,
@@ -174,7 +176,8 @@ def sections_for_repo(root="."):
     workflows = Path(root) / ".github" / "workflows"
     for path in sorted(workflows.glob("*.y*ml")) if workflows.is_dir() else []:
         try:
-            if OPT_IN_MARKER in path.read_text(encoding="utf-8"):
+            text = path.read_text(encoding="utf-8")
+            if any(marker in text for marker in OPT_IN_MARKERS):
                 return SECTIONS
         except OSError:
             continue

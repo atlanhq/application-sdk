@@ -124,7 +124,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.0"
+          version: "0.13.1"
 
       - name: Get current version
         id: versions
@@ -231,11 +231,12 @@ jobs:
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
 
-      # CI on a bump PR is opt-in via the `gate-check` label and covers only the
-      # commit it was given for (FND-3748). Clear it BEFORE the push: the
-      # `synchronize` the push fires carries the PR's labels at that instant, so
-      # a stale opt-in would start a full CI run on the new commit. Also creates
-      # the label if the repo lacks it. Fails open (warns, push proceeds).
+      # Legacy, for app repos whose shims predate FND-3839 and still read the
+      # `gate-check` LABEL as the bump-PR opt-in (FND-3748): clear it BEFORE the
+      # push, because the `synchronize` the push fires carries the PR's labels
+      # at that instant. A resynced repo opts in with a `/gate-check` comment
+      # instead — a commit status, which a push leaves behind by construction —
+      # so this is a no-op there. Remove once the fleet has resynced. Fails open.
       - name: Reset the bump PR's CI opt-in
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && hashFiles('.sdk-scripts/.github/scripts/bump_pr_opt_in.py') != ''
         env:

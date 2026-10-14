@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -116,7 +117,9 @@ def repair(
         _warn(f"could not read run {self_run_id}; skipping the deferred-gate repair")
         return False
 
-    candidates = newer_runs(repo, head_sha, self_run["workflow_id"], self_run_id, run)
+    candidates = newer_runs(
+        repo, head_sha, self_run["workflow_id"], self_run_id, run, event="pull_request"
+    )
     if candidates is None:
         _warn(
             f"could not list the Tests runs on {head_sha[:7]}; leaving them as they are"
@@ -179,6 +182,145 @@ def repair(
     return True
 
 
+#: Bound on waiting for a still-running PR run before reconciling its gate.
+#: The gate is that run's last job and finishes within minutes of the rest.
+RECONCILE_WAIT_SECONDS = 600
+RECONCILE_POLL_SECONDS = 20
+
+#: The PR run's gate job. A dispatched e2e-only run reports as `e2e / …`, so
+#: the prefix keeps it from matching itself.
+PR_GATE_JOB_NAME = "tests / Tests Gate"
+
+
+def _pr_gate_job(repo: str, run_id: int, run: RunFn) -> dict | None:
+    # Every page: a large e2e matrix can push the gate past the first 100 jobs,
+    # and "not found" would leave a disagreeing gate unrepaired.
+    payload = _load(
+        run(
+            [
+                "api",
+                f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100&filter=latest",
+                "--paginate",
+                "--slurp",
+            ]
+        )
+    )
+    pages = payload if isinstance(payload, list) else [payload]
+    for page in pages:
+        jobs = page.get("jobs") if isinstance(page, dict) else None
+        if not isinstance(jobs, list):
+            return None
+        for job in jobs:
+            if isinstance(job, dict) and job.get("name") == PR_GATE_JOB_NAME:
+                return job
+    return None
+
+
+def _deferral_failed(job: dict) -> bool:
+    return any(
+        isinstance(step, dict)
+        and step.get("name") == DEFER_STEP_NAME
+        and step.get("conclusion") == "failure"
+        for step in job.get("steps") or []
+    )
+
+
+def gate_disagrees(job: dict, verdict: str) -> bool:
+    """Whether a completed PR gate's result contradicts the e2e ``verdict``.
+
+    * green, but e2e failed (or produced no verdict): the gate passed before
+      the `/e2e` request existed, or read `pending`'s absence. It must re-read.
+    * red only because it gave up waiting on `pending`, and e2e passed.
+
+    A gate red for any other reason (a unit failure) is not e2e's to touch.
+    """
+    if job.get("status") != "completed":
+        return False
+    conclusion = job.get("conclusion")
+    if conclusion == "success":
+        return verdict in ("failure", "error")
+    if conclusion == "failure":
+        return verdict == "success" and _deferral_failed(job)
+    return False
+
+
+def reconcile(
+    repo: str,
+    head_sha: str,
+    self_run_id: int,
+    verdict: str,
+    *,
+    run: RunFn | None = None,
+    sleep=time.sleep,
+    clock=time.monotonic,
+    wait_seconds: int = RECONCILE_WAIT_SECONDS,
+    dry_run: bool = False,
+) -> bool:
+    """From a dispatched e2e run, bring the PR run's Tests Gate in line with
+    the ``verdict`` this run just recorded on ``head_sha`` (FND-3839).
+
+    A `/e2e` comment dispatches e2e as its own run, so the PR's `pull_request`
+    run — which owns the required `tests / Tests Gate` — may have concluded
+    before the verdict existed. Its gate holds to the `e2e` status
+    (e2e_commit_verdict.py), so re-running just that job makes it read the
+    verdict. Driven by disagreement rather than an attempt cap: a re-run that
+    reads the verdict agrees with it, so this cannot loop.
+    """
+    run = run or _run_gh
+    self_run = _load(run(["api", f"repos/{repo}/actions/runs/{self_run_id}"]))
+    if not isinstance(self_run, dict) or self_run.get("workflow_id") is None:
+        _warn(f"could not read run {self_run_id}; skipping the gate reconcile")
+        return False
+    deadline = clock() + wait_seconds
+    while True:
+        runs = newer_runs(
+            repo, head_sha, self_run["workflow_id"], 0, run, event="pull_request"
+        )
+        if runs is None:
+            _warn(f"could not list the PR runs on {head_sha[:7]}; leaving them")
+            return False
+        if not runs:
+            _notice("no pull_request run on this commit; nothing to reconcile")
+            return False
+        newest = max(runs, key=lambda entry: entry["id"])
+        if newest.get("status") == "completed":
+            break
+        if clock() >= deadline:
+            _warn(
+                f"PR run {newest['id']} is still running after {wait_seconds}s; "
+                "its gate reads the e2e status itself if it has not passed it yet. "
+                "If it is green with a failed e2e, re-run its Tests Gate by hand."
+            )
+            return False
+        sleep(RECONCILE_POLL_SECONDS)
+
+    job = _pr_gate_job(repo, newest["id"], run)
+    if job is None:
+        _warn(f"could not find `{PR_GATE_JOB_NAME}` in run {newest['id']}")
+        return False
+    if not gate_disagrees(job, verdict):
+        _notice(
+            f"run {newest['id']}'s gate ({job.get('conclusion')}) already agrees "
+            f"with the e2e verdict ({verdict})"
+        )
+        return False
+    if dry_run:
+        _notice(f"--dry-run: would re-run job {job['id']} of run {newest['id']}")
+        return True
+    if not run(["api", "-X", "POST", f"repos/{repo}/actions/jobs/{job['id']}/rerun"]):
+        _warn(
+            f"could not re-run the Tests Gate of run {newest['id']}. Re-running needs "
+            "`actions: write` (ORG_PAT_GITHUB). Re-run it by hand to pick up the "
+            "e2e verdict."
+        )
+        return False
+    _notice(
+        f"re-ran the Tests Gate of PR run {newest['id']}; it now reads the e2e "
+        f"verdict ({verdict})"
+    )
+    return True
+
+
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Re-run a newer Tests Gate that gave up waiting for the e2e verdict."
@@ -186,8 +328,23 @@ def main(argv: list | None = None) -> int:
     parser.add_argument("--repo", required=True, help="owner/name")
     parser.add_argument("--head-sha", required=True, help="The PR head commit.")
     parser.add_argument("--self-run-id", required=True, type=int, help="github.run_id")
+    parser.add_argument(
+        "--verdict",
+        default="",
+        help="The e2e verdict this run recorded. Set on a dispatched e2e run "
+        "(FND-3839): the PR run's Tests Gate is then reconciled with it instead.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.verdict:
+        reconcile(
+            args.repo,
+            args.head_sha,
+            args.self_run_id,
+            args.verdict,
+            dry_run=args.dry_run,
+        )
+        return 0
     repair(args.repo, args.head_sha, args.self_run_id, dry_run=args.dry_run)
     # Always 0: a repair must never fail the gate job it runs in.
     return 0

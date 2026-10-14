@@ -668,8 +668,9 @@ def test_the_gate_passes_the_pr_number_from_the_event() -> None:
 def test_the_gate_may_read_the_pull_request() -> None:
     """A job-level permissions block REPLACES the workflow default rather than
     merging with it, so dropping this does not fail loudly — the read 403s, the
-    poll warns, and it waits the full budget exactly as it used to."""
-    assert _connector_gate()["permissions"]["pull-requests"] == "read"
+    poll warns, and it waits the full budget exactly as it used to. Write, not
+    read, since FND-3839: the same job edits the PR's sticky `/e2e` comment."""
+    assert _connector_gate()["permissions"]["pull-requests"] == "write"
 
 
 # --- newest-wins among same-named check runs ------------------------------

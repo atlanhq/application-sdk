@@ -375,7 +375,7 @@ def test_checks_system_deps_structural_drift_flagged(tmp_path: pathlib.Path) -> 
     canonical = render("checks.yml", system_deps="libkrb5-dev")
     wf.write_text(
         canonical.replace(
-            "      group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.run_id || github.ref }}",
+            "      group: ${{ github.workflow }}-${{ github.ref }}",
             "      group: pre-commit-${{ github.ref }}",
         )
     )

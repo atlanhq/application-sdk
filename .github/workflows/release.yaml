@@ -38,7 +38,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.0"
+          version: "0.13.1"
 
       - name: Install dependencies
         shell: bash
@@ -130,21 +130,6 @@ jobs:
             --version-file application_sdk/version.py \
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
-
-      # CI on a bump PR is opt-in via the `gate-check` label and covers only the
-      # commit it was given for (FND-3748). Clear it BEFORE the push: the
-      # `synchronize` the push fires carries the PR's labels at that instant, so
-      # a stale opt-in would start a full CI run on the new commit. Also creates
-      # the label if the repo lacks it. Fails open (warns, push proceeds).
-      - name: Reset the bump PR's CI opt-in
-        if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          TARGET_BRANCH: ${{ github.ref_name }}
-        run: |
-          python .github/scripts/bump_pr_opt_in.py clear \
-            --base "${TARGET_BRANCH}" \
-            --head "bump-version-${TARGET_BRANCH}"
 
       - name: Commit and push bump branch
         if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'

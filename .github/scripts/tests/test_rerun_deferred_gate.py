@@ -40,10 +40,12 @@ def _run(
     conclusion: str = "failure",
     status: str = "completed",
     attempt: int = 1,
+    event: str = "pull_request",
 ) -> dict:
     return {
         "id": run_id,
         "workflow_id": WORKFLOW_ID,
+        "event": event,
         "status": status,
         "conclusion": conclusion,
         "run_attempt": attempt,
@@ -224,3 +226,192 @@ def test_the_repair_follows_the_recorded_verdict_and_fails_open(
     assert step["continue-on-error"] is True
     assert step["env"]["GH_TOKEN"] == "${{ secrets.ORG_PAT_GITHUB || github.token }}"
     assert "rerun_deferred_gate.py" in step["run"]
+
+
+# ── Reconciling the PR run's gate from a dispatched e2e run (FND-3839) ────
+
+from rerun_deferred_gate import (  # noqa: E402
+    PR_GATE_JOB_NAME,
+    gate_disagrees,
+    reconcile,
+)
+
+DISPATCHED = NEWER + 1000
+
+
+def _pr_gate(conclusion: str, *, deferred: bool = False, job_id: int = 7) -> dict:
+    return {
+        "id": job_id,
+        "name": PR_GATE_JOB_NAME,
+        "status": "completed",
+        "conclusion": conclusion,
+        "steps": [
+            {
+                "name": DEFER_STEP_NAME,
+                "conclusion": "failure" if deferred else "skipped",
+            }
+        ],
+    }
+
+
+def _reconcile_stub(
+    *, listings: list, jobs: list, job_reruns: list, rerun_ok: bool = True
+):
+    """``listings`` is consumed one poll at a time; the last one repeats."""
+    polls = list(listings)
+
+    def run(args: list) -> str:
+        path = args[-1] if args[1] == "-X" else args[1]
+        if path.endswith("/rerun"):
+            job_reruns.append(path)
+            return "{}" if rerun_ok else ""
+        if "/jobs?" in path:
+            assert "--paginate" in args and "--slurp" in args
+            return json.dumps(
+                [{"jobs": jobs[i : i + 100]} for i in range(0, len(jobs), 100)]
+                or [{"jobs": []}]
+            )
+        if path.endswith(f"/actions/runs/{DISPATCHED}"):
+            return json.dumps({"workflow_id": WORKFLOW_ID})
+        listing = polls.pop(0) if len(polls) > 1 else polls[0]
+        return json.dumps([{"workflow_runs": listing}])
+
+    return run
+
+
+@pytest.mark.parametrize(
+    ("conclusion", "deferred", "verdict", "disagrees"),
+    [
+        ("success", False, "failure", True),  # green before e2e failed
+        ("success", False, "error", True),  # no verdict blocks like a failure
+        ("success", False, "success", False),
+        ("failure", True, "success", True),  # gave up on pending; e2e passed
+        ("failure", True, "failure", False),  # already red for the right reason
+        ("failure", False, "success", False),  # red for its own reason (unit)
+        ("cancelled", False, "success", False),
+    ],
+)
+def test_gate_disagreement(
+    conclusion: str, deferred: bool, verdict: str, disagrees: bool
+) -> None:
+    assert gate_disagrees(_pr_gate(conclusion, deferred=deferred), verdict) is disagrees
+
+
+def test_a_green_pr_gate_is_rerun_when_dispatched_e2e_failed() -> None:
+    job_reruns: list = []
+    run = _reconcile_stub(
+        listings=[
+            [
+                _run(SELF, conclusion="success"),
+                _run(DISPATCHED, event="workflow_dispatch"),
+            ]
+        ],
+        jobs=[_pr_gate("success")],
+        job_reruns=job_reruns,
+    )
+    assert reconcile(REPO, SHA, DISPATCHED, "failure", run=run)
+    assert job_reruns == [f"repos/{REPO}/actions/jobs/7/rerun"]
+
+
+def test_a_pr_gate_past_the_first_page_is_found() -> None:
+    """Not finding the gate leaves a disagreeing verdict unrepaired, so the
+    job lookup must read every page (lens F-c69d2f)."""
+    job_reruns: list = []
+    filler = [{"id": 1000 + i, "name": f"tests / E2E leg {i}"} for i in range(150)]
+    run = _reconcile_stub(
+        listings=[[_run(SELF, conclusion="success")]],
+        jobs=[*filler, _pr_gate("success", job_id=7)],
+        job_reruns=job_reruns,
+    )
+    assert reconcile(REPO, SHA, DISPATCHED, "failure", run=run)
+    assert job_reruns == [f"repos/{REPO}/actions/jobs/7/rerun"]
+
+
+def test_an_agreeing_gate_is_left_alone() -> None:
+    job_reruns: list = []
+    run = _reconcile_stub(
+        listings=[[_run(SELF, conclusion="success")]],
+        jobs=[_pr_gate("success")],
+        job_reruns=job_reruns,
+    )
+    assert not reconcile(REPO, SHA, DISPATCHED, "success", run=run)
+    assert job_reruns == []
+
+
+def test_the_dispatched_run_never_reconciles_itself() -> None:
+    """Only pull_request runs own `tests / Tests Gate`; with none on the
+    commit there is nothing to bring in line."""
+    job_reruns: list = []
+    run = _reconcile_stub(
+        listings=[[_run(DISPATCHED, event="workflow_dispatch")]],
+        jobs=[_pr_gate("success")],
+        job_reruns=job_reruns,
+    )
+    assert not reconcile(REPO, SHA, DISPATCHED, "failure", run=run)
+    assert job_reruns == []
+
+
+def test_a_running_pr_run_is_waited_for_then_reconciled() -> None:
+    job_reruns: list = []
+    sleeps: list = []
+    run = _reconcile_stub(
+        listings=[
+            [_run(SELF, status="in_progress", conclusion="")],
+            [_run(SELF, conclusion="success")],
+        ],
+        jobs=[_pr_gate("success")],
+        job_reruns=job_reruns,
+    )
+    assert reconcile(
+        REPO,
+        SHA,
+        DISPATCHED,
+        "failure",
+        run=run,
+        sleep=sleeps.append,
+        clock=lambda: 0.0,
+    )
+    assert len(sleeps) == 1
+    assert job_reruns == [f"repos/{REPO}/actions/jobs/7/rerun"]
+
+
+def test_a_pr_run_that_outlasts_the_budget_is_left_with_a_warning(capsys) -> None:
+    ticks = iter([0.0, 10_000.0])
+    run = _reconcile_stub(
+        listings=[[_run(SELF, status="in_progress", conclusion="")]],
+        jobs=[_pr_gate("success")],
+        job_reruns=[],
+    )
+    assert not reconcile(
+        REPO,
+        SHA,
+        DISPATCHED,
+        "failure",
+        run=run,
+        sleep=lambda _s: None,
+        clock=lambda: next(ticks),
+    )
+    assert "re-run its Tests Gate by hand" in capsys.readouterr().err
+
+
+def test_main_with_a_verdict_reconciles(monkeypatch) -> None:
+    seen: list = []
+    monkeypatch.setattr(
+        rerun_deferred_gate, "reconcile", lambda *args, **kwargs: seen.append(args)
+    )
+    assert (
+        main(
+            [
+                "--repo",
+                REPO,
+                "--head-sha",
+                SHA,
+                "--self-run-id",
+                str(DISPATCHED),
+                "--verdict",
+                "failure",
+            ]
+        )
+        == 0
+    )
+    assert seen == [(REPO, SHA, DISPATCHED, "failure")]

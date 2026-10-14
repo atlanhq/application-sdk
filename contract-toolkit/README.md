@@ -95,6 +95,7 @@ The SDK auto-serves these from `ATLAN_CONTRACT_GENERATED_DIR`, defaulting to `ap
 The `examples/` directory contains executable contracts that teach stable toolkit patterns.
 
 - [`examples/minimal/`](examples/minimal/) — smallest possible contract; uses all defaults. Start here.
+- [`examples/tree-filters/`](examples/tree-filters/) — extraction app whose include/exclude filters are tree pickers with `treeSelection = true`; `AppInputContract` extends `TreeSelectionExtractionInput`.
 - [`examples/full/`](examples/full/) — every overridable feature: JDBC URL auth, all pipeline steps, diverse widgets, UIRules, extraNodes.
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
@@ -565,7 +566,7 @@ setting and for what is not supported yet.
 | `Widgets.DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` |
 | `Widgets.GlossarySelector` | `GlossarySelector` | `str` |
 
-`dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not. Requires the first SDK release after 3.43.0 (which adds `TreeSelection`), so raise the app's SDK floor in the same change.
+`dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not. Requires the first SDK release after 3.43.0 (which adds `TreeSelection`), so raise the app's SDK floor in the same change. On an extraction app's `include-filter` / `exclude-filter`, the flag makes the generated class extend the SDK's `TreeSelectionExtractionInput`, whose filters are `TreeSelection | str` (see the reference).
 
 ### Complex & Utility
 

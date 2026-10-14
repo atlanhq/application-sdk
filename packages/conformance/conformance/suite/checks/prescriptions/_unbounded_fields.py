@@ -12,7 +12,8 @@ refuses (they block removing the opt-out), those it accepts that still bound
 nothing, and those whose type this file cannot resolve, so the fix starts from
 the actual fields. Same-file aliases and quoted annotations are resolved the way
 ``get_type_hints`` resolves them; an imported type is reported as unknown, never
-as safe. Many opt-outs guard nothing: every declared field is already safe, and
+as safe, and a known SDK name imported from anywhere but its trusted origin (or
+renamed onto it) is treated as that unknown import. Many opt-outs guard nothing: every declared field is already safe, and
 the finding says so, because removing the opt-out is then the whole fix.
 
 Either form is inherited: ``__init_subclass__`` stores the keyword as the class
@@ -119,6 +120,7 @@ _KNOWN_SAFE = frozenset(
         "UUID",
         "SecretStr",
         "FilterMap",
+        "TreeSelection",
         "FileReference",
         "Lazy",
         "ConnectionRef",
@@ -168,6 +170,39 @@ def _is_alias_value(node: ast.expr) -> bool:
     return isinstance(node, (ast.Name, ast.Attribute, ast.Subscript))
 
 
+#: Modules a known-safe name may be imported from and still mean the known type.
+_TRUSTED_ORIGINS = (
+    "application_sdk",
+    "builtins",
+    "datetime",
+    "decimal",
+    "uuid",
+    "typing",
+    "typing_extensions",
+    "pydantic",
+)
+
+
+def _untrusted_import_bindings(node: ast.Module) -> frozenset[str]:
+    """Names bound by an import that cannot be taken to mean the known-safe type of that name.
+
+    ``from x import Thing as TreeSelection``, ``from .types import TreeSelection`` and
+    ``from some_lib import TreeSelection`` all bind ``TreeSelection`` to a type this file
+    cannot see; only an unrenamed import from a trusted origin keeps the known meaning.
+    """
+    out: set[str] = set()
+    for stmt in ast.walk(node):
+        if isinstance(stmt, ast.ImportFrom):
+            module = stmt.module or ""
+            trusted = stmt.level == 0 and any(
+                module == m or module.startswith(m + ".") for m in _TRUSTED_ORIGINS
+            )
+            for a in stmt.names:
+                if not trusted or (a.asname is not None and a.asname != a.name):
+                    out.add(a.asname or a.name)
+    return frozenset(out)
+
+
 class _Types:
     """Judges field annotations as ``validate_payload_safety`` would, within one file.
 
@@ -177,9 +212,15 @@ class _Types:
     would have them remove the opt-out and break the import.
     """
 
-    def __init__(self, aliases: dict[str, ast.expr], local_classes: set[str]) -> None:
+    def __init__(
+        self,
+        aliases: dict[str, ast.expr],
+        local_classes: set[str],
+        local_names: frozenset[str] = frozenset(),
+    ) -> None:
         self._aliases = aliases
         self._local = local_classes
+        self._local_names = local_names
 
     def judge(
         self,
@@ -245,7 +286,9 @@ class _Types:
             ]
         if isinstance(node, ast.Name) and name in self._aliases and name not in seen:
             return self.judge(self._aliases[name], bounded=bounded, seen=seen | {name})
-        if name in _KNOWN_SAFE or name in self._local:
+        if name in self._local or (
+            name in _KNOWN_SAFE and name not in self._local_names
+        ):
             return []
         return [(_UNKNOWN, f"`{name}`, a type this file does not define")]
 
@@ -328,7 +371,8 @@ def _optout_message(
         parts.append(
             ("Fix each" if inherited_from else "Fix each, then remove the opt-out")
             + ": drop an override of a field the SDK base already types "
-            "(connection: ConnectionRef; include/exclude filters: FilterMap | str); model passthrough data "
+            "(connection: ConnectionRef; include/exclude filters: FilterMap | str, or treeSelection = true "
+            "on a tree widget read below its second level); model passthrough data "
             "(metadata: a BaseMetadataConfig subclass; credentials by reference: credential_guid or "
             "CredentialRef, never inline); bound a dict or list of safe values with "
             "Annotated[..., MaxItems(n)]; pass data that grows with the source system by FileReference. "
@@ -528,7 +572,14 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             elif type(stmt).__name__ == "TypeAlias":  # `type X = ...` (Python 3.12+)
                 aliases[stmt.name.id] = stmt.value  # type: ignore[attr-defined]
         all_classes = [c for c in ast.walk(node) if isinstance(c, ast.ClassDef)]
-        self._types = _Types(aliases, {c.name for c in all_classes})
+        local_names = frozenset(
+            t.id
+            for stmt in node.body
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign))
+            for t in (stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target])
+            if isinstance(t, ast.Name)
+        ) | _untrusted_import_bindings(node)
+        self._types = _Types(aliases, {c.name for c in all_classes}, local_names)
         self._keyword_optout = {c for c in all_classes if _keyword_optout(c)}
 
         # One pass in source order: a base is defined before the class that names it, so each
@@ -650,8 +701,10 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                     "allow_unbounded_fields — payload-safety validation refuses Any "
                     "unconditionally, so this class raises PayloadSafetyError at "
                     "import and the app will not start. MaxItems does not help: bound "
-                    "the value type instead (a concrete type, or the SDK's FilterMap "
-                    "for filter maps), or keep allow_unbounded_fields with a justified "
+                    "the value type instead (a concrete type, the SDK's FilterMap "
+                    "for flat filter maps, or TreeSelection for a tree-widget "
+                    "selection; not a str the dict is encoded into), or keep "
+                    "allow_unbounded_fields with a justified "
                     "'# conformance: ignore[P001] <reason>' directive."
                 ),
                 directives=self._directives,

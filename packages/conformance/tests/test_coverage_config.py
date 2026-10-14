@@ -16,6 +16,7 @@ from conformance.suite.checks.coverage_config import (
     scan_text,
 )
 from conformance.suite.rules import get_rule
+from conformance.suite.schema.catalog import RemediationKind
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 # ── Rule metadata ────────────────────────────────────────────────────────────
@@ -27,6 +28,10 @@ def test_t014_rule_metadata() -> None:
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
     assert rule.category == "coverage-config"
+    # Suggest-only (migration): restoring autofixable=True brings back unsafe lane edits.
+    assert rule.autofixable is False
+    assert rule.remediation_reference is not None
+    assert rule.remediation_reference.kind is RemediationKind.GUIDE
 
 
 def test_t015_rule_metadata() -> None:
@@ -34,6 +39,10 @@ def test_t015_rule_metadata() -> None:
     assert rule.name == "CoverageOmitsProductCode"
     assert rule.scope == RuleScope.APP
     assert rule.category == "coverage-config"
+    # Suggest-only (migration): restoring autofixable=True brings back unsafe lane edits.
+    assert rule.autofixable is False
+    assert rule.remediation_reference is not None
+    assert rule.remediation_reference.kind is RemediationKind.GUIDE
 
 
 # ── T014: coverage gate disabled ─────────────────────────────────────────────
