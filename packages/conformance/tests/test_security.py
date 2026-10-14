@@ -391,3 +391,49 @@ def test_warn_violation_is_warning_disposition_and_keeps_gate_green(
     report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
     dispositions = [derive_disposition(r) for r in report.runs[0].results]
     assert dispositions == [Disposition.WARNING]
+
+
+# ── S002: standalone utility scripts at the repo root ──────────────────────────────
+# A root-level script with its own __main__ block never ships (images copy app/ and
+# main.py) and reads its credentials from a local .env, like a dev harness. Flagging
+# it sent the remediation lane to wrap two such scripts in a SecretStore and add
+# tests for them, which only added code nothing in production runs.
+
+_UTILITY = (
+    "import os\n"
+    "def fetch():\n"
+    "    return os.getenv('NETSUITE_CONSUMER_SECRET')\n"
+    "if __name__ == '__main__':\n"
+    "    fetch()\n"
+)
+
+
+def _s002(src: str, file: str) -> list[str]:
+    return [f.rule_id for f in scan_text(src, file) if f.rule_id == "S002"]
+
+
+def test_s002_skips_a_standalone_utility_script_at_the_repo_root() -> None:
+    assert _s002(_UTILITY, "hailmary.py") == []
+
+
+def test_s002_still_flags_the_same_read_in_shipped_or_imported_code() -> None:
+    assert _s002(_UTILITY, "app/hailmary.py") == ["S002"]  # inside the shipped package
+    assert _s002(_UTILITY, "main.py") == ["S002"]  # the container entry point
+    no_guard = _UTILITY.split("if __name__")[0]
+    assert _s002(no_guard, "helpers.py") == ["S002"]  # a root module other code imports
+
+
+def test_s001_still_flags_a_hardcoded_secret_in_a_standalone_utility() -> None:
+    src = _UTILITY + "password = 'hunter2-real-value'\n"
+    assert [f.rule_id for f in scan_text(src, "seed_fixtures.py")] == ["S001"]
+
+
+def test_secret_hygiene_rules_are_never_applied_unattended() -> None:
+    # Their fixes change where a credential comes from at runtime, or what an auth
+    # value holds; no gate proves the replacement resolves the same secret, so the
+    # remediation lane must route them to a person (security.prose.md, suggest-only).
+    for rule_id in ("S001", "S002"):
+        rule = get_rule(rule_id)
+        assert rule.autofixable is False, rule_id
+        assert rule.remediation_reference is not None
+        assert rule.remediation_reference.kind.value == "guide"

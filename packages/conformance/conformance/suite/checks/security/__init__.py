@@ -19,6 +19,13 @@ exclusions — ``run_dev*.py`` and ``scripts/`` — which are local dev harnesse
 that legitimately read secret-named env to seed mock stores; without them S002
 would fire on ~90% of the fleet, including the reference app.
 
+S002 additionally skips a *standalone utility script*: a module at the repository
+root, other than ``main.py``, that runs under its own ``if __name__ == "__main__":``
+block.  Images ship ``app/`` (and ``main.py``), never these; they read their
+credentials from a local ``.env`` like a dev harness, and moving them onto the SDK
+seam only adds code nothing in production runs.  S001 still scans them — a
+hardcoded secret leaks through version control whether or not the file ships.
+
 Inline suppression
 ------------------
 Add a ``# conformance: ignore[SXXX] <reason>`` comment on the offending line or
@@ -63,6 +70,35 @@ def discover(root: Path) -> list[Path]:
     return [p for p in _shared_discover(root) if not _is_harness(p.relative_to(root))]
 
 
+def _has_main_guard(tree: ast.Module) -> bool:
+    """True when the module runs an ``if __name__ == "__main__":`` block."""
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == "__name__"
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast.Constant)
+            and test.comparators[0].value == "__main__"
+        ):
+            return True
+    return False
+
+
+def _is_standalone_utility(file: str, tree: ast.Module) -> bool:
+    """A repo-root script other than ``main.py`` with its own ``__main__`` block (S002 only)."""
+    rel = Path(file)
+    return (
+        not rel.is_absolute()
+        and len(rel.parts) == 1
+        and rel.name != "main.py"
+        and _has_main_guard(tree)
+    )
+
+
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a single Python source *text* for S001 + S002 findings."""
     try:
@@ -75,6 +111,8 @@ def scan_text(text: str, file: str) -> list[Finding]:
     s001 = HardcodedCredentialChecker(filename=file, directives=directives)
     s001.visit(tree)
 
+    if _is_standalone_utility(file, tree):
+        return s001._findings
     return s001._findings + check_s002(tree, file, directives)
 
 
