@@ -6,6 +6,16 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.34.0] - 2026-10-14
+
+### Features
+
+- FND-3733 TreeSelectionExtractionInput for tree-picker filters (#4349) ([a678fce](https://github.com/atlanhq/application-sdk/commit/a678fce))
+
+### Bug fixes
+
+- deprecate QI input args the app no longer accepts (#4350) ([a3d8481](https://github.com/atlanhq/application-sdk/commit/a3d8481))
+
 ## [0.33.0] - 2026-10-09
 
 ### Features
