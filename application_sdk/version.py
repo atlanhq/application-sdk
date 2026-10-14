@@ -37,4 +37,4 @@ releases drop off the CDN.
 """
 
 __version__ = "3.48.0"
-__dapr_version: str = "1.18.5"
+__dapr_version: str = "1.18.7"
