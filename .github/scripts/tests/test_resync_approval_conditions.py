@@ -635,6 +635,105 @@ def test_accepted_drops_mirror_the_lane():
     }
 
 
+# The canonical tests.yaml before FND-3839 (#4359) dropped label triggers:
+# `labeled` in the pull_request types, and the bump-version opt-in condition
+# that read the `gate-check` / `e2e` labels.
+OLD_LABEL_CONDITION = (
+    "!startsWith(github.head_ref, 'bump-version') || "
+    "(contains(github.event.pull_request.labels.*.name, 'gate-check') && "
+    "(github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || "
+    "(contains(github.event.pull_request.labels.*.name, 'e2e') && "
+    "(github.event.action != 'labeled' || github.event.label.name == 'e2e'))"
+)
+NEW_CONDITION = "!startsWith(github.head_ref, 'bump-version')"
+
+
+def _tests_yaml(types: list[str], condition: str | None) -> str:
+    lines = [
+        "on:",
+        "  pull_request:",
+        "    types:",
+        *(f"      - {t}" for t in types),
+        "jobs:",
+        "  tests:",
+    ]
+    if condition is not None:
+        lines += ["    if: >-", f"      {condition}"]
+    lines.append("    uses: atlanhq/application-sdk/.github/workflows/x.yaml@main")
+    return "\n".join(lines) + "\n"
+
+
+OLD_TYPES = ["opened", "synchronize", "reopened", "labeled"]
+NEW_TYPES = ["opened", "synchronize", "reopened"]
+
+
+def _lost(backup: str, new: str) -> list[str]:
+    return resync.still_lost(
+        TESTS_YAML, resync.lost_setting_lines(backup, new, TESTS_YAML)
+    )
+
+
+def test_label_trigger_lines_the_canonical_dropped_are_accepted():
+    backup = _tests_yaml(OLD_TYPES, OLD_LABEL_CONDITION)
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION)
+    # The raw compare still sees both lines go; only the accepted list excuses them.
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == [
+        "- labeled",
+        OLD_LABEL_CONDITION,
+    ]
+    assert _lost(backup, new) == []
+
+
+def test_labeled_alone_is_accepted_when_the_repo_never_had_the_condition():
+    # Repos still on the pre-FND-3748 template: no `if:` on the tests job.
+    backup = _tests_yaml(OLD_TYPES, None)
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION)
+    assert _lost(backup, new) == []
+
+
+@pytest.mark.parametrize(
+    "custom",
+    [
+        # A repo's own extra clause on the old condition.
+        OLD_LABEL_CONDITION + " || github.actor == 'release-bot'",
+        # A prefix of the old canonical text is not the old canonical text.
+        "!startsWith(github.head_ref, 'bump-version') || "
+        "contains(github.event.pull_request.labels.*.name, 'gate-check')",
+    ],
+)
+def test_a_repo_customised_condition_is_still_held(custom):
+    backup = _tests_yaml(OLD_TYPES, custom)
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION)
+    assert _lost(backup, new) == [custom]
+
+
+def test_a_second_labeled_beyond_the_canonical_one_is_still_held():
+    backup = _tests_yaml(OLD_TYPES, OLD_LABEL_CONDITION) + (
+        "  pull_request_target:\n    types:\n      - labeled\n"
+    )
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION) + (
+        "  pull_request_target:\n    types:\n      - opened\n"
+    )
+    assert _lost(backup, new) == ["- labeled"]
+
+
+def test_accepted_lines_only_apply_to_tests_yaml():
+    assert resync.still_lost(".github/workflows/other.yaml", ["- labeled"]) == [
+        "- labeled"
+    ]
+
+
+def test_the_lane_does_not_hold_a_repo_for_the_dropped_label_triggers(tmp_path):
+    work = str(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "tests.yaml").write_text(_tests_yaml(NEW_TYPES, NEW_CONDITION))
+    (wf / "tests.yaml.bak").write_text(_tests_yaml(OLD_TYPES, OLD_LABEL_CONDITION))
+    manifest = {"touched": [".github/workflows/tests.yaml"]}
+    assert resync.stage_like_the_lane(work, manifest, subprocess.run) == {}
+
+
 @pytest.mark.parametrize(
     "runner_kwargs",
     [
@@ -955,6 +1054,13 @@ def test_an_accepted_key_excuses_one_lost_line_not_every_line_using_it():
     lost = ["e2e-clouds: aws", "e2e-clouds: gcp", "kept-key: x"]
     assert resync.still_lost(path, lost) == ["e2e-clouds: gcp", "kept-key: x"]
     assert resync.still_lost(path, ["e2e-clouds: aws"]) == []
+
+
+def test_two_identical_lost_lines_under_an_accepted_key_are_not_both_excused():
+    backup = "a:\n  e2e-clouds: aws\nb:\n  e2e-clouds: aws\n"
+    lost = resync.lost_setting_lines(backup, "a:\nb:\n", TESTS_YAML)
+    assert lost == ["e2e-clouds: aws", "e2e-clouds: aws"]
+    assert resync.still_lost(TESTS_YAML, lost) == ["e2e-clouds: aws"]
 
 
 def test_call_turns_a_timeout_into_a_gh_error():
