@@ -3333,9 +3333,10 @@ class TestMapperResultSerialisation:
         """A dict-returning mapper keeps every field it produced.
 
         The seam only *adds* the framework-injected attributes — here
-        ``connectionName`` (FND-2056) and ``lastSyncRunAt`` (FND-2097); the
-        other two lastSync values are empty outside a run context and so are
-        not written. Nothing the mapper itself emitted is rewritten.
+        ``connectionName`` (FND-2056), ``lastSyncRunAt`` (FND-2097) and the
+        root ``status`` default (FND-3928); the other two lastSync values are
+        empty outside a run context and so are not written. Nothing the mapper
+        itself emitted is rewritten.
         """
         app = TestSqlApp()
         _seed_raw(tmp_path, "table", [{"table_name": "users"}])
@@ -3354,6 +3355,7 @@ class TestMapperResultSerialisation:
         assert entity == {
             "typeName": "Table",
             "qualifiedName": "default/mysql/1/users",
+            "status": "ACTIVE",
         }
 
 
