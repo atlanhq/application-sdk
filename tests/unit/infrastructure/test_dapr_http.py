@@ -1024,9 +1024,7 @@ class TestWarmSidecarReadRetry:
 
         assert calls["n"] == 3
 
-    async def test_a_non_idempotent_binding_call_is_not_retried_after_the_ready_gate_is_armed(
-        self, armed_component
-    ) -> None:
+    async def test_the_transport_does_not_replay_a_binding_post(self) -> None:
         """Binding writes go straight through ``invoke_binding`` (an HTTP POST),
         which the transport retry never replays; a dropped connection on a
         ``create`` surfaces after exactly one attempt."""
