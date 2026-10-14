@@ -13,6 +13,7 @@ could not be taken is ungraded — never a pass, never a zero.
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import timedelta
 from typing import Any
 
@@ -22,7 +23,12 @@ from application_sdk.testing.e2e._errors import (
     AtlasReadIndeterminateError,
     InvalidLineageEdgeDeclarationError,
 )
-from application_sdk.testing.e2e.base import BaseE2ETest, DAGSpec, FullDAGOutcome
+from application_sdk.testing.e2e.base import (
+    BaseE2ETest,
+    DAGSpec,
+    FullDAGOutcome,
+    ResolvedDAG,
+)
 from application_sdk.testing.e2e.client import (
     DAGNodeResult,
     DAGNodeStatus,
@@ -30,13 +36,14 @@ from application_sdk.testing.e2e.client import (
     DAGRunStatus,
 )
 from application_sdk.testing.harness.expectations import (
+    LineageEdge,
     LineageEdgeCounts,
     Unreadable,
 )
 from application_sdk.testing.harness.outcome import Indeterminate, Settled
 
 _QN = "default/sigma/1700000000123456"
-_EDGE = ("SigmaDataElementField", "SigmaDataModelColumn")
+_EDGE = LineageEdge("SigmaDataElementField", "SigmaDataModelColumn")
 _EDGE_KEY = "SigmaDataElementField -> SigmaDataModelColumn"
 
 
@@ -109,18 +116,25 @@ def _settled(value: Any) -> Any:
 
 
 class TestResolution:
-    def test_the_class_declaration_resolves_under_its_canonical_key(self) -> None:
-        assert _suite()._dag.expected_lineage_edges == {_EDGE_KEY: 2}
+    def test_the_class_declaration_resolves_to_parsed_edges(self) -> None:
+        resolved = _suite()._dag.expected_lineage_edges
+        assert resolved == {_EDGE: 2}
+        assert all(isinstance(edge, LineageEdge) for edge in resolved)
+
+    def test_an_edge_renders_the_way_a_suite_declares_it(self) -> None:
+        assert str(_EDGE) == _EDGE_KEY
 
     def test_a_dag_spec_overrides_the_class_declaration(self) -> None:
         resolved = _suite().resolve_dag(
             DAGSpec(expected_lineage_edges={"Column->SigmaDataElementField": 1})
         )
-        assert resolved.expected_lineage_edges == {"Column -> SigmaDataElementField": 1}
+        assert resolved.expected_lineage_edges == {
+            LineageEdge("Column", "SigmaDataElementField"): 1
+        }
 
     def test_a_dag_spec_that_says_nothing_inherits_the_class(self) -> None:
         resolved = _suite().resolve_dag(DAGSpec())
-        assert resolved.expected_lineage_edges == {_EDGE_KEY: 2}
+        assert resolved.expected_lineage_edges == {_EDGE: 2}
 
     @pytest.mark.parametrize(
         "key",
@@ -161,7 +175,30 @@ class TestResolution:
         # run is submitted the same, and a BI connector's transform publishes
         # its processes with the lineage nodes skipped.
         resolved = _suite().resolve_dag(DAGSpec(expect_lineage=False))
-        assert resolved.expected_lineage_edges == {_EDGE_KEY: 2}
+        assert resolved.expected_lineage_edges == {_EDGE: 2}
+
+    @pytest.mark.parametrize(
+        ("cls", "added"),
+        [
+            (DAGSpec, ("expected_lineage_edges",)),
+            (ResolvedDAG, ("expected_lineage_edges",)),
+            (FullDAGOutcome, ("lineage_edge_reads", "lineage_edge_counts")),
+        ],
+    )
+    def test_new_fields_come_last_so_positional_callers_keep_their_slots(
+        self, cls: type, added: tuple[str, ...]
+    ) -> None:
+        # These dataclasses are positional. A field inserted mid-list shifts
+        # every later argument of an existing positional call into the wrong
+        # slot — a connection QN landing in the edge map, a store verdict lost.
+        names = tuple(f.name for f in dataclasses.fields(cls))
+        assert names[-len(added) :] == added
+
+    def test_a_positional_dag_spec_still_binds_its_connection_and_label(self) -> None:
+        spec = DAGSpec(*([None] * 11), "default/other/1", "second")
+        assert spec.connection_qualified_name == "default/other/1"
+        assert spec.label == "second"
+        assert spec.expected_lineage_edges is None
 
 
 # ---------------------------------------------------------------------------

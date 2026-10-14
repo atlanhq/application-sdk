@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
+from application_sdk.errors.leaves import InvalidInputValueError
 from application_sdk.testing.harness import atlas
 from application_sdk.testing.harness.expectations import LineageEdgeCounts
 from application_sdk.testing.harness.outcome import Indeterminate, Settled
@@ -192,3 +195,15 @@ async def test_no_pairs_makes_no_search() -> None:
     value = _value(await atlas.count_lineage_edges(client, _QN, []))
     assert value.counts == {}
     assert client.searches == 0
+
+
+@pytest.mark.parametrize("scan_cap", [0, -1])
+async def test_a_scan_cap_below_one_is_refused(scan_cap: int) -> None:
+    # A zero-size page reads no processes; without the guard every edge would
+    # settle at zero rather than be reported as unscanned.
+    client = _client(_process("p1", inputs=[], outputs=[]))
+    with pytest.raises(InvalidInputValueError) as exc:
+        await atlas.count_lineage_edges(
+            client, _QN, [_FIELD_TO_COLUMN], scan_cap=scan_cap
+        )
+    assert exc.value.field == "scan_cap"

@@ -350,35 +350,30 @@ def _parse_lineage_edge(key: str) -> LineageEdge:
             ),
             constraint="'SourceType -> TargetType'",
         )
-    return parts[0], parts[1]
+    return LineageEdge(parts[0], parts[1])
 
 
-def _edge_key(edge: LineageEdge) -> str:
-    """The canonical ``"Source -> Target"`` spelling of an edge."""
-    return f"{edge[0]} -> {edge[1]}"
-
-
-def _normalise_lineage_edges(declared: Mapping[str, int]) -> dict[str, int]:
-    """Validate a lineage-edge declaration and key it canonically.
+def _normalise_lineage_edges(declared: Mapping[str, int]) -> dict[LineageEdge, int]:
+    """Validate a lineage-edge declaration and parse its keys.
 
     Args:
         declared: ``"Source -> Target"`` -> minimum process count, as a suite
             writes it.
 
     Returns:
-        The same floors keyed by :func:`_edge_key`.
+        The same floors keyed by the parsed edge.
 
     Raises:
         InvalidLineageEdgeDeclarationError: A key is malformed, two keys name
             the same edge, or a floor is not an integer >= 1.
     """
-    normalised: dict[str, int] = {}
+    normalised: dict[LineageEdge, int] = {}
     for key, floor in declared.items():
-        canonical = _edge_key(_parse_lineage_edge(key))
-        if canonical in normalised:
+        edge = _parse_lineage_edge(key)
+        if edge in normalised:
             raise InvalidLineageEdgeDeclarationError(
                 message=(
-                    f"expected_lineage_edges names the edge {canonical!r} twice; "
+                    f"expected_lineage_edges names the edge '{edge}' twice; "
                     "declare each edge once."
                 ),
             )
@@ -391,7 +386,7 @@ def _normalise_lineage_edges(declared: Mapping[str, int]) -> dict[str, int]:
                 ),
                 constraint=">= 1",
             )
-        normalised[canonical] = floor
+        normalised[edge] = floor
     return normalised
 
 
@@ -688,6 +683,10 @@ class FullDAGOutcome:
     :attr:`succeeded` can tell "the connection is missing" apart from "this
     entrypoint was never going to publish one". Defaults True, so an outcome
     built without it grades exactly as before."""
+    store_assert_read: StoreAssertOutput | Unreadable | None = None
+    """The object-store assertion node's verdict, the fact that it could not be
+    read, or ``None`` when the run declared no store expectations. Set only by
+    :class:`~application_sdk.testing.e2e.system_app.SystemAppE2ETest`."""
     lineage_edge_reads: LineageEdgeRead | None = None
     """Lineage processes per declared ``"Source -> Target"`` edge, as read, or
     the fact that they could not be; ``None`` when the suite declared no
@@ -698,10 +697,6 @@ class FullDAGOutcome:
     """Settled projection of :attr:`lineage_edge_reads`, keyed by the declared
     edge as ``"Source -> Target"``. Empty when the read was not taken or could
     not be read — never zeros standing in for a failed search."""
-    store_assert_read: StoreAssertOutput | Unreadable | None = None
-    """The object-store assertion node's verdict, the fact that it could not be
-    read, or ``None`` when the run declared no store expectations. Set only by
-    :class:`~application_sdk.testing.e2e.system_app.SystemAppE2ETest`."""
 
     @property
     def succeeded(self) -> bool:
@@ -765,8 +760,6 @@ class DAGSpec:
         expected_asset_attributes: Per-type attribute-value claims.
         expected_asset_attributes_at: Per-asset attribute-value claims, keyed by
             type then qualifiedName suffix.
-        expected_lineage_edges: Per-edge floors on lineage processes, keyed by
-            ``"Source -> Target"`` type names.
         connection_qualified_name: The connection this run is submitted and
             graded against. ``None`` — the default, and what every run did
             before FND-1648 — means the suite's own minted connection, which is
@@ -782,6 +775,9 @@ class DAGSpec:
             the AE workflow name, so N runs in one leg stay N distinguishable
             AE workflows. Defaults to the resolved entrypoint, else
             ``"default"``.
+        expected_lineage_edges: Per-edge floors on lineage processes, keyed by
+            ``"Source -> Target"`` type names. Last, so the fields before it
+            keep their positional slots.
     """
 
     entrypoint: str | None = None
@@ -799,9 +795,9 @@ class DAGSpec:
     expected_asset_attributes_at: (
         Mapping[str, Mapping[str, Mapping[str, AttributeExpectationValue]]] | None
     ) = None
-    expected_lineage_edges: Mapping[str, int] | None = None
     connection_qualified_name: str | None = None
     label: str = ""
+    expected_lineage_edges: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -832,10 +828,10 @@ class ResolvedDAG:
     expected_asset_attributes_at: Mapping[
         str, Mapping[str, Mapping[str, AttributeExpectationValue]]
     ] = field(default_factory=dict)
-    expected_lineage_edges: Mapping[str, int] = field(default_factory=dict)
-    """Validated and keyed in canonical ``"Source -> Target"`` spelling, so
-    ``"A->B"`` and ``"A -> B"`` resolve to the same run."""
     connection_qualified_name: str = ""
+    expected_lineage_edges: Mapping[LineageEdge, int] = field(default_factory=dict)
+    """Validated and parsed once at resolution, so ``"A->B"`` and ``"A -> B"``
+    resolve to the same edge."""
 
 
 class BaseE2ETest:
@@ -4920,7 +4916,7 @@ class BaseE2ETest:
                 await atlas.count_lineage_edges(
                     client,
                     self.connection_qualified_name,
-                    [_parse_lineage_edge(key) for key in dag.expected_lineage_edges],
+                    list(dag.expected_lineage_edges),
                 )
             )
             logger.info(
@@ -5064,7 +5060,7 @@ class BaseE2ETest:
             addressed_attribute_reads=dict(addressed_reads or {}),
             lineage_edge_reads=edge_read,
             lineage_edge_counts=(
-                {_edge_key(edge): count for edge, count in edge_read.counts.items()}
+                {str(edge): count for edge, count in edge_read.counts.items()}
                 if edge_read is not None and not isinstance(edge_read, Unreadable)
                 else {}
             ),
@@ -5103,10 +5099,7 @@ class BaseE2ETest:
             # which is exactly what "there is no connection to measure depth
             # from" should do.
             connection_qualified_name=getattr(self, "connection_qualified_name", ""),
-            lineage_edges={
-                _parse_lineage_edge(key): floor
-                for key, floor in dag.expected_lineage_edges.items()
-            },
+            lineage_edges=dict(dag.expected_lineage_edges),
         )
 
     def _asset_findings(

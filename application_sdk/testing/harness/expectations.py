@@ -49,7 +49,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TypeAlias, Union
+from typing import NamedTuple, TypeAlias, Union
 
 __all__ = [
     "UNREADABLE",
@@ -191,8 +191,18 @@ AttributeSampleRead: TypeAlias = Union[Sequence[AssetAttributes], Unreadable]
 # (input type, output type) pair a process must connect is what makes that
 # drop visible.
 
-#: One declared lineage link: (input asset type, output asset type).
-LineageEdge: TypeAlias = tuple[str, str]
+
+class LineageEdge(NamedTuple):
+    """One declared lineage link: an input asset type and an output asset type.
+
+    Renders as ``"Source -> Target"``, the spelling a suite declares it in.
+    """
+
+    source: str
+    target: str
+
+    def __str__(self) -> str:
+        return f"{self.source} -> {self.target}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -1005,11 +1015,6 @@ def _evaluate_one_asset(
     return findings
 
 
-def _edge_name(edge: LineageEdge) -> str:
-    """Render a lineage edge the way a suite declares it: ``"A -> B"``."""
-    return f"{edge[0]} -> {edge[1]}"
-
-
 def evaluate_lineage_edges(
     read: LineageEdgeRead | None,
     expectations: AssetExpectations,
@@ -1035,7 +1040,7 @@ def evaluate_lineage_edges(
         return findings
     observed = read if read is not None else LineageEdgeCounts()
     for edge, floor in expectations.lineage_edges.items():
-        subject = _edge_name(edge)
+        subject = str(edge)
         if isinstance(observed, Unreadable):
             findings.append(_unreadable(subject, observed, checking="lineage edge"))
             continue
