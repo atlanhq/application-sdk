@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from conformance.suite.checks.test_quality import scan_text
 from conformance.suite.rules import get_rule
+from conformance.suite.schema.catalog import RemediationKind
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 # ── Rule metadata ────────────────────────────────────────────────────────────
@@ -45,6 +46,10 @@ def test_t008_rule_metadata() -> None:
     rule = get_rule("T008")
     assert rule.name == "UncollectableTestFile"
     assert rule.category == "test-collection"
+    # Suggest-only (migration): restoring autofixable=True brings back unsafe lane edits.
+    assert rule.autofixable is False
+    assert rule.remediation_reference is not None
+    assert rule.remediation_reference.kind is RemediationKind.GUIDE
 
 
 def test_t009_rule_metadata() -> None:
