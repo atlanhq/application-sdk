@@ -10,6 +10,7 @@ openapi and metabase reference apps that are not emitted entities.
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import pytest
 from conformance.suite.checks.prescriptions import scan_text as p_scan
@@ -145,60 +146,39 @@ def test_entity_bytes_kwarg_through_a_local_name() -> None:
 
 # ── Canonical reference: atlan-openapi-app ──────────────────────────────────────
 
-#: Excerpt of atlan-openapi-app ``app/asset_mapper.py`` — the mapper P058 cites
-#: as its canonical reference: a pyatlan_v9 creator, returned as an asset.
-_OPENAPI_ASSET_MAPPER = """
-    from pyatlan_v9.model.assets import APISpec
+#: Verbatim copies of the files P058's ``canonical_reference`` cites, taken
+#: from atlan-openapi-app at c11dcaefa230e689d096ee618b02ddc58dccaaf6.  Refresh
+#: them from the app's ``main`` when the reference changes.
+_CANONICAL = Path(__file__).parent / "fixtures" / "p058_openapi"
 
 
-    def map_api_spec(record, connection_qn, workflow_id, workflow_type, workflow_run_at_ms) -> APISpec:
-        asset = APISpec.creator(name=record.title, connection_qualified_name=connection_qn)
-        if record.spec_url:
-            asset.api_spec_url = record.spec_url
-        return asset
-"""
-
-#: Excerpt of atlan-openapi-app ``app/connector.py`` ``_transform_blocking`` —
-#: every mapper result is written through ``entity_bytes``.
-_OPENAPI_TRANSFORM = """
-    from application_sdk.common.asset_serialization import entity_bytes
-
-    from app.asset_mapper import map_api_spec, map_connection
+def _canonical(name: str) -> str:
+    return (_CANONICAL / f"{name}.txt").read_text(encoding="utf-8")
 
 
-    def _transform_blocking(input, connection, output_file, conn_qn):
-        with output_file.open("wb") as out_f:
-            if input.emit_connection:
-                out_f.write(
-                    entity_bytes(
-                        map_connection(connection),
-                        entity_type="connection",
-                        envelope=ENTITY_ENVELOPE,
-                    )
-                    + b"\\n"
-                )
-            for record in _iter_jsonl(input.api_spec_file, OpenAPISpecRecord):
-                asset = map_api_spec(record, conn_qn, "wf", "app", 0)
-                out_f.write(
-                    entity_bytes(asset, entity_type="api_spec", envelope=ENTITY_ENVELOPE)
-                    + b"\\n"
-                )
-"""
-
-
-def test_silent_on_canonical_reference() -> None:
-    assert _p058(_OPENAPI_ASSET_MAPPER, "app/asset_mapper.py") == []
-    assert _p058(_OPENAPI_TRANSFORM, "app/connector.py") == []
+@pytest.mark.parametrize("name", ["asset_mapper.py", "connector.py"])
+def test_silent_on_canonical_reference(name: str) -> None:
+    findings = [
+        f for f in p_scan(_canonical(name), f"app/{name}") if f.rule_id == "P058"
+    ]
+    assert findings == []
 
 
 def test_canonical_reference_regressed_to_a_raw_dict_fires() -> None:
-    # Guards the excerpt: the same mapper building a dict must be flagged.
-    regressed = _OPENAPI_ASSET_MAPPER.replace(
-        "asset = APISpec.creator(name=record.title, connection_qualified_name=connection_qn)",
-        'asset = {"typeName": "APISpec", "attributes": {"name": record.title}}',
+    # Guards the fixture: the cited mapper building a dict must be flagged.
+    creator = (
+        "asset = APISpec.creator(name=record.title, "
+        "connection_qualified_name=connection_qn)"
     )
-    assert regressed != _OPENAPI_ASSET_MAPPER
-    assert len(_p058(regressed, "app/asset_mapper.py")) == 1
+    source = _canonical("asset_mapper.py")
+    assert source.count(creator) == 1
+    regressed = source.replace(
+        creator, 'asset = {"typeName": "APISpec", "attributes": {"name": record.title}}'
+    )
+    findings = [
+        f for f in p_scan(regressed, "app/asset_mapper.py") if f.rule_id == "P058"
+    ]
+    assert len(findings) == 1
 
 
 # ── Negative: the same shape where it is not an emitted entity ─────────────────
