@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from httpx_retries import Retry, RetryTransport
 
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import (
@@ -795,16 +797,21 @@ class TestRetryPastDaprColdStart:
         assert calls["n"] == 1
 
         # The gate is now armed for this component — a later transient
-        # failure on the SAME component is not retried.
+        # failure on the SAME component gets only the short warm ladder, not
+        # the 30s cold-start budget.
         async def transient_call() -> str:
             calls["n"] += 1
             raise SecretStoreUnavailableError("p")
 
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_WARM_RETRY_DELAYS_SECONDS",
+            (0.0, 0.0),
+        )
         with pytest.raises(SecretStoreUnavailableError):
             await retry_past_dapr_cold_start(
                 transient_call, description="test call", component="test-component"
             )
-        assert calls["n"] == 2
+        assert calls["n"] == 1 + 3
 
     async def test_different_component_does_not_share_gate(
         self, fast_dapr_cold_start_retry
@@ -965,3 +972,78 @@ class TestGetDaprComponentTypes:
         ):
             result = await get_dapr_component_types()
         assert result == {}
+
+
+class TestWarmSidecarReadRetry:
+    """Once a component's cold-start gate is armed, an idempotent read still
+    gets a short bounded retry: a long-lived pod's one dropped connection to
+    the local sidecar must not fail the whole activity."""
+
+    @pytest.fixture
+    def armed_component(self, monkeypatch):
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http._dapr_component_confirmed_ready",
+            {"warm-component"},
+        )
+        with patch(
+            "application_sdk.infrastructure._dapr.http.asyncio.sleep", AsyncMock()
+        ):
+            yield "warm-component"
+
+    async def test_an_idempotent_binding_read_is_retried_after_the_ready_gate_is_armed(
+        self, armed_component
+    ) -> None:
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise ColdStartRaceError(message="store unreachable")
+            return "config"
+
+        result = await retry_past_dapr_cold_start(
+            call, description="test read", component=armed_component
+        )
+
+        assert result == "config"
+        assert calls["n"] == 2
+
+    async def test_a_persistent_failure_after_the_gate_is_armed_stops_after_the_bounded_retries(
+        self, armed_component
+    ) -> None:
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            raise ColdStartRaceError(message="store unreachable")
+
+        with pytest.raises(ColdStartRaceError):
+            await retry_past_dapr_cold_start(
+                call, description="test read", component=armed_component
+            )
+
+        assert calls["n"] == 3
+
+    async def test_a_non_idempotent_binding_call_is_not_retried_after_the_ready_gate_is_armed(
+        self, armed_component
+    ) -> None:
+        """Binding writes go straight through ``invoke_binding`` (an HTTP POST),
+        which the transport retry never replays; a dropped connection on a
+        ``create`` surfaces after exactly one attempt."""
+        attempts = {"n": 0}
+
+        class DropTransport(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request):
+                attempts["n"] += 1
+                raise httpx.ReadError("", request=request)
+
+        client = AsyncDaprClient(base_url="http://localhost:3500")
+        client._client._transport = RetryTransport(
+            transport=DropTransport(), retry=Retry(total=3, backoff_factor=0)
+        )
+
+        with pytest.raises(httpx.ReadError):
+            await client.invoke_binding("example-binding", "create", data=b"x")
+
+        assert attempts["n"] == 1
+        await client.close()

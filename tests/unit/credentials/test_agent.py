@@ -622,6 +622,10 @@ class TestBundleFetchReadinessRetry:
             "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
             30.0,
         )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_WARM_RETRY_DELAYS_SECONDS",
+            (0.0, 0.0),
+        )
         calls = {"n": 0}
 
         class ReadyThenDown:
@@ -635,11 +639,11 @@ class TestBundleFetchReadinessRetry:
         await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
         assert calls["n"] == 1
 
-        # A second resolution that hits an outage must NOT re-enter the retry
-        # loop — exactly one attempt, not a 30s retry window.
+        # A second resolution that hits an outage must NOT re-enter the 30s
+        # retry window — only the short warm ladder (1 call + 2 retries).
         with pytest.raises(CredentialError):
             await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
-        assert calls["n"] == 2
+        assert calls["n"] == 1 + 3
 
     async def test_cold_start_wait_not_rearmed_after_not_found(
         self, monkeypatch
@@ -650,6 +654,10 @@ class TestBundleFetchReadinessRetry:
         monkeypatch.setattr(
             "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
             30.0,
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http.DAPR_WARM_RETRY_DELAYS_SECONDS",
+            (0.0, 0.0),
         )
         calls = {"n": 0}
 
@@ -672,7 +680,7 @@ class TestBundleFetchReadinessRetry:
                 self._AGENT_JSON,
                 ReadyButMissingThenDown(),  # type: ignore[arg-type]
             )
-        assert calls["n"] == 2  # not retried — the gate was already armed
+        assert calls["n"] == 1 + 3  # warm ladder only — the gate was already armed
 
 
 class TestSingleKeyMode:
