@@ -1787,6 +1787,11 @@ class BaseE2ETest:
             method: The test method pytest just ran. Unused; part of the xunit
                 signature.
         """
+        # Before the delete, so the links point at assets that still exist and
+        # a requested hold can stop the delete. Here rather than in the test
+        # method because suites that drive the run from their own fixture
+        # never call that method, but every suite tears down.
+        self._write_preview_links()
         run_sync(self._teardown_method_async(method))
 
     async def _teardown_method_async(self, method: Any) -> None:
@@ -4245,7 +4250,12 @@ class BaseE2ETest:
             different things.
         """
         with self._dag_run(spec):
-            return run_sync(self._run_full_dag_async())
+            outcome = run_sync(self._run_full_dag_async())
+        # Teardown links what the last run landed, whichever test shape drove
+        # it: the base test method, or a suite's own fixture that calls
+        # run_full_dag and teardown_method itself.
+        self._preview_outcome = outcome
+        return outcome
 
     async def _run_full_dag_async(self) -> FullDAGOutcome:
         """Seed, submit, poll, then read Atlas.
@@ -5354,21 +5364,28 @@ class BaseE2ETest:
                 except Exception as failure:
                     self._collect_failure_evidence(failure, outcome)
                     raise
-        self._write_preview_links()
 
     def _write_preview_links(self) -> None:
         """Write a product link to one landed asset per type, for a reviewer.
 
-        Runs only after every DAG run passed and before teardown purges the
-        connection. Reporting, never a gate: any failure here is logged and the
-        run's verdict stands.
+        Called at the start of teardown, before the connection is purged, for
+        the last run :meth:`run_full_dag` returned. Teardown cannot see the
+        test's own assertions, so the gate is the run's: its DAG succeeded and
+        its connection reached Atlas. The PR comment shows the links only when
+        the e2e job passed. Reporting, never a gate: any failure here is
+        logged and the run's verdict stands.
         """
-        if not self.preview_links_dir or not self.dag_outcomes:
-            return
-        types = tuple(t for t, n in self.dag_outcomes[-1].asset_counts.items() if n > 0)
-        if not types:
+        outcome = getattr(self, "_preview_outcome", None)
+        if not self.preview_links_dir or outcome is None:
             return
         try:
+            if not (
+                outcome.connection_in_atlas and self._core_dag_ok(outcome.ae_result)
+            ):
+                return
+            types = tuple(t for t, n in outcome.asset_counts.items() if n > 0)
+            if not types:
+                return
             links = run_sync(self._preview_links_async(types))
             out = Path(self.preview_links_dir) / f"{type(self).__name__}.json"
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -5378,8 +5395,8 @@ class BaseE2ETest:
                 "links": links,
                 # What the run landed, so the PR comment can say how this run
                 # differs from the baseline run's file of the same name.
-                "asset_counts": dict(self.dag_outcomes[-1].asset_counts),
-                "lineage_present": self.dag_outcomes[-1].lineage_present,
+                "asset_counts": dict(outcome.asset_counts),
+                "lineage_present": outcome.lineage_present,
             }
             if links and (until := self._hold_for_preview()):
                 body["expires_at"] = preview_hold.stamp(until)
@@ -5405,9 +5422,11 @@ class BaseE2ETest:
 
         Returns the expiry only once the mark is saved: teardown skips the
         delete for a held connection, and one held without a mark is one the
-        reaper would never find. Not offered when the run seeded lineage-parent
-        connections, which teardown deletes alongside the run's own and whose
-        absence would leave the held lineage pointing at nothing.
+        reaper would never find. The hold replaces the PR's earlier hold for
+        this suite, and is refused when the tenant is at its hold cap. Not
+        offered when the run seeded lineage-parent connections, which teardown
+        deletes alongside the run's own and whose absence would leave the held
+        lineage pointing at nothing.
         """
         hours = preview_hold.hold_hours(os.environ)
         if not hours:
@@ -5420,7 +5439,7 @@ class BaseE2ETest:
             return None
         until = preview_hold.expiry_from_now(hours)
         try:
-            run_sync(self._mark_preview_hold_async(until))
+            held = run_sync(self._mark_preview_hold_async(until))
         # conformance: ignore[E004] a failed mark falls back to the normal delete, which is the safe direction
         except Exception:
             logger.warning(
@@ -5428,6 +5447,8 @@ class BaseE2ETest:
                 self.connection_qualified_name,
                 exc_info=True,
             )
+            return None
+        if not held:
             return None
         self._preview_held_qn = self.connection_qualified_name
         logger.info(
@@ -5437,13 +5458,15 @@ class BaseE2ETest:
         )
         return until
 
-    async def _mark_preview_hold_async(self, until: datetime) -> None:
+    async def _mark_preview_hold_async(self, until: datetime) -> bool:
         async with self._atlas_client() as client:
-            await preview_hold.mark(
+            return await preview_hold.hold(
                 client,
                 self.connection_qualified_name,
                 self.connection_display_name,
                 until,
+                pr=preview_hold.hold_owner(os.environ),
+                suite=type(self).__name__,
             )
 
     async def _preview_links_async(self, types: tuple[str, ...]) -> dict[str, str]:

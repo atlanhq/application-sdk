@@ -42,19 +42,19 @@ def _harness(
     monkeypatch.setattr(_ConcreteE2ETest, "_atlas_client", _client)
     monkeypatch.setattr(_ConcreteE2ETest, "preview_links_dir", str(tmp_path))
     monkeypatch.delenv(preview_hold.HOLD_ENV, raising=False)
+    monkeypatch.delenv(preview_hold.PR_ENV, raising=False)
     harness = _ConcreteE2ETest()
     harness.connection_qualified_name = _QN
     harness.connection_display_name = "openapi-1787587123106596"
     harness._fake_client = client  # type: ignore[attr-defined]
     harness._auth = SimpleNamespace(base_url=_BASE)
-    harness.dag_outcomes = [
-        FullDAGOutcome(
-            ae_result=MagicMock(),
-            connection_qualified_name=_QN,
-            connection_in_atlas=True,
-            asset_counts=counts,
-        )
-    ]
+    monkeypatch.setattr(_ConcreteE2ETest, "_core_dag_ok", lambda self, _r: True)
+    harness._preview_outcome = FullDAGOutcome(
+        ae_result=MagicMock(),
+        connection_qualified_name=_QN,
+        connection_in_atlas=True,
+        asset_counts=counts,
+    )
     return harness
 
 
@@ -136,6 +136,35 @@ def test_a_requested_hold_marks_the_connection_and_records_the_expiry(
     assert harness._preview_held_qn == _QN
 
 
+def test_the_hold_records_the_pr_and_the_suite(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    monkeypatch.setenv(preview_hold.HOLD_ENV, "24")
+    monkeypatch.setenv(preview_hold.PR_ENV, "example-org/example-app#42")
+    harness._write_preview_links()
+    [saved] = harness._fake_client.saved  # type: ignore[attr-defined]
+    hold = preview_hold.parse_hold(_QN, saved.description)
+    assert hold is not None
+    assert hold.pr == "example-org/example-app#42"
+    assert hold.suite == type(harness).__name__
+
+
+def test_a_hold_refused_at_the_tenant_cap_is_deleted_as_usual(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    monkeypatch.setenv(preview_hold.HOLD_ENV, "24")
+
+    async def _full(*_args: Any, **_kwargs: Any) -> bool:
+        return False
+
+    monkeypatch.setattr(preview_hold, "hold", _full)
+    harness._write_preview_links()
+    assert "expires_at" not in _written(tmp_path)
+    assert not getattr(harness, "_preview_held_qn", "")
+
+
 def test_a_mark_that_fails_holds_nothing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -191,3 +220,48 @@ def test_teardown_still_deletes_an_unheld_connection(
     harness._submitted_connection_qns = [_QN]
     harness.teardown_method(method=None)
     assert purged == [_QN]
+
+
+def test_a_suite_driving_the_run_from_its_own_fixture_still_gets_links_and_a_hold(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Some suites call run_full_dag and teardown_method from a class fixture
+    and never run the base test method; teardown is the one step they share."""
+    purged: list[str] = []
+
+    async def _record(_client: object, qn: str) -> object:
+        purged.append(qn)
+        return SimpleNamespace(purged=1, orphaned=(), errors=())
+
+    monkeypatch.setattr("application_sdk.testing.e2e.base.purge_connection", _record)
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    monkeypatch.setenv(preview_hold.HOLD_ENV, "24")
+    harness._submitted_connection_qns = [_QN]
+    harness.teardown_method(method=None)
+    assert "expires_at" in _written(tmp_path)
+    assert purged == []
+
+
+def test_a_run_whose_dag_failed_gets_no_links(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    monkeypatch.setattr(_ConcreteE2ETest, "_core_dag_ok", lambda self, _r: False)
+    harness._write_preview_links()
+    assert not (tmp_path / "_ConcreteE2ETest.json").exists()
+
+
+def test_run_full_dag_records_the_outcome_teardown_links(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    landed = FullDAGOutcome(
+        ae_result=MagicMock(), connection_qualified_name=_QN, connection_in_atlas=True
+    )
+
+    async def _run(_self: object) -> FullDAGOutcome:
+        return landed
+
+    monkeypatch.setattr(_ConcreteE2ETest, "_run_full_dag_async", _run)
+    assert harness.run_full_dag() is landed
+    assert harness._preview_outcome is landed
