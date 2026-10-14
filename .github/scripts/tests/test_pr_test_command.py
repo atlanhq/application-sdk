@@ -1403,6 +1403,31 @@ class TestMain:
         # dispatch returns no run id, so this is where the run is found.
         assert ptc.actions_link(REPO, "tests.yaml", "feat/x") in body
 
+    def test_gate_check_dispatch_hands_its_commit_to_the_wait_job(
+        self, run_main
+    ) -> None:
+        """FND-3934: the dispatched runs' completions never fire
+        `workflow_run`, so gate-check-wait settles the verdict from these."""
+        api = FakeApi(pull=_pull_body(BUMP), texts=_texts())
+        rc, outputs = run_main(_event("/gate-check"), api)
+        assert rc == 0
+        assert api.dispatches()
+        assert outputs["gate_check_sha"] == SHA
+        assert outputs["gate_check_branch"] == BUMP
+
+    def test_e2e_starts_no_wait(self, run_main) -> None:
+        _, outputs = run_main(_event(), FakeApi(texts=_texts()))
+        assert "gate_check_sha" not in outputs
+
+    def test_a_gate_check_that_dispatched_nothing_starts_no_wait(
+        self, run_main
+    ) -> None:
+        passed = [{"context": "gate-check", "state": "success"}]
+        api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), statuses=passed)
+        _, outputs = run_main(_event("/gate-check"), api)
+        assert api.dispatches() == []
+        assert "gate_check_sha" not in outputs
+
     def test_an_existing_sticky_is_edited_in_place(self, run_main) -> None:
         """One comment per command: the latest request replaces the last."""
         old = {"id": 500, "body": f"{sticky.marker('e2e')}\nold verdict"}
@@ -1573,6 +1598,40 @@ class TestContracts:
         on = _on(yaml.safe_load(_render("test-commands.yaml")))
         names = [yaml.safe_load(_render(w))["name"] for w in ptc.GATE_CHECK_WORKFLOWS]
         assert on["workflow_run"]["workflows"] == names
+
+    def test_the_caller_grants_every_scope_the_reusable_uses(self) -> None:
+        """A caller's `permissions:` is a ceiling: a scope a reusable job asks
+        for beyond it is `none`, fleet-wide and silently."""
+        rank = {"none": 0, "read": 1, "write": 2}
+        caller = yaml.safe_load(_render("test-commands.yaml"))["jobs"]["commands"][
+            "permissions"
+        ]
+        reusable = yaml.safe_load(
+            (WORKFLOWS / "test-commands-reusable.yaml").read_text(encoding="utf-8")
+        )
+        for name, job in reusable["jobs"].items():
+            for scope, level in job["permissions"].items():
+                assert rank[caller.get(scope, "none")] >= rank[level], (name, scope)
+
+    def test_the_gate_check_wait_job_is_wired_to_the_command(self) -> None:
+        """FND-3934: the verdict comes from this job, not `workflow_run`."""
+        jobs = yaml.safe_load(
+            (WORKFLOWS / "test-commands-reusable.yaml").read_text(encoding="utf-8")
+        )["jobs"]
+        outputs = jobs["command"]["outputs"]
+        assert set(outputs) == {"gate_check_sha", "gate_check_branch"}
+        step_ids = {step.get("id") for step in jobs["command"]["steps"]}
+        for value in outputs.values():
+            assert value.split(".")[1] in step_ids
+        wait = jobs["gate-check-wait"]
+        assert wait["needs"] == "command"
+        assert "needs.command.outputs.gate_check_sha" in wait["if"]
+        # Slim jobs die at 15 minutes; the gate (with e2e) runs far longer.
+        assert wait["runs-on"] != "ubuntu-slim"
+        run = wait["steps"][-1]["run"]
+        assert "--wait-minutes" in run
+        minutes = int(run.split("--wait-minutes")[1].split()[0])
+        assert wait["timeout-minutes"] > minutes
 
     def test_sdk_e2e_request_job_name(self) -> None:
         doc = yaml.safe_load(

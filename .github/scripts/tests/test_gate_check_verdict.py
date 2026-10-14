@@ -554,7 +554,144 @@ class TestRerunReleaseGate:
         assert api.writes == []
 
 
+class FakeClock:
+    """``time.monotonic`` that only moves when the code under test sleeps."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleeps: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class TestWaitForVerdict:
+    """FND-3934: the dispatched runs' completions never fire `workflow_run`
+    (a GITHUB_TOKEN dispatch starts no workflow), so the verdict is polled."""
+
+    def _wait(self, api: FakeApi, clock: FakeClock, minutes: int = 2) -> gcv.Verdict:
+        return gcv.wait_for_verdict(
+            GitHub(REPO, api),
+            SHA,
+            wait_minutes=minutes,
+            run_url="https://example.invalid/runs/99",
+            sleep=clock.sleep,
+            clock=clock,
+        )
+
+    def test_polls_until_the_runs_finish_then_settles(self) -> None:
+        api = FakeApi(
+            status=("pending", "running: tests.yaml"),
+            runs={
+                "tests.yaml": [
+                    [_run(1, status="in_progress", conclusion=None)],
+                    [_run(1)],
+                ],
+                gcv.RELEASE_GATE_WORKFLOW: [[_gate(8)]],
+            },
+        )
+        clock = FakeClock()
+        verdict = self._wait(api, clock, minutes=30)
+        assert (verdict.final, verdict.state) == (True, "success")
+        assert clock.sleeps == [gcv.POLL_SECONDS]
+        assert [p for p, _ in api.writes] == [
+            f"repos/{REPO}/statuses/{SHA}",
+            f"repos/{REPO}/actions/runs/8/rerun",
+        ]
+
+    def test_no_request_returns_at_once(self) -> None:
+        api = FakeApi(status=None)
+        clock = FakeClock()
+        assert self._wait(api, clock).reason == gcv.NO_REQUEST
+        assert clock.sleeps == [] and api.writes == []
+
+    def test_a_failed_pass_is_retried(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        passes = iter(
+            [GitHubError("502"), gcv.Verdict(True, "success", "passed: tests.yaml")]
+        )
+
+        def settle(github: GitHub, sha: str, **_kwargs: Any) -> gcv.Verdict:
+            outcome = next(passes)
+            if isinstance(outcome, GitHubError):
+                raise outcome
+            return outcome
+
+        monkeypatch.setattr(gcv, "settle", settle)
+        clock = FakeClock()
+        assert self._wait(FakeApi(status=None), clock).state == "success"
+        assert clock.sleeps == [gcv.POLL_SECONDS]
+
+    def test_timeout_turns_pending_into_error_and_reruns_release_gate(self) -> None:
+        """A pending nothing will settle blocks the PR forever: that is the bug."""
+        api = FakeApi(
+            status=("pending", "running: tests.yaml"),
+            runs={
+                "tests.yaml": [[_run(1, status="in_progress", conclusion=None)]],
+                gcv.RELEASE_GATE_WORKFLOW: [[_gate(8)]],
+            },
+        )
+        clock = FakeClock()
+        with pytest.raises(GitHubError, match="timed out"):
+            self._wait(api, clock, minutes=2)
+        assert clock.now >= 120
+        (status_path, fields), (rerun_path, _) = api.writes
+        assert status_path == f"repos/{REPO}/statuses/{SHA}"
+        assert fields["state"] == "error"
+        assert fields["description"].startswith(
+            "timed out after 2 min; comment /gate-check again"
+        )
+        assert "tests.yaml is still running" in fields["description"]
+        assert fields["target_url"] == "https://example.invalid/runs/99"
+        assert rerun_path == f"repos/{REPO}/actions/runs/8/rerun"
+
+    def test_timeout_description_fits_a_commit_status(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def settle(github: GitHub, sha: str, **_kwargs: Any) -> gcv.Verdict:
+            raise GitHubError("x" * 500)
+
+        monkeypatch.setattr(gcv, "settle", settle)
+        monkeypatch.setattr(gcv, "rerun_release_gate", lambda *a, **k: False)
+        api = FakeApi(status=("pending", "running: tests.yaml"))
+        with pytest.raises(GitHubError):
+            self._wait(api, FakeClock())
+        ((_, fields),) = api.writes
+        assert len(fields["description"]) <= gcv.STATUS_DESCRIPTION_MAX
+        assert "comment /gate-check again" in fields["description"]
+
+    def test_a_recorded_verdict_is_not_overwritten_at_the_deadline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Recorded, but every Release Gate re-run failed: fail visibly
+        without touching the verdict."""
+
+        def settle(github: GitHub, sha: str, **_kwargs: Any) -> gcv.Verdict:
+            raise GitHubError("Release Gate run 8 did not finish")
+
+        monkeypatch.setattr(gcv, "settle", settle)
+        api = FakeApi(status=("success", "passed: tests.yaml"))
+        with pytest.raises(GitHubError, match="did not finish"):
+            self._wait(api, FakeClock())
+        assert api.writes == []
+
+
 class TestMain:
+    def test_wait_minutes_polls(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: list[int] = []
+
+        def wait(github: GitHub, sha: str, **kwargs: Any) -> gcv.Verdict:
+            seen.append(kwargs["wait_minutes"])
+            return gcv.Verdict(True, "success", "passed: tests.yaml")
+
+        monkeypatch.setattr(gcv, "wait_for_verdict", wait)
+        argv = ["--repo", REPO, "--head-sha", SHA, "--wait-minutes", "180"]
+        assert gcv.main(argv) == 0
+        assert seen == [180]
+
     def test_github_error_fails(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
         def boom(github: GitHub, sha: str, **_kwargs: Any) -> gcv.Verdict:
             raise GitHubError("nope")

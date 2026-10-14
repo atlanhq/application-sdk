@@ -231,6 +231,8 @@ class Plan:
     #: Filled by run_dispatch for the comment: the commit and run links.
     sha: str = ""
     links: tuple = ()
+    #: Filled by run_dispatch: the PR branch, for the gate-check wait job.
+    branch: str = ""
 
 
 def plan_dispatch(
@@ -819,6 +821,7 @@ def run_dispatch(github: GitHub, request: Request, run_url: str) -> Plan:
     return replace(
         plan,
         sha=pr.head_sha,
+        branch=pr.head_ref,
         links=tuple(
             (d.workflow, actions_link(github.repo, d.workflow, pr.head_ref))
             for d in plan.dispatches
@@ -1064,6 +1067,10 @@ def main(argv: list | None = None) -> int:
                 print(f"::warning::could not reply: {reply_error}", file=sys.stderr)
         return 1
     if plan.act:
+        if args.mode == "dispatch" and request.command == GATE_CHECK:
+            # The reusable's gate-check-wait job settles the verdict from
+            # these: the dispatched runs' completions cannot (gate_check_verdict.py).
+            _emit(gate_check_sha=plan.sha, gate_check_branch=plan.branch)
         github.react(request.comment_id, "rocket")
     elif plan.noop:
         # Already passed or already running: the sticky comment already says

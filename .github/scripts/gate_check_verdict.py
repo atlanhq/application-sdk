@@ -3,8 +3,17 @@
 
 `/gate-check` (pr_test_command.py) dispatches a bump-version PR's gated
 workflows on the head commit and posts a `pending` `gate-check` status whose
-description lists them. Each of those runs finishing fires a `workflow_run`
-event, and this driver runs on every one of them:
+description lists them. Then this driver settles it, in one of two ways:
+
+* `--wait-minutes N` (the reusable's `gate-check-wait` job, right after the
+  dispatch): poll every minute until the verdict is final. This is the path
+  that works. The dispatch is made with the caller's GITHUB_TOKEN, and GitHub
+  starts no workflow from an event that token caused, so the dispatched runs'
+  completions never fire `workflow_run` (FND-3934).
+* one shot (the `workflow_run` job): kept as an idempotent backstop for runs a
+  person dispatched by hand, whose completions do fire it.
+
+Each pass:
 
 * while any listed workflow has no dispatched run on the commit yet, or one
   still running, it does nothing — a later completion will call it again;
@@ -59,6 +68,10 @@ from pr_test_command import (  # noqa: E402
 )
 
 RELEASE_GATE_WORKFLOW = "release-gate.yaml"
+NO_REQUEST = "no `gate-check` request on this commit"
+POLL_SECONDS = 60
+#: GitHub rejects a commit-status description over 140 characters.
+STATUS_DESCRIPTION_MAX = 140
 
 
 @dataclass(frozen=True)
@@ -145,13 +158,68 @@ def settle(
         # failed. Re-check the Release Gate rather than exiting (F-76a87b).
         verdict = Verdict(True, state, description, reason="already recorded")
     else:
-        return Verdict(False, reason="no `gate-check` request on this commit")
+        return Verdict(False, reason=NO_REQUEST)
     verdict_at = github.status_created_at(sha, GATE_CHECK_CONTEXT)
     rerun_release_gate(github, sha, verdict_at, sleep=sleep)
     return verdict
 
 
 FINAL_STATES = ("success", "failure", "error")
+
+
+def wait_for_verdict(
+    github: GitHub,
+    sha: str,
+    *,
+    branch: str = "",
+    wait_minutes: int,
+    run_url: str = "",
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Verdict:
+    """Call :func:`settle` every minute until it records a verdict and the
+    Release Gate has read it.
+
+    A pass that raises (an API error, a Release Gate re-run that did not take)
+    is retried by the next one, and :func:`settle` is idempotent, so a retry
+    after the status went final only re-checks the Release Gate. At the
+    deadline a still-pending request becomes ``error``: a ``pending`` nothing
+    will ever settle blocks the PR with no way forward, which is this bug.
+    """
+    deadline = clock() + wait_minutes * 60
+    verdict = Verdict(False, reason="not checked yet")
+    while True:
+        error: GitHubError | None = None
+        try:
+            verdict = settle(github, sha, branch=branch, sleep=sleep)
+        except GitHubError as raised:
+            error = raised
+            print(f"::warning::{raised}; retrying", file=sys.stderr)
+        else:
+            if verdict.final or verdict.reason == NO_REQUEST:
+                return verdict
+        if clock() >= deadline:
+            break
+        sleep(POLL_SECONDS)
+    state, _ = github.statuses(sha).get(GATE_CHECK_CONTEXT, ("", ""))
+    if state != "pending":
+        # Recorded, but the Release Gate re-run never took; say so.
+        raise error or GitHubError("the Release Gate did not read the verdict")
+    waiting_on = verdict.reason if error is None else str(error)
+    # The instruction first, so the 140-character cap only trims the detail.
+    description = (
+        f"timed out after {wait_minutes} min; comment /gate-check again once its "
+        f"runs finish ({waiting_on})"
+    )
+    timed_out = Verdict(True, "error", description[:STATUS_DESCRIPTION_MAX], run_url)
+    github.status(
+        sha, GATE_CHECK_CONTEXT, timed_out.state, timed_out.description, run_url
+    )
+    show_verdict(github, sha, branch, timed_out)
+    rerun_release_gate(
+        github, sha, github.status_created_at(sha, GATE_CHECK_CONTEXT), sleep=sleep
+    )
+    raise GitHubError(f"gate-check {timed_out.description}")
 
 
 def show_verdict(github: GitHub, sha: str, branch: str, verdict: Verdict) -> None:
@@ -181,7 +249,9 @@ def show_verdict(github: GitHub, sha: str, branch: str, verdict: Verdict) -> Non
             stage=sticky.PASSED if passed else sticky.FAILED,
             sha=sha,
             summary=(
-                f"{len(verdict.rows)} workflow(s) passed"
+                verdict.description
+                if not verdict.rows
+                else f"{len(verdict.rows)} workflow(s) passed"
                 if passed
                 else f"{failed} of {len(verdict.rows)} workflow(s) failed"
             ),
@@ -266,9 +336,29 @@ def main(argv: list | None = None) -> int:
     parser.add_argument(
         "--branch", default="", help="workflow_run.head_branch, to find the PR"
     )
+    parser.add_argument(
+        "--wait-minutes",
+        type=int,
+        default=0,
+        help="poll until the verdict is final, for at most this long (0: one pass)",
+    )
+    parser.add_argument(
+        "--run-url", default="", help="this run, linked from a timed-out status"
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    github = GitHub(args.repo)
     try:
-        verdict = settle(GitHub(args.repo), args.head_sha, branch=args.branch)
+        verdict = (
+            wait_for_verdict(
+                github,
+                args.head_sha,
+                branch=args.branch,
+                wait_minutes=args.wait_minutes,
+                run_url=args.run_url,
+            )
+            if args.wait_minutes > 0
+            else settle(github, args.head_sha, branch=args.branch)
+        )
     except GitHubError as error:
         print(f"::error::{error}", file=sys.stderr)
         return 1

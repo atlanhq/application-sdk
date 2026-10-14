@@ -47,6 +47,10 @@ jobs:
       startsWith(github.event.comment.body, '/gate-check'))
     runs-on: ubuntu-slim
     timeout-minutes: 10
+    outputs:
+      # Set only when a `/gate-check` was dispatched; gate-check-wait settles it.
+      gate_check_sha: ${{ steps.command.outputs.gate_check_sha }}
+      gate_check_branch: ${{ steps.command.outputs.gate_check_branch }}
     permissions:
       contents: read # read the PR branch's workflow files through the API
       actions: write # workflow_dispatch, and reading runs on the head commit
@@ -73,6 +77,7 @@ jobs:
         run: python3 .github/scripts/react_to_comment.py
 
       - name: Run the command
+        id: command
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -87,10 +92,53 @@ jobs:
           --mode dispatch
           --run-url "$RUN_URL"
 
+  gate-check-wait:
+    name: Gate-check verdict (wait)
+    # The `/gate-check` verdict. The dispatch above is made with GITHUB_TOKEN,
+    # and GitHub starts no workflow from an event that token caused, so the
+    # dispatched runs' completions never fire the caller's `workflow_run`
+    # (FND-3934): this job polls them instead. It holds a runner for the gate's
+    # duration, and the caller's per-PR concurrency slot with it, so a second
+    # `/gate-check` on the PR waits for this one to finish.
+    needs: command
+    if: needs.command.outputs.gate_check_sha != ''
+    # Not ubuntu-slim: slim jobs are killed at 15 minutes, and the gate runs
+    # the e2e suite, whose tenant lease alone may wait up to 90.
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    permissions:
+      contents: read
+      actions: write # read the dispatched runs; re-run Release Gate
+      statuses: write # the final `gate-check` status
+      pull-requests: write # find the PR; edit its sticky `/gate-check` comment
+    steps:
+      - name: Check out application-sdk's command scripts (trusted code only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Wait for the dispatched runs and settle the verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ needs.command.outputs.gate_check_sha }}
+          HEAD_BRANCH: ${{ needs.command.outputs.gate_check_branch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 .github/scripts/gate_check_verdict.py
+          --repo "$REPO" --head-sha "$HEAD_SHA" --branch "$HEAD_BRANCH"
+          --wait-minutes 180 --run-url "$RUN_URL"
+
   gate-check-verdict:
     name: Gate-check verdict
-    # Only runs a `/gate-check` dispatched can settle anything; every ordinary
-    # PR run's completion skips here at job level, which bills no runner.
+    # Backstop only: a run a person dispatched by hand does fire
+    # `workflow_run`; a `/gate-check` dispatch never does (gate-check-wait
+    # above). Every ordinary PR run's completion skips here at job level,
+    # which bills no runner.
     if: >-
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.event == 'workflow_dispatch' &&
