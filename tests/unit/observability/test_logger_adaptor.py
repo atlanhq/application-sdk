@@ -650,7 +650,7 @@ class TestLogSinkFanOut:
                     True,
                 ),
             ):
-                await adapter._log_sink(test_message)
+                adapter._log_sink(test_message)
 
         mock_add_record.assert_called_once()
         mock_send_otel.assert_called_once()
@@ -686,10 +686,47 @@ class TestLogSinkFanOut:
                     True,
                 ),
             ):
-                await adapter._log_sink(test_message)
+                adapter._log_sink(test_message)
 
         mock_add_record.assert_called_once()
         mock_send_otel.assert_not_called()
+
+    def test_log_sink_receives_lines_from_threads_without_a_loop(self):
+        """A line logged on a thread with no event loop still reaches the store.
+
+        Sync activities run in the worker's thread pool. loguru skips a
+        coroutine sink when the emitting thread has no running loop, so an
+        async ``_log_sink`` lost every such line. Exercised through a real
+        loguru handler, since loguru's dispatch is the behaviour under test.
+        """
+        import threading
+
+        with create_logger_adapter() as adapter:
+            adapter.logger_provider = None
+            with (
+                mock.patch.object(adapter, "add_record") as mock_add_record,
+                mock.patch(
+                    "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                handler_id = logger.add(
+                    adapter._log_sink,
+                    filter=lambda r: r["extra"].get("thread_sink_test") is True,
+                )
+                try:
+                    worker = threading.Thread(
+                        target=lambda: logger.bind(thread_sink_test=True).info(
+                            "from a thread-pool activity"
+                        )
+                    )
+                    worker.start()
+                    worker.join()
+                finally:
+                    logger.remove(handler_id)
+
+        messages = [c.args[0]["message"] for c in mock_add_record.call_args_list]
+        assert messages == ["from a thread-pool activity"]
 
 
 class TestCorrelationContext:
