@@ -603,12 +603,14 @@ class TestTreeSelectionExtractionInput:
         from application_sdk.templates.sql_app import SqlApp
         from application_sdk.templates.sql_metadata_extractor import _task_input
 
-        src = TreeSelectionExtractionInput(include_filter={"cat": {"ns": {"t": {}}}})
-        with pytest.raises(SqlTreeFilterInputUnsupportedError):
+        # Exclude-only: the error must not point the caller at include_filter.
+        src = TreeSelectionExtractionInput(exclude_filter={"cat": {"ns": {"t": {}}}})
+        with pytest.raises(SqlTreeFilterInputUnsupportedError) as exc_info:
             if builder == "sql_app":
                 SqlApp.build_task_input(ExtractionTaskInput, src)
             else:
                 _task_input(ExtractionTaskInput, src, cred_ref=None)
+        assert exc_info.value.field is None
 
     def test_redeclared_filter_field_gets_no_tree_coercion(self):
         class Sub(TreeSelectionExtractionInput):

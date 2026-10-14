@@ -12,7 +12,8 @@ refuses (they block removing the opt-out), those it accepts that still bound
 nothing, and those whose type this file cannot resolve, so the fix starts from
 the actual fields. Same-file aliases and quoted annotations are resolved the way
 ``get_type_hints`` resolves them; an imported type is reported as unknown, never
-as safe. Many opt-outs guard nothing: every declared field is already safe, and
+as safe, and a known SDK name imported from anywhere but its trusted origin (or
+renamed onto it) is treated as that unknown import. Many opt-outs guard nothing: every declared field is already safe, and
 the finding says so, because removing the opt-out is then the whole fix.
 
 The check stays inside one file: an attribute opt-out inherited from a class in
@@ -162,6 +163,39 @@ def _is_alias_value(node: ast.expr) -> bool:
     if isinstance(node, ast.BinOp):
         return isinstance(node.op, ast.BitOr)
     return isinstance(node, (ast.Name, ast.Attribute, ast.Subscript))
+
+
+#: Modules a known-safe name may be imported from and still mean the known type.
+_TRUSTED_ORIGINS = (
+    "application_sdk",
+    "builtins",
+    "datetime",
+    "decimal",
+    "uuid",
+    "typing",
+    "typing_extensions",
+    "pydantic",
+)
+
+
+def _untrusted_import_bindings(node: ast.Module) -> frozenset[str]:
+    """Names bound by an import that cannot be taken to mean the known-safe type of that name.
+
+    ``from x import Thing as TreeSelection``, ``from .types import TreeSelection`` and
+    ``from some_lib import TreeSelection`` all bind ``TreeSelection`` to a type this file
+    cannot see; only an unrenamed import from a trusted origin keeps the known meaning.
+    """
+    out: set[str] = set()
+    for stmt in ast.walk(node):
+        if isinstance(stmt, ast.ImportFrom):
+            module = stmt.module or ""
+            trusted = stmt.level == 0 and any(
+                module == m or module.startswith(m + ".") for m in _TRUSTED_ORIGINS
+            )
+            for a in stmt.names:
+                if not trusted or (a.asname is not None and a.asname != a.name):
+                    out.add(a.asname or a.name)
+    return frozenset(out)
 
 
 class _Types:
@@ -452,7 +486,7 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             if isinstance(stmt, (ast.Assign, ast.AnnAssign))
             for t in (stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target])
             if isinstance(t, ast.Name)
-        )
+        ) | _untrusted_import_bindings(node)
         self._types = _Types(aliases, set(classes), local_names)
         self._attr_optout = {
             name: stmt

@@ -88,7 +88,7 @@ class SqlTreeFilterInputUnsupportedError(InvalidInputError):
         "TreeSelectionExtractionInput filters keep every tree level, but SQL "
         "extraction task inputs keep two; extend ExtractionInput instead"
     )
-    field: str | None = "include_filter"
+    field: str | None = None
 
 
 @dataclass(kw_only=True)
