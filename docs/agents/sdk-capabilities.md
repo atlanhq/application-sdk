@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.46.0
-source-sha:    650e2d8c30f64b88d2eecbeb2557d31b11695380
-source-date:   2026-10-13T21:19:24+05:30
+sdk-version:   3.48.0
+source-sha:    c997fdd00ed75137f1d70809eace2117031881bb
+source-date:   2026-10-14T16:20:28+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 419 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
@@ -4408,6 +4408,21 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Wrapper for lazy evaluation with caching.
 - **Defined in:** `application_sdk/testing/integration/lazy.py`
 
+#### `LineageEdge`
+
+- **Import:** `from application_sdk.testing.harness.expectations import LineageEdge`
+- **Signature:** `class LineageEdge`
+- **Summary:** One declared lineage link: an input asset type and an output asset type.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `LineageEdgeCounts`
+
+- **Import:** `from application_sdk.testing.harness.atlas import LineageEdgeCounts`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class LineageEdgeCounts(*, counts: Mapping[LineageEdge, int] = dict(), scanned: int = 0, truncated: bool = False)`
+- **Summary:** How many lineage processes connect each requested type pair.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `LogCollector`
 
 - **Import:** `from application_sdk.testing.e2e import LogCollector`
@@ -5179,6 +5194,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Project a per-type count read, spreading an unreadable one over its types.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `as_lineage_edges`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_lineage_edges`
+- **Signature:** `as_lineage_edges(reading: Outcome[LineageEdgeCounts]) -> LineageEdgeRead`
+- **Summary:** Project a lineage-edge read into the evaluator's vocabulary.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `as_matcher`
 
 - **Import:** `from application_sdk.testing.harness.expectations import as_matcher`
@@ -5390,6 +5412,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Count assets of each named type that have lineage attached.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `count_lineage_edges`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_lineage_edges`
+- **Signature:** `count_lineage_edges(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Count lineage processes linking each (source type, target type) pair.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `count_total_assets`
 
 - **Import:** `from application_sdk.testing.harness.atlas import count_total_assets`
@@ -5496,6 +5525,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `evaluate_if_lazy(value: T)`
 - **Summary:** Evaluate a value if it's lazy, otherwise return as-is.
 - **Defined in:** `application_sdk/testing/integration/lazy.py`
+
+#### `evaluate_lineage_edges`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_lineage_edges`
+- **Signature:** `evaluate_lineage_edges(read: LineageEdgeRead | None, expectations: AssetExpectations) -> Sequence[Finding]`
+- **Summary:** Evaluate observed lineage-edge counts against the declared floors.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `evaluate_locations`
 
@@ -6582,6 +6618,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `HandlerResult`
 - **Summary:** Everything :func:`_coerce` accepts from a handler or authorizer.
 - **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `LineageEdgeRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import LineageEdgeRead`
+- **Signature:** `LineageEdgeRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `NO_TYPENAME`
 
