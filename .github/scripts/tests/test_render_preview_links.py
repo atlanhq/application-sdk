@@ -159,16 +159,81 @@ def test_a_non_integer_count_is_ignored(tmp_path: Path) -> None:
     assert got == {("atlan-example-app-example-e2e-aws", "ExampleE2E"): {"Schema": 2}}
 
 
-def test_the_baseline_is_the_newest_passing_release_run_but_not_this_one() -> None:
-    runs = [
-        {"id": 9, "conclusion": "success", "head_branch": "bump-version-main"},
-        {"id": 8, "conclusion": "success", "head_branch": "feature/x"},
-        {"id": 7, "conclusion": "failure", "head_branch": "bump-version-main"},
-        {"id": 6, "conclusion": "success", "head_branch": "bump-version-main"},
+_RUNS = [
+    {"id": 9, "conclusion": "success", "head_branch": "bump-version-main"},
+    {"id": 8, "conclusion": "success", "head_branch": "feature/x"},
+    {"id": 7, "conclusion": "failure", "head_branch": "bump-version-main"},
+    {"id": 6, "conclusion": "success", "head_branch": "bump-version-main"},
+    {"id": 5, "conclusion": "success", "head_branch": "bump-version-main"},
+]
+
+
+def test_only_passing_release_runs_other_than_this_one_are_candidates() -> None:
+    assert [r["id"] for r in baseline.candidates(_RUNS, current_run_id=1)] == [9, 6, 5]
+    assert [r["id"] for r in baseline.candidates(_RUNS, current_run_id=9)] == [6, 5]
+
+
+def test_a_release_cut_after_the_merge_base_is_never_the_baseline() -> None:
+    """Run 9 was cut after this PR branched: its counts carry default-branch
+    changes the PR lacks, which the diff would show as the PR's own."""
+    behind = {9: None, 6: 3, 5: 7}
+    picked = baseline.pick(_RUNS, 1, lambda run: behind[run["id"]])
+    assert picked == (6, 3)
+
+
+def test_no_release_at_or_before_the_merge_base_is_no_baseline() -> None:
+    assert baseline.pick(_RUNS, 1, lambda _run: None) is None
+
+
+def test_a_baseline_behind_the_merge_base_is_named_as_such(tmp_path: Path) -> None:
+    now = _counts(tmp_path / "pr", {"Table": 5, "ColumnProcess": 3})
+    before = _counts(tmp_path / "base", {"Table": 5})
+    md = mod.render_diff(now, before, commits_behind=3)
+    assert "3 default-branch commits before this PR's merge base" in md
+    assert "in that gap show here too" in md
+
+
+def test_a_baseline_at_the_merge_base_carries_no_gap_note(tmp_path: Path) -> None:
+    now = _counts(tmp_path / "pr", {"Table": 5, "ColumnProcess": 3})
+    before = _counts(tmp_path / "base", {"Table": 5})
+    assert "gap" not in mod.render_diff(now, before, commits_behind=0)
+
+
+def test_the_baseline_distance_reaches_the_renderer() -> None:
+    steps = yaml.safe_load(_REUSABLE.read_text())["jobs"]["tests-passed"]["steps"]
+    found = next(s for s in steps if s.get("id") == "baseline")
+    assert '>> "$GITHUB_OUTPUT"' in found["run"]
+    preview = next(s for s in steps if s.get("id") == "preview")
+    assert preview["env"]["BASELINE_COMMITS_BEHIND"] == (
+        "${{ steps.baseline.outputs.commits-behind }}"
+    )
+    assert '"${BASELINE_COMMITS_BEHIND:-0}"' in preview["run"]
+
+
+def test_the_hold_records_the_pr_it_belongs_to() -> None:
+    """The reaper ends a hold when its PR closes, and the next run's hold
+    replaces it: both need the PR on the hold."""
+    jobs = yaml.safe_load(_REUSABLE.read_text())["jobs"]
+    hold = next(
+        s for s in jobs["discover-e2e"]["steps"] if s.get("id") == "preview-hold"
+    )
+    assert 'echo "pr=${REPO}#${PR_NUMBER}"' in hold["run"]
+    assert jobs["e2e"]["env"]["E2E_PREVIEW_PR"] == (
+        "${{ needs.discover-e2e.outputs.preview-hold-hours != '' && "
+        "needs.discover-e2e.outputs.preview-hold-pr || '' }}"
+    )
+
+
+def test_the_reaper_can_read_pr_state_across_connector_repos() -> None:
+    reaper = yaml.safe_load(
+        (_REPO_ROOT / ".github" / "workflows" / "e2e-preview-reaper.yaml").read_text()
+    )
+    [purge] = [
+        s
+        for s in reaper["jobs"]["reap"]["steps"]
+        if "preview_hold reap" in s.get("run", "")
     ]
-    assert baseline.pick(runs, current_run_id=1) == 9
-    assert baseline.pick(runs, current_run_id=9) == 6
-    assert baseline.pick(runs[1:3], current_run_id=1) is None
+    assert purge["env"]["GH_TOKEN"] == "${{ secrets.ORG_PAT_GITHUB }}"
 
 
 def test_each_e2e_leg_uploads_its_preview_links_from_the_workflow_itself() -> None:

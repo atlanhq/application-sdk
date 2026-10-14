@@ -13,12 +13,13 @@ trusted: a link is rendered only when it is an https URL of the exact
 identifier, and anything else is dropped rather than escaped.
 
 It also compares each leg's per-type asset counts with the same leg's counts
-in a baseline run (the latest passing release e2e), so a reviewer can see what
-the change landed that the default branch does not, or that it landed nothing
-different at all.
+in a baseline run (the newest passing release e2e at or before the PR's merge
+base, see ``preview_baseline_run.py``), so a reviewer can see what the change
+landed that the default branch does not, or that it landed nothing different
+at all.
 
 Usage:
-    python3 render_preview_links.py <artifacts-root> [<baseline-root>]
+    python3 render_preview_links.py <artifacts-root> [<baseline-root> [<commits-behind>]]
 
 Prints the markdown (empty when there is nothing to show) to stdout.
 """
@@ -133,21 +134,37 @@ def collect_counts(root: Path) -> Counts:
     return found
 
 
-def render_diff(current: Counts, baseline: Counts | None) -> str:
+def _baseline_label(commits_behind: int) -> str:
+    if commits_behind <= 0:
+        return "the release e2e at this PR's merge base"
+    plural = "s" if commits_behind != 1 else ""
+    return (
+        f"the release e2e cut {commits_behind} default-branch commit{plural} "
+        "before this PR's merge base"
+    )
+
+
+def render_diff(
+    current: Counts, baseline: Counts | None, commits_behind: int = 0
+) -> str:
     """How this run's asset counts differ from the baseline run's.
 
-    The baseline is the latest passing release (`bump-version`) e2e in the same
-    repo, which runs the default branch's code. A run whose counts match the
-    baseline on every leg is called out: the e2e passed, but its source may not
-    exercise the change at all.
+    The baseline is the newest passing release (`bump-version`) e2e cut at or
+    before this PR's merge base, *commits_behind* default-branch commits before
+    it. A baseline that is behind is named as such: changes merged in that gap
+    show in the diff too. A run whose counts match the baseline on every leg is
+    called out: the e2e passed, but its source may not exercise the change at
+    all.
     """
     if not current:
         return ""
     if baseline is None:
         return (
             "_No baseline to compare asset counts against: no passing release "
-            "(`bump-version`) e2e run with preview files was found._"
+            "(`bump-version`) e2e run with preview files was found at or before "
+            "this PR's merge base._"
         )
+    label = _baseline_label(commits_behind)
     rows: list[str] = []
     compared = 0
     for key in sorted(current):
@@ -164,14 +181,24 @@ def render_diff(current: Counts, baseline: Counts | None) -> str:
         return "_No baseline for these legs: the release run's legs did not match._"
     if not rows:
         return (
-            "> ⚠️ **Asset counts match the release baseline exactly on every leg.** "
-            "The e2e passed, but its test source may not exercise this change: "
-            "check the preview links above for the change itself."
+            "> ⚠️ **Asset counts match the release baseline exactly on every leg** "
+            f"({label}). The e2e passed, but its test source may not exercise "
+            "this change: check the preview links above for the change itself."
         )
+    note = (
+        []
+        if commits_behind <= 0
+        else [
+            f"_Compared with {label}: changes merged to the default branch in "
+            "that gap show here too._",
+            "",
+        ]
+    )
     return "\n".join(
         [
-            "### What changed vs the last release e2e",
+            "### What changed vs the release e2e",
             "",
+            *note,
             "| Leg | Suite | Asset type | Release | This PR | Δ |",
             "|---|---|---|---|---|---|",
             *rows,
@@ -180,9 +207,10 @@ def render_diff(current: Counts, baseline: Counts | None) -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) not in (2, 3):
+    if len(argv) not in (2, 3, 4):
         print(
-            "usage: render_preview_links.py <artifacts-root> [<baseline-root>]",
+            "usage: render_preview_links.py <artifacts-root> "
+            "[<baseline-root> [<commits-behind>]]",
             file=sys.stderr,
         )
         return 2
@@ -190,7 +218,8 @@ def main(argv: list[str]) -> int:
     if not root.is_dir():
         print("")
         return 0
-    baseline_root = Path(argv[2]) if len(argv) == 3 else None
+    baseline_root = Path(argv[2]) if len(argv) >= 3 else None
+    commits_behind = int(argv[3]) if len(argv) == 4 and argv[3].isdigit() else 0
     baseline = (
         collect_counts(baseline_root)
         if baseline_root is not None
@@ -198,7 +227,10 @@ def main(argv: list[str]) -> int:
         and any(baseline_root.iterdir())
         else None
     )
-    sections = [render(collect(root)), render_diff(collect_counts(root), baseline)]
+    sections = [
+        render(collect(root)),
+        render_diff(collect_counts(root), baseline, commits_behind),
+    ]
     print("\n\n".join(section for section in sections if section))
     return 0
 

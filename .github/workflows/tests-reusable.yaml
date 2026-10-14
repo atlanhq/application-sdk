@@ -1217,6 +1217,7 @@ jobs:
       # exactly this reason.
       cloud-count: ${{ steps.discover-clouds.outputs.count }}
       preview-hold-hours: ${{ steps.preview-hold.outputs.hours }}
+      preview-hold-pr: ${{ steps.preview-hold.outputs.pr }}
       # The same cloud dimension as a flat list, for lease-tenant — which is ONE
       # job that takes every cloud's lease in order rather than a matrix leg per
       # cloud (FND-646), so it needs the list and not a matrix.
@@ -1450,6 +1451,8 @@ jobs:
       # rather than the event payload because a `/e2e` run is a dispatch with
       # no pull_request payload, and adding the label starts nothing on its
       # own. Empty hours (no label, no PR, a failed read) is the usual purge.
+      # The PR is recorded on the hold so the reaper can end it when the PR
+      # closes, and so the next run's hold replaces this one.
       - name: Read the preview-hold request
         id: preview-hold
         if: inputs.pr-number != '' || github.event.pull_request.number
@@ -1461,7 +1464,9 @@ jobs:
           PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          echo "hours=$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq 'if any(.[]; .name == "e2e-preview") then "24" else "" end')" >> "$GITHUB_OUTPUT"
+          hours="$(gh api "repos/${REPO}/issues/${PR_NUMBER}/labels" --jq 'if any(.[]; .name == "e2e-preview") then "24" else "" end')"
+          echo "hours=${hours}" >> "$GITHUB_OUTPUT"
+          echo "pr=${REPO}#${PR_NUMBER}" >> "$GITHUB_OUTPUT"
 
       # ── Show the `/e2e` request as running (FND-3839) ──────────────────────
       # Edits the PR's sticky `/e2e` comment in place. A view of the request,
@@ -2458,6 +2463,7 @@ jobs:
       # Set when the PR carries `e2e-preview` (discover-e2e reads it); empty
       # purges as usual. Read by application_sdk.testing.harness.preview_hold.
       E2E_PREVIEW_HOLD_HOURS: ${{ needs.discover-e2e.outputs.preview-hold-hours }}
+      E2E_PREVIEW_PR: ${{ needs.discover-e2e.outputs.preview-hold-hours != '' && needs.discover-e2e.outputs.preview-hold-pr || '' }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''
@@ -3534,9 +3540,11 @@ jobs:
           pattern: e2e-preview-${{ inputs.app-name }}*
           path: e2e-preview-artifacts
 
-      # The baseline: the latest passing release (`bump-version*`) run of this
-      # workflow, which runs the default branch's code. Its preview files carry
-      # the asset counts this PR's are compared against.
+      # The baseline: the newest passing release (`bump-version*`) run of this
+      # workflow cut at or before this PR's merge base with the default branch.
+      # A newer release would carry default-branch changes this PR lacks, and
+      # they would show up as the PR's own. Its preview files carry the asset
+      # counts this PR's are compared against.
       - name: Find the release-baseline run
         id: baseline
         if: >-
@@ -3549,7 +3557,7 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          echo "run-id=$(python3 .github/scripts/preview_baseline_run.py "$REPO" "$RUN_ID")" >> "$GITHUB_OUTPUT"
+          python3 .github/scripts/preview_baseline_run.py "$REPO" "$RUN_ID" >> "$GITHUB_OUTPUT"
 
       - name: Download release-baseline preview links
         if: always() && steps.baseline.outputs.run-id != ''
@@ -3569,9 +3577,11 @@ jobs:
           always() && needs.e2e.result == 'success' &&
           hashFiles('.github/scripts/render_preview_links.py') != ''
         continue-on-error: true
+        env:
+          BASELINE_COMMITS_BEHIND: ${{ steps.baseline.outputs.commits-behind }}
         run: |
           set -euo pipefail
-          python3 .github/scripts/render_preview_links.py e2e-preview-artifacts e2e-preview-baseline > "$RUNNER_TEMP/e2e-preview.md"
+          python3 .github/scripts/render_preview_links.py e2e-preview-artifacts e2e-preview-baseline "${BASELINE_COMMITS_BEHIND:-0}" > "$RUNNER_TEMP/e2e-preview.md"
           delim="PREVIEW_$(openssl rand -hex 16)"
           {
             echo "markdown<<${delim}"

@@ -6,10 +6,10 @@ name: E2E Preview Reaper
 # published into, so the preview links on the PR comment open real assets
 # (tests-reusable.yaml's E2E_PREVIEW_HOLD_HOURS). Teardown marks that
 # connection with an expiry instead of purging it; this job purges every marked
-# connection whose expiry has passed, on every cloud's connector and system
-# test tenant. Only connections carrying the marker AND the harness's own
-# minted qualified-name shape are ever touched: see
-# application_sdk/testing/harness/preview_hold.py.
+# connection whose expiry has passed, or whose PR has been closed or merged,
+# on every cloud's connector and system test tenant. Only connections carrying
+# the marker AND the harness's own minted qualified-name shape are ever
+# touched: see application_sdk/testing/harness/preview_hold.py.
 
 on:
   schedule:
@@ -62,8 +62,13 @@ jobs:
         if: env.TENANT_MATRIX_JSON != ''
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
 
-      - name: Purge expired holds
+      # The org token only reads each hold's PR state (the PRs live in the
+      # connector repos, which this repo's GITHUB_TOKEN cannot see). Without
+      # it the reaper still purges on expiry.
+      - name: Purge expired and closed-PR holds
         if: env.TENANT_MATRIX_JSON != ''
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
           uv run --frozen python -m application_sdk.testing.harness.preview_hold reap
