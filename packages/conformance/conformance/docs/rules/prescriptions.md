@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**51 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**52 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -74,6 +74,7 @@ reassigned.
 | [P055](#p055) | `OneToManyLinkFromParent` | `warn` | `app` | `asset-modeling` | — | 0.44.0 |
 | [P056](#p056) | `UnclosedBaseClient` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
 | [P057](#p057) | `CloseOverrideSkipsSuper` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
+| [P058](#p058) | `RawDictEntity` | `warn` | `app` | `asset-modeling` | — | 0.49.0 |
 
 ---
 
@@ -2880,8 +2881,8 @@ on a receiver of unknown type, when   the value names the child type
 The list ends come from a table generated off the pinned pyatlan_v9 models
 (`gen-relationship-directions`): an end whose single-valued inverse is on the child
 type.  Many-to-many ends such as `Process.inputs` are not in it, and assigning `None` is
-not flagged.  Raw-dict mappers are out of scope — move them to `pyatlan_v9` first
-(O004).
+not flagged.  Raw-dict mappers are out of scope — move them to `pyatlan_v9` first (O004,
+P058).
 
 Fix: drop the list from the parent and set the single reference on each child, e.g.
 `activity.fabric_process = RelatedProcess(qualified_name=process_qn)`.  Publish then
@@ -3020,5 +3021,56 @@ subclass counts.  The check is silent unless the app's `uv.lock` resolves an SDK
 
 Land as `WARN`: a justified inline `# conformance: ignore[P057] <reason>` records a
 deliberate exception and stays visible in SARIF.
+
+---
+
+## P058 — `RawDictEntity` {#p058}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.49.0
+
+> Atlas entity built as a raw typeName/attributes dict instead of a pyatlan_v9 asset
+
+**Rationale:** entity_bytes applies the SDK's central entity fixes to pyatlan assets, including a
+top-level status ACTIVE. Atlas restores a soft-deleted entity on upsert only when the
+payload carries it, so a hand-built dict that omits it leaves a reappearing entity
+DELETED, and nothing reports it. A fix in the SDK cannot reach a dict the app assembles
+itself; the fix is to move the app onto pyatlan_v9 assets.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app app/asset_mapper.py — every mapper builds its entity with a
+  `pyatlan_v9.model.assets` creator and app/connector.py writes each one through
+  `entity_bytes(...)`; no entity is assembled as a `typeName` / `attributes` dict.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
+- **Already correct when:** A justified inline `# conformance: ignore[P058] <reason>` is correct only for a type
+  `pyatlan_v9` does not model, and only when the dict carries top-level `"status":
+  "ACTIVE"` on a non-delete upsert. The reason must name the unmodelled type. A
+  directive on a type `pyatlan_v9` models is unremediated.
+
+App code under `app/` (`app/generated/` excluded) emits an Atlas entity it built as a
+raw dict — a dict display with literal `"typeName"` and `"attributes"` keys, or
+`dict(typeName=..., attributes=...)` — instead of a `pyatlan_v9.model.assets` object.
+
+Atlas encodes struct values and nested refs in the same shape, so the rule fires only
+where the dict is emitted:
+
+* `<x>.append(D)`, `<x>.insert(i, D)`, or an element of   `<x>.extend([...])` (a list /
+tuple display or comprehension); * `entity_bytes(D)`; * `yield D`; * `return D` from a
+`map_<entity>` mapper.
+
+`D` is the dict itself or a simple name bound to one in the same scope.  A dict stored
+under a subscript, nested in another dict, passed to `model_validate` or returned from a
+helper that is not a `map_` mapper is not flagged, and neither is a `typeName` without
+`attributes` (a `uniqueAttributes` ref, a search filter).
+
+`entity_bytes` applies the SDK's central entity fixes to pyatlan assets, among them a
+top-level `status: ACTIVE` — Atlas restores a soft-deleted entity on upsert only when
+the payload carries it.  A raw dict misses every one of them unless its author adds each
+key by hand.
+
+Fix: build the entity with the `pyatlan_v9.model.assets` creator for its type and
+serialize it with `entity_bytes`.  WARN tier — where `pyatlan_v9` does not model the
+type, keep the dict, give it top-level `"status": "ACTIVE"` on every non-delete upsert,
+and suppress with `# conformance: ignore[P058] <reason>` naming the type.
 
 ---

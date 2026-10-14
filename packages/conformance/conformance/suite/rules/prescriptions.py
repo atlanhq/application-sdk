@@ -815,7 +815,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "inverse is on the child type.  Many-to-many ends such as\n"
             "``Process.inputs`` are not in it, and assigning ``None`` is not\n"
             "flagged.  Raw-dict mappers are out of scope — move them to\n"
-            "``pyatlan_v9`` first (O004).\n"
+            "``pyatlan_v9`` first (O004, P058).\n"
             "\n"
             "Fix: drop the list from the parent and set the single reference on\n"
             "each child, e.g. ``activity.fabric_process =\n"
@@ -823,6 +823,81 @@ RULES: tuple[RuleDefinition, ...] = (
             "parent first and each child references a parent that already exists.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p055",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
+    ),
+    RuleDefinition(
+        id="P058",
+        canonical_reference=(
+            "atlan-openapi-app app/asset_mapper.py — every mapper builds its "
+            "entity with a `pyatlan_v9.model.assets` creator and "
+            "app/connector.py writes each one through `entity_bytes(...)`; no "
+            "entity is assembled as a `typeName` / `attributes` dict."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P058] <reason>` is "
+            "correct only for a type `pyatlan_v9` does not model, and only when "
+            'the dict carries top-level `"status": "ACTIVE"` on a non-delete '
+            "upsert. The reason must name the unmodelled type. A directive on "
+            "a type `pyatlan_v9` models is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="RawDictEntity",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.49.0",
+        rationale=(
+            "entity_bytes applies the SDK's central entity fixes to pyatlan "
+            "assets, including a top-level status ACTIVE. Atlas restores a "
+            "soft-deleted entity on upsert only when the payload carries it, so "
+            "a hand-built dict that omits it leaves a reappearing entity "
+            "DELETED, and nothing reports it. A fix in the SDK cannot reach a "
+            "dict the app assembles itself; the fix is to move the app onto "
+            "pyatlan_v9 assets."
+        ),
+        short_description=(
+            "Atlas entity built as a raw typeName/attributes dict instead of a "
+            "pyatlan_v9 asset"
+        ),
+        full_description=(
+            "App code under ``app/`` (``app/generated/`` excluded) emits an Atlas\n"
+            "entity it built as a raw dict — a dict display with literal\n"
+            '``"typeName"`` and ``"attributes"`` keys, or\n'
+            "``dict(typeName=..., attributes=...)`` — instead of a\n"
+            "``pyatlan_v9.model.assets`` object.\n"
+            "\n"
+            "Atlas encodes struct values and nested refs in the same shape, so the\n"
+            "rule fires only where the dict is emitted:\n"
+            "\n"
+            "* ``<x>.append(D)``, ``<x>.insert(i, D)``, or an element of\n"
+            "  ``<x>.extend([...])`` (a list / tuple display or comprehension);\n"
+            "* ``entity_bytes(D)``;\n"
+            "* ``yield D``;\n"
+            "* ``return D`` from a ``map_<entity>`` mapper.\n"
+            "\n"
+            "``D`` is the dict itself or a simple name bound to one in the same\n"
+            "scope.  A dict stored under a subscript, nested in another dict,\n"
+            "passed to ``model_validate`` or returned from a helper that is not a\n"
+            "``map_`` mapper is not flagged, and neither is a ``typeName`` without\n"
+            "``attributes`` (a ``uniqueAttributes`` ref, a search filter).\n"
+            "\n"
+            "``entity_bytes`` applies the SDK's central entity fixes to pyatlan\n"
+            "assets, among them a top-level ``status: ACTIVE`` — Atlas restores a\n"
+            "soft-deleted entity on upsert only when the payload carries it.  A raw\n"
+            "dict misses every one of them unless its author adds each key by hand.\n"
+            "\n"
+            "Fix: build the entity with the ``pyatlan_v9.model.assets`` creator\n"
+            "for its type and serialize it with ``entity_bytes``.  WARN tier —\n"
+            "where ``pyatlan_v9`` does not model the type, keep the dict, give it\n"
+            'top-level ``"status": "ACTIVE"`` on every non-delete upsert, and\n'
+            "suppress with ``# conformance: ignore[P058] <reason>`` naming the type.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p058",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
