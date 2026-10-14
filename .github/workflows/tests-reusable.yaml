@@ -2745,6 +2745,22 @@ jobs:
           # Dockerfile that declares no such secret mount simply ignores it.
           git-token: ${{ secrets.ORG_PAT_GITHUB }}
 
+      # The product links a passing full-DAG run wrote for a reviewer
+      # (BaseE2ETest._write_preview_links), uploaded on their own so the Tests
+      # Gate can put them on the PR without downloading each leg's logs. Here
+      # rather than inside sdr-e2e because that action is pinned to @main, so
+      # this step tracks the workflow's own ref. Reporting only: absent when
+      # the run wrote none.
+      - name: Upload preview links
+        if: always() && hashFiles('results/e2e-preview/*.json') != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: e2e-preview-${{ inputs.app-name }}-${{ matrix.name }}
+          path: results/e2e-preview/
+          retention-days: 14
+          overwrite: true
+
   # ── Hand the tenant to whoever is next in the queue ──────────────────────
   # Prompt release, not the mechanism that makes the lease safe. GitHub cancels
   # queued jobs rather than running them, so on a cancelled run this job never

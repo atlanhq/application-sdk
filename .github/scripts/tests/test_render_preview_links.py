@@ -169,3 +169,15 @@ def test_the_baseline_is_the_newest_passing_release_run_but_not_this_one() -> No
     assert baseline.pick(runs, current_run_id=1) == 9
     assert baseline.pick(runs, current_run_id=9) == 6
     assert baseline.pick(runs[1:3], current_run_id=1) is None
+
+
+def test_each_e2e_leg_uploads_its_preview_links_from_the_workflow_itself() -> None:
+    """sdr-e2e is pinned to @main, so an upload inside it would not track the
+    workflow ref a caller (or a branch under test) actually runs."""
+    steps = yaml.safe_load(_REUSABLE.read_text())["jobs"]["e2e"]["steps"]
+    upload = next(s for s in steps if s.get("name") == "Upload preview links")
+    assert upload["with"]["path"] == "results/e2e-preview/"
+    assert (
+        upload["with"]["name"]
+        == "e2e-preview-${{ inputs.app-name }}-${{ matrix.name }}"
+    )
