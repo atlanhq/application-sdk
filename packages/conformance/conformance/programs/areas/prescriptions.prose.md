@@ -159,6 +159,17 @@ output is not an entity line at all (a `ConnectionRef` built from
 `to_atlas_format`) gets an inline `# conformance: ignore[P052] <reason>`
 instead.
 
+P058 (an Atlas entity built as a raw `{"typeName": ..., "attributes": ...}`
+dict and emitted — appended, extended, inserted, yielded, passed to
+`entity_bytes` or returned from a `map_<entity>` mapper) is not auto-fixable.
+The fix rebuilds the entity with the `pyatlan_v9.model.assets` creator for its
+type and serializes it through `entity_bytes`, a semantic rewrite performed by
+the `migrate-asset-modeling` skill (its `remediation_reference`).  It drafts a
+proposal for human review and never auto-applies.  A type `pyatlan_v9` does not
+model keeps its dict, which must carry top-level `"status": "ACTIVE"` on a
+non-delete upsert, with an inline `# conformance: ignore[P058] <reason>` naming
+the type.
+
 ### Requires
 
 - `scope` — repository root path.
