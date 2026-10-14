@@ -141,8 +141,8 @@ async def list_keys(
         Sorted list of matching object keys.  By default, zero-byte objects
         that act as GCS-style directory markers are excluded, and so are S3
         ``folder/`` markers with no children (a zero-byte key whose HEAD is
-        not found); other zero-byte files with no children are returned
-        normally.  A zero-byte object is only identified as a GCS-style
+        not found and that lists under its own path); other zero-byte files
+        with no children are returned normally.  A zero-byte object is only identified as a GCS-style
         marker if its children appear in the same listing call (i.e. they share the
         requested *prefix*).
 

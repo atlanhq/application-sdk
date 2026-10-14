@@ -130,6 +130,45 @@ class TestListKeys:
             "dump/zero.json",
         ]
 
+    async def test_keeps_zero_byte_key_deleted_after_listing(self, store) -> None:
+        await _put("dump/a.json", b"{}", store, normalize=False)
+        await _put("dump/_SUCCESS", b"", store, normalize=False)
+        snapshot = [b async for b in obstore.list(store, prefix="dump/")]
+        real_list = obstore.list
+
+        async def _stale_list(store, prefix=None, **kwargs):
+            # The listing ran before the delete; the confirming list runs after.
+            if prefix == "dump/":
+                for batch in snapshot:
+                    yield batch
+                return
+            async for batch in real_list(store, prefix=prefix, **kwargs):
+                yield batch
+
+        await obstore.delete_async(store, "dump/_SUCCESS")
+        with patch.object(obstore, "list", _stale_list):
+            keys = await list_keys("dump/", store, normalize=False)
+        assert keys == ["dump/_SUCCESS", "dump/a.json"]
+
+    async def test_probe_tasks_are_bounded_by_concurrency(self, store) -> None:
+        for i in range(50):
+            await _put(f"dump/{i}", b"", store, normalize=False)
+        created = 0
+        real_create_task = asyncio.TaskGroup.create_task
+
+        def _counting_create_task(self, coro, **kwargs):
+            nonlocal created
+            created += 1
+            return real_create_task(self, coro, **kwargs)
+
+        with (
+            patch("application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS", 4),
+            patch.object(asyncio.TaskGroup, "create_task", _counting_create_task),
+        ):
+            keys = await list_keys("dump/", store, normalize=False)
+        assert len(keys) == 50
+        assert created == 4
+
     @pytest.mark.parametrize(
         "error",
         [
