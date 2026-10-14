@@ -1358,6 +1358,45 @@ is why a failed search there cannot arrive as "zero matches" — that spelling
 means "the asset did not land", a claim about the connector. See
 [What a red leg means when Atlas could not be read](#what-a-red-leg-means-when-atlas-could-not-be-read-fnd-225).
 
+## Asserting which types lineage connects
+
+`expect_lineage` passes as soon as any asset under the connection has lineage,
+and the count knobs cannot see lineage processes at all. A connector that keeps
+publishing its coarse lineage but stops producing one finer kind — every
+field-level link, say — lands asset counts identical to a good run and stays
+green. `expected_lineage_edges` names the link:
+
+```python
+class TestSigmaFullDAG(BaseE2ETest):
+    expected_lineage_edges = {
+        "SigmaDataElementField -> SigmaDataModelColumn": 1,
+    }
+```
+
+Each key is `"SourceType -> TargetType"`; each value is the minimum number of
+lineage processes (`Process`, `ColumnProcess`, `BIProcess`, or any other
+`Process` subtype) under the connection with at least one input of `SourceType`
+**and** at least one output of `TargetType`. A process carrying `TargetType`
+only among its inputs does not count — direction is part of the claim.
+
+* **Endpoints are matched by type name only.** A process's inputs or outputs may
+  belong to another connection — a warehouse column feeding a BI field — so only
+  the process has to sit under this connection.
+* **Rejected at resolution:** a key that is not two type names joined by `->`,
+  the same edge declared twice, a floor below 1, or edges declared on a run with
+  `expect_lineage = False` (the AE skips the lineage nodes there, so no edge
+  could land). `DAGSpec(expected_lineage_edges=...)` overrides the class
+  attribute per run, like every other knob.
+* **An edge observed 0 times is a failure**, naming the edge, its floor and the
+  observed count.
+* **Unreadable is not zero.** A failed search is an `AtlasReadIndeterminateError`,
+  as for counts. The reader also stops after a fixed number of processes; when
+  it stops with processes unread, an edge that already met its floor passes and
+  one that had not is ungraded rather than failed, because the unread processes
+  could still carry it.
+
+Empty (the default) makes no extra Atlas call.
+
 ## Contract regeneration before tests
 
 The e2e/integration tests consume `app/generated/manifest.json` (the Automation Engine DAG): the host-side harness reads the committed file, and the connector Docker image `COPY`s `app/generated/` at build time and serves `manifest.json` at runtime. Nothing used to regenerate that file from `contract/app.pkl`, so a Contract Toolkit change — at the app level (`contract/app.pkl`) or the SDK level (`contract-toolkit/src`) — ran against a possibly-stale committed manifest and was never actually exercised (BLDX-1493).
