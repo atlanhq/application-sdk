@@ -111,14 +111,16 @@ def _coerce_filter_value(v: Any) -> Any:
     return v
 
 
-def _is_sdk_sql_filter_field(cls: type, field_name: str | None) -> bool:
-    """Return True when a subclass still uses the SDK-owned SQL filter field."""
+def _is_sdk_sql_filter_field(
+    cls: type,
+    field_name: str | None,
+    marker: dict[str, JsonValue] = _FILTER_FIELD_JSON_SCHEMA_EXTRA,
+) -> bool:
+    """Return True when a subclass still uses the SDK-owned filter field."""
     if field_name is None:
         return False
     field = cls.model_fields.get(field_name)
-    return (
-        field is not None and field.json_schema_extra == _FILTER_FIELD_JSON_SCHEMA_EXTRA
-    )
+    return field is not None and field.json_schema_extra == marker
 
 
 class ExtractionInput(Input):
@@ -412,7 +414,11 @@ class TreeSelectionExtractionInput(ExtractionInput):
 
     @field_validator("include_filter", "exclude_filter", mode="before")
     @classmethod
-    def _coerce_tree_filter(cls, v: Any) -> Any:
+    def _coerce_filter(cls, v: Any, info: ValidationInfo) -> Any:
+        if not _is_sdk_sql_filter_field(
+            cls, info.field_name, _TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA
+        ):
+            return v
         return _coerce_tree_filter_value(v)
 
 

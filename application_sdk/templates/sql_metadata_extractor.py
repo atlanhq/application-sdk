@@ -454,6 +454,8 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
         Override to customize the orchestration order or add additional steps.
         """
+        if isinstance(input, TreeSelectionExtractionInput):
+            raise SqlTreeFilterInputUnsupportedError()
         workflow_id = input.workflow_id
         logger.info("Starting SQL metadata extraction: %s", workflow_id)
 

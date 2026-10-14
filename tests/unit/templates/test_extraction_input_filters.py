@@ -609,3 +609,22 @@ class TestTreeSelectionExtractionInput:
                 SqlApp.build_task_input(ExtractionTaskInput, src)
             else:
                 _task_input(ExtractionTaskInput, src, cred_ref=None)
+
+    def test_redeclared_filter_field_gets_no_tree_coercion(self):
+        class Sub(TreeSelectionExtractionInput):
+            include_filter: dict = {}  # pyright: ignore[reportIncompatibleVariableOverride]
+
+        with pytest.raises(ValidationError):
+            Sub.model_validate({"include_filter": '{"cat": {}}'})
+
+    @pytest.mark.asyncio
+    async def test_sql_metadata_extractor_run_raises_the_input_error_unwrapped(self):
+        from application_sdk.templates._template_errors import (
+            SqlTreeFilterInputUnsupportedError,
+        )
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        with pytest.raises(SqlTreeFilterInputUnsupportedError):
+            await SqlMetadataExtractor.run(None, TreeSelectionExtractionInput())  # type: ignore[arg-type]
