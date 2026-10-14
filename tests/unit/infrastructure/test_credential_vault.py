@@ -944,3 +944,86 @@ class TestSingleKeyProbeConcurrency:
         collected = await self._vault(_get_secret)._fetch_single_key_secrets(config)
 
         assert collected == {"password": "resolved"}
+
+
+def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
+    """A Dapr binding GET answered with HTTP 500 and Dapr's JSON error body."""
+    req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/upstream")
+    body = {"errorCode": "ERR_INVOKE_OUTPUT_BINDING", "message": dapr_message}
+    resp = httpx.Response(500, request=req, content=json.dumps(body).encode())
+    return httpx.HTTPStatusError(
+        "Server error '500 Internal Server Error'", request=req, response=resp
+    )
+
+
+class TestDaprCredentialVaultMissingConfigBlob:
+    """Some object-store bindings (Azure Blob among them) answer a GET for a
+    key that does not exist with HTTP 500 and a "not found" Dapr error body,
+    not a 200 with empty data. That is a missing credential config, and must
+    fail at once with the real cause rather than be retried for the whole
+    cold-start budget and then reported as an unreachable sidecar."""
+
+    def _make_vault(self, mock_client: MagicMock) -> DaprCredentialVault:
+        return DaprCredentialVault(
+            mock_client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+
+    @pytest.mark.parametrize(
+        "dapr_message",
+        [
+            "error invoking output binding upstream-objectstore: blob not found",
+            "error invoking output binding upstream-objectstore: "
+            "BlobNotFound: The specified blob does not exist.",
+            "error invoking output binding upstream-objectstore: "
+            "NoSuchKey: The specified key does not exist.",
+        ],
+    )
+    async def test_missing_credential_config_blob_is_not_retried(
+        self, deterministic_dapr_cold_start_deadline, dapr_message: str
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(side_effect=_binding_500(dapr_message))
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert "No credential config found" in str(exc_info.value)
+        assert mock_client.invoke_binding.await_count == 1
+
+    async def test_binding_500_without_not_found_is_still_retried(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=_binding_500(
+                "error invoking output binding: context deadline exceeded"
+            )
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert "No credential config found" not in str(exc_info.value)
+        assert mock_client.invoke_binding.await_count > 1
+
+    async def test_connection_refused_on_config_fetch_is_still_retried(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=httpx.ConnectError("all connection attempts failed")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert "No credential config found" not in str(exc_info.value)
+        assert mock_client.invoke_binding.await_count > 1
