@@ -280,7 +280,7 @@ class CloudStore:
 
         sem = asyncio.Semaphore(max_concurrency)
 
-        async def _dl(obj_key: str, size: int, etag: str | None) -> Path | None:
+        async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
             async with sem:
                 # No `list_prefix and` guard here: when list_prefix == "" (a
                 # whole-bucket download), startswith("") is always True, so the
@@ -297,29 +297,21 @@ class CloudStore:
                 # Pass the listing's size + etag so large objects chunk (with
                 # version-pinned range GETs) and small ones stream — no per-file
                 # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
-                try:
-                    await download_file_chunked(
-                        obj_key,
-                        local_path,
-                        store=self._store,
-                        normalize=False,
-                        file_size=size,
-                        etag=etag,
-                        # External bucket: the SDK never wrote sidecars here, so
-                        # skip the per-file probe that could only ever miss.
-                        sidecar_present=False,
-                    )
-                except StorageNotFoundError:
-                    if size != 0:
-                        raise
-                    _log().debug("Skipped directory marker key=%s", obj_key)
-                    return None
+                await download_file_chunked(
+                    obj_key,
+                    local_path,
+                    store=self._store,
+                    normalize=False,
+                    file_size=size,
+                    etag=etag,
+                    # External bucket: the SDK never wrote sidecars here, so
+                    # skip the per-file probe that could only ever miss.
+                    sidecar_present=False,
+                )
                 return local_path
 
         results = await asyncio.gather(*[_dl(k, s, e) for k, s, e in items])
-        downloaded = [path for path in results if path is not None]
-        if not downloaded:
-            raise StorageError(f"No files found under prefix: {list_prefix!r}")
+        downloaded = list(results)
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
@@ -374,8 +366,9 @@ class CloudStore:
         Returns:
             Sorted list of matching object keys.  Zero-byte objects that act as
             GCS-style directory markers (i.e. they have at least one child key
-            under them) are excluded; zero-byte files with no children are
-            returned normally.  For raw access including markers, use the
+            under them) are excluded, and so are S3 ``folder/`` markers with
+            no children; zero-byte files with no children are returned
+            normally.  For raw access including markers, use the
             underlying :attr:`store` property directly.
         """
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""

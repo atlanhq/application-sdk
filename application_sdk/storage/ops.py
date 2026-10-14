@@ -36,6 +36,7 @@ to target a specific store instead.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import logging
@@ -720,6 +721,8 @@ async def _list_items(
 
     A zero-byte object is excluded when its path is a strict path-prefix of at least
     one other listed key — i.e. it acts as a parent directory for real files.
+    Zero-byte objects that remain are then probed with a HEAD; one that is not
+    found is an S3 ``folder/`` marker with no children and is dropped too.
 
     Args:
         store: An obstore-compatible store instance.
@@ -743,7 +746,42 @@ async def _list_items(
         return all_items
     # Offloaded: two passes over the whole listing with no await in between,
     # which at 100k keys holds the event loop (and the activity heartbeat).
-    return await run_in_thread(_drop_directory_markers, all_items)
+    items = await run_in_thread(_drop_directory_markers, all_items)
+    return await _drop_childless_markers(store, items)
+
+
+async def _drop_childless_markers(
+    store: ObjectStore,
+    items: list[tuple[str, int, str | None]],
+) -> list[tuple[str, int, str | None]]:
+    """Drop zero-byte listed paths that a HEAD reports as not found.
+
+    An S3 ``folder/`` marker with no children lists without its trailing
+    slash, so it looks like a zero-byte file whose listed path does not exist.
+    """
+    candidates = [path for path, size, _ in items if size == 0]
+    if not candidates:
+        return items
+    from application_sdk.constants import (  # noqa: PLC0415
+        MAX_CONCURRENT_STORAGE_TRANSFERS,
+    )
+
+    sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
+
+    async def _is_phantom(path: str) -> bool:
+        async with sem:
+            try:
+                await obstore.head_async(store, path)
+            # conformance: ignore[E004] probe only; a non-404 error keeps the key and the download reports it
+            except Exception as exc:
+                return _is_not_found(exc)
+            return False
+
+    flags = await asyncio.gather(*[_is_phantom(path) for path in candidates])
+    phantoms = {path for path, phantom in zip(candidates, flags) if phantom}
+    if not phantoms:
+        return items
+    return [item for item in items if item[0] not in phantoms]
 
 
 def _drop_directory_markers(

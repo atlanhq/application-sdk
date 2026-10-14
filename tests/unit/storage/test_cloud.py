@@ -396,43 +396,30 @@ class TestCloudStoreOps:
         with pytest.raises(StorageError, match="No files found"):
             await store.download(prefix="empty", output_dir=tmp_path / "out")
 
-    async def test_download_prefix_skips_childless_directory_marker(self, tmp_path):
-        store = self._make_store(tmp_path)
+    async def test_download_prefix_skips_childless_folder_marker(self, tmp_path):
+        import obstore
+
+        store = CloudStore(MemoryStore(), provider="memory")
         await store.upload_bytes("dump/base/result.json", b"{}")
         await store.upload_bytes("dump/zero.json", b"")
-        listing = [
-            ("dump/base/result.json", 2, None),
-            ("dump/empty", 0, None),
-            ("dump/zero.json", 0, None),
-        ]
+        real_list = obstore.list
+
+        async def _list(raw, prefix=None, **kwargs):
+            async for batch in real_list(raw, prefix=prefix, **kwargs):
+                yield batch
+            yield [{"path": "dump/empty", "size": 0, "e_tag": None}]
+
         out = tmp_path / "out"
-        with patch.object(store, "_list_keys_with_meta", _async_return(listing)):
+        with patch.object(obstore, "list", _list):
+            assert await store.list("dump") == [
+                "dump/base/result.json",
+                "dump/zero.json",
+            ]
             paths = await store.download(prefix="dump", output_dir=out)
         assert sorted(p.relative_to(out).as_posix() for p in paths) == [
             "base/result.json",
             "zero.json",
         ]
-        assert not (out / "empty").exists()
-
-    async def test_download_prefix_missing_non_empty_key_still_raises(self, tmp_path):
-        store = self._make_store(tmp_path)
-        with (
-            patch.object(
-                store, "_list_keys_with_meta", _async_return([("dump/gone", 5, None)])
-            ),
-            pytest.raises(StorageNotFoundError),
-        ):
-            await store.download(prefix="dump", output_dir=tmp_path / "out")
-
-    async def test_download_prefix_only_markers_raises_no_files(self, tmp_path):
-        store = self._make_store(tmp_path)
-        with (
-            patch.object(
-                store, "_list_keys_with_meta", _async_return([("dump/empty", 0, None)])
-            ),
-            pytest.raises(StorageError, match="No files found"),
-        ):
-            await store.download(prefix="dump", output_dir=tmp_path / "out")
 
     async def test_download_empty_prefix_preserves_subdirectories(self, tmp_path):
         """A whole-bucket download (prefix="") must not flatten same-named files
