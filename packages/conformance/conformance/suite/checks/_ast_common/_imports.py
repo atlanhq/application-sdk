@@ -168,3 +168,68 @@ def register_alias_records(
         record = by_name.get(target)
         if record is not None:
             by_name[name] = record
+
+
+def _module_of(rel_file: str) -> str:
+    """Dotted module name of a repo-relative ``.py`` path (``src/`` layout aware)."""
+    parts = rel_file.replace("\\", "/").removesuffix(".py").split("/")
+    if parts[:1] == ["src"]:
+        parts = parts[1:]
+    if parts[-1:] == ["__init__"]:
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _imported_module(node: ast.ImportFrom, rel_file: str) -> str | None:
+    if node.level == 0:
+        return node.module or None
+    package = _module_of(rel_file).split(".")
+    if not rel_file.replace("\\", "/").endswith("/__init__.py"):
+        package = package[:-1]
+    if node.level - 1 > len(package):
+        return None
+    package = package[: len(package) - (node.level - 1)]
+    return ".".join([*package, *([node.module] if node.module else [])]) or None
+
+
+def qualified_rebound_imports(
+    trees: dict[str, ast.AST],
+) -> dict[str, dict[str, str]]:
+    """Per file, ``{local: class_name}`` for names imported from an in-repo rebinding.
+
+    A pkl-generated entrypoint module ends with a rebinding of a shared name
+    (``AppInputContract = MinerAppInputContract``), and every entrypoint module
+    binds that same name to its own class. An app importing it
+    (``from app.generated.miner._input import AppInputContract as _Base``) means
+    the class *that* module binds. Resolving the import by its bare name instead
+    lands on whichever module's rebinding was registered first, so a miner
+    contract was resolved, and recorded in the ledger, with the crawler's fields.
+
+    *trees* maps repo-relative paths to parsed modules. Only ``from M import N``
+    where ``M`` is a scanned module rebinding ``N`` to a different name is
+    returned; a chain of rebindings inside ``M`` is followed.
+    """
+    rebinds = {
+        _module_of(rel): collect_module_alias_targets(tree)
+        for rel, tree in trees.items()
+    }
+    out: dict[str, dict[str, str]] = {}
+    for rel, tree in trees.items():
+        resolved: dict[str, str] = {}
+        body = tree.body if isinstance(tree, ast.Module) else []
+        for node in body:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            targets = rebinds.get(_imported_module(node, rel) or "")
+            if not targets:
+                continue
+            for alias in node.names:
+                target, seen = targets.get(alias.name), {alias.name}
+                while target is not None and target in targets and target not in seen:
+                    seen.add(target)
+                    target = targets[target]
+                if target is not None and target != alias.name:
+                    resolved[alias.asname or alias.name] = target
+        if resolved:
+            out[rel] = resolved
+    return out

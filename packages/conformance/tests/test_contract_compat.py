@@ -2503,3 +2503,152 @@ def test_b005_first_own_field_on_a_fieldless_input_contract_fires(
     )
     (finding,) = _required_findings(findings)
     assert "'MyInput.extra' is new and required" in finding.message
+
+
+# ── Sibling entrypoint modules rebinding one shared name ──────────────────────
+# Each pkl-generated entrypoint module ends with ``AppInputContract =
+# <Entrypoint>AppInputContract``. An app importing it per module
+# (``from app.generated.miner._input import AppInputContract as _Base``) was
+# resolved by the bare name, i.e. by whichever module's rebinding registered
+# first, so the ledger recorded the crawler's fields under ``MinerInput``. Once
+# the app imported the classes explicitly, every one of them read as removed.
+
+_GEN_CRAWLER = """\
+class CrawlerAppInputContract:
+    crawl_only: str = ""
+    shared: str = ""
+
+AppInputContract = CrawlerAppInputContract
+"""
+
+_GEN_MINER = """\
+class MinerAppInputContract:
+    mine_only: str = ""
+    shared: str = ""
+
+AppInputContract = MinerAppInputContract
+"""
+
+_CONTRACTS_REBOUND = """\
+from app.generated.crawler._input import AppInputContract as _Crawler
+from app.generated.miner._input import AppInputContract as _Miner
+
+class CrawlerInput(_Crawler):
+    pass
+
+class MinerInput(_Miner):
+    pass
+"""
+
+_CONTRACTS_EXPLICIT = """\
+from app.generated.crawler._input import CrawlerAppInputContract as _Crawler
+from app.generated.miner._input import MinerAppInputContract as _Miner
+
+class CrawlerInput(_Crawler):
+    pass
+
+class MinerInput(_Miner):
+    pass
+"""
+
+_APPS = """\
+from application_sdk.app import App
+from app.contracts import CrawlerInput, MinerInput
+
+class Crawler(App):
+    async def run(self, input: CrawlerInput) -> None:
+        pass
+
+class Miner(App):
+    async def run(self, input: MinerInput) -> None:
+        pass
+"""
+
+
+def _two_entrypoint_app(contracts: str, *, miner: str = _GEN_MINER) -> dict[str, str]:
+    return {
+        "app/__init__.py": "",
+        "app/generated/__init__.py": "",
+        "app/generated/crawler/__init__.py": "",
+        "app/generated/crawler/_input.py": _GEN_CRAWLER,
+        "app/generated/miner/__init__.py": "",
+        "app/generated/miner/_input.py": miner,
+        "app/contracts.py": contracts,
+        "app/apps.py": _APPS,
+    }
+
+
+def _rows(contract: str, *names: str) -> list[ContractField]:
+    return [ContractField(contract, n, "str", "active") for n in names]
+
+
+def test_the_generator_records_each_entrypoint_contract_with_its_own_fields(
+    tmp_path: Path,
+) -> None:
+    from conformance.tools.generate_contract_ledger import build_ledger
+
+    for name, src in _two_entrypoint_app(_CONTRACTS_REBOUND).items():
+        p = tmp_path / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(src, encoding="utf-8")
+    ledger = build_ledger(tmp_path, ContractLedger(version=1, fields=[]))
+    recorded = {(f.contract, f.field) for f in ledger.fields}
+    assert ("MinerInput", "mine_only") in recorded
+    assert ("MinerInput", "crawl_only") not in recorded
+    assert ("CrawlerInput", "crawl_only") in recorded
+    assert ("CrawlerInput", "mine_only") not in recorded
+
+
+def test_b005_silent_on_a_sibling_entrypoints_fields_recorded_under_this_contract(
+    tmp_path: Path,
+) -> None:
+    ledger = _make_ledger(
+        *_rows("MinerInput", "crawl_only", "shared", "mine_only"),
+        *_rows("CrawlerInput", "crawl_only", "shared"),
+    )
+    findings = _scan(tmp_path, _two_entrypoint_app(_CONTRACTS_EXPLICIT), ledger)
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_still_fires_on_a_field_genuinely_removed_from_that_contract(
+    tmp_path: Path,
+) -> None:
+    ledger = _make_ledger(
+        *_rows("MinerInput", "crawl_only", "shared", "mine_only", "gone"),
+        *_rows("CrawlerInput", "crawl_only", "shared"),
+    )
+    findings = _scan(tmp_path, _two_entrypoint_app(_CONTRACTS_EXPLICIT), ledger)
+    assert [f.message.split("'")[1] for f in findings if f.rule_id == "B005"] == [
+        "MinerInput.gone"
+    ]
+
+
+def test_b005_still_fires_on_a_shared_field_removed_when_the_ledger_is_clean(
+    tmp_path: Path,
+) -> None:
+    # The miner drops `shared`, which the crawler still has. The ledger never
+    # recorded the crawler's own field under MinerInput, so this is a removal.
+    miner_without_shared = _GEN_MINER.replace('    shared: str = ""\n', "")
+    ledger = _make_ledger(
+        *_rows("MinerInput", "shared", "mine_only"),
+        *_rows("CrawlerInput", "crawl_only", "shared"),
+    )
+    findings = _scan(
+        tmp_path,
+        _two_entrypoint_app(_CONTRACTS_EXPLICIT, miner=miner_without_shared),
+        ledger,
+    )
+    assert [f.message.split("'")[1] for f in findings if f.rule_id == "B005"] == [
+        "MinerInput.shared"
+    ]
+
+
+def test_b005_still_fires_when_a_misattributed_field_was_retyped(
+    tmp_path: Path,
+) -> None:
+    ledger = _make_ledger(
+        ContractField("MinerInput", "crawl_only", "int", "active"),
+        *_rows("MinerInput", "shared", "mine_only"),
+    )
+    findings = _scan(tmp_path, _two_entrypoint_app(_CONTRACTS_EXPLICIT), ledger)
+    assert "B005" in _ids(findings)

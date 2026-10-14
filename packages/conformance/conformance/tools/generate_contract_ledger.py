@@ -66,6 +66,7 @@ from conformance.suite.checks._ast_common import (
     collect_module_alias_targets,
     detect_scope,
     discover,
+    qualified_rebound_imports,
     register_alias_records,
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
@@ -89,6 +90,13 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 from conformance.suite.schema.disposition import RuleScope
 
 LEDGER_NAME = "contract_schema.lock.json"
+
+
+def _rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
@@ -118,11 +126,16 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
         except SyntaxError:
             continue
         file_trees[path] = tree
-        try:
-            rel = str(path.relative_to(repo_root))
-        except ValueError:
-            rel = str(path)
+
+    rels = {path: _rel(path, repo_root) for path in file_trees}
+    # An import of a name an in-repo module rebinds means *that* module's class
+    # (each generated entrypoint module binds `AppInputContract` to its own) —
+    # never whichever rebinding of the bare name registered first.
+    rebound = qualified_rebound_imports({rels[p]: t for p, t in file_trees.items()})
+    for path, tree in file_trees.items():
+        rel = rels[path]
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        aliases.update(rebound.get(rel, {}))
         file_aliases[path] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)

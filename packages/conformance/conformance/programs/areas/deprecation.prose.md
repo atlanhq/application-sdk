@@ -136,7 +136,11 @@ human audit):
      packaged ledger, which bakes SDK template contracts in permanently because
      the build is append-only; and a class inheriting an SDK *template*
      contract, whose inherited fields the app-side AST scan cannot see.  On one
-     connector, all 25 B005 findings were noise of these families.  Check
+     connector, all 25 B005 findings were noise of these families.  A fourth family is
+     now recognised by the rule itself: a ledger written before imports were
+     resolved per module can hold a sibling entrypoint's fields under this
+     contract's name (each generated `_input.py` rebinds `AppInputContract`);
+     B005 skips those rows, so never "restore" another entrypoint's fields.  Check
      whether the named contract is declared more than once in the repo, and
      whether the ledger carries entries for contracts this app never declares
      (SDK template names such as `ExtractionInput` / `QueryExtractionOutput`).
