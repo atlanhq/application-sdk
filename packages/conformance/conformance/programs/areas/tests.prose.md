@@ -94,8 +94,11 @@ _Read by `remediate-finding` when `finding.area == "tests"`._
 Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
-**Judgment rules** (`autofixable = true` — every T-series rule is classified
-auto-fixable; `classification = "judgment"`; route to residue).  The write
+**Judgment rules** (`classification = "judgment"`; route to residue).  Every
+T-series rule is classified auto-fixable except T004, T008, T013, T014, T015
+and T023, which are suggest-only (migration, `autofixable = false`): their fix
+needs a decision the lane cannot verify, and each one's entry below says what
+a person checks before applying it.  The write
 scope still excludes `tests/` and `.github/`, so until the lane's write scope
 is widened every T-series result is a **fully worked proposal** — the exact
 decorator, marker, file move or config change, mirrored from the test layout
@@ -235,6 +238,15 @@ residue for a human to apply, not an applied edit:
   `ATLAN_APP_MODULE` being set out-of-band even for CI (e.g. some
   utility/CSA apps) — state that reason explicitly.
 
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  `main.py` may still be launched as the production CLI — a workflow or stress
+  test running `python main.py` against external Dapr + Temporal — and an
+  explicit `os.environ.setdefault("ATLAN_APP_MODULE", ...)` before the call
+  already prevents `MissingAppModuleError`.  Mirror `atlan-mysql-app`'s
+  `main.py` → `app.run_dev` only after re-pointing every caller that relied on
+  `main.py` being the production CLI (for example to
+  `python -m application_sdk.main`); otherwise suppress with that reason.
+
   `classification` is always `"judgment"`.
 
 - **T005 AssertionFreeTest** — a collected test's body is non-empty but
@@ -286,6 +298,12 @@ residue for a human to apply, not an applied edit:
   `tests/unit/connector_tests.py` → `tests/unit/test_connector.py`). Check
   for import references to the old filename (rare, since test modules are
   not usually imported by name) before renaming.
+
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  Rename only real test modules.  A helper or mixin module whose `Test*`
+  classes carry no `test_` methods is not a collectable: renaming it to
+  `test_*.py` makes pytest import it twice and can stop the whole tier from
+  collecting.  Keep the filename and, if needed, rename only the class.
 
   `classification` is always `"judgment"` — even when the new name is
   unambiguous, the fix renames a file under `tests/`, which is outside the
@@ -354,6 +372,12 @@ residue for a human to apply, not an applied edit:
   collection glob (rare), suppress with
   `# conformance: ignore[T013] <reason>` instead of moving it.
 
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  A repo-declared tier such as `tests/parity` (contract / performance parity
+  against a legacy host) needs a decision rather than a move.  When files do
+  move, move their `conftest.py`, fixtures and options with them — never
+  delete a `conftest.py` or a session fixture the moved tests need.
+
   `classification` is always `"judgment"` — even when the correct tier is
   unambiguous from the test's imports/fixtures (e.g. it uses a
   `testcontainers` fixture → integration), the fix moves a file under
@@ -388,6 +412,11 @@ residue for a human to apply, not an applied edit:
 
   `classification` is `"judgment"` — selecting a safe floor requires the
   repo's actual current unit coverage, which isn't in the finding.
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  The unit coverage floor that gates CI is the `tests-reusable.yaml` caller's
+  `unit-coverage-fail-under` input under `.github/`, which a person sets;
+  `fail_under` in `pyproject.toml` alone does not gate the unit tier.
+
 
 - **T015 CoverageOmitsProductCode** — `[tool.coverage.run].omit` excludes
   real product code under `app/`, or `source` is configured but excludes the
@@ -401,6 +430,12 @@ residue for a human to apply, not an applied edit:
   `classification` is `"judgment"` — confirming a given module is safe to
   keep omitted (vs. real product code that should count) requires reading
   what the module does, not just its path.
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  Remove an omit only after tests bring coverage at or above the floor — an
+  omit removed without tests fails the unit tier.  Vendored third-party code
+  (for example a `_vendored_*` module) may stay omitted, suppressed with a
+  reason naming it.
+
 
 - **T016 E2EDeploymentNameNotInherited** — an e2e CI docker-compose overlay
   under `.github/` (a YAML file with a top-level `services:` key that mentions
@@ -759,6 +794,17 @@ residue for a human to apply, not an applied edit:
 
   Suppress with `# conformance: ignore[T023] <reason>` when a genuinely test-only
   model is meant (e.g. a negative-path credential body that must be malformed).
+
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  Re-parent onto the generated e2e classes only when the generated model
+  carries every `{{...}}` token the manifest uses (for example
+  `{{agent-json}}`, `{{extraction-method}}`) with the same defaults the
+  hand-written model had (for example `preflight-check`).  Add a missing token
+  in a small test-side subclass of the generated model rather than editing
+  generated files.  Never change `contract/app.pkl`, `app/generated/**` or
+  `atlan.yaml` published values (source category, UI inputs) to clear a test
+  rule, and never import a generated module the app does not emit (a skipped
+  e2e module is a silent loss).  Run one e2e leg before merging.
 
   `classification` is always `"judgment"`.
 

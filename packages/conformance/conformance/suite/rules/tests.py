@@ -485,7 +485,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dev-entrypoint",
-        autofixable=True,
+        autofixable=False,
         since="0.10.0",
         rationale=(
             "application_sdk.main.main() is the production, "
@@ -541,13 +541,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "call's line when the app genuinely has no local dev-mode boot\n"
             "path and relies on ``ATLAN_APP_MODULE`` being set out-of-band\n"
             "even for CI (e.g. some utility/CSA apps).\n"
+            "\n"
+            "Not auto-applied: whether ``main.py`` may stop being the production CLI is a\n"
+            "judgment call (a workflow or stress test may launch it, or an explicit\n"
+            "``ATLAN_APP_MODULE`` default may already make it safe). The remediation lane\n"
+            "routes T004 findings to a person (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t004"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -767,7 +772,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
             "pytest only collects files matching its python_files convention "
@@ -804,13 +809,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "of the file only when the repo has a non-default ``python_files``\n"
             "override in ``pyproject.toml`` that legitimately collects this name (the\n"
             "check does not read that override — see the module docstring).\n"
+            "\n"
+            "Not auto-applied: a helper or mixin module with no ``test_`` functions is not\n"
+            "a collectable, and renaming it makes pytest import it twice. A person decides\n"
+            "which files are real test modules (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t008"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1083,7 +1092,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
             "CI's composite actions locate each tier by directory convention — "
@@ -1121,13 +1130,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n**Fixing it well**\n\n"
             "* A test that subclasses the deprecated SDR harness (``BaseSDRIntegrationTest``) is not moved: T003 retires it, and moving it only carries the T003 finding to the new path.\n\n"
             "* Otherwise move the file into the tier the reference apps use (``tests/unit``, ``tests/integration``, ``tests/e2e``, ``tests/ui``) and update anything that imports it.\n\n"
+            "\n"
+            "Not auto-applied: a repo-declared tier such as ``tests/parity`` needs a\n"
+            "decision, and moving files must keep their ``conftest.py`` and fixtures. The\n"
+            "remediation lane routes T013 findings to a person (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t013"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1146,7 +1159,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
             "A reported coverage percentage is decorative unless the effective "
@@ -1217,13 +1230,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``[tool.coverage.report]`` line only during the initial adoption PR\n"
             "itself, explicitly naming the follow-up tracking issue that will set\n"
             "a real floor.\n"
+            "\n"
+            "Not auto-applied: the unit coverage floor lives in the ``tests-reusable``\n"
+            "caller under ``.github/`` (``unit-coverage-fail-under``), which a person sets;\n"
+            "``fail_under`` in ``pyproject.toml`` alone does not gate CI (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t014"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1241,7 +1258,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
             "[tool.coverage.run].omit (or a narrowed source) controls the "
@@ -1287,13 +1304,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``source`` line naming the specific module and why it's legitimately\n"
             "excluded (e.g. a vendored third-party shim with no branch logic worth\n"
             "covering).\n"
+            "\n"
+            "Not auto-applied: removing an omit without tests drops coverage below the\n"
+            "floor and fails the unit tier, and vendored third-party code may stay omitted\n"
+            "with a reason. A person applies it (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t015"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1966,7 +1987,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=True,
+        autofixable=False,
         since="0.18.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -2033,13 +2054,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T023] <reason>`` on the flagged\n"
             "line when a genuinely test-only model is meant (e.g. a negative-path\n"
             "credential body that must be malformed on purpose).\n"
+            "\n"
+            "Not auto-applied: the generated e2e models must carry every token the manifest\n"
+            "uses with the same defaults, and a test rule must never change published\n"
+            "contract values. A person applies it and runs one e2e leg (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t023"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
