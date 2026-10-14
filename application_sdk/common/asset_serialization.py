@@ -240,9 +240,11 @@ def _set_default_status(asset: object) -> None:
         return
     try:
         asset.status = _DEFAULT_STATUS  # type: ignore[attr-defined]
-    except (AttributeError, TypeError):
+    except (AttributeError, TypeError, ValueError):
         # Frozen asset: same trade-off as connectionName — skip the default
-        # rather than fail the whole transform.
+        # rather than fail the whole transform. ``ValueError`` because a
+        # frozen pydantic model refuses with ``ValidationError``, which
+        # subclasses it; caught by base so this module needs no pydantic.
         return
 
 

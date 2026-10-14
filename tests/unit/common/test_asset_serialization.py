@@ -18,7 +18,7 @@ import orjson
 import pytest
 from pyatlan.model.enums import EntityStatus
 from pyatlan_v9.model.assets import Table
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from application_sdk.common.asset_serialization import (
     ModelDumpAsset,
@@ -311,6 +311,12 @@ class PydanticAsset(BaseModel):
     attributes: dict[str, Any] = {}
 
 
+class FrozenPydanticAsset(PydanticAsset):
+    """Frozen pydantic: assignment raises ``ValidationError``, a ``ValueError``."""
+
+    model_config = ConfigDict(frozen=True)
+
+
 class FrozenStatus:
     """An asset whose ``status`` reads falsy but refuses assignment."""
 
@@ -394,6 +400,11 @@ class TestDefaultStatus:
         out = orjson.loads(entity_bytes(FrozenStatus()))
 
         assert out == {"typeName": "Custom", "attributes": {}}
+
+    def test_frozen_pydantic_skips_the_default_rather_than_the_run(self):
+        out = orjson.loads(entity_bytes(FrozenPydanticAsset()))
+
+        assert out["status"] is None
 
 
 class TestDispatchOrder:
