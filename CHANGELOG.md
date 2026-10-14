@@ -1,5 +1,20 @@
 # Changelog
 
+## v3.49.0 (October 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.48.0...v3.49.0
+
+### Features
+
+- assert which asset types lineage connects (expected_lineage_edges) (#4380) (by @connectivity-ai[bot] in [54bee54](https://github.com/atlanhq/application-sdk/commit/54bee54))
+
+### Chores
+
+- lock file maintenance (#4377) (by @renovate[bot] in [59e6b1f](https://github.com/atlanhq/application-sdk/commit/59e6b1f))
+- sync daprd pin to 1.18.7 (#4378) (by @atlan-app-fleet[bot] in [71f6686](https://github.com/atlanhq/application-sdk/commit/71f6686))
+- update atlanhq/application-sdk action to v3.48.0 (#4382) (by @renovate[bot] in [3edd859](https://github.com/atlanhq/application-sdk/commit/3edd859))
+
+
 ## v3.48.0 (October 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.47.0...v3.48.0
