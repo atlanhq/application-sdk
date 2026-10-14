@@ -99,7 +99,7 @@ jobs:
         # property matters here, not a specific bypass-actor identity.
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -231,11 +231,12 @@ jobs:
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
 
-      # CI on a bump PR is opt-in via the `gate-check` label and covers only the
-      # commit it was given for (FND-3748). Clear it BEFORE the push: the
-      # `synchronize` the push fires carries the PR's labels at that instant, so
-      # a stale opt-in would start a full CI run on the new commit. Also creates
-      # the label if the repo lacks it. Fails open (warns, push proceeds).
+      # Legacy, for app repos whose shims predate FND-3839 and still read the
+      # `gate-check` LABEL as the bump-PR opt-in (FND-3748): clear it BEFORE the
+      # push, because the `synchronize` the push fires carries the PR's labels
+      # at that instant. A resynced repo opts in with a `/gate-check` comment
+      # instead — a commit status, which a push leaves behind by construction —
+      # so this is a no-op there. Remove once the fleet has resynced. Fails open.
       - name: Reset the bump PR's CI opt-in
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && hashFiles('.sdk-scripts/.github/scripts/bump_pr_opt_in.py') != ''
         env:

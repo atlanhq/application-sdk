@@ -72,19 +72,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Bump-version PR CI is opt-in (FND-3748): every area below skips until a
-      # reviewer adds `gate-check`, and the gate fails fast saying so. Read from
-      # the PR's LIVE labels, not the event payload: this workflow deliberately
-      # does not subscribe to `labeled` (an unrelated label would skip the
-      # inline gate, and a skipped required check reads as a pass), so adding
-      # `gate-check` re-runs it instead (bump-pr-gate-check.yaml) — and a
-      # re-run replays the original, label-less payload. `true` off a bump PR.
+      # reviewer comments `/gate-check`, and the gate fails fast saying so. Read
+      # live from the head commit's `gate-check` status, not the event payload:
+      # the comment re-runs this run (pr_test_command.py), and a re-run replays
+      # the original payload. `true` off a bump PR (FND-3839).
       - name: Check the bump-PR CI opt-in
         id: opt-in
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_REF: ${{ github.head_ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --pr "$PR_NUMBER"
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --sha "$HEAD_SHA"
 
       # Compute force-all FIRST — it needs no diff base, only the ref/head_ref.
       - name: Compute force flags
@@ -388,7 +386,7 @@ jobs:
       - name: Require the bump-PR CI opt-in
         if: needs.changes.result == 'success' && needs.changes.outputs.opted_in != 'true'
         run: |
-          echo "::error::Bump-version PR CI is opt-in (FND-3748). Add the 'gate-check' label to run it."
+          echo "::error::Bump-version PR CI is opt-in (FND-3748). Comment /gate-check on the PR to run it."
           exit 1
 
       - name: Evaluate composed areas

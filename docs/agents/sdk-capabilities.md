@@ -7452,6 +7452,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `local_path: str | None`
   - `ref: FileReference | None`
   - `skip_if_exists: bool` `= False`
+  - `tier: StorageTier | None`
 - **Defined in:** `application_sdk/contracts/storage.py`
 
 #### `DownloadOutput`

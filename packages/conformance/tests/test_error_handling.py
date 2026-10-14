@@ -1025,6 +1025,221 @@ async def probe(self):
     )
 
 
+def test_p004_no_finding_when_failure_row_is_appended_to_returned_checks() -> None:
+    # The caught failure is preserved in a typed row inside the returned checks list.
+    assert "E004" not in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(
+            PreflightCheck(
+                name="connectivity",
+                passed=False,
+                error=error.to_failure_details(),
+            )
+        )
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_no_finding_when_each_classified_row_reaches_returned_checks() -> None:
+    # Branches may classify the caught error differently, but both typed rows
+    # must be carried by the early or trailing PreflightOutput.
+    assert "E004" not in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await list_schemas()
+    except Exception as exc:
+        if is_connection_limit(exc):
+            error = ConnectionLimitError(cause=exc)
+            checks.append(PreflightCheck(name="schema", passed=False, error=error.to_failure_details()))
+        else:
+            error = SchemaAccessError(cause=exc)
+            checks.append(PreflightCheck(name="schema", passed=False, error=error.to_failure_details()))
+            return PreflightOutput(checks=checks)
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_untyped_row_appended_to_returned_checks() -> None:
+    # Returning a check list is not enough: the row must carry the caught failure.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(message="unavailable")
+        checks.append(
+            PreflightCheck(
+                name="connectivity",
+                passed=False,
+                error=error.to_failure_details(),
+            )
+        )
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_typed_row_cleared_before_return() -> None:
+    # A row removed before the output is returned is no longer inspectable.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+        checks.clear()
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_typed_row_handed_to_an_opaque_sink() -> None:
+    # A custom append method is not proven to preserve its argument in the output.
+    assert "E004" in _findings(
+        """\
+class OpaqueBucket:
+    def append(self, row):
+        pass
+
+async def probe():
+    checks = OpaqueBucket()
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_no_finding_when_returned_checks_are_summarised_first() -> None:
+    # Reading row attributes to pick a status keeps every staged row intact.
+    assert "E004" not in _findings(
+        """\
+async def probe():
+    checks: list[PreflightCheck] = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        row = PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details())
+        checks.append(row)
+    failed = any(not check.passed for check in checks)
+    return PreflightOutput(status=failed, checks=checks, count=len(checks))
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "after_append",
+    [
+        pytest.param("removed = checks.pop()", id="assigned-pop"),
+        pytest.param("rows = checks\n        rows.clear()", id="alias-cleared"),
+        pytest.param("checks[0].error = None", id="slot-row-erased"),
+        pytest.param(
+            "checks[0] = PreflightCheck(name='ok', passed=True)", id="slot-replaced"
+        ),
+        pytest.param("del checks[0]", id="slot-deleted"),
+        pytest.param("discard(checks)", id="opaque-call"),
+        pytest.param(
+            "for check in checks:\n            check.error = None", id="loop-row-erased"
+        ),
+    ],
+)
+def test_p004_still_flags_staged_row_that_may_be_dropped(after_append: str) -> None:
+    # Any use that can remove or rewrite the staged row voids the list proof.
+    assert "E004" in _findings(
+        f"""\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+        {after_append}
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_staged_list_rebound_to_a_dropping_sink() -> None:
+    # Rebinding the list in the handler means `append` is no longer list.append.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        checks = DropAppendList()
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_appended_row_erased_through_its_local() -> None:
+    # The list holds the same object, so erasing it via `row` erases the staged row.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        row = PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details())
+        checks.append(row)
+        row.error = None
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_unbound_broad_catch_that_only_debug_logs() -> None:
+    # A best-effort missing prefix is still a broad swallow without typed data.
+    assert "E004" in _findings(
+        """\
+async def download_type():
+    try:
+        await storage_download()
+    except Exception:
+        logger.debug("type has no objects")
+"""
+    )
+
+
+def test_p004_still_flags_debug_exc_info_without_typed_data() -> None:
+    # DEBUG does not clear E004, even when it attaches a traceback.
+    assert "E004" in _findings(
+        """\
+def safe_int(value):
+    try:
+        return convert(value)
+    except Exception as exc:
+        logger.debug("ignoring %s", exc, exc_info=True)
+"""
+    )
+
+
 def test_p004_still_flags_typed_failure_returned_without_a_binding() -> None:
     # `except Exception:` names nothing, so nothing of the caught exception can
     # be carried out — the typed row below is about the probe, not the failure.
@@ -1961,6 +2176,152 @@ class Probe:
             return Verdict(checks=checks)
 """
     assert "E007" not in _findings(src)
+
+
+def test_p007_no_finding_when_module_helper_logs_sanitized_exception_on_every_path() -> (
+    None
+):
+    src = """\
+def _report_problem(label, problem, internal):
+    if internal:
+        logger.error("%s failed: %s", label, safe_traceback(problem))
+    else:
+        logger.error("%s failed: %s", label, sanitize_cause_repr(problem))
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        failure = classify(problem)
+        if failure is None:
+            raise
+        _report_problem("lookup", problem, failure.internal)
+        return None
+"""
+    _none(src)
+
+
+def test_p007_no_finding_when_same_class_helper_has_setup_before_log() -> None:
+    src = """\
+class Probe:
+    def _log(self, problem):
+        message = "lookup failed"
+        metrics.increment("failures")
+        logger.error("%s: %s", message, problem)
+
+    def run(self):
+        try:
+            read_value()
+        except LookupError as problem:
+            self._log(problem)
+            return None
+"""
+    _none(src)
+
+
+def test_p007_no_finding_when_module_helper_has_setup_before_log() -> None:
+    src = """\
+def _log(problem):
+    message = "lookup failed"
+    logger.error("%s: %s", message, problem)
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _log(problem)
+        return None
+"""
+    _none(src)
+
+
+def test_p007_no_finding_when_assigned_module_helper_logs_exception() -> None:
+    src = """\
+def _report(problem):
+    logger.error("lookup failed: %s", safe_traceback(problem))
+    return True
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        reported = _report(problem)
+        return None
+"""
+    _none(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    [
+        "safe_traceback(None, max_len=problem)",
+        "redact(problem.__class__.__name__)",
+        "redact(len(problem.args))",
+    ],
+)
+def test_p007_still_flags_when_sanitizer_value_is_not_the_exception(
+    logged: str,
+) -> None:
+    src = f"""\
+def _report(problem):
+    logger.error("lookup failed: %s", {logged})
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report(problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_helper_rebinds_input_inside_branch() -> None:
+    src = """\
+def _log(problem, hide):
+    if hide:
+        problem = "redacted"
+    logger.error("failed: %s", problem)
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _log(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_logs_unrelated_argument() -> None:
+    src = """\
+def _report_problem(problem, detail):
+    logger.error("operation failed: %s", detail)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, "unrelated detail")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_has_a_path_without_logging() -> None:
+    src = """\
+def _maybe_report(problem, enabled):
+    if enabled:
+        logger.error("operation failed: %s", safe_traceback(problem))
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _maybe_report(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
 
 
 def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:

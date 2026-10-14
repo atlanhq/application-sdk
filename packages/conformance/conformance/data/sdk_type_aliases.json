@@ -24,6 +24,7 @@
     "application_sdk.handler.metadata_routes.ComputeManifest": "Callable[[dict[str, Any], dict[str, Any]], Awaitable[Any]]",
     "application_sdk.handler.routes.HandlerFn": "Callable[[Any, HandlerContext], Awaitable[Any]]",
     "application_sdk.handler.service.HandlerFn": "Callable[[Any, HandlerContext], Awaitable[Any]]",
+    "application_sdk.handler.source_probes.AddressPolicy": "Callable[[ipaddress.IPv4Address | ipaddress.IPv6Address], str | None]",
     "application_sdk.infrastructure.MessageHandler": "Callable[[Message], Awaitable[None]]",
     "application_sdk.infrastructure.pubsub.MessageHandler": "Callable[[Message], Awaitable[None]]",
     "application_sdk.observability.metrics.ObservableCallback": "Callable[[CallbackOptions], Iterable[Observation]]",

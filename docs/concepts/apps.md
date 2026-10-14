@@ -306,6 +306,8 @@ Both transfer tasks validate the bytes they move. An upload confirms the local f
   - `StorageTier.TRANSIENT` refs are always removed, except a key that a `RETAINED` or `PERSISTENT` ref in the same run also points at (the same file key, its `.sha256` sidecar, or a key under a durable directory ref). The durable tier wins: that key is counted in `skipped_count` and a WARNING names the clash.
   - `StorageTier.PERSISTENT` refs are always left untouched.
   - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
+  - Tracked refs tagged `store=UPSTREAM` are skipped: their bytes are in the upstream store, and cleanup deletes only from the deployment store. The opt-in run-prefix sweep does not consult refs: every deployment key under the run's own prefix is the run's, including the deployment copy `App.upload` dual-writes in a two-store deployment.
+  - Keys under `persistent-artifacts/` or `connection-cache/` (`PROTECTED_STORAGE_PREFIXES`) are never deleted, whatever the tier.
 
 Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — the cleanup contract is tied to workflow completion, not mid-run state.
 

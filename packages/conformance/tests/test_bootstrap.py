@@ -3542,6 +3542,11 @@ def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
         "base-image-ref",
         "agent-name-override",
         "e2e-clouds",
+        "head-sha",
+        "pr-number",
+        # Hardcoded `false` by the template: the scaffold no longer subscribes
+        # to `labeled`, so it must not read labels either (FND-3839).
+        "e2e-label-trigger",
         # Policy drop, not a slot — see redundant_install_app_to_tenant.
         "install-app-to-tenant",
     }

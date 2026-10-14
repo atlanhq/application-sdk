@@ -642,8 +642,8 @@ residue for a human to apply, not an applied edit:
   `tests/e2e/` suites and the `.github/e2e/` config dir (`app.yaml`,
   `make-secrets-e2e-full.py`, `e2e-full-components/`,
   `e2e-full-docker-compose.yaml`) — the reusable points the action at exactly
-  those paths. The trigger changes from a bespoke `sdr-full-dag` label to the
-  reusable's `e2e` label. `atlan-mysql-app/.github/workflows/tests.yaml` is the
+  those paths. The trigger changes from a bespoke `sdr-full-dag` label to a
+  `/e2e` PR comment (bootstrap's `test-commands.yaml`). `atlan-mysql-app/.github/workflows/tests.yaml` is the
   reference; `atlan-application-sdk-conformance bootstrap` regenerates it.
 
   **Route to residue** — the target is under `.github/` (outside write-scope),
@@ -666,8 +666,8 @@ residue for a human to apply, not an applied edit:
 
   Fix: add or repair the caller (see T020's snippet). `enable-e2e` defaults to
   true and should be left alone; `app-image-name` must be the repo's GHCR package
-  name. Wiring it costs nothing per-commit — the e2e job still only runs on the
-  `e2e` label or a `workflow_dispatch` with `run_e2e: true`.
+  name. Wiring it costs nothing per-commit — the e2e job still only runs on a
+  `/e2e` PR comment or a `workflow_dispatch` with `run_e2e: true`.
 
   This most often appears *after* a T020 remediation: the bespoke workflow was
   deleted and the caller never wired, turning "wrong runner" into "no runner".

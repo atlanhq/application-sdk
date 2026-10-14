@@ -47,7 +47,8 @@ here and requiring a byte-identical result:
 costs an image pull and a package install.
 
 The lane (``.github/scripts/conformance_resync.py``) imports
-:func:`stage_like_the_lane`, :data:`ACCEPTED_DROPS` and the marker from here, so
+:func:`stage_like_the_lane` (with :data:`ACCEPTED_DROPS` and
+:data:`ACCEPTED_LINE_DROPS`) and the marker from here, so
 the two cannot drift; if they ever did, the trees would differ, which fails
 CLOSED (no approval), never open.
 
@@ -564,6 +565,25 @@ ACCEPTED_DROPS: dict[str, frozenset[str]] = {
     ),
 }
 
+# Lines with no key of their own that the canonical templates deliberately
+# stopped carrying: a list item, or a line of a block scalar's body. Matched
+# on the whole line after the same normalisation :func:`lost_setting_lines`
+# applies, never on a prefix, so a repo that customised the line is still
+# held. Each entry excuses one lost line, as for :data:`ACCEPTED_DROPS`.
+ACCEPTED_LINE_DROPS: dict[str, tuple[str, ...]] = {
+    ".github/workflows/tests.yaml": (
+        # FND-3839 (#4359): e2e and the bump-version opt-in are requested by
+        # PR comment, so the canonical tests.yaml no longer runs on `labeled`
+        # and its `tests` job condition no longer reads labels.
+        "- labeled",
+        "!startsWith(github.head_ref, 'bump-version') || "
+        "(contains(github.event.pull_request.labels.*.name, 'gate-check') && "
+        "(github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || "
+        "(contains(github.event.pull_request.labels.*.name, 'e2e') && "
+        "(github.event.action != 'labeled' || github.event.label.name == 'e2e'))",
+    ),
+}
+
 
 def _setting_key(line: str) -> str:
     head = line.strip().split(":", 1)[0] if ":" in line else ""
@@ -571,28 +591,38 @@ def _setting_key(line: str) -> str:
 
 
 def still_lost(path: str, lost: list[str]) -> list[str]:
-    """Lost lines for ``path`` minus the accepted drops.
+    """Lost lines for ``path`` minus the accepted drops, each reported once.
 
-    Each accepted key excuses ONE lost line: the canonical template carried
-    that setting once. A second lost line with the same key is a repo's own
-    value that happens to share the name, and it is still reported.
+    Each accepted key or line excuses ONE lost line: the canonical template
+    carried it once. A second lost line with the same key, or a second copy of
+    the same line, is a repo's own and is still reported. ``lost`` must hold
+    one entry per lost occurrence, as :func:`lost_setting_lines` returns it.
     """
     accepted = ACCEPTED_DROPS.get(path, frozenset())
+    accepted_lines = Counter(
+        _normalise_for(path, x) for x in ACCEPTED_LINE_DROPS.get(path, ())
+    )
     excused: set[str] = set()
     remaining: list[str] = []
     for line in lost:
+        norm = _normalise_for(path, line)
+        if accepted_lines[norm] > 0:
+            accepted_lines[norm] -= 1
+            continue
         key = _setting_key(line)
         if key in accepted and key not in excused:
             excused.add(key)
             continue
-        remaining.append(line)
+        if line not in remaining:
+            remaining.append(line)
     return remaining
 
 
 def lost_setting_lines(backup_text: str, new_text: str, path: str = "") -> list[str]:
     """Non-comment lines in the ``.bak`` absent from its replacement
     (reorder-immune, counted per line so a duplicate elsewhere in the file
-    cannot stand in for a removed one). In a YAML or JSON ``path``,
+    cannot stand in for a removed one), one entry per lost occurrence so
+    :func:`still_lost` can excuse exactly one. In a YAML or JSON ``path``,
     descriptions are not compared, and in YAML a value that only gained or
     lost its quotes still matches. The lane imports this function."""
     new_skip = _description_lines(path, new_text)
@@ -613,7 +643,7 @@ def lost_setting_lines(backup_text: str, new_text: str, path: str = "") -> list[
             continue
         if remaining[norm] > 0:
             remaining[norm] -= 1
-        elif line.strip() not in lost:
+        else:
             lost.append(line.strip())
     return lost
 

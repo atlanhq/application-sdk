@@ -235,6 +235,8 @@ class MyConnector(App):
 
 Tracked `FileReference` objects are automatically registered for cleanup by `cleanup_storage()` at the end of the run.
 
+The ref `download()` returns gets its tier from `DownloadInput.tier`. When that is unset, a download that re-materialises `ref` keeps `ref.tier`, so the run's own `TRANSIENT` output is still cleaned up. Any other download (a `storage_path` the run did not write, such as another app's output or the connection cache) is `RETAINED`, so end-of-run cleanup never deletes bytes the app does not own.
+
 ---
 
 ## Cleanup

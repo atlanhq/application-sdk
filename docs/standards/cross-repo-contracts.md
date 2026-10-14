@@ -466,3 +466,20 @@ entry rather than a comment:
   AE's `_validate_event_ack_paths` rejects an event trigger with a falsy value.
   `[""]` is AE's fire-and-forget form. Suppressing it needs the AE change
   shipped first — the same ordering as the first bullet.
+
+## The PR test-command statuses and dispatch inputs (`/e2e`, `/gate-check`)
+
+| | |
+|---|---|
+| **Produced by** | `.github/scripts/pr_test_command.py` (the comment command), `tests-reusable.yaml`'s e2e verdict steps, and `.github/scripts/gate_check_verdict.py` |
+| **Served at** | Commit statuses on a PR's head commit: `e2e` and `gate-check` (connector repos), `e2e-request` and `gate-check` (application-sdk). `workflow_dispatch` of a connector's `tests.yaml` with `run_e2e: only` and `head_sha` |
+| **Key** | Context names; the `running: <workflow files>` description of a pending `gate-check`; the `E2E_ONLY_MARKER` line (`inputs.run_e2e == 'only'`) in the scaffolded `tests.yaml` |
+| **Read by** | Every connector repo's vendored Release Gate (`release_gate.py`, reads `gate-check`), its scaffolded `tests.yaml` / `test-commands.yaml` (bootstrap templates, resynced per repo, so a rename reaches the fleet only on resync) |
+| **Pinned by** | `.github/scripts/tests/test_pr_test_command.py` (contexts, marker, workflow names), `packages/conformance/tests/test_release_gate.py::test_status_context_matches_the_command_that_writes_it` |
+
+A connector keeps whatever template it last resynced, while the scripts here
+run at `@main`. So the command refuses a branch whose `tests.yaml` lacks the
+marker rather than dispatching it: an older file would publish an e2e-only run
+under the required `tests / …` checks and override the PR's real results
+(FND-3839). Renaming a context or the dispatch inputs needs the old name
+accepted until every repo has resynced.

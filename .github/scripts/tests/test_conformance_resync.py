@@ -580,3 +580,69 @@ def test_a_fresh_render_is_pushed_and_opened_as_the_lane_pr(monkeypatch):
     pushes = [c for c in runner.calls if c[:2] == ["git", "push"]]
     assert pushes and pushes[0][-1] == f"HEAD:refs/heads/{gate.RESYNC_BRANCH}"
     assert any(c[:3] == ["git", "add", "-A"] and "a.yaml" in c for c in runner.calls)
+
+
+# ── the lane never labels its PR (FND-3832) ──────────────────────────────
+# A label add is a ``labeled`` event. Connector tests.yaml listens for it (for
+# ``e2e``), so labelling a just-opened PR starts a second Tests run on the same
+# SHA; its unit job cancels the first run's, and the cancelled run's failed
+# ``Tests Gate`` blocks auto-merge. Lane PRs are identified by branch + author.
+
+
+def _label_calls(calls: list[list[str]]) -> list[list[str]]:
+    return [
+        c
+        for c in calls
+        if any(
+            "/labels" in a
+            or a.startswith("labels[]")
+            or a in ("--add-label", "--label")
+            for a in c
+        )
+    ]
+
+
+def _drive_opening(monkeypatch) -> tuple[dict, FakeRunner]:
+    runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
+
+    def opened(cmd, **kwargs):
+        if cmd[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"]:
+            runner.calls.append(cmd)
+            return subprocess.CompletedProcess(
+                cmd, 0, json.dumps({"number": 9, "html_url": "u", "state": "open"}), ""
+            )
+        return FakeRunner.__call__(runner, cmd, **kwargs)
+
+    return _drive(opened), runner
+
+
+def test_opening_the_lane_pr_adds_no_label(monkeypatch):
+    result, runner = _drive_opening(monkeypatch)
+    assert result["action"] == "pr_opened"
+    assert _label_calls(runner.calls) == []
+
+
+def test_updating_the_lane_pr_adds_no_label(monkeypatch):
+    keep = _pr(7, gate.RESYNC_BRANCH)
+    keep["html_url"] = "u"
+    runner = _process(monkeypatch, keep=keep, staged=["a.yaml"])
+    runner.answers[("gh", "api", f"repos/{REPO}/pulls/7")] = (
+        subprocess.CompletedProcess([], 0, stdout=json.dumps(keep))
+    )
+    result = _drive(runner)
+    assert result["action"] in ("pr_updated", "pr_unchanged"), result
+    assert _label_calls(runner.calls) == []
+
+
+def test_label_call_detector_matches_the_removed_label_post():
+    # Guards the guard: the exact call the lane used to make must be caught.
+    removed = [
+        "gh",
+        "api",
+        f"repos/{REPO}/issues/9/labels",
+        "-X",
+        "POST",
+        "-f",
+        "labels[]=conformance-resync",
+    ]
+    assert _label_calls([removed]) == [removed]
