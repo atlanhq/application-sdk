@@ -413,11 +413,27 @@ class Entrypoint:
     in the match. A bundle's cards are always matched by name.
     """
 
+    only_entrypoint: bool = False
+    """``True`` when this is a bundle's one and only declared entry point.
+
+    A bundle declaring exactly one ``entrypoints[]`` item has one runtime entry
+    point, so ``_resolve_default_entrypoint`` returns it and the app-id
+    fallback in ``handler.service.get_configmap`` serves *its* form — the same
+    guarantee :attr:`is_sole` gives a flat app. Card matching is unchanged:
+    a bundle's card is still matched by name. Only :func:`route_mismatch`
+    reads this, through :attr:`default_fallback_is_safe`.
+    """
+
     declared: frozenset[str] = frozenset()
     """Input names the committed contract declares for this entry point."""
 
     source: Path | None = None
     """The generated file that answered, for diagnostics."""
+
+    @property
+    def default_fallback_is_safe(self) -> bool:
+        """Whether the app-id fallback can only ever serve this entry point's form."""
+        return self.is_sole or self.only_entrypoint
 
 
 @dataclass(frozen=True)
@@ -546,11 +562,21 @@ def _declares_any_entrypoint(repo_root: Path) -> bool:
     "declares no entrypoints at all" — a skip and a failure respectively, which
     :func:`read_entrypoint_names` cannot tell apart on its own.
     """
+    return _declared_entrypoint_count(repo_root) > 0
+
+
+def _declared_entrypoint_count(repo_root: Path) -> int:
+    """How many ``entrypoints`` items ``atlan.yaml`` declares, cards or not.
+
+    Counts ``marketplace_card: false`` entries too: they are still runtime
+    entry points, so they still compete for the default the app-id fallback
+    resolves to.
+    """
     import yaml  # noqa: PLC0415 — see read_app_identity
 
     parsed = yaml.safe_load((repo_root / "atlan.yaml").read_text()) or {}
     declared = parsed.get("entrypoints")
-    return isinstance(declared, list) and bool(declared)
+    return len(declared) if isinstance(declared, list) else 0
 
 
 def declared_inputs(workflow_config: dict[str, Any]) -> frozenset[str]:
@@ -620,6 +646,7 @@ def read_entrypoints(
             "can be located. One of the two is wrong."
         )
 
+    only = not sole and _declared_entrypoint_count(repo_root) == 1
     found: list[Entrypoint] = []
     for name in names:
         path = form_configmap(generated, name, layout=layout)
@@ -647,6 +674,7 @@ def read_entrypoints(
                 name=config_id if sole else name,
                 config_id=config_id,
                 is_sole=sole,
+                only_entrypoint=only,
                 declared=declared_inputs(payload),
                 source=path,
             )
@@ -696,13 +724,15 @@ def route_mismatch(entrypoint: Entrypoint, card: Card) -> str | None:
     ``atlan-<name>`` against a config id of ``<name>``, and every one of those
     setup pages renders (FND-1680).
 
-    So the tolerance is **gated on** :attr:`Entrypoint.is_sole`, not granted
-    generally, because that is precisely where the fallback is safe: it
-    resolves to the app's *default* entry point, which for a sole contract is
-    the only entry point there is. For a bundle the same fallback would serve
-    the default entry point's form for *every* card, and the equality check is
-    the only thing standing between that and a user opening one entry point's
-    page to find another's form — so a bundle still fails on any mismatch.
+    So the tolerance is **gated on** :attr:`Entrypoint.default_fallback_is_safe`,
+    not granted generally, because that is precisely where the fallback is
+    safe: it resolves to the app's *default* entry point, which for a sole
+    contract — or a bundle declaring exactly one entry point — is the only
+    entry point there is. For a bundle with several, the same fallback would
+    serve the default entry point's form for *every* card, and the equality
+    check is the only thing standing between that and a user opening one entry
+    point's page to find another's form — so such a bundle still fails on any
+    mismatch.
 
     A tolerated mismatch is not waved through: :func:`verify` still fetches
     ``configmaps/<card.id>`` and still requires the served schema to carry this
@@ -723,7 +753,7 @@ def route_mismatch(entrypoint: Entrypoint, card: Card) -> str | None:
             f"Entrypoint {entrypoint.name!r}: the generated workflow "
             "config has no id. Regenerate the contract."
         )
-    if card.id != entrypoint.config_id and not entrypoint.is_sole:
+    if card.id != entrypoint.config_id and not entrypoint.default_fallback_is_safe:
         return (
             f"Entrypoint {entrypoint.name!r}: the marketplace card's id "
             f"is {card.id!r}, but this repo generates its workflow config as "
@@ -1686,8 +1716,8 @@ def verify(
             if card.id == entrypoint.config_id
             else (
                 f" (card id {card.id!r} differs from the generated config id "
-                f"{entrypoint.config_id!r}; this app has one contract, so the "
-                "app-id fallback resolved it to that one form)"
+                f"{entrypoint.config_id!r}; this app has one entry point, so "
+                "the app-id fallback resolved it to that one form)"
             )
         )
         report.append(

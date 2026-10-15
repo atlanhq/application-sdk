@@ -385,6 +385,82 @@ class TestAppIdFallbackTolerance:
         assert "/workflows/setup/atlan-mysql resolves" in report[0]
         assert "app-id fallback" in report[0]
 
+    def test_a_single_entrypoint_bundle_tolerates_the_app_id_card(self) -> None:
+        """A bundle declaring one entry point has one form to fall back to.
+
+        The runtime resolves the default entry point of a one-entry-point app to
+        that entry point, so the fallback cannot serve another's form.
+        """
+        card = Card.from_payload(_card_payload("clickhouse-crawler"))
+        entrypoint = Entrypoint(
+            name="crawler", config_id="crawler", only_entrypoint=True
+        )
+
+        assert route_mismatch(entrypoint, card) is None
+
+    def test_a_single_entrypoint_bundle_is_read_as_fallback_safe(
+        self, tmp_path: Path
+    ) -> None:
+        _write_single_entrypoint_bundle(tmp_path)
+
+        (found,) = read_entrypoints(tmp_path)
+
+        assert not found.is_sole
+        assert found.only_entrypoint
+        assert found.default_fallback_is_safe
+
+    def test_a_cardless_sibling_still_counts_as_an_entrypoint(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``marketplace_card: false`` entry point competes for the default.
+
+        One card is not one entry point: the runtime still has two, so the
+        fallback is not guaranteed to land on the card's form.
+        """
+        _write_bundle(tmp_path)
+        (tmp_path / "atlan.yaml").write_text(
+            "name: clickhouse\n"
+            "entrypoints:\n"
+            "- name: crawler\n"
+            "- name: miner\n"
+            "  marketplace_card: false\n"
+        )
+
+        (found,) = read_entrypoints(tmp_path)
+
+        assert not found.only_entrypoint
+        assert not found.default_fallback_is_safe
+
+    def test_a_multi_entrypoint_bundle_is_not_fallback_safe(
+        self, tmp_path: Path
+    ) -> None:
+        _write_bundle(tmp_path)
+
+        assert not any(e.default_fallback_is_safe for e in read_entrypoints(tmp_path))
+
+    def test_a_single_entrypoint_bundle_verifies_through_the_fallback(
+        self, tmp_path: Path
+    ) -> None:
+        """End to end: the card id differs, the served form is complete, green."""
+        _write_single_entrypoint_bundle(tmp_path)
+        catalog = [_card_payload("clickhouse-crawler")]
+        served = _form_schema("extraction-method", "credential-guid", "connection")
+        routes = _FakeRoutes(
+            [catalog],
+            {
+                "clickhouse-crawler": (
+                    200,
+                    _configmap_response(served, "clickhouse-crawler"),
+                )
+            },
+        )
+
+        report = verify(tmp_path, routes, wait_seconds=0)
+
+        assert len(report) == 1
+        assert "/workflows/setup/clickhouse-crawler resolves" in report[0]
+        assert "app-id fallback" in report[0]
+
 
 # ---------------------------------------------------------------------------
 # form_shortfall — does the contract's field actually reach a user
@@ -1151,6 +1227,27 @@ def _write_bundle(root: Path) -> None:
         (directory / f"{config_id}.json").write_text(
             json.dumps(_workflow_config(config_id))
         )
+
+
+def _write_single_entrypoint_bundle(root: Path) -> None:
+    """A bundle declaring ONE entry point, whose config id is its bare name.
+
+    The toolkit emits this when a contract populates ``entrypoints`` with a
+    single item: the tree is nested like a bundle, while the marketplace card
+    id (``<app>-<entrypoint>``) differs from the config id (``<entrypoint>``).
+    """
+    (root / "atlan.yaml").write_text(
+        "name: clickhouse\n"
+        "app_id: 019c72eb-f048-7a40-bb42-e5689dd8c150\n"
+        "entrypoints:\n"
+        "- name: crawler\n"
+        "  display_name: ClickHouse Assets\n"
+        "  type: connector\n"
+    )
+    directory = root / "app" / "generated" / "crawler"
+    directory.mkdir(parents=True)
+    (directory / "manifest.json").write_text("{}")
+    (directory / "crawler.json").write_text(json.dumps(_workflow_config("crawler")))
 
 
 def _write_flat(root: Path) -> None:
