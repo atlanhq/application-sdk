@@ -504,7 +504,7 @@ test = [
 
 [[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.50.0"
+version = "0.50.1"
 source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },

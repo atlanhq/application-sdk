@@ -2,6 +2,17 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.50.1] - 2026-10-15
+
+### Bug fixes
+
+- FND-4015 resolve duplicate contract class names by module in the ledger generator and B005 (#4404) ([902cc90](https://github.com/atlanhq/application-sdk/commit/902cc90))
+- B005 false positive when a sibling entrypoint's fields are recorded under the same contract name (#4379) ([61a66c4](https://github.com/atlanhq/application-sdk/commit/61a66c4))
+- FND-3733 register TreeSelectionExtractionInput and lock SDK 3.49.0 (#4391) ([a6c793d](https://github.com/atlanhq/application-sdk/commit/a6c793d))
+- FND-3981 require MaxItems on set, tuple, Sequence and every other collection field (#4400) ([4fdac1f](https://github.com/atlanhq/application-sdk/commit/4fdac1f))
+- FND-3964 P015 skips lists of plain values; P059 flags JSON text in contract fields (#4393) ([e0e60bc](https://github.com/atlanhq/application-sdk/commit/e0e60bc))
+- FND-3962 correct migrate-storage retirement, delivery and tier guidance (#4389) ([3768167](https://github.com/atlanhq/application-sdk/commit/3768167))
+
 ## [0.50.0] - 2026-10-14
 
 ### Features
