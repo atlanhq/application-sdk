@@ -435,6 +435,18 @@ STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN = (
     "ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES" in os.environ
 )
 
+#: Most parts a file may upload in when the deployment has not pinned the part
+#: size; larger files get larger parts. A proxy that emulates multipart (see
+#: ``STORAGE_UPLOAD_PART_SIZE_BYTES``) completes an upload in time proportional
+#: to the part count, and an 8 MiB part on a ~9 GiB file is ~1,150 parts, which
+#: outruns the proxy's request timeout. Ignored once the part size is set.
+STORAGE_UPLOAD_MAX_PARTS = int(os.getenv("ATLAN_STORAGE_UPLOAD_MAX_PARTS", "128"))
+
+#: Peak buffer memory (part size times concurrency) allowed when the part size
+#: was grown to honour ``STORAGE_UPLOAD_MAX_PARTS``; concurrency drops instead
+#: of memory rising. 768 MiB is the default 12 workers at 64 MiB.
+STORAGE_UPLOAD_MEMORY_BUDGET_BYTES = 768 * 1024 * 1024
+
 #: Number of parts uploaded concurrently (default 12, obstore's own default).
 #: Peak upload memory is roughly ``STORAGE_UPLOAD_PART_SIZE_BYTES`` times this,
 #: so a deployment that raises the part size to 64 MiB and leaves this at 12

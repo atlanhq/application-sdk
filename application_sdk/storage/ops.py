@@ -868,17 +868,26 @@ def _drop_directory_markers(
     ]
 
 
-def _compute_part_size(file_size: int, chunk_size: int) -> int:
-    """Compute effective upload part size to stay under S3's 10,000-part limit.
+def _compute_part_size(
+    file_size: int, chunk_size: int, max_parts: int | None = None
+) -> int:
+    """Compute the effective upload part size.
 
     Args:
         file_size: Total file size in bytes.
         chunk_size: Desired chunk size in bytes.
+        max_parts: When set, grow the part (rounded up to 1 MiB, capped at S3's
+            5 GiB per-part maximum) so the file uploads in at most this many
+            parts.
 
     Returns:
         Effective part size — at least *chunk_size* but never so small that
         more than 9,900 parts would be needed (safety margin below 10,000).
     """
+    mib = 1024 * 1024
+    if max_parts:
+        bounded = -(-math.ceil(file_size / max_parts) // mib) * mib
+        chunk_size = max(chunk_size, min(bounded, 5 * 1024 * mib))
     return max(chunk_size, math.ceil(file_size / 9900))
 
 
@@ -1046,6 +1055,8 @@ async def upload_file(
 
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_UPLOAD_MAX_CONCURRENCY,
+        STORAGE_UPLOAD_MAX_PARTS,
+        STORAGE_UPLOAD_MEMORY_BUDGET_BYTES,
         STORAGE_UPLOAD_PART_SIZE_BYTES,
         STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
     )
@@ -1073,7 +1084,17 @@ async def upload_file(
 
     path = Path(local_path)
     file_size = path.stat().st_size
-    effective_chunk = _compute_part_size(file_size, requested_chunk)
+    effective_chunk = _compute_part_size(
+        file_size,
+        requested_chunk,
+        None if STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN else STORAGE_UPLOAD_MAX_PARTS,
+    )
+    max_concurrency = STORAGE_UPLOAD_MAX_CONCURRENCY
+    if not STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN:
+        max_concurrency = min(
+            max_concurrency,
+            max(1, STORAGE_UPLOAD_MEMORY_BUDGET_BYTES // effective_chunk),
+        )
 
     if file_size == 0:
         logger.warning(
@@ -1096,7 +1117,7 @@ async def upload_file(
             resolved,
             key,
             buffer_size=effective_chunk,
-            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+            max_concurrency=max_concurrency,
             attributes=put_attributes,
         ) as writer:
             with path.open("rb") as fh:
