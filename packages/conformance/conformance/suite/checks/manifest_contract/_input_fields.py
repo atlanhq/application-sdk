@@ -110,8 +110,9 @@ from ._manifest_refs import manifest_paths_for_contract
 
 _RULE_ID = "K018"
 
-# The SDK base every SQL connector's extraction contract derives from. Used as
-# the fallback anchor when no @entrypoint is declared in the app's own source.
+# The SDK bases an extraction contract derives from: ``ExtractionInput``, or
+# ``TreeSelectionExtractionInput`` for tree-picker filters. Used as the fallback
+# anchor when no @entrypoint is declared in the app's own source.
 _EXTRACTION_INPUT_BASES = frozenset({"ExtractionInput", "TreeSelectionExtractionInput"})
 
 # Args the Automation Engine injects into every extract node and that no
@@ -394,7 +395,7 @@ def _sole_extraction_input(
     by_name: dict[str, ClassRecord],
     trees: dict[str, ast.AST],
 ) -> ClassRecord | None:
-    """The app's one live ``ExtractionInput`` descendant, or ``None`` if ambiguous.
+    """The app's one live extraction-input descendant, or ``None`` if ambiguous.
 
     Reached only when no entrypoint is visible at all: the app class extends
     ``BaseMetadataExtractor``, which defines no ``run()``, and writes neither
@@ -404,7 +405,8 @@ def _sole_extraction_input(
     motivating incident, so without this fallback K018 would be silent on
     exactly the family it exists to protect.
 
-    Anchoring on ``ExtractionInput`` rather than ``Input`` keeps the answer
+    Anchoring on ``ExtractionInput`` / ``TreeSelectionExtractionInput`` rather
+    than ``Input`` keeps the answer
     narrow — an app's ``TaskInput`` / ``CatalogTaskInput`` helpers descend from
     ``Input`` and are correctly excluded.
 
