@@ -21,24 +21,16 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
-    collect_module_alias_targets,
     make_finding,
-    merge_alias_targets,
-    qualified_rebound_imports,
-    register_alias_records,
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
     _canonical_type,
-    collect_entrypoint_contract_names,
+    build_contract_registry,
     resolve_contract_fields,
-    sdk_base_contract_names,
+    resolve_entrypoint_contracts,
     sdk_contract_ancestors,
 )
-from conformance.suite.checks.prescriptions._error_code_prefix import (
-    ClassRecord,
-    collect_classes,
-    collect_import_aliases,
-)
+from conformance.suite.checks.prescriptions._error_code_prefix import ClassRecord
 from conformance.suite.schema.disposition import RuleScope
 from conformance.suite.schema.findings import Finding
 
@@ -528,18 +520,7 @@ def scan_contract_compat(
     # Pass 1: parse + build class registry
     file_trees: dict[Path, ast.AST] = {}
     file_directives: dict[Path, dict[int, _IgnoreDirective]] = {}
-    file_aliases: dict[Path, dict[str, str]] = {}
     file_type_aliases: dict[Path, dict[str, TypeAliasDef]] = {}
-    by_name: dict[str, ClassRecord] = {}
-    # Every declaration per class name, not just the first. The ledger keys
-    # fields by BARE class name, so a name declared in two modules makes the
-    # ledger ambiguous — see the B005 presence check below.
-    by_name_all: dict[str, list[ClassRecord]] = {}
-    aliases_by_rel: dict[str, dict[str, str]] = {}
-    # Module-level rebindings (``OpenAPIConnectorInput = AppInputContract``),
-    # merged into the class registry once every file has been parsed so a
-    # rebinding declared in one module resolves a class defined in another.
-    module_targets: list[dict[str, str]] = []
 
     for path in paths:
         try:
@@ -552,6 +533,10 @@ def scan_contract_compat(
             continue
         file_trees[path] = tree
         file_directives[path] = _parse_directives(text)
+        file_type_aliases[path] = _unshadowed(
+            {**collect_sdk_imported_aliases(tree), **collect_type_aliases(tree)},
+            tree,
+        )
 
     rels: dict[Path, str] = {}
     for path in file_trees:
@@ -559,39 +544,31 @@ def scan_contract_compat(
             rels[path] = str(path.relative_to(root))
         except ValueError:
             rels[path] = str(path)
-    # Same resolution as the ledger generator: an import of a name an in-repo
-    # module rebinds names that module's class, not the first rebinding of the
-    # bare name (see `qualified_rebound_imports`).
-    rebound = qualified_rebound_imports({rels[p]: t for p, t in file_trees.items()})
-    for path, tree in file_trees.items():
-        rel = rels[path]
-        aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
-        aliases.update(rebound.get(rel, {}))
-        file_aliases[path] = aliases
-        file_type_aliases[path] = _unshadowed(
-            {**collect_sdk_imported_aliases(tree), **collect_type_aliases(tree)},
-            tree,
-        )
-        aliases_by_rel[rel] = aliases
-        for rec in collect_classes(tree, rel, aliases):
-            by_name.setdefault(rec.name, rec)
-            by_name_all.setdefault(rec.name, []).append(rec)
-        module_targets.append(collect_module_alias_targets(tree, aliases))
-    # A name several modules rebind to different classes is left unresolved,
-    # as the generator refuses to record it: a guess is what put one
-    # entrypoint's fields under another's contract name.
-    alias_targets, _ = merge_alias_targets(module_targets)
+    # The ledger generator's registry, so the two resolve every name the same
+    # way: an import names its module's class, and a bare name several modules
+    # declare or rebind is never resolved to whichever one parsed first.
+    registry = build_contract_registry(file_trees, rels)
+    file_aliases = registry.aliases
+    aliases_by_rel = {rels[path]: aliases for path, aliases in file_aliases.items()}
+    # Every declaration per class name, not just the first. The ledger keys
+    # fields by BARE class name, so a name declared in two modules makes the
+    # ledger ambiguous — see the B005 presence check below.
+    by_name_all = registry.by_name_all
+    # Field resolution reads the registry without ambiguous bare names.
+    by_name = registry.resolvable
 
-    # Only ``by_name`` is seeded: an alias is another name for a declaration
-    # already in ``by_name_all``, not a second declaration, and adding it there
-    # would make every aliased contract read as an ambiguous name.
-    register_alias_records(by_name, alias_targets)
+    # The declarations the ledger generator records, so B005 checks exactly
+    # those: a same-named class elsewhere is not the contract. An annotation
+    # the generator refuses as ambiguous falls back to every declaration of
+    # its name, so the contract is never silently unchecked.
+    contracts = resolve_entrypoint_contracts(file_trees, registry)
+    entrypoint_nodes = {id(rec.node) for rec in contracts.records} | {
+        id(rec.node)
+        for _, _, declared in contracts.ambiguous
+        for rec in by_name_all.get(declared, [])
+    }
 
-    entrypoint_names = collect_entrypoint_contract_names(
-        file_trees, by_name
-    ) | sdk_base_contract_names(by_name)
-
-    if not entrypoint_names:
+    if not entrypoint_nodes:
         return []
 
     # Pre-index the ledger for O(1) lookups
@@ -623,7 +600,7 @@ def scan_contract_compat(
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
-            if class_node.name not in entrypoint_names:
+            if id(class_node) not in entrypoint_nodes:
                 continue
 
             aliases = file_aliases.get(path, {})

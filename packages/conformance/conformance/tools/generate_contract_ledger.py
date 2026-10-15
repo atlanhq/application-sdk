@@ -62,19 +62,12 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import (
-    collect_module_alias_targets,
-    detect_scope,
-    discover,
-    merge_alias_targets,
-    qualified_rebound_imports,
-    register_alias_records,
-)
+from conformance.suite.checks._ast_common import detect_scope, discover
 from conformance.suite.checks._entrypoint_contract_fields import (
     _base_name,
-    collect_entrypoint_contract_names,
+    build_contract_registry,
     resolve_contract_fields,
-    sdk_base_contract_names,
+    resolve_entrypoint_contracts,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
     LEDGER_VERSION,
@@ -84,11 +77,7 @@ from conformance.suite.checks.deprecation._ledger_schema import (
     regen_command,
     serialize,
 )
-from conformance.suite.checks.prescriptions._error_code_prefix import (
-    ClassRecord,
-    collect_classes,
-    collect_import_aliases,
-)
+from conformance.suite.checks.prescriptions._error_code_prefix import ClassRecord
 from conformance.suite.schema.disposition import RuleScope
 
 LEDGER_NAME = "contract_schema.lock.json"
@@ -109,13 +98,26 @@ class AmbiguousContractBase(ValueError):
     """
 
 
+class DuplicateContractName(ValueError):
+    """An entrypoint contract's class name is declared in more than one module.
+
+    The ledger keys a contract by its bare class name, so it cannot keep the
+    declarations apart: each one's fields would be recorded under the other.
+    """
+
+
 def _ambiguous_bases(
     class_node: ast.ClassDef,
     aliases: dict[str, str],
     by_name: dict[str, ClassRecord],
-    ambiguous: set[str],
+    ambiguous: frozenset[str],
 ) -> set[str]:
-    """Names in *class_node*'s ancestry that resolve only through an ambiguous rebinding."""
+    """Names in *class_node*'s ancestry that resolve only through an ambiguous name.
+
+    *by_name* is the registry without ambiguous bare names
+    (:attr:`ContractRegistry.resolvable`), so an ambiguous name is never
+    walked through a guessed declaration.
+    """
     found: set[str] = set()
     seen: set[str] = {class_node.name}
     stack = [aliases.get(n, n) for b in class_node.bases if (n := _base_name(b))]
@@ -140,8 +142,10 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     moves from ``False`` to ``True``.
 
     Raises :class:`AmbiguousContractBase` instead of recording a contract whose
-    base only resolves through a name several modules rebind to different
-    classes (import the class from its module, or by its own name).
+    base only resolves through a name several modules declare or rebind to
+    different classes (import the class from its module, or by its own name),
+    and :class:`DuplicateContractName` when an entrypoint contract's own class
+    name is declared in more than one module.
     """
     # Collect all Python files under the repo root
     paths = list(discover(repo_root))
@@ -149,10 +153,6 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     # Parse all files and build the class registry (needed for App-subclass
     # resolution during entrypoint detection, and for inherited-field resolution)
     file_trees: dict[Path, ast.AST] = {}
-    file_aliases: dict[Path, dict[str, str]] = {}
-    by_name: dict[str, ClassRecord] = {}
-    module_targets: list[dict[str, str]] = []
-
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
@@ -165,30 +165,33 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
         file_trees[path] = tree
 
     rels = {path: _rel(path, repo_root) for path in file_trees}
-    # An import of a name an in-repo module rebinds means *that* module's class
-    # (each generated entrypoint module binds `AppInputContract` to its own) —
-    # never whichever rebinding of the bare name registered first.
-    rebound = qualified_rebound_imports({rels[p]: t for p, t in file_trees.items()})
-    for path, tree in file_trees.items():
-        rel = rels[path]
-        aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
-        aliases.update(rebound.get(rel, {}))
-        file_aliases[path] = aliases
-        for rec in collect_classes(tree, rel, aliases):
-            by_name.setdefault(rec.name, rec)
-        module_targets.append(collect_module_alias_targets(tree, aliases))
-    alias_targets, ambiguous = merge_alias_targets(module_targets)
+    registry = build_contract_registry(file_trees, rels)
+    paths_by_rel = {rel: path for path, rel in rels.items()}
 
-    # Module-level rebindings resolve to the class they name, so a contract
-    # exposed as ``OpenAPIConnectorInput = AppInputContract`` is recorded under
-    # the generated class's own name instead of being skipped entirely. The
-    # checker seeds its registry the same way, so the two cannot disagree about
-    # which contracts exist.
-    register_alias_records(by_name, alias_targets)
+    contracts = resolve_entrypoint_contracts(file_trees, registry)
+    if contracts.ambiguous:
+        path, name, _ = contracts.ambiguous[0]
+        raise AmbiguousContractBase(
+            f"{rels[path]}: an entrypoint is annotated {name!r}, which "
+            "several modules declare or bind to different classes. Import "
+            "it from the module that defines it; the ledger is not "
+            "written rather than guessing."
+        )
 
-    entrypoint_names = collect_entrypoint_contract_names(
-        file_trees, by_name
-    ) | sdk_base_contract_names(by_name)
+    by_contract: dict[str, list[ClassRecord]] = {}
+    for rec in contracts.records:
+        by_contract.setdefault(rec.name, []).append(rec)
+    for name, recs in sorted(by_contract.items()):
+        if len(recs) > 1:
+            files = ", ".join(sorted(rec.file for rec in recs))
+            raise DuplicateContractName(
+                f"entrypoint contract {name!r} is declared more than once "
+                f"({files}). The ledger records a contract under its class "
+                "name, so it cannot tell these apart; rename all but one "
+                "(regenerate with a current contract-toolkit, which prefixes "
+                "each entrypoint's class). The ledger is not written rather "
+                "than mixing their fields."
+            )
 
     # Index existing ledger entries for fast lookup
     existing_by_key: dict[tuple[str, str], ContractField] = {
@@ -197,33 +200,30 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
 
     # Collect all live contract fields from entrypoint classes
     live_entries: dict[tuple[str, str], ContractField] = {}
-    for path, tree in file_trees.items():
-        aliases = file_aliases.get(path, {})
-        for class_node in ast.walk(tree):
-            if not isinstance(class_node, ast.ClassDef):
-                continue
-            if class_node.name not in entrypoint_names:
-                continue
-            unresolved = _ambiguous_bases(class_node, aliases, by_name, ambiguous)
-            if unresolved:
-                names = ", ".join(sorted(unresolved))
-                raise AmbiguousContractBase(
-                    f"{_rel(path, repo_root)}: contract {class_node.name!r} "
-                    f"inherits {names}, which several modules bind to different "
-                    "classes. Import the base from the module that defines it "
-                    "(`from app.generated.<entrypoint>._input import "
-                    "AppInputContract`) or by its own class name; the ledger "
-                    "is not written rather than guessing."
-                )
-            for fi in resolve_contract_fields(class_node, aliases, by_name):
-                key = (class_node.name, fi.name)
-                live_entries[key] = ContractField(
-                    contract=class_node.name,
-                    field=fi.name,
-                    type=fi.canonical_type,
-                    status=fi.status,
-                    required=fi.required,
-                )
+    for rec in sorted(contracts.records, key=lambda r: (r.file, r.node.lineno)):
+        aliases = registry.aliases.get(paths_by_rel[rec.file], {})
+        unresolved = _ambiguous_bases(
+            rec.node, aliases, registry.resolvable, registry.ambiguous
+        )
+        if unresolved:
+            names = ", ".join(sorted(unresolved))
+            raise AmbiguousContractBase(
+                f"{rec.file}: contract {rec.name!r} "
+                f"inherits {names}, which several modules declare or bind "
+                "to different classes. Import the base from the module "
+                "that defines it (`from app.generated.<entrypoint>._input "
+                "import AppInputContract`) or by its own class name; the "
+                "ledger is not written rather than guessing."
+            )
+        for fi in resolve_contract_fields(rec.node, aliases, registry.resolvable):
+            key = (rec.name, fi.name)
+            live_entries[key] = ContractField(
+                contract=rec.name,
+                field=fi.name,
+                type=fi.canonical_type,
+                status=fi.status,
+                required=fi.required,
+            )
 
     # Merge: append-only with status refresh
     merged: dict[tuple[str, str], ContractField] = {}
@@ -352,7 +352,7 @@ def main(argv: list[str] | None = None) -> None:
     # invariant cannot drift between the two writers.
     try:
         ledger = build_ledger(repo_root, load_ledger_baseline(outfile))
-    except AmbiguousContractBase as exc:
+    except (AmbiguousContractBase, DuplicateContractName) as exc:
         print(f"error: {exc}", file=sys.stderr)
         sys.exit(2)
     content = serialize(ledger)

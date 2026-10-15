@@ -139,9 +139,12 @@ human audit):
      connector, all 25 B005 findings were noise of these families.  A fourth
      family: a ledger written before imports were resolved per module can hold
      a sibling entrypoint's fields under this contract's name (each generated
-     `_input.py` rebinds `AppInputContract`).  The generator no longer writes
-     such rows, and refuses to write a contract whose base only resolves
-     through that ambiguous name; rows already written cannot be told from a
+     `_input.py` rebinds `AppInputContract`, or, from an older toolkit,
+     declares it).  The generator no longer writes such rows: it refuses
+     (exit 2) to write a contract whose base only resolves through that
+     ambiguous name, and to write two entrypoint contracts that share a class
+     name (rename one, or regenerate with a current contract-toolkit); rows
+     already written cannot be told from a
      real removal, so B005 still reports them.  Never "restore" another
      entrypoint's fields: hand the residue to a human, whose one-time remedy is
      a reviewed ledger PR deleting those rows, merged past `ledger-guard` by

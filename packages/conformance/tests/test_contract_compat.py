@@ -2729,3 +2729,311 @@ def test_b005_still_fires_when_a_misattributed_field_was_retyped(
     )
     findings = _scan(tmp_path, _two_entrypoint_app(_CONTRACTS_EXPLICIT), ledger)
     assert "B005" in _ids(findings)
+
+
+# ── Sibling entrypoint modules each declaring one shared class name ───────────
+# An older contract-toolkit generated ``class AppInputContract`` in every
+# entrypoint's ``_input.py`` instead of a prefixed class plus a rebinding. A
+# lookup by the bare name kept whichever declaration parsed first, so a
+# contract based on the other one was resolved, and recorded in the
+# append-only ledger, with the wrong fields.
+
+_DECL_CRAWLER = """\
+class AppInputContract:
+    crawl_only: str = ""
+    shared: str = ""
+"""
+
+_DECL_MINER = """\
+class AppInputContract:
+    mine_only: str = ""
+    shared: int = 0
+"""
+
+_CONTRACTS_QUALIFIED = """\
+from app.generated.crawler._input import AppInputContract as _Crawler
+from app.generated.miner._input import AppInputContract as _Miner
+
+class CrawlerInput(_Crawler):
+    pass
+
+class MinerInput(_Miner):
+    pass
+"""
+
+
+def _declared_twice_app(contracts: str) -> dict[str, str]:
+    files = _two_entrypoint_app(contracts)
+    files["app/generated/crawler/_input.py"] = _DECL_CRAWLER
+    files["app/generated/miner/_input.py"] = _DECL_MINER
+    return files
+
+
+def _recorded(tmp_path: Path) -> dict[tuple[str, str], str]:
+    from conformance.tools.generate_contract_ledger import build_ledger
+
+    ledger = build_ledger(tmp_path, ContractLedger(version=1, fields=[]))
+    return {(f.contract, f.field): f.type for f in ledger.fields}
+
+
+def _assert_each_contract_has_its_own_fields(recorded: dict) -> None:
+    assert recorded[("MinerInput", "mine_only")] == "str"
+    assert recorded[("MinerInput", "shared")] == "int"
+    assert ("MinerInput", "crawl_only") not in recorded
+    assert recorded[("CrawlerInput", "crawl_only")] == "str"
+    assert recorded[("CrawlerInput", "shared")] == "str"
+    assert ("CrawlerInput", "mine_only") not in recorded
+
+
+def test_the_generator_resolves_a_duplicated_class_by_the_module_imported_from(
+    tmp_path: Path,
+) -> None:
+    _write(tmp_path, _declared_twice_app(_CONTRACTS_QUALIFIED))
+    _assert_each_contract_has_its_own_fields(_recorded(tmp_path))
+
+
+def test_the_generator_follows_a_package_re_export_of_a_duplicated_class(
+    tmp_path: Path,
+) -> None:
+    files = _declared_twice_app(
+        _CONTRACTS_QUALIFIED.replace(
+            "app.generated.crawler._input", "app.generated.crawler"
+        ).replace("app.generated.miner._input", "app.generated.miner")
+    )
+    files["app/generated/crawler/__init__.py"] = (
+        "from ._input import AppInputContract\n"
+    )
+    files["app/generated/miner/__init__.py"] = "from ._input import AppInputContract\n"
+    _write(tmp_path, files)
+    _assert_each_contract_has_its_own_fields(_recorded(tmp_path))
+
+
+def test_the_generator_resolves_a_duplicated_class_inside_its_own_module(
+    tmp_path: Path,
+) -> None:
+    # The one place the bare name is unambiguous is the module declaring it.
+    files = _declared_twice_app(
+        "from app.generated.crawler._input import CrawlerInput\n"
+        "from app.generated.miner._input import MinerInput\n"
+    )
+    files["app/generated/crawler/_input.py"] = (
+        _DECL_CRAWLER + "\nclass CrawlerInput(AppInputContract):\n    pass\n"
+    )
+    files["app/generated/miner/_input.py"] = (
+        _DECL_MINER + "\nclass MinerInput(AppInputContract):\n    pass\n"
+    )
+    _write(tmp_path, files)
+    _assert_each_contract_has_its_own_fields(_recorded(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "contracts",
+    [
+        pytest.param(
+            """\
+from app.generated.crawler import _input as c
+from app.generated.miner import _input as m
+
+class CrawlerInput(c.AppInputContract):
+    pass
+
+class MinerInput(m.AppInputContract):
+    pass
+""",
+            id="attribute-base",
+        ),
+        pytest.param(
+            """\
+from app.generated.crawler import _input as c
+from app.generated.miner import _input as m
+
+_Crawler = c.AppInputContract
+_Miner = m.AppInputContract
+
+class CrawlerInput(_Crawler):
+    pass
+
+class MinerInput(_Miner):
+    pass
+""",
+            id="rebinding-of-the-bare-name",
+        ),
+    ],
+)
+def test_the_generator_refuses_a_duplicated_class_reached_by_its_bare_name(
+    tmp_path: Path, contracts: str
+) -> None:
+    from conformance.tools.generate_contract_ledger import main
+
+    _write(tmp_path, {"pyproject.toml": "", **_declared_twice_app(contracts)})
+    out = tmp_path / "contract_schema.lock.json"
+    with pytest.raises(SystemExit) as exc:
+        main(["--repo", str(tmp_path), "--outfile", str(out)])
+    assert exc.value.code == 2
+    assert not out.exists()
+
+
+def test_the_generator_refuses_two_entrypoint_contracts_sharing_a_class_name(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The ledger keys a contract by its bare class name, so two entrypoints
+    # whose own contracts are both `AppInputContract` cannot be kept apart.
+    from conformance.tools.generate_contract_ledger import main
+
+    files = _declared_twice_app("")
+    files["app/apps.py"] = """\
+from application_sdk.app import App
+from app.generated.crawler._input import AppInputContract as CrawlerContract
+from app.generated.miner._input import AppInputContract as MinerContract
+
+class Crawler(App):
+    async def run(self, input: CrawlerContract) -> None:
+        pass
+
+class Miner(App):
+    async def run(self, input: MinerContract) -> None:
+        pass
+"""
+    _write(tmp_path, {"pyproject.toml": "", **files})
+    out = tmp_path / "contract_schema.lock.json"
+    with pytest.raises(SystemExit) as exc:
+        main(["--repo", str(tmp_path), "--outfile", str(out)])
+    assert exc.value.code == 2
+    assert not out.exists()
+    err = capsys.readouterr().err
+    assert "'AppInputContract' is declared more than once" in err
+    assert "app/generated/crawler/_input.py" in err
+    assert "app/generated/miner/_input.py" in err
+
+
+def test_b005_resolves_a_duplicated_class_by_the_module_imported_from(
+    tmp_path: Path,
+) -> None:
+    # Read through the first declaration parsed, MinerInput carried the
+    # crawler's `crawl_only` (B006: not in the ledger) and lost its own.
+    ledger = _make_ledger(
+        *_rows("CrawlerInput", "crawl_only", "shared"),
+        *_rows("MinerInput", "mine_only"),
+        ContractField("MinerInput", "shared", "int", "active"),
+    )
+    findings = _scan(tmp_path, _declared_twice_app(_CONTRACTS_QUALIFIED), ledger)
+    assert not {"B005", "B006"} & set(_ids(findings))
+
+
+def test_b005_still_fires_on_a_field_removed_behind_a_duplicated_class(
+    tmp_path: Path,
+) -> None:
+    ledger = _make_ledger(
+        *_rows("CrawlerInput", "crawl_only", "shared"),
+        *_rows("MinerInput", "mine_only", "gone"),
+        ContractField("MinerInput", "shared", "int", "active"),
+    )
+    findings = _scan(tmp_path, _declared_twice_app(_CONTRACTS_QUALIFIED), ledger)
+    assert [f.message.split("'")[1] for f in findings if f.rule_id == "B005"] == [
+        "MinerInput.gone"
+    ]
+
+
+def test_the_generator_records_a_contract_that_subclasses_its_namesake(
+    tmp_path: Path,
+) -> None:
+    # The app's contract subclasses the generated class under the same name;
+    # only the subclass is the entrypoint's contract, so nothing is ambiguous.
+    files = {
+        "pyproject.toml": "",
+        "app/__init__.py": "",
+        "app/generated/__init__.py": "",
+        "app/generated/_input.py": 'class AppInputContract:\n    generated: str = ""\n',
+        "app/contracts.py": (
+            "from app.generated._input import AppInputContract as _Generated\n\n"
+            "class AppInputContract(_Generated):\n"
+            '    own: str = ""\n'
+        ),
+        "app/apps.py": (
+            "from application_sdk.app import App\n"
+            "from app.contracts import AppInputContract\n\n"
+            "class Connector(App):\n"
+            "    async def run(self, input: AppInputContract) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    _write(tmp_path, files)
+    recorded = _recorded(tmp_path)
+    assert ("AppInputContract", "own") in recorded
+    assert ("AppInputContract", "generated") in recorded
+
+
+def test_the_generator_ignores_an_unrelated_class_sharing_the_contracts_name(
+    tmp_path: Path,
+) -> None:
+    # A same-named model elsewhere is not the entrypoint's contract, and its
+    # fields were merged into the contract's ledger rows.
+    files = {
+        "app/__init__.py": "",
+        "app/models.py": 'class LineageInput:\n    model_only: str = ""\n',
+        "app/workflow.py": (
+            "from application_sdk.app import App\n\n"
+            "class LineageInput:\n"
+            '    contract_only: str = ""\n\n'
+            "class Lineage(App):\n"
+            "    async def run(self, input: LineageInput) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    _write(tmp_path, files)
+    recorded = _recorded(tmp_path)
+    assert ("LineageInput", "contract_only") in recorded
+    assert ("LineageInput", "model_only") not in recorded
+
+
+def test_the_generator_resolves_an_import_of_a_class_that_shadows_its_import(
+    tmp_path: Path,
+) -> None:
+    # `from .base import Foo` then `class Foo(Foo)`: the module exports its own
+    # class, the later binding, not the base it imported.
+    files = {
+        "app/__init__.py": "",
+        "app/miner/__init__.py": "",
+        "app/miner/base.py": 'class MinerBase:\n    base_only: str = ""\n',
+        "app/miner/contract.py": (
+            "from .base import MinerBase\n\n"
+            "class MinerBase(MinerBase):\n"
+            '    own: str = ""\n'
+        ),
+        "app/apps.py": (
+            "from application_sdk.app import App\n"
+            "from app.miner.contract import MinerBase as _Base\n\n"
+            "class MinerInput(_Base):\n"
+            "    pass\n\n"
+            "class Miner(App):\n"
+            "    async def run(self, input: MinerInput) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    _write(tmp_path, files)
+    recorded = _recorded(tmp_path)
+    assert ("MinerInput", "own") in recorded
+    assert ("MinerInput", "base_only") in recorded
+
+
+def test_b005_ignores_an_unrelated_class_sharing_the_contracts_name(
+    tmp_path: Path,
+) -> None:
+    # Only the declaration the entrypoint annotates is the contract: the
+    # same-named model's field is not reported as missing from the ledger.
+    files = {
+        "app/__init__.py": "",
+        "app/models.py": 'class LineageInput:\n    model_only: str = ""\n',
+        "app/workflow.py": (
+            "from application_sdk.app import App\n\n"
+            "class LineageInput:\n"
+            '    contract_only: str = ""\n\n'
+            "class Lineage(App):\n"
+            "    async def run(self, input: LineageInput) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    findings = _scan(
+        tmp_path, files, _make_ledger(*_rows("LineageInput", "contract_only"))
+    )
+    assert not {"B005", "B006"} & set(_ids(findings))

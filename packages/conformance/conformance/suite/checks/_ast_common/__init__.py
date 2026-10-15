@@ -18,6 +18,7 @@ from ._imports import (
     collect_import_origins,
     collect_module_alias_targets,
     merge_alias_targets,
+    qualified_class_key,
     qualified_rebound_imports,
     qualify_chained_attr_call,
     register_alias_records,
@@ -45,6 +46,7 @@ from ._toml_suppress import (
 
 __all__ = [
     "merge_alias_targets",
+    "qualified_class_key",
     "qualified_rebound_imports",
     "safe_read_json",
     "safe_read_text",
