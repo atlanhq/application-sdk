@@ -164,7 +164,12 @@ class CloudStore:
         if auth_type == "s3":
             store, put_attrs = _create_s3_store(credentials, extra)
             if _needs_region_lookup(extra):
-                creds, base_extra = credentials, extra
+                creds = {
+                    k: credentials[k]
+                    for k in ("username", "password", "token")
+                    if k in credentials
+                }
+                base_extra = dict(extra)
                 region_lookup = (
                     base_extra["s3_bucket"],
                     lambda region: _create_s3_store(
@@ -269,9 +274,9 @@ class CloudStore:
         Raises:
             StorageError: If no files found under the prefix.
         """
-        await self._ensure_region()
         if key and prefix:
             raise StorageConfigError("Provide either 'key' or 'prefix', not both.")
+        await self._ensure_region()
 
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
@@ -585,7 +590,10 @@ def _needs_region_lookup(extra: dict[str, Any]) -> bool:
 def _region_lookup_host() -> str:
     """S3 endpoint host for the region lookup: the ambient region, else global."""
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
-    return f"s3.{region}.amazonaws.com" if region else "s3.amazonaws.com"
+    if not region:
+        return "s3.amazonaws.com"
+    suffix = "amazonaws.com.cn" if region.startswith("cn-") else "amazonaws.com"
+    return f"s3.{region}.{suffix}"
 
 
 async def _lookup_bucket_region(bucket: str) -> str:
@@ -601,8 +609,14 @@ async def _lookup_bucket_region(bucket: str) -> str:
     )
     timeout = aiohttp.ClientTimeout(total=_S3_REGION_LOOKUP_TIMEOUT_SECONDS)
     try:
+        from application_sdk.clients.ssl_utils import (  # noqa: PLC0415
+            get_ssl_context,
+        )
+
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-            async with session.head(url, allow_redirects=False) as response:
+            async with session.head(
+                url, allow_redirects=False, ssl=get_ssl_context()
+            ) as response:
                 return response.headers.get("x-amz-bucket-region", "")
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         _log().warning("S3 bucket region lookup failed bucket=%s error=%s", bucket, exc)

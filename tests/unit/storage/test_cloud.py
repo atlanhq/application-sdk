@@ -994,6 +994,7 @@ class TestS3RegionLookup:
         [
             ({"AWS_REGION": "eu-west-1"}, "s3.eu-west-1.amazonaws.com"),
             ({"AWS_DEFAULT_REGION": "ap-south-1"}, "s3.ap-south-1.amazonaws.com"),
+            ({"AWS_REGION": "cn-north-1"}, "s3.cn-north-1.amazonaws.com.cn"),
             ({}, "s3.amazonaws.com"),
         ],
     )
@@ -1005,3 +1006,62 @@ class TestS3RegionLookup:
         for key, value in env.items():
             monkeypatch.setenv(key, value)
         assert cloud._region_lookup_host() == host
+
+    async def test_lookup_uses_sdk_ssl_context(self, monkeypatch):
+        import aiohttp
+
+        from application_sdk.clients import ssl_utils
+        from application_sdk.storage import cloud
+
+        sentinel = object()
+        monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
+        seen: dict = {}
+
+        def _head(_self, url, **kwargs):
+            seen.update(kwargs)
+            raise aiohttp.ClientConnectionError("blocked")
+
+        monkeypatch.setattr(aiohttp.ClientSession, "head", _head)
+        assert await cloud._lookup_bucket_region("b") == ""
+        assert seen["ssl"] is sentinel
+
+    async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
+        from application_sdk.storage import _obstore_config, cloud
+
+        built: list[tuple[str, dict]] = []
+
+        def _make(bucket, config=None, **_kwargs):
+            built.append((bucket, dict(config or {})))
+            return MemoryStore()
+
+        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return("us-west-2"))
+        credentials = {
+            "authType": "s3",
+            "username": "access-a",
+            "password": "secret-a",
+            "extra": {"s3_bucket": "b"},
+        }
+        store = CloudStore.from_credentials(credentials)
+        credentials["username"] = "access-b"
+        credentials["extra"]["s3_bucket"] = "other"
+        await store.list("x")
+        bucket, config = built[-1]
+        assert bucket == "b"
+        assert config["aws_access_key_id"] == "access-a"
+        assert config["aws_region"] == "us-west-2"
+
+    async def test_download_checks_arguments_before_lookup(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        self._regions_built(monkeypatch)
+        lookup = MagicMock(side_effect=_async_return("us-west-2"))
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        with pytest.raises(StorageConfigError):
+            await store.download(key="k", prefix="p")
+        lookup.assert_not_called()
