@@ -43,8 +43,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -197,7 +197,9 @@ class CloudStore:
             region = await _lookup_bucket_region(bucket)
             if region:
                 self._store = rebuild(region)
-                _log().info("Resolved S3 bucket region bucket=%s region=%s", bucket, region)
+                _log().info(
+                    "Resolved S3 bucket region bucket=%s region=%s", bucket, region
+                )
             self._region_lookup = None
 
     # ------------------------------------------------------------------
