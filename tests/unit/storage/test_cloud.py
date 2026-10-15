@@ -957,3 +957,51 @@ class TestS3RegionLookup:
         await store.list("x")
         assert built == [None]
         assert store.store is before
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda store, tmp: store.get_bytes("k"),
+            lambda store, tmp: store.download(prefix="p", output_dir=tmp / "out"),
+            lambda store, tmp: store.list("p"),
+            lambda store, tmp: store.upload(tmp / "f.bin", "k"),
+            lambda store, tmp: store.upload_bytes("k", b"x"),
+            lambda store, tmp: store.upload_dir(tmp / "d", "p"),
+        ],
+        ids=["get_bytes", "download", "list", "upload", "upload_bytes", "upload_dir"],
+    )
+    async def test_every_entry_point_resolves_region_first(
+        self, monkeypatch, tmp_path, call
+    ):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return("us-west-2"))
+        (tmp_path / "f.bin").write_bytes(b"x")
+        (tmp_path / "d").mkdir()
+        (tmp_path / "d" / "g.bin").write_bytes(b"y")
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        try:
+            await call(store, tmp_path)
+        except StorageError:
+            pass
+        assert built == [None, "us-west-2"]
+
+    @pytest.mark.parametrize(
+        ("env", "host"),
+        [
+            ({"AWS_REGION": "eu-west-1"}, "s3.eu-west-1.amazonaws.com"),
+            ({"AWS_DEFAULT_REGION": "ap-south-1"}, "s3.ap-south-1.amazonaws.com"),
+            ({}, "s3.amazonaws.com"),
+        ],
+    )
+    def test_lookup_uses_ambient_regional_endpoint(self, monkeypatch, env, host):
+        from application_sdk.storage import cloud
+
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        assert cloud._region_lookup_host() == host

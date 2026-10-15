@@ -32,7 +32,8 @@ Usage::
 Credential format (standard ``csa-connectors-objectstore``)::
 
     S3:   authType="s3",   username=access_key, password=secret_key,
-          extra={s3_bucket, region, aws_role_arn?, aws_external_id?}
+          extra={s3_bucket, region?, aws_role_arn?, aws_external_id?}
+          (a blank region is looked up from the bucket before the first call)
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
     ADLS: authType="adls", username=client_id,   password=client_secret,
@@ -111,7 +112,11 @@ class CloudStore:
 
     @property
     def store(self) -> ObjectStore:
-        """Underlying obstore instance (for advanced use)."""
+        """Underlying obstore instance (for advanced use).
+
+        For S3 with a blank region, this is the store as built until the
+        first async call resolves the bucket's region.
+        """
         return self._store
 
     # ------------------------------------------------------------------
@@ -566,7 +571,7 @@ class CloudStore:
 # ---------------------------------------------------------------------------
 
 
-_S3_REGION_LOOKUP_URL = "https://s3.amazonaws.com/{bucket}"
+_S3_REGION_LOOKUP_URL = "https://{host}/{bucket}"
 _S3_REGION_LOOKUP_TIMEOUT_SECONDS = 10.0
 
 
@@ -577,13 +582,23 @@ def _needs_region_lookup(extra: dict[str, Any]) -> bool:
     )
 
 
+def _region_lookup_host() -> str:
+    """S3 endpoint host for the region lookup: the ambient region, else global."""
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    return f"s3.{region}.amazonaws.com" if region else "s3.amazonaws.com"
+
+
 async def _lookup_bucket_region(bucket: str) -> str:
     """Return the bucket's region from ``x-amz-bucket-region``, or ``""``.
 
     An unsigned path-style HEAD on the bucket returns the header on 200, 301
-    and 403, so no credentials are needed and dotted bucket names work.
+    and 403, so no credentials are needed and dotted bucket names work. The
+    pod's own regional endpoint is used when ``AWS_REGION`` is set, so a
+    network that reaches only its own region still answers.
     """
-    url = _S3_REGION_LOOKUP_URL.format(bucket=quote(bucket, safe=""))
+    url = _S3_REGION_LOOKUP_URL.format(
+        host=_region_lookup_host(), bucket=quote(bucket, safe="")
+    )
     timeout = aiohttp.ClientTimeout(total=_S3_REGION_LOOKUP_TIMEOUT_SECONDS)
     try:
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
