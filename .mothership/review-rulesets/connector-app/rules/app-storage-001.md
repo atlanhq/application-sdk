@@ -23,4 +23,6 @@ semantics:
   otherwise get declared by the next one.
 - A persisted progress marker (watermark) has exactly one owner; two
   loops sharing one marker with separate freeze flags silently lose data.
-- MUST NOT write outside the task's `output_path`.
+- MUST write under a directory the task owns (its own scratch directory),
+  not under a path another task passes in through a contract field; the data
+  leaves the task as a FileReference.

@@ -1803,7 +1803,10 @@ class App(ABC):
 
         Returns:
             ``DownloadOutput`` with a fully materialised ``FileReference``
-            containing both ``storage_path`` and ``local_path``.
+            containing both ``storage_path`` and ``local_path``.  A prefix
+            with no objects is not an error: the ref names an empty local
+            directory with ``file_count=0``, so check ``ref.file_count``
+            before handing the ref to another task.
 
         Example — SDR publish app consuming artifacts from the extract app::
 

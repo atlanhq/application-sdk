@@ -28,7 +28,7 @@ optional_triggers:
   - "upload_prefix replacement"
   - "RollingFileWriter migration"
 owner: connector-platform-team
-last_updated: "2026-10-06"
+last_updated: "2026-10-15"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -38,7 +38,7 @@ outputs:
   - run() / @entrypoint delivering outbound files with App.upload or App.upload_refs at the same keys as before
   - RollingFileWriter or local writes in place of the deprecated storage-format readers and writers
   - pyproject.toml and uv.lock (SDK raised to >= 3.33.2 only when App.upload_refs is adopted and the lock is below it)
-  - contract_schema.lock.json entries marked sunset for retired entrypoint fields; updated tests
+  - contract_schema.lock.json entries marked deprecated for entrypoint fields being retired; updated tests
 ---
 
 # Migrate to the storage seam (P008, P009, P010, P011, P012, P044)
@@ -124,8 +124,11 @@ class TransformInput(Input):
     data: FileReference
 
 async def transform(self, input: TransformInput) -> TransformOutput:
-    frame = pd.read_parquet(input.data.local_path)
+    frame = await self.run_in_thread(pd.read_parquet, input.data.local_path)
 ```
+
+A blocking read runs through `run_in_thread`; a bare `pd.read_parquet` in an
+async task is a P023 finding.
 
 Chunked output replaces `ParquetFileWriter` / `JsonFileWriter` with the SDK's
 `RollingFileWriter` (none of the reference apps writes chunks; this is the
@@ -251,6 +254,12 @@ each use to the inventory.
   existing `self.upload(UploadInput(local_path=<dir>))` in `run()` that only
   works because the legacy writers already put the files at mirrored keys
   must become `upload_refs` in the same change that retires those writers.
+  A copy that runs only when `ENABLE_ATLAN_UPLOAD` is set worked because the
+  ref pinned its own key with `storage_path`. A ref from
+  `FileReference.from_local` lands under `file_refs/{uuid}` instead, so its
+  `upload_refs` call runs in every deployment. It writes to
+  `upstream_storage or storage`: Atlan's bucket in SDR, and in-cluster the
+  one store that both names point at, which is where publish reads.
 - **inbound** — reading another app's output by prefix (for example the
   query-intelligence app's results). Becomes `self.download(DownloadInput(...))`
   in `run()` (it reads `upstream_storage or storage`) or
@@ -297,9 +306,17 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    when its `DeclaredFile` has a `label`, otherwise at `{prefix}/{leaf}`,
    where *leaf* is the ref's own key with `source_prefix` removed. A ref that
    yields neither is an error.
-2. **Tier per artefact.** `TRANSIENT` refs are deleted at run end;
-   `RETAINED` survive the run; `PERSISTENT` are kept indefinitely. Legacy
-   writer output survived the run.
+2. **Tier per artefact.** Cleanup runs after `run()` returns, on success
+   and on failure (when cleanup is enabled, the default), and deletes
+   `TRANSIENT` refs; `RETAINED` refs survive the
+   run; `PERSISTENT` are kept indefinitely. `upload_refs` writes its own
+   copies, `RETAINED` by default. Keep what the run cannot recreate: raw
+   extract output (`RETAINED`; legacy writer output survived the run), a ref
+   whose own key is the hand-off another app reads, and a file that must be
+   reviewable after the run. What can be recreated from those is
+   `TRANSIENT`, including a transformed ref that `upload_refs` delivers:
+   downstream reads the delivered copy, so a `RETAINED` source ref only
+   keeps a second copy of the same bytes.
 3. **Empty output.** `upload_refs` returns `prefix=""` for an empty
    declaration and raises on a declared file with no objects; some apps hand
    publish a prefix naming an empty tree today. An empty or missing prefix
@@ -313,11 +330,17 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    write the same bytes and names, or get the developer's yes. Parquet to
    JSONL changes nullable integer typing.
 5. **Entrypoint contract.** Retiring or retyping a field the app declares on
-   an `@entrypoint` Input / Output: mark it `sunset` in
-   `contract_schema.lock.json`; a FileReference on an entrypoint contract needs
-   an `artifactSchemas` entry in the pkl contract. A field inherited from an
+   an `@entrypoint` Input / Output: stop reading it, mark it
+   `Field(..., deprecated=True)` and regenerate the ledger (status
+   `deprecated`; the field stays on the contract). In a later change, after
+   a release, add `json_schema_extra={"x-lifecycle": "sunset"}` and
+   regenerate (status `sunset`); once the ledger records `sunset`, the field
+   can be deleted. `ledger-guard` blocks `active` → `sunset` in one change.
+   P012 keeps reporting a path field while it is on the contract. A
+   FileReference on an entrypoint contract needs an `artifactSchemas` entry
+   in the pkl contract. A field inherited from an
    SDK contract (for example `ExtractionInput.output_path`): stop reading it;
-   do not sunset it. `@task` contracts are free to change.
+   do not retire it. `@task` contracts are free to change.
 6. **Retries.** Legacy writers with `replace_prefix=True` wiped a prior
    attempt's prefix; per-task scratch directories do not. Confirm no consumer
    depends on that overwrite.
@@ -327,8 +350,8 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
 ## Step 2 — Apply, in this order
 
 1. Contracts: add the FileReference fields; keep the old fields until their
-   producers and consumers are migrated, then remove them (or mark them
-   `sunset` on an entrypoint contract).
+   producers and consumers are migrated, then remove them (on an entrypoint
+   contract, mark them `deprecated` and remove them in a later change).
 2. Producers: per-task scratch directories; `RollingFileWriter` or local
    writes; return the FileReference.
 3. Consumers: read `input.<field>.local_path`; remove prefix reads,
