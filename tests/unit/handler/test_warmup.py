@@ -850,6 +850,7 @@ class TestBoundedWarmupProbe:
         self,
     ) -> None:
         cancelled = asyncio.Event()
+        release = asyncio.Event()
         finished = asyncio.Event()
 
         async def probe() -> WarmupObservation:
@@ -857,15 +858,20 @@ class TestBoundedWarmupProbe:
                 await asyncio.sleep(30)
             except asyncio.CancelledError:
                 cancelled.set()
-                # Swallow the cancel and keep running past the bound.
-                await asyncio.sleep(0.2)
+                # Swallow the cancel and keep running until the test releases
+                # it, so a caller that waited on the probe could not return.
+                await release.wait()
             finished.set()
             return WarmupObservation(state=WarmupState.READY)
 
-        started = time.monotonic()
-        assert await bounded_warmup_probe(probe(), 0.05) is None
-        assert time.monotonic() - started < 0.15
+        # The outer wait_for only turns a regression (a caller that awaits the
+        # cancelled probe) into a failure rather than a hang. Passing does not
+        # depend on elapsed time. An earlier `< 0.15s` ceiling on a 0.05s bound
+        # measured runner load and failed at random (FND-4018).
+        observed = await asyncio.wait_for(bounded_warmup_probe(probe(), 0.05), 10)
+        assert observed is None
         assert not finished.is_set()
+        release.set()
         await asyncio.wait_for(finished.wait(), timeout=5)
         assert cancelled.is_set()
 
