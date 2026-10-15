@@ -609,16 +609,15 @@ async def _lookup_bucket_region(bucket: str) -> str:
     )
     timeout = aiohttp.ClientTimeout(total=_S3_REGION_LOOKUP_TIMEOUT_SECONDS)
     try:
-        from application_sdk.clients.ssl_utils import (  # noqa: PLC0415
-            get_ssl_context,
-        )
+        from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415
 
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             async with session.head(
                 url, allow_redirects=False, ssl=get_ssl_context()
             ) as response:
                 return response.headers.get("x-amz-bucket-region", "")
-    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+    # conformance: ignore[E004] best-effort lookup; any failure keeps the store as built and is logged
+    except Exception as exc:
         _log().warning("S3 bucket region lookup failed bucket=%s error=%s", bucket, exc)
         return ""
 

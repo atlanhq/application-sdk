@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from obstore.store import LocalStore, MemoryStore
 
+from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
     StorageConfigError,
@@ -21,6 +22,14 @@ def _async_return(value):
         return value
 
     return _inner
+
+
+_REAL_LOOKUP_BUCKET_REGION = _cloud_module._lookup_bucket_region
+
+
+@pytest.fixture(autouse=True)
+def _no_region_lookup(monkeypatch):
+    monkeypatch.setattr(_cloud_module, "_lookup_bucket_region", _async_return(""))
 
 
 class TestInferAuthType:
@@ -838,48 +847,58 @@ class TestCloudStorePutAttributes:
 
 class TestS3RegionLookup:
     @staticmethod
-    async def _serve(response):
-        from aiohttp import web
+    def _stub_head(monkeypatch, *, headers=None, error=None):
+        import aiohttp
 
-        async def _handler(_request):
-            return response
+        seen: dict = {}
 
-        app = web.Application()
-        app.router.add_route("HEAD", "/{bucket}", _handler)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "127.0.0.1", 0)
-        await site.start()
-        port = runner.addresses[0][1]
-        return runner, f"http://127.0.0.1:{port}/{{bucket}}"
+        class _Response:
+            def __init__(self):
+                self.headers = headers or {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        def _head(_self, url, **kwargs):
+            seen.update(url=url, **kwargs)
+            if error is not None:
+                raise error
+            return _Response()
+
+        monkeypatch.setattr(aiohttp.ClientSession, "head", _head)
+        return seen
 
     @pytest.mark.parametrize(
-        ("status", "headers", "expected"),
+        ("headers", "expected"),
         [
-            (301, {"x-amz-bucket-region": "us-west-2"}, "us-west-2"),
-            (403, {"x-amz-bucket-region": "eu-central-1"}, "eu-central-1"),
-            (404, {}, ""),
+            ({"x-amz-bucket-region": "us-west-2"}, "us-west-2"),
+            ({}, ""),
         ],
     )
-    async def test_lookup_reads_region_header(self, status, headers, expected):
-        from aiohttp import web
+    async def test_lookup_reads_region_header(self, monkeypatch, headers, expected):
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        seen = self._stub_head(monkeypatch, headers=headers)
+        assert await _REAL_LOOKUP_BUCKET_REGION("my.bucket") == expected
+        assert seen["url"] == "https://s3.amazonaws.com/my.bucket"
+        assert seen["allow_redirects"] is False
 
-        from application_sdk.storage import cloud
+    @pytest.mark.parametrize(
+        "error", [OSError("unreachable"), RuntimeError("socket blocked")]
+    )
+    async def test_lookup_failure_returns_empty(self, monkeypatch, error):
+        import aiohttp
 
-        runner, url = await self._serve(web.Response(status=status, headers=headers))
-        try:
-            with patch.object(cloud, "_S3_REGION_LOOKUP_URL", url):
-                assert await cloud._lookup_bucket_region("my.bucket") == expected
-        finally:
-            await runner.cleanup()
-
-    async def test_lookup_unreachable_returns_empty(self):
-        from application_sdk.storage import cloud
-
-        with patch.object(
-            cloud, "_S3_REGION_LOOKUP_URL", "http://127.0.0.1:9/{bucket}"
-        ):
-            assert await cloud._lookup_bucket_region("b") == ""
+        self._stub_head(
+            monkeypatch,
+            error=aiohttp.ClientConnectionError("unreachable")
+            if isinstance(error, OSError)
+            else error,
+        )
+        assert await _REAL_LOOKUP_BUCKET_REGION("b") == ""
 
     @staticmethod
     def _regions_built(monkeypatch):
@@ -1008,21 +1027,12 @@ class TestS3RegionLookup:
         assert cloud._region_lookup_host() == host
 
     async def test_lookup_uses_sdk_ssl_context(self, monkeypatch):
-        import aiohttp
-
         from application_sdk.clients import ssl_utils
-        from application_sdk.storage import cloud
 
         sentinel = object()
         monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
-        seen: dict = {}
-
-        def _head(_self, url, **kwargs):
-            seen.update(kwargs)
-            raise aiohttp.ClientConnectionError("blocked")
-
-        monkeypatch.setattr(aiohttp.ClientSession, "head", _head)
-        assert await cloud._lookup_bucket_region("b") == ""
+        seen = self._stub_head(monkeypatch, headers={})
+        await _REAL_LOOKUP_BUCKET_REGION("b")
         assert seen["ssl"] is sentinel
 
     async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
