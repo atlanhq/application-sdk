@@ -168,3 +168,124 @@ def register_alias_records(
         record = by_name.get(target)
         if record is not None:
             by_name[name] = record
+
+
+def _module_of(rel_file: str) -> str:
+    """Dotted module name of a repo-relative ``.py`` path (``src/`` layout aware)."""
+    parts = rel_file.replace("\\", "/").removesuffix(".py").split("/")
+    if parts[:1] == ["src"]:
+        parts = parts[1:]
+    if parts[-1:] == ["__init__"]:
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _imported_module(node: ast.ImportFrom, rel_file: str) -> str | None:
+    if node.level == 0:
+        return node.module or None
+    package = _module_of(rel_file).split(".")
+    if not rel_file.replace("\\", "/").endswith("/__init__.py"):
+        package = package[:-1]
+    if node.level - 1 > len(package):
+        return None
+    package = package[: len(package) - (node.level - 1)]
+    return ".".join([*package, *([node.module] if node.module else [])]) or None
+
+
+def qualified_rebound_imports(
+    trees: dict[str, ast.AST],
+) -> dict[str, dict[str, str]]:
+    """Per file, ``{local: class_name}`` for names imported from an in-repo rebinding.
+
+    A pkl-generated entrypoint module ends with a rebinding of a shared name
+    (``AppInputContract = MinerAppInputContract``), and every entrypoint module
+    binds that same name to its own class. An app importing it
+    (``from app.generated.miner._input import AppInputContract as _Base``) means
+    the class *that* module binds. Resolving the import by its bare name instead
+    lands on whichever module's rebinding was registered first, so a miner
+    contract was resolved, and recorded in the ledger, with the crawler's fields.
+
+    *trees* maps repo-relative paths to parsed modules. Only ``from M import N``
+    where ``N`` reaches, inside ``M``, a rebinding to a different name is
+    returned. A chain of rebindings inside ``M`` is followed, and so is a
+    re-export: ``from app.generated.miner import AppInputContract`` where
+    ``miner/__init__.py`` itself imports it from ``._input``.
+    """
+    rebinds: dict[str, dict[str, str]] = {}
+    reexports: dict[str, dict[str, tuple[str, str]]] = {}
+    for rel, tree in trees.items():
+        module = _module_of(rel)
+        rebinds[module] = collect_module_alias_targets(tree)
+        imported: dict[str, tuple[str, str]] = {}
+        for node in tree.body if isinstance(tree, ast.Module) else []:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            source = _imported_module(node, rel)
+            if source is None:
+                continue
+            for alias in node.names:
+                imported[alias.asname or alias.name] = (source, alias.name)
+        reexports[module] = imported
+
+    def resolve(module: str, name: str, seen: set[tuple[str, str]]) -> str | None:
+        """The class *name* ends at in *module*, or None when no rebinding is crossed."""
+        if (module, name) in seen or module not in rebinds:
+            return None
+        seen.add((module, name))
+        targets = rebinds[module]
+        if name in targets:
+            target, local_seen = targets[name], {name}
+            while target in targets and target not in local_seen:
+                local_seen.add(target)
+                target = targets[target]
+            if target in reexports[module]:
+                source, original = reexports[module][target]
+                return resolve(source, original, seen) or original
+            return target
+        if name in reexports[module]:
+            source, original = reexports[module][name]
+            return resolve(source, original, seen)
+        return None
+
+    out: dict[str, dict[str, str]] = {}
+    for rel, tree in trees.items():
+        resolved: dict[str, str] = {}
+        for node in tree.body if isinstance(tree, ast.Module) else []:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            module = _imported_module(node, rel)
+            if module is None:
+                continue
+            for alias in node.names:
+                target = resolve(module, alias.name, set())
+                if target is not None and target != alias.name:
+                    resolved[alias.asname or alias.name] = target
+        if resolved:
+            out[rel] = resolved
+    return out
+
+
+def merge_alias_targets(
+    per_file: list[dict[str, str]],
+) -> tuple[dict[str, str], set[str]]:
+    """Merge per-module rebindings into one bare-name map, refusing to guess.
+
+    Returns ``(targets, ambiguous)``. A name two modules rebind to *different*
+    classes (each generated entrypoint module binds ``AppInputContract`` to its
+    own) has no single meaning, so it is left out of *targets* and returned in
+    *ambiguous* instead. Keeping the first rebinding parsed is what attributed
+    one entrypoint's fields to another; an unresolved name is visible, a wrong
+    one is not. An import that names the module (see
+    :func:`qualified_rebound_imports`) never reaches this map.
+    """
+    seen: dict[str, set[str]] = {}
+    for targets in per_file:
+        for local, target in targets.items():
+            seen.setdefault(local, set()).add(target)
+    ambiguous = {local for local, targets in seen.items() if len(targets) > 1}
+    merged = {
+        local: next(iter(targets))
+        for local, targets in seen.items()
+        if local not in ambiguous
+    }
+    return merged, ambiguous

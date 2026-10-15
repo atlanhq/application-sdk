@@ -23,6 +23,8 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     collect_module_alias_targets,
     make_finding,
+    merge_alias_targets,
+    qualified_rebound_imports,
     register_alias_records,
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
@@ -537,7 +539,7 @@ def scan_contract_compat(
     # Module-level rebindings (``OpenAPIConnectorInput = AppInputContract``),
     # merged into the class registry once every file has been parsed so a
     # rebinding declared in one module resolves a class defined in another.
-    alias_targets: dict[str, str] = {}
+    module_targets: list[dict[str, str]] = []
 
     for path in paths:
         try:
@@ -551,11 +553,20 @@ def scan_contract_compat(
         file_trees[path] = tree
         file_directives[path] = _parse_directives(text)
 
+    rels: dict[Path, str] = {}
+    for path in file_trees:
         try:
-            rel = str(path.relative_to(root))
+            rels[path] = str(path.relative_to(root))
         except ValueError:
-            rel = str(path)
+            rels[path] = str(path)
+    # Same resolution as the ledger generator: an import of a name an in-repo
+    # module rebinds names that module's class, not the first rebinding of the
+    # bare name (see `qualified_rebound_imports`).
+    rebound = qualified_rebound_imports({rels[p]: t for p, t in file_trees.items()})
+    for path, tree in file_trees.items():
+        rel = rels[path]
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        aliases.update(rebound.get(rel, {}))
         file_aliases[path] = aliases
         file_type_aliases[path] = _unshadowed(
             {**collect_sdk_imported_aliases(tree), **collect_type_aliases(tree)},
@@ -565,8 +576,11 @@ def scan_contract_compat(
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
             by_name_all.setdefault(rec.name, []).append(rec)
-        for local, target in collect_module_alias_targets(tree, aliases).items():
-            alias_targets.setdefault(local, target)
+        module_targets.append(collect_module_alias_targets(tree, aliases))
+    # A name several modules rebind to different classes is left unresolved,
+    # as the generator refuses to record it: a guess is what put one
+    # entrypoint's fields under another's contract name.
+    alias_targets, _ = merge_alias_targets(module_targets)
 
     # Only ``by_name`` is seeded: an alias is another name for a declaration
     # already in ``by_name_all``, not a second declaration, and adding it there
