@@ -4452,7 +4452,7 @@ def test_p059_fires_on_list_of_json_strings_across_files(tmp_path: Path) -> None
             "    return DiscoverOutput(\n"
             "        descriptors_json=[json.dumps(d) for d in all_descriptors]\n"
             "    )\n"
-            "def extract(result):\n"
+            "def extract(result: DiscoverOutput):\n"
             "    return [json.loads(s) for s in result.descriptors_json]\n"
         ),
     }
@@ -4467,7 +4467,7 @@ def test_p059_fires_on_str_field_decoded(tmp_path: Path) -> None:
         "app/contracts.py": _P059_CONTRACTS,
         "app/extractor.py": (
             "import json\n"
-            "def extract(input):\n"
+            "def extract(input: ExtractInput):\n"
             "    return json.loads(input.credentials_json)\n"
         ),
     }
@@ -4481,8 +4481,8 @@ def test_p059_fires_on_str_field_decoded(tmp_path: Path) -> None:
         "from json import dumps\nx = ExtractInput(credentials_json=dumps({}))\n",
         "import orjson\nx = ExtractInput(credentials_json=orjson.dumps({}).decode())\n",
         "def f(m):\n    return ExtractInput(credentials_json=m.model_dump_json())\n",
-        "def f(i, M):\n    return M.model_validate_json(i.credentials_json)\n",
-        "import json\ndef f(i):\n    i.credentials_json = json.dumps({})\n",
+        "def f(i: ExtractInput, M):\n    return M.model_validate_json(i.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput):\n    i.credentials_json = json.dumps({})\n",
     ],
 )
 def test_p059_evidence_forms(tmp_path: Path, code: str) -> None:
@@ -4490,10 +4490,122 @@ def test_p059_evidence_forms(tmp_path: Path, code: str) -> None:
     assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        # decode with a fallback, or through getattr
+        "import json\ndef f(i: ExtractInput):\n    return json.loads(i.credentials_json or '{}')\n",
+        "import json\ndef f(i: ExtractInput):\n    return json.loads(getattr(i, 'credentials_json', '{}'))\n",
+        # annotated attribute assignment
+        "import json\ndef f(i: ExtractInput):\n    i.credentials_json: str = json.dumps({})\n",
+        # receiver typed by wrapper, string annotation, or keyword-only param
+        "import json\ndef f(i: ExtractInput | None):\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(i: 'ExtractInput'):\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(*, i: ExtractInput):\n    return json.loads(i.credentials_json)\n",
+        # receiver bound to a constructed or validated contract
+        "import json\ndef f(d):\n    x = ExtractInput.model_validate(d)\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f():\n    x = ExtractInput()\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f(load):\n    x: ExtractInput = load()\n    return json.loads(x.credentials_json)\n",
+        # outer binding seen from a nested function
+        "import json\ndef f(i: ExtractInput):\n    def g():\n        return json.loads(i.credentials_json)\n    return g\n",
+    ],
+)
+def test_p059_receiver_and_value_forms(tmp_path: Path, code: str) -> None:
+    files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # receiver of unknown type
+        "import json\ndef f(i):\n    return json.loads(i.credentials_json)\n",
+        # receiver typed as something other than a contract
+        "import json\ndef f(r: Response):\n    return json.loads(r.credentials_json)\n",
+        "import json\ndef f(r: Response):\n    r.credentials_json = json.dumps({})\n",
+        # a nested function re-binds the name to a non-contract
+        "import json\ndef f(i: ExtractInput):\n    def g(i: Response):\n        return json.loads(i.credentials_json)\n    return g\n",
+        # self of a class that is not a contract
+        "import json\nclass Client:\n    credentials_json: str = ''\n    def creds(self):\n        return json.loads(self.credentials_json)\n",
+        # getattr with a computed name
+        "import json\ndef f(i: ExtractInput, n):\n    return json.loads(getattr(i, n))\n",
+    ],
+)
+def test_p059_silent_on_untyped_or_foreign_receiver(tmp_path: Path, code: str) -> None:
+    files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_self_in_contract_method(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "import json\n"
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    blob: str = ''\n"
+            "    def decoded(self) -> dict:\n"
+            "        return json.loads(self.blob) if self.blob else {}\n"
+        ),
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [4]
+
+
+def test_p059_field_validator_that_dumps(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "import json\n"
+            "from pydantic import field_validator\n"
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    blob: str = ''\n"
+            "    other: str = ''\n"
+            "    plain: str = ''\n"
+            "    @field_validator('blob', 'other', mode='before')\n"
+            "    @classmethod\n"
+            "    def _ser(cls, v):\n"
+            "        if isinstance(v, dict):\n"
+            "            return json.dumps(v)\n"
+            "        return v\n"
+        ),
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert [f.line for f in hits] == [5, 6]
+    assert "encoded as JSON at app/contracts.py:12" in hits[0].message
+
+
+def test_p059_attributes_evidence_to_the_receivers_class(tmp_path: Path) -> None:
+    """A field name shared by two contracts is flagged only where it is decoded."""
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class A(Input):\n"
+            "    blob: str = ''\n"
+            "class B(Input):\n"
+            "    blob: str = ''\n"
+        ),
+        "app/x.py": "import json\ndef f(b: B):\n    return json.loads(b.blob)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]
+
+
+def test_p059_receiver_typed_as_subclass_flags_base_field(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class Base(Input):\n"
+            "    blob: str = ''\n"
+            "class Child(Base):\n"
+            "    note: str = ''\n"
+        ),
+        "app/x.py": "import json\ndef f(c: Child):\n    return json.loads(c.blob)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [3]
+
+
 def test_p059_map_loads_over_list_field(tmp_path: Path) -> None:
     files = {
         "app/contracts.py": _P059_CONTRACTS,
-        "app/x.py": "import json\ndef f(r):\n    return list(map(json.loads, r.descriptors_json))\n",
+        "app/x.py": "import json\ndef f(r: DiscoverOutput):\n    return list(map(json.loads, r.descriptors_json))\n",
     }
     assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [4]
 
@@ -4503,7 +4615,7 @@ def test_p059_silent_on_plain_text_fields(tmp_path: Path) -> None:
         "app/contracts.py": _P059_CONTRACTS,
         "app/x.py": (
             "import json\n"
-            "def f(i, out):\n"
+            "def f(i: ExtractInput, out: DiscoverOutput):\n"
             "    ids = [n for n in out.names if n]\n"
             "    blob = json.dumps({'note': i.note})\n"
             "    return json.loads(blob)\n"
@@ -4538,7 +4650,7 @@ def test_p059_suppressed_with_reason(tmp_path: Path) -> None:
             "    credentials_json: str = '{}'\n",
             "    credentials_json: str = '{}'  # conformance: ignore[P059] vendor API takes JSON text\n",
         ),
-        "app/x.py": "import json\ndef f(i):\n    return json.loads(i.credentials_json)\n",
+        "app/x.py": "import json\ndef f(i: ExtractInput):\n    return json.loads(i.credentials_json)\n",
     }
     hits = _p059(_scan_files(tmp_path, files))
     assert hits and all(f.suppressed for f in hits)
@@ -4563,7 +4675,7 @@ def test_p059_silent_on_same_named_keyword_of_other_call(tmp_path: Path) -> None
 def test_p059_aliased_json_module(tmp_path: Path) -> None:
     files = {
         "app/contracts.py": _P059_CONTRACTS,
-        "app/x.py": "import json as j\ndef f(i):\n    return j.loads(i.credentials_json)\n",
+        "app/x.py": "import json as j\ndef f(i: ExtractInput):\n    return j.loads(i.credentials_json)\n",
     }
     assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
 
@@ -4588,7 +4700,7 @@ def test_p059_text_field_forms(tmp_path: Path, annotation: str) -> None:
             "class I(Input):\n"
             f"    blob: {annotation} = None\n"
         ),
-        "app/x.py": "import json\ndef f(i):\n    return json.loads(i.blob)\n",
+        "app/x.py": "import json\ndef f(i: I):\n    return json.loads(i.blob)\n",
     }
     assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]
 

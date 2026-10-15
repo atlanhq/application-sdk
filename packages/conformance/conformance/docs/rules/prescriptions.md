@@ -3117,15 +3117,19 @@ A field on an `Input`/`Output` contract typed `str` or a list/set of `str` (bare
 bounded with `MaxItems`, or optional) whose value app code under the scanned tree (tests
 excluded) writes as JSON or reads back as JSON:
 
-* written: `FIELD=json.dumps(...)` (also `orjson.dumps(...)` with   or without
-`.decode()`, and `.model_dump_json()`), a list or   set comprehension of those, or
-`x.FIELD = json.dumps(...)`; * read: `json.loads(x.FIELD)`, `json.loads(s) for s in
-x.FIELD`,   `map(json.loads, x.FIELD)`, `Model.model_validate_json(x.FIELD)`   or
-`TypeAdapter(...).validate_json(x.FIELD)`.
+* written: `Contract(FIELD=json.dumps(...))` (also   `orjson.dumps(...)` with or without
+`.decode()`, and   `.model_dump_json()`), a list or set comprehension of those,
+`x.FIELD = json.dumps(...)`, or a `field_validator` naming   `FIELD` that returns
+`json.dumps(...)`; * read: `json.loads(x.FIELD)` (also `x.FIELD or default` and
+`getattr(x, 'FIELD')`), `json.loads(s) for s in x.FIELD`,   `map(json.loads, x.FIELD)`,
+`Model.model_validate_json(x.FIELD)`   or `TypeAdapter(...).validate_json(x.FIELD)`.
 
-Evidence is matched to the declaration by field name across files, because the contract
-and the task code usually live apart.  One finding per declaration, anchored at the
-field; the message names the first evidence site.
+`x` counts only when it is typed as a contract class: a parameter annotated with one, a
+local bound to `Contract(...)` / `Contract.model_validate(...)`, or `self` in a method
+of the contract.  An attribute of the same name on any other object is not evidence.
+The evidence is matched to the field declared on that class or one of its bases, across
+files, because the contract and the task code usually live apart.  One finding per
+declaration, anchored at the field; the message names the first evidence site.
 
 Fix: declare the decoded value as a typed field — a `pydantic.BaseModel`, or
 `list[Model]` for a list of records, bounded with `MaxItems` where payload safety needs
