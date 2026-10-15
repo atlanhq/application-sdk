@@ -14,6 +14,7 @@ outbound traffic from the unit tier — stays enforced.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import http.client
 import ipaddress
@@ -265,14 +266,17 @@ class TestLifecycle:
         with source:
             assert source.base_url.startswith("https://")
             client_ctx = ssl.create_default_context(cafile=str(cert))
-            conn = http.client.HTTPSConnection(
-                "127.0.0.1", source.port, context=client_ctx, timeout=60
-            )
-            conn.request("GET", "/ping")
-            resp = conn.getresponse()
-            assert resp.status == 200
-            assert json.loads(resp.read()) == {"ok": True}
-            conn.close()
+            # Closed even when an assert fails: an open keep-alive socket would
+            # hold stop() for the whole 60s idle budget before the failure shows.
+            with contextlib.closing(
+                http.client.HTTPSConnection(
+                    "127.0.0.1", source.port, context=client_ctx, timeout=60
+                )
+            ) as conn:
+                conn.request("GET", "/ping")
+                resp = conn.getresponse()
+                assert resp.status == 200
+                assert json.loads(resp.read()) == {"ok": True}
 
     def test_plain_http_stays_the_default(self) -> None:
         """No ssl_context means no behaviour change for every existing caller."""

@@ -516,6 +516,10 @@ class TestTheWriteIsOffTheCallersPath:
 
         asyncio.run(scenario())
 
+    # A caller that waited on the held write would deadlock the loop thread,
+    # where no asyncio timeout can fire. pytest-timeout turns that hang into a
+    # failure.
+    @pytest.mark.timeout(30)
     def test_a_slow_write_costs_the_caller_nothing(self):
         # The write cannot finish until the test releases it, and the test only
         # releases it after the caller has returned. A caller that waited on the
