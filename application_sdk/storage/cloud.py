@@ -32,7 +32,8 @@ Usage::
 Credential format (standard ``csa-connectors-objectstore``)::
 
     S3:   authType="s3",   username=access_key, password=secret_key,
-          extra={s3_bucket, region, aws_role_arn?, aws_external_id?}
+          extra={s3_bucket, region?, aws_role_arn?, aws_external_id?}
+          (a blank region is looked up from the bucket before the first call)
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
     ADLS: authType="adls", username=client_id,   password=client_secret,
@@ -43,9 +44,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import aiohttp
 import obstore as obs
 import orjson
 from obstore.store import ObjectStore
@@ -98,6 +102,8 @@ class CloudStore:
         self._store = store
         self._provider = provider
         self._put_attributes: dict[str, str] | None = put_attributes
+        self._region_lookup: tuple[str, Callable[[str], ObjectStore]] | None = None
+        self._region_lock = asyncio.Lock()
 
     @property
     def provider(self) -> str:
@@ -106,7 +112,11 @@ class CloudStore:
 
     @property
     def store(self) -> ObjectStore:
-        """Underlying obstore instance (for advanced use)."""
+        """Underlying obstore instance (for advanced use).
+
+        For S3 with a blank region, this is the store as built until the
+        first async call resolves the bucket's region.
+        """
         return self._store
 
     # ------------------------------------------------------------------
@@ -150,8 +160,22 @@ class CloudStore:
             or _infer_auth_type(extra)
         )
 
+        region_lookup: tuple[str, Callable[[str], ObjectStore]] | None = None
         if auth_type == "s3":
             store, put_attrs = _create_s3_store(credentials, extra)
+            if _needs_region_lookup(extra):
+                creds = {
+                    k: credentials[k]
+                    for k in ("username", "password", "token")
+                    if k in credentials
+                }
+                base_extra = dict(extra)
+                region_lookup = (
+                    base_extra["s3_bucket"],
+                    lambda region: _create_s3_store(
+                        creds, {**base_extra, "region": region}
+                    )[0],
+                )
         elif auth_type == "gcs":
             store, put_attrs = _create_gcs_store(credentials, extra)
         elif auth_type == "adls":
@@ -163,7 +187,30 @@ class CloudStore:
             )
 
         _log().debug("Created CloudStore provider=%s", auth_type)
-        return cls(store, provider=auth_type, put_attributes=put_attrs)
+        cloud_store = cls(store, provider=auth_type, put_attributes=put_attrs)
+        cloud_store._region_lookup = region_lookup
+        return cloud_store
+
+    async def _ensure_region(self) -> None:
+        """Rebuild an S3 store that has no region with the bucket's own region.
+
+        Runs once, before the first request. obstore does not follow S3
+        region redirects, so a store without a region fails on a bucket in
+        any other region. A failed lookup keeps the store as built.
+        """
+        if self._region_lookup is None:
+            return
+        async with self._region_lock:
+            if self._region_lookup is None:
+                return
+            bucket, rebuild = self._region_lookup
+            region = await _lookup_bucket_region(bucket)
+            if region:
+                self._store = rebuild(region)
+                _log().info(
+                    "Resolved S3 bucket region bucket=%s region=%s", bucket, region
+                )
+            self._region_lookup = None
 
     # ------------------------------------------------------------------
     # Read operations
@@ -181,6 +228,7 @@ class CloudStore:
         Raises:
             StorageNotFoundError: If the key does not exist.
         """
+        await self._ensure_region()
         try:
             result = await obs.get_async(self._store, key)
             return bytes(await result.bytes_async())
@@ -228,6 +276,7 @@ class CloudStore:
         """
         if key and prefix:
             raise StorageConfigError("Provide either 'key' or 'prefix', not both.")
+        await self._ensure_region()
 
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
@@ -375,6 +424,7 @@ class CloudStore:
             normally.  For raw access including markers, use the
             underlying :attr:`store` property directly.
         """
+        await self._ensure_region()
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         suffix_filter = {suffix} if suffix else None
         return await self._list_keys(list_prefix, suffix_filter)
@@ -420,6 +470,7 @@ class CloudStore:
             count and does not surface it; no caller needs the exact figure, so
             this does not spend a second HEAD to recover it.
         """
+        await self._ensure_region()
         path = Path(local_path)
         try:
             size = path.stat().st_size
@@ -454,6 +505,7 @@ class CloudStore:
         Returns:
             Number of bytes uploaded.
         """
+        await self._ensure_region()
         try:
             await obs.put_async(self._store, key, data, attributes=self._put_attributes)
         # conformance: ignore[E004] re-raise only; wraps obstore put failure into StorageError
@@ -484,6 +536,7 @@ class CloudStore:
         Returns:
             List of uploaded object keys.
         """
+        await self._ensure_region()
         local = Path(local_dir)
 
         def _collect_files() -> list[tuple[str, Path]]:
@@ -521,6 +574,69 @@ class CloudStore:
 # ---------------------------------------------------------------------------
 # Store creation helpers
 # ---------------------------------------------------------------------------
+
+
+_S3_REGION_LOOKUP_URL = "https://{host}/{bucket}"
+_S3_REGION_LOOKUP_TIMEOUT_SECONDS = 10.0
+
+
+def _needs_region_lookup(extra: dict[str, Any]) -> bool:
+    """True when an S3 store has no region and talks to AWS S3 itself."""
+    return not extra.get("region") and not (
+        os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT")
+    )
+
+
+_S3_GLOBAL_LOOKUP_HOST = "s3.amazonaws.com"
+_S3_CHINA_LOOKUP_HOST = "s3.cn-north-1.amazonaws.com.cn"
+
+
+def _region_lookup_hosts() -> list[str]:
+    """S3 endpoint hosts for the region lookup, in probe order.
+
+    The ambient region's endpoint (else the global one) comes first, then the
+    other partition's: a partition's endpoint cannot see the other partition's
+    buckets, and a blank-region store has no region to pick the partition from.
+    """
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if not region:
+        return [_S3_GLOBAL_LOOKUP_HOST, _S3_CHINA_LOOKUP_HOST]
+    if region.startswith("cn-"):
+        return [f"s3.{region}.amazonaws.com.cn", _S3_GLOBAL_LOOKUP_HOST]
+    return [f"s3.{region}.amazonaws.com", _S3_CHINA_LOOKUP_HOST]
+
+
+async def _lookup_bucket_region(bucket: str) -> str:
+    """Return the bucket's region from ``x-amz-bucket-region``, or ``""``.
+
+    An unsigned path-style HEAD on the bucket returns the header on 200, 301
+    and 403, so no credentials are needed and dotted bucket names work. The
+    pod's own regional endpoint is used when ``AWS_REGION`` is set, so a
+    network that reaches only its own region still answers. A response without
+    the header means the bucket is not in that partition, so the other
+    partition is probed next; a failed request stops the lookup rather than
+    spend a second timeout on an unreachable network.
+    """
+    timeout = aiohttp.ClientTimeout(total=_S3_REGION_LOOKUP_TIMEOUT_SECONDS)
+    try:
+        from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415
+
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            for host in _region_lookup_hosts():
+                url = _S3_REGION_LOOKUP_URL.format(
+                    host=host, bucket=quote(bucket, safe="")
+                )
+                async with session.head(
+                    url, allow_redirects=False, ssl=get_ssl_context()
+                ) as response:
+                    region = response.headers.get("x-amz-bucket-region", "")
+                if region:
+                    return region
+            return ""
+    # conformance: ignore[E004] best-effort lookup; any failure keeps the store as built and is logged
+    except Exception as exc:
+        _log().warning("S3 bucket region lookup failed bucket=%s error=%s", bucket, exc)
+        return ""
 
 
 def _infer_auth_type(extra: dict[str, Any]) -> str:
