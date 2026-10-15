@@ -24,7 +24,7 @@ class ExtractOutput(Output):
 
 - Add new fields with defaults — backwards compatible across workflow versions.
 - Never remove fields or change their types — Temporal serialises task inputs/outputs; a type mismatch on replay crashes the worker.
-- `Any`, `bytes`, and unbounded `list`/`dict` are rejected at class-definition time (see [Payload Safety](#payload-safety) below).
+- `Any`, `bytes`, and unbounded collections (`list`, `dict`, `set`, `tuple[T, ...]`, `Sequence`, ...) are rejected at class-definition time (see [Payload Safety](#payload-safety) below).
 
 ### Importing
 
@@ -76,6 +76,9 @@ The framework rejects unsafe field types at class-definition time:
 | `bytearray` | Rejected | Use `FileReference` |
 | `list[T]` (unbounded) | Rejected | Use `Annotated[list[T], MaxItems(N)]` |
 | `dict[str, Any]` (unbounded) | Rejected | Use a typed Pydantic model |
+| `set[T]`, `frozenset[T]`, `tuple[T, ...]`, `Sequence[T]`, `Mapping[K, V]`, `deque[T]` (unbounded) | Rejected | Use `Annotated[set[T], MaxItems(N)]` and likewise; every variable-size collection needs a bound, so retyping a `list` as a `set` does not get past the check |
+| `tuple[A, B]` (fixed arity) | Allowed | Bounded by its shape; its members are still checked |
+| bare `set`, `tuple`, `deque`, `Sequence`, `typing.Set`, `typing.List`, ... | Rejected | A bare collection holds anything; parameterise and bound it. Bare builtin `dict` and `list` are still accepted, but bound nothing |
 | `Annotated[dict[str, Any], MaxItems(N)]` | Rejected | `Any` is refused even inside a bound; for a nested tree-widget selection use `TreeSelection` |
 
 This prevents Temporal's 2 MB payload limit from being hit silently in production.
