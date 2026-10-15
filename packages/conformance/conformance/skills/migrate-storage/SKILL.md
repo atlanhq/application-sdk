@@ -116,6 +116,8 @@ async def extract_collections(self, input: FetchInput) -> FetchOutput:
 
 `task_scratch_dir` is the app's own helper (a `tempfile.mkdtemp` per task);
 every task makes its own directory, so no path is shared through a contract.
+This example is raw extract output, kept `RETAINED`; for a ref that
+`upload_refs` re-delivers, see owner decision 2.
 
 A task consumes a ref (the interceptor has already materialised it):
 
@@ -123,6 +125,7 @@ A task consumes a ref (the interceptor has already materialised it):
 class TransformInput(Input):
     data: FileReference
 
+@task(timeout_seconds=600)
 async def transform(self, input: TransformInput) -> TransformOutput:
     frame = await self.run_in_thread(pd.read_parquet, input.data.local_path)
 ```
@@ -308,12 +311,12 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    when its `DeclaredFile` has a `label`, otherwise at `{prefix}/{leaf}`,
    where *leaf* is the ref's own key with `source_prefix` removed. A ref that
    yields neither is an error.
-2. **Tier per artefact.** Cleanup runs after `run()` returns, on success
-   and on failure (when cleanup is enabled, the default), and deletes
-   `TRANSIENT` refs; `RETAINED` refs survive the run; `PERSISTENT` are kept
-   indefinitely. Legacy writer output survived the run. `upload_refs` writes
-   its own copies, `RETAINED` by default, and downstream reads those: a ref
-   it re-delivers can be `TRANSIENT`, because a `RETAINED` one only keeps a
+2. **Tier per artefact.** Cleanup runs after `run()` returns, on success and
+   on failure (when cleanup is enabled, the default), and deletes `TRANSIENT`
+   refs; `RETAINED` refs survive the run; `PERSISTENT` are kept indefinitely.
+   Legacy writer output survived the run. `upload_refs` writes its own copies,
+   `RETAINED` by default, and downstream reads those: a ref it re-delivers
+   keeps the default tier, `TRANSIENT`, because a `RETAINED` one only keeps a
    second copy of the same bytes. Keep a ref `RETAINED` when its own key is
    read after the run, or when the file must be reviewable after the run.
 3. **Empty output.** `upload_refs` returns `prefix=""` for an empty
@@ -329,19 +332,20 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    write the same bytes and names, or get the developer's yes. Parquet to
    JSONL changes nullable integer typing.
 5. **Entrypoint contract.** Retiring or retyping a field the app declares on
-   an `@entrypoint` Input / Output: stop reading it and mark it
-   `deprecated` (in Python source `Field(..., deprecated=True)`; for a
-   contract generated from `app.pkl`, in the Pkl widget definition, then
-   regenerate), and regenerate the ledger (status `deprecated`; the field
-   stays on the contract). Once that has merged, mark it `sunset` the same
-   way in a later change (in Python source
-   `json_schema_extra={"x-lifecycle": "sunset"}`); once the ledger records
-   `sunset`, the field can be deleted. `ledger-guard` blocks `active` → `sunset` in one change.
-   P012 keeps reporting a path field while it is on the contract. A
-   FileReference on an entrypoint contract needs an `artifactSchemas` entry
-   in the pkl contract. A field inherited from an
-   SDK contract (for example `ExtractionInput.output_path`): stop reading it;
-   do not retire it. `@task` contracts are free to change.
+   an `@entrypoint` Input / Output: stop reading it and mark it `deprecated`
+   (in Python source `Field(..., deprecated=True)`; for a contract generated
+   from `app.pkl`, in the Pkl widget definition, then regenerate), and
+   regenerate the ledger (status `deprecated`; the field stays on the
+   contract). Once that has merged, mark it `sunset` the same way in a later
+   change (in Python source `Field(..., deprecated=True,
+   json_schema_extra={"x-lifecycle": "sunset"})`; keep `deprecated=True`).
+   Once the ledger records `sunset`, delete the field from the source; the
+   ledger keeps its entry. `ledger-guard` blocks `active` → `sunset` in one
+   change. P012 keeps reporting a path field while it is on the contract. A
+   FileReference on an entrypoint contract needs an `artifactSchemas` entry in
+   the pkl contract. A field inherited from an SDK contract (for example
+   `ExtractionInput.output_path`): stop reading it; do not retire it. `@task`
+   contracts are free to change.
 6. **Retries.** Legacy writers with `replace_prefix=True` wiped a prior
    attempt's prefix; per-task scratch directories do not. Confirm no consumer
    depends on that overwrite.
