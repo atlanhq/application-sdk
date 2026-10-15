@@ -4506,6 +4506,9 @@ def test_p059_evidence_forms(tmp_path: Path, code: str) -> None:
         "import json\ndef f(d):\n    x = ExtractInput.model_validate(d)\n    return json.loads(x.credentials_json)\n",
         "import json\ndef f():\n    x = ExtractInput()\n    return json.loads(x.credentials_json)\n",
         "import json\ndef f(load):\n    x: ExtractInput = load()\n    return json.loads(x.credentials_json)\n",
+        # every binding agrees on the contract
+        "import json\ndef f(d):\n    x = ExtractInput()\n    x = ExtractInput.model_validate(d)\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f():\n    x = y = ExtractInput()\n    return json.loads(y.credentials_json)\n",
         # outer binding seen from a nested function
         "import json\ndef f(i: ExtractInput):\n    def g():\n        return json.loads(i.credentials_json)\n    return g\n",
     ],
@@ -4529,6 +4532,14 @@ def test_p059_receiver_and_value_forms(tmp_path: Path, code: str) -> None:
         "import json\nclass Client:\n    credentials_json: str = ''\n    def creds(self):\n        return json.loads(self.credentials_json)\n",
         # getattr with a computed name
         "import json\ndef f(i: ExtractInput, n):\n    return json.loads(getattr(i, n))\n",
+        # a contract-typed name re-bound to something else anywhere in the scope
+        "import json\ndef f(r):\n    x = ExtractInput()\n    x = r\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput, r):\n    i = r\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(rows):\n    x = ExtractInput()\n    for x in rows:\n        json.loads(x.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput):\n    with open('p') as i:\n        return json.loads(i.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput, pairs):\n    i, _ = pairs\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput, r):\n    if (i := r):\n        return json.loads(i.credentials_json)\n",
+        "import json\nx = ExtractInput()\nx = load()\ndef f():\n    return json.loads(x.credentials_json)\n",
     ],
 )
 def test_p059_silent_on_untyped_or_foreign_receiver(tmp_path: Path, code: str) -> None:

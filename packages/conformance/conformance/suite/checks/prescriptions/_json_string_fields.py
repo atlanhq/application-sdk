@@ -185,6 +185,17 @@ def _walk_scope(nodes: list[ast.AST]) -> list[ast.AST]:
     return out
 
 
+def _target_names(target: ast.expr) -> list[str]:
+    """Names bound by an assignment target (through tuple/list unpacking and ``*rest``)."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return [name for elt in target.elts for name in _target_names(elt)]
+    return []
+
+
 def _is_staticmethod(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return any(_terminal_name(d) == "staticmethod" for d in func.decorator_list)
 
@@ -207,23 +218,60 @@ class _Evidence:
         self.found: dict[_FieldRef, tuple[str, int]] = {}
         self._scope(tree.body, self._bind({}, tree.body), owner=None)
 
-    def _bind(self, env: dict[str, str], body: list[ast.stmt]) -> dict[str, str]:
-        env = dict(env)
-        for node in _walk_scope(list(body)):
-            if (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
+    def _bindings(self, node: ast.AST) -> list[tuple[str, str | None]]:
+        """Each name *node* binds, with the contract class it binds it to (or ``None``)."""
+        if isinstance(node, ast.Assign):
+            cls = _constructed_contract(node.value, self.contracts)
+            return [
+                (name, cls if isinstance(target, ast.Name) else None)
+                for target in node.targets
+                for name in _target_names(target)
+            ]
+        if isinstance(node, ast.AnnAssign):
+            cls = _contract_of(node.annotation, self.contracts)
+            if cls is None and node.value is not None:
                 cls = _constructed_contract(node.value, self.contracts)
-                if cls is not None:
-                    env[node.targets[0].id] = cls
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                cls = _contract_of(node.annotation, self.contracts)
-                if cls is None and node.value is not None:
-                    cls = _constructed_contract(node.value, self.contracts)
-                if cls is not None:
-                    env[node.target.id] = cls
+            return [(name, cls) for name in _target_names(node.target)]
+        if isinstance(node, ast.NamedExpr):
+            cls = _constructed_contract(node.value, self.contracts)
+            return [(node.target.id, cls)]
+        if isinstance(node, (ast.AugAssign, ast.For, ast.AsyncFor)):
+            return [(name, None) for name in _target_names(node.target)]
+        if isinstance(node, ast.withitem) and node.optional_vars is not None:
+            return [(name, None) for name in _target_names(node.optional_vars)]
+        if isinstance(node, ast.ExceptHandler) and node.name:
+            return [(node.name, None)]
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            return [((a.asname or a.name).split(".")[0], None) for a in node.names]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return [(node.name, None)]
+        return []
+
+    def _bind(
+        self,
+        env: dict[str, str],
+        body: list[ast.stmt],
+        params: dict[str, str | None] | None = None,
+    ) -> dict[str, str]:
+        """Type each name bound in *body*; a name keeps a type only if every binding agrees.
+
+        The scan is flow-insensitive, so ``x = Contract(); x = response`` must
+        not leave ``x`` typed as ``Contract``: any binding to something else
+        (or to a different contract) makes the name's type unknown.
+        """
+        kinds: dict[str, set[str | None]] = {
+            name: {cls} for name, cls in (params or {}).items()
+        }
+        for node in _walk_scope(list(body)):
+            for name, cls in self._bindings(node):
+                kinds.setdefault(name, set()).add(cls)
+        env = dict(env)
+        for name, seen in kinds.items():
+            only = next(iter(seen)) if len(seen) == 1 else None
+            if only is None:
+                env.pop(name, None)
+            else:
+                env[name] = only
         return env
 
     def _function_env(
@@ -232,18 +280,18 @@ class _Evidence:
         env: dict[str, str],
         owner: str | None,
     ) -> dict[str, str]:
-        env = dict(env)
         args = func.args
         positional = [*args.posonlyargs, *args.args]
-        for arg in [*positional, *args.kwonlyargs]:
-            cls = _contract_of(arg.annotation, self.contracts)
-            if cls is None:
-                env.pop(arg.arg, None)
-            else:
-                env[arg.arg] = cls
+        params: dict[str, str | None] = {
+            arg.arg: _contract_of(arg.annotation, self.contracts)
+            for arg in [*positional, *args.kwonlyargs]
+        }
+        for extra in (args.vararg, args.kwarg):
+            if extra is not None:
+                params[extra.arg] = None
         if owner is not None and positional and not _is_staticmethod(func):
-            env[positional[0].arg] = owner
-        return self._bind(env, func.body)
+            params[positional[0].arg] = owner
+        return self._bind(env, func.body, params)
 
     def _scope(
         self, body: list[ast.stmt], env: dict[str, str], owner: str | None
