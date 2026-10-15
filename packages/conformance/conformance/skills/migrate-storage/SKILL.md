@@ -245,7 +245,8 @@ each use to the inventory.
 - **writer / reader** — `ParquetFileWriter` / `JsonFileWriter` →
   `RollingFileWriter` (or a local write plus `FileReference.from_local` for
   the directory); `ParquetFileReader` / `JsonFileReader` → a FileReference
-  input read with `pandas.read_parquet` or an `orjson` line loop.
+  input read with `pandas.read_parquet` or an `orjson` line loop, through
+  `run_in_thread`.
 - **outbound** — an `upload_to_atlan` call, a hand-rolled copy between the
   deployment and upstream stores (`create_store_from_binding*`), an
   `application_sdk.storage` upload (`upload_file`, `upload_file_from_bytes`),
@@ -273,7 +274,10 @@ each use to the inventory.
   adds keys downstream apps can see, so it is an owner decision.
 - **store** — a hand-built store (P009). Inside the app:
   `self.context.storage` / `upstream_storage` or `App.download`. An external
-  customer bucket: `CloudStore.from_credentials`. A `boto3` import used only
+  customer bucket: `CloudStore.from_credentials`. `CloudStore.download` with
+  a prefix raises `StorageError` when the prefix holds no files, where a
+  `boto3` listing loop returned nothing; call `CloudStore.list` first when an
+  empty prefix is a valid state. A `boto3` import used only
   for authentication (STS, IAM) is not storage: ignore it with that reason.
 - **field** — a hand-set `storage_path` / `is_durable` / `file_count` (P010).
   `FileReference.from_local(path, tier=...)` computes them. A `storage_path`
