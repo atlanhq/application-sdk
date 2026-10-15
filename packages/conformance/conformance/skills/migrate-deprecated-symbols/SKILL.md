@@ -26,7 +26,7 @@ optional_triggers:
   - "remove private SDK imports"
   - "fix deprecation warnings from application_sdk"
 owner: connector-platform-team
-last_updated: "2026-10-06"
+last_updated: "2026-10-15"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"

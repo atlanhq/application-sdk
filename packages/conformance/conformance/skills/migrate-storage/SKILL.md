@@ -256,8 +256,9 @@ each use to the inventory.
   works because the legacy writers already put the files at mirrored keys
   must become `upload_refs` in the same change that retires those writers.
   A copy that runs only when `ENABLE_ATLAN_UPLOAD` is set worked because the
-  ref pinned its own key with `storage_path`. A ref from
-  `FileReference.from_local` lands under `file_refs/{uuid}` instead, so its
+  files already sat at their canonical keys (a pinned `storage_path`, or a
+  legacy writer's mirrored key). A ref from `FileReference.from_local` lands
+  under `file_refs/{uuid}` instead, so its
   `upload_refs` call runs in every deployment. It writes to
   `upstream_storage or storage`: Atlan's bucket in SDR, and in-cluster the
   one store that both names point at, which is where publish reads.
@@ -331,12 +332,14 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    write the same bytes and names, or get the developer's yes. Parquet to
    JSONL changes nullable integer typing.
 5. **Entrypoint contract.** Retiring or retyping a field the app declares on
-   an `@entrypoint` Input / Output: stop reading it, mark it
-   `Field(..., deprecated=True)` and regenerate the ledger (status
-   `deprecated`; the field stays on the contract). In a later change, after
-   a release, add `json_schema_extra={"x-lifecycle": "sunset"}` and
-   regenerate (status `sunset`); once the ledger records `sunset`, the field
-   can be deleted. `ledger-guard` blocks `active` → `sunset` in one change.
+   an `@entrypoint` Input / Output: stop reading it and mark it
+   `deprecated` (in Python source `Field(..., deprecated=True)`; for a
+   contract generated from `app.pkl`, in the Pkl widget definition, then
+   regenerate), and regenerate the ledger (status `deprecated`; the field
+   stays on the contract). Once that has merged, mark it `sunset` the same
+   way in a later change (in Python source
+   `json_schema_extra={"x-lifecycle": "sunset"}`); once the ledger records
+   `sunset`, the field can be deleted. `ledger-guard` blocks `active` → `sunset` in one change.
    P012 keeps reporting a path field while it is on the contract. A
    FileReference on an entrypoint contract needs an `artifactSchemas` entry
    in the pkl contract. A field inherited from an
