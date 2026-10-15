@@ -1063,6 +1063,29 @@ def test_k018_pairs_inherited_template_run_with_the_template_input(
     assert all(f.file == "app/app.py" for f in findings)
 
 
+def test_k018_inherited_template_run_names_an_unwired_tree_selection_declarer(
+    tmp_path: Path,
+) -> None:
+    """SqlApp's Input is ExtractionInput, so a TreeSelectionExtractionInput
+    contract is reached only through the extraction-input anchors."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base="SqlApp"),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ).replace("ExtractionInput", "TreeSelectionExtractionInput"),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"fetch_partitions"}
+    assert "'AppInputContract' declares it" in findings[0].message
+
+
 def test_k018_inherited_sql_query_extractor_run_pairs_with_query_input(
     tmp_path: Path,
 ) -> None:
