@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.49.1 (October 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.0...v3.49.1
+
+### Bug Fixes
+
+- FND-3938 resolve the bucket region for an S3 CloudStore with no region (#4390) (by @sachi-atlan in [663b217](https://github.com/atlanhq/application-sdk/commit/663b217))
+- FND-3981 require MaxItems on set, tuple, Sequence and every other collection field (#4400) (by @cmgrote in [4fdac1f](https://github.com/atlanhq/application-sdk/commit/4fdac1f))
+
+### Chores
+
+- lock file maintenance (#4383) (by @renovate[bot] in [7516ed4](https://github.com/atlanhq/application-sdk/commit/7516ed4))
+- update atlanhq/application-sdk action to v3.49.0 (#4387) (by @renovate[bot] in [7b22973](https://github.com/atlanhq/application-sdk/commit/7b22973))
+- lock file maintenance (#4392) (by @renovate[bot] in [a5e0e1b](https://github.com/atlanhq/application-sdk/commit/a5e0e1b))
+- lock file maintenance (#4397) (by @renovate[bot] in [5018717](https://github.com/atlanhq/application-sdk/commit/5018717))
+- update github/codeql-action digest to 6f2ac81 (#4401) (by @renovate[bot] in [516927f](https://github.com/atlanhq/application-sdk/commit/516927f))
+- lock file maintenance (#4399) (by @renovate[bot] in [4192ec5](https://github.com/atlanhq/application-sdk/commit/4192ec5))
+
+
 ## v3.49.0 (October 14, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.48.0...v3.49.0
