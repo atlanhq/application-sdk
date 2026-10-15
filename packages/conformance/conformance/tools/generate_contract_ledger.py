@@ -66,10 +66,12 @@ from conformance.suite.checks._ast_common import (
     collect_module_alias_targets,
     detect_scope,
     discover,
+    merge_alias_targets,
     qualified_rebound_imports,
     register_alias_records,
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
+    _base_name,
     collect_entrypoint_contract_names,
     resolve_contract_fields,
     sdk_base_contract_names,
@@ -99,12 +101,47 @@ def _rel(path: Path, root: Path) -> str:
         return str(path)
 
 
+class AmbiguousContractBase(ValueError):
+    """An entrypoint contract's base is a name several modules bind differently.
+
+    Recording it would mean guessing which module's class it is, and the ledger
+    is append-only: a wrong guess stays recorded as that contract's fields.
+    """
+
+
+def _ambiguous_bases(
+    class_node: ast.ClassDef,
+    aliases: dict[str, str],
+    by_name: dict[str, ClassRecord],
+    ambiguous: set[str],
+) -> set[str]:
+    """Names in *class_node*'s ancestry that resolve only through an ambiguous rebinding."""
+    found: set[str] = set()
+    seen: set[str] = {class_node.name}
+    stack = [aliases.get(n, n) for b in class_node.bases if (n := _base_name(b))]
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        rec = by_name.get(name)
+        if rec is not None:
+            stack.extend(rec.bases)
+        elif name in ambiguous:
+            found.add(name)
+    return found
+
+
 def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     """Scan *repo_root* and build an updated ledger.
 
     Append-only: new fields are added; ``status`` is refreshed from source;
     ``type`` is NEVER changed; entries are NEVER deleted; ``required`` never
     moves from ``False`` to ``True``.
+
+    Raises :class:`AmbiguousContractBase` instead of recording a contract whose
+    base only resolves through a name several modules rebind to different
+    classes (import the class from its module, or by its own name).
     """
     # Collect all Python files under the repo root
     paths = list(discover(repo_root))
@@ -114,7 +151,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     file_trees: dict[Path, ast.AST] = {}
     file_aliases: dict[Path, dict[str, str]] = {}
     by_name: dict[str, ClassRecord] = {}
-    alias_targets: dict[str, str] = {}
+    module_targets: list[dict[str, str]] = []
 
     for path in paths:
         try:
@@ -139,8 +176,8 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
         file_aliases[path] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
-        for local, target in collect_module_alias_targets(tree, aliases).items():
-            alias_targets.setdefault(local, target)
+        module_targets.append(collect_module_alias_targets(tree, aliases))
+    alias_targets, ambiguous = merge_alias_targets(module_targets)
 
     # Module-level rebindings resolve to the class they name, so a contract
     # exposed as ``OpenAPIConnectorInput = AppInputContract`` is recorded under
@@ -167,6 +204,17 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                 continue
             if class_node.name not in entrypoint_names:
                 continue
+            unresolved = _ambiguous_bases(class_node, aliases, by_name, ambiguous)
+            if unresolved:
+                names = ", ".join(sorted(unresolved))
+                raise AmbiguousContractBase(
+                    f"{_rel(path, repo_root)}: contract {class_node.name!r} "
+                    f"inherits {names}, which several modules bind to different "
+                    "classes. Import the base from the module that defines it "
+                    "(`from app.generated.<entrypoint>._input import "
+                    "AppInputContract`) or by its own class name; the ledger "
+                    "is not written rather than guessing."
+                )
             for fi in resolve_contract_fields(class_node, aliases, by_name):
                 key = (class_node.name, fi.name)
                 live_entries[key] = ContractField(
@@ -302,7 +350,11 @@ def main(argv: list[str] | None = None) -> None:
     # A first ledger starts EMPTY — see load_ledger_baseline for why, and note
     # that bootstrap's write-if-absent scaffold shares the same helper so the
     # invariant cannot drift between the two writers.
-    ledger = build_ledger(repo_root, load_ledger_baseline(outfile))
+    try:
+        ledger = build_ledger(repo_root, load_ledger_baseline(outfile))
+    except AmbiguousContractBase as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        sys.exit(2)
     content = serialize(ledger)
 
     if args.check:

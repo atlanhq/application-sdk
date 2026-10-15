@@ -2582,15 +2582,19 @@ def _rows(contract: str, *names: str) -> list[ContractField]:
     return [ContractField(contract, n, "str", "active") for n in names]
 
 
+def _write(tmp_path: Path, files: dict[str, str]) -> None:
+    for name, src in files.items():
+        p = tmp_path / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(src, encoding="utf-8")
+
+
 def test_the_generator_records_each_entrypoint_contract_with_its_own_fields(
     tmp_path: Path,
 ) -> None:
     from conformance.tools.generate_contract_ledger import build_ledger
 
-    for name, src in _two_entrypoint_app(_CONTRACTS_REBOUND).items():
-        p = tmp_path / name
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(src, encoding="utf-8")
+    _write(tmp_path, _two_entrypoint_app(_CONTRACTS_REBOUND))
     ledger = build_ledger(tmp_path, ContractLedger(version=1, fields=[]))
     recorded = {(f.contract, f.field) for f in ledger.fields}
     assert ("MinerInput", "mine_only") in recorded
@@ -2599,22 +2603,95 @@ def test_the_generator_records_each_entrypoint_contract_with_its_own_fields(
     assert ("CrawlerInput", "mine_only") not in recorded
 
 
-def test_b005_silent_on_a_sibling_entrypoints_fields_recorded_under_this_contract(
+def test_the_generator_resolves_a_base_re_exported_by_the_entrypoint_package(
     tmp_path: Path,
 ) -> None:
+    from conformance.tools.generate_contract_ledger import build_ledger
+
+    files = _two_entrypoint_app(
+        _CONTRACTS_REBOUND.replace(
+            "app.generated.crawler._input", "app.generated.crawler"
+        ).replace("app.generated.miner._input", "app.generated.miner")
+    )
+    files["app/generated/crawler/__init__.py"] = (
+        "from ._input import AppInputContract\n"
+    )
+    files["app/generated/miner/__init__.py"] = "from ._input import AppInputContract\n"
+    _write(tmp_path, files)
+    ledger = build_ledger(tmp_path, ContractLedger(version=1, fields=[]))
+    recorded = {(f.contract, f.field) for f in ledger.fields}
+    assert ("MinerInput", "mine_only") in recorded
+    assert ("MinerInput", "crawl_only") not in recorded
+    assert ("CrawlerInput", "crawl_only") in recorded
+    assert ("CrawlerInput", "mine_only") not in recorded
+
+
+def test_the_generator_refuses_a_base_only_an_ambiguous_rebinding_names(
+    tmp_path: Path,
+) -> None:
+    # `m.AppInputContract` reaches the class by its bare name, which both
+    # entrypoint modules bind. The first rebinding parsed is a guess, and an
+    # append-only ledger would keep a wrong one — so nothing is written.
+    from conformance.tools.generate_contract_ledger import (
+        AmbiguousContractBase,
+        build_ledger,
+    )
+
+    contracts = """\
+from app.generated.crawler import _input as c
+from app.generated.miner import _input as m
+
+class CrawlerInput(c.AppInputContract):
+    pass
+
+class MinerInput(m.AppInputContract):
+    pass
+"""
+    _write(tmp_path, _two_entrypoint_app(contracts))
+    with pytest.raises(AmbiguousContractBase, match="AppInputContract"):
+        build_ledger(tmp_path, ContractLedger(version=1, fields=[]))
+
+
+def test_b005_reports_a_ledger_polluted_by_the_old_resolution(
+    tmp_path: Path,
+) -> None:
+    # A ledger written before per-module resolution holds the crawler's fields
+    # under MinerInput. Nothing in the ledger or the source tells those rows
+    # from a real removal, so B005 reports them; the one-time remedy is a
+    # reviewed ledger PR deleting the rows (ledger-guard refuses the deletion,
+    # so it merges by admin bypass).
     ledger = _make_ledger(
         *_rows("MinerInput", "crawl_only", "shared", "mine_only"),
         *_rows("CrawlerInput", "crawl_only", "shared"),
     )
     findings = _scan(tmp_path, _two_entrypoint_app(_CONTRACTS_EXPLICIT), ledger)
-    assert "B005" not in _ids(findings)
+    assert [f.message.split("'")[1] for f in findings if f.rule_id == "B005"] == [
+        "MinerInput.crawl_only"
+    ]
+
+
+def test_b005_reports_a_shared_field_removed_under_a_polluted_ledger(
+    tmp_path: Path,
+) -> None:
+    miner_without_shared = _GEN_MINER.replace('    shared: str = ""\n', "")
+    ledger = _make_ledger(
+        *_rows("MinerInput", "crawl_only", "shared", "mine_only"),
+        *_rows("CrawlerInput", "crawl_only", "shared"),
+    )
+    findings = _scan(
+        tmp_path,
+        _two_entrypoint_app(_CONTRACTS_EXPLICIT, miner=miner_without_shared),
+        ledger,
+    )
+    reported = {f.message.split("'")[1] for f in findings if f.rule_id == "B005"}
+    assert "MinerInput.shared" in reported
 
 
 def test_b005_still_fires_on_a_field_genuinely_removed_from_that_contract(
     tmp_path: Path,
 ) -> None:
     ledger = _make_ledger(
-        *_rows("MinerInput", "crawl_only", "shared", "mine_only", "gone"),
+        *_rows("MinerInput", "shared", "mine_only", "gone"),
         *_rows("CrawlerInput", "crawl_only", "shared"),
     )
     findings = _scan(tmp_path, _two_entrypoint_app(_CONTRACTS_EXPLICIT), ledger)

@@ -23,11 +23,11 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     collect_module_alias_targets,
     make_finding,
+    merge_alias_targets,
     qualified_rebound_imports,
     register_alias_records,
 )
 from conformance.suite.checks._entrypoint_contract_fields import (
-    _base_name,
     _canonical_type,
     collect_entrypoint_contract_names,
     resolve_contract_fields,
@@ -505,49 +505,6 @@ def _expand_aliases(
     return canonical if canonical != _canonical_type(annotation) else None
 
 
-def _sibling_rebinding_fields(
-    class_node: ast.ClassDef,
-    aliases: dict[str, str],
-    by_name: dict[str, ClassRecord],
-    module_rebinds: dict[str, dict[str, str]],
-    aliases_by_rel: dict[str, dict[str, str]],
-) -> dict[str, str]:
-    """Fields of the classes *sibling* modules bind to a name *class_node*'s base module binds.
-
-    Each pkl-generated entrypoint module rebinds one shared name to its own class
-    (``AppInputContract = MinerAppInputContract`` beside ``AppInputContract =
-    CrawlerAppInputContract``). Before imports were resolved per module, a
-    contract based on one of them could be resolved, and recorded in the ledger,
-    with a sibling's fields. Returns ``{field: canonical_type}`` for those sibling
-    classes, so the ledger rows that resolution wrote can be told from removals.
-    """
-    ancestors: list[ClassRecord] = []
-    seen: set[str] = {class_node.name}
-    stack = [aliases.get(n, n) for b in class_node.bases if (n := _base_name(b))]
-    while stack:
-        name = stack.pop()
-        rec = by_name.get(name)
-        if rec is None or name in seen:
-            continue
-        seen.add(name)
-        ancestors.append(rec)
-        stack.extend(rec.bases)
-    out: dict[str, str] = {}
-    for rec in ancestors:
-        for shared, target in module_rebinds.get(rec.file, {}).items():
-            if target != rec.name:
-                continue
-            for other_rel, binds in module_rebinds.items():
-                sibling = by_name.get(binds.get(shared, ""))
-                if other_rel == rec.file or sibling is None or sibling.name == rec.name:
-                    continue
-                for fi in resolve_contract_fields(
-                    sibling.node, aliases_by_rel.get(sibling.file, {}), by_name
-                ):
-                    out.setdefault(fi.name, fi.canonical_type)
-    return out
-
-
 def scan_contract_compat(
     paths: list[Path],
     root: Path,
@@ -582,7 +539,7 @@ def scan_contract_compat(
     # Module-level rebindings (``OpenAPIConnectorInput = AppInputContract``),
     # merged into the class registry once every file has been parsed so a
     # rebinding declared in one module resolves a class defined in another.
-    alias_targets: dict[str, str] = {}
+    module_targets: list[dict[str, str]] = []
 
     for path in paths:
         try:
@@ -606,12 +563,10 @@ def scan_contract_compat(
     # module rebinds names that module's class, not the first rebinding of the
     # bare name (see `qualified_rebound_imports`).
     rebound = qualified_rebound_imports({rels[p]: t for p, t in file_trees.items()})
-    module_rebinds: dict[str, dict[str, str]] = {}
     for path, tree in file_trees.items():
         rel = rels[path]
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         aliases.update(rebound.get(rel, {}))
-        module_rebinds[rel] = collect_module_alias_targets(tree)
         file_aliases[path] = aliases
         file_type_aliases[path] = _unshadowed(
             {**collect_sdk_imported_aliases(tree), **collect_type_aliases(tree)},
@@ -621,8 +576,11 @@ def scan_contract_compat(
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
             by_name_all.setdefault(rec.name, []).append(rec)
-        for local, target in collect_module_alias_targets(tree, aliases).items():
-            alias_targets.setdefault(local, target)
+        module_targets.append(collect_module_alias_targets(tree, aliases))
+    # A name several modules rebind to different classes is left unresolved,
+    # as the generator refuses to record it: a guess is what put one
+    # entrypoint's fields under another's contract name.
+    alias_targets, _ = merge_alias_targets(module_targets)
 
     # Only ``by_name`` is seeded: an alias is another name for a declaration
     # already in ``by_name_all``, not a second declaration, and adding it there
@@ -723,29 +681,11 @@ def scan_contract_compat(
                 for retired in sdk_retired.get(ancestor, ())
             }
 
-            # A ledger written before imports were resolved per module can hold a
-            # sibling entrypoint's fields under this contract's name. The
-            # signature is that resolution's output: EVERY field the sibling
-            # class has and this contract lacks is recorded here. A real removal
-            # leaves no such trace, so it still reports.
-            recorded = {lf.field for lf in ledger_by_contract.get(class_node.name, [])}
-            sibling_fields = _sibling_rebinding_fields(
-                class_node, aliases, by_name, module_rebinds, aliases_by_rel
-            )
-            foreign = {n for n in sibling_fields if n not in live_by_name}
-            misattributed = foreign if foreign and foreign <= recorded else set()
-
             # B005: every ledger field must still exist with its recorded type
             for lf in ledger_by_contract.get(class_node.name, []):
                 live = live_by_name.get(lf.field)
                 if live is None and lf.field in present_names:
                     continue  # ambiguous name — the field lives on a sibling
-                if (
-                    live is None
-                    and lf.field in misattributed
-                    and lf.type == sibling_fields[lf.field]
-                ):
-                    continue  # a sibling entrypoint's field, never this contract's
                 if live is None and lf.status == "sunset":
                     # The rule's own message names 'sunset' as the remedy for a
                     # retired field, but the status was never read — so marking
