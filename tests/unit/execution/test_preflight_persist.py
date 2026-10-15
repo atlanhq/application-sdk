@@ -516,25 +516,32 @@ class TestTheWriteIsOffTheCallersPath:
 
         asyncio.run(scenario())
 
+    # A caller that waited on the held write would deadlock the loop thread,
+    # where no asyncio timeout can fire. pytest-timeout turns that hang into a
+    # failure.
+    @pytest.mark.timeout(30)
     def test_a_slow_write_costs_the_caller_nothing(self):
-        async def _slow(row, *, endpoint, timeout):
-            await asyncio.sleep(0.2)
+        # The write cannot finish until the test releases it, and the test only
+        # releases it after the caller has returned. A caller that waited on the
+        # write in any way could not return here. An elapsed-time ceiling
+        # measured runner load instead and failed at random (FND-4018).
+        release = asyncio.Event()
+
+        async def _held(row, *, endpoint, timeout):
+            await release.wait()
 
         async def scenario():
-            with mock.patch.object(persist, "post_check_result", _slow):
-                loop = asyncio.get_running_loop()
-                started = loop.time()
+            with mock.patch.object(persist, "post_check_result", _held):
                 task = persist.persist_check_result(
                     _gate(workflow_slug=SLUG),
                     _verdict(),
                     endpoint="http://store/x/check-results",
                     timeout=30,
                 )
-                elapsed = loop.time() - started
                 assert task is not None
-                await task
-            # Two orders of magnitude under the write it scheduled.
-            assert elapsed < 0.02, f"scheduling cost {elapsed:.4f}s"
+                assert not task.done(), "the caller waited for the write"
+                release.set()
+                await asyncio.wait_for(task, timeout=10)
 
         asyncio.run(scenario())
 
