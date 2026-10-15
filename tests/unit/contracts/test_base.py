@@ -1,5 +1,6 @@
 """Unit tests for application_sdk.contracts.base."""
 
+import typing
 from collections import deque
 from collections.abc import (
     Iterable,
@@ -361,6 +362,42 @@ class TestPayloadSafetyOtherCollections:
     def test_element_types_are_still_checked(self, field_type: Any) -> None:
         with pytest.raises(PayloadSafetyError):
             _contract(field_type)
+
+    @pytest.mark.parametrize(
+        ("field_type", "kind"),
+        [
+            (set, "set"),
+            (frozenset, "frozenset"),
+            (tuple, "tuple"),
+            (Tuple, "tuple"),  # noqa: UP006
+            (deque, "deque"),
+            (Sequence, "Sequence"),
+            (Mapping, "Mapping"),
+            (AbstractSet, "Set"),
+            (typing.Set, "set"),  # noqa: UP006
+            (typing.Sequence, "Sequence"),  # noqa: UP006
+            (typing.Dict, "dict"),  # noqa: UP006
+            (typing.List, "list"),  # noqa: UP006
+            (Annotated[list[set], MaxItems(5)], "set"),
+        ],
+    )
+    def test_bare_collection_is_refused(self, field_type: Any, kind: str) -> None:
+        # No origin, so the parameterised check used to skip it: a bare set is a set of anything.
+        with pytest.raises(PayloadSafetyError) as exc_info:
+            _contract(field_type)
+
+        assert exc_info.value.reason == f"Unbounded {kind} may exceed payload limits"
+
+    @pytest.mark.parametrize("field_type", [set, tuple, deque, Sequence, typing.Set])  # noqa: UP006
+    def test_bare_collection_with_max_items_passes(self, field_type: Any) -> None:
+        _contract(Annotated[field_type, MaxItems(5)])
+
+    @pytest.mark.parametrize(
+        "field_type", [dict, list, Annotated[list[dict], MaxItems(5)]]
+    )
+    def test_bare_dict_and_list_stay_accepted(self, field_type: Any) -> None:
+        # Fleet contracts still declare these; refusing them is a separate, staged change.
+        _contract(field_type)
 
     def test_nested_bounded_collections_pass(self) -> None:
         _contract(

@@ -125,8 +125,10 @@ _BOUNDED_COLLECTIONS = frozenset(
 #: A ``tuple[A, B]`` of fixed arity is bounded by its shape; only ``tuple[T, ...]`` needs MaxItems.
 _TUPLES = frozenset({"tuple", "Tuple"})
 _BYTES = frozenset({"bytes", "bytearray"})
-#: Accepted by the runtime check (it skips an unparameterised collection) while bounding nothing.
-_BARE_UNBOUNDED = _BOUNDED_COLLECTIONS
+#: The only bare collections the runtime check accepts while they bound nothing: a bare builtin
+#: ``dict`` or ``list``. Every other bare collection, and the ``typing`` aliases ``Dict`` and
+#: ``List``, has (or is given) an origin and is refused like its parameterised form.
+_BARE_UNBOUNDED = frozenset({"dict", "list"})
 #: Types the runtime check accepts that still let any value through: retyping a field to one of
 #: these clears the class-definition error without bounding the payload.
 _OPEN_ENDED = frozenset({"object", "JsonValue"})
@@ -274,7 +276,10 @@ class _Types:
             name = _simple_name(node.value)
             if name == "Annotated":
                 return self.judge(
-                    _annotated_arg(node), bounded=_has_max_items(node), seen=seen
+                    _annotated_arg(node),
+                    # Python flattens nested Annotated, so a MaxItems at any level bounds it.
+                    bounded=bounded or _has_max_items(node),
+                    seen=seen,
                 )
             if name in ("ClassVar", "Literal"):
                 return []
@@ -312,6 +317,8 @@ class _Types:
                     f"bare `{name}` (the runtime check accepts it, but it is unbounded)",
                 )
             ]
+        if name in _BOUNDED_COLLECTIONS:
+            return [] if bounded else [(_REFUSED, f"bare `{name}` without MaxItems")]
         if isinstance(node, ast.Name) and name in self._aliases and name not in seen:
             return self.judge(self._aliases[name], bounded=bounded, seen=seen | {name})
         if name in self._local or (

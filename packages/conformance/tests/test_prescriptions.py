@@ -1086,13 +1086,53 @@ def test_p001_still_judges_the_elements_of_a_bounded_collection(
     assert f"ids: {why}" in _p001_message(src)
 
 
-@pytest.mark.parametrize("annotation", ["set", "frozenset", "tuple", "Sequence"])
-def test_p001_reports_a_bare_collection_as_open_ended(annotation: str) -> None:
-    # The runtime skips an unparameterised collection, so it accepts it while it bounds nothing.
+@pytest.mark.parametrize("annotation", ["dict", "list"])
+def test_p001_reports_a_bare_dict_or_list_as_open_ended(annotation: str) -> None:
+    # The runtime still accepts a bare builtin dict or list while it bounds nothing.
     src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
     message = _p001_message(src)
     assert f"ids: bare `{annotation}`" in message
     assert "Fields it accepts that still bound nothing" in message
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "set",
+        "frozenset",
+        "tuple",
+        "deque",
+        # typing aliases have an origin, so the runtime refuses them bare.
+        "Sequence",
+        "typing.Sequence",
+        "Set",
+        "Tuple",
+        "Dict",
+        "List",
+        "Annotated[list[set], MaxItems(5)]",
+    ],
+)
+def test_p001_names_a_bare_collection_the_runtime_refuses(annotation: str) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    message = _p001_message(src)
+    assert "Fields payload safety refuses" in message
+    assert "without MaxItems" in message
+    assert "bound nothing" not in message
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "Annotated[set, MaxItems(5)]",
+        "Annotated[typing.Sequence, MaxItems(5)]",
+        # Python flattens nested Annotated: the outer MaxItems bounds the inner set.
+        "Annotated[Annotated[set[str], Field(min_length=1)], MaxItems(10)]",
+        "Annotated[Annotated[tuple[str, ...], object()], MaxItems(10)]",
+    ],
+)
+def test_p001_accepts_a_bound_from_any_annotated_level(annotation: str) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    assert "already payload-safe" in _p001_message(src)
 
 
 def test_p001_the_last_class_attribute_assignment_decides() -> None:

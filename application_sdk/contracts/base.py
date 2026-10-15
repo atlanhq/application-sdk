@@ -675,6 +675,14 @@ class PayloadSafetyError(ContractValidationError):
 # =============================================================================
 
 
+#: Modules whose classes, used bare, are collections payload safety must bound.
+_COLLECTION_MODULES = frozenset({"builtins", "collections", "collections.abc"})
+#: Bare ``dict`` and ``list`` were accepted before every other collection was
+#: checked, and fleet contracts still declare them, so they stay accepted until
+#: those contracts are typed. Their ``typing`` aliases are refused (by origin).
+_BARE_ACCEPTED: tuple[type, ...] = (dict, list)
+
+
 def _collection_kind(field_type: Any) -> str | None:
     """Name of the variable-size collection *field_type* is, or ``None``.
 
@@ -684,15 +692,30 @@ def _collection_kind(field_type: Any) -> str | None:
     or ``Sequence[str]`` does not get past the bound. ``str`` and ``bytes`` are
     not collections here, and a fixed-arity ``tuple[A, B]`` is bounded by its
     shape; only the variadic ``tuple[T, ...]`` needs ``MaxItems``.
+
+    An unparameterised collection class (``set``, ``deque``,
+    ``collections.abc.Sequence``) counts too, as its ``typing`` alias
+    (``typing.Set``) already does through its origin; bare ``dict`` and
+    ``list`` are the exception, see ``_BARE_ACCEPTED``.
     """
     origin = get_origin(field_type)
+    if (
+        origin is None
+        and isinstance(field_type, type)
+        and field_type.__module__ in _COLLECTION_MODULES
+        and field_type not in _BARE_ACCEPTED
+    ):
+        origin = field_type
     if (
         not isinstance(origin, type)
         or not issubclass(origin, Iterable)
         or issubclass(origin, (str, bytes, bytearray))
     ):
         return None
-    if origin is tuple and Ellipsis not in get_args(field_type):
+    # Bare ``tuple`` and ``typing.Tuple`` mean ``tuple[Any, ...]``; ``tuple[()]``
+    # also has no args but is fixed at zero items.
+    variadic = field_type in (tuple, typing.Tuple) or Ellipsis in get_args(field_type)
+    if origin is tuple and not variadic:
         return None
     return origin.__name__
 
