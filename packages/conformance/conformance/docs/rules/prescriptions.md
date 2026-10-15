@@ -75,7 +75,7 @@ reassigned.
 | [P056](#p056) | `UnclosedBaseClient` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
 | [P057](#p057) | `CloseOverrideSkipsSuper` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
 | [P058](#p058) | `RawDictEntity` | `warn` | `app` | `asset-modeling` | — | 0.49.0 |
-| [P059](#p059) | `JsonEncodedContractField` | `warn` | `app` | `contract-modeling` | — | 0.49.0 |
+| [P059](#p059) | `JsonEncodedContractField` | `warn` | `app` | `contract-modeling` | — | 0.51.0 |
 
 ---
 
@@ -752,11 +752,11 @@ The SDK contract guidance (`make-contract` skill, §6) prefers typed properties 
 nested `pydantic.BaseModel` subclass over arbitrary string keys.
 
 **Exempt:** `list[FooModel]`, `dict[str, FooModel]` — containers of a typed class are
-the canonical bounded pattern and are fine. Lists, sets and tuples of a scalar primitive
-(`str`, `int`, `float`, `bool`, `bytes`), or of such collections — `list[str]`,
-`set[int]`, `Annotated[list[str], MaxItems(N)]`, `list[list[str]]` — are exempt too: a
-collection of plain values has no keys to mistype, and wrapping each value in a model
-changes the wire shape without adding safety.
+the canonical bounded pattern and are fine. Lists and sets of a scalar primitive (`str`,
+`int`, `float`, `bool`, `bytes`) or a `Literal`, optional items included, or of such
+collections — `list[str]`, `set[int]`, `Annotated[list[str], MaxItems(N)]`,
+`list[list[str]]` — are exempt too: a collection of plain values has no keys to mistype,
+and wrapping each value in a model changes the wire shape without adding safety.
 
 This rule lands as `WARN` (not `BLOCK`) because the bounded form is technically
 sanctioned — this is a modeling nudge, not a gate failure.  Suppress with `#
@@ -3095,7 +3095,7 @@ and suppress with `# conformance: ignore[P058] <reason>` naming the type.
 
 ## P059 — `JsonEncodedContractField` {#p059}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.49.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.51.0
 
 > Contract str / list[str] field carries JSON text — declare the decoded value as a typed model
 

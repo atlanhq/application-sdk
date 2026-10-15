@@ -501,8 +501,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Exempt:** ``list[FooModel]``, ``dict[str, FooModel]`` — containers\n"
             "of a typed class are the canonical bounded pattern and are fine.\n"
-            "Lists, sets and tuples of a scalar primitive (``str``, ``int``,\n"
-            "``float``, ``bool``, ``bytes``), or of such collections —\n"
+            "Lists and sets of a scalar primitive (``str``, ``int``,\n"
+            "``float``, ``bool``, ``bytes``) or a ``Literal``, optional items\n"
+            "included, or of such collections —\n"
             "``list[str]``, ``set[int]``, ``Annotated[list[str], MaxItems(N)]``,\n"
             "``list[list[str]]`` — are exempt too: a collection of plain values\n"
             "has no keys to mistype, and wrapping each value in a model changes\n"
@@ -943,7 +944,7 @@ RULES: tuple[RuleDefinition, ...] = (
         category="contract-modeling",
         autofixable=False,
         orthogonal_gate="tests",
-        since="0.49.0",
+        since="0.51.0",
         rationale=(
             "A str field that holds json.dumps output is a structure declared as "
             "text. Payload safety (P001) and the unmodeled-container check (P015) "

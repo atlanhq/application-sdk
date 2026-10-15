@@ -4570,17 +4570,55 @@ def test_p059_aliased_json_module(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "annotation",
-    ["Optional[str]", "str | None", "Annotated[str, Field(max_length=10)]", "set[str]"],
+    [
+        "Optional[str]",
+        "str | None",
+        "Annotated[str, Field(max_length=10)]",
+        "set[str]",
+        "Annotated[list[str], MaxItems(10)] | None",
+        "Optional[Annotated[list[str], MaxItems(10)]]",
+    ],
 )
 def test_p059_text_field_forms(tmp_path: Path, annotation: str) -> None:
     files = {
         "app/contracts.py": (
             "from typing import Annotated, Optional\n"
             "from pydantic import Field\n"
-            "from application_sdk.contracts import Input\n"
+            "from application_sdk.contracts import Input, MaxItems\n"
             "class I(Input):\n"
             f"    blob: {annotation} = None\n"
         ),
         "app/x.py": "import json\ndef f(i):\n    return json.loads(i.blob)\n",
     }
     assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]
+
+
+def _p015_on(annotation: str) -> list[str]:
+    src = (
+        "from typing import Annotated, Any, Literal, Optional\n"
+        "from application_sdk.contracts import Input, MaxItems\n"
+        "class I(Input):\n"
+        f"    f: {annotation} = None\n"
+    )
+    return [f.rule_id for f in scan_text(src, "x.py") if f.rule_id == "P015"]
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "list[str | None]",
+        "list[Optional[str]]",
+        "list[Literal['a', 'b']]",
+        "Annotated[list[Literal['a']], MaxItems(5)] | None",
+    ],
+)
+def test_p015_exempts_optional_and_literal_scalar_items(annotation: str) -> None:
+    assert _p015_on(annotation) == []
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    ["dict[str, str | None]", "list[dict[str, str] | None]", "list[Any | None]"],
+)
+def test_p015_still_fires_on_keyed_or_any_items(annotation: str) -> None:
+    assert _p015_on(annotation) == ["P015"]

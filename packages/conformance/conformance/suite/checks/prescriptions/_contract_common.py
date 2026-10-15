@@ -283,14 +283,29 @@ def _container_element_type(node: ast.Subscript) -> ast.expr | None:
         return slc  # directly T
 
 
+def strip_annotation_wrappers(node: ast.expr) -> ast.expr:
+    """Peer through ``Annotated[X, ...]`` and ``Optional[X]`` / ``X | None`` to a fixed point.
+
+    A single pass misses ``Optional[Annotated[...]]`` and
+    ``Annotated[...] | None``, where the two wrappers nest either way round.
+    """
+    while True:
+        unwrapped = _unwrap_optional_node(_unwrap_annotated(node))
+        if unwrapped is node:
+            return node
+        node = unwrapped
+
+
 def _is_scalar_collection_element(elem: ast.expr) -> bool:
-    """A scalar primitive, or a list/set-like container of them (any depth)."""
-    elem = _unwrap_annotated(elem)
+    """A scalar primitive, a ``Literal``, or a list/set-like container of them (any depth)."""
+    elem = strip_annotation_wrappers(elem)
     if isinstance(elem, ast.Name):
         return elem.id in _SCALAR_ELEMENT_NAMES
     if not isinstance(elem, ast.Subscript):
         return False
     name = _terminal_name(elem.value)
+    if name == "Literal":
+        return True
     if name not in _CONTAINER_NAMES or name in _DICT_LIKE_NAMES:
         return False
     inner = _container_element_type(elem)
@@ -326,15 +341,7 @@ def unmodeled_container_name(node: ast.expr) -> str | None:
     Returns the container name (e.g. ``"dict"``, ``"list"``) for the finding
     message, or ``None`` when the annotation is not an unmodeled container.
     """
-    # Peer through Annotated[X, ...] and Optional[X] / X | None to a fixed point.
-    # A single pass misses Optional[Annotated[...]] when Annotated is the outer wrapper.
-    inner = node
-    while True:
-        unwrapped = _unwrap_annotated(inner)
-        unwrapped = _unwrap_optional_node(unwrapped)
-        if unwrapped is inner:
-            break
-        inner = unwrapped
+    inner = strip_annotation_wrappers(node)
 
     # Bare container name: dict, list, set, … — always unmodeled.
     if isinstance(inner, ast.Name) and inner.id in _CONTAINER_NAMES:

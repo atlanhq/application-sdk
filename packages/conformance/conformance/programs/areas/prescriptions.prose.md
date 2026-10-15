@@ -679,8 +679,9 @@ The lane applies nothing: return `not_remediable = true` with a
   `Annotated[dict[str, Any], MaxItems(N)]` still raises `PayloadSafetyError`
   without the opt-out and is still a P001 finding — replace the `Any` first
   (see P001 above).  Containers of a typed class
-  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Lists, sets and
-  tuples of a scalar primitive (`str`, `int`, `float`, `bool`, `bytes`), such
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Lists and sets
+  of a scalar primitive (`str`, `int`, `float`, `bool`, `bytes`) or a
+  `Literal`, optional items included, such
   as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
   are exempt too: they have no keys to model.  Target shape, from
   `atlan-metabase-app` `app/contracts.py`:

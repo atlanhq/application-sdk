@@ -23,11 +23,10 @@ from conformance.suite.schema.findings import Finding
 from ._contract_common import (
     _container_element_type,
     _terminal_name,
-    _unwrap_annotated,
-    _unwrap_optional_node,
     collect_foreign_contract_names,
     is_str_annotation,
     iter_contract_classes,
+    strip_annotation_wrappers,
 )
 
 _JSON_MODULES: frozenset[str] = frozenset({"json", "orjson", "ujson", "simplejson"})
@@ -48,12 +47,11 @@ _LIST_LIKE_NAMES: frozenset[str] = frozenset(
 
 
 def _is_str_node(node: ast.expr) -> bool:
-    node = _unwrap_optional_node(_unwrap_annotated(node))
-    return is_str_annotation(node)
+    return is_str_annotation(strip_annotation_wrappers(node))
 
 
 def _is_text_field(annotation: ast.expr) -> bool:
-    node = _unwrap_optional_node(_unwrap_annotated(annotation))
+    node = strip_annotation_wrappers(annotation)
     if _is_str_node(node):
         return True
     if not isinstance(node, ast.Subscript):
