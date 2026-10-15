@@ -10,6 +10,7 @@ from conformance.suite.schema.findings import Finding
 from .dependency_audience import DependencyAudienceMixin
 from .exception_chaining import ExceptionChainingMixin
 from .http_failure import HttpFailureMixin
+from .run_query_params import RunQueryParamsMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin
@@ -67,6 +68,7 @@ class Checker(
     HttpFailureMixin,
     SecurityMixin,
     DependencyAudienceMixin,
+    RunQueryParamsMixin,
     ast.NodeVisitor,
 ):
     """Walk a module AST and emit E-series findings."""
@@ -80,6 +82,7 @@ class Checker(
         local_helpers: dict[str, ast.FunctionDef] | None = None,
         sdk_errors: frozenset[str] = frozenset(),
         dependency_classes: frozenset[str] = frozenset(),
+        sql_client_classes: frozenset[str] = frozenset(),
     ) -> None:
         self._filename = filename
         self._directives = directives
@@ -88,6 +91,7 @@ class Checker(
         self._local_helpers = local_helpers or {}
         self._sdk_errors = sdk_errors
         self._dependency_classes = dependency_classes
+        self._sql_client_classes = sql_client_classes
         self._findings: list[Finding] = []
         self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
@@ -151,6 +155,7 @@ class Checker(
         self._check_p011(node)
         if not self._class_stack and not self._function_stack:
             self._check_e021(node)
+            self._check_e022(node)
         self._class_stack.append(node)
         self.generic_visit(node)
         self._class_stack.pop()

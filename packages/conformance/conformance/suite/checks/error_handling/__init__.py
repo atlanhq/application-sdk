@@ -1,7 +1,7 @@
 """E-series error-handling checks — AST-based.
 
 Scans Python source files for error-handling anti-patterns defined in the
-E001–E021 rule catalog.  Every check is purely deterministic: the same
+E001–E022 rule catalog.  Every check is purely deterministic: the same
 source text always produces the same set of findings.
 
 Inline suppression
@@ -25,6 +25,7 @@ Rule implementations are split by category:
 * ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)
 * ``dependency_audience`` — E021 (DEPENDENCY_UNAVAILABLE overridden to USER)
+* ``run_query_params``   — E022 (SQL client run_query override drops ``params``)
 
 ``_checker.py`` assembles these into a single ``Checker`` visitor.
 ``__init__.py`` (this file) exposes the public scan + CLI API.
@@ -61,6 +62,7 @@ from ._constants import (
 from ._dependency_category import dependency_unavailable_classes
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
+from ._sql_client import sdk_binds_run_query_params, sql_client_classes
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -92,9 +94,13 @@ def scan_text(
 ) -> list[Finding]:
     """Scan Python source *text* and return all E-series findings.
 
-    *path* and *root* let E004 and E021 follow the scanned repo's own imports
-    when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
-    and :mod:`._dependency_category`).
+    *path* and *root* let E004, E021 and E022 follow the scanned repo's own
+    imports when they resolve a class's SDK ancestry (see :mod:`._sdk_errors`,
+    :mod:`._dependency_category` and :mod:`._sql_client`).
+
+    E022 is gated on *root*'s locked SDK version: with a *root* it stays silent
+    unless ``uv.lock`` resolves application-sdk 3.46.0 or later.  Without one
+    there is no repo to read, so the pure AST pass is ungated (as P053/P056).
     """
     try:
         tree = ast.parse(text, filename=file)
@@ -115,6 +121,11 @@ def scan_text(
         local_helpers=local_helpers,
         sdk_errors=sdk_error_names(tree, path=path, root=root),
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
+        sql_client_classes=(
+            sql_client_classes(tree, path=path, root=root)
+            if root is None or sdk_binds_run_query_params(root)
+            else frozenset()
+        ),
     )
     checker.visit(tree)
     return checker._findings
@@ -134,8 +145,8 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    # scan_path, not scan_text: E004 and E021 follow the repo's own imports,
-    # which needs each file's path and the repo root.
+    # scan_path, not scan_text: E004, E021 and E022 follow the repo's own
+    # imports, which needs each file's path and the repo root.
     return [finding for path in paths for finding in scan_path(path, root)]
 
 
