@@ -2585,19 +2585,54 @@ def _p015_ids(src: str) -> list[str]:
     [
         "dict",
         "dict[str, str]",
+        "dict[str, int]",
         "Dict[str, Any]",
+        "Mapping[str, str]",
+        "Annotated[dict[str, bool], MaxItems(10)]",
+        "list",
+        "List",
+        "set",
+        "list[Any]",
+        "List[Any]",
+        "set[Any]",
+        "frozenset[object]",
+        "Sequence[Any]",
+        "list[bytearray]",
+        "Annotated[list[Any], MaxItems(10)]",
+        "list[dict[str, str]]",
+        "list[list[Any]]",
+    ],
+)
+def test_p015_fires_on_unmodeled_container(annotation: str) -> None:
+    """Dict of primitives, container of Any, or bare container → P015."""
+    src = f"class MyInput(Input):\n    data: {annotation}\n"
+    assert _p015_ids(src) == ["P015"], f"Expected P015 for annotation '{annotation}'"
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
         "list[str]",
         "List[int]",
         "set[str]",
         "Set[str]",
-        "Mapping[str, str]",
-        "Sequence[str]",
+        "frozenset[float]",
+        "FrozenSet[bool]",
+        "Sequence[bytes]",
+        "tuple[str, ...]",
+        "Tuple[int, int]",
+        "Annotated[list[str], MaxItems(100)]",
+        "Optional[Annotated[set[int], MaxItems(100)]]",
+        "list[str] | None",
+        "list[Annotated[str, MaxLen(64)]]",
+        "Annotated[list[Annotated[list[str], MaxItems(500)]], MaxItems(200)]",
+        "list[set[int]]",
     ],
 )
-def test_p015_fires_on_unmodeled_container(annotation: str) -> None:
-    """Container of primitives/Any on a contract field → P015."""
+def test_p015_silent_on_scalar_collection(annotation: str) -> None:
+    """List/set/tuple of a scalar primitive has no keys to model → no P015."""
     src = f"class MyInput(Input):\n    data: {annotation}\n"
-    assert _p015_ids(src) == ["P015"], f"Expected P015 for annotation '{annotation}'"
+    assert _p015_ids(src) == [], f"Expected no P015 for annotation '{annotation}'"
 
 
 def test_p015_fires_on_bounded_annotated_dict(tmp_path: Path) -> None:
@@ -4387,3 +4422,139 @@ def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
     findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
     assert len(findings) == 1
     assert "does NOT set" in findings[0].message
+
+
+# ── P059 JsonEncodedContractField ─────────────────────────────────────────────
+
+
+_P059_CONTRACTS = (
+    "from typing import Annotated\n"
+    "from application_sdk.contracts import Input, Output, MaxItems\n"
+    "class DiscoverOutput(Output):\n"
+    "    descriptors_json: Annotated[list[str], MaxItems(100)] = []\n"
+    "    names: Annotated[list[str], MaxItems(100)] = []\n"
+    "class ExtractInput(Input):\n"
+    "    credentials_json: str = '{}'\n"
+    "    note: str = ''\n"
+)
+
+
+def _p059(findings: list) -> list:
+    return [f for f in findings if f.rule_id == "P059"]
+
+
+def test_p059_fires_on_list_of_json_strings_across_files(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/extractor.py": (
+            "import json\n"
+            "def discover(all_descriptors):\n"
+            "    return DiscoverOutput(\n"
+            "        descriptors_json=[json.dumps(d) for d in all_descriptors]\n"
+            "    )\n"
+            "def extract(result):\n"
+            "    return [json.loads(s) for s in result.descriptors_json]\n"
+        ),
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert [(f.file, f.line) for f in hits] == [("app/contracts.py", 4)]
+    assert "descriptors_json" in hits[0].message
+    assert "app/extractor.py" in hits[0].message
+
+
+def test_p059_fires_on_str_field_decoded(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/extractor.py": (
+            "import json\n"
+            "def extract(input):\n"
+            "    return json.loads(input.credentials_json)\n"
+        ),
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert [f.line for f in hits] == [7]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from json import dumps\nx = ExtractInput(credentials_json=dumps({}))\n",
+        "import orjson\nx = ExtractInput(credentials_json=orjson.dumps({}).decode())\n",
+        "def f(m):\n    return ExtractInput(credentials_json=m.model_dump_json())\n",
+        "def f(i, M):\n    return M.model_validate_json(i.credentials_json)\n",
+        "import json\ndef f(i):\n    i.credentials_json = json.dumps({})\n",
+    ],
+)
+def test_p059_evidence_forms(tmp_path: Path, code: str) -> None:
+    files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+
+
+def test_p059_map_loads_over_list_field(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/x.py": "import json\ndef f(r):\n    return list(map(json.loads, r.descriptors_json))\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [4]
+
+
+def test_p059_silent_on_plain_text_fields(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/x.py": (
+            "import json\n"
+            "def f(i, out):\n"
+            "    ids = [n for n in out.names if n]\n"
+            "    blob = json.dumps({'note': i.note})\n"
+            "    return json.loads(blob)\n"
+        ),
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_silent_on_non_text_field(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    payload: dict[str, str] = {}\n"
+        ),
+        "app/x.py": "import json\nx = I(payload=json.dumps({}))\n",
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_silent_on_non_contract_class(tmp_path: Path) -> None:
+    files = {
+        "app/models.py": "class Row:\n    blob: str = ''\n",
+        "app/x.py": "import json\ndef f(r):\n    return json.loads(r.blob)\n",
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_suppressed_with_reason(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS.replace(
+            "    credentials_json: str = '{}'\n",
+            "    credentials_json: str = '{}'  # conformance: ignore[P059] vendor API takes JSON text\n",
+        ),
+        "app/x.py": "import json\ndef f(i):\n    return json.loads(i.credentials_json)\n",
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert hits and all(f.suppressed for f in hits)
+
+
+def test_p059_silent_on_same_named_keyword_of_other_call(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    data: str = ''\n"
+        ),
+        "app/x.py": (
+            "import json, requests\n"
+            "def f(x):\n"
+            "    return requests.post('u', data=json.dumps(x))\n"
+        ),
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []

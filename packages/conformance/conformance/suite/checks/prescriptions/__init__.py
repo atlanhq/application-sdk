@@ -61,6 +61,8 @@ Currently implemented:
 * ``P058`` RawDictEntity — app code under ``app/`` (not ``app/generated/``)
   emits an Atlas entity built as a raw ``{"typeName", "attributes"}`` dict
   instead of a ``pyatlan_v9`` asset.  Per-file.
+* ``P059`` JsonEncodedContractField — a ``str`` / ``list[str]`` contract field
+  whose value the app encodes or decodes as JSON.  Cross-file.
 
 Inline suppression
 ------------------
@@ -110,6 +112,7 @@ from ._error_code_prefix import (
 from ._file_reference import check_p010
 from ._framework_transfer import check_p008
 from ._getattr_contract_field import check_p026
+from ._json_string_fields import check_p059
 from ._prefix_transfer import check_p044
 from ._qualified_name import check_p028
 from ._raw_dict_entity import check_p058
@@ -220,6 +223,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     Pass 5 — emit P027 (app-wide ``app_state`` read-with-no-writer): resolve key
     constants across all stored trees and flag every ``get_app_state(KEY)`` whose
     ``KEY`` has no populating ``set_app_state`` writer anywhere.
+
+    Pass 6 — emit P059 (text contract field carrying JSON): match ``json.dumps``
+    writers and ``json.loads`` readers to contract fields by name across files.
     """
     findings: list[Finding] = []
 
@@ -336,6 +342,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     # Pass 5 — emit P027 (app-wide app_state read-with-no-writer)
     findings.extend(check_p027(file_trees, file_directives, root))
+
+    # Pass 6 — emit P059 (text contract field carrying JSON)
+    findings.extend(check_p059(file_trees, file_directives, root))
 
     return findings
 

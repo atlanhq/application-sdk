@@ -643,7 +643,7 @@ around `finding.line` before drafting any proposal.
   prefix call to a different module — the finding is about the level of the
   abstraction, not its location.
 
-**Typed-boundary / contract-modeling rules (P013–P015)** — migration rules
+**Typed-boundary / contract-modeling rules (P013–P015, P059)** — migration rules
 (`autofixable = false`), scope=app; `classification` is always `"judgment"`.
 The lane applies nothing: return `not_remediable = true` with a
 `migration_brief`.  Backed by `suite.checks.prescriptions`.
@@ -671,14 +671,18 @@ The lane applies nothing: return `not_remediable = true` with a
   and pointers as P013.
 
 - **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
-  `Output` contract is a container of primitives or `Any`, bare or bounded
+  `Output` contract is a dict of primitives or a container of `Any` (a bare
+  `list` / `set` / `dict` counts as `Any`), bare or bounded
   (`Annotated[dict[str, str], MaxItems(N)]`).  For a container of payload-safe
   primitives, the bound satisfies payload safety without an opt-out, but the
   keys and values still have no schema.  A bound never makes `Any` safe:
   `Annotated[dict[str, Any], MaxItems(N)]` still raises `PayloadSafetyError`
   without the opt-out and is still a P001 finding — replace the `Any` first
   (see P001 above).  Containers of a typed class
-  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Lists, sets and
+  tuples of a scalar primitive (`str`, `int`, `float`, `bool`, `bytes`), such
+  as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
+  are exempt too: they have no keys to model.  Target shape, from
   `atlan-metabase-app` `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
   where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
@@ -688,6 +692,21 @@ The lane applies nothing: return `not_remediable = true` with a
   When the key set is genuinely open, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).
+
+- **P059 JsonEncodedContractField** (WARN) — a `str` or `list[str]` field on
+  an `Input` / `Output` contract holds JSON text: app code writes it with
+  `json.dumps` / `model_dump_json` or reads it back with `json.loads` /
+  `model_validate_json`.  The finding names the first evidence site.  Payload
+  safety and P015 grade only the declared `str`, so the shape and size of the
+  value pass unchecked; packing a dict into a string is also how an app gets a
+  `dict[str, Any]` past P001.  The brief reads the decoded shape off the
+  encoder (the dict or model that goes into `json.dumps`) and every decoder,
+  proposes a `BaseModel` for it (`list[Model]` for a list of records, bounded
+  with `MaxItems`), and lists every writer and reader to rewrite.  A value that
+  grows with the source goes in a `FileReference` instead.  On a field in the
+  contract ledger, add the typed field under a new name and retire the old one.
+  Propose `# conformance: ignore[P059] <reason>` only when a system outside the
+  app needs the value as JSON text.
 
 **Typed-boundary read rule (P026)** — suggest-only, scope=app, WARN-tier;
 `classification` is always `"judgment"`.  Backed by
