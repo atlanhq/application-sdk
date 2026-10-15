@@ -847,14 +847,14 @@ class TestCloudStorePutAttributes:
 
 class TestS3RegionLookup:
     @staticmethod
-    def _stub_head(monkeypatch, *, headers=None, error=None):
+    def _stub_head(monkeypatch, *, headers=None, error=None, by_host=None):
         import aiohttp
 
-        seen: dict = {}
+        seen: dict = {"urls": []}
 
         class _Response:
-            def __init__(self):
-                self.headers = headers or {}
+            def __init__(self, response_headers):
+                self.headers = response_headers
 
             async def __aenter__(self):
                 return self
@@ -863,28 +863,71 @@ class TestS3RegionLookup:
                 return False
 
         def _head(_self, url, **kwargs):
+            seen["urls"].append(url)
             seen.update(url=url, **kwargs)
             if error is not None:
                 raise error
-            return _Response()
+            if by_host is not None:
+                return _Response(by_host.get(url.split("/")[2], {}))
+            return _Response(headers or {})
 
         monkeypatch.setattr(aiohttp.ClientSession, "head", _head)
         return seen
 
     @pytest.mark.parametrize(
-        ("headers", "expected"),
+        ("headers", "expected", "urls"),
         [
-            ({"x-amz-bucket-region": "us-west-2"}, "us-west-2"),
-            ({}, ""),
+            (
+                {"x-amz-bucket-region": "us-west-2"},
+                "us-west-2",
+                ["https://s3.amazonaws.com/my.bucket"],
+            ),
+            (
+                {},
+                "",
+                [
+                    "https://s3.amazonaws.com/my.bucket",
+                    "https://s3.cn-north-1.amazonaws.com.cn/my.bucket",
+                ],
+            ),
         ],
     )
-    async def test_lookup_reads_region_header(self, monkeypatch, headers, expected):
+    async def test_lookup_reads_region_header(
+        self, monkeypatch, headers, expected, urls
+    ):
         monkeypatch.delenv("AWS_REGION", raising=False)
         monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
         seen = self._stub_head(monkeypatch, headers=headers)
         assert await _REAL_LOOKUP_BUCKET_REGION("my.bucket") == expected
-        assert seen["url"] == "https://s3.amazonaws.com/my.bucket"
+        assert seen["urls"] == urls
         assert seen["allow_redirects"] is False
+
+    @pytest.mark.parametrize(
+        ("env", "region_host", "expected"),
+        [
+            ({}, "s3.cn-north-1.amazonaws.com.cn", "cn-northwest-1"),
+            (
+                {"AWS_REGION": "us-east-1"},
+                "s3.cn-north-1.amazonaws.com.cn",
+                "cn-north-1",
+            ),
+            ({"AWS_REGION": "cn-north-1"}, "s3.amazonaws.com", "eu-west-1"),
+        ],
+    )
+    async def test_lookup_falls_back_to_other_partition(
+        self, monkeypatch, env, region_host, expected
+    ):
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        seen = self._stub_head(
+            monkeypatch,
+            by_host={region_host: {"x-amz-bucket-region": expected}},
+        )
+        assert await _REAL_LOOKUP_BUCKET_REGION("b") == expected
+        assert len(seen["urls"]) == 2
+        assert seen["urls"][-1] == f"https://{region_host}/b"
 
     @pytest.mark.parametrize(
         "error", [OSError("unreachable"), RuntimeError("socket blocked")]
@@ -892,13 +935,14 @@ class TestS3RegionLookup:
     async def test_lookup_failure_returns_empty(self, monkeypatch, error):
         import aiohttp
 
-        self._stub_head(
+        seen = self._stub_head(
             monkeypatch,
             error=aiohttp.ClientConnectionError("unreachable")
             if isinstance(error, OSError)
             else error,
         )
         assert await _REAL_LOOKUP_BUCKET_REGION("b") == ""
+        assert len(seen["urls"]) == 1
 
     @staticmethod
     def _regions_built(monkeypatch):
@@ -1009,22 +1053,31 @@ class TestS3RegionLookup:
         assert built == [None, "us-west-2"]
 
     @pytest.mark.parametrize(
-        ("env", "host"),
+        ("env", "hosts"),
         [
-            ({"AWS_REGION": "eu-west-1"}, "s3.eu-west-1.amazonaws.com"),
-            ({"AWS_DEFAULT_REGION": "ap-south-1"}, "s3.ap-south-1.amazonaws.com"),
-            ({"AWS_REGION": "cn-north-1"}, "s3.cn-north-1.amazonaws.com.cn"),
-            ({}, "s3.amazonaws.com"),
+            (
+                {"AWS_REGION": "eu-west-1"},
+                ["s3.eu-west-1.amazonaws.com", "s3.cn-north-1.amazonaws.com.cn"],
+            ),
+            (
+                {"AWS_DEFAULT_REGION": "ap-south-1"},
+                ["s3.ap-south-1.amazonaws.com", "s3.cn-north-1.amazonaws.com.cn"],
+            ),
+            (
+                {"AWS_REGION": "cn-northwest-1"},
+                ["s3.cn-northwest-1.amazonaws.com.cn", "s3.amazonaws.com"],
+            ),
+            ({}, ["s3.amazonaws.com", "s3.cn-north-1.amazonaws.com.cn"]),
         ],
     )
-    def test_lookup_uses_ambient_regional_endpoint(self, monkeypatch, env, host):
+    def test_lookup_uses_ambient_regional_endpoint(self, monkeypatch, env, hosts):
         from application_sdk.storage import cloud
 
         monkeypatch.delenv("AWS_REGION", raising=False)
         monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
         for key, value in env.items():
             monkeypatch.setenv(key, value)
-        assert cloud._region_lookup_host() == host
+        assert cloud._region_lookup_hosts() == hosts
 
     async def test_lookup_uses_sdk_ssl_context(self, monkeypatch):
         from application_sdk.clients import ssl_utils

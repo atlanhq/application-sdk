@@ -587,13 +587,23 @@ def _needs_region_lookup(extra: dict[str, Any]) -> bool:
     )
 
 
-def _region_lookup_host() -> str:
-    """S3 endpoint host for the region lookup: the ambient region, else global."""
+_S3_GLOBAL_LOOKUP_HOST = "s3.amazonaws.com"
+_S3_CHINA_LOOKUP_HOST = "s3.cn-north-1.amazonaws.com.cn"
+
+
+def _region_lookup_hosts() -> list[str]:
+    """S3 endpoint hosts for the region lookup, in probe order.
+
+    The ambient region's endpoint (else the global one) comes first, then the
+    other partition's: a partition's endpoint cannot see the other partition's
+    buckets, and a blank-region store has no region to pick the partition from.
+    """
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     if not region:
-        return "s3.amazonaws.com"
-    suffix = "amazonaws.com.cn" if region.startswith("cn-") else "amazonaws.com"
-    return f"s3.{region}.{suffix}"
+        return [_S3_GLOBAL_LOOKUP_HOST, _S3_CHINA_LOOKUP_HOST]
+    if region.startswith("cn-"):
+        return [f"s3.{region}.amazonaws.com.cn", _S3_GLOBAL_LOOKUP_HOST]
+    return [f"s3.{region}.amazonaws.com", _S3_CHINA_LOOKUP_HOST]
 
 
 async def _lookup_bucket_region(bucket: str) -> str:
@@ -602,20 +612,27 @@ async def _lookup_bucket_region(bucket: str) -> str:
     An unsigned path-style HEAD on the bucket returns the header on 200, 301
     and 403, so no credentials are needed and dotted bucket names work. The
     pod's own regional endpoint is used when ``AWS_REGION`` is set, so a
-    network that reaches only its own region still answers.
+    network that reaches only its own region still answers. A response without
+    the header means the bucket is not in that partition, so the other
+    partition is probed next; a failed request stops the lookup rather than
+    spend a second timeout on an unreachable network.
     """
-    url = _S3_REGION_LOOKUP_URL.format(
-        host=_region_lookup_host(), bucket=quote(bucket, safe="")
-    )
     timeout = aiohttp.ClientTimeout(total=_S3_REGION_LOOKUP_TIMEOUT_SECONDS)
     try:
         from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415
 
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-            async with session.head(
-                url, allow_redirects=False, ssl=get_ssl_context()
-            ) as response:
-                return response.headers.get("x-amz-bucket-region", "")
+            for host in _region_lookup_hosts():
+                url = _S3_REGION_LOOKUP_URL.format(
+                    host=host, bucket=quote(bucket, safe="")
+                )
+                async with session.head(
+                    url, allow_redirects=False, ssl=get_ssl_context()
+                ) as response:
+                    region = response.headers.get("x-amz-bucket-region", "")
+                if region:
+                    return region
+            return ""
     # conformance: ignore[E004] best-effort lookup; any failure keeps the store as built and is logged
     except Exception as exc:
         _log().warning("S3 bucket region lookup failed bucket=%s error=%s", bucket, exc)
