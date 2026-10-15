@@ -201,9 +201,10 @@ def qualified_class_key(module: str, name: str) -> str:
     return f"{module}:{name}"
 
 
-def _top_level_classes(tree: ast.AST) -> set[str]:
+def _top_level_classes(tree: ast.AST) -> dict[str, int]:
+    """Each top-level class name, mapped to the line of its last declaration."""
     body = tree.body if isinstance(tree, ast.Module) else []
-    return {stmt.name for stmt in body if isinstance(stmt, ast.ClassDef)}
+    return {stmt.name: stmt.lineno for stmt in body if isinstance(stmt, ast.ClassDef)}
 
 
 def qualified_rebound_imports(
@@ -226,7 +227,8 @@ def qualified_rebound_imports(
     M's own ``class N`` resolves to :func:`qualified_class_key` ``(M, N)``, and
     so does a bare reference inside M, the one place the bare name is
     unambiguous. Names declared once are left bare, so they resolve exactly as
-    before.
+    before. Where M both imports and declares ``N`` (``from .base import N``
+    then ``class N(N)``), the later binding is what M exports.
 
     *trees* maps repo-relative paths to parsed modules. Only names that cross a
     rebinding, or land on a duplicated class, are returned. A chain of
@@ -236,12 +238,18 @@ def qualified_rebound_imports(
     """
     rebinds: dict[str, dict[str, str]] = {}
     reexports: dict[str, dict[str, tuple[str, str]]] = {}
-    declared: dict[str, set[str]] = {}
+    declared: dict[str, dict[str, int]] = {}
+    import_lines: dict[str, dict[str, int]] = {}
     for rel, tree in trees.items():
         module = _module_of(rel)
         rebinds[module] = collect_module_alias_targets(tree)
-        declared[module] = _top_level_classes(tree) & duplicated
+        declared[module] = {
+            name: line
+            for name, line in _top_level_classes(tree).items()
+            if name in duplicated
+        }
         imported: dict[str, tuple[str, str]] = {}
+        lines: dict[str, int] = {}
         for node in tree.body if isinstance(tree, ast.Module) else []:
             if not isinstance(node, ast.ImportFrom):
                 continue
@@ -250,11 +258,19 @@ def qualified_rebound_imports(
                 continue
             for alias in node.names:
                 imported[alias.asname or alias.name] = (source, alias.name)
+                lines[alias.asname or alias.name] = node.lineno
         reexports[module] = imported
+        import_lines[module] = lines
 
     def declaration(module: str, name: str) -> str | None:
-        """*module*'s own key for *name*, when it declares a duplicated *name*."""
-        if name in declared[module] and name not in rebinds[module]:
+        """*module*'s own key for *name*, when its last binding of *name* is a
+        declaration of a duplicated class."""
+        line = declared[module].get(name)
+        if (
+            line is not None
+            and name not in rebinds[module]
+            and line > import_lines[module].get(name, 0)
+        ):
             return qualified_class_key(module, name)
         return None
 
@@ -269,14 +285,16 @@ def qualified_rebound_imports(
             while target in targets and target not in local_seen:
                 local_seen.add(target)
                 target = targets[target]
-            if target in reexports[module]:
+            own = declaration(module, target)
+            if own is None and target in reexports[module]:
                 source, original = reexports[module][target]
                 return resolve(source, original, seen) or original
-            return declaration(module, target) or target
-        if name in reexports[module]:
+            return own or target
+        own = declaration(module, name)
+        if own is None and name in reexports[module]:
             source, original = reexports[module][name]
             return resolve(source, original, seen)
-        return declaration(module, name)
+        return own
 
     out: dict[str, dict[str, str]] = {}
     for rel, tree in trees.items():

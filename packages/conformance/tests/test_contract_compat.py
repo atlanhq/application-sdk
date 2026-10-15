@@ -2984,3 +2984,56 @@ def test_the_generator_ignores_an_unrelated_class_sharing_the_contracts_name(
     recorded = _recorded(tmp_path)
     assert ("LineageInput", "contract_only") in recorded
     assert ("LineageInput", "model_only") not in recorded
+
+
+def test_the_generator_resolves_an_import_of_a_class_that_shadows_its_import(
+    tmp_path: Path,
+) -> None:
+    # `from .base import Foo` then `class Foo(Foo)`: the module exports its own
+    # class, the later binding, not the base it imported.
+    files = {
+        "app/__init__.py": "",
+        "app/miner/__init__.py": "",
+        "app/miner/base.py": 'class MinerBase:\n    base_only: str = ""\n',
+        "app/miner/contract.py": (
+            "from .base import MinerBase\n\n"
+            "class MinerBase(MinerBase):\n"
+            '    own: str = ""\n'
+        ),
+        "app/apps.py": (
+            "from application_sdk.app import App\n"
+            "from app.miner.contract import MinerBase as _Base\n\n"
+            "class MinerInput(_Base):\n"
+            "    pass\n\n"
+            "class Miner(App):\n"
+            "    async def run(self, input: MinerInput) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    _write(tmp_path, files)
+    recorded = _recorded(tmp_path)
+    assert ("MinerInput", "own") in recorded
+    assert ("MinerInput", "base_only") in recorded
+
+
+def test_b005_ignores_an_unrelated_class_sharing_the_contracts_name(
+    tmp_path: Path,
+) -> None:
+    # Only the declaration the entrypoint annotates is the contract: the
+    # same-named model's field is not reported as missing from the ledger.
+    files = {
+        "app/__init__.py": "",
+        "app/models.py": 'class LineageInput:\n    model_only: str = ""\n',
+        "app/workflow.py": (
+            "from application_sdk.app import App\n\n"
+            "class LineageInput:\n"
+            '    contract_only: str = ""\n\n'
+            "class Lineage(App):\n"
+            "    async def run(self, input: LineageInput) -> None:\n"
+            "        pass\n"
+        ),
+    }
+    findings = _scan(
+        tmp_path, files, _make_ledger(*_rows("LineageInput", "contract_only"))
+    )
+    assert not {"B005", "B006"} & set(_ids(findings))

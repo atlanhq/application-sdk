@@ -66,9 +66,8 @@ from conformance.suite.checks._ast_common import detect_scope, discover
 from conformance.suite.checks._entrypoint_contract_fields import (
     _base_name,
     build_contract_registry,
-    iter_entrypoint_contract_annotations,
     resolve_contract_fields,
-    sdk_base_contract_names,
+    resolve_entrypoint_contracts,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
     LEDGER_VERSION,
@@ -169,31 +168,18 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     registry = build_contract_registry(file_trees, rels)
     paths_by_rel = {rel: path for path, rel in rels.items()}
 
-    # The declaration each entrypoint annotates, resolved through the
-    # annotating file's imports: a same-named class elsewhere in the repo (a
-    # generated base the contract subclasses under its own name, a stale copy,
-    # an unrelated model) is not that entrypoint's contract.
-    contracts: dict[int, ClassRecord] = {}
-    for path, name in iter_entrypoint_contract_annotations(
-        file_trees, registry.by_name
-    ):
-        target = registry.aliases[path].get(name, name)
-        rec = registry.resolvable.get(target)
-        if rec is not None:
-            contracts[id(rec.node)] = rec
-        elif target in registry.ambiguous:
-            raise AmbiguousContractBase(
-                f"{rels[path]}: an entrypoint is annotated {name!r}, which "
-                "several modules declare or bind to different classes. Import "
-                "it from the module that defines it; the ledger is not "
-                "written rather than guessing."
-            )
-    for name in sdk_base_contract_names(registry.by_name):
-        rec = registry.by_name[name]
-        contracts[id(rec.node)] = rec
+    contracts = resolve_entrypoint_contracts(file_trees, registry)
+    if contracts.ambiguous:
+        path, name, _ = contracts.ambiguous[0]
+        raise AmbiguousContractBase(
+            f"{rels[path]}: an entrypoint is annotated {name!r}, which "
+            "several modules declare or bind to different classes. Import "
+            "it from the module that defines it; the ledger is not "
+            "written rather than guessing."
+        )
 
     by_contract: dict[str, list[ClassRecord]] = {}
-    for rec in contracts.values():
+    for rec in contracts.records:
         by_contract.setdefault(rec.name, []).append(rec)
     for name, recs in sorted(by_contract.items()):
         if len(recs) > 1:
@@ -214,7 +200,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
 
     # Collect all live contract fields from entrypoint classes
     live_entries: dict[tuple[str, str], ContractField] = {}
-    for rec in sorted(contracts.values(), key=lambda r: (r.file, r.node.lineno)):
+    for rec in sorted(contracts.records, key=lambda r: (r.file, r.node.lineno)):
         aliases = registry.aliases.get(paths_by_rel[rec.file], {})
         unresolved = _ambiguous_bases(
             rec.node, aliases, registry.resolvable, registry.ambiguous

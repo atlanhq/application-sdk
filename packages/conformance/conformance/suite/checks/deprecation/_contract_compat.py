@@ -26,9 +26,8 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.checks._entrypoint_contract_fields import (
     _canonical_type,
     build_contract_registry,
-    collect_entrypoint_contract_names,
     resolve_contract_fields,
-    sdk_base_contract_names,
+    resolve_entrypoint_contracts,
     sdk_contract_ancestors,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import ClassRecord
@@ -558,11 +557,18 @@ def scan_contract_compat(
     # Field resolution reads the registry without ambiguous bare names.
     by_name = registry.resolvable
 
-    entrypoint_names = collect_entrypoint_contract_names(
-        file_trees, registry.by_name
-    ) | sdk_base_contract_names(registry.by_name)
+    # The declarations the ledger generator records, so B005 checks exactly
+    # those: a same-named class elsewhere is not the contract. An annotation
+    # the generator refuses as ambiguous falls back to every declaration of
+    # its name, so the contract is never silently unchecked.
+    contracts = resolve_entrypoint_contracts(file_trees, registry)
+    entrypoint_nodes = {id(rec.node) for rec in contracts.records} | {
+        id(rec.node)
+        for _, _, declared in contracts.ambiguous
+        for rec in by_name_all.get(declared, [])
+    }
 
-    if not entrypoint_names:
+    if not entrypoint_nodes:
         return []
 
     # Pre-index the ledger for O(1) lookups
@@ -594,7 +600,7 @@ def scan_contract_compat(
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
-            if class_node.name not in entrypoint_names:
+            if id(class_node) not in entrypoint_nodes:
                 continue
 
             aliases = file_aliases.get(path, {})

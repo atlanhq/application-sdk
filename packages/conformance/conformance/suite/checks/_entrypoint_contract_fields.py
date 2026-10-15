@@ -831,3 +831,50 @@ def build_contract_registry(
         by_name_all=by_name_all,
         ambiguous=frozenset(ambiguous),
     )
+
+
+@dataclass(frozen=True)
+class EntrypointContracts:
+    """The declarations entrypoint contracts are, as the ledger records them."""
+
+    records: tuple[ClassRecord, ...]
+    """Each declaration an entrypoint annotates, resolved through the annotating
+    file's imports, plus the SDK contract bases an SDK scan declares. A
+    same-named class elsewhere in the repo (a generated base the contract
+    subclasses under its own name, a stale copy, an unrelated model) is not
+    one of them."""
+
+    ambiguous: tuple[tuple[Path, str, str], ...]
+    """``(file, annotation, declared_name)`` for each annotation that only
+    reaches a name several modules declare or bind differently, so no single
+    declaration can be picked. *declared_name* is the bare name first-wins
+    resolution reports it under."""
+
+
+def resolve_entrypoint_contracts(
+    file_trees: dict[Path, ast.AST], registry: ContractRegistry
+) -> EntrypointContracts:
+    """Resolve every entrypoint annotation in *file_trees* to its declaration."""
+    records: dict[int, ClassRecord] = {}
+    ambiguous: list[tuple[Path, str, str]] = []
+    for path, name in iter_entrypoint_contract_annotations(
+        file_trees, registry.by_name
+    ):
+        target = registry.aliases[path].get(name, name)
+        rec = registry.resolvable.get(target)
+        if rec is not None:
+            records[id(rec.node)] = rec
+        elif target in registry.ambiguous:
+            tree = file_trees[path]
+            aliases = (
+                collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+            )
+            ambiguous.append(
+                (path, name, _declared_contract_name(name, aliases, registry.by_name))
+            )
+    for name in sdk_base_contract_names(registry.by_name):
+        rec = registry.by_name[name]
+        records[id(rec.node)] = rec
+    return EntrypointContracts(
+        records=tuple(records.values()), ambiguous=tuple(ambiguous)
+    )
