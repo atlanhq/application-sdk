@@ -310,15 +310,12 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    yields neither is an error.
 2. **Tier per artefact.** Cleanup runs after `run()` returns, on success
    and on failure (when cleanup is enabled, the default), and deletes
-   `TRANSIENT` refs; `RETAINED` refs survive the
-   run; `PERSISTENT` are kept indefinitely. `upload_refs` writes its own
-   copies, `RETAINED` by default. Keep what the run cannot recreate: raw
-   extract output (`RETAINED`; legacy writer output survived the run), a ref
-   whose own key is the hand-off another app reads, and a file that must be
-   reviewable after the run. What can be recreated from those is
-   `TRANSIENT`, including a transformed ref that `upload_refs` delivers:
-   downstream reads the delivered copy, so a `RETAINED` source ref only
-   keeps a second copy of the same bytes.
+   `TRANSIENT` refs; `RETAINED` refs survive the run; `PERSISTENT` are kept
+   indefinitely. Legacy writer output survived the run. `upload_refs` writes
+   its own copies, `RETAINED` by default, and downstream reads those: a ref
+   it re-delivers can be `TRANSIENT`, because a `RETAINED` one only keeps a
+   second copy of the same bytes. Keep a ref `RETAINED` when its own key is
+   read after the run, or when the file must be reviewable after the run.
 3. **Empty output.** `upload_refs` returns `prefix=""` for an empty
    declaration and raises on a declared file with no objects; some apps hand
    publish a prefix naming an empty tree today. An empty or missing prefix
