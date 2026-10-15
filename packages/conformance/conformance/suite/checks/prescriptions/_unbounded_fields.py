@@ -91,18 +91,47 @@ def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
     return _simple_name(node) == "ClassVar"
 
 
-#: Collections payload safety refuses without a ``MaxItems`` bound. The runtime looks only at
-#: ``dict`` and ``list`` (by ``get_origin``): a set or tuple of safe values passes it.
-_BOUNDED_COLLECTIONS = frozenset({"dict", "list", "Dict", "List"})
+#: Collections payload safety refuses without a ``MaxItems`` bound. The runtime refuses every
+#: parameterised iterable class (by ``get_origin``), so retyping a list as a set or a Sequence
+#: does not get past it; these are the names this file can recognise as one.
+_BOUNDED_COLLECTIONS = frozenset(
+    {
+        "dict",
+        "list",
+        "set",
+        "frozenset",
+        "tuple",
+        "deque",
+        "defaultdict",
+        "OrderedDict",
+        "Counter",
+        "Dict",
+        "List",
+        "Set",
+        "FrozenSet",
+        "Tuple",
+        "Deque",
+        "DefaultDict",
+        "AbstractSet",
+        "MutableSet",
+        "Sequence",
+        "MutableSequence",
+        "Mapping",
+        "MutableMapping",
+        "Collection",
+        "Iterable",
+    }
+)
+#: A ``tuple[A, B]`` of fixed arity is bounded by its shape; only ``tuple[T, ...]`` needs MaxItems.
+_TUPLES = frozenset({"tuple", "Tuple"})
 _BYTES = frozenset({"bytes", "bytearray"})
 #: Accepted by the runtime check (it skips an unparameterised collection) while bounding nothing.
-_BARE_UNBOUNDED = frozenset({"dict", "list", "Dict", "List"})
+_BARE_UNBOUNDED = _BOUNDED_COLLECTIONS
 #: Types the runtime check accepts that still let any value through: retyping a field to one of
 #: these clears the class-definition error without bounding the payload.
 _OPEN_ENDED = frozenset({"object", "JsonValue"})
-#: Field types known to be payload-safe without seeing their definition: scalars, the SDK's
-#: payload-safe contract types, and containers the runtime check accepts (their arguments are
-#: still judged).
+#: Field types known to be payload-safe without seeing their definition: scalars and the SDK's
+#: payload-safe contract types.
 _KNOWN_SAFE = frozenset(
     {
         "str",
@@ -129,14 +158,6 @@ _KNOWN_SAFE = frozenset(
         "AgentCredentialSpec",
         "GitReference",
         "BaseMetadataConfig",
-        "set",
-        "frozenset",
-        "tuple",
-        "Set",
-        "FrozenSet",
-        "Tuple",
-        "Mapping",
-        "Sequence",
     }
 )
 _OPTOUT_ATTR = "_allow_unbounded_fields"
@@ -159,6 +180,13 @@ def _has_max_items(node: ast.expr) -> bool:
 
 def _args(node: ast.Subscript) -> list[ast.expr]:
     return list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+
+
+def _fixed_tuple(node: ast.Subscript) -> bool:
+    """True if *node* is a ``tuple[A, B]`` of fixed arity (no ``...`` argument)."""
+    return _simple_name(node.value) in _TUPLES and not any(
+        isinstance(a, ast.Constant) and a.value is Ellipsis for a in _args(node)
+    )
 
 
 def _is_alias_value(node: ast.expr) -> bool:
@@ -251,7 +279,7 @@ class _Types:
             if name in ("ClassVar", "Literal"):
                 return []
             out: list[tuple[str, str]] = []
-            if name in _BOUNDED_COLLECTIONS and not bounded:
+            if name in _BOUNDED_COLLECTIONS and not bounded and not _fixed_tuple(node):
                 out.append((_REFUSED, f"`{name}[...]` without MaxItems"))
             elif name not in ("Optional", "Union") and name not in _BOUNDED_COLLECTIONS:
                 out += self._name(node.value, bounded=bounded, seen=seen)
@@ -374,7 +402,8 @@ def _optout_message(
             "(connection: ConnectionRef; include/exclude filters: FilterMap | str, or treeSelection = true "
             "on a tree widget read below its second level); model passthrough data "
             "(metadata: a BaseMetadataConfig subclass; credentials by reference: credential_guid or "
-            "CredentialRef, never inline); bound a dict or list of safe values with "
+            "CredentialRef, never inline); bound a collection of safe values (dict, list, set, "
+            "tuple[T, ...], Sequence) with "
             "Annotated[..., MaxItems(n)]; pass data that grows with the source system by FileReference. "
             "MaxItems never makes Any safe."
         )

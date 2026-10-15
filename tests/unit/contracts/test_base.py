@@ -1,6 +1,16 @@
 """Unit tests for application_sdk.contracts.base."""
 
-from typing import Annotated, Any, ClassVar, List, Literal
+from collections import deque
+from collections.abc import (
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSequence,
+    MutableSet,
+    Sequence,
+)
+from collections.abc import Set as AbstractSet
+from typing import Annotated, Any, ClassVar, List, Literal, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
@@ -267,6 +277,101 @@ class TestPayloadSafetyValidation:
 
         obj = FlexOutput(data=42)
         assert obj.data == 42
+
+
+# =============================================================================
+# Every variable-size collection needs MaxItems, not only list and dict
+# =============================================================================
+
+# Before, the check matched only list and dict by origin, so retyping a
+# list[str] as set[str] or Sequence[str] passed with no bound at all.
+_UNBOUNDED_COLLECTIONS: list[tuple[Any, str]] = [
+    (set[str], "set"),
+    (frozenset[str], "frozenset"),
+    (AbstractSet[str], "Set"),
+    (MutableSet[str], "MutableSet"),
+    (tuple[str, ...], "tuple"),
+    (Tuple[str, ...], "tuple"),  # noqa: UP006
+    (Sequence[str], "Sequence"),
+    (MutableSequence[str], "MutableSequence"),
+    (Mapping[str, str], "Mapping"),
+    (MutableMapping[str, str], "MutableMapping"),
+    (deque[str], "deque"),
+    (Iterable[str], "Iterable"),
+]
+
+
+def _contract(field_type: Any, base: type = Input) -> type:
+    """Define a contract with one field typed *field_type*."""
+    return type(
+        "OneFieldContract",
+        (base,),
+        {"__annotations__": {"field": field_type}, "__module__": __name__},
+    )
+
+
+class TestPayloadSafetyOtherCollections:
+    @pytest.mark.parametrize(("field_type", "kind"), _UNBOUNDED_COLLECTIONS)
+    @pytest.mark.parametrize("base", [Input, Output])
+    def test_unbounded_is_refused(self, field_type: Any, kind: str, base: type) -> None:
+        with pytest.raises(PayloadSafetyError) as exc_info:
+            _contract(field_type, base)
+
+        assert exc_info.value.field_name == "field"
+        assert exc_info.value.reason == f"Unbounded {kind} may exceed payload limits"
+
+    @pytest.mark.parametrize(("field_type", "kind"), _UNBOUNDED_COLLECTIONS)
+    def test_unbounded_inside_optional_is_refused(
+        self, field_type: Any, kind: str
+    ) -> None:
+        with pytest.raises(PayloadSafetyError):
+            _contract(field_type | None)
+        with pytest.raises(PayloadSafetyError):
+            _contract(Optional[field_type])  # noqa: UP045
+
+    @pytest.mark.parametrize(("field_type", "kind"), _UNBOUNDED_COLLECTIONS)
+    def test_max_items_bounds_it(self, field_type: Any, kind: str) -> None:
+        _contract(Annotated[field_type, MaxItems(5)])
+        _contract(Annotated[field_type, MaxItems(5)] | None)
+
+    @pytest.mark.parametrize(
+        "field_type",
+        [tuple[str, int], Tuple[str, int], tuple[()], tuple[str]],  # noqa: UP006
+    )
+    def test_fixed_arity_tuple_is_bounded_by_its_shape(self, field_type: Any) -> None:
+        _contract(field_type)
+
+    @pytest.mark.parametrize(
+        "field_type",
+        [
+            # MaxItems bounds the collection, never its elements.
+            Annotated[set[bytes], MaxItems(5)],
+            Annotated[frozenset[Any], MaxItems(5)],
+            Annotated[tuple[Any, ...], MaxItems(5)],
+            Annotated[Sequence[dict[str, str]], MaxItems(5)],
+            Annotated[Mapping[str, list[str]], MaxItems(5)],
+            Annotated[list[set[str]], MaxItems(5)],
+            Annotated[tuple[set[str], ...], MaxItems(5)],
+            # A fixed-arity tuple is bounded, its members are still checked.
+            tuple[str, Any],
+            tuple[str, list[str]],
+            tuple[str, Sequence[str]],
+        ],
+    )
+    def test_element_types_are_still_checked(self, field_type: Any) -> None:
+        with pytest.raises(PayloadSafetyError):
+            _contract(field_type)
+
+    def test_nested_bounded_collections_pass(self) -> None:
+        _contract(
+            Annotated[list[Annotated[set[str], MaxItems(3)]], MaxItems(5)],
+        )
+        _contract(tuple[str, Annotated[frozenset[int], MaxItems(3)]])
+
+    def test_strings_are_not_collections(self) -> None:
+        # str is iterable, but it is a scalar to payload safety.
+        _contract(str)
+        _contract(Annotated[str, Field(max_length=10)])
 
 
 # =============================================================================

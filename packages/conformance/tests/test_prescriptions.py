@@ -1017,10 +1017,82 @@ def test_p001_reports_a_type_it_cannot_resolve_as_unknown_not_safe() -> None:
     assert "name:" not in message
 
 
-def test_p001_does_not_name_a_set_or_tuple_the_runtime_accepts() -> None:
-    # Payload safety bounds only dict and list; a set or tuple of safe values passes it.
-    src = "class C(Input, allow_unbounded_fields=True):\n    ids: set[int] = set()\n    pair: tuple[str, int] = ('', 0)\n"
+@pytest.mark.parametrize(
+    ("annotation", "named"),
+    [
+        ("set[int]", "set"),
+        ("frozenset[str]", "frozenset"),
+        ("Set[str]", "Set"),
+        ("FrozenSet[str]", "FrozenSet"),
+        ("AbstractSet[str]", "AbstractSet"),
+        ("tuple[str, ...]", "tuple"),
+        ("Tuple[str, ...]", "Tuple"),
+        ("Sequence[str]", "Sequence"),
+        ("typing.Sequence[str]", "Sequence"),
+        ("MutableSequence[str]", "MutableSequence"),
+        ("Mapping[str, str]", "Mapping"),
+        ("MutableMapping[str, str]", "MutableMapping"),
+        ("deque[str]", "deque"),
+        ("Optional[set[str]]", "set"),
+        ("set[str] | None", "set"),
+        ("'Sequence[str]'", "Sequence"),
+    ],
+)
+def test_p001_names_every_unbounded_collection_as_a_blocker(
+    annotation: str, named: str
+) -> None:
+    # Payload safety refuses every collection without MaxItems, not only dict and list, so
+    # each of these blocks removing the opt-out.
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    message = _p001_message(src)
+    assert f"ids: `{named}[...]` without MaxItems" in message
+    assert "Fields payload safety refuses" in message
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "Annotated[set[int], MaxItems(10)]",
+        "Annotated[tuple[str, ...], MaxItems(10)]",
+        "Annotated[Sequence[str], MaxItems(10)]",
+        "Annotated[Mapping[str, int], MaxItems(10)]",
+        "tuple[str, int]",
+        "Tuple[str, int]",
+        "Annotated[list[Annotated[set[str], MaxItems(3)]], MaxItems(10)]",
+    ],
+)
+def test_p001_accepts_a_bounded_collection_and_a_fixed_arity_tuple(
+    annotation: str,
+) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
     assert "already payload-safe" in _p001_message(src)
+
+
+@pytest.mark.parametrize(
+    ("annotation", "why"),
+    [
+        # MaxItems bounds the outer collection; an unbounded one inside it still blocks.
+        ("Annotated[list[set[str]], MaxItems(10)]", "`set[...]` without MaxItems"),
+        ("Annotated[set[bytes], MaxItems(10)]", "`bytes`"),
+        ("Annotated[tuple[Any, ...], MaxItems(10)]", "`Any`"),
+        # A fixed-arity tuple is bounded by its shape; its members are still judged.
+        ("tuple[str, Sequence[str]]", "`Sequence[...]` without MaxItems"),
+    ],
+)
+def test_p001_still_judges_the_elements_of_a_bounded_collection(
+    annotation: str, why: str
+) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    assert f"ids: {why}" in _p001_message(src)
+
+
+@pytest.mark.parametrize("annotation", ["set", "frozenset", "tuple", "Sequence"])
+def test_p001_reports_a_bare_collection_as_open_ended(annotation: str) -> None:
+    # The runtime skips an unparameterised collection, so it accepts it while it bounds nothing.
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    message = _p001_message(src)
+    assert f"ids: bare `{annotation}`" in message
+    assert "Fields it accepts that still bound nothing" in message
 
 
 def test_p001_the_last_class_attribute_assignment_decides() -> None:

@@ -85,14 +85,15 @@ reassigned.
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
 **Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
-Unbounded fields can silently grow past it in production, failing the workflow with a
-cryptic size error instead of a type error at import time. Typing every field
-payload-safely and removing the opt-out restores that import-time check; an opt-out that
-genuinely cannot be removed carries a justified inline suppression, which keeps it
-visible in review and auditable in SARIF. Customer impact: payload size scales with the
-customer's data, so the app that passed every test fails only in the tenant with the
-largest source system — the customer's crawl dies mid-run with a serialization error
-nothing in their configuration explains.
+Unbounded fields (any variable-size collection without MaxItems: a set, tuple[T, ...] or
+Sequence grows with the source as freely as a list) can silently grow past it in
+production, failing the workflow with a cryptic size error instead of a type error at
+import time. Typing every field payload-safely and removing the opt-out restores that
+import-time check; an opt-out that genuinely cannot be removed carries a justified
+inline suppression, which keeps it visible in review and auditable in SARIF. Customer
+impact: payload size scales with the customer's data, so the app that passed every test
+fails only in the tenant with the largest source system — the customer's crawl dies
+mid-run with a serialization error nothing in their configuration explains.
 
 ### What correct looks like
 
@@ -120,10 +121,12 @@ nothing in their configuration explains.
   inverse finding still reports the Any-typed field and class creation raises
   PayloadSafetyError; with the opt-out, the class-level finding still fires. Any is
   refused unconditionally. MaxItems bounds a collection only when its element/value type
-  is already payload-safe. Note also that an app-level OVERRIDE of a base-class field is
-  often what introduces the Any — the SDK's own ExtractionInput already models its
-  filters payload-safely — and dropping an override is not a retype of your contract at
-  all.
+  is already payload-safe, and every variable-size collection needs it: set, frozenset,
+  tuple[T, ...], Sequence and Mapping are refused without it just as dict and list are,
+  so retyping one as another does not clear the finding. Note also that an app-level
+  OVERRIDE of a base-class field is often what introduces the Any — the SDK's own
+  ExtractionInput already models its filters payload-safely — and dropping an override
+  is not a retype of your contract at all.
 - **Already correct when:** The opt-out removed, with every field it guarded bounded, not merely accepted by the
   payload-safety check. A kept opt-out with a justified `# conformance: ignore[P001]
   <reason>` is the owner's decision, reached only after the fixes in the description
@@ -169,7 +172,10 @@ on the widget; for an extraction app's include/exclude filters it extends
 `mode='before'` validator.
 
 4. *Bound a collection of safe values* with `Annotated[..., MaxItems(n)]`, `n` taken
-from the field's real cardinality.  Every nested `dict` or `list` needs its own bound.
+from the field's real cardinality.  That covers every variable-size collection, not only
+`dict` and `list`: `set`, `frozenset`, `tuple[T, ...]`, `Sequence`, `Mapping` and the
+like are refused without it, so retyping a list as a set is not a fix.  A fixed-arity
+`tuple[A, B]` is bounded by its shape.  Every nested collection needs its own bound.
 
 5. *Data that grows with the source system* (file lists, event batches, per-object
 results) moves by reference: write it to the object store and pass a `FileReference`.
@@ -178,15 +184,15 @@ This is the fix that holds at 2MB.
 6. *Retire a field nothing populates*: mark it `deprecated=True` with `x-lifecycle:
 sunset`, regenerate the ledger, then remove it from source.
 
-**Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias with
-no bound (`TreeSelection` bounds every level), or a nested `BaseModel(extra='allow')`
-pass the check while bounding nothing; reach for them only as an owner's recorded
-decision.  Changing a `dict` to a `str` (a `mode='before'` validator that JSON-encodes
-it) is not a fix either: it hides the shape from the check and bounds nothing.
-`MaxItems` never makes `Any` safe.  Removing the opt-out while an `Any` field remains
-raises `PayloadSafetyError` at class definition, so the app stops importing: import the
-module after the change, because a base class or mixin the detector cannot see may carry
-the `Any`.
+**Not fixes.**  `object`, `JsonValue`, a bare `dict`, `list`, `set` or `tuple`, a
+recursive alias with no bound (`TreeSelection` bounds every level), or a nested
+`BaseModel(extra='allow')` pass the check while bounding nothing; reach for them only as
+an owner's recorded decision.  Changing a `dict` to a `str` (a `mode='before'` validator
+that JSON-encodes it) is not a fix either: it hides the shape from the check and bounds
+nothing. `MaxItems` never makes `Any` safe.  Removing the opt-out while an `Any` field
+remains raises `PayloadSafetyError` at class definition, so the app stops importing:
+import the module after the change, because a base class or mixin the detector cannot
+see may carry the `Any`.
 
 **Generated contracts** (`app/generated/`) are fixed at their source: the
 `contract/*.pkl` widget, or the toolkit when it emits `dict[str, Any]` for a widget
