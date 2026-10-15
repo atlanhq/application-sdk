@@ -241,7 +241,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.42.1"
+version = "3.49.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -266,9 +266,9 @@ dependencies = [
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/72/8c/98bb61433c781098b499f1569ebb4192893bd845d2dcff465b91d5a77908/atlan_application_sdk-3.42.1.tar.gz", hash = "sha256:7e45f6b66e1612de9d7db5786b49447d35930acc60e4b100673df52be17d9147", size = 9496585, upload-time = "2026-10-07T00:52:43.473Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/76/959d3ac9e72e58daa1d566ee45c89c04a14c5fafbf7b0575adcc7dbefad5/atlan_application_sdk-3.49.0.tar.gz", hash = "sha256:c6123b3b01a58f1bdd5c97548c6538fa18db0c7ec89c1532eae5c6a6eee82901", size = 10058093, upload-time = "2026-10-14T16:59:36.875Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/d7/ec9dbc4c7bb7a6153ab00dd707db5fc7a6cf918064164cb4bd24887b2654/atlan_application_sdk-3.42.1-py3-none-any.whl", hash = "sha256:9adabf2d1fbd4fcb9cda58835dd2d97f848dcf69f456dc42410ea966f3bcd042", size = 1960111, upload-time = "2026-10-07T00:52:40.45Z" },
+    { url = "https://files.pythonhosted.org/packages/7d/cf/c6494571e772f46fc436bd7ab56eeac62709d3f73baf76df00059444db5c/atlan_application_sdk-3.49.0-py3-none-any.whl", hash = "sha256:44324d9d3be41bf0da08a4810bb24b469d6c6e116eb0811b6bf1c53b845bcbfc", size = 2030298, upload-time = "2026-10-14T16:59:34.819Z" },
 ]
 
 [package.optional-dependencies]
@@ -821,7 +821,7 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.142.4"
+version = "0.143.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -831,9 +831,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/2c/d69ce63c27bf9c5e574ab425118390102924503b4b3cdf33c07a69744dd2/fastapi-0.142.4.tar.gz", hash = "sha256:7fe2e254a0a948b88f432b02b8f627463285248233bba0998ed9640191e2ff57", size = 467841, upload-time = "2026-10-07T21:22:13.046Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/16/52ca959230f9820660fd822f488f883d7dc42310716b4cc6d2a944835dcd/fastapi-0.143.1.tar.gz", hash = "sha256:4cafaab64df8534758bf0fce61947f5e27e6cd512798ccbbaad5425086c3b664", size = 469025, upload-time = "2026-10-14T12:53:09.448Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/6a/c3e85c05b2ec12e9d352b6f1700e29e0fb3f0fff2511b9c44cdf8837577d/fastapi-0.142.4-py3-none-any.whl", hash = "sha256:8a651aa071a9f92c8217cca1d0b044bf9c326f336578be0a728a1a1f22ec52d2", size = 144456, upload-time = "2026-10-07T21:22:11.386Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/73/30ee3dd8f26fd385e451bbded9e1b54766a277db588e70154dd894f4b698/fastapi-0.143.1-py3-none-any.whl", hash = "sha256:687beb445804e4c4dbe2a76fd83c25e9b973ac48c267defb86f791e099baecc4", size = 144682, upload-time = "2026-10-14T12:53:07.69Z" },
 ]
 
 [package.optional-dependencies]
