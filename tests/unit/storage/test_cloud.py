@@ -834,3 +834,126 @@ class TestCloudStorePutAttributes:
             )
 
         assert cs._put_attributes is None
+
+
+class TestS3RegionLookup:
+    @staticmethod
+    async def _serve(response):
+        from aiohttp import web
+
+        async def _handler(_request):
+            return response
+
+        app = web.Application()
+        app.router.add_route("HEAD", "/{bucket}", _handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = runner.addresses[0][1]
+        return runner, f"http://127.0.0.1:{port}/{{bucket}}"
+
+    @pytest.mark.parametrize(
+        ("status", "headers", "expected"),
+        [
+            (301, {"x-amz-bucket-region": "us-west-2"}, "us-west-2"),
+            (403, {"x-amz-bucket-region": "eu-central-1"}, "eu-central-1"),
+            (404, {}, ""),
+        ],
+    )
+    async def test_lookup_reads_region_header(self, status, headers, expected):
+        from aiohttp import web
+
+        from application_sdk.storage import cloud
+
+        runner, url = await self._serve(web.Response(status=status, headers=headers))
+        try:
+            with patch.object(cloud, "_S3_REGION_LOOKUP_URL", url):
+                assert await cloud._lookup_bucket_region("my.bucket") == expected
+        finally:
+            await runner.cleanup()
+
+    async def test_lookup_unreachable_returns_empty(self):
+        from application_sdk.storage import cloud
+
+        with patch.object(
+            cloud, "_S3_REGION_LOOKUP_URL", "http://127.0.0.1:9/{bucket}"
+        ):
+            assert await cloud._lookup_bucket_region("b") == ""
+
+    @staticmethod
+    def _regions_built(monkeypatch):
+        from application_sdk.storage import _obstore_config
+
+        built: list[str | None] = []
+
+        def _make(bucket, config=None, **_kwargs):
+            built.append((config or {}).get("aws_region"))
+            return MemoryStore()
+
+        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        return built
+
+    async def test_blank_region_rebuilds_store_once_with_bucket_region(
+        self, monkeypatch
+    ):
+        import asyncio
+
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+
+        async def _slow_lookup(_bucket):
+            await asyncio.sleep(0)
+            return "us-west-2"
+
+        lookup = MagicMock(side_effect=_slow_lookup)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        await asyncio.gather(store.list("x"), store.list("y"))
+        assert built == [None, "us-west-2"]
+        lookup.assert_called_once_with("b")
+
+    async def test_explicit_region_skips_lookup(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        lookup = MagicMock(side_effect=_async_return("us-west-2"))
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "eu-west-1"}}
+        )
+        await store.list("x")
+        assert built == ["eu-west-1"]
+        lookup.assert_not_called()
+
+    async def test_custom_endpoint_skips_lookup(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:9000")
+        lookup = MagicMock(side_effect=_async_return("us-west-2"))
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        await store.list("x")
+        assert built == [None]
+        lookup.assert_not_called()
+
+    async def test_failed_lookup_keeps_store(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return(""))
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        before = store.store
+        await store.list("x")
+        assert built == [None]
+        assert store.store is before
