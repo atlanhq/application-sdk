@@ -491,15 +491,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "modeling nudge toward a typed nested model."
         ),
         short_description=(
-            "Input/Output contract field uses a container of primitives/Any — "
-            "replace with a typed nested model"
+            "Input/Output contract field uses a dict of primitives or a container "
+            "of Any — replace with a typed nested model"
         ),
         full_description=(
             "A field on an ``Input``/``Output`` contract whose annotation is a "
-            "container of primitives or ``Any`` — ``dict[str, str]``,\n"
-            "``list[str]``, ``set[int]``, or the bounded equivalents\n"
-            "``Annotated[dict[str, str], MaxItems(N)]`` — is considered an\n"
-            "unmodeled boundary.  Even though the bounded form satisfies the\n"
+            "dict of primitives or a container of ``Any`` — ``dict[str, str]``,\n"
+            "``list[Any]``, a bare ``list``/``set``/``dict``, or the bounded\n"
+            "equivalents ``Annotated[dict[str, str], MaxItems(N)]`` — is\n"
+            "considered an unmodeled boundary.  Even though the bounded form satisfies the\n"
             "payload-safety gate (P001), the container has no schema: keys and\n"
             "values are opaque strings, typos are runtime-only failures, and the\n"
             "field is invisible to contract diffing and the SDK's\n"
@@ -511,6 +511,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Exempt:** ``list[FooModel]``, ``dict[str, FooModel]`` — containers\n"
             "of a typed class are the canonical bounded pattern and are fine.\n"
+            "Lists and sets of a scalar primitive (``str``, ``int``,\n"
+            "``float``, ``bool``, ``bytes``) or a ``Literal``, optional items\n"
+            "included, or of such collections —\n"
+            "``list[str]``, ``set[int]``, ``Annotated[list[str], MaxItems(N)]``,\n"
+            "``list[list[str]]`` — are exempt too: a collection of plain values\n"
+            "has no keys to mistype, and wrapping each value in a model changes\n"
+            "the wire shape without adding safety.\n"
             "\n"
             "This rule lands as ``WARN`` (not ``BLOCK``) because the bounded form\n"
             "is technically sanctioned — this is a modeling nudge, not a gate\n"
@@ -929,6 +936,77 @@ RULES: tuple[RuleDefinition, ...] = (
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
+        ),
+    ),
+    RuleDefinition(
+        id="P059",
+        canonical_reference=(
+            "atlan-metabase-app app/contracts.py — structured task data crosses "
+            "the boundary as typed models (`CollectionFilter = Annotated[dict[str, "
+            "CollectionSelection], MaxItems(1000)]`, `residual_files: "
+            "Annotated[dict[str, FileReference], MaxItems(16)]`); no field holds a "
+            "`json.dumps` string that a task decodes again."
+        ),
+        scope=RuleScope.APP,
+        name="JsonEncodedContractField",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.51.0",
+        rationale=(
+            "A str field that holds json.dumps output is a structure declared as "
+            "text. Payload safety (P001) and the unmodeled-container check (P015) "
+            "grade the declared type, so the real shape and its size pass "
+            "unchecked, and the contract ledger records a string whose keys can "
+            "change with no diff. Packing a dict into a string is also the shape "
+            "an app reaches for to get past P001 without modeling the data."
+        ),
+        short_description=(
+            "Contract str / list[str] field carries JSON text — declare the "
+            "decoded value as a typed model"
+        ),
+        full_description=(
+            "A field on an ``Input``/``Output`` contract typed ``str`` or a\n"
+            "list/set of ``str`` (bare, bounded with ``MaxItems``, or optional)\n"
+            "whose value app code under the scanned tree (tests excluded) writes\n"
+            "as JSON or reads back as JSON:\n"
+            "\n"
+            "* written: ``Contract(FIELD=json.dumps(...))`` (also\n"
+            "  ``orjson.dumps(...)`` with or without ``.decode()``, and\n"
+            "  ``.model_dump_json()``), a list or set comprehension of those,\n"
+            "  ``x.FIELD = json.dumps(...)``, or a ``field_validator`` naming\n"
+            "  ``FIELD`` that returns ``json.dumps(...)``;\n"
+            "* read: ``json.loads(x.FIELD)`` (also ``x.FIELD or default`` and\n"
+            "  ``getattr(x, 'FIELD')``), ``json.loads(s) for s in x.FIELD``,\n"
+            "  ``map(json.loads, x.FIELD)``, ``Model.model_validate_json(x.FIELD)``\n"
+            "  or ``TypeAdapter(...).validate_json(x.FIELD)``.\n"
+            "\n"
+            "``x`` counts only when it is typed as a contract class: a parameter\n"
+            "annotated with one, a local bound to ``Contract(...)`` /\n"
+            "``Contract.model_validate(...)``, or ``self`` in a method of the\n"
+            "contract.  An attribute of the same name on any other object is not\n"
+            "evidence.  The evidence is matched to the field declared on that\n"
+            "class or one of its bases, across files, because the contract and the\n"
+            "task code usually live apart.  One finding per declaration, anchored\n"
+            "at the field; the message names the first evidence site.\n"
+            "\n"
+            "Fix: declare the decoded value as a typed field — a\n"
+            "``pydantic.BaseModel``, or ``list[Model]`` for a list of records,\n"
+            "bounded with ``MaxItems`` where payload safety needs it — and delete\n"
+            "the encode and decode steps.  A value that grows with the source\n"
+            "belongs in a ``FileReference``.  On a field recorded in the contract\n"
+            "ledger, add the typed field under a new name and retire the old one\n"
+            "(retyping in place is a B005 break).\n"
+            "\n"
+            "WARN tier.  Suppress with ``# conformance: ignore[P059] <reason>``\n"
+            "only when a system outside the app needs the value as JSON text.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p059",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
 )

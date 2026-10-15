@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**52 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**53 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -75,6 +75,7 @@ reassigned.
 | [P056](#p056) | `UnclosedBaseClient` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
 | [P057](#p057) | `CloseOverrideSkipsSuper` | `warn` | `app` | `client-lifecycle` | yes | 0.47.0 |
 | [P058](#p058) | `RawDictEntity` | `warn` | `app` | `asset-modeling` | — | 0.49.0 |
+| [P059](#p059) | `JsonEncodedContractField` | `warn` | `app` | `contract-modeling` | — | 0.51.0 |
 
 ---
 
@@ -725,7 +726,7 @@ conformance: ignore[P014] <reason>` at the method definition.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.6.0
 
-> Input/Output contract field uses a container of primitives/Any — replace with a typed nested model
+> Input/Output contract field uses a dict of primitives or a container of Any — replace with a typed nested model
 
 **Rationale:** Bounded containers (Annotated[dict[str, str], MaxItems(50)]) pass payload-safety
 validation (P001) but are still stringly-typed: keys and values carry no schema, typos
@@ -745,18 +746,23 @@ sanctioned; this is a modeling nudge toward a typed nested model.
   schema.
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
-A field on an `Input`/`Output` contract whose annotation is a container of primitives or
-`Any` — `dict[str, str]`, `list[str]`, `set[int]`, or the bounded equivalents
-`Annotated[dict[str, str], MaxItems(N)]` — is considered an unmodeled boundary.  Even
-though the bounded form satisfies the payload-safety gate (P001), the container has no
-schema: keys and values are opaque strings, typos are runtime-only failures, and the
-field is invisible to contract diffing and the SDK's `is_backwards_compatible` checker.
+A field on an `Input`/`Output` contract whose annotation is a dict of primitives or a
+container of `Any` — `dict[str, str]`, `list[Any]`, a bare `list`/`set`/`dict`, or the
+bounded equivalents `Annotated[dict[str, str], MaxItems(N)]` — is considered an
+unmodeled boundary.  Even though the bounded form satisfies the payload-safety gate
+(P001), the container has no schema: keys and values are opaque strings, typos are
+runtime-only failures, and the field is invisible to contract diffing and the SDK's
+`is_backwards_compatible` checker.
 
 The SDK contract guidance (`make-contract` skill, §6) prefers typed properties / a
 nested `pydantic.BaseModel` subclass over arbitrary string keys.
 
 **Exempt:** `list[FooModel]`, `dict[str, FooModel]` — containers of a typed class are
-the canonical bounded pattern and are fine.
+the canonical bounded pattern and are fine. Lists and sets of a scalar primitive (`str`,
+`int`, `float`, `bool`, `bytes`) or a `Literal`, optional items included, or of such
+collections — `list[str]`, `set[int]`, `Annotated[list[str], MaxItems(N)]`,
+`list[list[str]]` — are exempt too: a collection of plain values has no keys to mistype,
+and wrapping each value in a model changes the wire shape without adding safety.
 
 This rule lands as `WARN` (not `BLOCK`) because the bounded form is technically
 sanctioned — this is a modeling nudge, not a gate failure.  Suppress with `#
@@ -3090,5 +3096,54 @@ Fix: build the entity with the `pyatlan_v9.model.assets` creator for its type an
 serialize it with `entity_bytes`.  WARN tier — where `pyatlan_v9` does not model the
 type, keep the dict, give it top-level `"status": "ACTIVE"` on every non-delete upsert,
 and suppress with `# conformance: ignore[P058] <reason>` naming the type.
+
+---
+
+## P059 — `JsonEncodedContractField` {#p059}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.51.0
+
+> Contract str / list[str] field carries JSON text — declare the decoded value as a typed model
+
+**Rationale:** A str field that holds json.dumps output is a structure declared as text. Payload safety
+(P001) and the unmodeled-container check (P015) grade the declared type, so the real
+shape and its size pass unchecked, and the contract ledger records a string whose keys
+can change with no diff. Packing a dict into a string is also the shape an app reaches
+for to get past P001 without modeling the data.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/contracts.py — structured task data crosses the boundary as typed
+  models (`CollectionFilter = Annotated[dict[str, CollectionSelection],
+  MaxItems(1000)]`, `residual_files: Annotated[dict[str, FileReference],
+  MaxItems(16)]`); no field holds a `json.dumps` string that a task decodes again.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+A field on an `Input`/`Output` contract typed `str` or a list/set of `str` (bare,
+bounded with `MaxItems`, or optional) whose value app code under the scanned tree (tests
+excluded) writes as JSON or reads back as JSON:
+
+* written: `Contract(FIELD=json.dumps(...))` (also   `orjson.dumps(...)` with or without
+`.decode()`, and   `.model_dump_json()`), a list or set comprehension of those,
+`x.FIELD = json.dumps(...)`, or a `field_validator` naming   `FIELD` that returns
+`json.dumps(...)`; * read: `json.loads(x.FIELD)` (also `x.FIELD or default` and
+`getattr(x, 'FIELD')`), `json.loads(s) for s in x.FIELD`,   `map(json.loads, x.FIELD)`,
+`Model.model_validate_json(x.FIELD)`   or `TypeAdapter(...).validate_json(x.FIELD)`.
+
+`x` counts only when it is typed as a contract class: a parameter annotated with one, a
+local bound to `Contract(...)` / `Contract.model_validate(...)`, or `self` in a method
+of the contract.  An attribute of the same name on any other object is not evidence.
+The evidence is matched to the field declared on that class or one of its bases, across
+files, because the contract and the task code usually live apart.  One finding per
+declaration, anchored at the field; the message names the first evidence site.
+
+Fix: declare the decoded value as a typed field — a `pydantic.BaseModel`, or
+`list[Model]` for a list of records, bounded with `MaxItems` where payload safety needs
+it — and delete the encode and decode steps.  A value that grows with the source belongs
+in a `FileReference`.  On a field recorded in the contract ledger, add the typed field
+under a new name and retire the old one (retyping in place is a B005 break).
+
+WARN tier.  Suppress with `# conformance: ignore[P059] <reason>` only when a system
+outside the app needs the value as JSON text.
 
 ---
