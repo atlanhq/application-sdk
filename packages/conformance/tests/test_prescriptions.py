@@ -4558,3 +4558,29 @@ def test_p059_silent_on_same_named_keyword_of_other_call(tmp_path: Path) -> None
         ),
     }
     assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_aliased_json_module(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/x.py": "import json as j\ndef f(i):\n    return j.loads(i.credentials_json)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    ["Optional[str]", "str | None", "Annotated[str, Field(max_length=10)]", "set[str]"],
+)
+def test_p059_text_field_forms(tmp_path: Path, annotation: str) -> None:
+    files = {
+        "app/contracts.py": (
+            "from typing import Annotated, Optional\n"
+            "from pydantic import Field\n"
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            f"    blob: {annotation} = None\n"
+        ),
+        "app/x.py": "import json\ndef f(i):\n    return json.loads(i.blob)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]

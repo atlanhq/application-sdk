@@ -64,6 +64,16 @@ def _is_text_field(annotation: ast.expr) -> bool:
     return elem is not None and _is_str_node(elem)
 
 
+def _json_module_aliases(tree: ast.AST) -> frozenset[str]:
+    aliases = set(_JSON_MODULES)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in _JSON_MODULES and alias.asname:
+                    aliases.add(alias.asname)
+    return frozenset(aliases)
+
+
 def _json_function_aliases(tree: ast.AST, name: str) -> set[str]:
     aliases: set[str] = set()
     for node in ast.walk(tree):
@@ -74,17 +84,19 @@ def _json_function_aliases(tree: ast.AST, name: str) -> set[str]:
     return aliases
 
 
-def _is_json_call(node: ast.expr, name: str, bare: set[str]) -> bool:
+def _is_json_call(
+    node: ast.expr, name: str, bare: set[str], modules: frozenset[str]
+) -> bool:
     if not isinstance(node, ast.Call):
         return False
     func = node.func
     if isinstance(func, ast.Attribute) and func.attr == name:
-        return isinstance(func.value, ast.Name) and func.value.id in _JSON_MODULES
+        return isinstance(func.value, ast.Name) and func.value.id in modules
     return isinstance(func, ast.Name) and func.id in bare
 
 
-def _is_decode_call(node: ast.expr, loads: set[str]) -> bool:
-    if _is_json_call(node, "loads", loads):
+def _is_decode_call(node: ast.expr, loads: set[str], modules: frozenset[str]) -> bool:
+    if _is_json_call(node, "loads", loads, modules):
         return True
     return (
         isinstance(node, ast.Call)
@@ -93,14 +105,14 @@ def _is_decode_call(node: ast.expr, loads: set[str]) -> bool:
     )
 
 
-def _is_encode_value(node: ast.expr, dumps: set[str]) -> bool:
+def _is_encode_value(node: ast.expr, dumps: set[str], modules: frozenset[str]) -> bool:
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "decode"
     ):
         node = node.func.value
-    if _is_json_call(node, "dumps", dumps):
+    if _is_json_call(node, "dumps", dumps, modules):
         return True
     return (
         isinstance(node, ast.Call)
@@ -109,11 +121,13 @@ def _is_encode_value(node: ast.expr, dumps: set[str]) -> bool:
     )
 
 
-def _encoded_field_value(node: ast.expr, dumps: set[str]) -> bool:
-    if _is_encode_value(node, dumps):
+def _encoded_field_value(
+    node: ast.expr, dumps: set[str], modules: frozenset[str]
+) -> bool:
+    if _is_encode_value(node, dumps, modules):
         return True
     if isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
-        return _is_encode_value(node.elt, dumps)
+        return _is_encode_value(node.elt, dumps, modules)
     return False
 
 
@@ -138,6 +152,7 @@ def _collect_evidence(
 ) -> dict[str, tuple[str, int]]:
     loads = _json_function_aliases(tree, "loads")
     dumps = _json_function_aliases(tree, "dumps")
+    modules = _json_module_aliases(tree)
     evidence: dict[str, tuple[str, int]] = {}
 
     def note(field: str, kind: str, node: ast.AST) -> None:
@@ -147,12 +162,12 @@ def _collect_evidence(
         bound = _comprehension_fields(node)
         if bound:
             elt = getattr(node, "elt", None)
-            if elt is not None and _is_decode_call(elt, loads) and elt.args:
+            if elt is not None and _is_decode_call(elt, loads, modules) and elt.args:
                 arg = elt.args[0]
                 if isinstance(arg, ast.Name) and arg.id in bound:
                     note(bound[arg.id], "decoded", elt)
         if isinstance(node, ast.Call):
-            if _is_decode_call(node, loads) and node.args:
+            if _is_decode_call(node, loads, modules) and node.args:
                 attr = _field_attr(node.args[0])
                 if attr is not None:
                     note(attr, "decoded", node)
@@ -167,7 +182,7 @@ def _collect_evidence(
                     isinstance(fn, ast.Attribute)
                     and fn.attr == "loads"
                     and isinstance(fn.value, ast.Name)
-                    and fn.value.id in _JSON_MODULES
+                    and fn.value.id in modules
                 ) or (isinstance(fn, ast.Name) and fn.id in loads)
                 if attr is not None and is_loads:
                     note(attr, "decoded", node)
@@ -176,10 +191,12 @@ def _collect_evidence(
                 if (
                     builds_contract
                     and kw.arg is not None
-                    and _encoded_field_value(kw.value, dumps)
+                    and _encoded_field_value(kw.value, dumps, modules)
                 ):
                     note(kw.arg, "encoded", kw.value)
-        if isinstance(node, ast.Assign) and _encoded_field_value(node.value, dumps):
+        if isinstance(node, ast.Assign) and _encoded_field_value(
+            node.value, dumps, modules
+        ):
             for target in node.targets:
                 attr = _field_attr(target)
                 if attr is not None:
