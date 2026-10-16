@@ -729,6 +729,78 @@ class TestLogSinkFanOut:
         assert messages == ["from a thread-pool activity"]
 
 
+@contextmanager
+def _store_sink_adapters() -> (
+    Generator[tuple[AtlanLoggerAdapter, AtlanLoggerAdapter], None, None]
+):
+    """Yield ``(sink_owner, other)`` with the real loguru store sink registered.
+
+    ``sink_owner`` is constructed first, so loguru's ``_log_sink`` is bound to
+    it, as ``default_logger`` is in production. ``other`` is any later
+    ``get_logger(name)`` adapter. The periodic flush is stubbed out, so the
+    owner's buffer holds exactly what the sink appended.
+    """
+    with (
+        mock.patch(
+            "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+            True,
+        ),
+        mock.patch.object(AtlanLoggerAdapter, "_spawn_flush_thread"),
+        mock.patch.object(
+            AtlanLoggerAdapter, "_periodic_flush", new_callable=mock.AsyncMock
+        ),
+        create_logger_adapter() as owner,
+    ):
+        owner.logger_provider = None
+        other = get_logger("app.module")
+        try:
+            yield owner, other
+        finally:
+            logger.remove()
+            AtlanLoggerAdapter._reset_for_testing()
+
+
+class TestOffloadedLogsReachSinkOwner:
+    """Lines logged from offloaded code reach the store buffer, and ``error()``
+    on any adapter flushes it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_in_thread_log_lands_in_sink_owner_buffer(self):
+        """A line logged inside ``run_in_thread`` is buffered for upload.
+
+        ``run_in_thread`` targets run on a pool thread with no event loop, the
+        case where loguru skipped the old coroutine sink.
+        """
+        from application_sdk._runtime.offload import run_in_thread
+
+        with _store_sink_adapters() as (owner, other):
+            await run_in_thread(other.warning, "offloaded line")
+
+            messages = [r["message"] for r in owner._buffer]
+
+        assert messages == ["offloaded line"]
+
+    def test_error_on_other_adapter_flushes_sink_owner_buffer(self):
+        """``error()`` drains the buffer records actually land in.
+
+        Called from a thread with no running loop so ``_sync_flush`` runs the
+        flush to completion before returning.
+        """
+        with _store_sink_adapters() as (owner, other):
+            with mock.patch.object(
+                owner, "_flush_records", new_callable=mock.AsyncMock
+            ) as flush:
+                other.info("context line")
+                other.error("failure line")
+
+            flushed = [r["message"] for c in flush.await_args_list for r in c.args[0]]
+            remaining = list(owner._buffer)
+
+        assert flushed == ["context line", "failure line"]
+        assert remaining == []
+
+
 class TestCorrelationContext:
     """Tests for correlation context in logging."""
 
