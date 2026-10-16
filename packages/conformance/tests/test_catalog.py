@@ -428,6 +428,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # app's contract/ + app/generated/ tree, which the SDK does not have.
     # K027: entrypoint contract classes sharing one bare class name — the SDK
     # declares no @entrypoint contracts of its own, so nothing can collide (FND-3140).
+    # K028: a semver app with no releaseSchedule — the schedule is declared in an
+    # app's contract/app.pkl and read from its atlan.yaml release_model; the SDK
+    # has neither and is not released on the app release train (FND-4040).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -532,6 +535,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K020",
         "K021",
         "K027",
+        "K028",
         "P004",
         "P005",
         "P008",
@@ -937,8 +941,9 @@ def test_catalog_k_series_present() -> None:
     and the legacy-alias agreement rule K015 (manifest legacy_workflow_types vs
     the SDK App declaration) (CONNECT-1081), plus the artifact-schema pair K016
     (a public hand-off with no declaration) and K017 (a declaration its own
-    writer contradicts) (ADR-0020), and K027 (two entrypoints binding different
-    contract classes under one bare class name) (FND-3140)."""
+    writer contradicts) (ADR-0020), K027 (two entrypoints binding different
+    contract classes under one bare class name) (FND-3140), and K028 (a semver
+    app with no declared releaseSchedule) (FND-4040)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -964,6 +969,7 @@ def test_catalog_k_series_present() -> None:
         "K020",
         "K021",
         "K027",
+        "K028",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
