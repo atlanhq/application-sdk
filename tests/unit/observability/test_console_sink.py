@@ -200,3 +200,41 @@ def test_formatting_runs_on_the_logging_thread() -> None:
 
     assert format_threads == [threading.current_thread().name]
     assert stream.lines == ["rendered-here\n"]
+
+
+@pytest.mark.parametrize("max_records", [0, -1])
+def test_non_positive_capacity_is_rejected(max_records: int) -> None:
+    with pytest.raises(ValueError, match="max_records"):
+        ConsoleWriter(max_records=max_records)
+
+
+class _FailOnceStream(_GatedStream):
+    """A gated stream that rejects the first drop warning written to it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.failed = False
+
+    def write(self, text: str) -> int:
+        if "console log queue full" in text and not self.failed:
+            self.failed = True
+            raise OSError("broken pipe")
+        return super().write(text)
+
+
+def test_failed_drop_warning_is_retried() -> None:
+    writer = ConsoleWriter(max_records=1, drop_warning_interval=0.0)
+    stream = _FailOnceStream()
+    writer.put(stream, "first\n")
+    assert stream.entered.wait(timeout=5.0)
+    writer.put(stream, "queued-0\n")
+    writer.put(stream, "queued-1\n")
+    stream.release.set()
+    assert writer.flush(timeout=5.0)
+    assert stream.failed
+    assert not any("console log queue full" in line for line in stream.lines)
+
+    # The next written record carries the warning that failed before.
+    writer.put(stream, "after\n")
+    assert writer.flush(timeout=5.0)
+    assert any("dropped 1 records" in line for line in stream.lines)

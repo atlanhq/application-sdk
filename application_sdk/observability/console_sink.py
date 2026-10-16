@@ -46,6 +46,8 @@ class ConsoleWriter:
         max_records: int = CONSOLE_QUEUE_MAX_RECORDS,
         drop_warning_interval: float = DROP_WARNING_INTERVAL_SECONDS,
     ) -> None:
+        if max_records < 1:
+            raise ValueError(f"max_records must be at least 1, got {max_records}")
         self._max_records = max_records
         self._drop_warning_interval = drop_warning_interval
         self._init_state()
@@ -87,6 +89,7 @@ class ConsoleWriter:
             # A forked child inherits the queue and lock but not the thread.
             self._init_state()
         with self._cond:
+            # max_records >= 1 is enforced in __init__, so a full queue is never empty here.
             if len(self._queue) >= self._max_records:
                 self._queue.popleft()
                 self._dropped += 1
@@ -126,9 +129,12 @@ class ConsoleWriter:
             try:
                 self._write(stream, text)
                 if pending_drops and self._drop_warning_due():
-                    self._write(stream, self._drop_warning(pending_drops))
-                    with self._cond:
-                        self._dropped_reported += pending_drops
+                    # Count the drops as reported only once the warning is
+                    # actually written. A failed write is retried after the
+                    # next interval.
+                    if self._write(stream, self._drop_warning(pending_drops)):
+                        with self._cond:
+                            self._dropped_reported += pending_drops
             finally:
                 with self._cond:
                     self._in_flight = 0
@@ -149,15 +155,17 @@ class ConsoleWriter:
         )
 
     @staticmethod
-    def _write(stream: TextIO, text: str) -> None:
+    def _write(stream: TextIO, text: str) -> bool:
+        """Write and flush *text*. Return ``False`` if the stream rejected it."""
         try:
             stream.write(text)
             stream.flush()
         # A closed or broken stream (ValueError, OSError) must not kill the
         # writer thread. There's nowhere left to report it, so the line is lost.
         # conformance: ignore[E002] the failing sink is the console itself; logging would recurse into it
-        except (OSError, ValueError):  # noqa: S110
-            pass
+        except (OSError, ValueError):
+            return False
+        return True
 
 
 # One writer for the whole process: one thread and one ordering across

@@ -664,7 +664,7 @@ If you need replay logs — for example when using `temporalio.worker.Replayer` 
 Console lines (WARNING and below to stdout, ERROR and above to stderr) are formatted on the thread that logs, so trace and correlation ids are captured where they're set. A background thread then writes them. A stalled stdout or stderr, such as a full pipe or a slow log collector, delays console output but can't block the event loop or the activity heartbeats.
 
 - The queue holds up to 10,000 lines. When it's full, the **oldest** line is dropped. Drops are counted, and at most once every 30 seconds a line like `console log queue full: dropped N records (total M)` is written once the stream accepts writes again.
-- `logger.error()` / `critical()` called on a thread with no running event loop waits up to 1 second for the queue to drain, so the error reaches the console before the call returns. On the event loop it doesn't wait.
+- `logger.error()` / `critical()` called on a thread with no running event loop waits up to 1 second for the queue to drain, which gives the error a chance to reach the console before the call returns. It's a best-effort wait: if stdout or stderr is still stalled after 1 second, the call returns with the line still queued. On the event loop it doesn't wait.
 - At interpreter exit the queue gets up to 2 seconds to drain.
 - `application_sdk.observability.console_sink.flush_console_logs(timeout)` drains on demand, for example in tests that read `capsys`. `console_log_drop_count()` returns the drop total.
 
