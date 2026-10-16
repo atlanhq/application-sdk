@@ -8,8 +8,6 @@ import application_sdk.constants as constants
 from application_sdk.constants import (
     _load_dirty_restart_max_wait_seconds,
     _load_oom_restart_check,
-    _load_temporary_path_sweep_keep,
-    _load_temporary_path_sweep_on_start,
     _load_worker_liveness_max_idle_seconds,
 )
 
@@ -357,76 +355,3 @@ class TestLoadOomRestartCheck:
         monkeypatch.setenv(self.ENV, "apiserver")
         with pytest.warns(UserWarning, match="is not one of"):
             assert _load_oom_restart_check() == "none"
-
-
-class TestLoadTemporaryPathSweepOnStart:
-    """Cover the ``ATLAN_TEMPORARY_PATH_SWEEP_ON_START`` loader."""
-
-    ENV = "ATLAN_TEMPORARY_PATH_SWEEP_ON_START"
-    K8S = "KUBERNETES_SERVICE_HOST"
-
-    def test_off_by_default_outside_kubernetes(self, monkeypatch: pytest.MonkeyPatch):
-        """Local development keeps its files."""
-        monkeypatch.delenv(self.ENV, raising=False)
-        monkeypatch.delenv(self.K8S, raising=False)
-        assert _load_temporary_path_sweep_on_start() is False
-
-    def test_on_by_default_inside_kubernetes(self, monkeypatch: pytest.MonkeyPatch):
-        """There the volume is the pod's own and outlives a crashed container."""
-        monkeypatch.delenv(self.ENV, raising=False)
-        monkeypatch.setenv(self.K8S, "10.0.0.1")
-        assert _load_temporary_path_sweep_on_start() is True
-
-    def test_an_empty_value_counts_as_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """An unset Helm value renders as an empty string."""
-        monkeypatch.setenv(self.ENV, "")
-        monkeypatch.setenv(self.K8S, "10.0.0.1")
-        assert _load_temporary_path_sweep_on_start() is True
-
-    def test_false_turns_it_off_inside_kubernetes(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """The override wins over the Kubernetes default, downwards."""
-        monkeypatch.setenv(self.ENV, "false")
-        monkeypatch.setenv(self.K8S, "10.0.0.1")
-        assert _load_temporary_path_sweep_on_start() is False
-
-    def test_true_turns_it_on_outside_kubernetes(self, monkeypatch: pytest.MonkeyPatch):
-        """The override wins over the default elsewhere, upwards."""
-        monkeypatch.setenv(self.ENV, "true")
-        monkeypatch.delenv(self.K8S, raising=False)
-        assert _load_temporary_path_sweep_on_start() is True
-
-    def test_case_and_padding_are_tolerated(self, monkeypatch: pytest.MonkeyPatch):
-        """Helm renders values with whatever whitespace the template had."""
-        monkeypatch.setenv(self.ENV, " TRUE\n")
-        monkeypatch.delenv(self.K8S, raising=False)
-        assert _load_temporary_path_sweep_on_start() is True
-
-    def test_an_unknown_word_turns_it_off_and_says_so(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Off even in Kubernetes: a typo must never be what deletes files."""
-        monkeypatch.setenv(self.ENV, "flase")
-        monkeypatch.setenv(self.K8S, "10.0.0.1")
-        with pytest.warns(UserWarning, match="is not 'true' or 'false'"):
-            assert _load_temporary_path_sweep_on_start() is False
-
-
-class TestLoadTemporaryPathSweepKeep:
-    """Cover the ``ATLAN_TEMPORARY_PATH_SWEEP_KEEP`` loader."""
-
-    ENV = "ATLAN_TEMPORARY_PATH_SWEEP_KEEP"
-
-    def test_empty_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """Only the built-in keep-list applies by default."""
-        monkeypatch.delenv(self.ENV, raising=False)
-        assert _load_temporary_path_sweep_keep() == ()
-
-    def test_splits_on_commas_and_drops_blanks(self, monkeypatch: pytest.MonkeyPatch):
-        """Padding and empty entries, a trailing comma included, are not patterns."""
-        monkeypatch.setenv(self.ENV, " connection-cache, models/*.onnx ,, ")
-        assert _load_temporary_path_sweep_keep() == (
-            "connection-cache",
-            "models/*.onnx",
-        )

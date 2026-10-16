@@ -398,14 +398,6 @@ Requests and limits are deployment configuration and are deliberately not
 requested from the SDK or from app code — neither can know the number. The error
 tells the operator which deployment to raise and roughly by how much.
 
-A worker that died does not take its scratch with it. A container killed for
-memory restarts in the same pod, on the same volume, and in worker mode the SDK
-deletes what the dead process left under `ATLAN_TEMPORARY_PATH` before the new
-one polls, so a crash loop no longer grows the disk with every restart. It is on
-by default in Kubernetes only, keeps what `ATLAN_TEMPORARY_PATH_SWEEP_KEEP` names,
-and never touches scratch an app keeps outside `ATLAN_TEMPORARY_PATH`. See
-[Stale scratch sweep at worker start](common.md#stale-scratch-sweep-at-worker-start).
-
 Before a large write whose size is known up front, the SDK checks free space
 first, so a plainly undersized volume fails in seconds with `needs ~N GiB, has
 M` rather than corrupting output forty minutes in. The check is strict — free

@@ -23,15 +23,6 @@ This page covers **runtime** variables only. Variables starting `E2E_` configure
 | `ATLAN_CONTRACT_GENERATED_DIR` | `app/generated` | Directory for generated contract JSON (configmaps, manifest). In Docker (`WORKDIR=/app`) this resolves to `/app/app/generated`. |
 | `ATLAN_FRONTEND_ASSETS_PATH` | `app/generated/frontend/static` | Path to static frontend assets served by the handler. |
 
-### Stale scratch at worker start
-
-A container killed for memory restarts in the same pod, on the same volume, so the dead process's scratch is still under `ATLAN_TEMPORARY_PATH` when the next one starts. In worker mode the SDK deletes it once, before the worker loads the app or polls. It deletes only the children of `ATLAN_TEMPORARY_PATH`, never the directory itself; unlinks symbolic links without following them; does not descend into another filesystem mounted inside; and refuses to run when the path resolves to a filesystem root, a one-component path, the home directory or the app's working directory (or a parent of either). It always keeps the SDK's telemetry staging directory (`artifacts/apps/*/*/observability`), `lost+found`, and Python's temporary-file directory when that lies inside. Handler and combined modes never sweep. One `INFO` line reports what was removed. See [Stale scratch sweep](concepts/common.md#stale-scratch-sweep-at-worker-start).
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ATLAN_TEMPORARY_PATH_SWEEP_ON_START` | on in Kubernetes, off elsewhere | `true` or `false` overrides in both directions. Unset or empty, the sweep runs only when `KUBERNETES_SERVICE_HOST` is set, so local development keeps its files. Any other value turns the sweep off, with a startup warning. |
-| `ATLAN_TEMPORARY_PATH_SWEEP_KEEP` | _(empty)_ | Comma-separated glob patterns, relative to `ATLAN_TEMPORARY_PATH`, naming entries to keep: a cache the app reuses across activities on the same pod, e.g. `connection-cache,models/*.onnx`. Each `/`-separated segment matches one path component and a kept entry is kept whole. An absolute pattern or one with a `..` segment makes the sweep refuse to run. |
-
 ### Release metadata
 
 Two sources, baked first. `build-and-publish-app.yaml` writes `app/atlan_build.json` into the image (`app_version`, `commit_sha`, `image`, `built_at`); the SDK reads it at startup. Deployers (Local Marketplace into the Helm release, the SDR orchestrator into the container) may still stamp env vars. When both exist the file wins: it describes the image, the env var describes what a deployer thinks it deployed. Images built before this CI started baking the file have no file and fall back to the env vars, then empty. Exposed to consumers via the OTel `target_info` gauge (one row per pod). Leave empty for local development. See [`standards/release-flow.md#image-identity`](standards/release-flow.md#image-identity).

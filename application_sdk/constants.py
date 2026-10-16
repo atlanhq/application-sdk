@@ -220,48 +220,6 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
-
-#: Whether a worker deletes what an earlier process left under
-#: :data:`TEMPORARY_PATH` before it starts polling. The mechanism, and what it
-#: never deletes, is in ``application_sdk.common.scratch_sweep``.
-#:
-#: Unset, it is on only in Kubernetes (``KUBERNETES_SERVICE_HOST`` is set),
-#: where the volume holding ``TEMPORARY_PATH`` belongs to the pod and outlives a
-#: container that was killed and restarted in place; everywhere else it is off,
-#: so local development keeps its files. ``true`` and ``false`` override in both
-#: directions. An empty value counts as unset, because that is how an unset Helm
-#: value renders. Any other value turns the sweep off and says so: a deletion
-#: must never be the result of a typo.
-def _load_temporary_path_sweep_on_start() -> bool:
-    raw = os.getenv("ATLAN_TEMPORARY_PATH_SWEEP_ON_START", "").strip().lower()
-    if raw in ("true", "false"):
-        return raw == "true"
-    if raw:
-        warnings.warn(
-            f"ATLAN_TEMPORARY_PATH_SWEEP_ON_START={raw!r} is not 'true' or 'false'; "
-            "the startup sweep of TEMPORARY_PATH stays off",
-            stacklevel=2,
-        )
-        return False
-    return bool(os.getenv("KUBERNETES_SERVICE_HOST", "").strip())
-
-
-TEMPORARY_PATH_SWEEP_ON_START: bool = _load_temporary_path_sweep_on_start()
-
-
-#: Entries the startup sweep keeps, as comma-separated glob patterns relative to
-#: :data:`TEMPORARY_PATH` (for example ``connection-cache,models/*.onnx``), for
-#: a cache an app deliberately reuses across activities on the same pod. Each
-#: ``/``-separated segment matches one path component (``*``, ``?`` and
-#: ``[...]`` never cross a ``/``), and a kept entry is kept whole. Patterns are
-#: validated by the sweep, which refuses to run on one it cannot honour.
-def _load_temporary_path_sweep_keep() -> tuple[str, ...]:
-    raw = os.getenv("ATLAN_TEMPORARY_PATH_SWEEP_KEEP", "")
-    return tuple(pattern.strip() for pattern in raw.split(",") if pattern.strip())
-
-
-TEMPORARY_PATH_SWEEP_KEEP: tuple[str, ...] = _load_temporary_path_sweep_keep()
-
 PREFLIGHT_GATE_MODE_ENV = "ATLAN_PREFLIGHT_GATE_MODE"
 """Removed lever, kept one release as an import shim.
 

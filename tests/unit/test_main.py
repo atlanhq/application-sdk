@@ -1510,11 +1510,6 @@ class TestRunWorkerMode:
                 new_callable=AsyncMock,
             ),
             patch("application_sdk.main._install_graceful_signal_handlers"),
-            # Never the real sweep here: a test run inside a Kubernetes pod
-            # would otherwise clear this checkout's ./local/tmp.
-            patch(
-                "application_sdk.common.scratch_sweep.sweep_temporary_path"
-            ) as mock_sweep,
         ):
             yield {
                 "infra": infra,
@@ -1522,7 +1517,6 @@ class TestRunWorkerMode:
                 "set_infra": mock_set_infra,
                 "close_infra": mock_close_infra,
                 "health": mock_health,
-                "sweep": mock_sweep,
             }
 
     @pytest.fixture
@@ -1556,53 +1550,6 @@ class TestRunWorkerMode:
         worker_patches["create_client"].assert_awaited_once()
         worker_patches["close_infra"].assert_awaited_once()
         worker_patches["health"].assert_called_once()
-
-    async def test_sweeps_stale_scratch_once_before_anything_else_starts(
-        self, worker_patches, wait_patch
-    ) -> None:
-        """The sweep runs once, before the app module is loaded and before a
-        worker exists to poll: nothing this process writes can predate it."""
-        order: list[str] = []
-        worker_patches["sweep"].side_effect = lambda: order.append("sweep")
-
-        def _load_app(*_args: Any, **_kwargs: Any) -> Any:
-            order.append("load_app_class")
-            return _fake_app_class()
-
-        def _create_worker(*_args: Any, **_kwargs: Any) -> Any:
-            order.append("create_worker")
-            return _make_async_cm()
-
-        cfg = AppConfig(mode="worker", app_module="pkg:FakeApp")
-        with (
-            patch("application_sdk.main.load_app_class", side_effect=_load_app),
-            patch(
-                "application_sdk.execution._temporal.worker.create_worker",
-                side_effect=_create_worker,
-            ),
-        ):
-            await run_worker_mode(cfg)
-
-        worker_patches["sweep"].assert_called_once_with()
-        assert order == ["sweep", "load_app_class", "create_worker"]
-
-    async def test_a_supervised_rebuild_does_not_sweep_again(
-        self, worker_patches
-    ) -> None:
-        """An in-process rebuild can leave activity threads still writing, so
-        the sweep belongs to process start, not to each worker generation."""
-
-        async def _rebuild_twice(**kwargs: Any) -> None:
-            kwargs["build_worker"]()
-            kwargs["build_worker"]()
-
-        cfg = AppConfig(mode="worker", app_module="pkg:FakeApp")
-        with patch(
-            "application_sdk.main._supervise_worker", side_effect=_rebuild_twice
-        ):
-            await run_worker_mode(cfg)
-
-        worker_patches["sweep"].assert_called_once_with()
 
     async def test_auth_enabled_acquires_token(
         self, worker_patches, auth_manager, wait_patch
@@ -1906,30 +1853,6 @@ class TestRunHandlerMode:
             run_handler_mode(cfg)
         mock_validate.assert_called_once()
 
-    def test_handler_mode_does_not_sweep_scratch(self) -> None:
-        """A handler runs no activities and need not own its volume alone."""
-        infra = self._make_infra()
-        p_infra, p_load_app, p_conv, p_set, p_validate = self._common_patches(infra)
-        with (
-            p_infra,
-            p_load_app,
-            p_conv,
-            p_set,
-            p_validate,
-            patch("application_sdk.main.load_handler_class", return_value=None),
-            patch("application_sdk.handler.DefaultHandler"),
-            patch("application_sdk.handler.run_app_handler_service"),
-            patch(
-                "application_sdk.main._flush_observability",
-                new_callable=AsyncMock,
-            ),
-            patch(
-                "application_sdk.common.scratch_sweep.sweep_temporary_path"
-            ) as mock_sweep,
-        ):
-            run_handler_mode(AppConfig(mode="handler", app_module="pkg:FakeApp"))
-        mock_sweep.assert_not_called()
-
     def test_handler_mode_closes_infrastructure(self) -> None:
         """Handler mode should close infrastructure on exit (parity with worker/combined)."""
         infra = self._make_infra()
@@ -2047,17 +1970,6 @@ class TestRunCombinedMode:
         assert kwargs["prometheus_bind_address"] == "127.0.0.1:9464"
         combined_patches["uvicorn_server"].serve.assert_awaited()
         combined_patches["close_infra"].assert_awaited_once()
-
-    async def test_combined_mode_does_not_sweep_scratch(self, combined_patches) -> None:
-        """Combined mode serves SDR, docker-compose and local development, where
-        the volume under TEMPORARY_PATH is not known to be the pod's own."""
-        with patch(
-            "application_sdk.common.scratch_sweep.sweep_temporary_path"
-        ) as mock_sweep:
-            await run_combined_mode(
-                AppConfig(mode="combined", app_module="pkg:FakeApp")
-            )
-        mock_sweep.assert_not_called()
 
     async def test_reuses_existing_infrastructure(self, combined_patches) -> None:
         """If infra is already set, _create_infrastructure must NOT be called."""

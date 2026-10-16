@@ -40,8 +40,7 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 import orjson
 
-from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common import restart_marker, scratch_sweep
+from application_sdk.common import restart_marker
 from application_sdk.common._env import env_int as _env_int
 from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.discovery import (
@@ -1474,15 +1473,6 @@ async def run_worker_mode(config: AppConfig) -> None:
         config.temporal_host,
         config.task_queue,
     )
-
-    # A container killed for memory restarts in place, on the pod's own volume,
-    # so what is under TEMPORARY_PATH now was left by a process that is gone.
-    # Clear it once, here: before the infrastructure, the app module or a worker
-    # exists to write anything of this process's own, and long before the first
-    # poll. Not in the restart supervisor, whose in-process rebuild can leave
-    # activity threads still writing. Off outside Kubernetes by default; see
-    # application_sdk.common.scratch_sweep for what it keeps and refuses.
-    await run_in_thread(scratch_sweep.sweep_temporary_path)
 
     infra = await _create_infrastructure()
     from application_sdk.storage.preflight import (  # noqa: PLC0415 — cold path: SDR-gated; only runs when ENABLE_ATLAN_UPLOAD=true
