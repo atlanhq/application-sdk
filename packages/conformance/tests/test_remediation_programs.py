@@ -144,6 +144,22 @@ def test_every_catalog_series_has_a_remediation_area() -> None:
     assert not undispatched, f"remediate-finding dispatches no row for: {undispatched}"
 
 
+#: A runner call forwards ``rule_ids`` verbatim, or narrows it to a fixed group
+#: with ``intersect(rule_ids, [...])``.  Narrowing can only shrink a ``--rule``
+#: run — an empty ``rule_ids`` means every rule, so the intersection is the group
+#: — and never widen one, which is the failure this guard exists to catch.
+_FORWARDS_RULE_IDS = re.compile(
+    r"^\s*rule_ids: (?:rule_ids|intersect\(rule_ids, \[[^\]]*\]\))\s*$", re.MULTILINE
+)
+
+
+def test_rule_ids_forwarding_pattern() -> None:
+    assert _FORWARDS_RULE_IDS.search("    rule_ids: rule_ids")
+    assert _FORWARDS_RULE_IDS.search('    rule_ids: intersect(rule_ids, ["P060"])')
+    assert not _FORWARDS_RULE_IDS.search('    rule_ids: ["P060"]')
+    assert not _FORWARDS_RULE_IDS.search("    rule_ids: worker_disk_ids")
+
+
 @pytest.mark.parametrize("area", ALL_AREAS)
 def test_every_area_forwards_rule_ids_into_every_runner_call(area: str) -> None:
     """THE hop that was actually broken (sdk-review on this PR, F1): the
@@ -156,7 +172,7 @@ def test_every_area_forwards_rule_ids_into_every_runner_call(area: str) -> None:
         text, "detect-violations"
     )
     assert blocks, f"{area} makes no runner calls — the test would be vacuous"
-    missing = [b for b in blocks if "rule_ids: rule_ids" not in b]
+    missing = [b for b in blocks if not _FORWARDS_RULE_IDS.search(b)]
     assert not missing, (
         f"{area}: {len(missing)} runner call(s) do not forward rule_ids — "
         f"a --rule-scoped run widens to the whole series at this hop:\n"
@@ -585,6 +601,32 @@ def test_blind_gate_areas_force_the_unverifiable_classification(area: str) -> No
     text = _read(f"areas/{area}.prose.md")
     assert 'classification_override: "unverifiable"' in text
     assert "require_cited_evidence: true" in text
+
+
+def test_prescriptions_area_applies_the_worker_disk_group_by_default() -> None:
+    """P060–P062 graduate out of suggest-only: a default /remediate applies them.
+
+    The first runner call in the area runs before the ``apply_unverifiable``
+    branch, so it fires in every mode; it must target exactly the worker-disk
+    group and carry no ``classification_override``, because its gates check the
+    fix (the rule's own recheck, and tests that raise ``FileNotFoundError`` on an
+    over-eager delete).  The suggest-only pass must skip the group so the same
+    finding is not drafted twice.
+    """
+    from conformance.suite.rules import CATALOG
+    from conformance.suite.schema.disposition import EnforcementTier
+
+    text = _read("areas/prescriptions.prose.md")
+    applied = _call_blocks(text, "detect-fix-recheck")[0]
+    group = re.search(r"intersect\(rule_ids, (\[[^\]]*\])\)", applied)
+    assert group, applied
+    ids = re.findall(r'"(P\d{3})"', group.group(1))
+    assert ids == ["P060", "P061", "P062"]
+    assert all(CATALOG[rule_id].tier is EnforcementTier.BLOCK for rule_id in ids)
+    assert "classification_override" not in applied
+    execution = text.split("### Execution", 1)[1]
+    assert execution.index(applied) < execution.index("if apply_unverifiable:")
+    assert 'if finding.rule_id in ["P060", "P061", "P062"]:' in execution
 
 
 def test_dockerfile_area_does_not_claim_to_be_unverifiable() -> None:

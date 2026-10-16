@@ -1,4 +1,4 @@
-"""O008 TempFileOutsideWorkerVolume — flag stdlib ``tempfile`` scratch with no ``dir=``.
+"""P061 TempFileOutsideWorkerVolume — stdlib ``tempfile`` scratch with no ``dir=``.
 
 Given no directory, the ``tempfile`` constructors create their file or
 directory in the system temp dir (``$TMPDIR``, else ``/tmp``), not under the
@@ -13,22 +13,24 @@ Six constructors are graded — ``mkdtemp``, ``mkstemp``, ``NamedTemporaryFile``
 call is flagged when its directory is:
 
 * omitted (neither ``dir=`` nor the positional slot is given),
-* the literal ``None``, or
-* ``tempfile.gettempdir()``, which is the same location spelled out.
+* the literal ``None``,
+* ``tempfile.gettempdir()``, the same location spelled out, or
+* the literal ``"/tmp"`` / ``"/var/tmp"`` itself (with or without a trailing
+  slash) — again the system temp dir, so the cheapest non-fix cannot clear the
+  finding.  A sub-directory literal (``"/tmp/output"``) is accepted: some apps
+  mount their volume there.
 
 ``dir`` passed positionally is read at each constructor's real position
-(:data:`DIR_POSITION`).  Only stdlib bindings count — ``import tempfile [as t]``
-and ``from tempfile import mkdtemp [as x]`` — so an app helper that happens to
-share a name is never matched.  Any other ``dir`` expression is compliant, and a
+(:data:`DIR_POSITION`).  Only stdlib bindings count, so an app helper that
+shares a name is never matched.  Any other ``dir`` expression is accepted, and a
 ``*args`` / ``**kwargs`` splat that may supply it is left alone.
 
-Known limits (biased toward zero false positives at WARN):
+Known limits (biased toward zero false positives at BLOCK):
 
 * Out of scope: ``tempfile.mktemp`` (deprecated) and paths assembled by hand
   from ``tempfile.gettempdir()``.
 * A process-wide ``tempfile.tempdir`` assignment or a ``TMPDIR`` set in deploy
-  config is invisible to a per-file scan, so an app that points either under
-  ``TEMPORARY_PATH`` still sees findings.
+  config is invisible to a per-file scan.
 * Storing the callable (``make = tempfile.mkdtemp; make()``), passing it to
   ``run_in_thread`` / ``functools.partial``, and ``from tempfile import *`` are
   not followed — the O001 limitation.
@@ -39,6 +41,7 @@ from __future__ import annotations
 import ast
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._local_files import TempfileBindings, runs_on_worker
 from conformance.suite.schema.findings import Finding
 
 #: 0-based position of the ``dir`` parameter in each graded constructor's
@@ -54,8 +57,10 @@ DIR_POSITION: dict[str, int] = {
     "SpooledTemporaryFile": 7,
 }
 
-_TEMPFILE = "tempfile"
 _GETTEMPDIR = "gettempdir"
+
+#: Literal directories that are the system temp dir itself.
+_SYSTEM_TEMP_LITERALS = frozenset({"/tmp", "/tmp/", "/var/tmp", "/var/tmp/"})
 
 _TAIL = (
     "creates its scratch in the system temp dir ($TMPDIR, else /tmp), outside "
@@ -66,72 +71,25 @@ _TAIL = (
 )
 
 
-def collect_tempfile_bindings(tree: ast.AST) -> tuple[frozenset[str], dict[str, str]]:
-    """Return ``(module_names, func_names)`` for stdlib ``tempfile`` bindings.
-
-    * ``module_names`` — local names bound to the module (``import tempfile as
-      t`` → ``t``).
-    * ``func_names`` — local name → stdlib name for the graded constructors and
-      ``gettempdir`` (``from tempfile import mkdtemp as mk`` → ``{"mk":
-      "mkdtemp"}``).
-
-    Walks the whole module, so function-local imports are covered.
-    """
-    module_names: set[str] = set()
-    func_names: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name == _TEMPFILE:
-                    module_names.add(alias.asname or _TEMPFILE)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level != 0 or node.module != _TEMPFILE:
-                continue
-            for alias in node.names:
-                if alias.name in DIR_POSITION or alias.name == _GETTEMPDIR:
-                    func_names[alias.asname or alias.name] = alias.name
-    return frozenset(module_names), func_names
-
-
-def _stdlib_name(
-    func: ast.expr, module_names: frozenset[str], func_names: dict[str, str]
-) -> str | None:
-    """The stdlib ``tempfile`` function *func* resolves to, else ``None``."""
-    if (
-        isinstance(func, ast.Attribute)
-        and isinstance(func.value, ast.Name)
-        and func.value.id in module_names
-    ):
-        return func.attr
-    if isinstance(func, ast.Name):
-        return func_names.get(func.id)
-    return None
-
-
-def _is_system_temp(
-    expr: ast.expr, module_names: frozenset[str], func_names: dict[str, str]
-) -> bool:
-    """True for ``None`` or ``tempfile.gettempdir()`` — both mean the system temp dir."""
+def _is_system_temp(expr: ast.expr, bindings: TempfileBindings) -> bool:
+    """True for ``None``, ``"/tmp"``-like literals and ``tempfile.gettempdir()``."""
     if isinstance(expr, ast.Constant):
-        return expr.value is None
+        return expr.value is None or expr.value in _SYSTEM_TEMP_LITERALS
     return (
         isinstance(expr, ast.Call)
         and not expr.args
         and not expr.keywords
-        and _stdlib_name(expr.func, module_names, func_names) == _GETTEMPDIR
+        and bindings.resolve(expr.func) == _GETTEMPDIR
     )
 
 
 def _dir_problem(
-    call: ast.Call,
-    position: int,
-    module_names: frozenset[str],
-    func_names: dict[str, str],
+    call: ast.Call, position: int, bindings: TempfileBindings
 ) -> str | None:
     """How *call* falls back to the system temp dir, or ``None`` when it does not."""
     explicit = next((kw for kw in call.keywords if kw.arg == "dir"), None)
     if explicit is not None:
-        if _is_system_temp(explicit.value, module_names, func_names):
+        if _is_system_temp(explicit.value, bindings):
             return f"dir={ast.unparse(explicit.value)}"
         return None
     if any(kw.arg is None for kw in call.keywords):
@@ -140,36 +98,38 @@ def _dir_problem(
         return None  # a *args splat may supply dir
     if len(call.args) > position:
         arg = call.args[position]
-        if _is_system_temp(arg, module_names, func_names):
+        if _is_system_temp(arg, bindings):
             return f"dir={ast.unparse(arg)}"
         return None
     return "no dir="
 
 
-def check_o008(
+def check_p061(
     tree: ast.AST,
     filename: str,
     directives: dict[int, _IgnoreDirective],
 ) -> list[Finding]:
-    """Emit O008 for stdlib ``tempfile`` constructors that fall back to system temp."""
-    module_names, func_names = collect_tempfile_bindings(tree)
-    if not module_names and not func_names:
+    """Emit P061 for stdlib ``tempfile`` constructors that fall back to system temp."""
+    if not runs_on_worker(filename):
+        return []
+    bindings = TempfileBindings(tree)
+    if bindings.empty:
         return []
     findings: list[Finding] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        name = _stdlib_name(node.func, module_names, func_names)
+        name = bindings.resolve(node.func)
         position = DIR_POSITION.get(name) if name is not None else None
         if position is None:
             continue
-        problem = _dir_problem(node, position, module_names, func_names)
+        problem = _dir_problem(node, position, bindings)
         if problem is None:
             continue
         findings.append(
             make_finding(
                 filename=filename,
-                rule_id="O008",
+                rule_id="P061",
                 node=node,
                 message=f"tempfile.{name}() with {problem} {_TAIL}",
                 directives=directives,

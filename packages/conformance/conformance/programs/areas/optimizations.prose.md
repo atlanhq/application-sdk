@@ -72,14 +72,15 @@ Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
 **Judgment rules** (`classification = "judgment"`; always route to residue).
-Two flags apply in this area: **O001, O005 and O008 are `autofixable = true`**
+Two flags apply in this area: **O001, O005 and O009 are `autofixable = true`**
 — the lane applies the prescription below and residues the result for audit —
-while **O002, O003, O004, O006, O007 and O009 are `autofixable = false`**,
+while **O002, O003, O004, O006 and O010 are `autofixable = false`**,
 *migration* rules: for those, apply nothing and return `not_remediable = true`
 with a `migration_brief` built from the reference app named by
 `finding.canonical_reference` (see `remediate-finding`'s *Reference apps,
 impact analysis and verification*).  Produce a `"fix"` outcome only for the
-three auto-fixable rules:
+three auto-fixable rules.  (O007 and O008 are vacant: they graduated to the
+mandatory P060/P061, whose prescriptions live in `areas/prescriptions.prose.md`.)
 
 - **O001 OrjsonOverStdlibJson** — the site calls `json.dumps(...)` or
   `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so
@@ -334,45 +335,43 @@ three auto-fixable rules:
   - Never "resolve" the token by hardcoding a concrete app name: that hides
     the finding while freezing the wrong value into every other tenant.
 
-- **O007 UploadRetainsLocalCopy** (worker-disk) — an SDK `upload_file` call
-  omits `retain_local_copy` or passes `True`, so the uploaded file stays on
-  the worker's disk.  Migration: apply nothing; put the draft in the
-  `migration_brief`.  First read what happens to `local_path` after the
-  upload: a later read in the same task, or a `FileReference` built from it
-  and returned, means the file is still needed — propose
-  `# conformance: ignore[O007] <reason>` naming that reader and what removes
-  the file afterwards.  Otherwise propose `retain_local_copy=False` only when
-  the path is provably under `TEMPORARY_PATH` (built from it or from the
-  workflow output path); for any other path propose deleting the file once
-  the upload returns.  Never propose `retain_local_copy=False` for a path
-  outside `TEMPORARY_PATH`: the SDK deletes nothing there, so it only hides
-  the finding.
-- **O008 TempFileOutsideWorkerVolume** (worker-disk) — a stdlib `tempfile`
-  constructor is given no directory (`dir=` omitted, `dir=None`, or
-  `dir=tempfile.gettempdir()`).  Pass `dir=` a directory under
-  `TEMPORARY_PATH` (`from application_sdk.constants import TEMPORARY_PATH`),
-  as a keyword, replacing any `None`/`gettempdir()` value and keeping every
-  other argument.  `tempfile` does not create a missing `dir`, so make sure it
-  exists first (`os.makedirs(<dir>, exist_ok=True)` before the call).  If the
-  app already has a scratch-root helper that resolves under `TEMPORARY_PATH`,
-  use it instead of a new constant.  The re-check is
-  `atlan-application-sdk-conformance detect --rule O008`; the orthogonal
-  gate is the test suite.
 - **O009 WorkerVolumeWithoutAutoresize** (worker-disk) — a `deploy.storage` /
   `deploy.storageWorker` entry in `atlan.yaml` has no
-  `resize.topolvm.io/storage_limit` annotation.  Migration: apply nothing (the
-  edit is deploy configuration, outside this function's write scope); draft it
-  in the `migration_brief`.  Keep the entry's `name` and `mountPath`, set a
-  small base `size`, and add `resize.topolvm.io/storage_limit`,
-  `resize.topolvm.io/threshold` and `resize.topolvm.io/increase`: the base
-  near the p99 per-pod disk peak, so about 1% of pods need to grow, and the
-  limit above the largest run observed.  When those numbers are not in hand,
-  say so in the brief instead of inventing a size.  Say where the edit goes:
-  if `pkl eval -m <tmpdir> contract/app.pkl` emits `atlan.yaml`, the entry
-  lives in the contract's `deploy` → `overrides` `["storage"]` /
-  `["storageWorker"]` listing and `atlan.yaml` is regenerated, never
-  hand-edited; otherwise edit `atlan.yaml` directly.  The re-check is
-  `atlan-application-sdk-conformance detect --rule O009`.
+  `resize.topolvm.io/storage_limit` annotation.  WARN, so the lane reaches it
+  in strict mode only.
+  - **Mechanical — the annotations:** add whichever of the three is missing,
+    keep any already present, and leave the entry's `size` exactly as it is:
+    `resize.topolvm.io/storage_limit: 192Gi` (twice the declared size when that
+    is already 192Gi or more — the message spells the value out),
+    `resize.topolvm.io/threshold: "50%"`, `resize.topolvm.io/increase: 8Gi`.
+    Where the edit goes is decided by the K014 emission test: run
+    `pkl eval -m <tmpdir> contract/app.pkl`; if it emits `atlan.yaml`, add the
+    annotations to the entry in the contract's `deploy` → `overrides`
+    `["storage"]` / `["storageWorker"]` listing and regenerate with the repo's
+    generate task (`touched_files` lists `contract/app.pkl` and the regenerated
+    `atlan.yaml`); otherwise edit `atlan.yaml` directly.  Never hand-edit a
+    generated `atlan.yaml`.
+  - **Residue — the base size:** lowering `size` is not part of the fix.  Add
+    a residue note: once P060–P062 and O010 are clean for the app, take each
+    pod's 30-day disk peak and lower the base toward `8Gi` so that about 1% of
+    pods need to grow (roughly the p99 peak).  Never invent the number.
+- **O010 WholePrefixStagedOnDisk** (worker-disk) — a `download_prefix` into a
+  local directory followed by `upload_prefix` of that tree, so the whole prefix
+  sits on disk at once.  Migration: apply nothing; draft the change in the
+  `migration_brief`, in this order of preference:
+  1. **Bounded batches** — list the keys, group them into batches capped by
+     bytes (256 MiB is a proven slice size), and per batch download, upload
+     (the bulk helpers keep `max_concurrency=4` within a batch) and delete the
+     batch's local files before the next.
+  2. **A bounded pipeline** — single files with about 4 in flight (download →
+     upload → delete each), matching the bulk helpers' `max_concurrency=4`; a
+     strictly serial loop is up to 4x slower on many small files.  It overlaps
+     download and upload and holds only a few files on disk.
+  Mention an in-store copy only when the message says both calls use the same
+  store.  A move across stores through the worker is expected and is never the
+  problem.  When the step genuinely needs every file at once (a merge, a
+  baseline build), the brief is
+  `# conformance: ignore[O010] <reason naming why>` instead.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 

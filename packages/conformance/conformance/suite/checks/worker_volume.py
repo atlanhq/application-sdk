@@ -10,7 +10,10 @@ of ephemeral PVCs, each ``{name, mountPath, size, annotations}``:
 An entry with no ``resize.topolvm.io/storage_limit`` annotation is never grown
 by the pvc-autoresizer, so its ``size`` is fixed: it has to cover the largest
 run any tenant makes, and every pod that mounts it gets the full size.  Each such
-entry is reported on its ``-`` line with its ``name``, ``mountPath`` and ``size``.
+entry is reported on its ``-`` line with its ``name``, ``mountPath`` and ``size``,
+and the message spells out the mechanical fix: the three annotations at the
+values the fleet's smallest worker disk uses (:func:`storage_limit_for` keeps the
+limit above a base that already reaches it), with the base size untouched.
 
 Why ``atlan.yaml`` and not ``contract/app.pkl``
 ------------------------------------------------
@@ -65,6 +68,7 @@ SERIES = "O"
 RULE_O009 = "O009"
 
 __all__ = [
+    "DEFAULT_STORAGE_LIMIT",
     "SERIES",
     "STORAGE_LIMIT_ANNOTATION",
     "WORKER_STORAGE_KEYS",
@@ -74,6 +78,7 @@ __all__ = [
     "scan_path",
     "scan_text",
     "storage_entries",
+    "storage_limit_for",
 ]
 
 ATLAN_YAML = "atlan.yaml"
@@ -84,6 +89,27 @@ WORKER_STORAGE_KEYS: tuple[str, ...] = ("storage", "storageWorker")
 
 #: The pvc-autoresizer annotation without which a PVC is never grown.
 STORAGE_LIMIT_ANNOTATION = "resize.topolvm.io/storage_limit"
+
+#: The growth ceiling the mechanical fix adds, as on the fleet's smallest
+#: worker disk (an 8Gi base that grows by 8Gi at 50% use, up to this limit).
+DEFAULT_STORAGE_LIMIT = "192Gi"
+
+#: A Kubernetes quantity with a binary or decimal suffix (``300Gi``, ``1T``).
+_QUANTITY_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(Ki|Mi|Gi|Ti|Pi|K|M|G|T|P)?\s*$")
+
+_UNIT_BYTES: dict[str, int] = {
+    "": 1,
+    "Ki": 2**10,
+    "Mi": 2**20,
+    "Gi": 2**30,
+    "Ti": 2**40,
+    "Pi": 2**50,
+    "K": 10**3,
+    "M": 10**6,
+    "G": 10**9,
+    "T": 10**12,
+    "P": 10**15,
+}
 
 _DEPLOY_RE = re.compile(r"""^(["']?)deploy\1[ \t]*:[ \t]*$""")
 
@@ -326,6 +352,24 @@ def storage_entries(text: str) -> list[StorageEntry]:
     return entries
 
 
+def storage_limit_for(size: str | None) -> str:
+    """The ``storage_limit`` the mechanical fix adds for a volume of *size*.
+
+    :data:`DEFAULT_STORAGE_LIMIT`, unless the declared size already reaches it:
+    a limit at or below the base never lets the volume grow, so then twice the
+    size, in its own unit.  An unparseable size gets a spelled-out rule.
+    """
+    if size is None:
+        return DEFAULT_STORAGE_LIMIT
+    match = _QUANTITY_RE.match(size)
+    if match is None:
+        return f"{DEFAULT_STORAGE_LIMIT} (or twice {size} if that is larger)"
+    number, unit = float(match.group(1)), match.group(2) or ""
+    if number * _UNIT_BYTES[unit] < 192 * _UNIT_BYTES["Gi"]:
+        return DEFAULT_STORAGE_LIMIT
+    return f"{number * 2:g}{unit}"
+
+
 def _message(entry: StorageEntry) -> str:
     label = f"'{entry.name}'" if entry.name else "(unnamed)"
     mount = f" (mountPath {entry.mount_path})" if entry.mount_path else ""
@@ -335,11 +379,13 @@ def _message(entry: StorageEntry) -> str:
         f"deploy.{entry.key} entry {label}{mount} declares {size} with no "
         f"{STORAGE_LIMIT_ANNOTATION} annotation, so the volume never grows: every "
         f"{pods} that mounts it gets the full size, sized up front for the largest "
-        "run any tenant makes. Use a small base size plus the "
-        f"{STORAGE_LIMIT_ANNOTATION}, resize.topolvm.io/threshold and "
-        "resize.topolvm.io/increase annotations, sizing the base so about 1% of "
-        "pods need to grow. If contract/app.pkl emits atlan.yaml, make the change "
-        "in its deploy overrides and regenerate; otherwise edit atlan.yaml."
+        "run any tenant makes. Add the missing autoresize annotations without "
+        f"changing the size ({STORAGE_LIMIT_ANNOTATION}: "
+        f"{storage_limit_for(entry.size)}, resize.topolvm.io/threshold: 50%, "
+        "resize.topolvm.io/increase: 8Gi); then, once P060-P062 and O010 are clean "
+        "for the app, lower the base toward 8Gi from its 30-day disk peak so about "
+        "1% of pods need to grow. If contract/app.pkl emits atlan.yaml, make the "
+        "change in its deploy overrides and regenerate; otherwise edit atlan.yaml."
     )
 
 

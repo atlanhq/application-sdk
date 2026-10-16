@@ -1,15 +1,17 @@
-"""Tests for O008 TempFileOutsideWorkerVolume.
+"""Tests for P061 TempFileOutsideWorkerVolume.
 
 The rule fires on stdlib ``tempfile`` constructors that fall back to the system
-temp dir — ``dir=`` omitted, ``dir=None``, or ``dir=tempfile.gettempdir()`` —
-and on nothing else: an explicit directory (literal or computed), a splat that
-may supply one, and any non-stdlib callable that happens to share a name all
-stay silent.  The positional ``dir`` slot differs per constructor, so the
-position table is re-derived from the running interpreter rather than trusted.
+temp dir — ``dir=`` omitted, ``dir=None``, ``dir=tempfile.gettempdir()`` or the
+literal ``"/tmp"`` itself — and on nothing else: an explicit directory (literal
+or computed), a splat that may supply one, and any non-stdlib callable that
+happens to share a name all stay silent.  The positional ``dir`` slot differs per
+constructor, so the position table is re-derived from the running interpreter
+rather than trusted.
 """
 
 from __future__ import annotations
 
+import ast
 import inspect
 import json
 import tempfile
@@ -17,19 +19,17 @@ from pathlib import Path
 
 import pytest
 from conformance.suite import runner
-from conformance.suite.checks.optimizations import scan_text
-from conformance.suite.checks.optimizations._tempfile_dir import (
-    DIR_POSITION,
-    collect_tempfile_bindings,
-)
+from conformance.suite.checks._local_files import TempfileBindings
+from conformance.suite.checks.worker_disk import scan_text
+from conformance.suite.checks.worker_disk._tempfile_dir import DIR_POSITION
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.catalog import RemediationKind
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 
-def _o008(src: str) -> list[int]:
-    """Lines of the O008 findings in *src*."""
-    return [f.line for f in scan_text(src, "app/x.py") if f.rule_id == "O008"]
+def _p061(src: str, file: str = "app/x.py") -> list[int]:
+    """Lines of the P061 findings in *src*."""
+    return [f.line for f in scan_text(src, file) if f.rule_id == "P061"]
 
 
 def _call(name: str, args: str) -> str:
@@ -50,23 +50,28 @@ def test_dir_position_matches_the_stdlib_signature(name: str) -> None:
 
 @pytest.mark.parametrize("name", sorted(DIR_POSITION))
 def test_fires_when_dir_is_omitted(name: str) -> None:
-    assert _o008(_call(name, "")) == [4]
+    assert _p061(_call(name, "")) == [4]
 
 
 @pytest.mark.parametrize("name", sorted(DIR_POSITION))
 def test_fires_on_dir_none_keyword(name: str) -> None:
-    assert _o008(_call(name, "dir=None")) == [4]
+    assert _p061(_call(name, "dir=None")) == [4]
 
 
 @pytest.mark.parametrize("name", sorted(DIR_POSITION))
 def test_fires_on_dir_none_in_the_positional_slot(name: str) -> None:
     args = ", ".join(["None"] * (DIR_POSITION[name] + 1))
-    assert _o008(_call(name, args)) == [4]
+    assert _p061(_call(name, args)) == [4]
+
+
+@pytest.mark.parametrize("literal", ["'/tmp'", "'/tmp/'", "'/var/tmp'", "'/var/tmp/'"])
+def test_fires_on_the_system_temp_dir_spelled_as_a_literal(literal: str) -> None:
+    assert _p061(_call("mkdtemp", f"dir={literal}")) == [4]
 
 
 def test_fires_when_positionals_stop_short_of_the_dir_slot() -> None:
     # NamedTemporaryFile's dir is 7th; two positionals leave it at its default.
-    assert _o008(_call("NamedTemporaryFile", "'w', -1")) == [4]
+    assert _p061(_call("NamedTemporaryFile", "'w', -1")) == [4]
 
 
 def test_fires_on_dir_gettempdir_in_both_import_forms() -> None:
@@ -74,34 +79,34 @@ def test_fires_on_dir_gettempdir_in_both_import_forms() -> None:
         "import tempfile\n"
         "from tempfile import gettempdir\n\n"
         "def f():\n"
-        "    tempfile.mkdtemp(dir=tempfile.gettempdir())\n"
-        "    tempfile.mkstemp(dir=gettempdir())\n"
+        "    tempfile.TemporaryDirectory(dir=tempfile.gettempdir())\n"
+        "    tempfile.TemporaryFile(dir=gettempdir())\n"
     )
-    assert _o008(src) == [5, 6]
+    assert _p061(src) == [5, 6]
 
 
 def test_fires_through_module_and_function_aliases() -> None:
     src = (
         "import tempfile as tf\n"
-        "from tempfile import NamedTemporaryFile as NTF, mkdtemp\n\n"
+        "from tempfile import NamedTemporaryFile as NTF, SpooledTemporaryFile\n\n"
         "def f():\n"
         "    tf.TemporaryDirectory(prefix='x-')\n"
         "    NTF('w', suffix='.json', delete=False)\n"
-        "    mkdtemp()\n"
+        "    SpooledTemporaryFile(max_size=1024)\n"
     )
-    assert _o008(src) == [5, 6, 7]
+    assert _p061(src) == [5, 6, 7]
 
 
 def test_fires_on_a_function_local_import() -> None:
     src = "def f():\n    import tempfile\n    return tempfile.mkstemp(suffix='.part')\n"
-    assert _o008(src) == [3]
+    assert _p061(src) == [3]
 
 
 def test_message_names_the_constructor_the_cause_and_the_fix() -> None:
     (finding,) = [
         f
         for f in scan_text(_call("mkdtemp", "prefix='x-'"), "app/x.py")
-        if f.rule_id == "O008"
+        if f.rule_id == "P061"
     ]
     assert finding.message.startswith("tempfile.mkdtemp() with no dir= ")
     for needle in ("$TMPDIR, else /tmp", "TEMPORARY_PATH", "node's root disk"):
@@ -113,36 +118,43 @@ def test_message_names_the_constructor_the_cause_and_the_fix() -> None:
 
 @pytest.mark.parametrize("name", sorted(DIR_POSITION))
 def test_silent_on_an_explicit_dir_keyword(name: str) -> None:
-    assert _o008(_call(name, "dir=base")) == []
+    assert _p061(_call(name, "dir=base")) == []
 
 
 @pytest.mark.parametrize(
-    "value", ["'/app/local/tmp'", "str(base)", "os.path.join(base, 'x')", "base.dir"]
+    "value",
+    [
+        "'/app/local/tmp'",
+        "'/tmp/output'",
+        "str(base)",
+        "os.path.join(base, 'x')",
+        "base.dir",
+    ],
 )
 def test_silent_on_any_other_dir_expression(value: str) -> None:
-    assert _o008(_call("mkdtemp", f"dir={value}")) == []
+    assert _p061(_call("TemporaryDirectory", f"dir={value}")) == []
 
 
 @pytest.mark.parametrize("name", sorted(DIR_POSITION))
 def test_silent_on_a_directory_in_the_positional_slot(name: str) -> None:
     args = ", ".join(["None"] * DIR_POSITION[name] + ["base"])
-    assert _o008(_call(name, args)) == []
+    assert _p061(_call(name, args)) == []
 
 
 def test_silent_when_a_splat_may_supply_dir() -> None:
     src = (
         "import tempfile\n\n"
         "def f(opts, rest):\n"
-        "    tempfile.mkdtemp(**opts)\n"
-        "    tempfile.mkdtemp(*rest)\n"
+        "    tempfile.TemporaryDirectory(**opts)\n"
+        "    tempfile.TemporaryDirectory(*rest)\n"
         "    tempfile.NamedTemporaryFile('w', *rest)\n"
     )
-    assert _o008(src) == []
+    assert _p061(src) == []
 
 
 def test_silent_on_a_starred_argument_after_the_dir_slot() -> None:
     # The slot is filled positionally before the splat, so the splat cannot move it.
-    assert _o008(_call("mkdtemp", "'s', 'p', base, *rest")) == []
+    assert _p061(_call("TemporaryDirectory", "'s', 'p', base, *rest")) == []
 
 
 # ── silent: binding negatives and out-of-scope calls ───────────────────────────
@@ -150,7 +162,7 @@ def test_silent_on_a_starred_argument_after_the_dir_slot() -> None:
 
 def test_silent_on_an_app_defined_helper_of_the_same_name() -> None:
     src = "def mkdtemp(prefix=''):\n    return prefix\n\ndef f():\n    mkdtemp()\n"
-    assert _o008(src) == []
+    assert _p061(src) == []
 
 
 def test_silent_when_the_name_comes_from_another_module() -> None:
@@ -163,7 +175,7 @@ def test_silent_when_the_name_comes_from_another_module() -> None:
         "    obj.mkdtemp()\n"
     )
     # ``import app.scratch as tempfile`` binds the name to an app module, not the stdlib.
-    assert _o008(src) == []
+    assert _p061(src) == []
 
 
 def test_silent_on_constructors_outside_the_graded_set() -> None:
@@ -174,19 +186,19 @@ def test_silent_on_constructors_outside_the_graded_set() -> None:
         "    tempfile.gettempdir()\n"
         "    tempfile.gettempprefix()\n"
     )
-    assert _o008(src) == []
+    assert _p061(src) == []
 
 
-def test_collect_bindings_reports_modules_and_functions() -> None:
-    import ast
+def test_silent_under_a_developer_tooling_directory() -> None:
+    assert _p061(_call("TemporaryDirectory", ""), file="scripts/bench.py") == []
+    assert _p061(_call("TemporaryDirectory", ""), file="poc/try_it.py") == []
 
-    tree = ast.parse(
-        "import tempfile as tf\n"
-        "from tempfile import mkdtemp as mk, gettempdir, mktemp\n"
-    )
-    module_names, func_names = collect_tempfile_bindings(tree)
-    assert module_names == frozenset({"tf"})
-    assert func_names == {"mk": "mkdtemp", "gettempdir": "gettempdir"}
+
+def test_tempfile_bindings_report_modules_and_functions() -> None:
+    tree = ast.parse("import tempfile as tf\nfrom tempfile import mkdtemp as mk\n")
+    bindings = TempfileBindings(tree)
+    assert bindings.modules == frozenset({"tf"})
+    assert bindings.functions == {"mk": "mkdtemp"}
 
 
 # ── suppression, metadata, scope ───────────────────────────────────────────────
@@ -196,22 +208,23 @@ def test_suppressed_by_a_justified_directive() -> None:
     src = (
         "import tempfile\n\n"
         "def f():\n"
-        "    return tempfile.mkdtemp()  # conformance: ignore[O008] TMPDIR points at the volume\n"
+        "    # conformance: ignore[P061] TMPDIR points at the worker volume here\n"
+        "    return tempfile.TemporaryDirectory()\n"
     )
-    findings = [f for f in scan_text(src, "app/x.py") if f.rule_id == "O008"]
-    assert len(findings) == 1
-    assert findings[0].suppressed is True
+    findings = [f for f in scan_text(src, "app/x.py") if f.rule_id == "P061"]
+    assert [f.suppressed for f in findings] == [True]
 
 
 def test_rule_metadata() -> None:
-    rule = get_rule("O008")
+    rule = get_rule("P061")
     assert rule.name == "TempFileOutsideWorkerVolume"
-    assert rule.tier is EnforcementTier.WARN
+    assert rule.tier is EnforcementTier.BLOCK
     assert rule.scope is RuleScope.APP
     assert rule.autofixable is True
+    assert "Customer impact:" in rule.rationale
     assert rule.remediation_reference is not None
     assert rule.remediation_reference.kind is RemediationKind.PRESCRIPTION
-    assert rule.remediation_reference.target == "programs/areas/optimizations.prose.md"
+    assert rule.remediation_reference.target == "programs/areas/prescriptions.prose.md"
 
 
 def _repo(tmp_path: Path, project: str) -> Path:
@@ -220,7 +233,7 @@ def _repo(tmp_path: Path, project: str) -> Path:
     )
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "scratch.py").write_text(
-        "import tempfile\n\ndef make():\n    return tempfile.mkdtemp()\n",
+        "import tempfile\n\ndef make():\n    return tempfile.TemporaryDirectory()\n",
         encoding="utf-8",
     )
     # Tests are excluded by the standard discovery walk.
@@ -234,7 +247,7 @@ def _repo(tmp_path: Path, project: str) -> Path:
 
 def _results(repo: Path) -> list[tuple[str, str]]:
     out = repo / "out.sarif"
-    runner.main(["--repo", str(repo), "--rule", "O008", "--output", str(out)])
+    runner.main(["--repo", str(repo), "--rule", "P061", "--output", str(out)])
     doc = json.loads(out.read_text(encoding="utf-8"))
     return [
         (r["ruleId"], r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"])
@@ -243,8 +256,8 @@ def _results(repo: Path) -> list[tuple[str, str]]:
 
 
 def test_runner_reports_app_code_and_skips_tests(tmp_path: Path) -> None:
-    assert _results(_repo(tmp_path, "atlan-demo-app")) == [("O008", "app/scratch.py")]
+    assert _results(_repo(tmp_path, "atlan-demo-app")) == [("P061", "app/scratch.py")]
 
 
-def test_runner_drops_o008_on_the_sdk(tmp_path: Path) -> None:
+def test_runner_drops_p061_on_the_sdk(tmp_path: Path) -> None:
     assert _results(_repo(tmp_path, "atlan-application-sdk")) == []

@@ -390,10 +390,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # application_sdk.common.incremental.storage.rocksdb_utils are themselves the
     # intended callers of rocksdict; the SDK is the publisher of this seam, not a
     # consumer of it (CNCT-80, CNCT-191).
-    # O007/O008/O009: worker-disk hygiene for connector workloads — the SDK
-    # publishes upload_file and TEMPORARY_PATH rather than consuming them, its
-    # own staging and upload sites are seam internals reviewed with the SDK,
-    # and it has no atlan.yaml deploy block for O009 to grade.
+    # P060/P061/P062, O009/O010: worker-disk hygiene for connector workloads —
+    # the SDK publishes upload_file / upload_prefix / download_prefix and
+    # TEMPORARY_PATH rather than consuming them, its own staging and upload sites
+    # are seam internals reviewed with the SDK, and it has no atlan.yaml deploy
+    # block for O009 to grade.
     # K001/K002: contract-toolkit conformance — only app repos have a contract/
     # directory with .pkl source files; the SDK has no contract/ dir to scan
     # (BLDX-1479).
@@ -584,9 +585,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "O003",
         "O004",
         "O006",
-        "O007",
-        "O008",
         "O009",
+        "O010",
+        "P060",
+        "P061",
+        "P062",
         "I001",
         "I002",
         "I003",
@@ -797,6 +800,11 @@ def test_catalog_p_series_present() -> None:
     subclass constructed in a function with no ``async with`` and no ``close()``
     in a ``finally``) and CloseOverrideSkipsSuper (a ``close()`` override that
     never calls ``super().close()``); gated on an app SDK >= 3.46.0 (FND-3778).
+    P060–P062 are the worker-disk rules — UploadedFileNotDeleted (an SDK upload
+    whose local source is never removed), TempFileOutsideWorkerVolume (tempfile
+    scratch outside TEMPORARY_PATH) and TempScratchNotCleanedUp (mkdtemp/mkstemp
+    scratch not removed on every exit); P060/P061 graduated from the unreleased
+    O007/O008.
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -856,6 +864,9 @@ def test_catalog_p_series_present() -> None:
         "P057",
         "P058",
         "P059",
+        "P060",
+        "P061",
+        "P062",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -894,12 +905,13 @@ def test_catalog_o_series_present() -> None:
         "O004",
         "O005",
         "O006",
-        "O007",
-        "O008",
         "O009",
+        "O010",
     }
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
+    # O007/O008 graduated to P060/P061 before any release and stay vacant.
+    assert not o_ids & {"O007", "O008"}, "vacated O-ids reused"
 
 
 def test_catalog_t_series_present() -> None:
@@ -1601,12 +1613,24 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
         "the rule was written for, so the SDK's BaseClient.close() is the only "
         "compliant shape to cite (FND-3778)"
     ),
-    "O008": (
+    "P060": (
+        "no reference app calls upload_file or upload_prefix directly — all three "
+        "hand files off through App.upload / App.upload_refs — so the SDK writers' "
+        "explicit retain_local_copy is the only compliant call shape to cite"
+    ),
+    "P061": (
         "no reference app passes dir= to a tempfile constructor: atlan-openapi-app "
         "(app/connector.py) and atlan-metabase-app (app/paths.py) call "
-        "tempfile.mkdtemp with only a prefix, the shape O008 flags, and "
-        "atlan-mysql-app creates no temp files in the code O008 scans, so the SDK's "
+        "tempfile.mkdtemp with only a prefix, the shape P061 flags, and "
+        "atlan-mysql-app creates no temp files in the code P061 scans, so the SDK's "
         "staged download is the only compliant shape to cite"
+    ),
+    "P062": (
+        "no reference app removes mkdtemp/mkstemp scratch in a finally: "
+        "atlan-openapi-app returns FileReferences into its mkdtemp directory, which "
+        "hands it to the framework, and atlan-metabase-app's task_scratch_dir returns "
+        "the path to its caller, so the SDK's staged cross-store copy is the only "
+        "compliant shape to cite"
     ),
 }
 

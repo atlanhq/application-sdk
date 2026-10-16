@@ -5,7 +5,7 @@
 
 # Optimisation / Recommendation Rules (O-series)
 
-**9 rules** · Checker: `suite.checks.optimizations` (AST-based) and `suite.checks.worker_volume` (O009, line-based over `atlan.yaml`)
+**8 rules** · Checker: `suite.checks.optimizations` (AST-based) and `suite.checks.worker_volume` (O009, line-based over `atlan.yaml`)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -19,7 +19,8 @@ ignore[...]` suppressions across the fleet.  An id therefore **never migrates an
 changes**, even if a future domain series (S/B/T/A/…) later subsumes the same topic.
 When a domain series takes over an area, the rule is retired in place (kept documented,
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
-reassigned.
+reassigned. O007 and O008 were drafted as worker-disk recommendations and graduated to
+the mandatory P060 and P061 before any release; those O-ids stay vacant.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
@@ -29,9 +30,8 @@ reassigned.
 | [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | yes | 0.18.0 |
 | [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
-| [O007](#o007) | `UploadRetainsLocalCopy` | `warn` | `app` | `worker-disk` | — | 0.51.0 |
-| [O008](#o008) | `TempFileOutsideWorkerVolume` | `warn` | `app` | `worker-disk` | yes | 0.51.0 |
-| [O009](#o009) | `WorkerVolumeWithoutAutoresize` | `warn` | `app` | `worker-disk` | — | 0.51.0 |
+| [O009](#o009) | `WorkerVolumeWithoutAutoresize` | `warn` | `app` | `worker-disk` | yes | 0.51.0 |
+| [O010](#o010) | `WholePrefixStagedOnDisk` | `warn` | `app` | `worker-disk` | — | 0.51.0 |
 
 ---
 
@@ -334,126 +334,9 @@ tuning, or association-list output like `rocks_backed_dict.py`'s `append_to_key`
 
 ---
 
-## O007 — `UploadRetainsLocalCopy` {#o007}
-
-**Tier:** `warn` · **Scope:** `app` · **Category:** `worker-disk` · **Autofixable:** — · **Since:** 0.51.0
-
-> upload_file() keeps the local file after the upload (retain_local_copy defaults to True), so uploaded files pile up on the worker's disk
-
-**Rationale:** upload_file keeps the local file after a successful upload unless the caller passes
-retain_local_copy=False (the keyword defaults to True), and even then it deletes only a
-file under TEMPORARY_PATH. A connector that uploads as it extracts therefore keeps every
-file it has already uploaded on the worker's disk, and a review of connector worker
-disks found exactly that growth on long runs. WARN, and a migration rather than an
-automatic edit, because the call site alone cannot say whether the file is still needed:
-a later read in the same task, or a FileReference built from it, breaks once the file is
-deleted, and retain_local_copy=False on a file outside TEMPORARY_PATH clears the finding
-while deleting nothing.
-
-### What correct looks like
-
-- **Compliant example:** application_sdk/storage/formats/__init__.py — the writers' `_upload_file` passes
-  `retain_local_copy=` explicitly, and the JSON and Parquet writers default it to False,
-  so a chunk uploaded inline leaves the worker's disk once it is in the store. No
-  reference app calls upload_file directly; they hand files off through App.upload and
-  App.upload_refs.
-- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
-- **Interacts with:** O008: retain_local_copy=False deletes only under TEMPORARY_PATH, so a file staged by a
-  tempfile call with no dir= is not deleted by it. Move that scratch under
-  TEMPORARY_PATH first, or delete the file explicitly.
-- **Already correct when:** A justified inline `# conformance: ignore[O007] <reason>` IS the correct end state when
-  the file is still needed after the upload (the same task reads it again, or returns a
-  FileReference built from it) and the reason names that reader and what removes the
-  file afterwards. A directive that names neither is unremediated: delete the file after
-  the upload, or pass retain_local_copy=False with it under TEMPORARY_PATH.
-
-Flags a call to the SDK's `upload_file` that omits `retain_local_copy` or passes the
-literal `True`.  `upload_file` keeps the local file after a successful upload by
-default, and with `retain_local_copy=False` deletes it only when the file sits under
-`TEMPORARY_PATH` (`application_sdk/storage/ops.py`).  An app that uploads as it goes
-therefore leaves every uploaded file on the worker's disk for the rest of the run.
-
-Only calls that resolve to the SDK function are flagged.  The binding must come from an
-SDK module that exposes it — `application_sdk.storage`, `application_sdk.storage.ops`,
-the deprecated `application_sdk.common.incremental.marker` alias, or a module that
-imports it at module level (`storage.batch`, `storage.cloud`, …) — as `from … import
-upload_file [as x]`, through a module alias (`import application_sdk.storage.ops as ops`
-then `ops.upload_file(...)`), or by the fully dotted path.  An app's own `upload_file`,
-a client method of that name and the v2 `ObjectStore.upload_file` are never matched.
-`retain_local_copy=False` is compliant; any other expression (a variable, a parameter, a
-conditional) and a `**kwargs` splat are left alone because the value is not known
-statically.
-
-Fix: when nothing reads the file after the upload, pass `retain_local_copy=False` with
-the file under `TEMPORARY_PATH` — outside it the keyword deletes nothing — or delete the
-file right after the upload.  Not a mechanical rewrite: first confirm the same task does
-not read the file again and does not return a `FileReference` built from it.  When the
-file must stay, suppress with `# conformance: ignore[O007] <reason>` naming what reads
-it and what removes it afterwards (see *Already correct when*).
-
----
-
-## O008 — `TempFileOutsideWorkerVolume` {#o008}
-
-**Tier:** `warn` · **Scope:** `app` · **Category:** `worker-disk` · **Autofixable:** yes · **Since:** 0.51.0
-
-> tempfile scratch with no dir= lands in the system temp dir, outside TEMPORARY_PATH and the worker volume — pass dir= under TEMPORARY_PATH
-
-**Rationale:** Worker disk is provisioned, measured and cleaned at TEMPORARY_PATH: apps mount their
-worker volume where it lives, upload_file deletes only under it, and the end-of-run
-cleanup_files task removes the run's directory beneath it. The stdlib tempfile
-constructors default to the system temp dir instead ($TMPDIR, else /tmp), and the SDK
-base image sets no TMPDIR, so unless an app mounts its volume at /tmp that scratch lands
-on the node's root disk. A review of connector worker disks found scratch there that
-volume metrics never saw, that disk sizing missed and that no cleanup removed. WARN: it
-is a placement and hygiene fix rather than a broken run, and the reference apps
-themselves still create scratch this way.
-
-### What correct looks like
-
-- **Compliant example:** application_sdk/storage/ops.py — `download_file` stages its partial file with
-  `tempfile.mkstemp(dir=str(staging_dir), ...)` in a directory beside the destination,
-  so the scratch sits on the same volume as the file it becomes. No reference app passes
-  dir=: atlan-openapi-app's connector and atlan-metabase-app's `task_scratch_dir` call
-  tempfile.mkdtemp with only a prefix, the shape this rule flags.
-- **Fix by:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
-- **Interacts with:** O007: upload_file(retain_local_copy=False) deletes only under TEMPORARY_PATH, so moving
-  this scratch there is also what lets an upload clean up after itself.
-
-Flags a stdlib `tempfile` call — `mkdtemp`, `mkstemp`, `NamedTemporaryFile`,
-`TemporaryDirectory`, `TemporaryFile` or `SpooledTemporaryFile` — that is given no
-directory: `dir=` omitted, `dir=None`, or `dir=tempfile.gettempdir()` (the same location
-spelled out).  A `dir` passed positionally is read at each constructor's real position.
-Only stdlib bindings count (`import tempfile [as t]`, `from tempfile import mkdtemp [as
-x]`), so an app helper of the same name is never matched; any other `dir=` expression is
-compliant, and a `*args` / `**kwargs` splat that may supply it is left alone.
-
-Such scratch lands in the system temp dir (`$TMPDIR`, else `/tmp`).  The SDK base image
-sets no `TMPDIR`, so unless the app mounts its worker volume at `/tmp` it lands on the
-node's root disk: worker-volume metrics and disk sizing never see it, and filling it
-starves the node rather than the app's volume.  Either way it sits outside
-`TEMPORARY_PATH`, the tree the SDK's local cleanup works in (`upload_file` deletes only
-under it; `cleanup_files` removes the run's directory beneath it).
-
-Fix: pass `dir=` a directory under `TEMPORARY_PATH` (`application_sdk.constants`),
-creating it first with `os.makedirs(..., exist_ok=True)` because `tempfile` does not
-create a missing `dir`.  Autofixable per-site, not mechanically: reuse the app's own
-scratch-root helper when it already resolves under `TEMPORARY_PATH`, and keep the call's
-other arguments as they are. In an app that declares no worker volume, `TEMPORARY_PATH`
-itself sits on the container's disk, so there the fix buys cleanup reach and puts the
-scratch where a volume lands once the app declares one.
-
-Out of scope: `tempfile.mktemp` (deprecated) and paths assembled by hand from
-`tempfile.gettempdir()`.  A process-wide `tempfile.tempdir` or `TMPDIR` override is
-invisible to a per-file scan, so an app that points one under `TEMPORARY_PATH` still
-sees findings: pass `dir=` anyway, or suppress with `# conformance: ignore[O008]
-<reason>`.
-
----
-
 ## O009 — `WorkerVolumeWithoutAutoresize` {#o009}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `worker-disk` · **Autofixable:** — · **Since:** 0.51.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `worker-disk` · **Autofixable:** yes · **Since:** 0.51.0
 
 > atlan.yaml worker storage entry has no resize.topolvm.io/storage_limit annotation, so the volume is a fixed size sized for the largest tenant
 
@@ -462,11 +345,11 @@ annotations is a fixed-size PVC: it never grows, so it must be sized up front fo
 largest run any tenant makes, and every pod that mounts it gets that full size whether
 its own run needs it or not. A review of connector worker disks found a connector giving
 every worker a fixed volume more than ten times larger than its largest normal run used.
-The alternative is already in use across the fleet: a small base size plus the
-resize.topolvm.io/storage_limit, threshold and increase annotations, so only the pods
-that need more disk grow. WARN because a fixed size is a cost and headroom trade-off
-rather than a broken deploy, and the base size has to come from the app's own disk-usage
-numbers.
+The connector on the fleet's smallest worker disk declares 8Gi that grows by 8Gi when
+half of it is used, up to 192Gi (atlan-snowflake-app contract/app.pkl). WARN because a
+fixed size is a cost and headroom trade-off rather than a broken deploy: the annotations
+can be added mechanically, but how far the base can come down depends on the app's own
+disk use.
 
 ### What correct looks like
 
@@ -475,7 +358,7 @@ numbers.
   No reference app declares a worker volume, so none shows the compliant entry: a small
   base `size` plus the `resize.topolvm.io/storage_limit`, `threshold` and `increase`
   annotations, the shape this rule's description spells out.
-- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+- **Fix by:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
 
 Flags each worker storage entry in `atlan.yaml`'s `deploy:` block — `deploy.storage`
 (mounted on every pod) and `deploy.storageWorker` (worker pods only) — that carries no
@@ -485,24 +368,28 @@ graded: it mounts on server pods only.
 
 Without a `storage_limit` the pvc-autoresizer never grows the PVC, so the volume is a
 fixed `size`: it must cover the largest run any tenant makes, and every pod that mounts
-it gets the full size.  The compliant entry is a small base `size` plus the three
-annotations:
+it gets the full size.
+
+**Fix, in two steps.**  The first is mechanical: add whichever of the three annotations
+is missing, keep any already present, and leave the declared `size` alone —
+`storage_limit: 192Gi` (twice the declared size when that is already 192Gi or more,
+since a limit at or below the base never lets the volume grow), `threshold: "50%"` and
+`increase: 8Gi`:
 
 ```yaml
 storage:
   - name: local-data
     mountPath: /app/local
-    size: 8Gi
+    size: 100Gi
     annotations:
       resize.topolvm.io/storage_limit: 192Gi
       resize.topolvm.io/threshold: "50%"
       resize.topolvm.io/increase: 8Gi
 ```
 
-Size the base from the app's per-pod disk peaks so that about 1% of pods need to grow
-(roughly the p99 peak), set `storage_limit` above the largest run observed with
-headroom, and pick `threshold` (the free space left when a resize fires) and `increase`
-(the growth step) so a growing pod stays ahead of its write rate.
+The second is not: once the app is clean on P060–P062 and O010, lower the base toward
+`8Gi` from each pod's 30-day disk peak, so that about 1% of pods need to grow (roughly
+the p99 peak).
 
 **Where to edit.**  `atlan.yaml` is graded because it is what the platform deploys,
 hand-written or generated.  When `contract/app.pkl` emits it, the storage list comes
@@ -516,7 +403,7 @@ overrides {
     new Mapping {
       ["name"] = "local-data"
       ["mountPath"] = "/app/local"
-      ["size"] = "8Gi"
+      ["size"] = "100Gi"
       ["annotations"] = new Mapping {
         ["resize.topolvm.io/storage_limit"] = "192Gi"
         ["resize.topolvm.io/threshold"] = "50%"
@@ -529,13 +416,67 @@ overrides {
 
 Otherwise `atlan.yaml` is hand-owned; edit it directly.
 
-Not a mechanical rewrite: the base and the limit come from the app's own disk-usage
-numbers, and the edit lands in deploy configuration rather than Python.  The scan is
-line-based (no YAML dependency) and reads block-style sequences in both layouts the
-fleet uses; a flow-style sequence, a YAML anchor or merge key, per-pool storage under
-`workerPools` and raw `extraVolumes` PVC templates are not graded.  Suppress with `#
-conformance: ignore[O009] <reason>` on the entry's `-` line or the line above it —
-possible only in a hand-written `atlan.yaml`, since regeneration drops comments from a
-generated one.
+The scan is line-based (no YAML dependency) and reads block-style sequences in both
+layouts the fleet uses; a flow-style sequence, a YAML anchor or merge key, per-pool
+storage under `workerPools` and raw `extraVolumes` PVC templates are not graded.
+Suppress with `# conformance: ignore[O009] <reason>` on the entry's `-` line or the line
+above it — possible only in a hand-written `atlan.yaml`, since regeneration drops
+comments from a generated one.
+
+---
+
+## O010 — `WholePrefixStagedOnDisk` {#o010}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `worker-disk` · **Autofixable:** — · **Since:** 0.51.0
+
+> download_prefix() then upload_prefix() of the same local tree stages a whole prefix on the worker's disk — move it in bounded batches
+
+**Rationale:** download_prefix followed by upload_prefix of the same directory puts every object under
+the prefix on the worker's disk before any of it leaves, so the step's disk need grows
+with the largest prefix any tenant has instead of with a batch. Moving data across
+stores through the worker is expected — a self-deployed runtime hands data from the
+customer's deployment store to Atlan's upstream store — but staging the whole prefix to
+do it is not needed. The connector on the fleet's smallest worker disk writes and ships
+one bounded slice at a time (256 MiB of decoded input per slice, uploaded with
+upload_prefix and removed before the next: atlan-snowflake-app
+app/pipeline/crawler/duckdb_transform.py). WARN because some steps need every file at
+once (a merge, a baseline build), and only the code's owner can say which.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/storage/transfer.py — `_upload_from_store` copies a single object
+  between stores through a temp file it unlinks in a `finally`, and the SDK's
+  cross-store hand-off runs it per object, so moving a prefix from one store to another
+  never stages the whole prefix on the worker. No reference app calls download_prefix.
+- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+- **Interacts with:** P060: removing the staged directory after the upload clears P060 but not this rule,
+  which stays until the move is bounded.
+
+Flags an SDK `upload_prefix` call whose local directory was filled by a
+`download_prefix` earlier in the same function — the same directory, one under it, or
+one holding it — so every object under the prefix sits on the worker's disk at once.
+The finding sits on the `upload_prefix` call and names the `download_prefix` line.
+Calls resolve through import bindings, like P060.
+
+Not flagged: moving data across stores, which the SDK expects; a per-file move
+(`download_file` → `upload_file` → delete); the SDK's own cross-store hand-off
+(`App.upload` / `App.upload_refs` and the `application_sdk.storage.transfer` helpers
+behind them, which move one object at a time); and a loop that downloads, uploads and
+removes its local batch in the same iteration, which is bounded by the batch.
+
+Fix, in order of preference:
+
+1. **Bounded batches.**  List the keys, group them into batches capped    by bytes (256
+MiB slices are a proven size), and per batch download,    upload — the bulk helpers keep
+their `max_concurrency=4` within    each batch — and delete the batch before the next.
+2. **A bounded pipeline.**  Move single files with about 4 in flight,    each download →
+upload → delete, matching the bulk helpers'    `max_concurrency=4` rather than a
+strictly serial loop (up to 4x    slower on many small files).  It overlaps download and
+upload and    holds only a few files on disk.
+
+Only when both calls provably use the same store (both omit `store=`, or pass the same
+expression) is a copy inside the store worth asking about; the message says when.  Not a
+mechanical rewrite: a step that needs every file at once (a merge, a baseline build) is
+a deliberate staging — suppress with `# conformance: ignore[O010] <reason>` naming why.
 
 ---

@@ -25,17 +25,16 @@ Currently implemented:
   so the token survives verbatim into the runtime value.
 * ``O006`` DirectRocksdictImport — app code importing ``rocksdict`` directly
   (rather than the SDK's ``SpillableDict``).
-* ``O007`` UploadRetainsLocalCopy — a call to the SDK's ``upload_file`` that
-  omits ``retain_local_copy`` or passes the literal ``True``, so the uploaded
-  file stays on the worker's disk.
-* ``O008`` TempFileOutsideWorkerVolume — a stdlib ``tempfile`` constructor
-  given no ``dir=`` (or ``dir=None``), so its scratch lands in the system temp
-  dir rather than under ``TEMPORARY_PATH``.
+* ``O010`` WholePrefixStagedOnDisk — the SDK's ``download_prefix`` followed by
+  ``upload_prefix`` of the same local tree, so the whole prefix sits on the
+  worker's disk at once (a per-batch loop that removes each batch is exempt).
 
 ``O009`` WorkerVolumeWithoutAutoresize is an O-series rule too, but it grades
 ``atlan.yaml`` rather than Python source, so it lives in
 ``conformance.suite.checks.worker_volume`` and registers with the runner on its
-own.
+own.  O007 and O008 are vacant: drafted as worker-disk recommendations, they
+graduated to the mandatory P060/P061 (``conformance.suite.checks.worker_disk``)
+before any release.
 
 Inline suppression
 ------------------
@@ -73,11 +72,10 @@ from conformance.suite.schema.findings import Finding
 
 from ._app_name_placeholder import check_o005
 from ._asset_mapper import check_o002, check_o003
+from ._prefix_staging import check_o010
 from ._pyatlan_v9 import check_o004
 from ._rocksdict import check_o006
 from ._stdlib_json import OrjsonOverStdlibJsonChecker, _collect_json_bindings
-from ._tempfile_dir import check_o008
-from ._upload_retain import check_o007
 
 SERIES = "O"
 
@@ -114,8 +112,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + check_o004(tree, file, directives)
         + check_o005(tree, file, directives)
         + check_o006(tree, file, directives)
-        + check_o007(tree, file, directives)
-        + check_o008(tree, file, directives)
+        + check_o010(tree, file, directives)
     )
 
 

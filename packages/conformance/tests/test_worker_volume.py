@@ -22,6 +22,7 @@ from conformance.suite.checks.worker_volume import (
     scan_path,
     scan_text,
     storage_entries,
+    storage_limit_for,
 )
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.catalog import RemediationKind
@@ -79,11 +80,33 @@ def test_fires_on_a_fixed_size_storage_entry() -> None:
         "deploy.storage entry 'local-data'",
         "mountPath /app/local",
         "fixed 300Gi volume",
-        "resize.topolvm.io/storage_limit",
+        # The mechanical fix keeps the limit above a base that already exceeds 192Gi.
+        "resize.topolvm.io/storage_limit: 600Gi",
+        "resize.topolvm.io/threshold: 50%",
+        "resize.topolvm.io/increase: 8Gi",
+        "without changing the size",
+        "toward 8Gi from its 30-day disk peak",
         "about 1% of pods",
         "contract/app.pkl",
     ):
         assert needle in finding.message
+
+
+@pytest.mark.parametrize(
+    ("size", "limit"),
+    [
+        (None, "192Gi"),
+        ("8Gi", "192Gi"),
+        ("191Gi", "192Gi"),
+        ("192Gi", "384Gi"),
+        ("300Gi", "600Gi"),
+        ("1Ti", "2Ti"),
+        ("500G", "1000G"),
+        ("lots", "192Gi (or twice lots if that is larger)"),
+    ],
+)
+def test_storage_limit_stays_above_the_base(size: str | None, limit: str) -> None:
+    assert storage_limit_for(size) == limit
 
 
 def test_fires_on_a_flush_layout_entry_without_the_limit() -> None:
@@ -382,7 +405,8 @@ def test_rule_metadata() -> None:
     assert rule.tier is EnforcementTier.WARN
     assert rule.scope is RuleScope.APP
     assert rule.fix_locus is FixLocus.PACKAGING
-    assert rule.autofixable is False
+    # The annotations are mechanical; lowering the base is residue guidance.
+    assert rule.autofixable is True
     assert rule.remediation_reference is not None
-    assert rule.remediation_reference.kind is RemediationKind.GUIDE
+    assert rule.remediation_reference.kind is RemediationKind.PRESCRIPTION
     assert rule.remediation_reference.target == "programs/areas/optimizations.prose.md"
