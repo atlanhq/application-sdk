@@ -6,7 +6,8 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from obstore.store import LocalStore, MemoryStore
+from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
+from obstore.store import GCSStore, LocalStore, MemoryStore
 
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
@@ -14,6 +15,7 @@ from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
     StorageNotFoundError,
+    StoragePermissionError,
 )
 
 
@@ -1128,3 +1130,142 @@ class TestS3RegionLookup:
         with pytest.raises(StorageConfigError):
             await store.download(key="k", prefix="p")
         lookup.assert_not_called()
+
+
+_GCS_VPC_SC_403 = (
+    "Generic GCS error: Error performing list request: Error performing GET "
+    "https://storage.googleapis.com/storage/v1/b/example-bucket/o: Client error "
+    "with status 403 Forbidden: <?xml version='1.0'?><Error>"
+    "<Code>SecurityPolicyViolated</Code>"
+    "<Message>Request violates VPC Service Controls.</Message></Error>"
+)
+_S3_ACCESS_DENIED_403 = (
+    "Generic S3 error: Error performing list request: non-2xx status code: 403 "
+    "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+)
+
+
+class TestListPermissionDenied:
+    """A 401/403 listing a bucket is the caller's to fix, not a retryable outage."""
+
+    @pytest.fixture(params=["_list_keys", "_list_keys_with_meta"])
+    def list_fn(self, request):
+        return request.param
+
+    async def _list(self, monkeypatch, list_fn, message, provider="gcs"):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(_cloud_module, "_list_items", _boom)
+        store = CloudStore(
+            GCSStore("example-bucket", skip_signature=True), provider=provider
+        )
+        return await getattr(store, list_fn)("prefix/")
+
+    async def test_gcs_vpc_sc_403_is_user_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _GCS_VPC_SC_403)
+        err = ei.value
+        assert err.effective_retryable is False
+        assert err.audience.name == "USER"
+        assert err.http_status == 403
+        assert err.provider_code == "SecurityPolicyViolated"
+        assert err.target == "gs://example-bucket/prefix/"
+        assert "VPC Service Controls" in str(err)
+
+    async def test_s3_access_denied_403_is_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _S3_ACCESS_DENIED_403, provider="s3")
+        assert ei.value.provider_code == "AccessDenied"
+        assert ei.value.http_status == 403
+
+    async def test_503_stays_retryable_storage_error(self, monkeypatch, list_fn):
+        with pytest.raises(StorageError) as ei:
+            await self._list(
+                monkeypatch, list_fn, "non-2xx status code: 503 Service Unavailable"
+            )
+        assert not isinstance(ei.value, StoragePermissionError)
+        assert ei.value.effective_retryable is True
+
+    async def test_typed_obstore_denial_without_status_text(self, monkeypatch, list_fn):
+        async def _boom(*_a, **_k):
+            raise UnauthenticatedError("credential rejected")
+
+        monkeypatch.setattr(_cloud_module, "_list_items", _boom)
+        store = CloudStore(
+            GCSStore("example-bucket", skip_signature=True), provider="gcs"
+        )
+        with pytest.raises(StoragePermissionError) as ei:
+            await getattr(store, list_fn)("prefix/")
+        assert ei.value.http_status == 401
+        assert ei.value.provider_code is None
+
+
+def _gcs_store() -> CloudStore:
+    return CloudStore(GCSStore("example-bucket", skip_signature=True), provider="gcs")
+
+
+def _wrapped_403(key: str) -> StorageError:
+    """A 403 as the shared primitives deliver it: a retryable StorageError chained to the driver error."""
+    try:
+        raise RuntimeError(_GCS_VPC_SC_403)
+    except RuntimeError as driver:
+        err = StorageError(f"Failed on {key}", key=key, cause=driver)
+        err.__cause__ = driver
+        return err
+
+
+class TestReadWritePermissionDenied:
+    """Reads and writes map a 401/403 the same way listing does."""
+
+    async def test_get_bytes_403(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise PermissionDeniedError(_GCS_VPC_SC_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert ei.value.target == "gs://example-bucket/data/a.json"
+        assert ei.value.provider_code == "SecurityPolicyViolated"
+        assert ei.value.effective_retryable is False
+
+    async def test_upload_bytes_403(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(_S3_ACCESS_DENIED_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "put_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().upload_bytes("out/a.json", b"x")
+        assert ei.value.provider_code == "AccessDenied"
+
+    async def test_download_single_wrapped_403(self, monkeypatch, tmp_path):
+        async def _boom(key, *_a, **_k):
+            raise _wrapped_403(key)
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value.http_status == 403
+        assert ei.value.key == "data/a.json"
+
+    async def test_upload_wrapped_403(self, monkeypatch, tmp_path):
+        src = tmp_path / "a.json"
+        src.write_bytes(b"x")
+
+        async def _boom(key, *_a, **_k):
+            raise _wrapped_403(key)
+
+        monkeypatch.setattr(_cloud_module, "upload_file", _boom)
+        with pytest.raises(StoragePermissionError):
+            await _gcs_store().upload(src, "out/a.json")
+
+    async def test_wrapped_503_is_reraised_unchanged(self, monkeypatch, tmp_path):
+        original = StorageError("Failed", key="data/a.json")
+
+        async def _boom(*_a, **_k):
+            raise original
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value is original

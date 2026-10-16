@@ -421,7 +421,11 @@ def _is_precondition(exc: BaseException) -> bool:
 # attribute. Matches ``safe_traceback``'s ceiling.
 _LOG_CAUSE_MAX_LEN = 8000
 
-_OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
+# Two shapes reach here: the backend-response form above ("non-2xx status
+# code: 403 ...") and the retry layer's "Client error with status 403
+# Forbidden: ...", which is how GCS client errors arrive. Matching only the
+# first left ``http_status`` empty on every GCS 4xx.
+_OBSTORE_HTTP_STATUS_RE = re.compile(r"status(?: code:)?\s*(\d{3})\b")
 _PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
 # Not every store behind an S3 API answers in S3's XML dialect. Atlan's
 # ``/api/blobstorage`` proxy is a Kong plugin that rejects before the request
