@@ -177,14 +177,28 @@ def test_the_host_never_reads_its_own_bare_queue_settings(
     assert manifest["dag"]["extract"]["task_queue"] == "atlan-parity-prod"
 
 
-def test_without_the_apps_own_settings_the_host_stamps_no_queue(
+def test_the_host_uses_its_own_deployment_name_but_never_its_bare_queue(
     generated: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """The chart gives the host and every app's worker the same tenant-wide
+    deployment name, so the host's own is the worker's. A queue override is one
+    app's, so the host's bare one is never used."""
     monkeypatch.setenv("ATLAN_TASK_QUEUE", "host-wide-queue")
-    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "host-wide")
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
     host = TestClient(
         build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
     )
     manifest = host.post("/manifest", json={}).json()
-    queue = manifest["dag"]["extract"]["task_queue"]
-    assert "host-wide" not in queue
+    assert manifest["dag"]["extract"]["task_queue"] == "atlan-parity-prod"
+
+
+def test_without_any_deployment_name_the_host_never_falls_back_to_its_bare_queue(
+    generated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATLAN_TASK_QUEUE", "host-wide-queue")
+    monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
+    host = TestClient(
+        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+    )
+    manifest = host.post("/manifest", json={}).json()
+    assert manifest["dag"]["extract"]["task_queue"] != "host-wide-queue"

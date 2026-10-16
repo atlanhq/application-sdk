@@ -95,11 +95,12 @@ def _task_queue(app_name: str, deployment: Any) -> str | None:
 
     Stamped, not derived, wherever the host can be told: the worker's own
     ``ATLAN_TASK_QUEUE`` override, which the host's app-env sync carries as
-    ``ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE``. Derived from the app's name and
-    its own ``ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME``, as the worker derives
-    it, only when there is no override. With neither, ``None``: the manifest then
-    keeps its baked queue and this is logged, rather than a queue made from the
-    host's own settings that no worker polls.
+    ``ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE``. Never the host's bare
+    ``ATLAN_TASK_QUEUE``: an override names one app's queue, and the host serves
+    many. Otherwise derived from the app's name and *deployment*, as the worker
+    derives it (see :func:`_deployment_name`). With no deployment name either,
+    ``None``: the manifest keeps its baked queue and this is logged, rather than
+    a made-up queue no worker polls.
     """
     override = app_env(app_name, "ATLAN_TASK_QUEUE").strip()
     if override:
@@ -107,14 +108,31 @@ def _task_queue(app_name: str, deployment: Any) -> str | None:
     deployment_name = deployment()
     if not deployment_name:
         logger.error(
-            "No ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE or "
-            "ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME for hosted app %s, so the "
-            "served manifest cannot be stamped with the queue its worker polls. "
-            "Set them from the app's deploy env (the host's app-env sync).",
+            "No ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE and no deployment name for "
+            "hosted app %s, so the served manifest cannot be stamped with the "
+            "queue its worker polls. Set ATLAN_DEPLOYMENT_NAME on the host.",
             app_name,
         )
         return None
     return derive_task_queue(app_name, deployment_name)
+
+
+def _deployment_name(app_name: str) -> str:
+    """The deployment name *app_name*'s worker derives its queue from.
+
+    The app's own ``ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME`` when set, else
+    the host's ``ATLAN_DEPLOYMENT_NAME``. The fallback is deliberate, unlike the
+    queue override: the atlan-app chart gives every app's worker and the host the
+    same tenant-wide ``deploymentName``, so the host's value is the workers'
+    value. A Self-Deployed Runtime run polls a different queue, but Heracles
+    re-stamps every agent-side node with ``atlan-<sdr deployment>`` on create and
+    update (``stampSDRTaskQueue``), so the served queue only ever reaches the
+    cloud-side nodes, which use the tenant's deployment name.
+    """
+    return (
+        app_env(app_name, "ATLAN_DEPLOYMENT_NAME").strip()
+        or os.environ.get("ATLAN_DEPLOYMENT_NAME", "").strip()
+    )
 
 
 def _package_generated_dir(app_package: str) -> Path | None:
@@ -190,7 +208,7 @@ def build_asgi_app(
     if generated is not None:
 
         def _deployment() -> str:
-            return app_env(app_name, "ATLAN_DEPLOYMENT_NAME").strip()
+            return _deployment_name(app_name)
 
         register_metadata_routes(
             app,
