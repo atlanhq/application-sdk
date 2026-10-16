@@ -566,3 +566,34 @@ The return type is a typed model rather than a `Mapping[str, Any]` deliberately.
 |----------|---------|---------|-------------|
 | `TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `ATLAN_TEMPORAL_PROMETHEUS_BIND_ADDRESS` | `127.0.0.1:9464` | Bind address for Temporal SDK Prometheus metrics. Loopback-only — not externally reachable. Combined-mode FastAPI `/metrics` proxies it in-process. |
 | `WORKER_LIVENESS_MAX_IDLE_SECONDS` | `ATLAN_WORKER_LIVENESS_MAX_IDLE_SECONDS` | `0` (disabled) | Idle window for the worker `/live` probe. When set to a positive number of seconds, `/live` fails once no worker activity has been recorded within that window, letting a Kubernetes `livenessProbe` recycle a worker whose Temporal poll loop has silently parked (BLDX-1552). Disabled by default because a positive window false-positives on legitimately idle queues — enable it only for continuously-busy queues, and set it larger than the longest activity that runs without heartbeating. Non-numeric, non-finite (`inf`/`nan`), or negative values fall back to `0`. See `docs/concepts/server.md` for the probe behavior. |
+
+## Stale scratch sweep at worker start
+
+`application_sdk.common.scratch_sweep.sweep_temporary_path()` deletes what an earlier process left under `TEMPORARY_PATH`. `run_worker_mode` calls it once per process, right after the `Starting worker mode` line and before the infrastructure, the app module or the Temporal worker is created, so nothing the new process writes can predate it.
+
+**Why.** A worker pod mounts its own volume for scratch, and the volume lives as long as the pod. A container killed for memory is restarted by the kubelet in the same pod, so the dead process's temp directories, query-engine spill files and partial downloads are still on the volume. Nothing removed them, so a pod in a crash loop grew its disk with every crash while its healthy siblings stayed small. When the worker process starts, no other process that owns files under `TEMPORARY_PATH` is running in its container, so what is already there belongs to one that is gone.
+
+**Where it does not run.** Not in the restart supervisor (an in-process rebuild can leave activity threads still writing), not in handler mode (no activities), and not in combined mode, which serves SDR, docker-compose and local development, where the volume layout is the deployer's.
+
+| Constant | Env Var | Default | Description |
+|----------|---------|---------|-------------|
+| `TEMPORARY_PATH_SWEEP_ON_START` | `ATLAN_TEMPORARY_PATH_SWEEP_ON_START` | `True` in Kubernetes, `False` elsewhere | Resolved at import. `true` / `false` override; unset or empty follows `KUBERNETES_SERVICE_HOST`; any other value is `False`, with a warning, so a typo never deletes anything. |
+| `TEMPORARY_PATH_SWEEP_KEEP` | `ATLAN_TEMPORARY_PATH_SWEEP_KEEP` | `()` | Comma-separated glob patterns relative to `TEMPORARY_PATH`. Each `/`-separated segment matches one path component (`*`, `?`, `[...]` never cross a `/`; matching is case-sensitive), and a kept entry is kept whole, its parent directories with it. |
+
+**What it deletes.** The children of `TEMPORARY_PATH`, never the directory itself. Links are unlinked, never followed. A directory on another filesystem (a volume mounted inside `TEMPORARY_PATH`) is left whole.
+
+**What it always keeps** (`BUILTIN_KEEP`, plus one dynamic entry):
+
+| Entry | Why |
+|-------|-----|
+| `artifacts/apps/*/*/observability` | The telemetry staging directory. Log, metric, trace and sizing batches are uploaded by the process that wrote them, so nothing there is read on a later start, but the directory is live while the sweep runs: this process's sinks write there from import onwards, and in SDR the daprd log forwarder, which the entrypoint starts first, writes there too. |
+| `lost+found` | The filesystem's own directory when a volume is mounted at `TEMPORARY_PATH` itself. Not ours, and not removable by a non-root worker. |
+| Python's temporary-file directory, when inside | When `TMPDIR` points inside `TEMPORARY_PATH`. Python resolves it once and never recreates it. |
+
+Nothing else the SDK writes under `TEMPORARY_PATH` has to survive a restart. Run outputs, staging, downloaded credential files and partial transfers are scratch for one attempt. The rest are caches whose loss costs a download, never a wrong answer: `FileReference` copies are reused only after their SHA-256 matches, the current-state mirror re-checks files against its `.sdk-sync` index, and a resumable download's `.sdk-partial` checkpoint helps only a retry that lands on the same pod. An app that wants a cache to outlive a restart lists it in `ATLAN_TEMPORARY_PATH_SWEEP_KEEP`.
+
+**When it refuses.** It deletes nothing, and logs one WARNING, when `TEMPORARY_PATH` resolves to a path with fewer than two components (`/`, `/tmp`), to the home directory or a directory containing it, or to the working directory or a directory containing it; and when a keep pattern is absolute or has a `..` segment. A missing `TEMPORARY_PATH` is reported at INFO as nothing to sweep.
+
+**What it logs.** One INFO line: `Scratch sweep at worker start: root=… removed_entries=… removed_bytes=… (… GiB) kept=… failed=…`. `removed_bytes` is allocated disk space where the platform reports blocks, so a sparse, partly written download counts what it held, not its nominal size. Entries it could not remove add one WARNING naming the first error type and path. Nothing it runs into stops the worker: an unexpected error is logged once, with its type, and the worker starts.
+
+**Scratch outside `TEMPORARY_PATH` is not covered.** A spill directory or cache an app places beside `TEMPORARY_PATH` rather than under it, and files the SDK's `tempfile` users write to the system temporary directory, are untouched.
