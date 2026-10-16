@@ -21,7 +21,11 @@ name: Test commands (reusable)
 #     this workflow's pinned SHA. Do not add a step that checks out the PR.
 #   * Who may trigger is decided in .github/scripts/pr_test_command.py (tested),
 #     not in shell: Write, Maintain or Admin role on the repo only (read
-#     live from the permissions API), no bots, no forks.
+#     live from the permissions API), no bots, no forks. One exception
+#     (FND-4037): a plain `/gate-check` on a `bump-version*` PR posted by the
+#     fleet App itself, matched on the comment's `performed_via_github_app.id`
+#     against FLEET_APP_ID (passed as `--trusted-app-id` through env, never
+#     inlined). Unset id = no exception.
 #   * The work is a `workflow_dispatch` on the PR branch, which runs that
 #     branch's own workflow with exactly the trust a same-repo `pull_request`
 #     run already has. Nothing here passes a secret to it.
@@ -103,6 +107,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRUSTED_APP_ID: ${{ secrets.FLEET_APP_ID }}
         run: >-
           python3 .github/scripts/pr_test_command.py
           --repo "$REPO"
@@ -110,6 +115,7 @@ jobs:
           --event-path "$EVENT_PATH"
           --mode dispatch
           --run-url "$RUN_URL"
+          --trusted-app-id "$TRUSTED_APP_ID"
           --authorize-only
 
       - name: Mint the /gate-check dispatch token
@@ -131,6 +137,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TRUSTED_APP_ID: ${{ secrets.FLEET_APP_ID }}
         run: >-
           python3 .github/scripts/pr_test_command.py
           --repo "$REPO"
@@ -138,6 +145,7 @@ jobs:
           --event-path "$EVENT_PATH"
           --mode dispatch
           --run-url "$RUN_URL"
+          --trusted-app-id "$TRUSTED_APP_ID"
 
   gate-check-verdict:
     name: Gate-check verdict
