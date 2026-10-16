@@ -1,4 +1,5 @@
-"""P-series hosted-handler check (P060 HostedHandlerLogs).
+"""P-series hosted-handler checks: P060 HostedHandlerLogs and P061
+HostedHandlerMigration (:mod:`.migration`).
 
 Scans the handler module of an app that declares ``[tool.atlan-app-api]`` in its
 root ``pyproject.toml`` (the module ``handler = "app.<module>:<Class>"`` names)
@@ -8,6 +9,9 @@ imports also run on the worker, so their logging is left alone. Silent for an
 app without the block.
 
 Inline suppression: ``# conformance: ignore[P060] <reason>``.
+
+P061 reports what still stands between an app and the consolidated host; see
+:mod:`conformance.suite.checks.hosted_handler.migration`.
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from conformance.suite.checks._ast_common import (
     make_finding,
     safe_read_text,
 )
+from conformance.suite.checks.hosted_handler import migration
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"
@@ -176,20 +181,21 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Scan the discovered files that are *root*'s hosted handler files."""
+    """P060 for the discovered files that are *root*'s hosted handler files, and
+    P061 for the app as a whole."""
     hosted = {p.resolve() for p in handler_files(root)}
-    if not hosted:
-        return []
-    return [
+    logs = [
         f for path in paths if path.resolve() in hosted for f in _scan_file(path, root)
     ]
+    return logs + migration.scan_repo(root)
 
 
 main = make_cli_main(
     scan_all=scan_all,
     description=(
-        "Hosted-handler P-series check (P060): flag logging in the handler code of "
-        "an app that declares [tool.atlan-app-api] (silent otherwise)."
+        "Hosted-handler P-series checks: P060 flags logging in the handler code of "
+        "an app that declares [tool.atlan-app-api]; P061 flags what still stands "
+        "between an app and the consolidated API host."
     ),
 )
 

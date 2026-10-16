@@ -4,3 +4,4 @@ adopt-preflight-gate
 migrate-storage
 migrate-orchestration
 migrate-deprecated-symbols
+api-server-consolidation-migration

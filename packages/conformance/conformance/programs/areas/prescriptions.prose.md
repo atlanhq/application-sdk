@@ -1508,3 +1508,28 @@ path component, and this rule governs that package's sources too).
   `# conformance: ignore[P053] <reason>` naming what is resolved, and return
   `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
   the tier is already WARN for that.
+
+**Hosted-handler rules (P060/P061)** — scope=app.  Both concern an app moving
+onto the consolidated API host (common-app-server), which serves the app's own
+`app/` handler through `atlan-application-sdk-api` once the root
+`pyproject.toml` declares `[tool.atlan-app-api]`.  For the human reading the
+brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
+`docs/standards/api-distribution.md`.
+
+- **P060 HostedHandlerLogs** — BLOCK, migration (guide
+  `docs/hosted-handler-guide.md`).  The handler module logs.  Never delete a
+  log line blindly: where it was the only report of a failure, the handler
+  must raise a typed `AppError` (or return a failed check) instead.
+  application-sdk's `gen_app_api.py fix` removes the rest and refuses the
+  cases it cannot remove safely.
+- **P061 HostedHandlerMigration** — WARN, migration (skill
+  `api-server-consolidation-migration`).  The finding's message says which of
+  four cases fired; hand every one to the skill, which maps each to its
+  checklist steps.  Do not draft a partial fix in this area: the migration
+  spans the app, a host PR and a flag flip.  Two cases need care:
+  * **`server/` on `atlan-server-sdk`** — never propose deleting it until the
+    host's pin serves the app's own handler (the skill's step 10 gate).
+    Deleting it first takes the app's API offline on every tenant still
+    routed to the old package.
+  * **`compute_manifest`** — not fixable by editing imports; the app cannot be
+    hosted until the hook's output is static.  Do not suppress it.

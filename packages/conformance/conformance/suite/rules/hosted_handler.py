@@ -101,10 +101,80 @@ RULES: tuple[RuleDefinition, ...] = (
             "Blocks for one that has it, because declaring the block is the app\n"
             "moving to the host.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p056",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p060",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="docs/hosted-handler-guide.md",
+        ),
+    ),
+    RuleDefinition(
+        id="P061",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — the [tool.atlan-app-api] block names "
+            'handler = "app.handler:MySQLAppHandler", a Handler subclass in app/ '
+            "whose files import each other relatively; the repo has no server/ "
+            "package, and the host stages that handler from app/."
+        ),
+        scope=RuleScope.APP,
+        name="HostedHandlerMigration",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="hosted-handler",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.51.0",
+        rule_interactions=(
+            "Logging in the handler module is P060's; this rule never reports it. "
+            "Once an app declares [tool.atlan-app-api], application-sdk's "
+            "gen_app_api.py check (the api-member CI job) enforces the same "
+            "handler-misuse cases as a test, and this rule mirrors them."
+        ),
+        rationale=(
+            "The consolidated API host serves many apps' HTTP surfaces from one "
+            "process, so an app stops running its own always-on API pod. An app "
+            "gets there by serving its real app/ handler through "
+            "atlan-application-sdk-api: one [tool.atlan-app-api] block, no copied "
+            "code. Until then each app either runs its own server pod or keeps a "
+            "hand-written server/ copy on atlan-server-sdk that drifts from the real "
+            "handler. Customer impact: a drifted server/ copy answers test-credential, "
+            "preflight and metadata calls differently from the worker that runs the "
+            "extraction, so a credential that tests green can fail the run."
+        ),
+        short_description=(
+            "App is not yet served from the consolidated API host the supported way"
+        ),
+        full_description=(
+            "Reports what still stands between an app and the consolidated API\n"
+            "host.  Each finding hands off to the\n"
+            "``api-server-consolidation-migration`` skill.\n"
+            "\n"
+            "* **Not migrated** — a class under ``app/`` subclasses the SDK's\n"
+            "  ``Handler`` and the root ``pyproject.toml`` has no\n"
+            "  ``[tool.atlan-app-api]`` block.\n"
+            "* **Old path still present** — ``server/pyproject.toml`` depends on\n"
+            "  ``atlan-server-sdk``: a hand-written handler copy.  Delete it once\n"
+            "  the host's pin serves the app's own handler, not before.\n"
+            "* **Handler not used correctly** (the block is present) — ``handler``\n"
+            "  does not name a ``Handler`` subclass in ``app/``; a ``data`` glob\n"
+            "  matches nothing; or the handler's import closure has an absolute\n"
+            "  ``from app.`` import, an import that moved off the host\n"
+            "  (``execution.heartbeat.run_in_thread``,\n"
+            "  ``observability.logger_adaptor.get_logger``), or an\n"
+            "  ``APPLICATION_NAME`` read (on the host that names the host; use\n"
+            "  ``self.context.app_name``).\n"
+            "* **Cannot be hosted yet** — an ``app/<entrypoint>/core.py`` defines\n"
+            "  ``compute_manifest``.  The host serves static manifests only, so the\n"
+            "  hook has to become static data first.\n"
+            "\n"
+            "The handler-misuse and hook cases mirror application-sdk's\n"
+            "``gen_app_api.py check``.  Logging in the handler module is P060.\n"
+            "WARN: the host is rolling out app by app.  Suppress with\n"
+            "``# conformance: ignore[P061] <reason>`` on the reported line.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p061",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="api-server-consolidation-migration",
         ),
     ),
 )
