@@ -51,6 +51,11 @@ description: >
   rename -- regenerate with a toolkit that names bundle classes per entrypoint and
   import or subclass the unique name -- followed by a ledger regenerate, verified by
   the test-suite gate.
+  K028 (a semver app declares no releaseSchedule in contract/app.pkl, or its
+  generated app/generated/release_schedule.yaml is missing) is not autofixable:
+  the owner picks the release days and slot, so the area proposes the declaration
+  and routes it to residue; a declared-but-ungenerated schedule is a plain
+  regenerate, verified by the pkl-eval gate.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -72,10 +77,10 @@ K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
-(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021), which is where the rest
+(K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021/K028), which is where the rest
 of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K021 and K027 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K021, K027 and K028 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -150,6 +155,8 @@ additionally whenever the applied fix touched a `.pkl` or a generated artifact.
 contract edit is the usual fix, but the writer-side fix is plain Python — use the
 test-suite gate additionally whenever the applied fix touched only `.py`.
 **K018, K021, and K027 are Python edits**, verified by the test-suite gate.
+**K028 is a contract edit** (`contract/app.pkl` plus a regenerate), verified by
+the `pkl-eval` gate.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
@@ -1046,12 +1053,80 @@ modules, and the role (Input or Output).
    `# conformance: ignore[K027] <reason>` on each entrypoint method definition and
    route to residue.
 
+**K028 ReleaseScheduleDeclared** — the app's `atlan.yaml` declares
+`release_model: semver` (or the deprecated `versioned`), and either
+`contract/app.pkl` declares no `releaseSchedule`, or it declares one but
+`app/generated/release_schedule.yaml` is not committed.  The release train
+(FND-3529) reads the app's weekly slots from that file.  **WARN-tier** (strict
+mode only).  **Not autofixable**: the rule's `autofixable` flag is `False`.  The
+days and slot are a release-policy decision owned by the app team, and nothing in
+the repo decides them.  **requires `pkl`** for the regenerate.
+
+Classification depends on the shape, the same split as K014:
+
+- **Missing file, declaration present**: `classification = "mechanical"`.  The
+  fix is a regenerate.
+- **No declaration**: `classification = "judgment"`.  The owner must choose the
+  days and slot.
+
+The finding anchors in `contract/app.pkl`.  The **no-declaration** shape anchors
+on the `amends` line; the **missing-file** shape anchors on the `releaseSchedule`
+line.  `finding.message` says which it is.
+
+*Procedure:*
+
+1. **Missing file, declaration present.**  The intent is settled.  Regenerate with
+   `pkl eval -m . contract/app.pkl` (or `uv run poe generate`), confirm
+   `app/generated/release_schedule.yaml` appears, and stage it.  Set
+   `touched_files` the K003-step-4 way so a gate rejection reverts every
+   regenerated artifact.  If the eval refuses the schedule, report the refusal to
+   residue verbatim and do not edit the slots yourself.  The refusals are: a
+   duplicate day, more than four entries, a non-semver app, or a declaration on a
+   bundle entrypoint.  If the declaration is an empty `releaseSchedule {}`, it
+   emits nothing.  Treat that as the no-declaration case.  If the toolkit
+   predates `releaseSchedule` (the eval rejects the property), route to residue
+   with a note to bump the toolkit first.
+   A contract that amends `NativeApp.pkl`/`NativeAppBundle.pkl` has no
+   `releaseSchedule` at any toolkit version.  Route it to residue as a K001
+   migration; a toolkit bump does not fix it.
+2. **No declaration.**  Do **not** pick days or a slot.  Propose the declaration
+   as a suggestion for the owner, placed next to the `metadata` block that
+   carries `release_model`, and route the finding to residue with the question
+   "which weekdays (mon–thu) and which IST slot?":
+
+   ```
+   releaseSchedule {
+     new { day = "mon"; slot = "12:00" }   // owner: choose 1–4 days, one slot each
+   }
+   ```
+
+   - `day` must be `mon`, `tue`, `wed` or `thu`, and each day can appear at most once.
+   - `slot` must be `09:00`, `12:00`, `15:00`, `18:00` or `21:00`, in IST.
+   - On a bundle, declare it on the root contract, not on an entrypoint.
+   - The contract itself must declare `["release_model"] = "semver"` in
+     `metadata` (or `atlanYamlOverrides`).  App.pkl reads the model from there, so
+     a `semver` that lives only in a hand-owned `atlan.yaml` (for example with
+     `emitAtlanYaml = false`) makes `pkl eval` refuse the schedule.  The finding
+     message says when that line is missing.
+   - A contract that still amends `NativeApp.pkl`/`NativeAppBundle.pkl` must
+     migrate to `App.pkl` first (K001).  The finding message says so.
+   - See `docs/standards/release-flow.md`, section *Release train*.
+3. **Never hand-write `app/generated/release_schedule.yaml`.**  It is a `pkl eval`
+   output.  A hand-written copy with no declaration still reports K028, and the
+   next regenerate deletes it.
+4. **Never switch `release_model` to `cd` to silence the rule.**  That changes
+   how the app reaches tenants; it is K014's policy decision, not a K028 fix.
+5. Suppression (strict mode): `// conformance: ignore[K028] <reason>` on the
+   anchored line in `contract/app.pkl`, or on the comment-only line directly
+   above it.  Use it only for a semver app deliberately kept off the release
+   train.  Route to residue.
+
 ---
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
-(K001–K005, K007, K008, K010; `//` comments) or `# conformance: ignore[Kxxx]
+(K001–K005, K007, K008, K010, K028; `//` comments) or `# conformance: ignore[Kxxx]
 <8–40 word justification>` for the artifact/Python-anchored rules (K006, K016 and
 K017 Python, K018, K021, K027,
 K009 text artifact, K014 `atlan.yaml`; `#` comments) — on the violating line or

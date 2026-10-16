@@ -80,6 +80,11 @@ not degrade quality — it silently prevents the app from ever reaching the
 marketplace, so it must fail the PR that introduces it rather than surface at
 release time.
 
+K028 (WARN) belongs to the same family. A ``semver`` app must declare the weekly
+release-train slots it releases in (``releaseSchedule`` in ``contract/app.pkl``),
+and commit the ``app/generated/release_schedule.yaml`` the toolkit renders from
+it (FND-3529 / FND-4040). It is not autofixable: the owner picks the days and slot.
+
 Scope
 -----
 ``APP`` only: consumer apps have a ``contract/`` directory; the SDK itself does
@@ -2180,6 +2185,108 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="K028",
+        canonical_reference=(
+            "application_sdk contract-toolkit/examples/release-schedule/app.pkl — "
+            'metadata { ["release_model"] = "semver" } with a releaseSchedule '
+            "block beside it, and the app/generated/release_schedule.yaml it "
+            "renders. The property is new (FND-4039), so none of the reference "
+            "apps declares one yet."
+        ),
+        fix_locus=FixLocus.CONTRACT,
+        scope=RuleScope.APP,
+        name="ReleaseScheduleDeclared",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-toolkit",
+        autofixable=False,
+        since="0.51.0",
+        orthogonal_gate="pkl-eval",
+        rationale=(
+            "A semver app reaches tenants only when a release is cut, and the "
+            "release train (FND-3529) cuts releases in fixed weekly slots. The "
+            "slot an app releases in is an owner decision, so it belongs in the "
+            "contract, where it is reviewed and travels with the app. Without a "
+            "declared releaseSchedule the train has no slot for the app, and "
+            "its fixes wait until someone cuts a release by hand. The schedule "
+            "reaches the scheduler only as the generated "
+            "app/generated/release_schedule.yaml, so a declaration whose file was "
+            "never regenerated is the same gap. A cd app publishes on every "
+            "merge and has nothing to schedule, so the rule does not apply to it. "
+            "WARN, not BLOCK: a missing schedule delays releases but breaks "
+            "nothing."
+        ),
+        short_description=(
+            "a semver app declares no releaseSchedule in contract/app.pkl, or "
+            "its generated release_schedule.yaml is missing"
+        ),
+        full_description=(
+            "The app's ``atlan.yaml`` declares ``release_model: semver`` (or the "
+            "deprecated alias ``versioned``), and either:\n"
+            "\n"
+            "* ``contract/app.pkl`` declares no ``releaseSchedule``, or\n"
+            "* it declares one, but ``app/generated/release_schedule.yaml`` is "
+            "not committed.\n"
+            "\n"
+            "``releaseSchedule`` lists the weekly release-train slots the app "
+            "releases in (FND-3529). The release train reads them from "
+            "``app/generated/release_schedule.yaml``, which contract-toolkit "
+            "renders from the declaration.\n"
+            "\n"
+            "**Not autofixable.** The owner picks the days and the slot, so no "
+            "default is applied for them. Declare it next to the "
+            "``release_model`` it depends on:\n"
+            "\n"
+            "    metadata {\n"
+            '      ["release_model"] = "semver"\n'
+            "    }\n"
+            "    releaseSchedule {\n"
+            '      new { day = "mon"; slot = "12:00" }\n'
+            "    }\n"
+            "\n"
+            "* Declare 1 to 4 entries, each weekday at most once.\n"
+            "* ``day`` is ``mon``, ``tue``, ``wed`` or ``thu``.\n"
+            "* ``slot`` is ``09:00``, ``12:00``, ``15:00``, ``18:00`` or "
+            "``21:00``, in IST (fixed UTC+05:30).\n"
+            "* ``pkl eval`` refuses a duplicate day, more than four entries, or "
+            "a schedule on a non-semver app.\n"
+            "* On a multi-entrypoint bundle, declare it on the root contract, "
+            "not on an entrypoint's.\n"
+            '* The contract itself must declare ``["release_model"] = '
+            '"semver"`` in ``metadata`` (or ``atlanYamlOverrides``). App.pkl '
+            "reads the model from there, so a ``semver`` that lives only in a "
+            "hand-owned ``atlan.yaml`` (for example with ``emitAtlanYaml = "
+            "false``) makes ``pkl eval`` refuse the schedule.\n"
+            "* ``releaseSchedule`` exists only on ``App.pkl``. A contract that "
+            "still amends ``NativeApp.pkl``/``NativeAppBundle.pkl`` must migrate "
+            "first (K001).\n"
+            "\n"
+            "Then regenerate with ``pkl eval -m . contract/app.pkl`` (``uv run poe "
+            "generate``) and commit ``app/generated/release_schedule.yaml``. It "
+            "needs a contract-toolkit release that includes ``releaseSchedule`` "
+            "(FND-4039). See ``docs/standards/release-flow.md``, section "
+            "*Release train*.\n"
+            "\n"
+            "**Not applicable** when ``release_model`` is ``cd``, missing or "
+            "invalid (K014 reports the last two), or when the repo has no "
+            "``contract/app.pkl``.\n"
+            "\n"
+            "**Suppress** with ``// conformance: ignore[K028] <reason>`` in "
+            "``contract/app.pkl``, on the line the finding names (the "
+            "``amends`` line, or the ``releaseSchedule`` line) or the "
+            "comment-only line directly above it. Use this only for a semver "
+            "app that is deliberately kept off the release train.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/contract-toolkit.md#k028"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),

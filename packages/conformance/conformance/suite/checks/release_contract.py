@@ -1,4 +1,4 @@
-"""K011/K012/K014 release-readiness guards — atlan.yaml keys + generate poe task.
+"""K011/K012/K014/K028 release-readiness guards — atlan.yaml keys, release schedule, generate poe task.
 
 K011 ``AppIdMissingFromContract``: the generated ``atlan.yaml`` must carry a
 top-level ``app_id`` (the Global Marketplace identity the publish step POSTs to
@@ -15,14 +15,23 @@ omitting it silently opts the app into publish-to-all-tenants on every merge.
 The rule takes no side between ``cd`` and ``semver`` — it only requires the
 choice to be written down.
 
-All three are APP-scoped and gated on the presence of a ``contract/`` directory —
+K028 ``ReleaseScheduleDeclared``: a ``semver`` app (``release_model`` read from
+``atlan.yaml`` exactly as K014 reads it, deprecated ``versioned`` included) must
+declare a ``releaseSchedule`` in ``contract/app.pkl`` and ship the
+``app/generated/release_schedule.yaml`` it renders, so the release train
+(FND-3529) knows which weekly slots the app releases in. A ``cd`` app, or one
+with no usable ``release_model``, is out of scope — it has no release to
+schedule.
+
+All four are APP-scoped and gated on the presence of a ``contract/`` directory —
 the same "is this a pkl-contract-driven app repo?" signal the sibling K checks
 (``legacy_contract``, ``generated_freshness``) use. The SDK repo has no
 ``contract/`` dir, so the check no-ops there (and the runner's scope filter
 drops any K finding on the SDK regardless).
 
-This is a cross-artifact check — it reads two fixed root-level files
-(``atlan.yaml``, ``pyproject.toml``), not a discovered per-file set — so it
+This is a cross-artifact check — it reads fixed files (``atlan.yaml``,
+``pyproject.toml``, ``contract/app.pkl``, ``app/generated/release_schedule.yaml``),
+not a discovered per-file set — so it
 implements ``scan_all`` and a no-op ``scan_path``, mirroring K006
 (``manifest_contract``).
 """
@@ -39,6 +48,10 @@ from conformance.suite.checks._ast_common import (
     make_toml_finding,
     parse_toml_suppressions,
     safe_read_text,
+)
+from conformance.suite.checks.legacy_contract._directives_pkl import (
+    _make_pkl_finding_suppressed,
+    _parse_pkl_directives,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -76,6 +89,34 @@ _RELEASE_MODEL_RE = re.compile(r"^release_model:[ \t]*(.*)$", re.MULTILINE)
 # reported for migration rather than treated as broken.
 _VALID_RELEASE_MODELS = frozenset({"cd", "semver", "versioned"})
 _DEPRECATED_RELEASE_MODELS = frozenset({"versioned"})
+
+# K028 — the release models a release schedule applies to. ``versioned`` is the
+# deprecated alias the publish step normalises to ``semver``, so it is in scope.
+_SEMVER_RELEASE_MODELS = frozenset({"semver", "versioned"})
+
+# K028 — a ``releaseSchedule`` declaration in contract/app.pkl: the property
+# name at the start of a line (after indentation), followed by an amend body or
+# an assignment. Anchoring on line start keeps ``//`` / ``///`` comments and any
+# identifier that merely contains the name (``myReleaseSchedule``) out.
+_RELEASE_SCHEDULE_DECL_RE = re.compile(
+    r"^[ \t]*releaseSchedule[ \t]*(?:\{|=)", re.MULTILINE
+)
+
+# K028 — the file contract-toolkit renders a declared ``releaseSchedule`` into.
+# One per app, at the top of ``app/generated/`` for single-entrypoint apps and
+# bundles alike.
+_RELEASE_SCHEDULE_OUTPUT = "app/generated/release_schedule.yaml"
+_APP_PKL = "contract/app.pkl"
+
+# K028: an ``amends`` of a legacy base module. ``releaseSchedule`` exists only on
+# ``App.pkl``.
+_LEGACY_AMENDS_RE = re.compile(
+    r"^[ \t]*amends[ \t]+\"[^\"]*NativeApp(?:Bundle)?\.pkl\"", re.MULTILINE
+)
+
+# K028: the contract declaring ``release_model`` itself, through ``metadata`` or
+# ``atlanYamlOverrides``. App.pkl reads the model from those, not from atlan.yaml.
+_CONTRACT_RELEASE_MODEL_RE = re.compile(r"\[[ \t]*\"release_model\"[ \t]*\]")
 
 
 def discover(root: Path) -> list[Path]:
@@ -168,8 +209,110 @@ def _release_model_problem(text: str) -> str | None:
     return None
 
 
+def _release_model_value(text: str) -> str | None:
+    """The first top-level ``release_model`` value in atlan.yaml, else ``None``.
+
+    Parsed the same way :func:`_release_model_problem` parses it: inline comment
+    stripped, surrounding quotes removed. An empty value returns ``""``.
+    """
+    match = _RELEASE_MODEL_RE.search(text)
+    if match is None:
+        return None
+    return match.group(1).split("#", 1)[0].strip().strip("\"'")
+
+
+def _amends_line(text: str) -> int:
+    """1-based line of the ``amends`` statement, or 1 if absent."""
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if line.lstrip().startswith("amends"):
+            return lineno
+    return 1
+
+
+def _scan_release_schedule(root: Path, atlan_text: str) -> list[Finding]:
+    """K028 — a semver app declares a ``releaseSchedule`` and ships its output.
+
+    Not applicable (no finding) unless atlan.yaml's ``release_model`` is
+    ``semver``/``versioned`` and ``contract/app.pkl`` exists: a ``cd`` app has no
+    release to schedule, an undeclared model is K014's finding, and a repo with
+    no ``contract/app.pkl`` has no contract to declare it in.
+
+    Two shapes, one finding each, both anchored in ``contract/app.pkl`` (the
+    hand-owned file, so a ``// conformance: ignore[K028]`` survives regeneration):
+
+    * no ``releaseSchedule`` declaration — anchored on the ``amends`` line
+    * a declaration, but no ``app/generated/release_schedule.yaml`` — anchored on
+      the declaration (regenerate; an empty ``releaseSchedule {}`` emits nothing)
+    """
+    if _release_model_value(atlan_text) not in _SEMVER_RELEASE_MODELS:
+        return []
+    app_pkl = root / _APP_PKL
+    if not app_pkl.is_file():
+        return []
+    text = safe_read_text(app_pkl) or ""
+    directives = _parse_pkl_directives(text)
+    decl = _RELEASE_SCHEDULE_DECL_RE.search(text)
+
+    if decl is None:
+        line = _amends_line(text)
+        message = (
+            "This semver app declares no releaseSchedule in contract/app.pkl, so "
+            "the release train has no slot to release it in. Pick 1-4 weekdays "
+            "(mon-thu) and a slot (09:00/12:00/15:00/18:00/21:00 IST), e.g. "
+            'releaseSchedule { new { day = "mon"; slot = "12:00" } }, then '
+            "regenerate (uv run poe generate) and commit "
+            f"{_RELEASE_SCHEDULE_OUTPUT}. See docs/standards/release-flow.md "
+            "(Release train)."
+        )
+    elif not (root / _RELEASE_SCHEDULE_OUTPUT).is_file():
+        line = text.count("\n", 0, decl.start()) + 1
+        message = (
+            "contract/app.pkl declares a releaseSchedule but "
+            f"{_RELEASE_SCHEDULE_OUTPUT} is missing, so the release train cannot "
+            "read it. Regenerate with 'pkl eval -m . contract/app.pkl' (uv run "
+            "poe generate) on a contract-toolkit that supports releaseSchedule, "
+            "and commit the file. An empty releaseSchedule {} emits nothing: "
+            "declare at least one slot."
+        )
+    else:
+        return []
+
+    # Two contracts where the prescribed edit cannot pass `pkl eval` as-is.
+    # releaseSchedule exists only on App.pkl, and App.pkl refuses it unless the
+    # contract itself declares semver. Reading semver from a hand-owned
+    # atlan.yaml is not enough.
+    if _LEGACY_AMENDS_RE.search(text):
+        message += (
+            " This contract amends the legacy NativeApp.pkl/NativeAppBundle.pkl, "
+            "which has no releaseSchedule: migrate it to App.pkl first (K001)."
+        )
+    elif _CONTRACT_RELEASE_MODEL_RE.search(text) is None:
+        message += (
+            ' Also declare metadata { ["release_model"] = "semver" } in the '
+            "contract: App.pkl refuses a releaseSchedule unless the contract "
+            "itself declares semver, even when a hand-owned atlan.yaml does."
+        )
+
+    suppressed, justification = _make_pkl_finding_suppressed(
+        rule_id="K028", line=line, directives=directives
+    )
+    return [
+        Finding(
+            rule_id="K028",
+            file=_APP_PKL,
+            line=line,
+            column=1,
+            message=message,
+            snippet=None,
+            suppressed=suppressed,
+            suppression_justification=justification,
+        )
+    ]
+
+
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
-    """Emit K011 (app_id), K014 (release_model) and K012 (generate poe task).
+    """Emit K011 (app_id), K014 (release_model), K028 (release schedule) and
+    K012 (generate poe task).
 
     No-ops when ``discover`` returned nothing (not a contract-driven app repo).
     """
@@ -229,6 +372,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 )
             )
 
+        # K028 — a semver app declares its release-train schedule.
+        findings.extend(_scan_release_schedule(root, text))
+
     # K012 — generate poe task in pyproject.toml.
     pyproject = root / "pyproject.toml"
     if pyproject.is_file():
@@ -268,7 +414,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:  # noqa: ARG001
-    """No-op: K011/K012/K014 are cross-artifact; use :func:`scan_all`."""
+    """No-op: K011/K012/K014/K028 are cross-artifact; use :func:`scan_all`."""
     return []
 
 
@@ -276,8 +422,8 @@ main = make_cli_main(
     scan_all=scan_all,
     discover=discover,
     description=(
-        "K011/K012/K014 release-readiness: atlan.yaml app_id + release_model, "
-        "generate poe task presence."
+        "K011/K012/K014/K028 release-readiness: atlan.yaml app_id + "
+        "release_model, semver release schedule, generate poe task presence."
     ),
 )
 
