@@ -39,17 +39,21 @@ from application_sdk.constants import (
     OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
 )
+
+# Module level, not lazy: the record patcher runs on whichever thread logs. A
+# background thread logging while the main thread is still initialising the
+# observability package would otherwise import this module mid-boot and deadlock
+# on the module lock (_DeadlockError at startup when the log level is DEBUG).
+from application_sdk.observability.console_sink import (
+    console_writer,
+    flush_console_logs,
+)
 from application_sdk.observability.context import (
     correlation_context,
     get_execution_context,
     is_replaying,
     request_context,
 )
-
-# Module level, not lazy: the record patcher runs on whichever thread logs. A
-# background thread logging while the main thread is still initialising the
-# observability package would otherwise import this module mid-boot and deadlock
-# on the module lock (_DeadlockError at startup when the log level is DEBUG).
 from application_sdk.observability.correlation import get_correlation_context
 from application_sdk.observability.logger_adaptor_errors import (
     UnsupportedLogRecordError,
@@ -102,6 +106,11 @@ WARMUP_TRANSITIONS_KEY = "warmup_transitions"
 # "http" (the setup form endpoint) or "sdr" (the interactive test-connection
 # activity). The gate's own rows use their distinct event body instead.
 PREFLIGHT_SURFACE_KEY = "preflight_surface"
+
+# How long an error/critical log on a thread without a running loop waits for
+# the console writer to catch up. It's bounded so a stalled stdout delays each
+# error by at most this much, instead of blocking it indefinitely.
+_CONSOLE_FLUSH_TIMEOUT_SECONDS = 1.0
 
 # Transformed-asset validation outcome-event key, shared with the emitter
 # (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
@@ -980,9 +989,15 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # fields off the record and builds its own traceback via
         # `_format_exception_stacktrace`, which never carried local values. So this
         # changes console output only; nothing queryable downstream moves.
+        #
+        # Both sinks are callables from ``console_writer`` (FND-4075). loguru
+        # still renders the format and the traceback on the logging thread, so
+        # context fields and ``diagnose`` behave as they did with a stream
+        # sink. The sink only queues the finished line. A background thread
+        # writes it, so a stalled stdout/stderr pipe can't block the event loop.
         _ERROR_LEVEL_NO = SEVERITY_MAPPING["ERROR"]
         self.logger.add(
-            sys.stdout,
+            console_writer.sink(sys.stdout),
             format=get_log_format,
             level=SEVERITY_MAPPING[LOG_LEVEL],
             colorize=colorize,
@@ -990,7 +1005,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             filter=lambda record: record["level"].no < _ERROR_LEVEL_NO,
         )
         self.logger.add(
-            sys.stderr,
+            console_writer.sink(sys.stderr),
             format=get_log_format,
             level=max(SEVERITY_MAPPING[LOG_LEVEL], _ERROR_LEVEL_NO),
             colorize=colorize,
@@ -1515,7 +1530,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         contexts:
 
         - Async context (running event loop in this thread): schedules a task.
-        - Sync context (no running loop): creates a temporary loop to flush.
+        - Sync context (no running loop): creates a temporary loop to flush,
+          then waits up to ``_CONSOLE_FLUSH_TIMEOUT_SECONDS`` for queued
+          console lines to be written.
         - Thread context (loop running in another thread, e.g. Temporal
           activity in ThreadPoolExecutor): skips, periodic flush handles it.
 
@@ -1542,6 +1559,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
                     loop.run_until_complete(owner._flush_buffer(force=True))
                 finally:
                     loop.close()
+                # Also safe to block here, briefly, so the error line reaches
+                # the console before the caller continues. Async callers skip
+                # this: the writer thread drains the queue without help, and
+                # waiting would stall the loop, which is what FND-4075 removed.
+                flush_console_logs(_CONSOLE_FLUSH_TIMEOUT_SECONDS)
         except Exception:
             logging.error("Error during sync flush", exc_info=True)
 
