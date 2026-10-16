@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -53,6 +52,7 @@ from urllib.parse import quote
 import aiohttp
 import obstore as obs
 import orjson
+from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import ObjectStore
 
 from application_sdk._runtime.offload import run_in_thread
@@ -66,7 +66,9 @@ from application_sdk.storage.errors import (
 from application_sdk.storage.ops import (
     BoundStore,
     _list_items,
+    _obstore_http_evidence,
     _safe_join_under,
+    _store_target,
     download_file_chunked,
     upload_file,
 )
@@ -88,9 +90,33 @@ def _log():
     return _logger
 
 
-# obstore surfaces HTTP failures only as text unless it maps them to a typed error.
-_HTTP_AUTH_STATUS = re.compile(r"status(?: code)?:? (40[13])\b")
-_XML_ERROR_CODE = re.compile(r"<Code>([^<]+)</Code>")
+# Statuses that mean the caller's credential or the bucket's policy refused the
+# request. obstore maps some of these to a typed error and leaves the rest as
+# text, so both are checked.
+_DENIED_STATUSES = frozenset({401, 403})
+_DENIED_ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
+    (PermissionDeniedError, 403),
+    (UnauthenticatedError, 401),
+)
+
+
+def _denied_evidence(exc: BaseException) -> tuple[int, str | None] | None:
+    """Return ``(http_status, provider_code)`` when *exc* is a 401/403.
+
+    Walks explicit ``__cause__`` links so a ``StorageError`` the shared
+    primitives already wrapped is judged by the driver error inside it.
+    """
+    current: BaseException | None = exc
+    while current is not None:
+        http_status, provider_code = _obstore_http_evidence(current)
+        if http_status is None:
+            http_status = next(
+                (s for t, s in _DENIED_ERROR_STATUS if isinstance(current, t)), None
+            )
+        if http_status in _DENIED_STATUSES:
+            return http_status, provider_code
+        current = current.__cause__
+    return None
 
 
 class CloudStore:
@@ -248,6 +274,7 @@ class CloudStore:
             # - S3/GCS/Azure: obstore.exceptions.NotFoundError
             if type(exc).__name__ == "NotFoundError":
                 raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
+            self._raise_if_denied(exc, "reading", key)
             raise StorageError(f"Failed to get key: {key}", cause=exc) from exc
 
     async def download(
@@ -305,13 +332,17 @@ class CloudStore:
         # protocol, so sidecar_present=False saves a guaranteed-miss probe per
         # file; the byte-count check against the declared size still runs.
         # (BLDX-1513 / FND-306)
-        await download_file_chunked(
-            key,
-            local_path,
-            store=self._store,
-            normalize=False,
-            sidecar_present=False,
-        )
+        try:
+            await download_file_chunked(
+                key,
+                local_path,
+                store=self._store,
+                normalize=False,
+                sidecar_present=False,
+            )
+        except StorageError as exc:
+            self._raise_if_denied(exc, "reading", key)
+            raise
         _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
@@ -353,17 +384,21 @@ class CloudStore:
                 # Pass the listing's size + etag so large objects chunk (with
                 # version-pinned range GETs) and small ones stream — no per-file
                 # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
-                await download_file_chunked(
-                    obj_key,
-                    local_path,
-                    store=self._store,
-                    normalize=False,
-                    file_size=size,
-                    etag=etag,
-                    # External bucket: the SDK never wrote sidecars here, so
-                    # skip the per-file probe that could only ever miss.
-                    sidecar_present=False,
-                )
+                try:
+                    await download_file_chunked(
+                        obj_key,
+                        local_path,
+                        store=self._store,
+                        normalize=False,
+                        file_size=size,
+                        etag=etag,
+                        # External bucket: the SDK never wrote sidecars here, so
+                        # skip the per-file probe that could only ever miss.
+                        sidecar_present=False,
+                    )
+                except StorageError as exc:
+                    self._raise_if_denied(exc, "reading", obj_key)
+                    raise
                 return local_path
 
         results = await asyncio.gather(*[_dl(k, s, e) for k, s, e in items])
@@ -371,38 +406,33 @@ class CloudStore:
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
-    def _list_error(self, list_prefix: str, exc: Exception) -> StorageError:
-        """Map a listing failure to the error the caller can act on.
+    def _raise_if_denied(self, exc: Exception, action: str, key: str) -> None:
+        """Raise ``StoragePermissionError`` from *exc* when it is a 401/403.
 
         A 401/403 is a credential or bucket-policy problem (IAM, a VPC Service
-        Controls perimeter) that no retry fixes, so it is a non-retryable
-        user-facing permission error rather than a platform outage.
+        Controls perimeter) that no retry fixes. Every store this class talks
+        to belongs to the customer, so it is a non-retryable USER error rather
+        than the retryable platform outage the shared primitives report (they
+        cannot tell a customer bucket from the deployment's own store).
         """
-        text = str(exc)
-        status = _HTTP_AUTH_STATUS.search(text)
-        if status is None and type(exc).__name__ not in (
-            "PermissionDeniedError",
-            "UnauthenticatedError",
-        ):
-            return StorageError(
-                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
-            )
-        code = _XML_ERROR_CODE.search(text)
-        http_status = int(status.group(1)) if status else 403
-        provider_code = code.group(1) if code else None
-        bucket = getattr(self._store, "config", {}).get("bucket", "")
-        scheme = {"gcs": "gs", "adls": "az"}.get(self._provider, self._provider)
-        target = f"{scheme}://{bucket}/{list_prefix}"
+        if isinstance(exc, StoragePermissionError):
+            return
+        denied = _denied_evidence(exc)
+        if denied is None:
+            return
+        http_status, provider_code = denied
+        target = _store_target(self._store, key)
         detail = f"{http_status} {provider_code}" if provider_code else str(http_status)
-        return StoragePermissionError(
-            f"Permission denied listing {target} ({detail}). Check the "
+        raise StoragePermissionError(
+            f"Permission denied {action} {target or key} ({detail}). Check the "
             "credential's IAM access and any VPC Service Controls perimeter "
             "on the bucket.",
+            key=key,
             cause=exc,
             target=target,
             http_status=http_status,
             provider_code=provider_code,
-        )
+        ) from exc
 
     async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
@@ -420,7 +450,10 @@ class CloudStore:
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
-            raise self._list_error(list_prefix, exc) from exc
+            self._raise_if_denied(exc, "listing", list_prefix)
+            raise StorageError(
+                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
+            ) from exc
 
     async def _list_keys_with_meta(
         self, list_prefix: str, suffix_filter: set[str] | None = None
@@ -440,7 +473,10 @@ class CloudStore:
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
-            raise self._list_error(list_prefix, exc) from exc
+            self._raise_if_denied(exc, "listing", list_prefix)
+            raise StorageError(
+                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
+            ) from exc
 
     async def list(self, prefix: str = "", *, suffix: str = "") -> list[str]:
         """List object keys under a prefix.
@@ -521,13 +557,17 @@ class CloudStore:
         # write loop is not lost with the loop: ``upload_file`` marks
         # ``storage.upload_part`` per part, so the stall watchdog still sees a
         # long external upload making progress. Only the label changed.
-        await upload_file(
-            key,
-            path,
-            BoundStore(self._store, self._put_attributes),
-            normalize=False,
-            compute_hash=False,
-        )
+        try:
+            await upload_file(
+                key,
+                path,
+                BoundStore(self._store, self._put_attributes),
+                normalize=False,
+                compute_hash=False,
+            )
+        except StorageError as exc:
+            self._raise_if_denied(exc, "writing", key)
+            raise
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
@@ -546,6 +586,7 @@ class CloudStore:
             await obs.put_async(self._store, key, data, attributes=self._put_attributes)
         # conformance: ignore[E004] re-raise only; wraps obstore put failure into StorageError
         except Exception as exc:
+            self._raise_if_denied(exc, "writing", key)
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         return len(data)
 
