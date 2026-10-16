@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.49.2 (October 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.1...v3.49.2
+
+### Bug Fixes
+
+- a 401/403 listing a bucket raises a non-retryable permission error (#4424) (by @connectivity-ai[bot] in [411ffa8](https://github.com/atlanhq/application-sdk/commit/411ffa8))
+
+### Chores
+
+- lock file maintenance (#4405) (by @renovate[bot] in [b6af691](https://github.com/atlanhq/application-sdk/commit/b6af691))
+- FND-4018 make one-off timing flakes in the unit suite deterministic (#4407) (by @cmgrote in [4e631ab](https://github.com/atlanhq/application-sdk/commit/4e631ab))
+- update atlanhq/application-sdk action to v3.49.1 (#4409) (by @renovate[bot] in [2f82429](https://github.com/atlanhq/application-sdk/commit/2f82429))
+- lock file maintenance (#4410) (by @renovate[bot] in [21029ee](https://github.com/atlanhq/application-sdk/commit/21029ee))
+- lock file maintenance (#4411) (by @renovate[bot] in [5902096](https://github.com/atlanhq/application-sdk/commit/5902096))
+- lock file maintenance (#4425) (by @renovate[bot] in [21b1e6b](https://github.com/atlanhq/application-sdk/commit/21b1e6b))
+
+
 ## v3.49.1 (October 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.0...v3.49.1
