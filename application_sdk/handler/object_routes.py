@@ -59,14 +59,23 @@ logger = get_logger(__name__)
 CONFIG_KEY_PATTERN = r"^[a-zA-Z0-9_\-]{1,128}$"
 _CONFIG_KEY_RE = re.compile(CONFIG_KEY_PATTERN)
 
-# An upload prefix: one or more path segments of letters, digits, '_', '-' and
-# '.', with no '..' segment and no leading, trailing or doubled '/'. It comes
-# from the browser (Heracles forwards the form field unchanged), so it is
-# untrusted input that becomes part of an object-store key.
-UPLOAD_PREFIX_RE = re.compile(
-    r"^(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)*$"
-)
+# An upload prefix: one or more '/'-separated segments of letters, digits, '_',
+# '-' and '.', none of them '.' or '..', with no leading, trailing or doubled
+# '/'. It comes from the browser (Heracles forwards the form field unchanged), so
+# it is untrusted input that becomes part of an object-store key.
+_UPLOAD_PREFIX_SEGMENT_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 _MAX_UPLOAD_PREFIX = 256
+
+
+def valid_upload_prefix(prefix: str) -> bool:
+    """Whether *prefix* is a safe relative object-store prefix (see above)."""
+    if not prefix or len(prefix) > _MAX_UPLOAD_PREFIX:
+        return False
+    return all(
+        segment not in (".", "..") and _UPLOAD_PREFIX_SEGMENT_RE.fullmatch(segment)
+        for segment in prefix.split("/")
+    )
+
 
 # Strips any character that is not a simple alphanumeric from file extensions
 # before they become part of an object-store key.
@@ -206,13 +215,11 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
 
         file_id = str(uuid4())
         effective_prefix = prefix or "workflow_file_upload"
-        if len(effective_prefix) > _MAX_UPLOAD_PREFIX or not UPLOAD_PREFIX_RE.match(
-            effective_prefix
-        ):
+        if not valid_upload_prefix(effective_prefix):
             raise HTTPException(
                 status_code=400,
                 detail="prefix must be relative path segments of letters, digits, "
-                "'_', '-' or '.', with no '..'",
+                "'_', '-' or '.', with no '.' or '..' segment",
             )
         if source.upload_namespace:
             effective_prefix = f"{source.upload_namespace}/{effective_prefix}"

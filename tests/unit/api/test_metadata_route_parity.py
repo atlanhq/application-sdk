@@ -72,7 +72,9 @@ def clients(
     from application_sdk.handler.service import create_app_handler_service
 
     monkeypatch.setenv("ATLAN_APPLICATION_NAME", "parity")
+    # The worker reads its own bare name; the host only the app's prefixed copy.
     monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+    monkeypatch.setenv("ATLAN_APPENV__PARITY__ATLAN_DEPLOYMENT_NAME", "prod")
     monkeypatch.setattr(svc_module, "CONTRACT_GENERATED_DIR", generated)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
@@ -159,3 +161,30 @@ def test_the_workers_queue_override_is_stamped_on_the_host(
     )
     manifest = host.post("/manifest", json={}).json()
     assert manifest["dag"]["extract"]["task_queue"] == "custom-queue"
+
+
+def test_the_host_never_reads_its_own_bare_queue_settings(
+    generated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATLAN_TASK_QUEUE", "host-wide-queue")
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "host-wide")
+    monkeypatch.setenv("ATLAN_APPENV__PARITY__ATLAN_DEPLOYMENT_NAME", "prod")
+    assert app_env("parity", "ATLAN_TASK_QUEUE") == ""
+    host = TestClient(
+        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+    )
+    manifest = host.post("/manifest", json={}).json()
+    assert manifest["dag"]["extract"]["task_queue"] == "atlan-parity-prod"
+
+
+def test_without_the_apps_own_settings_the_host_stamps_no_queue(
+    generated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATLAN_TASK_QUEUE", "host-wide-queue")
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "host-wide")
+    host = TestClient(
+        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+    )
+    manifest = host.post("/manifest", json={}).json()
+    queue = manifest["dag"]["extract"]["task_queue"]
+    assert "host-wide" not in queue

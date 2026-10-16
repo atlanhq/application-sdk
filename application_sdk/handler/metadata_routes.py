@@ -208,6 +208,9 @@ class MetadataSource:
             no entry point is named.
         log: The logger the routes report through.
         max_fe_inputs_bytes: The GET ``fe_inputs`` cap.
+        from_process_env: Whether this process's own ``ATLAN_APPLICATION_NAME``
+            / ``ATLAN_DEPLOYMENT_NAME`` describe this app. ``False`` on the
+            consolidated API host, where they describe the host.
     """
 
     generated_dir: Callable[[], Path]
@@ -225,6 +228,7 @@ class MetadataSource:
     programmatic_manifest: Any = None
     log: Callable[[], Any] = lambda: logger
     max_fe_inputs_bytes: Callable[[], int] = lambda: MAX_FE_INPUTS_BYTES
+    from_process_env: bool = True
 
 
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
@@ -421,6 +425,7 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
             task_queue=source.task_queue() or None,
             app_name=source.app_name() or source.fallback_app_name or None,
             deployment_fallback=source.deployment_name() or "default",
+            from_process_env=source.from_process_env,
         )
         if resolution.unresolved_app_name:
             # conformance: ignore[L009] not a request-boundary handler — the manifest is

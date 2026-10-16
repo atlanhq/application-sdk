@@ -118,11 +118,13 @@ extras = ["sql", "aws"]
   statements from the handler module only (P060); the other files also run on
   the worker and keep their logs. It **refuses, changing nothing,** where a
   deletion would be unsafe: a log call sharing a line with other code, a
-  `get_logger` import mixed with other names, a logger stored on an attribute
+  logger import mixed with other names (`get_logger`, or `getLogger` /
+  `logger` from `logging` / `loguru`), a logger stored on an attribute
   (`self.logger`), or an `except` block that would be left as `pass` (raise a
-  typed `AppError` there instead). It prints each deletion as `file:line` and
-  fails on any unused import, unused variable or undefined name it introduced
-  (ruff F401/F841/F821). Needs Python 3.11+.
+  typed `AppError` there instead). It needs ruff on PATH and checks its own
+  edits with it: on any unused import, unused variable or undefined name it
+  introduced (ruff F401/F841/F821) it restores every file and fails. It prints
+  each deletion as `file:line`. Needs Python 3.11+.
 - `check` runs in CI and fails, in those files, on an absolute `from app`
   import, a worker-only import `fix` would move, or a read of
   `APPLICATION_NAME` / `ATLAN_APPLICATION_NAME`. On the host that names the
@@ -151,7 +153,7 @@ service does for it, from one shared implementation each:
 | Routes | Module | On the host |
 |---|---|---|
 | `auth`, `check`, `warmup`, `metadata` | `handler/routes.py` | The app's handler. |
-| `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is the one the app's worker polls: its `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`), else `derive_task_queue(app, deployment)` with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` before `ATLAN_DEPLOYMENT_NAME`. Static manifests only: `check` refuses an app with a `compute_manifest` hook. |
+| `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is the one the app's worker polls: its `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`), else `derive_task_queue(app, deployment)` with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` only. The host never reads its own bare `ATLAN_*` keys for an app; with neither per-app key it stamps no queue and logs an ERROR. Static manifests only: `check` refuses an app with a `compute_manifest` hook. |
 | `config/{id}` (GET/POST), `file` | `handler/object_routes.py` | One S3 bucket from `S3_BUCKET` / `S3_REGION` (the `aws` extra, ambient AWS identity). A config is keyed `persistent-artifacts/apps/<app>/<type>/<id>/config.json` with the hosted app's name, the key its worker reads. An upload's `prefix` must be relative path segments with no `..`, and on the host every upload lands under the app's own `persistent-artifacts/apps/<app>/uploads/`. 503 without `S3_BUCKET`. |
 
 The worker registers the same modules with its own lookups (the app registry,

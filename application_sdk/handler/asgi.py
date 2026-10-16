@@ -33,6 +33,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import blocking_executor
 from application_sdk.common.task_queue import derive_task_queue
 from application_sdk.handler.base import Handler
@@ -53,6 +54,8 @@ from application_sdk.handler.routes import (
 )
 
 #: Threads in each app's ``run_in_thread`` pool on the host.
+logger = get_logger(__name__)
+
 DEFAULT_BLOCKING_THREADS = 8
 
 #: The host's per-app environment prefix: ``ai-memory`` → ``ATLAN_APPENV__AI_MEMORY__``.
@@ -60,15 +63,17 @@ APPENV_PREFIX = "ATLAN_APPENV__"
 
 
 def app_env(app_name: str, key: str, default: str = "") -> str:
-    """``key`` for one hosted app: its ``ATLAN_APPENV__<APP>__<key>``, else the bare
-    ``key``, else ``default``. An empty string counts as set."""
+    """``key`` for one hosted app: its ``ATLAN_APPENV__<APP>__<key>``, else
+    ``default``. An empty string counts as set.
+
+    Never the bare ``key``: on the host that is the host's own value, shared by
+    every hosted app, so reading it would hand one app another app's (or the
+    host's) setting.
+    """
     scoped = APPENV_PREFIX + app_name.strip().upper().replace("-", "_").replace(
         ".", "_"
     )
-    value = os.environ.get(f"{scoped}__{key}")
-    if value is not None:
-        return value
-    return os.environ.get(key, default)
+    return os.environ.get(f"{scoped}__{key}", default)
 
 
 @functools.cache
@@ -91,11 +96,25 @@ def _task_queue(app_name: str, deployment: Any) -> str | None:
     Stamped, not derived, wherever the host can be told: the worker's own
     ``ATLAN_TASK_QUEUE`` override, which the host's app-env sync carries as
     ``ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE``. Derived from the app's name and
-    deployment, as the worker derives it, only when there is no override.
+    its own ``ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME``, as the worker derives
+    it, only when there is no override. With neither, ``None``: the manifest then
+    keeps its baked queue and this is logged, rather than a queue made from the
+    host's own settings that no worker polls.
     """
-    return app_env(app_name, "ATLAN_TASK_QUEUE").strip() or derive_task_queue(
-        app_name, deployment()
-    )
+    override = app_env(app_name, "ATLAN_TASK_QUEUE").strip()
+    if override:
+        return override
+    deployment_name = deployment()
+    if not deployment_name:
+        logger.error(
+            "No ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE or "
+            "ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME for hosted app %s, so the "
+            "served manifest cannot be stamped with the queue its worker polls. "
+            "Set them from the app's deploy env (the host's app-env sync).",
+            app_name,
+        )
+        return None
+    return derive_task_queue(app_name, deployment_name)
 
 
 def _package_generated_dir(app_package: str) -> Path | None:
@@ -181,6 +200,7 @@ def build_asgi_app(
                 app_package=app_package,
                 task_queue=lambda: _task_queue(app_name, _deployment),
                 deployment_name=_deployment,
+                from_process_env=False,
             ),
         )
     store = default_object_store() if object_store is _FROM_ENV else object_store

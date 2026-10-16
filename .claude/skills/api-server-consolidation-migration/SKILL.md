@@ -38,12 +38,14 @@ The reference migration is atlan-mysql-app#778.
    line was the only report of a failure, raise a typed `AppError` instead.
 
    `fix` refuses, changing nothing, when a deletion would be unsafe: a log call
-   sharing its line with other code, a `get_logger` import mixed with other
-   names, a logger stored on an attribute (`self.logger`), or an `except`
-   block that would be left as `pass`. Fix those by hand (for the `except`,
-   raise a typed `AppError` or return a failed result), then rerun. It also
-   fails if it left an unused import, unused variable or undefined name (ruff
-   F401/F841/F821). It needs Python 3.11+. Nothing else is committed: there is
+   sharing its line with other code, a logger import mixed with other names
+   (`get_logger`, or `getLogger` / `logger` from `logging` / `loguru`), a
+   logger stored on an attribute (`self.logger`), or an `except` block that
+   would be left as `pass`. Fix those by hand (for the `except`, raise a typed
+   `AppError` or return a failed result), then rerun. It needs ruff on PATH:
+   if its edits leave an unused import, unused variable or undefined name
+   (ruff F401/F841/F821) it restores every file and fails. It needs Python
+   3.11+. Nothing else is committed: there is
    no `api/` folder.
 
 3. Check it the way CI will:

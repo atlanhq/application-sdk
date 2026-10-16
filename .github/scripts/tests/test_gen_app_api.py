@@ -11,6 +11,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import gen_app_api as gen  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _ruff_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``fix`` requires ruff; CI has none on PATH, so stand in a clean one.
+
+    Tests of what ruff reports override ``gen.ruff_findings`` themselves.
+    """
+    monkeypatch.setattr(gen, "_ruff", lambda: "ruff")
+    monkeypatch.setattr(gen, "ruff_findings", lambda root, files: set())
+
+
 _PYPROJECT = """
 [project]
 name = "atlan-demo-app"
@@ -192,7 +203,7 @@ def test_fix_removes_logging_from_handler_code(tmp_path: Path) -> None:
         (
             "from application_sdk.observability.metrics_adaptor import get_logger, get_metrics\n"
             "M = get_metrics()\n",
-            "imports get_logger together with ['get_metrics']",
+            "imports ['get_logger'] together with ['get_metrics']",
         ),
         (
             "import logging\nclass H:\n    def __init__(self):\n"
@@ -404,3 +415,60 @@ def test_fix_leaves_import_text_inside_strings_alone(tmp_path: Path) -> None:
     assert (root / "app/handler.py").read_text() == (
         '"""Usage::\n\n    from app.client import C\n"""\nfrom .client import C\n'
     )
+
+
+def test_fix_without_ruff_changes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handler = "import logging\nfrom .client import C\nlogging.info('x')\n"
+    root = _app(tmp_path, handler)
+    monkeypatch.setattr(gen, "_ruff", lambda: None)
+    assert gen.main(["fix", "--root", str(root)]) == 1
+    assert "needs ruff" in capsys.readouterr().out
+    assert (root / "app/handler.py").read_text() == handler
+
+
+def test_fix_restores_every_file_when_ruff_finds_what_it_introduced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handler = "import logging\nfrom app.client import C\nlogging.info('x')\n"
+    root = _app(tmp_path, handler)
+    calls = iter([set(), {("app/handler.py", "F401 `C` imported but unused")}])
+    monkeypatch.setattr(gen, "ruff_findings", lambda root, files: next(calls))
+    assert gen.main(["fix", "--root", str(root)]) == 1
+    out = capsys.readouterr().out
+    assert "fix would leave app/handler.py: F401" in out
+    assert "removed" not in out
+    assert (root / "app/handler.py").read_text() == handler
+
+
+def test_fix_removes_a_logging_import_of_only_loggers(tmp_path: Path) -> None:
+    root = _app(
+        tmp_path,
+        "from logging import getLogger\nfrom .client import C\n"
+        "logger = getLogger(__name__)\n",
+    )
+    assert gen.main(["fix", "--root", str(root)]) == 0
+    assert (root / "app/handler.py").read_text() == "from .client import C\n"
+
+
+def test_fix_refuses_a_logging_import_that_brings_other_names(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    handler = (
+        "from logging import Formatter, getLogger\nfrom .client import C\n"
+        "logger = getLogger(__name__)\nFMT = Formatter('%(message)s')\n"
+    )
+    root = _app(tmp_path, handler)
+    assert gen.main(["fix", "--root", str(root)]) == 1
+    assert "together with ['Formatter']" in capsys.readouterr().out
+    assert (root / "app/handler.py").read_text() == handler
+
+
+def test_a_logging_import_of_no_loggers_is_left_alone(tmp_path: Path) -> None:
+    handler = (
+        "from logging import Formatter\nfrom .client import C\nFMT = Formatter()\n"
+    )
+    root = _app(tmp_path, handler)
+    assert gen.main(["fix", "--root", str(root)]) == 0
+    assert (root / "app/handler.py").read_text() == handler

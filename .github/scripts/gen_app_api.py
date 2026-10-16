@@ -51,7 +51,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python < 3.11: say so before anything else fails
+    sys.exit(
+        "gen_app_api.py needs Python 3.11+ (tomllib); run it with `uv run --python 3.11`"
+    )
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -272,6 +278,16 @@ _CONTEXT_LOG_METHODS = frozenset({"log_debug", "log_info", "log_warning", "log_e
 
 
 _LOGGER_FACTORIES = frozenset({"get_logger", "getLogger"})
+# Names a ``from logging import ...`` / ``from loguru import ...`` may bring in
+# that are loggers themselves; anything else from those modules is not logging.
+_LOGGING_MODULE_LOGGERS = _LOGGER_FACTORIES | {"Logger", "logger"}
+
+
+def _logger_import_names(node: ast.ImportFrom) -> frozenset[str]:
+    """The names *node* may import that count as loggers."""
+    if (node.module or "").split(".")[0] in {"logging", "loguru"}:
+        return _LOGGING_MODULE_LOGGERS
+    return _LOGGER_FACTORIES
 
 
 def _called(call: ast.Call) -> str:
@@ -331,9 +347,8 @@ def logging_statements(tree: ast.Module) -> list[ast.stmt]:
             a.name.split(".")[0] in {"logging", "loguru"} for a in node.names
         ):
             found.append(node)
-        elif isinstance(node, ast.ImportFrom) and (
-            (node.module or "").split(".")[0] in {"logging", "loguru"}
-            or all(a.name in _LOGGER_FACTORIES for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and all(
+            a.name in _logger_import_names(node) for a in node.names
         ):
             found.append(node)
     return found
@@ -359,14 +374,13 @@ def unsafe_logging(tree: ast.Module, text: str, rel: str) -> list[str]:
                     f"{rel}:{node.lineno}: a logger stored on an attribute "
                     "(e.g. self.logger); remove it and its uses by hand"
                 )
-        elif isinstance(node, ast.ImportFrom) and (
-            (node.module or "").split(".")[0] not in {"logging", "loguru"}
-        ):
+        elif isinstance(node, ast.ImportFrom):
             names = {a.name for a in node.names}
-            if names & _LOGGER_FACTORIES and names - _LOGGER_FACTORIES:
+            loggers = _logger_import_names(node)
+            if names & loggers and names - loggers:
                 problems.append(
-                    f"{rel}:{node.lineno}: imports get_logger together with "
-                    f"{sorted(names - _LOGGER_FACTORIES)}; split the import by hand"
+                    f"{rel}:{node.lineno}: imports {sorted(names & loggers)} together "
+                    f"with {sorted(names - loggers)}; split the import by hand"
                 )
         elif isinstance(node, ast.ExceptHandler):
             stmts = [s for s in node.body if isinstance(s, ast.stmt)]
@@ -461,11 +475,16 @@ def strip_logging(root: Path, files: list[str]) -> list[tuple[str, int, str]]:
     return deleted
 
 
+def _ruff() -> str | None:
+    """The ruff executable on PATH, or ``None``."""
+    return shutil.which("ruff")
+
+
 def ruff_findings(root: Path, files: list[str]) -> set[tuple[str, str]] | None:
     """ruff's unused-import, unused-variable and undefined-name findings in
     *files*, as ``(file, message)`` without line numbers (deletions shift them).
     ``None`` when ruff is not installed."""
-    ruff = shutil.which("ruff")
+    ruff = _ruff()
     targets = [f for f in files if f.endswith(".py")]
     if ruff is None:
         return None
@@ -720,10 +739,6 @@ def check(root: Path, config: Config) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    if sys.version_info < (3, 11):
-        sys.exit(
-            "gen_app_api.py needs Python 3.11+ (tomllib); run it with `uv run --python 3.11`"
-        )
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("command", choices=["fix", "check", "build", "stage", "hash"])
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -762,32 +777,50 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "fix":
+        if _ruff() is None:
+            print(
+                "::error::fix needs ruff on PATH to prove its edits leave no unused "
+                "import, unused variable or undefined name; install it "
+                "(`uv tool install ruff`) and rerun. Nothing was changed."
+            )
+            return 1
         handler = handler_file(args.root, config)
         before_files, _ = closure(args.root, config)
-        before = ruff_findings(args.root, before_files)
+        before = ruff_findings(args.root, before_files) or set()
+        # Everything fix may write, so a failed run leaves the tree as it found it.
+        originals = {
+            rel: (args.root / rel).read_text(encoding="utf-8")
+            for rel in {*before_files, handler}
+            if rel.endswith(".py")
+        }
+
+        def restore() -> None:
+            for rel, text in originals.items():
+                (args.root / rel).write_text(text, encoding="utf-8")
+
         try:
             deleted = strip_logging(args.root, [handler])
+            files, _ = closure(args.root, config)
+            rewritten = fix_absolute_imports(args.root, files)
+            after = ruff_findings(args.root, files) or set()
         except ValueError as exc:
+            restore()
             print(f"::error::{exc}")
+            return 1
+        introduced = sorted(after - before)
+        if introduced:
+            restore()
+            for rel, message in introduced:
+                print(f"::error::fix would leave {rel}: {message}")
+            print(
+                "::error::fix changed nothing: edit those lines by hand so the "
+                "removal is clean, then rerun"
+            )
             return 1
         for rel, line, code in deleted:
             print(f"gen_app_api: removed {rel}:{line}: {code}")
-        files, _ = closure(args.root, config)
-        rewritten = fix_absolute_imports(args.root, files)
         for rel in rewritten:
             print(f"gen_app_api: rewrote imports in {rel}")
-        after = ruff_findings(args.root, files)
-        if before is None or after is None:
-            print(
-                "gen_app_api: ruff not found; run `ruff check --select "
-                "F401,F841,F821` on the changed files before committing"
-            )
-        else:
-            introduced = sorted(after - before)
-            for rel, message in introduced:
-                print(f"::error::fix left {rel}: {message} (clean it up by hand)")
-            if introduced:
-                return 1
     problems = check(args.root, config)
     for problem in problems:
         print(f"::error::{problem}")

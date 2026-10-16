@@ -90,10 +90,14 @@ structural.
 cannot copy the worker's in-process value. It stamps the worker's
 `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one
 (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`, from the app's `atlan.yaml`
-`deploy.env`), and derives from the app's name and deployment only when there
-is none. The residual risk is an override set on the worker some other way
-(not in `deploy.env`): the host cannot see it. Pinned by
-`test_metadata_route_parity.py`.
+`deploy.env`), and derives from the app's name and its own
+`ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` only when there is none. It never
+reads the bare `ATLAN_TASK_QUEUE`, `ATLAN_DEPLOYMENT_NAME` or
+`ATLAN_APPLICATION_NAME`: on the host those are the host's own, shared by every
+hosted app (`resolve_manifest_tokens(from_process_env=False)`). With neither
+per-app key set it stamps nothing and logs an ERROR. The residual risk is an
+override set on the worker some other way (not in `deploy.env`): the host
+cannot see it. Pinned by `test_metadata_route_parity.py`.
 
 That is the FND-195 fix, and the failure it removed is silent by construction:
 when the served queue and the polled queue disagree, nothing errors. AE submits

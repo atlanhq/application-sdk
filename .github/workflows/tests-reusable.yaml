@@ -856,6 +856,9 @@ jobs:
   # yet hosted — skip api-member entirely.
   detect-api-member:
     name: Detect hosted api member
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (inputs.run-e2e != 'only')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -896,7 +899,9 @@ jobs:
   api-member:
     name: Hosted api member
     needs: detect-api-member
-    if: needs.detect-api-member.outputs.present == 'true'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      needs.detect-api-member.outputs.present == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

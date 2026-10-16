@@ -124,7 +124,20 @@ def test_a_file_upload_is_stored_under_its_key(host: TestClient, s3: _FakeS3) ->
 
 
 @pytest.mark.parametrize(
-    "prefix", ["../other", "a/../../b", "/absolute", "a//b", "trailing/", "x" * 300]
+    "prefix",
+    [
+        "../other",
+        "a/../../b",
+        "/absolute",
+        "a//b",
+        "trailing/",
+        "x" * 300,
+        "abc\n",
+        ".",
+        "./a",
+        "a/./b",
+        "a/.",
+    ],
 )
 def test_an_unsafe_upload_prefix_is_refused(
     host: TestClient, s3: _FakeS3, prefix: str
