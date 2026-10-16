@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Sequence
 from pathlib import Path
 
 from ._helpers import (
@@ -10,47 +11,15 @@ from ._helpers import (
     _dotted_name,
     _function_binds_name,
     _get_name,
+    _iter_shallow,
     _message_kw_has_exc_text,
     _sdk_error_takes_cause,
     module_helpers,
 )
+from ._sdk_errors import _Resolver as _SdkErrorResolver
 from ._sdk_errors import names_sdk_error, sdk_error_names
 
 ExceptionHelper = tuple[ast.FunctionDef, frozenset[str], ast.Module]
-
-
-def _imported_module_file(
-    module: str | None, level: int, source: Path, root: Path
-) -> Path | None:
-    """Resolve an import to a Python module inside the scanned repository."""
-    resolved_root = root.resolve()
-    try:
-        relative_source = source.resolve().relative_to(resolved_root)
-    except ValueError:
-        return None
-
-    if level:
-        parts = list(relative_source.parent.parts)
-        climb = level - 1
-        if climb > len(parts):
-            return None
-        if climb:
-            parts = parts[:-climb]
-    else:
-        parts = []
-    if module:
-        parts.extend(module.split("."))
-    if not parts:
-        return None
-
-    candidates = (
-        resolved_root.joinpath(*parts).with_suffix(".py"),
-        resolved_root.joinpath(*parts, "__init__.py"),
-    )
-    for candidate in candidates:
-        if candidate.is_file() and candidate.resolve().is_relative_to(resolved_root):
-            return candidate.resolve()
-    return None
 
 
 def _bound_name(node: ast.Import | ast.ImportFrom, alias: ast.alias) -> str:
@@ -61,38 +30,47 @@ def _bound_name(node: ast.Import | ast.ImportFrom, alias: ast.alias) -> str:
     return alias.name
 
 
-def _import_binding_is_unique(
-    tree: ast.Module,
-    import_node: ast.ImportFrom,
-    imported_alias: ast.alias,
-    local_name: str,
-) -> bool:
-    """Reject imported helpers shadowed or rebound anywhere in their module."""
-    matching_imports = 0
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                if _bound_name(node, alias) == local_name:
-                    matching_imports += 1
-                    if node is not import_node or alias is not imported_alias:
-                        return False
+def _module_bindings(tree: ast.Module, name: str) -> list[ast.AST] | None:
+    """Module-scope nodes binding *name*, or ``None`` when a ``global`` exposes it.
+
+    Only module scope is walked: a parameter or local in some other function
+    cannot change what a call elsewhere resolves to. Shadowing at the call site
+    is the caller's check (:func:`_function_binds_name` over the enclosing
+    functions). A ``global`` declaration anywhere lets a function rebind the
+    module name at runtime, so it leaves the binding unproven.
+    """
+    if any(
+        isinstance(node, ast.Global) and name in node.names for node in ast.walk(tree)
+    ):
+        return None
+    bindings: list[ast.AST] = []
+    for node in _iter_shallow(tree):
         if (
             isinstance(node, ast.Name)
-            and node.id == local_name
+            and node.id == name
             and isinstance(node.ctx, (ast.Store, ast.Del))
         ):
-            return False
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
-            node.name == local_name
+            bindings.append(node)
+        elif isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ) and (node.name == name):
+            bindings.append(node)
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and (
+            node.name == name
         ):
-            return False
-        if isinstance(node, ast.arg) and node.arg == local_name:
-            return False
-        if isinstance(node, ast.ExceptHandler) and node.name == local_name:
-            return False
-        if isinstance(node, (ast.Global, ast.Nonlocal)) and local_name in node.names:
-            return False
-    return matching_imports == 1
+            bindings.append(node)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bindings.extend(
+                alias for alias in node.names if _bound_name(node, alias) == name
+            )
+    return bindings
+
+
+def _import_binding_is_unique(tree: ast.Module, imported_alias: ast.alias) -> bool:
+    """Whether *imported_alias* is the only module-scope binding of its name."""
+    local_name = imported_alias.asname or imported_alias.name
+    bindings = _module_bindings(tree, local_name)
+    return bindings is not None and len(bindings) == 1 and bindings[0] is imported_alias
 
 
 def exception_helpers(
@@ -115,17 +93,16 @@ def exception_helpers(
     if path is None or root is None:
         return resolved
 
+    resolver = _SdkErrorResolver(root)
+    module_path_of_source = path.resolve()
     for import_node in tree.body:
         if not isinstance(import_node, ast.ImportFrom):
             continue
-        module_path = _imported_module_file(
-            import_node.module, import_node.level, path, root
+        module_path = resolver.module_file(
+            import_node.module, import_node.level, module_path_of_source
         )
-        if module_path is None:
-            continue
-        try:
-            imported_tree = ast.parse(module_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, SyntaxError):
+        imported_tree = resolver.load(module_path) if module_path else None
+        if module_path is None or imported_tree is None:
             continue
         imported_functions = module_helpers(imported_tree)
         imported_sdk_errors = sdk_error_names(
@@ -133,7 +110,7 @@ def exception_helpers(
         )
         for alias in import_node.names:
             local_name = _bound_name(import_node, alias)
-            if not _import_binding_is_unique(tree, import_node, alias, local_name):
+            if not _import_binding_is_unique(tree, alias):
                 continue
             function = imported_functions.get(alias.name)
             if function is not None:
@@ -145,58 +122,54 @@ def exception_helpers(
     return resolved
 
 
-def _module_rebinds_name(tree: ast.Module, name: str) -> bool:
-    """Whether a module changes a name used as a builtin or SDK class."""
-    import_count = 0
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Name)
-            and node.id == name
-            and isinstance(node.ctx, (ast.Store, ast.Del))
-        ):
-            return True
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
-            node.name == name
-        ):
-            return True
-        if isinstance(node, ast.arg) and node.arg == name:
-            return True
-        if isinstance(node, ast.ExceptHandler) and node.name == name:
-            return True
-        if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
-            return True
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            import_count += sum(
-                _bound_name(node, alias) == name for alias in node.names
-            )
-    return import_count > 1
+Scope = Sequence[ast.FunctionDef | ast.AsyncFunctionDef]
 
 
-def _stable_name(name: str, function: ast.FunctionDef, module: ast.Module) -> bool:
-    return not _function_binds_name(function, name) and not _module_rebinds_name(
-        module, name
+def _locally_shadowed(name: str, functions: Scope) -> bool:
+    return any(_function_binds_name(function, name) for function in functions)
+
+
+def _stable_name(name: str, functions: Scope, module: ast.Module) -> bool:
+    """Whether *name* still means its single module-level import or class.
+
+    For an SDK error class or ``errors`` module alias: exactly one module-scope
+    binding, and it is the import or class definition the SDK resolver proved —
+    ``InternalError = LocalFailure`` after the import is a second binding.
+    """
+    if _locally_shadowed(name, functions):
+        return False
+    bindings = _module_bindings(module, name)
+    return (
+        bindings is not None
+        and len(bindings) == 1
+        and isinstance(bindings[0], (ast.alias, ast.ClassDef))
+    )
+
+
+def _stable_builtin(name: str, functions: Scope, module: ast.Module) -> bool:
+    """Whether *name* still resolves to the builtin: nothing in scope binds it."""
+    return (
+        not _locally_shadowed(name, functions) and _module_bindings(module, name) == []
     )
 
 
 def _class_expression_is_stable(
-    expression: ast.expr, function: ast.FunctionDef, module: ast.Module
+    expression: ast.expr, functions: Scope, module: ast.Module
 ) -> bool:
     if isinstance(expression, ast.Tuple):
         return bool(expression.elts) and all(
-            _class_expression_is_stable(item, function, module)
+            _class_expression_is_stable(item, functions, module)
             for item in expression.elts
         )
     dotted = _dotted_name(expression)
     if dotted is None:
         return False
-    root_name = (
-        expression.id if isinstance(expression, ast.Name) else expression.value.id
-    )
-    return _stable_name(root_name, function, module)
+    root_name = _root_name(expression)
+    return root_name is not None and _stable_name(root_name, functions, module)
 
 
 def _isinstance_test_is_safe(
-    expression: ast.expr, function: ast.FunctionDef, module: ast.Module
+    expression: ast.expr, functions: Scope, module: ast.Module
 ) -> bool:
     if (
         not isinstance(expression, ast.Call)
@@ -204,11 +177,11 @@ def _isinstance_test_is_safe(
         or expression.func.id != "isinstance"
         or len(expression.args) != 2
         or expression.keywords
-        or not _stable_name("isinstance", function, module)
+        or not _stable_builtin("isinstance", functions, module)
         or not isinstance(expression.args[0], ast.Name)
     ):
         return False
-    return _class_expression_is_stable(expression.args[1], function, module)
+    return _class_expression_is_stable(expression.args[1], functions, module)
 
 
 def _is_sdk_error_type(
@@ -225,10 +198,8 @@ def _is_sdk_error_type(
     dotted = _dotted_name(expression)
     if dotted is None or not names_sdk_error(sdk_errors, dotted):
         return False
-    root_name = (
-        expression.id if isinstance(expression, ast.Name) else expression.value.id
-    )
-    return _stable_name(root_name, function, module)
+    root_name = _root_name(expression)
+    return root_name is not None and _stable_name(root_name, [function], module)
 
 
 def _is_sdk_error_guard(
@@ -239,7 +210,7 @@ def _is_sdk_error_guard(
     module: ast.Module,
 ) -> bool:
     return (
-        _isinstance_test_is_safe(expression, function, module)
+        _isinstance_test_is_safe(expression, [function], module)
         and isinstance(expression, ast.Call)
         and isinstance(expression.args[0], ast.Name)
         and expression.args[0].id == exception_parameter
@@ -261,7 +232,7 @@ def _pure_value(
             and expression.func.id == "type"
             and len(expression.args) == 1
             and not expression.keywords
-            and _stable_name("type", function, module)
+            and _stable_builtin("type", [function], module)
             and _pure_value(expression.args[0], function, module)
         )
     if isinstance(expression, ast.JoinedStr):
@@ -301,6 +272,37 @@ def _pure_value(
     return False
 
 
+def _root_name(expression: ast.expr) -> str | None:
+    while isinstance(expression, ast.Attribute):
+        expression = expression.value
+    return expression.id if isinstance(expression, ast.Name) else None
+
+
+def _constructs_sdk_cause(
+    expression: ast.expr,
+    exception_name: str,
+    sdk_errors: frozenset[str],
+    functions: Scope,
+    module: ast.Module,
+) -> bool:
+    """Whether *expression* really builds an SDK error with ``cause=<exception>``.
+
+    The constructor must still be the proven SDK class at this point (no second
+    module binding such as ``InternalError = LocalFailure``, no local shadow),
+    and the arguments must be closed: ``*args`` or ``**extra`` can bind
+    ``cause`` twice (``TypeError`` before the error exists) or replace it.
+    """
+    if (
+        not isinstance(expression, ast.Call)
+        or not _sdk_error_takes_cause(expression, exception_name, sdk_errors)
+        or any(isinstance(argument, ast.Starred) for argument in expression.args)
+        or any(keyword.arg is None for keyword in expression.keywords)
+    ):
+        return False
+    root_name = _root_name(expression.func)
+    return root_name is not None and _stable_name(root_name, functions, module)
+
+
 def _sdk_error_return(
     expression: ast.expr,
     exception_parameter: str,
@@ -308,29 +310,9 @@ def _sdk_error_return(
     function: ast.FunctionDef,
     module: ast.Module,
 ) -> bool:
-    if (
-        not isinstance(expression, ast.Call)
-        or not _sdk_error_takes_cause(expression, exception_parameter, sdk_errors)
-        or any(isinstance(argument, ast.Starred) for argument in expression.args)
-        or any(keyword.arg is None for keyword in expression.keywords)
+    if not isinstance(expression, ast.Call) or not _constructs_sdk_cause(
+        expression, exception_parameter, sdk_errors, [function], module
     ):
-        return False
-    cause_keywords = [
-        keyword for keyword in expression.keywords if keyword.arg == "cause"
-    ]
-    dotted = _dotted_name(expression.func)
-    if (
-        len(cause_keywords) != 1
-        or dotted is None
-        or not names_sdk_error(sdk_errors, dotted)
-    ):
-        return False
-    root_name = (
-        expression.func.id
-        if isinstance(expression.func, ast.Name)
-        else expression.func.value.id
-    )
-    if not _stable_name(root_name, function, module):
         return False
     return all(
         _pure_value(argument, function, module) for argument in expression.args
@@ -378,7 +360,7 @@ def _helper_preserves_cause(
                 ):
                     return False
             elif isinstance(statement, ast.If):
-                if not _isinstance_test_is_safe(statement.test, function, module):
+                if not _isinstance_test_is_safe(statement.test, [function], module):
                     return False
                 positive_guard = _is_sdk_error_guard(
                     statement.test,
@@ -498,7 +480,9 @@ class ExceptionChainingMixin:
         if handler.name is None:
             return  # no binding (except SomeError:) — chaining not applicable
         exc_binding = handler.name
-        if _sdk_error_takes_cause(node.exc, exc_binding, self._sdk_errors):
+        if self._module is not None and _constructs_sdk_cause(
+            node.exc, exc_binding, self._sdk_errors, self._function_stack, self._module
+        ):
             return  # SDK AppError serializes its typed cause on the wire
         if _helper_call_preserves_cause(
             node.exc, exc_binding, self._exception_helpers, self._function_stack

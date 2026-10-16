@@ -94,6 +94,7 @@ class Checker(
         self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        self._module: ast.Module | None = None
         self._except_stack: list[ast.ExceptHandler] = []
         self._class_stack: list[ast.ClassDef] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
@@ -120,6 +121,7 @@ class Checker(
     # ── Context management ────────────────────────────────────────────────────
 
     def visit_Module(self, node: ast.Module) -> None:
+        self._module = node
         self._import_origins = import_bindings(node)
         self.generic_visit(node)
 

@@ -3964,6 +3964,116 @@ except Exception as problem:
     )
 
 
+@pytest.mark.parametrize(
+    "unrelated_binding",
+    [
+        "def describe(classify_problem):\n    return classify_problem\n",
+        "def describe():\n    classify_problem = None\n    return classify_problem\n",
+        "class Wrapper:\n    classify_problem = None\n",
+    ],
+    ids=["other-function-parameter", "other-function-local", "class-attribute"],
+)
+def test_e016_imported_classifier_survives_unrelated_local_binding(
+    tmp_path, unrelated_binding: str
+) -> None:
+    """A binding in another scope does not shadow the imported helper at the raise."""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": f"{_E016_CLASSIFIER_CALLER}\n\n{unrelated_binding}",
+    }
+    assert "E016" not in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        "classify_problem = str\n",
+        "def refresh():\n    global classify_problem\n",
+    ],
+    ids=["module-rebinding", "global-declaration"],
+)
+def test_e016_still_flags_rebound_imported_classifier(tmp_path, shadow: str) -> None:
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": f"{_E016_CLASSIFIER_CALLER}\n\n{shadow}",
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+def test_e016_still_flags_classifier_shadowed_at_the_raise(tmp_path) -> None:
+    caller = _E016_CLASSIFIER_CALLER.replace(
+        "def perform_operation():", "def perform_operation(classify_problem=str):"
+    )
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": caller,
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """\
+from application_sdk.errors import InternalError
+
+InternalError = RuntimeError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+
+def run(InternalError=RuntimeError):
+    try:
+        do_work()
+    except Exception as problem:
+        raise InternalError(message="operation failed", cause=problem)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem, **extra)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(*details, cause=problem)
+""",
+    ],
+    ids=["module-rebound", "parameter-shadow", "unpacked-keywords", "unpacked-args"],
+)
+def test_e016_still_flags_unproven_direct_sdk_cause(source: str) -> None:
+    """``cause=`` only counts when the call really builds the proven SDK error."""
+    assert "E016" in _findings(source)
+
+
+def test_e016_accepts_sdk_cause_through_module_alias() -> None:
+    assert "E016" not in _findings(
+        """\
+from application_sdk import errors
+
+try:
+    do_work()
+except Exception as problem:
+    raise errors.InternalError(message="operation failed", cause=problem)
+"""
+    )
+
+
 # ── P017 — SecretNamedEvidenceKey ────────────────────────────────────────────
 
 
