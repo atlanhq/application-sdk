@@ -8,7 +8,7 @@ from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
 from .dependency_audience import DependencyAudienceMixin
-from .exception_chaining import ExceptionChainingMixin
+from .exception_chaining import ExceptionChainingMixin, ExceptionHelper
 from .http_failure import HttpFailureMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
@@ -79,6 +79,7 @@ class Checker(
         legacy_aliases: frozenset[str] = frozenset(),
         local_helpers: dict[str, ast.FunctionDef] | None = None,
         sdk_errors: frozenset[str] = frozenset(),
+        raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
     ) -> None:
         self._filename = filename
@@ -87,6 +88,7 @@ class Checker(
         self._legacy_aliases = legacy_aliases
         self._local_helpers = local_helpers or {}
         self._sdk_errors = sdk_errors
+        self._exception_helpers = raised_error_helpers or {}
         self._dependency_classes = dependency_classes
         self._findings: list[Finding] = []
         self._import_origins: dict[str, str] = {}

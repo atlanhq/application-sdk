@@ -727,12 +727,16 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.2.0",
         rationale=(
             "When the Automation Engine rebuilds the typed wire envelope it walks the "
-            ".cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does "
-            "not follow __context__. Without explicit chaining the original exception — "
-            "attached only as __context__ — is visible at the interpreter level but dropped "
-            "from the wire envelope and every downstream system that reads it."
+            ".cause/__cause__ chain, not __context__. A replacing raise that neither "
+            "explicitly chains the caught exception nor carries it as the SDK error's cause "
+            "leaves the original attached only as __context__; it is visible at the "
+            "interpreter level but dropped from the wire envelope and every downstream "
+            "system that reads it."
         ),
-        short_description="raise inside except block missing 'from exc' cause — breaks exception chain",
+        short_description=(
+            "raise inside except block missing an explicit or SDK-visible cause — breaks "
+            "exception chaining"
+        ),
         full_description=(
             "A non-bare ``raise`` inside an ``except … as e:`` block that does not\n"
             "include ``from e`` (or ``from None``).  Without explicit chaining, Python\n"

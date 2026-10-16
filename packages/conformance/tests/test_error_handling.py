@@ -3871,6 +3871,99 @@ except ValueError:
     )
 
 
+_E016_CLASSIFIER_HELPER = """\
+from application_sdk.errors import AppError, InternalError
+
+
+def classify_problem(problem: Exception, *, operation: str) -> AppError:
+    if isinstance(problem, AppError):
+        return problem
+    return InternalError(message=operation, cause=problem)
+"""
+
+_E016_CLASSIFIER_CALLER = """\
+from sample.errors import classify_problem
+
+
+def perform_operation():
+    try:
+        do_work()
+    except Exception as problem:
+        raise classify_problem(problem, operation="work")
+"""
+
+
+def test_e016_accepts_resolved_sdk_cause_classifier(tmp_path) -> None:
+    """A resolved helper that carries the caught exception into an SDK error preserves its wire cause."""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": _E016_CLASSIFIER_CALLER,
+    }
+    assert "E016" not in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "returned_error",
+    [
+        "InternalError(message=operation)",
+        "InternalError(message=operation, cause=str(problem))",
+        "LocalFailure(message=operation, cause=problem)",
+    ],
+    ids=["no-cause", "stringified-cause", "non-sdk-cause"],
+)
+def test_e016_still_flags_classifier_without_proven_sdk_cause(
+    tmp_path, returned_error: str
+) -> None:
+    helper = f"""\
+from application_sdk.errors import AppError, InternalError
+
+
+class LocalFailure(Exception):
+    pass
+
+
+def classify_problem(problem: Exception, *, operation: str) -> AppError:
+    if isinstance(problem, AppError):
+        return problem
+    return {returned_error}
+"""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": helper,
+        "sample/handler.py": _E016_CLASSIFIER_CALLER,
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+def test_e016_accepts_direct_sdk_error_cause_without_python_chain() -> None:
+    """An SDK-visible cause is sufficient even if the raise omits ``from``."""
+    assert "E016" not in _findings(
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem)
+"""
+    )
+
+
+def test_e016_still_flags_direct_sdk_error_without_cause() -> None:
+    """A fresh SDK error without a cause or Python chain still drops the caught failure."""
+    assert "E016" in _findings(
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed")
+"""
+    )
+
+
 # ── P017 — SecretNamedEvidenceKey ────────────────────────────────────────────
 
 
