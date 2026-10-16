@@ -304,6 +304,40 @@ def poll():
     assert "L006" in _ids(src)
 
 
+def test_l006_fires_when_finally_break_overrides_return_in_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        while True:
+            try:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+            finally:
+                break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_outer_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            for attempt in attempts:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_when_return_is_in_nested_function() -> None:
     src = """
 from loguru import logger

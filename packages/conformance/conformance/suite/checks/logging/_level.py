@@ -65,17 +65,19 @@ def _is_terminal_break_summary(
 
 
 def _is_terminal_return_summary(
-    node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While
+    node: ast.Call, outermost: ast.For | ast.AsyncFor | ast.While
 ) -> bool:
     """True when a bare log is followed by a return that exits its function.
 
     The log may be the last statement in an ``if`` branch when the enclosing
-    ``if`` is immediately followed by the return. A ``finally: continue`` can
-    override that return, so such logs are not terminal summaries.
+    ``if`` is immediately followed by the return. A ``finally: break`` or
+    ``finally: continue`` anywhere between the return and *outermost* (the
+    function's outermost loop) overrides the return and can let a loop repeat
+    the log, so such logs are not terminal summaries.
     """
     parents = {
         child: parent
-        for parent in ast.walk(loop)
+        for parent in ast.walk(outermost)
         for child in ast.iter_child_nodes(parent)
     }
     statement = parents.get(node)
@@ -101,25 +103,31 @@ def _is_terminal_return_summary(
         if (
             isinstance(ancestor, (ast.Try, ast.TryStar))
             and not any(child is value for value in ancestor.finalbody)
-            and _continues_enclosing_loop(ancestor.finalbody)
+            and _continues_enclosing_loop(ancestor.finalbody, include_break=True)
         ):
             return False
-        if ancestor is loop:
-            return True
         child = ancestor
         ancestor = parents.get(ancestor)
-    return False
+    return True
 
 
-def _continues_enclosing_loop(statements: list[ast.stmt]) -> bool:
-    """True when *statements* contain a ``continue`` for the enclosing loop."""
+def _continues_enclosing_loop(
+    statements: list[ast.stmt], *, include_break: bool = False
+) -> bool:
+    """True when *statements* contain a ``continue`` for the enclosing loop.
+
+    With *include_break*, a ``break`` for the enclosing loop also counts.
+    """
+    targets: tuple[type[ast.stmt], ...] = (
+        (ast.Continue, ast.Break) if include_break else (ast.Continue,)
+    )
     pending: list[ast.AST] = list(statements)
     while pending:
         current = pending.pop()
-        if isinstance(current, ast.Continue):
+        if isinstance(current, targets):
             return True
-        # A continue in a nested loop's body targets that loop; one in its
-        # ``else`` still targets ours.  Nested scopes cannot continue ours.
+        # A continue/break in a nested loop's body targets that loop; one in
+        # its ``else`` still targets ours.  Nested scopes cannot reach ours.
         if isinstance(current, (ast.For, ast.AsyncFor, ast.While)):
             pending.extend(current.orelse)
         elif not isinstance(
@@ -160,7 +168,7 @@ class LevelMixin(_MixinBase):
             and loop_is_bounded(loop, self._bounded_loop_caps)
             for loop in self._loop_stack[:-1]
         )
-        if _is_terminal_return_summary(node, innermost):
+        if _is_terminal_return_summary(node, self._loop_stack[0]):
             return
         if enclosing_loops_are_bounded and _is_terminal_break_summary(node, innermost):
             return
