@@ -35,6 +35,8 @@ SCRIPTS = (
     "test_command_comment",
     "e2e_branch_recheck",
     "rerun_deferred_gate",
+    # FND-4036: the release train's argv carries its safety mode.
+    "release_train",
 )
 
 _CALL = re.compile(r"python3?\s+\S*?/(?P<script>[a-z_]+)\.py\b(?P<args>.*)", re.S)
