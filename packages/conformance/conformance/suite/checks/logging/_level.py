@@ -8,6 +8,30 @@ from ._base import _MixinBase
 from ._helpers import get_logger_method, loop_is_bounded
 
 
+def _following_statement(
+    statement: ast.stmt, parents: dict[ast.AST, ast.AST]
+) -> ast.stmt | None:
+    """Return the statement immediately after *statement* in its containing suite."""
+    suite = parents.get(statement)
+    if suite is None:
+        return None
+    statements = next(
+        (
+            values
+            for _, values in ast.iter_fields(suite)
+            if isinstance(values, list) and any(value is statement for value in values)
+        ),
+        None,
+    )
+    if statements is None:
+        return None
+    index = next(index for index, value in enumerate(statements) if value is statement)
+    if index + 1 >= len(statements):
+        return None
+    following = statements[index + 1]
+    return following if isinstance(following, ast.stmt) else None
+
+
 def _is_terminal_break_summary(
     node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While
 ) -> bool:
@@ -20,25 +44,11 @@ def _is_terminal_break_summary(
     statement = parents.get(node)
     if not isinstance(statement, ast.Expr) or statement.value is not node:
         return False
-    suite = parents.get(statement)
-    if suite is None:
-        return False
-    statements = next(
-        (
-            values
-            for _, values in ast.iter_fields(suite)
-            if isinstance(values, list) and any(value is statement for value in values)
-        ),
-        None,
-    )
-    if statements is None:
-        return False
-    index = next(index for index, value in enumerate(statements) if value is statement)
-    if index + 1 >= len(statements) or not isinstance(statements[index + 1], ast.Break):
+    if not isinstance(_following_statement(statement, parents), ast.Break):
         return False
 
     child: ast.AST = statement
-    ancestor: ast.AST | None = suite
+    ancestor: ast.AST | None = parents.get(statement)
     while ancestor is not None:
         if isinstance(ancestor, (ast.For, ast.AsyncFor, ast.While)):
             return ancestor is loop
@@ -49,6 +59,53 @@ def _is_terminal_break_summary(
             and _continues_enclosing_loop(ancestor.finalbody)
         ):
             return False
+        child = ancestor
+        ancestor = parents.get(ancestor)
+    return False
+
+
+def _is_terminal_return_summary(
+    node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While
+) -> bool:
+    """True when a bare log is followed by a return that exits its function.
+
+    The log may be the last statement in an ``if`` branch when the enclosing
+    ``if`` is immediately followed by the return. A ``finally: continue`` can
+    override that return, so such logs are not terminal summaries.
+    """
+    parents = {
+        child: parent
+        for parent in ast.walk(loop)
+        for child in ast.iter_child_nodes(parent)
+    }
+    statement = parents.get(node)
+    if not isinstance(statement, ast.Expr) or statement.value is not node:
+        return False
+
+    current: ast.stmt = statement
+    following = _following_statement(current, parents)
+    while following is None:
+        parent = parents.get(current)
+        if not isinstance(parent, ast.If):
+            return False
+        current = parent
+        following = _following_statement(current, parents)
+    if not isinstance(following, ast.Return):
+        return False
+
+    child: ast.AST = following
+    ancestor = parents.get(following)
+    while ancestor is not None:
+        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return False
+        if (
+            isinstance(ancestor, (ast.Try, ast.TryStar))
+            and not any(child is value for value in ancestor.finalbody)
+            and _continues_enclosing_loop(ancestor.finalbody)
+        ):
+            return False
+        if ancestor is loop:
+            return True
         child = ancestor
         ancestor = parents.get(ancestor)
     return False
@@ -84,7 +141,8 @@ class LevelMixin(_MixinBase):
         monitor, drowning lifecycle signals in noise and inflating storage cost.
         INFO is for milestones; per-item progress belongs at DEBUG.
 
-        Exempt: loops bounded to ≤ 10 iterations (literal range / collection).
+        Exempt: loops bounded to ≤ 10 iterations and terminal logs that end with
+        a break (when outer loops do not repeat them) or an unconditional return.
         """
         if not self._loop_stack:
             return
@@ -102,6 +160,8 @@ class LevelMixin(_MixinBase):
             and loop_is_bounded(loop, self._bounded_loop_caps)
             for loop in self._loop_stack[:-1]
         )
+        if _is_terminal_return_summary(node, innermost):
+            return
         if enclosing_loops_are_bounded and _is_terminal_break_summary(node, innermost):
             return
         self._add(
