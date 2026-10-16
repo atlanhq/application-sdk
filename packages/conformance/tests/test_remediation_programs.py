@@ -347,11 +347,15 @@ def test_o001_prose_names_the_three_dropped_tolerances() -> None:
     assert "64 bits" in text
 
 
-def test_d003_prose_removes_constraint_floors_rather_than_relocating() -> None:
-    """Moving a floor into constraint-dependencies only relocates D003."""
+def test_d003_prose_distinguishes_generic_and_app_specific_floors() -> None:
+    """Generic floors move upstream; documented app-specific floors may remain."""
     text = " ".join(_read("areas/dependency.prose.md").split())
     assert "constraint-dependencies` entry in an app is also D003" in text
-    assert "do not move a floor" in text
+    assert "do not move a floor" in text.lower()
+    assert "documented app-specific minimum" in text
+    assert "the SDK's declared range does not guarantee the required minimum" in text
+    assert "reasoned D003 exception" in text
+    assert "lockfile version alone is not a future guarantee" in text
 
 
 def test_p001_prose_says_the_opt_out_does_not_govern_unknown_keys() -> None:
