@@ -5,7 +5,7 @@
 
 # Error-Handling Rules (E-series)
 
-**21 rules** · Checker: `suite.checks.error_handling` (AST-based)
+**22 rules** · Checker: `suite.checks.error_handling` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -45,6 +45,7 @@ They are documented alongside the orchestration, storage and client seam rules i
 | [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | yes | 0.9.0 |
 | [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | yes | 0.9.0 |
 | [E021](#e021) | `DependencyUnavailableOverriddenToUser` | `warn` | `both` | `failure-category` | yes | 0.47.0 |
+| [E022](#e022) | `SqlClientRunQueryOverrideDropsParams` | `warn` | `app` | `sql-bind-parameters` | — | 0.51.0 |
 
 ---
 
@@ -814,5 +815,53 @@ Only the class that assigns the override is flagged; subclasses that inherit it 
 fixed by the same edit.  A DEPENDENCY_UNAVAILABLE leaf raised for a customer source
 *without* an override is not detected: the rule matches the structural pattern and does
 not infer intent from names.
+
+---
+
+## E022 — `SqlClientRunQueryOverrideDropsParams` {#e022}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `sql-bind-parameters` · **Autofixable:** — · **Since:** 0.51.0
+
+> BaseSQLClient subclass overrides run_query without the base's params argument
+
+**Rationale:** The SDK makes run_query the override point for a driver whose cursor the base cannot
+read, and its signature has to be copied by hand. From application-sdk 3.46.0 the base
+takes params, so the SDK and the app can bind a user-supplied filter value instead of
+formatting it into SQL text. An override written against an older SDK keeps the old
+signature: the first caller that binds gets a TypeError, and an override that later
+accepts the argument but ignores it runs the query without the filter, silently. A type
+checker in standard mode does not stop the drift, so the fleet carries it until a call
+fails.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/clients/sql.py — `BaseSQLClient.run_query` and
+  `AsyncBaseSQLClient.run_query` take `params: Mapping[str, SqlBindValue] | None = None`
+  after `batch_size` and check it with `_bound_params`, which raises
+  `SqlBindParameterError` for a name the query never references before anything
+  executes.
+- **Migrate with:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+
+A class whose base resolves to the SDK's `BaseSQLClient` or `AsyncBaseSQLClient`
+(imported from `application_sdk.clients` or `application_sdk.clients.sql`, directly,
+through a module alias, or through an intermediate class defined in the same module or
+imported by name from the app's own modules) defines `run_query` and the definition
+accepts no `params` argument: no parameter named `params` (positional or keyword-only)
+and no `**kwargs`.
+
+Silent when the app's `uv.lock` does not resolve application-sdk 3.46.0 or later, where
+the base has no `params` to keep, or when the lock cannot be read.  A class that
+implements `ClientInterface` directly, a test double under `tests/`, and a `run_query`
+on any other class are out of scope, as is a base reached through a name the resolver
+cannot follow (a star import, a dynamic base).  An override that accepts `params` and
+then ignores it is not detected: the rule grades the signature, not what the body does
+with the value.
+
+Fix: add `params: Mapping[str, SqlBindValue] | None = None` after `batch_size` and bind
+it on every execution path, raising `SqlBindParameterError` before executing when
+`params` names a placeholder the query never references.  Delegating to
+`super().run_query(query, batch_size, params)` keeps the SDK's own check.  A driver that
+cannot bind at all must raise on a non-empty `params` rather than run the query without
+it.  Cover the bound, unbound and unreferenced-name cases with a test.
 
 ---

@@ -1035,4 +1035,69 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/error-handling.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="E022",
+        canonical_reference=(
+            "application_sdk/clients/sql.py — `BaseSQLClient.run_query` and "
+            "`AsyncBaseSQLClient.run_query` take `params: Mapping[str, "
+            "SqlBindValue] | None = None` after `batch_size` and check it with "
+            "`_bound_params`, which raises `SqlBindParameterError` for a name the "
+            "query never references before anything executes."
+        ),
+        scope=RuleScope.APP,
+        name="SqlClientRunQueryOverrideDropsParams",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="sql-bind-parameters",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.51.0",
+        rationale=(
+            "The SDK makes run_query the override point for a driver whose cursor "
+            "the base cannot read, and its signature has to be copied by hand. "
+            "From application-sdk 3.46.0 the base takes params, so the SDK and "
+            "the app can bind a user-supplied filter value instead of formatting "
+            "it into SQL text. An override written against an older SDK keeps the "
+            "old signature: the first caller that binds gets a TypeError, and an "
+            "override that later accepts the argument but ignores it runs the "
+            "query without the filter, silently. A type checker in standard mode "
+            "does not stop the drift, so the fleet carries it until a call fails."
+        ),
+        short_description=(
+            "BaseSQLClient subclass overrides run_query without the base's params "
+            "argument"
+        ),
+        full_description=(
+            "A class whose base resolves to the SDK's ``BaseSQLClient`` or\n"
+            "``AsyncBaseSQLClient`` (imported from ``application_sdk.clients`` or\n"
+            "``application_sdk.clients.sql``, directly, through a module alias, or\n"
+            "through an intermediate class defined in the same module or imported\n"
+            "by name from the app's own modules) defines ``run_query`` and the\n"
+            "definition accepts no ``params`` argument: no parameter named\n"
+            "``params`` (positional or keyword-only) and no ``**kwargs``.\n"
+            "\n"
+            "Silent when the app's ``uv.lock`` does not resolve application-sdk\n"
+            "3.46.0 or later, where the base has no ``params`` to keep, or when the\n"
+            "lock cannot be read.  A class that implements ``ClientInterface``\n"
+            "directly, a test double under ``tests/``, and a ``run_query`` on any\n"
+            "other class are out of scope, as is a base reached through a name the\n"
+            "resolver cannot follow (a star import, a dynamic base).  An override\n"
+            "that accepts ``params`` and then ignores it is not detected: the rule\n"
+            "grades the signature, not what the body does with the value.\n"
+            "\n"
+            "Fix: add ``params: Mapping[str, SqlBindValue] | None = None`` after\n"
+            "``batch_size`` and bind it on every execution path, raising\n"
+            "``SqlBindParameterError`` before executing when ``params`` names a\n"
+            "placeholder the query never references.  Delegating to\n"
+            "``super().run_query(query, batch_size, params)`` keeps the SDK's own\n"
+            "check.  A driver that cannot bind at all must raise on a non-empty\n"
+            "``params`` rather than run the query without it.  Cover the bound,\n"
+            "unbound and unreferenced-name cases with a test.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/error-handling.md#e022",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/error-handling.prose.md",
+        ),
+    ),
 )

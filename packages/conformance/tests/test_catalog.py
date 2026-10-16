@@ -431,6 +431,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
+    # E022: a run_query override on a BaseSQLClient subclass that drops params —
+    # the SDK declares the base, so the rule grades the apps that override it.
     # S002: raw-env credential reads — the SDK is the *provider* of the secret-store
     # seam (EnvironmentSecretStore legitimately reads os.environ), so the rule that
     # steers apps onto that seam is meaningless on the SDK itself (BLDX-1419). S001
@@ -510,6 +512,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D009",
         "D011",
         "E020",
+        "E022",
         "K001",
         "K002",
         "K003",
@@ -655,6 +658,7 @@ def test_catalog_e_series_present() -> None:
         "E019",
         "E020",
         "E021",
+        "E022",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"

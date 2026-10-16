@@ -445,6 +445,22 @@ outcome mirroring the error-handling shape in the reference app named by
   really covers an Atlan-side service, the override is the bug: delete the
   `audience` line and keep the category.
 
+- **E022 SqlClientRunQueryOverrideDropsParams** (migration, suggest-only) — a
+  `BaseSQLClient` / `AsyncBaseSQLClient` subclass overrides `run_query`
+  without the `params` argument the base takes from application-sdk 3.46.0,
+  so a caller that binds a value gets a `TypeError`.  Propose adding
+  `params: Mapping[str, SqlBindValue] | None = None` after `batch_size` and
+  binding it on every execution path.  Never accept the argument and drop it:
+  that runs the query without the caller's filter.  Where the override only
+  post-processes rows, delegate to `super().run_query(query, batch_size,
+  params)` to keep the SDK's own check.  Otherwise reject a name the query
+  never references with `SqlBindParameterError` before executing, and pass
+  the values to the driver as bound parameters, never as SQL text.  A driver
+  that cannot bind must raise on a non-empty `params`.  The SDK's
+  `application_sdk/clients/sql.py` `BaseSQLClient.run_query` is the shape.
+  Not applied by the lane: the binding depends on the driver's cursor API,
+  and each edit needs a bound / unbound / unreferenced-name test.
+
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`
   subclass.  Consult the `/typed-failures` prescription: propose replacing
   with the appropriate `AppError` subclass from
