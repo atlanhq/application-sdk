@@ -2,6 +2,18 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.50.2] - 2026-10-16
+
+### Bug fixes
+
+- E007 false positive on compliant code (1 repo) (#4428) ([a998fcd](https://github.com/atlanhq/application-sdk/commit/a998fcd))
+- correct D003's fix guidance (1 repo) (#4427) ([045f420](https://github.com/atlanhq/application-sdk/commit/045f420))
+- correct O001's fix guidance (1 repo) (#4429) ([1682259](https://github.com/atlanhq/application-sdk/commit/1682259))
+- L006 false positive on compliant code (1 repo) (#4422) ([4d53dea](https://github.com/atlanhq/application-sdk/commit/4d53dea))
+- correct P019's fix guidance (1 repo) (#4423) ([71f76d8](https://github.com/atlanhq/application-sdk/commit/71f76d8))
+- E016 false positive on compliant code (1 repo) (#4413) ([1f701b5](https://github.com/atlanhq/application-sdk/commit/1f701b5))
+- retire Dependabot config in favour of the Renovate preset [FND-4034] (#4415) ([fc19e58](https://github.com/atlanhq/application-sdk/commit/fc19e58))
+
 ## [0.50.1] - 2026-10-15
 
 ### Bug fixes
