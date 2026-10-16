@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 from loguru import logger
 
 from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
+from application_sdk.observability.console_sink import flush_console_logs
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -79,7 +80,12 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
         },
     ):
-        yield AtlanLoggerAdapter("test_logger")
+        try:
+            yield AtlanLoggerAdapter("test_logger")
+        finally:
+            # Console lines are written by a background thread. Wait for them
+            # so tests that read capsys after the block see every line.
+            flush_console_logs()
 
 
 @pytest.fixture
