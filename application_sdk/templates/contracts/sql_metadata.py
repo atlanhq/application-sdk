@@ -11,6 +11,7 @@ from typing import Annotated, Any, ClassVar
 import orjson
 from pydantic import Field, JsonValue, ValidationInfo, field_validator, model_validator
 
+from application_sdk._logging import get_logger
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
     normalize_legacy_filter_value,
@@ -31,7 +32,6 @@ from application_sdk.credentials.ingress import (
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.wire import FailureDetails
-from application_sdk._logging import get_logger
 
 _logger = get_logger(__name__)
 
