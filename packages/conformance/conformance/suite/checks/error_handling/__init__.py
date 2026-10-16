@@ -61,6 +61,7 @@ from ._constants import (
 from ._dependency_category import dependency_unavailable_classes
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
+from .exception_chaining import exception_helpers
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -107,13 +108,18 @@ def scan_text(
 
     directives = _parse_directives(text)
     local_helpers = module_helpers(tree)
+    sdk_errors = sdk_error_names(tree, path=path, root=root)
+    raised_error_helpers = exception_helpers(
+        tree, path=path, root=root, sdk_errors=sdk_errors
+    )
     checker = Checker(
         filename=file,
         directives=directives,
         atlan_ioerror_imported=atlan_ioerror,
         legacy_aliases=legacy_aliases,
         local_helpers=local_helpers,
-        sdk_errors=sdk_error_names(tree, path=path, root=root),
+        sdk_errors=sdk_errors,
+        raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
     )
     checker.visit(tree)

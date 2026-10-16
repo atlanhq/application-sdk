@@ -727,22 +727,35 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.2.0",
         rationale=(
             "When the Automation Engine rebuilds the typed wire envelope it walks the "
-            ".cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does "
-            "not follow __context__. Without explicit chaining the original exception — "
-            "attached only as __context__ — is visible at the interpreter level but dropped "
-            "from the wire envelope and every downstream system that reads it."
+            ".cause/__cause__ chain, not __context__. A replacing raise that neither "
+            "explicitly chains the caught exception nor carries it as the SDK error's cause "
+            "leaves the original attached only as __context__; it is visible at the "
+            "interpreter level but dropped from the wire envelope and every downstream "
+            "system that reads it."
         ),
-        short_description="raise inside except block missing 'from exc' cause — breaks exception chain",
+        short_description=(
+            "raise inside except block missing an explicit or SDK-visible cause — breaks "
+            "exception chaining"
+        ),
         full_description=(
-            "A non-bare ``raise`` inside an ``except … as e:`` block that does not\n"
-            "include ``from e`` (or ``from None``).  Without explicit chaining, Python\n"
-            "attaches the original as ``__context__`` with ``__suppress_context__=False``\n"
-            "— the chain is preserved at the interpreter level but AE's wire serialiser\n"
-            "only follows the ``__cause__`` chain, so the original exception is lost in\n"
-            "dashboards.  Fix: ``raise NewError(...) from e``.  Use ``from None`` only\n"
-            "when intentionally hiding the original (requires a comment explaining why).\n"
-            "Acceptable patterns: bare ``raise`` (re-raise), ``raise X() from e`` (already\n"
-            "chained), ``raise X() from None`` (intentional suppression).\n"
+            "A non-bare ``raise`` inside an ``except … as e:`` block that neither\n"
+            "includes ``from e`` (or ``from None``) nor carries ``e`` as a proven SDK\n"
+            "error's cause.  Without either, Python attaches the original only as\n"
+            "``__context__`` — preserved at the interpreter level, but AE's wire\n"
+            "serialiser follows the ``__cause__``/``.cause`` chain, so the original\n"
+            "exception is lost in dashboards.  Fix: ``raise NewError(...) from e``, and\n"
+            "for an SDK ``AppError`` also pass ``cause=e``.  Use ``from None`` only when\n"
+            "intentionally hiding the original (requires a comment explaining why).\n"
+            "Acceptable patterns: bare ``raise`` (re-raise); ``raise X() from e``\n"
+            "(already chained); ``raise X() from None`` (intentional suppression);\n"
+            "``raise SdkError(..., cause=e)`` where ``SdkError`` is proven to come from\n"
+            "``application_sdk.errors``, is not rebound or shadowed, and the call has no\n"
+            "``*args``/``**kwargs`` unpacking; ``raise classify(e)`` where ``classify``\n"
+            "is an unshadowed top-level function in this module or imported from the\n"
+            "scanned repo whose every return either passes through ``e`` already proven\n"
+            "to be an SDK error or builds an SDK error with ``cause=e``.  A cause the\n"
+            "rule cannot prove (``cause=str(e)``, an app-defined class, an opaque\n"
+            "helper) still needs ``from e``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
         remediation_reference=RemediationReference(
