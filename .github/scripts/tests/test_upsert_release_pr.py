@@ -248,3 +248,107 @@ def test_outputs_written_to_github_output(tmp_path, monkeypatch):
     written = out.read_text(encoding="utf-8")
     assert "pr_number=42" in written
     assert "pr_action=updated" in written
+
+
+SUFFIX = "Next release Mon 26 Oct 12:00 IST"
+
+
+def test_suffix_kept_on_version_change():
+    assert (
+        mod.carry_title_suffix(
+            f"Bump version to 1.3.0 · {SUFFIX}", "Bump version to 1.4.0"
+        )
+        == f"Bump version to 1.4.0 · {SUFFIX}"
+    )
+
+
+def test_no_suffix_leaves_desired_title_unchanged():
+    assert (
+        mod.carry_title_suffix("Bump version to 1.3.0", "Bump version to 1.4.0")
+        == "Bump version to 1.4.0"
+    )
+
+
+@pytest.mark.parametrize(
+    "current",
+    [None, "", f"chore(release): release 1.3.0 · {SUFFIX}", f"WIP · {SUFFIX}"],
+)
+def test_current_title_without_bump_prefix_keeps_existing_behaviour(current):
+    assert (
+        mod.carry_title_suffix(current, "Bump version to 1.4.0")
+        == "Bump version to 1.4.0"
+    )
+
+
+def test_non_bump_desired_title_is_never_suffixed():
+    desired = "chore(conformance): release v0.51.0"
+    assert (
+        mod.carry_title_suffix(f"Bump version to 1.3.0 · {SUFFIX}", desired) == desired
+    )
+
+
+def test_multiple_separator_segments_kept_intact():
+    suffix = f"{SUFFIX} · queued · slot 2"
+    assert (
+        mod.carry_title_suffix(
+            f"Bump version to 1.3.0 · {suffix}", "Bump version to 1.4.0"
+        )
+        == f"Bump version to 1.4.0 · {suffix}"
+    )
+
+
+def test_desired_title_with_own_suffix_wins():
+    desired = "Bump version to 1.4.0 · Held"
+    assert (
+        mod.carry_title_suffix(f"Bump version to 1.3.0 · {SUFFIX}", desired) == desired
+    )
+
+
+def test_blank_suffix_is_not_carried():
+    assert (
+        mod.carry_title_suffix("Bump version to 1.3.0 ·  ", "Bump version to 1.4.0")
+        == "Bump version to 1.4.0"
+    )
+
+
+def test_sync_skips_edit_when_only_the_suffix_differs(tmp_path, monkeypatch, capsys):
+    """Between release-train slots a merge to main must not strip the suffix."""
+    body = "Version: 0.3.1 → 0.4.0\n"
+    open_pr = [
+        {
+            "number": 258,
+            "title": f"Bump version to 0.4.0 · {SUFFIX}",
+            "body": body,
+            "labels": [{"name": "release"}],
+        }
+    ]
+    gh = Gh([json.dumps(open_pr)])
+    monkeypatch.setattr(mod, "run", gh)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+
+    assert mod.main(_argv(_body_file(tmp_path, body))) == 0
+
+    assert not gh.of("pr", "edit")
+    assert "pr_action=unchanged" in capsys.readouterr().out
+
+
+def test_sync_carries_suffix_onto_new_version(tmp_path, monkeypatch):
+    open_pr = [
+        {
+            "number": 258,
+            "title": f"Bump version to 0.3.2 · {SUFFIX}",
+            "body": "Version: 0.3.1 → 0.3.2",
+            "labels": [{"name": "release"}],
+        }
+    ]
+    gh = Gh([json.dumps(open_pr)])
+    monkeypatch.setattr(mod, "run", gh)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+
+    assert mod.main(_argv(_body_file(tmp_path))) == 0
+
+    edits = gh.of("pr", "edit")
+    assert len(edits) == 1
+    assert (
+        edits[0][edits[0].index("--title") + 1] == f"Bump version to 0.4.0 · {SUFFIX}"
+    )
