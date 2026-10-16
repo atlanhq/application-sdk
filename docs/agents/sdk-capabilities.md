@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.47.0
-source-sha:    36265edd221cdc3ac309cdea20f3a4dfd7648bf2
-source-date:   2026-10-14T10:55:39+05:30
+sdk-version:   3.49.1
+source-sha:    2b2dd154231dff018b1e5c5e1433f46712b3cda7
+source-date:   2026-10-14T11:16:33+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 419 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
@@ -4422,6 +4422,21 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Wrapper for lazy evaluation with caching.
 - **Defined in:** `application_sdk/testing/integration/lazy.py`
 
+#### `LineageEdge`
+
+- **Import:** `from application_sdk.testing.harness.expectations import LineageEdge`
+- **Signature:** `class LineageEdge`
+- **Summary:** One declared lineage link: an input asset type and an output asset type.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `LineageEdgeCounts`
+
+- **Import:** `from application_sdk.testing.harness.atlas import LineageEdgeCounts`
+- **Also importable from:** `application_sdk.testing.harness.expectations`
+- **Signature:** `class LineageEdgeCounts(*, counts: Mapping[LineageEdge, int] = dict(), scanned: int = 0, truncated: bool = False)`
+- **Summary:** How many lineage processes connect each requested type pair.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
+
 #### `LogCollector`
 
 - **Import:** `from application_sdk.testing.e2e import LogCollector`
@@ -5193,6 +5208,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Project a per-type count read, spreading an unreadable one over its types.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `as_lineage_edges`
+
+- **Import:** `from application_sdk.testing.harness.outcome import as_lineage_edges`
+- **Signature:** `as_lineage_edges(reading: Outcome[LineageEdgeCounts]) -> LineageEdgeRead`
+- **Summary:** Project a lineage-edge read into the evaluator's vocabulary.
+- **Defined in:** `application_sdk/testing/harness/outcome.py`
+
 #### `as_matcher`
 
 - **Import:** `from application_sdk.testing.harness.expectations import as_matcher`
@@ -5404,6 +5426,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Count assets of each named type that have lineage attached.
 - **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
 
+#### `count_lineage_edges`
+
+- **Import:** `from application_sdk.testing.harness.atlas import count_lineage_edges`
+- **Signature:** `count_lineage_edges(client: AsyncAtlanClient, *, ...)`
+- **Summary:** Count lineage processes linking each (source type, target type) pair.
+- **Defined in:** `application_sdk/testing/harness/atlas/__init__.py`
+
 #### `count_total_assets`
 
 - **Import:** `from application_sdk.testing.harness.atlas import count_total_assets`
@@ -5510,6 +5539,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `evaluate_if_lazy(value: T)`
 - **Summary:** Evaluate a value if it's lazy, otherwise return as-is.
 - **Defined in:** `application_sdk/testing/integration/lazy.py`
+
+#### `evaluate_lineage_edges`
+
+- **Import:** `from application_sdk.testing.harness.expectations import evaluate_lineage_edges`
+- **Signature:** `evaluate_lineage_edges(read: LineageEdgeRead | None, expectations: AssetExpectations) -> Sequence[Finding]`
+- **Summary:** Evaluate observed lineage-edge counts against the declared floors.
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `evaluate_locations`
 
@@ -6596,6 +6632,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `HandlerResult`
 - **Summary:** Everything :func:`_coerce` accepts from a handler or authorizer.
 - **Defined in:** `application_sdk/testing/fake_source.py`
+
+#### `LineageEdgeRead`
+
+- **Import:** `from application_sdk.testing.harness.expectations import LineageEdgeRead`
+- **Signature:** `LineageEdgeRead: TypeAlias`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/harness/expectations.py`
 
 #### `NO_TYPENAME`
 
@@ -8624,6 +8667,30 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
   - `transformed_file: FileReference | None` — ``FileReference`` to the transformed asset output.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `TreeSelectionExtractionInput`
+
+- **Import:** `from application_sdk.templates.contracts import TreeSelectionExtractionInput`
+- **Summary:** ``ExtractionInput`` whose include/exclude filters are tree-widget selections.
+- **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `preflight_credential_refs: ClassVar[dict[str, str]]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
+  - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.
+  - `credential_ref: CredentialRef | None` — Typed credential reference — preferred over credential_guid for new apps.
+  - `extraction_method: str` `= ''` — ``"agent"`` or ``"direct"``. Empty defaults to direct.
+  - `agent_json: AgentCredentialSpec | None` — Typed agent credential spec. Non-None when extraction_method is agent.
+  - `output_prefix: str` `= ''` — Object store prefix for all output artifacts.
+  - `output_path: str` `= ''` — Local or object store path for output files.
+  - `exclude_filter: TreeSelection | str` `= Field(default='', json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Selection to exclude: an APITree-style nested dict, or a string.
+  - `include_filter: TreeSelection | str` `= Field(default='', json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Selection to include: an APITree-style nested dict, or a string.
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern for table/view names to exclude from extraction.
+  - `exclude_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Form-key name of :attr:`temp_table_regex` (FND-2733).
+  - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`

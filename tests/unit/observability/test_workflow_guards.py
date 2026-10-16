@@ -233,12 +233,25 @@ class TestAddRecordWorkflowGuard:
         create_task.assert_not_called()
         assert len(obs_instance._buffer) == 1
 
-    def test_starts_flush_outside_workflow(self, obs_instance):
-        """Positive control: the same full batch flushes off the workflow loop."""
+    @pytest.mark.asyncio
+    async def test_starts_flush_outside_workflow(self, obs_instance):
+        """Positive control: the same full batch flushes on a running worker loop."""
         create_task = self._add_with_flush_due(obs_instance, in_workflow=False)
 
         create_task.assert_called_once()
         assert obs_instance._buffer == []
+
+    def test_keeps_record_buffered_without_a_running_loop(self, obs_instance):
+        """On a thread with no event loop (a sync activity), only append.
+
+        ``asyncio.create_task`` would raise there, after the batch had already
+        been swapped out of the buffer, losing it. The periodic flush drains
+        what is left behind.
+        """
+        create_task = self._add_with_flush_due(obs_instance, in_workflow=False)
+
+        create_task.assert_not_called()
+        assert len(obs_instance._buffer) == 1
 
 
 # ---------------------------------------------------------------------------

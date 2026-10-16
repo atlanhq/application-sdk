@@ -26,7 +26,7 @@ Usage, from the app repo root::
     python3 <sdk>/.github/scripts/gen_app_api.py fix     # relative imports, host-safe paths
     python3 <sdk>/.github/scripts/gen_app_api.py check   # CI: config valid, imports relative
 
-``fix`` deletes logging only from the handler module itself (P058). The other
+``fix`` deletes logging only from the handler module itself (P060). The other
 listed files also run on the worker, so their logging stays; only their logger
 import moves to a path the host has (:data:`KNOWN_MOVES`). It refuses, changing
 nothing, where a deletion would be unsafe: a log call sharing a line with other
@@ -707,7 +707,7 @@ def check(root: Path, config: Config) -> list[str]:
     if handler:
         text = (root / handler).read_text(encoding="utf-8")
         problems.extend(
-            f"{handler}:{n.lineno}: logs in the hosted handler module (P058); "
+            f"{handler}:{n.lineno}: logs in the hosted handler module (P060); "
             "run `fix`, or report through the result or a typed AppError"
             for n in logging_statements(ast.parse(text, filename=handler))
         )

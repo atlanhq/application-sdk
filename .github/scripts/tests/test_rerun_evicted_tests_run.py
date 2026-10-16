@@ -39,6 +39,7 @@ from rerun_evicted_tests_run import (  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _bump_skip import without_bump_skip  # noqa: E402
 from _gha_expr import evaluate  # noqa: E402
 
 REPO = "atlanhq/atlan-example-app"
@@ -492,7 +493,7 @@ def test_the_gate_job_still_always_reports() -> None:
     `failure` from the `opened` run, and the required context would become
     decorative on exactly the auto-merge path it guards (FND-2167).
     """
-    assert str(_gate_job().get("if")).strip() == "always()"
+    assert without_bump_skip(_gate_job().get("if")) == "always()"
 
 
 def test_a_dispatched_e2e_run_is_never_a_sibling() -> None:

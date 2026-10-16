@@ -79,15 +79,32 @@ before a push. (`.github/scripts/bump_pr_opt_in.py clear` still runs in the app-
 Ordinary PRs request e2e with `/e2e`. See [ci.md](ci.md#test-legs-are-requested-by-pr-comment-never-by-label)
 for the command mechanics.
 
-*App repos* skip the **caller** job of every bootstrap shim (`tests.yaml`, `checks.yml`,
-`conformance.yaml`, `vulnerability-scan.yml`) on a bump PR's own `pull_request` run
-(`if: !startsWith(github.head_ref, 'bump-version')`). A skipped caller gets no runner and creates
-no `<caller> / <job>` context, so an un-opted bump commit's required checks sit at "Expected" —
-Release Gate is the visible red check explaining why — rather than reading `skipped` as a pass.
-`/gate-check` then dispatches each of those workflows on the bump branch (`workflow_dispatch`,
-where `head_ref` is empty, so the caller runs). Their checks land on the head commit exactly as a
-PR run's would; no PR run published them, so nothing collides. `vulnerability-scan.yml` builds
-its release candidate only on that dispatch. None of the shims subscribes to `labeled`.
+*App repos* skip **every job inside the reusable** on a bump PR's own `pull_request` run. Each
+bootstrap shim (`tests.yaml`, `checks.yml`, `conformance.yaml`, `vulnerability-scan.yml`) passes
+`skip-on-bump-pr: true` to its reusable, and every job there starts with
+`!(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version'))`
+(FND-3947). A skipped job gets no runner and is not billed, but it still files its
+`<caller> / <job>` check run as `skipped`, and `skipped` passes a required check. So the PR's
+required checks (`tests / Tests Gate`, `pre-commit / Pre-commit`, `suite / Conformance Gate`,
+`scan / Build Image`, `scan / Security Gate`) resolve on every bump commit, and **Release Gate is
+the only blocker**: it stays red until the head commit's `gate-check` verdict is `success`.
+
+The shims used to skip their **caller** job instead (FND-3748). That filed only a bare `tests` /
+`pre-commit` / … context, never the required `<caller> / <job>` name, and GitHub does not count a
+`workflow_dispatch` run toward a PR's required checks. A bump PR therefore sat at "Expected"
+even after a passing `/gate-check`, and could only merge by admin bypass.
+
+`/gate-check` dispatches each of those workflows on the bump branch (`workflow_dispatch`, which
+the skip term does not match), so the dispatch runs everything. Its checks land on the head commit
+alongside the PR run's skipped ones; the dispatch result reaches the merge only through the
+`gate-check` verdict and Release Gate. `vulnerability-scan.yml` builds its release candidate only
+on that dispatch. None of the shims subscribes to `labeled`.
+
+`skip-on-bump-pr` defaults to `false`, and only a caller whose Release Gate reads the
+`gate-check` *status* may set it. A shim from before FND-3839 runs its reusable on a bump PR's
+`labeled` event, and its Release Gate passes on the `gate-check` *label*; a skipped
+`tests / Tests Gate` there would let an untested release merge. The SDK's own `sdk-gate.yaml`
+calls `conformance-reusable.yaml` on its bump PRs and leaves the input off too (see below).
 
 *The SDK repo* cannot use caller skips: SDK Gate and Connector Tests Gate are inline required
 jobs, and a skipped inline job files `skipped`, which reads as a pass. So both gates run and

@@ -234,7 +234,7 @@ def test_check_reports_logging_in_the_handler_module(tmp_path: Path) -> None:
     root = _app(tmp_path, "import logging\nfrom .client import C\nlogging.info('x')\n")
     problems = gen.check(root, gen.load(root))
     assert any(
-        "app/handler.py:3: logs in the hosted handler module (P058)" in p
+        "app/handler.py:3: logs in the hosted handler module (P060)" in p
         for p in problems
     )
 

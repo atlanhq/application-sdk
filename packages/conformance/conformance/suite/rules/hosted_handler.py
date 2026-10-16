@@ -1,4 +1,4 @@
-"""Hosted-handler rule definitions (P058).
+"""Hosted-handler rule definitions (P060).
 
 An app whose root ``pyproject.toml`` declares ``[tool.atlan-app-api]`` has its
 handler served by the consolidated API host. The host installs a wheel built
@@ -31,7 +31,7 @@ from conformance.suite.schema.disposition import (
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P058",
+        id="P060",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — the hosted handler returns an "
             "AuthOutput / PreflightOutput or raises a typed AppError from "

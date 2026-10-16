@@ -75,6 +75,19 @@ name: tests-reusable
 on:
   workflow_call:
     inputs:
+      skip-on-bump-pr:
+        description: >-
+          Skip every job on a bump-version PR's own `pull_request` run (FND-3947).
+          Each job still files its check run, as `skipped`, under its full
+          `<caller job> / <job name>` context, so the PR's required checks
+          resolve without billing a runner. Release Gate stays the blocker: it
+          fails until a `/gate-check` verdict passes on the head commit, and
+          `/gate-check` dispatches the caller, which this does not skip. Only
+          a caller whose Release Gate reads that verdict may set it: a caller
+          whose Release Gate passes on a label would let a skipped run through.
+        type: boolean
+        required: false
+        default: false
       app-name:
         required: true
         type: string
@@ -627,7 +640,9 @@ jobs:
     # An e2e-only run (a `/e2e` comment) skips the tier its PR run already
     # measured. The run reports under `e2e / …`, so this skip never reaches a
     # required `tests / …` context (FND-3839).
-    if: inputs.run-e2e != 'only'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (inputs.run-e2e != 'only')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -735,7 +750,9 @@ jobs:
   # for why that direction is the safe one.
   detect-merge-queue:
     name: Detect merge queue
-    if: github.event_name == 'pull_request'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (github.event_name == 'pull_request')
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -805,7 +822,8 @@ jobs:
     # condition as the integration job below, so detection never runs for a
     # tier that won't.
     if: >-
-      always() && inputs.run-e2e != 'only' &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() && inputs.run-e2e != 'only' &&
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( inputs.e2e-label-trigger &&
@@ -814,7 +832,7 @@ jobs:
         ( inputs.e2e-label-trigger &&
           startsWith(github.head_ref, 'bump-version') &&
           contains(github.event.pull_request.labels.*.name, 'gate-check') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) ))
     runs-on: ubuntu-slim
     timeout-minutes: 5
     outputs:
@@ -939,7 +957,8 @@ jobs:
     # event only the `e2e` label itself counts, so adding any other label does
     # not re-run the tier.
     if: >-
-      always() && inputs.run-e2e != 'only' &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() && inputs.run-e2e != 'only' &&
       needs.detect-integration.result == 'success' &&
       needs.detect-integration.outputs.count != '0' &&
       ( github.event_name != 'pull_request' ||
@@ -950,7 +969,7 @@ jobs:
         ( inputs.e2e-label-trigger &&
           startsWith(github.head_ref, 'bump-version') &&
           contains(github.event.pull_request.labels.*.name, 'gate-check') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) ))
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
@@ -1259,7 +1278,8 @@ jobs:
     # comment was made on: that commit is no longer the PR's head, and the
     # commit that IS was not the one asked about.
     if: |
-      inputs.enable-e2e && (
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (inputs.enable-e2e && (
         (
           github.event_name == 'workflow_dispatch' &&
           (inputs.run-e2e == 'true' || inputs.run-e2e == 'only') &&
@@ -1281,7 +1301,7 @@ jobs:
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
-      )
+      ))
     outputs:
       matrix: ${{ steps.discover.outputs.matrix }}
       count: ${{ steps.discover.outputs.count }}
@@ -1615,14 +1635,15 @@ jobs:
     # discover-e2e skipped for want of the `e2e` label) would wake the pin for a
     # run that reads it nowhere. Same shape the e2e legs and build-e2e-image use.
     if: >-
-      always() &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() &&
       inputs.dataforge-lifecycle &&
       inputs.dataforge-datasource != '' &&
       inputs.dataforge-mode == 'resource' &&
       (needs.detect-integration.result == 'success' ||
        (inputs.run-e2e == 'only' && needs.detect-integration.result == 'skipped')) &&
       ((needs.detect-integration.result == 'success' && needs.detect-integration.outputs.count != '0') ||
-       (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0'))
+       (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0')))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -1708,9 +1729,10 @@ jobs:
     name: Build e2e image (${{ matrix.arch }})
     needs: discover-e2e
     if: |
-      inputs.install-app-to-tenant &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (inputs.install-app-to-tenant &&
       needs.discover-e2e.result == 'success' &&
-      needs.discover-e2e.outputs.count != '0'
+      needs.discover-e2e.outputs.count != '0')
     strategy:
       # No fail-fast: knowing whether ONE arch or BOTH failed is the whole
       # diagnosis when a build breaks on an architecture rather than in general.
@@ -1780,7 +1802,9 @@ jobs:
   merge-e2e-image:
     name: Merge e2e image manifest
     needs: build-e2e-image
-    if: needs.build-e2e-image.result == 'success'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (needs.build-e2e-image.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -1935,7 +1959,9 @@ jobs:
   sdk-head-recheck:
     name: Recheck the dispatched SDK ref
     needs: [merge-e2e-image]
-    if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success')
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -2005,11 +2031,12 @@ jobs:
     # merge-e2e-image have to be named explicitly; they were previously carried
     # by it. Same shape and same reason as prepare-tenant and the e2e legs below.
     if: |
-      always() &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() &&
       inputs.install-app-to-tenant &&
       needs.discover-e2e.result == 'success' &&
       needs.merge-e2e-image.result == 'success' &&
-      needs.sdk-head-recheck.outputs.superseded != 'true'
+      needs.sdk-head-recheck.outputs.superseded != 'true')
     runs-on: ubuntu-latest
     # Above the action's own 90-minute wait budget, which is now a budget for the
     # WHOLE ordered set rather than per cloud — so this still bounds the job, and
@@ -2127,11 +2154,12 @@ jobs:
     # merge-e2e-image have to be named explicitly here; they were previously
     # carried by the implicit check.
     if: |
-      always() &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() &&
       inputs.install-app-to-tenant &&
       needs.discover-e2e.result == 'success' &&
       needs.merge-e2e-image.result == 'success' &&
-      needs.lease-tenant.result != 'skipped'
+      needs.lease-tenant.result != 'skipped')
     strategy:
       # One cloud's tenant being uninstallable must not cancel the others; the
       # legs for that cloud fail on their own version check.
@@ -2452,14 +2480,15 @@ jobs:
     # exact FND-31 failure. Reading the output also keeps a failed recheck
     # fail-open: no answer means carry on (FND-701).
     if: |
-      always() &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() &&
       needs.sdk-head-recheck.outputs.superseded != 'true' &&
       needs.discover-e2e.result == 'success' &&
       needs.discover-e2e.outputs.count != '0' &&
       (needs.lease-tenant.result == 'success' || needs.lease-tenant.result == 'skipped') &&
       (needs.prepare-tenant.result == 'success' || needs.prepare-tenant.result == 'skipped') &&
       (needs.build-e2e-image.result == 'success' || needs.build-e2e-image.result == 'skipped') &&
-      (needs.merge-e2e-image.result == 'success' || needs.merge-e2e-image.result == 'skipped')
+      (needs.merge-e2e-image.result == 'success' || needs.merge-e2e-image.result == 'skipped'))
     strategy:
       fail-fast: false
       # Fallback to an empty matrix when discovery was skipped (no label / not
@@ -2723,7 +2752,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.0"
+          version: "0.13.1"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2836,7 +2865,9 @@ jobs:
     # a leg for a cloud this run never held reads a lease that is not its own (or
     # none at all) and no-ops. Not gated on the legs' outcome either — a failed
     # leg must still give the tenant back.
-    if: always() && needs.lease-tenant.result != 'skipped'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() && needs.lease-tenant.result != 'skipped')
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
@@ -2893,11 +2924,12 @@ jobs:
     # wake-dataforge-source skipped ⇒ this run didn't opt in / has no consumable
     # source, so there's nothing to pause.
     if: >-
-      always() &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() &&
       inputs.dataforge-lifecycle &&
       inputs.dataforge-datasource != '' &&
       inputs.dataforge-mode == 'resource' &&
-      needs.wake-dataforge-source.result != 'skipped'
+      needs.wake-dataforge-source.result != 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -2973,9 +3005,10 @@ jobs:
         e2e,
       ]
     if: |
-      always() &&
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() &&
       github.event_name == 'workflow_dispatch' &&
-      inputs.application-sdk-ref != ''
+      inputs.application-sdk-ref != '')
     runs-on: ubuntu-slim
     # Explicit, not the platform's: ubuntu-slim kills a job at 15 minutes
     # whatever it declares (docs/standards/ci.md, "Runner sizing").
@@ -3221,7 +3254,9 @@ jobs:
     needs: [unit, detect-integration, integration, discover-e2e, e2e]
     # Not on an e2e-only run: it skips the unit and integration tiers on
     # purpose, and a scorecard row reading them as absent would be wrong.
-    if: always() && github.event_name != 'pull_request' && inputs.run-e2e != 'only'
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always() && github.event_name != 'pull_request' && inputs.run-e2e != 'only')
     runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
@@ -3236,7 +3271,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.0"
+          version: "0.13.1"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
@@ -3447,7 +3482,9 @@ jobs:
   # context — Tests Gate is.
   renovate-artifacts:
     name: Renovate artifacts
-    if: startsWith(github.head_ref, 'renovate/')
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (startsWith(github.head_ref, 'renovate/'))
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -3493,7 +3530,9 @@ jobs:
         detect-api-member,
         api-member,
       ]
-    if: always()
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (always())
     runs-on: ubuntu-slim
     # Gate-eval, comment, and up to 10 min waiting on the e2e verdict of a
     # sibling run (FND-3650). GitHub kills a slim job at 15 min regardless

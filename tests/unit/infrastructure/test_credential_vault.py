@@ -635,6 +635,36 @@ class TestFetchCredentialConfigColdStartRetry:
         assert calls["n"] == 1
         assert not isinstance(exc_info.value.cause, ColdStartRaceError)
 
+    async def test_a_credential_read_failure_names_an_empty_cause_by_type(
+        self, monkeypatch
+    ) -> None:
+        """``str(httpx.ReadError(""))`` is empty; the message must still say
+        what failed instead of ending in a bare colon."""
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.http._dapr_component_confirmed_ready",
+            {"upstream-binding"},
+        )
+        monkeypatch.setattr(
+            "application_sdk.infrastructure._dapr.credential_vault.DAPR_UPSTREAM_BINDING_COMPONENT",
+            "upstream-binding",
+        )
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(side_effect=httpx.ReadError(""))
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(
+                "application_sdk.infrastructure._dapr.http.asyncio.sleep", AsyncMock()
+            ),
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-guid")
+
+        message = str(exc_info.value.cause)
+        assert "ReadError" in message
+        assert not message.rstrip().endswith(":")
+
 
 # ---------------------------------------------------------------------------
 # _get_local_secret tests

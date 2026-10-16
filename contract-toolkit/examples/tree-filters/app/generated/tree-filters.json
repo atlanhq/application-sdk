@@ -1,0 +1,54 @@
+{
+  "id": "tree-filters",
+  "name": "Tree Filters Example",
+  "logo": "https://assets.atlan.com/assets/fullscreen-exit.svg",
+  "config": {
+    "properties": {
+      "include-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Include Metadata",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "connectorConfigName": "atlan-connectors-tree-filters",
+          "credential": "credential-guid"
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": {}
+      },
+      "exclude-filter": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "apitree",
+          "label": "Exclude Metadata",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "connectorConfigName": "atlan-connectors-tree-filters",
+          "credential": "credential-guid"
+        },
+        "additionalProperties": {
+          "type": "array"
+        },
+        "default": {}
+      }
+    },
+    "steps": [
+      {
+        "title": "Metadata",
+        "description": "",
+        "id": "metadata",
+        "properties": [
+          "include-filter",
+          "exclude-filter"
+        ]
+      }
+    ]
+  }
+}

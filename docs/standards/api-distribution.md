@@ -92,7 +92,7 @@ that needs a declared dependency or a guarded fallback.
   the SDK's structured logger on the worker, stdlib logging on the host.
 - **Handler code does not log.** It reports through its return value or a typed
   `AppError`, and the SDK's shared routes log every outcome with the request id.
-  Conformance rule **P058** blocks logging in a hosted app's handler module. The
+  Conformance rule **P060** blocks logging in a hosted app's handler module. The
   `app/` files it imports also run on the worker, so they may log, through
   `application_sdk.common.logger`.
 
@@ -115,7 +115,7 @@ extras = ["sql", "aws"]
   two imports whose usual path is worker-only: `run_in_thread` to
   `application_sdk.common.concurrency` (its usual path loads Temporal) and
   `get_logger` to `application_sdk.common.logger`. It deletes logging
-  statements from the handler module only (P058); the other files also run on
+  statements from the handler module only (P060); the other files also run on
   the worker and keep their logs. It **refuses, changing nothing,** where a
   deletion would be unsafe: a log call sharing a line with other code, a
   `get_logger` import mixed with other names, a logger stored on an attribute
@@ -127,7 +127,7 @@ extras = ["sql", "aws"]
   import, a worker-only import `fix` would move, or a read of
   `APPLICATION_NAME` / `ATLAN_APPLICATION_NAME`. On the host that names the
   host itself; a handler uses `self.context.app_name`. It also fails on logging
-  left in the handler module (P058), and for an app with a `compute_manifest`
+  left in the handler module (P060), and for an app with a `compute_manifest`
   hook, which the host cannot serve.
 - `stage` / `build --out DIR` write the handler's files, its data files and
   `app/generated/` as `<app>_api/*`, with a generated `pyproject.toml` (its

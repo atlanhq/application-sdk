@@ -168,3 +168,179 @@ def register_alias_records(
         record = by_name.get(target)
         if record is not None:
             by_name[name] = record
+
+
+def _module_of(rel_file: str) -> str:
+    """Dotted module name of a repo-relative ``.py`` path (``src/`` layout aware)."""
+    parts = rel_file.replace("\\", "/").removesuffix(".py").split("/")
+    if parts[:1] == ["src"]:
+        parts = parts[1:]
+    if parts[-1:] == ["__init__"]:
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def _imported_module(node: ast.ImportFrom, rel_file: str) -> str | None:
+    if node.level == 0:
+        return node.module or None
+    package = _module_of(rel_file).split(".")
+    if not rel_file.replace("\\", "/").endswith("/__init__.py"):
+        package = package[:-1]
+    if node.level - 1 > len(package):
+        return None
+    package = package[: len(package) - (node.level - 1)]
+    return ".".join([*package, *([node.module] if node.module else [])]) or None
+
+
+def qualified_class_key(module: str, name: str) -> str:
+    """Registry key for the class *name* that module *module* declares.
+
+    ``module:name`` can never collide with a bare class name, so it sits in the
+    same registry as the bare names without shadowing any of them.
+    """
+    return f"{module}:{name}"
+
+
+def _top_level_classes(tree: ast.AST) -> dict[str, int]:
+    """Each top-level class name, mapped to the line of its last declaration."""
+    body = tree.body if isinstance(tree, ast.Module) else []
+    return {stmt.name: stmt.lineno for stmt in body if isinstance(stmt, ast.ClassDef)}
+
+
+def qualified_rebound_imports(
+    trees: dict[str, ast.AST],
+    duplicated: frozenset[str] = frozenset(),
+) -> dict[str, dict[str, str]]:
+    """Per file, ``{local: class}`` for names that resolve through the module named.
+
+    A pkl-generated entrypoint module ends with a rebinding of a shared name
+    (``AppInputContract = MinerAppInputContract``), and every entrypoint module
+    binds that same name to its own class. An app importing it
+    (``from app.generated.miner._input import AppInputContract as _Base``) means
+    the class *that* module binds. Resolving the import by its bare name instead
+    lands on whichever module's rebinding was registered first, so a miner
+    contract was resolved, and recorded in the ledger, with the crawler's fields.
+
+    The same holds for a class *declared* in several modules: two modules that
+    each define ``class AppInputContract`` (an older toolkit generated one per
+    entrypoint). For a name in *duplicated*, a ``from M import N`` that reaches
+    M's own ``class N`` resolves to :func:`qualified_class_key` ``(M, N)``, and
+    so does a bare reference inside M, the one place the bare name is
+    unambiguous. Names declared once are left bare, so they resolve exactly as
+    before. Where M both imports and declares ``N`` (``from .base import N``
+    then ``class N(N)``), the later binding is what M exports.
+
+    *trees* maps repo-relative paths to parsed modules. Only names that cross a
+    rebinding, or land on a duplicated class, are returned. A chain of
+    rebindings inside ``M`` is followed, and so is a re-export: ``from
+    app.generated.miner import AppInputContract`` where ``miner/__init__.py``
+    itself imports it from ``._input``.
+    """
+    rebinds: dict[str, dict[str, str]] = {}
+    reexports: dict[str, dict[str, tuple[str, str]]] = {}
+    declared: dict[str, dict[str, int]] = {}
+    import_lines: dict[str, dict[str, int]] = {}
+    for rel, tree in trees.items():
+        module = _module_of(rel)
+        rebinds[module] = collect_module_alias_targets(tree)
+        declared[module] = {
+            name: line
+            for name, line in _top_level_classes(tree).items()
+            if name in duplicated
+        }
+        imported: dict[str, tuple[str, str]] = {}
+        lines: dict[str, int] = {}
+        for node in tree.body if isinstance(tree, ast.Module) else []:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            source = _imported_module(node, rel)
+            if source is None:
+                continue
+            for alias in node.names:
+                imported[alias.asname or alias.name] = (source, alias.name)
+                lines[alias.asname or alias.name] = node.lineno
+        reexports[module] = imported
+        import_lines[module] = lines
+
+    def declaration(module: str, name: str) -> str | None:
+        """*module*'s own key for *name*, when its last binding of *name* is a
+        declaration of a duplicated class."""
+        line = declared[module].get(name)
+        if (
+            line is not None
+            and name not in rebinds[module]
+            and line > import_lines[module].get(name, 0)
+        ):
+            return qualified_class_key(module, name)
+        return None
+
+    def resolve(module: str, name: str, seen: set[tuple[str, str]]) -> str | None:
+        """The class *name* ends at in *module*, or None when it stays a bare name."""
+        if (module, name) in seen or module not in rebinds:
+            return None
+        seen.add((module, name))
+        targets = rebinds[module]
+        if name in targets:
+            target, local_seen = targets[name], {name}
+            while target in targets and target not in local_seen:
+                local_seen.add(target)
+                target = targets[target]
+            own = declaration(module, target)
+            if own is None and target in reexports[module]:
+                source, original = reexports[module][target]
+                return resolve(source, original, seen) or original
+            return own or target
+        own = declaration(module, name)
+        if own is None and name in reexports[module]:
+            source, original = reexports[module][name]
+            return resolve(source, original, seen)
+        return own
+
+    out: dict[str, dict[str, str]] = {}
+    for rel, tree in trees.items():
+        module = _module_of(rel)
+        resolved: dict[str, str] = {}
+        for node in tree.body if isinstance(tree, ast.Module) else []:
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            source = _imported_module(node, rel)
+            if source is None:
+                continue
+            for alias in node.names:
+                target = resolve(source, alias.name, set())
+                if target is not None and target != alias.name:
+                    resolved[alias.asname or alias.name] = target
+        for name in declared[module]:
+            if name not in resolved and name not in reexports[module]:
+                key = declaration(module, name)
+                if key is not None:
+                    resolved[name] = key
+        if resolved:
+            out[rel] = resolved
+    return out
+
+
+def merge_alias_targets(
+    per_file: list[dict[str, str]],
+) -> tuple[dict[str, str], set[str]]:
+    """Merge per-module rebindings into one bare-name map, refusing to guess.
+
+    Returns ``(targets, ambiguous)``. A name two modules rebind to *different*
+    classes (each generated entrypoint module binds ``AppInputContract`` to its
+    own) has no single meaning, so it is left out of *targets* and returned in
+    *ambiguous* instead. Keeping the first rebinding parsed is what attributed
+    one entrypoint's fields to another; an unresolved name is visible, a wrong
+    one is not. An import that names the module (see
+    :func:`qualified_rebound_imports`) never reaches this map.
+    """
+    seen: dict[str, set[str]] = {}
+    for targets in per_file:
+        for local, target in targets.items():
+            seen.setdefault(local, set()).add(target)
+    ambiguous = {local for local, targets in seen.items() if len(targets) > 1}
+    merged = {
+        local: next(iter(targets))
+        for local, targets in seen.items()
+        if local not in ambiguous
+    }
+    return merged, ambiguous

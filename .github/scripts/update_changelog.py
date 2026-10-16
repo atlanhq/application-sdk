@@ -153,10 +153,14 @@ LEGACY_SECTIONS = (
 
 # What marks a repo whose bump-PR CI is gated on the opt-in: the bootstrap
 # shims carry one once the repo has resynced onto the FND-3748 templates, and
-# they all arrive in the same resync. `'gate-check'` is the label-era gate;
-# since FND-3839 the shims skip the bump PR's own run outright (a
-# `/gate-check` comment dispatches them instead), so the skip is the marker.
-OPT_IN_MARKERS = ("'gate-check'", "!startsWith(github.head_ref, 'bump-version')")
+# they all arrive in the same resync. `'gate-check'` is the label-era gate.
+# From FND-3839 the shims skipped the bump PR's own run with a caller `if:`;
+# since FND-3947 they pass `skip-on-bump-pr: true` to the reusable instead.
+OPT_IN_MARKERS = (
+    "'gate-check'",
+    "!startsWith(github.head_ref, 'bump-version')",
+    "skip-on-bump-pr: true",
+)
 _CONVENTIONAL_RE = re.compile(
     r"^(?P<type>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?:\s*(?P<desc>.*)$",
     re.IGNORECASE,

@@ -424,6 +424,96 @@ def test_yaml_quotes_that_change_the_value_still_count_as_lost(old, new):
     assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
 
 
+def test_yaml_inline_comment_alone_is_not_a_lost_setting():
+    # FND-3945: the re-render writes the bare line; the value is unchanged.
+    backup = (
+        "    with:\n"
+        "      private-git-deps: true  # query-redaction; ORG_PAT_GITHUB below\n"
+        "      git-lfs-skip-smudge: true\t# its repo LFS-tracks a jar\n"
+        "      e2e-test-path: 'tests/e2e' # quoted value, comment after\n"
+        "      runtime-sdk-ref: # nothing set\n"
+    )
+    new = (
+        "    with:\n"
+        "      private-git-deps: true\n"
+        "      git-lfs-skip-smudge: true\n"
+        '      e2e-test-path: "tests/e2e"\n'
+        "      runtime-sdk-ref:\n"
+    )
+    lost = resync.lost_setting_lines(backup, new, TESTS_YAML)
+    assert lost == []
+    assert resync.still_lost(TESTS_YAML, lost) == []
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ("private-git-deps: true  # keep", "private-git-deps: false"),
+        ("private-git-deps: true  # keep", "private-git-deps: false  # keep"),
+        ("args: -k slow # comment", "args: -k"),
+        ("runtime-sdk-ref: # unset", "runtime-sdk-ref: main"),
+    ],
+)
+def test_yaml_value_change_with_inline_comment_still_counts_as_lost(old, new):
+    assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        # `#` inside a quoted scalar is part of the value.
+        ("args: 'a #b'", "args: 'a'"),
+        ('args: "a #b"', 'args: "a"'),
+        ('args: "a \\" #b"', 'args: "a \\""'),
+        ("args: 'it''s #b'", "args: 'it''s'"),
+        ("if: ${{ contains(x, ' #b') }}", "if: ${{ contains(x, '') }}"),
+        ("key: [a, ' #b']", "key: [a, '"),
+        # `#` with no whitespace before it is not a comment.
+        ("args: a#b", "args: a"),
+        # A quote that never closes keeps the rest of the line.
+        ("args: 'a #b", "args: 'a"),
+    ],
+)
+def test_yaml_hash_that_is_not_a_comment_still_counts(old, new):
+    assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
+
+
+@pytest.mark.parametrize(
+    "header, body_indent",
+    [
+        ("      run: |", "        "),
+        ("      - run: >-", "          "),
+        ("      run: | # script", "        "),
+        ("      - |", "        "),
+    ],
+)
+def test_yaml_hash_in_a_block_scalar_body_is_text_not_a_comment(header, body_indent):
+    # A `#` inside a block scalar is part of the value, so a change after it
+    # is a real change even when the line looks like `key: value # ...`.
+    backup = f"{header}\n{body_indent}setting: enabled #old\n"
+    new = f"{header}\n{body_indent}setting: enabled #new\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == [
+        "setting: enabled #old"
+    ]
+
+
+def test_yaml_comment_after_a_block_scalar_ends_is_still_a_comment():
+    backup = (
+        "      run: |\n"
+        "        echo hi # kept\n"
+        "      private-git-deps: true  # dropped by the render\n"
+    )
+    new = "      run: |\n        echo hi # kept\n      private-git-deps: true\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == []
+
+
+def test_inline_comments_are_compared_in_files_that_are_not_yaml():
+    for path in ("pyproject.toml", "README.md"):
+        assert resync.lost_setting_lines("a = 1  # x\n", "a = 1\n", path) == [
+            "a = 1  # x"
+        ]
+
+
 def test_json_quoting_is_never_ignored():
     backup = '{\n  "automerge": "true",\n  "groupName": "x"\n}\n'
     new = '{\n  "automerge": true,\n  "groupName": "x"\n}\n'
@@ -1070,3 +1160,25 @@ def test_call_turns_a_timeout_into_a_gh_error():
 
     with pytest.raises(resync.GhError, match="timed out"):
         resync.call(runner, ["gh", "api", "x"])
+
+
+# FND-3947: the bump-version skip moved inside the reusable, so the canonical
+# `tests` job has no `if:` at all.
+
+
+@pytest.mark.parametrize(
+    ("types", "condition"),
+    [(NEW_TYPES, NEW_CONDITION), (OLD_TYPES, OLD_LABEL_CONDITION)],
+    ids=["fnd-3839-template", "fnd-3748-template"],
+)
+def test_the_dropped_tests_job_condition_is_accepted(types, condition):
+    backup = _tests_yaml(types, condition)
+    new = _tests_yaml(NEW_TYPES, None)
+    assert "if: >-" in resync.lost_setting_lines(backup, new, TESTS_YAML)
+    assert _lost(backup, new) == []
+
+
+def test_a_customised_condition_is_held_when_the_if_goes():
+    custom = NEW_CONDITION + " && github.actor != 'release-bot'"
+    backup = _tests_yaml(NEW_TYPES, custom)
+    assert _lost(backup, _tests_yaml(NEW_TYPES, None)) == [custom]

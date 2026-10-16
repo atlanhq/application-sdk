@@ -62,6 +62,7 @@ import re
 import sys
 import typing
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import (
@@ -645,12 +646,16 @@ class PayloadSafetyError(ContractValidationError):
     - bytes/bytearray: Binary data should use FileReference
     - list[T] without MaxItems: Unbounded lists can grow arbitrarily
     - dict[K, V] without MaxItems: Unbounded dicts can grow arbitrarily
+    - Any other variable-size collection without MaxItems: set[T], frozenset[T],
+      tuple[T, ...], Sequence[T], Mapping[K, V], deque[T] and the like. A
+      fixed-arity tuple[A, B] is bounded by its shape and allowed.
     - Any: Cannot validate size constraints
 
     To fix:
     - Use FileReference for large/binary data
     - Use Annotated[list[T], MaxItems(N)] for bounded lists
     - Use Annotated[dict[K, V], MaxItems(N)] for bounded dicts
+    - Use Annotated[set[T], MaxItems(N)] (and likewise) for any other collection
     - Use allow_unbounded_fields=True class keyword to opt out (use with caution)
     """
 
@@ -667,6 +672,7 @@ class PayloadSafetyError(ContractValidationError):
             f"  - Use FileReference for large/binary data\n"
             f"  - Use Annotated[list[T], MaxItems(N)] for bounded lists\n"
             f"  - Use Annotated[dict[K,V], MaxItems(N)] for bounded dicts\n"
+            f"  - Use Annotated[set[T], MaxItems(N)] (and likewise) for any other collection\n"
             f"  - Use allow_unbounded_fields=True class keyword to opt out (use with caution)"
         )
         # Skip ContractValidationError's __init__ to avoid double DeprecationWarning;
@@ -686,44 +692,60 @@ class PayloadSafetyError(ContractValidationError):
 # =============================================================================
 
 
-def _is_unbounded_collection(field_type: type, collection_type: type) -> bool:
-    """Check if a type is an unbounded collection (no MaxItems annotation).
+#: Modules whose classes, used bare, are collections payload safety must bound.
+_COLLECTION_MODULES = frozenset({"builtins", "collections", "collections.abc"})
+#: Bare ``dict`` and ``list`` were accepted before every other collection was
+#: checked, and fleet contracts still declare them, so they stay accepted until
+#: those contracts are typed. Their ``typing`` aliases are refused (by origin).
+_BARE_ACCEPTED: tuple[type, ...] = (dict, list)
 
-    Args:
-        field_type: The type to check.
-        collection_type: The collection type to check for (e.g., dict, list).
 
-    Returns:
-        True if the type is an unbounded collection of the specified type.
+def _collection_kind(field_type: Any) -> str | None:
+    """Name of the variable-size collection *field_type* is, or ``None``.
+
+    Fails closed: any parameterised iterable class counts (``dict``, ``list``,
+    ``set``, ``frozenset``, ``deque``, the ``collections.abc`` ``Sequence`` /
+    ``Set`` / ``Mapping`` families), so retyping a ``list[str]`` as ``set[str]``
+    or ``Sequence[str]`` does not get past the bound. ``str`` and ``bytes`` are
+    not collections here, and a fixed-arity ``tuple[A, B]`` is bounded by its
+    shape; only the variadic ``tuple[T, ...]`` needs ``MaxItems``.
+
+    An unparameterised collection class (``set``, ``deque``,
+    ``collections.abc.Sequence``) counts too, as its ``typing`` alias
+    (``typing.Set``) already does through its origin; bare ``dict`` and
+    ``list`` are the exception, see ``_BARE_ACCEPTED``.
     """
     origin = get_origin(field_type)
+    if (
+        origin is None
+        and isinstance(field_type, type)
+        and field_type.__module__ in _COLLECTION_MODULES
+        and field_type not in _BARE_ACCEPTED
+    ):
+        origin = field_type
+    if (
+        not isinstance(origin, type)
+        or not issubclass(origin, Iterable)
+        or issubclass(origin, (str, bytes, bytearray))
+    ):
+        return None
+    # Bare ``tuple`` and ``typing.Tuple`` mean ``tuple[Any, ...]``; ``tuple[()]``
+    # also has no args but is fixed at zero items.
+    variadic = field_type in (tuple, typing.Tuple) or Ellipsis in get_args(field_type)
+    if origin is tuple and not variadic:
+        return None
+    return origin.__name__
 
-    # Plain collection without bounds
-    if origin is collection_type:
-        return True
 
-    # Check Annotated types for MaxItems constraint
-    if origin is Annotated:
+def _is_unbounded_collection(field_type: Any) -> str | None:
+    """Kind of the unbounded collection *field_type* is (no ``MaxItems``), or ``None``."""
+    if get_origin(field_type) is Annotated:
         args = get_args(field_type)
-        # Check if any annotation arg is MaxItems
-        for arg in args[1:]:
-            if isinstance(arg, MaxItems):
-                return False
+        if any(isinstance(arg, MaxItems) for arg in args[1:]):
+            return None
         # Annotated but no MaxItems - check the inner type
-        if args:
-            return _is_unbounded_collection(args[0], collection_type)
-
-    return False
-
-
-def _is_unbounded_dict(field_type: type) -> bool:
-    """Check if a type is an unbounded dict (no MaxItems annotation)."""
-    return _is_unbounded_collection(field_type, dict)
-
-
-def _is_unbounded_list(field_type: type) -> bool:
-    """Check if a type is an unbounded list (no MaxItems annotation)."""
-    return _is_unbounded_collection(field_type, list)
+        return _is_unbounded_collection(args[0]) if args else None
+    return _collection_kind(field_type)
 
 
 _TYPE_ALIAS_TYPES: tuple[type, ...] = tuple(
@@ -820,10 +842,9 @@ def _is_forbidden_type(
         return True, "Binary data should use FileReference instead"
 
     # Check for unbounded collections (handles both plain and Annotated types)
-    if _is_unbounded_dict(field_type):
-        return True, "Unbounded dict may exceed payload limits"
-    if _is_unbounded_list(field_type):
-        return True, "Unbounded list may exceed payload limits"
+    kind = _is_unbounded_collection(field_type)
+    if kind is not None:
+        return True, f"Unbounded {kind} may exceed payload limits"
 
     # For Annotated types, we already handled the collection bounds check above.
     # If we get here, the Annotated type has MaxItems so the collection is bounded.
@@ -834,9 +855,8 @@ def _is_forbidden_type(
         if args:
             # First arg is the actual type (e.g., list[dict[str, Any]])
             inner_type = args[0]
-            inner_origin = get_origin(inner_type)
-            # For bounded collections (list/dict with MaxItems), check their type args
-            if inner_origin in (list, dict):
+            # For bounded collections (any collection with MaxItems), check their type args
+            if _collection_kind(inner_type) is not None:
                 inner_args = get_args(inner_type)
                 for arg in inner_args:
                     if _is_type_arg(arg):
