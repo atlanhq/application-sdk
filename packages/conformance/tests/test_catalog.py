@@ -390,6 +390,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # application_sdk.common.incremental.storage.rocksdb_utils are themselves the
     # intended callers of rocksdict; the SDK is the publisher of this seam, not a
     # consumer of it (CNCT-80, CNCT-191).
+    # O007/O008/O009: worker-disk hygiene for connector workloads — the SDK
+    # publishes upload_file and TEMPORARY_PATH rather than consuming them, its
+    # own staging and upload sites are seam internals reviewed with the SDK,
+    # and it has no atlan.yaml deploy block for O009 to grade.
     # K001/K002: contract-toolkit conformance — only app repos have a contract/
     # directory with .pkl source files; the SDK has no contract/ dir to scan
     # (BLDX-1479).
@@ -580,6 +584,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "O003",
         "O004",
         "O006",
+        "O007",
+        "O008",
+        "O009",
         "I001",
         "I002",
         "I003",
@@ -880,7 +887,17 @@ def test_catalog_o_series_present() -> None:
     """The O-series optimisation rules are all present."""
     rules = load_catalog()
     o_ids = {r.id for r in rules if r.id.startswith("O")}
-    expected = {"O001", "O002", "O003", "O004", "O005", "O006"}
+    expected = {
+        "O001",
+        "O002",
+        "O003",
+        "O004",
+        "O005",
+        "O006",
+        "O007",
+        "O008",
+        "O009",
+    }
     missing = expected - o_ids
     assert not missing, f"Missing O-series rules: {missing}"
 
@@ -1583,6 +1600,13 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
         "super(); atlan-metabase-app's MetabaseApiClient.close() is the violation "
         "the rule was written for, so the SDK's BaseClient.close() is the only "
         "compliant shape to cite (FND-3778)"
+    ),
+    "O008": (
+        "no reference app passes dir= to a tempfile constructor: atlan-openapi-app "
+        "(app/connector.py) and atlan-metabase-app (app/paths.py) call "
+        "tempfile.mkdtemp with only a prefix, the shape O008 flags, and "
+        "atlan-mysql-app creates no temp files in the code O008 scans, so the SDK's "
+        "staged download is the only compliant shape to cite"
     ),
 }
 

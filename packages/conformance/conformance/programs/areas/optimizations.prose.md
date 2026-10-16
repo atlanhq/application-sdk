@@ -48,7 +48,8 @@ Postcondition (deterministic validator — never render-attested):
 
 ### Continuity
 
-Input-driven: re-render this node when any `*.py` file under `scope` changes.
+Input-driven: re-render this node when any `*.py` file under `scope` changes,
+or `atlan.yaml` (O009 grades its `deploy:` storage entries).
 This is the Reactor-ready wake source — in the Claude Code skill path, the
 skill caller re-invokes on demand rather than watching the filesystem.
 
@@ -71,14 +72,14 @@ Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
 **Judgment rules** (`classification = "judgment"`; always route to residue).
-Two flags apply in this area: **O001 and O005 are `autofixable = true`** — the
-lane applies the prescription below and residues the result for audit —
-while **O002, O003, O004 and O006 are `autofixable = false`**, *migration*
-rules: for those, apply nothing and return `not_remediable = true` with a
-`migration_brief` built from the reference app named by
+Two flags apply in this area: **O001, O005 and O008 are `autofixable = true`**
+— the lane applies the prescription below and residues the result for audit —
+while **O002, O003, O004, O006, O007 and O009 are `autofixable = false`**,
+*migration* rules: for those, apply nothing and return `not_remediable = true`
+with a `migration_brief` built from the reference app named by
 `finding.canonical_reference` (see `remediate-finding`'s *Reference apps,
 impact analysis and verification*).  Produce a `"fix"` outcome only for the
-two auto-fixable rules:
+three auto-fixable rules:
 
 - **O001 OrjsonOverStdlibJson** — the site calls `json.dumps(...)` or
   `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so
@@ -332,6 +333,46 @@ two auto-fixable rules:
     downstream can interpolate it either.
   - Never "resolve" the token by hardcoding a concrete app name: that hides
     the finding while freezing the wrong value into every other tenant.
+
+- **O007 UploadRetainsLocalCopy** (worker-disk) — an SDK `upload_file` call
+  omits `retain_local_copy` or passes `True`, so the uploaded file stays on
+  the worker's disk.  Migration: apply nothing; put the draft in the
+  `migration_brief`.  First read what happens to `local_path` after the
+  upload: a later read in the same task, or a `FileReference` built from it
+  and returned, means the file is still needed — propose
+  `# conformance: ignore[O007] <reason>` naming that reader and what removes
+  the file afterwards.  Otherwise propose `retain_local_copy=False` only when
+  the path is provably under `TEMPORARY_PATH` (built from it or from the
+  workflow output path); for any other path propose deleting the file once
+  the upload returns.  Never propose `retain_local_copy=False` for a path
+  outside `TEMPORARY_PATH`: the SDK deletes nothing there, so it only hides
+  the finding.
+- **O008 TempFileOutsideWorkerVolume** (worker-disk) — a stdlib `tempfile`
+  constructor is given no directory (`dir=` omitted, `dir=None`, or
+  `dir=tempfile.gettempdir()`).  Pass `dir=` a directory under
+  `TEMPORARY_PATH` (`from application_sdk.constants import TEMPORARY_PATH`),
+  as a keyword, replacing any `None`/`gettempdir()` value and keeping every
+  other argument.  `tempfile` does not create a missing `dir`, so make sure it
+  exists first (`os.makedirs(<dir>, exist_ok=True)` before the call).  If the
+  app already has a scratch-root helper that resolves under `TEMPORARY_PATH`,
+  use it instead of a new constant.  The re-check is
+  `atlan-application-sdk-conformance detect --rule O008`; the orthogonal
+  gate is the test suite.
+- **O009 WorkerVolumeWithoutAutoresize** (worker-disk) — a `deploy.storage` /
+  `deploy.storageWorker` entry in `atlan.yaml` has no
+  `resize.topolvm.io/storage_limit` annotation.  Migration: apply nothing (the
+  edit is deploy configuration, outside this function's write scope); draft it
+  in the `migration_brief`.  Keep the entry's `name` and `mountPath`, set a
+  small base `size`, and add `resize.topolvm.io/storage_limit`,
+  `resize.topolvm.io/threshold` and `resize.topolvm.io/increase`: the base
+  near the p99 per-pod disk peak, so about 1% of pods need to grow, and the
+  limit above the largest run observed.  When those numbers are not in hand,
+  say so in the brief instead of inventing a size.  Say where the edit goes:
+  if `pkl eval -m <tmpdir> contract/app.pkl` emits `atlan.yaml`, the entry
+  lives in the contract's `deploy` → `overrides` `["storage"]` /
+  `["storageWorker"]` listing and `atlan.yaml` is regenerated, never
+  hand-edited; otherwise edit `atlan.yaml` directly.  The re-check is
+  `atlan-application-sdk-conformance detect --rule O009`.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 

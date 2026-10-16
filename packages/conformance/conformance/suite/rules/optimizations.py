@@ -15,6 +15,7 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -429,6 +430,288 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="O007",
+        canonical_reference=(
+            "application_sdk/storage/formats/__init__.py — the writers' "
+            "`_upload_file` passes `retain_local_copy=` explicitly, and the JSON and "
+            "Parquet writers default it to False, so a chunk uploaded inline leaves "
+            "the worker's disk once it is in the store. No reference app calls "
+            "upload_file directly; they hand files off through App.upload and "
+            "App.upload_refs."
+        ),
+        scope=RuleScope.APP,
+        name="UploadRetainsLocalCopy",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="worker-disk",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.51.0",
+        rationale=(
+            "upload_file keeps the local file after a successful upload unless the "
+            "caller passes retain_local_copy=False (the keyword defaults to True), "
+            "and even then it deletes only a file under TEMPORARY_PATH. A connector "
+            "that uploads as it extracts therefore keeps every file it has already "
+            "uploaded on the worker's disk, and a review of connector worker disks "
+            "found exactly that growth on long runs. WARN, and a migration rather "
+            "than an automatic edit, because the call site alone cannot say whether "
+            "the file is still needed: a later read in the same task, or a "
+            "FileReference built from it, breaks once the file is deleted, and "
+            "retain_local_copy=False on a file outside TEMPORARY_PATH clears the "
+            "finding while deleting nothing."
+        ),
+        short_description=(
+            "upload_file() keeps the local file after the upload (retain_local_copy "
+            "defaults to True), so uploaded files pile up on the worker's disk"
+        ),
+        full_description=(
+            "Flags a call to the SDK's ``upload_file`` that omits\n"
+            "``retain_local_copy`` or passes the literal ``True``.  ``upload_file``\n"
+            "keeps the local file after a successful upload by default, and with\n"
+            "``retain_local_copy=False`` deletes it only when the file sits under\n"
+            "``TEMPORARY_PATH`` (``application_sdk/storage/ops.py``).  An app that\n"
+            "uploads as it goes therefore leaves every uploaded file on the\n"
+            "worker's disk for the rest of the run.\n"
+            "\n"
+            "Only calls that resolve to the SDK function are flagged.  The binding\n"
+            "must come from an SDK module that exposes it —\n"
+            "``application_sdk.storage``, ``application_sdk.storage.ops``, the\n"
+            "deprecated ``application_sdk.common.incremental.marker`` alias, or a\n"
+            "module that imports it at module level (``storage.batch``,\n"
+            "``storage.cloud``, …) — as ``from … import upload_file [as x]``,\n"
+            "through a module alias (``import application_sdk.storage.ops as ops``\n"
+            "then ``ops.upload_file(...)``), or by the fully dotted path.  An app's\n"
+            "own ``upload_file``, a client method of that name and the v2\n"
+            "``ObjectStore.upload_file`` are never matched.\n"
+            "``retain_local_copy=False`` is compliant; any other expression (a\n"
+            "variable, a parameter, a conditional) and a ``**kwargs`` splat are left\n"
+            "alone because the value is not known statically.\n"
+            "\n"
+            "Fix: when nothing reads the file after the upload, pass\n"
+            "``retain_local_copy=False`` with the file under ``TEMPORARY_PATH`` —\n"
+            "outside it the keyword deletes nothing — or delete the file right\n"
+            "after the upload.  Not a mechanical rewrite: first confirm the same\n"
+            "task does not read the file again and does not return a\n"
+            "``FileReference`` built from it.  When the file must stay, suppress\n"
+            "with ``# conformance: ignore[O007] <reason>`` naming what reads it and\n"
+            "what removes it afterwards (see *Already correct when*).\n"
+        ),
+        rule_interactions=(
+            "O008: retain_local_copy=False deletes only under TEMPORARY_PATH, so a "
+            "file staged by a tempfile call with no dir= is not deleted by it. Move "
+            "that scratch under TEMPORARY_PATH first, or delete the file explicitly."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[O007] <reason>` IS the "
+            "correct end state when the file is still needed after the upload (the "
+            "same task reads it again, or returns a FileReference built from it) "
+            "and the reason names that reader and what removes the file afterwards. "
+            "A directive that names neither is unremediated: delete the file after "
+            "the upload, or pass retain_local_copy=False with it under "
+            "TEMPORARY_PATH."
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/optimizations.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="O008",
+        canonical_reference=(
+            "application_sdk/storage/ops.py — `download_file` stages its partial "
+            "file with `tempfile.mkstemp(dir=str(staging_dir), ...)` in a directory "
+            "beside the destination, so the scratch sits on the same volume as the "
+            "file it becomes. No reference app passes dir=: atlan-openapi-app's "
+            "connector and atlan-metabase-app's `task_scratch_dir` call "
+            "tempfile.mkdtemp with only a prefix, the shape this rule flags."
+        ),
+        scope=RuleScope.APP,
+        name="TempFileOutsideWorkerVolume",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="worker-disk",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.51.0",
+        rationale=(
+            "Worker disk is provisioned, measured and cleaned at TEMPORARY_PATH: "
+            "apps mount their worker volume where it lives, upload_file deletes "
+            "only under it, and the end-of-run cleanup_files task removes the run's "
+            "directory beneath it. The stdlib tempfile constructors default to the "
+            "system temp dir instead ($TMPDIR, else /tmp), and the SDK base image "
+            "sets no TMPDIR, so unless an app mounts its volume at /tmp that scratch "
+            "lands on the node's root disk. A review of connector worker disks found "
+            "scratch there that volume metrics never saw, that disk sizing missed "
+            "and that no cleanup removed. WARN: it is a placement and hygiene fix "
+            "rather than a broken run, and the reference apps themselves still "
+            "create scratch this way."
+        ),
+        short_description=(
+            "tempfile scratch with no dir= lands in the system temp dir, outside "
+            "TEMPORARY_PATH and the worker volume — pass dir= under TEMPORARY_PATH"
+        ),
+        full_description=(
+            "Flags a stdlib ``tempfile`` call — ``mkdtemp``, ``mkstemp``,\n"
+            "``NamedTemporaryFile``, ``TemporaryDirectory``, ``TemporaryFile`` or\n"
+            "``SpooledTemporaryFile`` — that is given no directory: ``dir=``\n"
+            "omitted, ``dir=None``, or ``dir=tempfile.gettempdir()`` (the same\n"
+            "location spelled out).  A ``dir`` passed positionally is read at each\n"
+            "constructor's real position.  Only stdlib bindings count (``import\n"
+            "tempfile [as t]``, ``from tempfile import mkdtemp [as x]``), so an app\n"
+            "helper of the same name is never matched; any other ``dir=``\n"
+            "expression is compliant, and a ``*args`` / ``**kwargs`` splat that may\n"
+            "supply it is left alone.\n"
+            "\n"
+            "Such scratch lands in the system temp dir (``$TMPDIR``, else\n"
+            "``/tmp``).  The SDK base image sets no ``TMPDIR``, so unless the app\n"
+            "mounts its worker volume at ``/tmp`` it lands on the node's root disk:\n"
+            "worker-volume metrics and disk sizing never see it, and filling it\n"
+            "starves the node rather than the app's volume.  Either way it sits\n"
+            "outside ``TEMPORARY_PATH``, the tree the SDK's local cleanup works in\n"
+            "(``upload_file`` deletes only under it; ``cleanup_files`` removes the\n"
+            "run's directory beneath it).\n"
+            "\n"
+            "Fix: pass ``dir=`` a directory under ``TEMPORARY_PATH``\n"
+            "(``application_sdk.constants``), creating it first with\n"
+            "``os.makedirs(..., exist_ok=True)`` because ``tempfile`` does not create\n"
+            "a missing ``dir``.  Autofixable per-site, not mechanically: reuse the\n"
+            "app's own scratch-root helper when it already resolves under\n"
+            "``TEMPORARY_PATH``, and keep the call's other arguments as they are.\n"
+            "In an app that declares no worker volume, ``TEMPORARY_PATH`` itself\n"
+            "sits on the container's disk, so there the fix buys cleanup reach and\n"
+            "puts the scratch where a volume lands once the app declares one.\n"
+            "\n"
+            "Out of scope: ``tempfile.mktemp`` (deprecated) and paths assembled by\n"
+            "hand from ``tempfile.gettempdir()``.  A process-wide\n"
+            "``tempfile.tempdir`` or ``TMPDIR`` override is invisible to a per-file\n"
+            "scan, so an app that points one under ``TEMPORARY_PATH`` still sees\n"
+            "findings: pass ``dir=`` anyway, or suppress with\n"
+            "``# conformance: ignore[O008] <reason>``.\n"
+        ),
+        rule_interactions=(
+            "O007: upload_file(retain_local_copy=False) deletes only under "
+            "TEMPORARY_PATH, so moving this scratch there is also what lets an "
+            "upload clean up after itself."
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="O009",
+        canonical_reference=(
+            "atlan-mysql-app atlan.yaml — its `deploy:` block declares no `storage` "
+            "or `storageWorker` entry, so there is no fixed-size worker volume for "
+            "this rule to grade. No reference app declares a worker volume, so none "
+            "shows the compliant entry: a small base `size` plus the "
+            "`resize.topolvm.io/storage_limit`, `threshold` and `increase` "
+            "annotations, the shape this rule's description spells out."
+        ),
+        fix_locus=FixLocus.PACKAGING,
+        scope=RuleScope.APP,
+        name="WorkerVolumeWithoutAutoresize",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="worker-disk",
+        autofixable=False,
+        orthogonal_gate="skip",
+        since="0.51.0",
+        rationale=(
+            "A worker volume declared in atlan.yaml's deploy block without "
+            "pvc-autoresizer annotations is a fixed-size PVC: it never grows, so it "
+            "must be sized up front for the largest run any tenant makes, and every "
+            "pod that mounts it gets that full size whether its own run needs it or "
+            "not. A review of connector worker disks found a connector giving every "
+            "worker a fixed volume more than ten times larger than its largest "
+            "normal run used. The alternative is already in use across the fleet: "
+            "a small base size plus the resize.topolvm.io/storage_limit, threshold "
+            "and increase annotations, so only the pods that need more disk grow. "
+            "WARN because a fixed size is a cost and headroom trade-off rather than "
+            "a broken deploy, and the base size has to come from the app's own "
+            "disk-usage numbers."
+        ),
+        short_description=(
+            "atlan.yaml worker storage entry has no resize.topolvm.io/storage_limit "
+            "annotation, so the volume is a fixed size sized for the largest tenant"
+        ),
+        full_description=(
+            "Flags each worker storage entry in ``atlan.yaml``'s ``deploy:`` block\n"
+            "— ``deploy.storage`` (mounted on every pod) and\n"
+            "``deploy.storageWorker`` (worker pods only) — that carries no\n"
+            "``resize.topolvm.io/storage_limit`` annotation.  The finding sits on\n"
+            "the entry's ``-`` line and names its ``name``, ``mountPath`` and\n"
+            "declared ``size``.  ``deploy.storageServer`` is not graded: it mounts\n"
+            "on server pods only.\n"
+            "\n"
+            "Without a ``storage_limit`` the pvc-autoresizer never grows the PVC, so\n"
+            "the volume is a fixed ``size``: it must cover the largest run any\n"
+            "tenant makes, and every pod that mounts it gets the full size.  The\n"
+            "compliant entry is a small base ``size`` plus the three annotations:\n"
+            "\n"
+            ".. code-block:: yaml\n"
+            "\n"
+            "    storage:\n"
+            "      - name: local-data\n"
+            "        mountPath: /app/local\n"
+            "        size: 8Gi\n"
+            "        annotations:\n"
+            "          resize.topolvm.io/storage_limit: 192Gi\n"
+            '          resize.topolvm.io/threshold: "50%"\n'
+            "          resize.topolvm.io/increase: 8Gi\n"
+            "\n"
+            "Size the base from the app's per-pod disk peaks so that about 1% of\n"
+            "pods need to grow (roughly the p99 peak), set ``storage_limit`` above\n"
+            "the largest run observed with headroom, and pick ``threshold`` (the\n"
+            "free space left when a resize fires) and ``increase`` (the growth\n"
+            "step) so a growing pod stays ahead of its write rate.\n"
+            "\n"
+            "**Where to edit.**  ``atlan.yaml`` is graded because it is what the\n"
+            "platform deploys, hand-written or generated.  When\n"
+            "``contract/app.pkl`` emits it, the storage list comes from the\n"
+            "contract's ``deploy`` → ``overrides`` mapping (the toolkit models no\n"
+            "storage field), so make the change there and regenerate; never\n"
+            "hand-edit a generated ``atlan.yaml``:\n"
+            "\n"
+            ".. code-block:: pkl\n"
+            "\n"
+            "    overrides {\n"
+            '      ["storage"] = new Listing {\n'
+            "        new Mapping {\n"
+            '          ["name"] = "local-data"\n'
+            '          ["mountPath"] = "/app/local"\n'
+            '          ["size"] = "8Gi"\n'
+            '          ["annotations"] = new Mapping {\n'
+            '            ["resize.topolvm.io/storage_limit"] = "192Gi"\n'
+            '            ["resize.topolvm.io/threshold"] = "50%"\n'
+            '            ["resize.topolvm.io/increase"] = "8Gi"\n'
+            "          }\n"
+            "        }\n"
+            "      }\n"
+            "    }\n"
+            "\n"
+            "Otherwise ``atlan.yaml`` is hand-owned; edit it directly.\n"
+            "\n"
+            "Not a mechanical rewrite: the base and the limit come from the app's\n"
+            "own disk-usage numbers, and the edit lands in deploy configuration\n"
+            "rather than Python.  The scan is line-based (no YAML dependency) and\n"
+            "reads block-style sequences in both layouts the fleet uses; a\n"
+            "flow-style sequence, a YAML anchor or merge key, per-pool storage\n"
+            "under ``workerPools`` and raw ``extraVolumes`` PVC templates are not\n"
+            "graded.  Suppress with ``# conformance: ignore[O009] <reason>`` on the\n"
+            "entry's ``-`` line or the line above it — possible only in a\n"
+            "hand-written ``atlan.yaml``, since regeneration drops comments from a\n"
+            "generated one.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
             target="programs/areas/optimizations.prose.md",
         ),
     ),

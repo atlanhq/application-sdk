@@ -203,7 +203,10 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="O",
         source_module="conformance/suite/rules/optimizations.py",
         output_filename="optimizations.md",
-        checker="`suite.checks.optimizations` (AST-based)",
+        checker=(
+            "`suite.checks.optimizations` (AST-based) and "
+            "`suite.checks.worker_volume` (O009, line-based over `atlan.yaml`)"
+        ),
         suppression_example="# conformance: ignore[O001] intentional: stdlib json required here",
         stability_note=_ID_STABILITY_NOTE,
     ),

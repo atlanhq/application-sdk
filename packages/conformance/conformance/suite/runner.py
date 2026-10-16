@@ -71,6 +71,7 @@ from conformance.suite.checks import (
     test_structure,
     text_io_encoding,
     transform_templates,
+    worker_volume,
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
@@ -158,6 +159,11 @@ _CHECKS: list[CheckRegistration] = [
         series=optimizations.SERIES,
         discover=optimizations.discover,
         scan_path=optimizations.scan_path,
+    ),
+    CheckRegistration(
+        series=worker_volume.SERIES,
+        discover=worker_volume.discover,
+        scan_path=worker_volume.scan_path,
     ),
     CheckRegistration(
         series=prescriptions.SERIES,

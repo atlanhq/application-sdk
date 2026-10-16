@@ -25,6 +25,17 @@ Currently implemented:
   so the token survives verbatim into the runtime value.
 * ``O006`` DirectRocksdictImport — app code importing ``rocksdict`` directly
   (rather than the SDK's ``SpillableDict``).
+* ``O007`` UploadRetainsLocalCopy — a call to the SDK's ``upload_file`` that
+  omits ``retain_local_copy`` or passes the literal ``True``, so the uploaded
+  file stays on the worker's disk.
+* ``O008`` TempFileOutsideWorkerVolume — a stdlib ``tempfile`` constructor
+  given no ``dir=`` (or ``dir=None``), so its scratch lands in the system temp
+  dir rather than under ``TEMPORARY_PATH``.
+
+``O009`` WorkerVolumeWithoutAutoresize is an O-series rule too, but it grades
+``atlan.yaml`` rather than Python source, so it lives in
+``conformance.suite.checks.worker_volume`` and registers with the runner on its
+own.
 
 Inline suppression
 ------------------
@@ -65,6 +76,8 @@ from ._asset_mapper import check_o002, check_o003
 from ._pyatlan_v9 import check_o004
 from ._rocksdict import check_o006
 from ._stdlib_json import OrjsonOverStdlibJsonChecker, _collect_json_bindings
+from ._tempfile_dir import check_o008
+from ._upload_retain import check_o007
 
 SERIES = "O"
 
@@ -101,6 +114,8 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + check_o004(tree, file, directives)
         + check_o005(tree, file, directives)
         + check_o006(tree, file, directives)
+        + check_o007(tree, file, directives)
+        + check_o008(tree, file, directives)
     )
 
 
