@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from obstore.store import LocalStore, MemoryStore
+from obstore.store import GCSStore, LocalStore, MemoryStore
 
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
@@ -14,6 +14,7 @@ from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
     StorageNotFoundError,
+    StoragePermissionError,
 )
 
 
@@ -1128,3 +1129,59 @@ class TestS3RegionLookup:
         with pytest.raises(StorageConfigError):
             await store.download(key="k", prefix="p")
         lookup.assert_not_called()
+
+
+_GCS_VPC_SC_403 = (
+    "Generic GCS error: Error performing list request: Error performing GET "
+    "https://storage.googleapis.com/storage/v1/b/example-bucket/o: Client error "
+    "with status 403 Forbidden: <?xml version='1.0'?><Error>"
+    "<Code>SecurityPolicyViolated</Code>"
+    "<Message>Request violates VPC Service Controls.</Message></Error>"
+)
+_S3_ACCESS_DENIED_403 = (
+    "Generic S3 error: Error performing list request: non-2xx status code: 403 "
+    "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+)
+
+
+class TestListPermissionDenied:
+    """A 401/403 listing a bucket is the caller's to fix, not a retryable outage."""
+
+    @pytest.fixture(params=["_list_keys", "_list_keys_with_meta"])
+    def list_fn(self, request):
+        return request.param
+
+    async def _list(self, monkeypatch, list_fn, message, provider="gcs"):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(_cloud_module, "_list_items", _boom)
+        store = CloudStore(
+            GCSStore("example-bucket", skip_signature=True), provider=provider
+        )
+        return await getattr(store, list_fn)("prefix/")
+
+    async def test_gcs_vpc_sc_403_is_user_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _GCS_VPC_SC_403)
+        err = ei.value
+        assert err.effective_retryable is False
+        assert err.audience.name == "USER"
+        assert err.http_status == 403
+        assert err.provider_code == "SecurityPolicyViolated"
+        assert err.target == "gs://example-bucket/prefix/"
+        assert "VPC Service Controls" in str(err)
+
+    async def test_s3_access_denied_403_is_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _S3_ACCESS_DENIED_403, provider="s3")
+        assert ei.value.provider_code == "AccessDenied"
+        assert ei.value.http_status == 403
+
+    async def test_503_stays_retryable_storage_error(self, monkeypatch, list_fn):
+        with pytest.raises(StorageError) as ei:
+            await self._list(
+                monkeypatch, list_fn, "non-2xx status code: 503 Service Unavailable"
+            )
+        assert not isinstance(ei.value, StoragePermissionError)
+        assert ei.value.effective_retryable is True

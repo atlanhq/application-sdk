@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -60,6 +61,7 @@ from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
     StorageNotFoundError,
+    StoragePermissionError,
 )
 from application_sdk.storage.ops import (
     BoundStore,
@@ -84,6 +86,11 @@ def _log():
 
         _logger = get_logger(__name__)
     return _logger
+
+
+# obstore surfaces HTTP failures only as text unless it maps them to a typed error.
+_HTTP_AUTH_STATUS = re.compile(r"status(?: code)?:? (40[13])\b")
+_XML_ERROR_CODE = re.compile(r"<Code>([^<]+)</Code>")
 
 
 class CloudStore:
@@ -364,6 +371,39 @@ class CloudStore:
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
+    def _list_error(self, list_prefix: str, exc: Exception) -> StorageError:
+        """Map a listing failure to the error the caller can act on.
+
+        A 401/403 is a credential or bucket-policy problem (IAM, a VPC Service
+        Controls perimeter) that no retry fixes, so it is a non-retryable
+        user-facing permission error rather than a platform outage.
+        """
+        text = str(exc)
+        status = _HTTP_AUTH_STATUS.search(text)
+        if status is None and type(exc).__name__ not in (
+            "PermissionDeniedError",
+            "UnauthenticatedError",
+        ):
+            return StorageError(
+                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
+            )
+        code = _XML_ERROR_CODE.search(text)
+        http_status = int(status.group(1)) if status else 403
+        provider_code = code.group(1) if code else None
+        bucket = getattr(self._store, "config", {}).get("bucket", "")
+        scheme = {"gcs": "gs", "adls": "az"}.get(self._provider, self._provider)
+        target = f"{scheme}://{bucket}/{list_prefix}"
+        detail = f"{http_status} {provider_code}" if provider_code else str(http_status)
+        return StoragePermissionError(
+            f"Permission denied listing {target} ({detail}). Check the "
+            "credential's IAM access and any VPC Service Controls perimeter "
+            "on the bucket.",
+            cause=exc,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
+
     async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[str]:
@@ -380,9 +420,7 @@ class CloudStore:
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
-            raise StorageError(
-                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
-            ) from exc
+            raise self._list_error(list_prefix, exc) from exc
 
     async def _list_keys_with_meta(
         self, list_prefix: str, suffix_filter: set[str] | None = None
@@ -402,9 +440,7 @@ class CloudStore:
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
-            raise StorageError(
-                f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
-            ) from exc
+            raise self._list_error(list_prefix, exc) from exc
 
     async def list(self, prefix: str = "", *, suffix: str = "") -> list[str]:
         """List object keys under a prefix.
