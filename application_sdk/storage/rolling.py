@@ -65,12 +65,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import itertools
 import os
 import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
@@ -121,8 +122,9 @@ async def _call_maybe_blocking(fn: Callable[..., Any], *args: Any) -> Any:
     function is dispatched to the SDK's blocking pool instead (ADR-0010).
 
     ``run_in_thread`` copies the current ``contextvars`` context into the
-    worker thread, so a synchronous ``on_chunk_complete`` that calls
-    ``activity.heartbeat()`` still finds its activity context.
+    worker thread, so a plain ``on_chunk_complete`` calling the SDK heartbeat
+    (``self.heartbeat`` / ``task_context.heartbeat``) still finds its task, and
+    that heartbeat hands itself back to the loop when called off it.
 
     A plain function that *returns* an awaitable keeps working: the awaitable
     is produced in the thread and returned unawaited for the caller to await
@@ -217,11 +219,10 @@ class TimePolicy(RolloverPolicy):
 class SizePolicy(RolloverPolicy):
     """Roll when the buffered byte estimate reaches ``max_bytes``.
 
-    The estimate is best-effort (``sys.getsizeof`` plus a one-level walk for
-    common containers; pandas DataFrames are sized via
-    ``memory_usage(deep=True).sum()``). Accuracy matters less than triggering
-    *before* the pod OOMs — under-counting only widens the window between
-    flushes, never causes a false rollover.
+    The estimate is best-effort and bounded in cost (a sampled recursive
+    ``sys.getsizeof`` walk for builtin containers; pandas DataFrames are sized
+    via ``memory_usage(deep=True)`` on a row sample). Accuracy matters less
+    than triggering *before* the pod OOMs.
     """
 
     def __init__(self, max_bytes: int) -> None:
@@ -279,34 +280,107 @@ class AnyOfPolicy(RolloverPolicy):
 # ---------------------------------------------------------------------------
 
 
-def _default_size_estimator(batch: Any) -> int:
-    """Best-effort byte estimate for a single appended batch.
+# The estimator runs inline in `append()`, on the event loop, so its cost must
+# not grow with the batch. Containers are sized from at most this many evenly
+# spaced items (scaled to the full length), nesting is walked this deep, and
+# one estimate visits at most this many objects in total.
+_SIZE_SAMPLE_ITEMS = 64
+_SIZE_MAX_DEPTH = 4
+_SIZE_MAX_NODES = 16_384
+# Rows of a DataFrame sized with `memory_usage(deep=True)`, which walks every
+# Python object in object-dtype columns (~150 ms for 100k x 20 string cells).
+_SIZE_SAMPLE_ROWS = 256
 
-    Tries pandas' built-in deep memory accounting first (DataFrames and
-    Series both expose ``memory_usage(deep=True)``). Falls back to
-    ``sys.getsizeof`` plus a one-level walk for builtin containers
-    (dict / list / tuple / set / frozenset) so we don't dramatically
-    under-count a list of large dicts.
+
+class _DeepSizer:
+    """Sampled, depth- and node-bounded recursive ``sys.getsizeof``.
+
+    Shared objects (e.g. the same key strings in every row) are counted once
+    per reference, which over-counts. That is the safe direction: the writer
+    rolls a little early instead of letting the buffer outgrow the pod. Once
+    the node budget is spent, each open container extrapolates from the items
+    it has sized so far.
+    """
+
+    def __init__(self) -> None:
+        self._nodes_left = _SIZE_MAX_NODES
+
+    def size(self, obj: Any, depth: int) -> int:
+        size = sys.getsizeof(obj)
+        self._nodes_left -= 1
+        if depth <= 0 or self._nodes_left <= 0:
+            return size
+        if isinstance(obj, dict):
+            pairs = itertools.islice(obj.items(), _SIZE_SAMPLE_ITEMS)
+            return size + self._scaled(pairs, len(obj), depth - 1, pairs=True)
+        if isinstance(obj, (list, tuple)):
+            n = len(obj)
+            if n <= _SIZE_SAMPLE_ITEMS:
+                sample: Iterable[Any] = obj
+            else:
+                step = n / _SIZE_SAMPLE_ITEMS
+                sample = (obj[int(i * step)] for i in range(_SIZE_SAMPLE_ITEMS))
+            return size + self._scaled(sample, n, depth - 1)
+        if isinstance(obj, (set, frozenset)):
+            sample = itertools.islice(obj, _SIZE_SAMPLE_ITEMS)
+            return size + self._scaled(sample, len(obj), depth - 1)
+        return size
+
+    def _scaled(
+        self, sample: Iterable[Any], total: int, depth: int, *, pairs: bool = False
+    ) -> int:
+        """Deep size of *total* items, extrapolated from those sized in *sample*."""
+        sized = 0
+        count = 0
+        for item in sample:
+            if self._nodes_left <= 0:
+                break
+            if pairs:
+                key, value = item
+                sized += self.size(key, depth) + self.size(value, depth)
+            else:
+                sized += self.size(item, depth)
+            count += 1
+        return sized * total // count if count else 0
+
+
+def _frame_size(batch: Any, memory_usage: Callable[..., Any]) -> int:
+    """Deep byte size of a pandas DataFrame/Series from a strided row sample."""
+    rows = len(batch)
+    if rows > _SIZE_SAMPLE_ROWS:
+        sample = batch.iloc[:: rows // _SIZE_SAMPLE_ROWS]
+        usage = sample.memory_usage(deep=True)
+        return int(getattr(usage, "sum", lambda: usage)()) * rows // len(sample)
+    usage = memory_usage(deep=True)
+    return int(getattr(usage, "sum", lambda: usage)())
+
+
+def _default_size_estimator(batch: Any) -> int:
+    """Best-effort byte estimate for a single appended batch, at bounded cost.
+
+    pandas DataFrames and Series are sized with ``memory_usage(deep=True)``
+    over an evenly strided sample of at most ~2 x ``_SIZE_SAMPLE_ROWS`` rows,
+    scaled to the full row count. Builtin containers (dict / list / tuple /
+    set / frozenset) are walked recursively up to ``_SIZE_MAX_DEPTH`` levels,
+    sizing at most ``_SIZE_SAMPLE_ITEMS`` items per container and
+    ``_SIZE_MAX_NODES`` objects in total — so a
+    ``list[dict]`` of rows counts the row values, not just the row pointers.
 
     Accuracy is intentionally best-effort. The writer uses this only to
-    decide *when* to roll over, and an undercount merely widens the window
-    between flushes. Callers that need precision can pass their own
-    ``size_estimator`` to ``RollingFileWriter``.
+    decide *when* to roll over. Callers that need precision can pass their
+    own ``size_estimator`` to ``RollingFileWriter``.
     """
     memory_usage = getattr(batch, "memory_usage", None)
     if callable(memory_usage):
         try:
+            if hasattr(batch, "iloc"):
+                return _frame_size(batch, memory_usage)
             usage = memory_usage(deep=True)
             return int(getattr(usage, "sum", lambda: usage)())
         except Exception:  # noqa: S110, BLE001 — best-effort sizer; pandas can raise on exotic dtypes
             pass
 
-    base = sys.getsizeof(batch)
-    if isinstance(batch, dict):
-        return base + sum(sys.getsizeof(k) + sys.getsizeof(v) for k, v in batch.items())
-    if isinstance(batch, (list, tuple, set, frozenset)):
-        return base + sum(sys.getsizeof(item) for item in batch)
-    return base
+    return _DeepSizer().size(batch, _SIZE_MAX_DEPTH)
 
 
 def _record_count(batch: Any) -> int:
@@ -384,8 +458,10 @@ class RollingFileWriter(Generic[T]):
             DataFrames and common Python containers.
         on_chunk_complete: Optional callback ``(chunk_index, chunk_path) ->
             None`` (sync or async) invoked after every successful chunk
-            flush. Useful for Temporal heartbeats — pass
-            ``lambda idx, path: activity.heartbeat(f"chunk {idx}")``.
+            flush. Useful for heartbeats — inside a ``@task`` pass
+            ``lambda idx, path: self.heartbeat(f"chunk {idx}")``. A plain
+            function runs in the SDK's blocking pool, like ``flush_fn``, and
+            the SDK heartbeat is safe to call from there.
             Callback exceptions are logged but never abort the write loop.
         scoped_subdir_name: Optional explicit name for the writer-owned
             sub-directory. Defaults to ``f"rolling_{uuid.uuid4().hex[:8]}"``.
