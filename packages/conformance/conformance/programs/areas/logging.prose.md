@@ -296,8 +296,11 @@ report that site the same way.
   one summary after the loop (`logger.info("processed %d assets, %d skipped", total, skipped)`).
   A standalone INFO immediately followed by an unconditional `break` from the
   loop is already an at-most-once terminal summary; keep it there rather than
-  moving or demoting it.  This does not exempt a terminal summary repeated by
-  an unbounded enclosing loop.  Mirror `atlan-metabase-app
+  moving or demoting it.  An INFO at the end of a conditional branch immediately
+  followed by an unconditional `return` from the same function is also terminal;
+  this does not apply when a `finally: continue` overrides the return.  A break
+  summary can repeat in an unbounded enclosing loop, while a return exits the
+  function.  Mirror `atlan-metabase-app
   app/extracts/process.py`, where the per-dashboard skip inside `process_assets`
   logs at DEBUG.  Do not simply delete a per-item call: the record is still
   wanted at DEBUG.

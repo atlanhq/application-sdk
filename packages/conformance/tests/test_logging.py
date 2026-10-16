@@ -240,6 +240,134 @@ for item in items:
     assert "L006" in _ids(src)
 
 
+def test_l006_silent_for_terminal_recovery_log_before_return() -> None:
+    src = """
+from loguru import logger
+
+def fetch_with_retries():
+    for attempt in attempts:
+        try:
+            response = fetch()
+            if attempt > 0:
+                logger.info("request recovered on attempt %d", attempt)
+            return response
+        except TransientError:
+            continue
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_page_progress_logs_in_unbounded_loop() -> None:
+    src = """
+from loguru import logger
+
+def read_pages():
+    cursor = None
+    while True:
+        logger.info("fetching page for cursor %s", cursor)
+        page = fetch_page(cursor)
+        cursor = page.next_cursor
+        logger.info("fetched page with %d records", len(page.records))
+        if not cursor:
+            break
+"""
+    findings = scan_text(src, "x.py")
+    assert sum(f.rule_id == "L006" for f in findings) == 2
+
+
+def test_l006_fires_for_per_item_info_before_conditional_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        logger.info("processing item")
+        if is_final(item):
+            return
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def poll():
+    while True:
+        try:
+            if should_log():
+                logger.info("still processing")
+            return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_break_overrides_return_in_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        while True:
+            try:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+            finally:
+                break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_silent_when_finally_break_exits_outermost_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            if should_log(item):
+                logger.info("processed item")
+            return
+        finally:
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_when_outer_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            for attempt in attempts:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_return_is_in_nested_function() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        if should_log(item):
+            logger.info("processing item")
+        def finish_item():
+            return
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_terminal_summary_repeated_by_outer_loop() -> None:
     src = """
 from loguru import logger
