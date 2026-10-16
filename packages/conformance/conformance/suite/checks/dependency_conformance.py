@@ -2009,13 +2009,13 @@ def _constraint_entry_lines(text: str) -> Iterator[tuple[str, int, int]]:
 
 
 def _scan_constraint_floors(text: str, rel_pyproject: str) -> list[Finding]:
-    """D003: an app's ``[tool.uv] constraint-dependencies`` floors.
+    """D003: app-local ``[tool.uv] constraint-dependencies`` floors.
 
-    A floor on a package the app does not declare is a second place for a
-    transitive version to be decided.  Transitive floors belong to the SDK,
-    whose dependency ranges the app resolves through; an app-local copy goes
-    stale the moment the SDK's own floor moves, and nothing reports it.  App
-    repos only — the SDK's own pyproject is where these floors live.
+    Surface each entry for review.  Generic transitive floors belong in the
+    SDK's declared dependency ranges, not in app-local direct requirements or
+    constraints.  A documented app-specific minimum may be retained with a
+    reasoned D003 exception only when the SDK's declared range does not
+    guarantee it.  App repos only — the SDK's own pyproject is exempt.
     """
     suppressions = parse_toml_suppressions(text)
     findings: list[Finding] = []
@@ -2030,12 +2030,14 @@ def _scan_constraint_floors(text: str, rel_pyproject: str) -> list[Finding]:
                 column=column,
                 message=(
                     f"'{name}' is floored in [tool.uv] constraint-dependencies "
-                    f"('{raw}'). An app does not carry transitive security floors: "
-                    f"remove the entry. If a CVE fix is needed, it belongs in "
-                    f"atlan-application-sdk's dependency ranges and reaches the app "
-                    f"by upgrading the SDK. Note uv does not propagate an SDK's own "
-                    f"[tool.uv] constraints to dependents, so the lock's resolved "
-                    f"version and CI's vulnerability scan are what guard it."
+                    f"('{raw}'). This finding surfaces app-local floors for review: "
+                    f"generic transitive floors belong in atlan-application-sdk's "
+                    f"declared dependency ranges and should be removed from the app, "
+                    f"not relocated between a direct dependency and a constraint. "
+                    f"A documented app-specific minimum may be retained only when "
+                    f"the SDK's declared range does not guarantee it, with a reasoned "
+                    f"D003 exception naming the app floor and SDK range gap. A resolved "
+                    f"lockfile version alone is not a future guarantee."
                 ),
                 suppressions=suppressions,
             )
