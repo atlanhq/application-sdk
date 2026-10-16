@@ -155,6 +155,7 @@ class ConsoleWriter:
             stream.flush()
         # A closed or broken stream (ValueError, OSError) must not kill the
         # writer thread. There's nowhere left to report it, so the line is lost.
+        # conformance: ignore[E002] the failing sink is the console itself; logging would recurse into it
         except (OSError, ValueError):  # noqa: S110
             pass
 
