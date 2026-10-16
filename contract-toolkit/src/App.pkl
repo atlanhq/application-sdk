@@ -270,6 +270,114 @@ emitAppYaml: Boolean = true
 /// Whether to re-export entrypoint contract artifacts in multi-entrypoint mode.
 emitGeneratedArtifacts: Boolean = true
 
+// ── RELEASE SCHEDULE (release train, FND-3529) ───────────────────────────────
+
+/// A release-train weekday. Releases go out Monday to Thursday only, so a
+/// release never lands going into a weekend.
+typealias ReleaseDay = "mon"|"tue"|"wed"|"thu"
+
+/// A release-train slot, as wall-clock time in IST (fixed UTC+05:30, no DST).
+typealias ReleaseSlotTime = "09:00"|"12:00"|"15:00"|"18:00"|"21:00"
+
+/// One weekly release-train slot: a weekday and a time of day in IST.
+class ReleaseSlot {
+  /// Weekday the release goes out: `"mon"`, `"tue"`, `"wed"` or `"thu"`.
+  day: ReleaseDay
+
+  /// Time of day (IST) the release goes out: `"09:00"`, `"12:00"`, `"15:00"`,
+  /// `"18:00"` or `"21:00"`.
+  slot: ReleaseSlotTime
+}
+
+/// Weekly release-train slots for a `semver` app (FND-3529, FND-4039).
+///
+/// Default: empty — no schedule, and no `app/generated/release_schedule.yaml`
+/// is emitted, so a contract that never sets this generates byte-identical
+/// output to before the property existed. Leaving it empty is the only way to
+/// declare "no schedule" (the property is not nullable).
+///
+/// When set, the toolkit emits `app/generated/release_schedule.yaml`:
+///
+/// ```yaml
+/// schema_version: 1
+/// timezone: IST   # fixed UTC+05:30
+/// releases:
+///   - day: mon
+///     slot: "12:00"
+/// ```
+///
+/// Entries render in the order declared. `atlan.yaml`, `manifest.json` and every
+/// other generated file are unchanged — the schedule is its own file so a
+/// release-train scheduler can read it without parsing the marketplace manifest.
+///
+/// Rules, each enforced at `pkl eval` time with a message naming the problem:
+///   - 1 to 4 entries, and each `day` at most once (one release per day).
+///   - The app's release model must be `semver` (or its deprecated alias
+///     `versioned`), read from the rendered `atlan.yaml` data — `metadata` plus
+///     `atlanYamlOverrides` — exactly as the publish step reads it. A missing
+///     `release_model` means `cd`, and a `cd` app publishes on every merge, so a
+///     schedule would be meaningless and is refused.
+///   - On a multi-entrypoint bundle, declare it on the bundle **root** (where the
+///     app's `metadata` lives). An entrypoint contract that declares it is
+///     refused rather than silently relocated under `app/generated/<entrypoint>/`.
+///
+/// ```pkl
+/// metadata {
+///   ["release_model"] = "semver"
+/// }
+/// releaseSchedule {
+///   new { day = "mon"; slot = "12:00" }
+///   new { day = "wed"; slot = "15:00" }
+/// }
+/// ```
+///
+/// Caveat: a contract with `emitAtlanYaml = false` still has its release model
+/// read from `metadata`/`atlanYamlOverrides`; if those do not declare `semver`,
+/// the schedule is refused.
+releaseSchedule: Listing<ReleaseSlot>
+
+/// Envelope version of `release_schedule.yaml`. Bump only on a breaking change to
+/// the file's shape.
+local releaseScheduleSchemaVersion: Int = 1
+
+/// The release model the publish step will see: `release_model` from the merged
+/// `atlan.yaml` data, defaulting to `cd` when absent (`parse_atlan_yaml.py`).
+local resolvedReleaseModel: Any = atlanYamlData.getOrNull("release_model") ?? "cd"
+
+local function releaseScheduleText(slots: List<ReleaseSlot>): String =
+  generatedYamlHeader
+    + "schema_version: \(releaseScheduleSchemaVersion)\n"
+    + "timezone: IST   # fixed UTC+05:30\n"
+    + "releases:\n"
+    + slots.map((s) -> "  - day: \(s.day)\n    slot: \"\(s.slot)\"\n").join("")
+
+/// Refuses a release schedule that is malformed or can never take effect.
+/// `local`, not `hidden`, so an amending contract cannot assign the guard away;
+/// forced from `output` because nothing else reads it.
+local _releaseScheduleCheck: Any =
+  let (slots = releaseSchedule.toList())
+  let (dupDays = slots.map((s) -> s.day).groupBy((d) -> d).filter((_, ds) -> ds.length > 1).keys.toList())
+  if (slots.isEmpty) null
+  else if (slots.length > 4)
+    throw("App.pkl: releaseSchedule declares \(slots.length) entries; at most 4 are allowed — one per release day (mon, tue, wed, thu).")
+  else if (!dupDays.isEmpty)
+    throw("App.pkl: releaseSchedule declares day(s) \(dupDays.join(", ")) more than once. Each day may appear at most once — pick one slot per day.")
+  else if (resolvedReleaseModel != "semver" && resolvedReleaseModel != "versioned")
+    throw("App.pkl: releaseSchedule is only valid for semver apps, but this app's release_model is '\(resolvedReleaseModel)' (a missing release_model means 'cd', which publishes on every merge). Declare `metadata { [\"release_model\"] = \"semver\" }`, or remove releaseSchedule.")
+  else null
+
+/// A schedule belongs to the whole app, whose release model lives on the bundle
+/// root. An entrypoint contract's own declaration would be relocated under
+/// `app/generated/<entrypoint>/`, where nothing reads it — refuse it by name.
+local _bundleReleaseScheduleCheck: Any =
+  let (bad = entrypoints.toList()
+    .filter((e) -> e.contract != null
+      && e.contract!!.hasProperty("releaseSchedule")
+      && !(e.contract!!.getProperty("releaseSchedule") as Listing).isEmpty)
+    .map((e) -> e.name))
+  if (bad.isEmpty) null
+  else throw("App.pkl: releaseSchedule is declared on entrypoint contract(s) \(bad.join(", ")). A release schedule is app-level — declare it once on the bundle root, next to its `metadata { [\"release_model\"] = \"semver\" }`.")
+
 // ── WORKFLOW TYPE ────────────────────────────────────────────────────────────
 
 /// Temporal workflow type written to `manifest.json` as `workflow_type`.
@@ -5010,10 +5118,12 @@ class ContractFile {
 // App.pkl contracts emit full repo-root paths ("app/generated/foo.json",
 // "atlan.yaml"). In bundle mode we need bare artifact names ("foo.json") for
 // dedup keys and per-entrypoint path construction. Bundle-owned root files
-// (atlan.yaml, app.yaml) are skipped — returns "" as a skip sentinel.
+// (atlan.yaml, app.yaml, and the app-level release_schedule.yaml) are skipped —
+// returns "" as a skip sentinel.
 local function normalizeContractFileName(fileName: String): String =
   let (prefix = "app/generated/")
-  if (fileName == "atlan.yaml" || fileName == "app.yaml") ""
+  if (fileName == "atlan.yaml" || fileName == "app.yaml"
+      || fileName == "app/generated/release_schedule.yaml") ""
   else if (fileName.startsWith(prefix)) fileName.drop(prefix.length)
   else fileName
 
@@ -5140,6 +5250,10 @@ hidden _credentialConflictCheck: Any =
 // ────────────────────────────────────────────────────────────────────────────
 
 output =
+  // Forced first — before _credentialConflictCheck or the bundle loop evaluates
+  // any entrypoint's output — so an entrypoint-level schedule is refused by name
+  // rather than by that entrypoint's own (misleading) release-model check.
+  let (_bundleReleaseCheck = _bundleReleaseScheduleCheck)
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
@@ -5170,6 +5284,7 @@ output =
   let (_bundleInputNameCheck = _bundleInputClassNameCheck)
   let (_treeSelectionCheck = _treeSelectionWidgetCheck)
   let (_treeFilterCheck = _treeFilterModeCheck)
+  let (_releaseCheck = _releaseScheduleCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {
@@ -5181,6 +5296,14 @@ output =
       }
       when (emitAppYaml) {
         ["app.yaml"] = appYamlOutput
+      }
+      // App-level release-train schedule (FND-4039). Emitted in both single- and
+      // multi-entrypoint mode at the top of `app/generated/`, and only when set,
+      // so a contract that declares none is byte-identical to before.
+      when (!releaseSchedule.isEmpty) {
+        ["app/generated/release_schedule.yaml"] = new FileOutput {
+          text = releaseScheduleText(releaseSchedule.toList())
+        }
       }
 
       // ── single-entrypoint mode ────────────────────────────────────────────

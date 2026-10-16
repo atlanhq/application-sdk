@@ -1,0 +1,9 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+schema_version: 1
+timezone: IST   # fixed UTC+05:30
+releases:
+  - day: mon
+    slot: "12:00"
+  - day: wed
+    slot: "18:00"

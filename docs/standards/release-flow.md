@@ -349,3 +349,32 @@ version it deployed — which is the case this change exists to correct. A
 deployment that needs the deployer's value to win should stop baking the file
 (`ATLAN_BUILD_INFO_PATH` pointed at a path that does not exist), not reorder the
 precedence: the file is the only source a single-app SDR customer has.
+
+## Release train
+
+A `semver` app declares the weekly slots it wants to release in, in its own contract
+(FND-3529). The declaration is `releaseSchedule` in `contract/app.pkl`:
+
+```pkl
+metadata {
+  ["release_model"] = "semver"
+}
+releaseSchedule {
+  new { day = "mon"; slot = "12:00" }
+}
+```
+
+- One to four entries, each weekday at most once.
+- `day` is one of `mon`, `tue`, `wed`, `thu`.
+- `slot` is one of `09:00`, `12:00`, `15:00`, `18:00`, `21:00`, in IST (fixed UTC+05:30).
+- `semver` apps only. A `cd` app publishes on every merge, so it has no release to
+  schedule, and `pkl eval` refuses the declaration.
+
+`pkl eval` renders it to `app/generated/release_schedule.yaml` (not `atlan.yaml`), and only
+when it is set. The contract toolkit reference documents the file shape:
+[Release Schedule](https://github.com/atlanhq/application-sdk/blob/main/contract-toolkit/docs/reference.md#release-schedule-release-train).
+
+The owner picks the days and slot, so nothing fills this in automatically. The
+scheduler that reads the file and cuts releases in those slots is still being built
+(FND-3529). Until it ships, the declaration records intent and changes no release
+behaviour.

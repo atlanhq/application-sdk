@@ -20,6 +20,7 @@ Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
 - `app/generated/manifest.json` — Automation Engine DAG
 - `app/generated/_input.py` — typed SDK input model
 - `app/generated/artifact_schemas.json` — data hand-off declarations (only when `artifactSchemas` is non-empty)
+- `app/generated/release_schedule.yaml` — release-train slots (only when `releaseSchedule` is non-empty; semver apps only)
 
 ## Main Files
 
@@ -69,6 +70,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - `artifact-schemas`: `artifactSchemas` data hand-off declarations — parquet + NDJSON, nested paths, arrays of structs (`[]` element step), an input artifact.
+- `release-schedule`: `releaseSchedule` release-train slots on a `semver` app → `app/generated/release_schedule.yaml`.
 
 ## Editing Rules
 

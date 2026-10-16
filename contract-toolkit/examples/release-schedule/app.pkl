@@ -1,0 +1,42 @@
+/// Release-schedule example — demonstrates `releaseSchedule` (FND-4039).
+///
+/// A `semver` app declares the weekly release-train slots it wants: one or more
+/// weekdays (mon–thu), each with a time of day in IST. Declaring it emits
+/// `app/generated/release_schedule.yaml`; `atlan.yaml` and every other generated
+/// file are unchanged.
+///
+/// `releaseSchedule` is only valid for semver apps, so `metadata` declares
+/// `release_model` explicitly — leaving it out means `cd`, and generation refuses.
+amends "../../src/App.pkl"
+
+name = "release-schedule"
+displayName = "Release Schedule Example"
+icon = "https://assets.atlan.com/assets/fullscreen-exit.svg"
+hasCredentialConfig = false
+
+metadata {
+  ["release_model"] = "semver"
+}
+
+releaseSchedule {
+  new { day = "mon"; slot = "12:00" }
+  new { day = "wed"; slot = "18:00" }
+}
+
+pipeline {
+  publish = null
+}
+
+uiConfig = new UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new TextInput {
+          title = "Target"
+          helpText = "What to process."
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
