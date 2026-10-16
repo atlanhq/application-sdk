@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**54 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**55 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015, P059), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK), `suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -77,6 +77,7 @@ reassigned.
 | [P058](#p058) | `RawDictEntity` | `warn` | `app` | `asset-modeling` | — | 0.49.0 |
 | [P059](#p059) | `JsonEncodedContractField` | `warn` | `app` | `contract-modeling` | — | 0.51.0 |
 | [P060](#p060) | `HostedHandlerLogs` | `block` | `app` | `hosted-handler` | — | 0.41.0 |
+| [P061](#p061) | `HostedHandlerMigration` | `warn` | `app` | `hosted-handler` | — | 0.51.0 |
 
 ---
 
@@ -3200,5 +3201,52 @@ report of a failure the handler should instead raise as a typed `AppError`.
 
 Silent for an app without `[tool.atlan-app-api]`: it is not hosted. Blocks for one that
 has it, because declaring the block is the app moving to the host.
+
+---
+
+## P061 — `HostedHandlerMigration` {#p061}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `hosted-handler` · **Autofixable:** — · **Since:** 0.51.0
+
+> App is not yet served from the consolidated API host the supported way
+
+**Rationale:** The consolidated API host serves many apps' HTTP surfaces from one process, so an app
+stops running its own always-on API pod. An app gets there by serving its real app/
+handler through atlan-application-sdk-api: one [tool.atlan-app-api] block, no copied
+code. Until then each app either runs its own server pod or keeps a hand-written server/
+copy on atlan-server-sdk that drifts from the real handler. Customer impact: a drifted
+server/ copy answers test-credential, preflight and metadata calls differently from the
+worker that runs the extraction, so a credential that tests green can fail the run.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — the [tool.atlan-app-api] block names handler =
+  "app.handler:MySQLAppHandler", a Handler subclass in app/ whose files import each
+  other relatively; the repo has no server/ package, and the host stages that handler
+  from app/.
+- **Migrate with:** the `api-server-consolidation-migration` skill (`skills-dir`)
+- **Interacts with:** Logging in the handler module is P060's; this rule never reports it. Once an app
+  declares [tool.atlan-app-api], application-sdk's gen_app_api.py check (the api-member
+  CI job) enforces the same handler-misuse cases as a test, and this rule mirrors them.
+
+Reports what still stands between an app and the consolidated API host.  Each finding
+hands off to the `api-server-consolidation-migration` skill.
+
+* **Not migrated** — a class under `app/` subclasses the SDK's   `Handler` and the root
+`pyproject.toml` has no   `[tool.atlan-app-api]` block. * **Old path still present** —
+`server/pyproject.toml` depends on   `atlan-server-sdk`: a hand-written handler copy.
+Delete it once   the host's pin serves the app's own handler, not before. * **Handler
+not used correctly** (the block is present) — `handler`   does not name a `Handler`
+subclass in `app/`; a `data` glob   matches nothing; or the handler's import closure has
+an absolute   `from app.` import, an import that moved off the host
+(`execution.heartbeat.run_in_thread`,   `observability.logger_adaptor.get_logger`), or
+an   `APPLICATION_NAME` read (on the host that names the host; use
+`self.context.app_name`). * **Cannot be hosted yet** — an `app/<entrypoint>/core.py`
+defines   `compute_manifest`.  The host serves static manifests only, so the   hook has
+to become static data first.
+
+The handler-misuse and hook cases mirror application-sdk's `gen_app_api.py check`.
+Logging in the handler module is P060. WARN: the host is rolling out app by app.
+Suppress with `# conformance: ignore[P061] <reason>` on the reported line.
 
 ---

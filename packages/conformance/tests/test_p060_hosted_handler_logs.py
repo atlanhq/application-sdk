@@ -26,7 +26,7 @@ def _ids(root: Path) -> list[tuple[str, int]]:
     return [
         (f.file, f.line)
         for f in hosted_handler.scan_all(paths, root)
-        if not f.suppressed
+        if f.rule_id == "P060" and not f.suppressed
     ]
 
 
