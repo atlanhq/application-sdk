@@ -2201,6 +2201,191 @@ def inspect():
     _none(src)
 
 
+def test_p007_no_finding_when_module_helper_uses_dynamic_logger_alias() -> None:
+    src = """\
+def _report_problem(operation, problem, level="warning", **metadata):
+    extra = {"detail": str(problem)}
+    for key in ("status", "reason"):
+        extra[key] = metadata.get(key)
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem, level="debug", item="sample")
+        return None
+"""
+    _none(src)
+
+
+def test_p007_still_flags_when_only_a_conditional_exc_info_carries_the_exception() -> (
+    None
+):
+    # exc_info=False on the ExpectedFailure branch records neither the traceback
+    # nor the exception value, so the fallback return is still silent there.
+    src = """\
+def _report_problem(operation, problem):
+    audit.warning(
+        "%s failed",
+        operation,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_entry_for_the_exception_is_overwritten() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra["detail"] = None
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_mapping_is_mutated_by_a_call() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra.pop("detail")
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_uses_an_unresolved_callable_alias() -> (
+    None
+):
+    src = """\
+def _report_problem(problem):
+    log_fn = choose_sink()
+    log_fn("lookup failed", exc_info=problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_a_kwargs_helper_does_not_log() -> None:
+    src = """\
+def _record_problem(problem, **metadata):
+    metadata["detail"] = problem
+    return metadata
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _record_problem(problem, item="sample")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_selector_is_not_a_log_level() -> None:
+    src = """\
+def _report_problem(problem, level):
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn("lookup failed", exc_info=problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, level="isEnabledFor")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_helper_logs_unrelated_data() -> None:
+    src = """\
+def _report_problem(problem, detail):
+    log_fn = getattr(audit, "warning", audit.warning)
+    log_fn("lookup failed: %s", detail)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, "unrelated")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_helper_can_skip_its_log() -> None:
+    src = """\
+def _report_problem(problem, enabled):
+    log_fn = getattr(audit, "warning", audit.warning)
+    if enabled:
+        log_fn("lookup failed: %s", problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_unlogged_empty_parse_fallback() -> None:
+    src = """\
+def parse_payload(body):
+    try:
+        return decode_payload(body)
+    except (ValueError, TypeError):
+        return {}
+"""
+    _single(src, "E007")
+
+
 def test_p007_no_finding_when_same_class_helper_has_setup_before_log() -> None:
     src = """\
 class Probe:
