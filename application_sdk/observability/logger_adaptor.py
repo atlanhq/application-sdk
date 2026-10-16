@@ -825,6 +825,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     _flush_task_started: ClassVar[bool] = False
     _flush_task: ClassVar[Any] = None
     _initialized: ClassVar[bool] = False
+    # The adapter whose bound ``_log_sink`` loguru calls. The sink is
+    # registered once, so this adapter's buffer is the only one records land
+    # in; every other adapter's buffer stays empty.
+    _sink_owner: ClassVar["AtlanLoggerAdapter | None"] = None
 
     @classmethod
     def _reset_for_testing(cls) -> None:
@@ -833,13 +837,14 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         Public test hook: any new ClassVar or module-level cache associated
         with logger initialization MUST be reset here so test isolation
         stays correct. Currently resets ``_initialized``, ``_flush_task_started``,
-        and clears the module-level ``_logger_instances`` cache.
+        ``_sink_owner``, and clears the module-level ``_logger_instances`` cache.
 
         This method should only be used in tests to allow fresh sink setup
         for each test case.
         """
         cls._initialized = False
         cls._flush_task_started = False
+        cls._sink_owner = None
         _logger_instances.clear()
         _otlp_shutdown_done.clear()
 
@@ -1058,6 +1063,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         _has_otlp = self.logger_provider is not None
         if ENABLE_OBSERVABILITY_STORE_SINK or _has_otlp:
             self.logger.add(self._log_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
+            AtlanLoggerAdapter._sink_owner = self
             # Start the periodic flush task only when the object-store sink is active.
             if (
                 ENABLE_OBSERVABILITY_STORE_SINK
@@ -1502,7 +1508,11 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     def _sync_flush(self):
         """Flush the log buffer, dispatching appropriately for the current context.
 
-        Called on error/critical logs to force-flush. Works in three contexts:
+        Called on error/critical logs to force-flush. Drains the sink owner's
+        buffer, not this adapter's: records only ever land in the buffer of
+        the adapter whose ``_log_sink`` is registered, so flushing ``self``
+        from any other logger would find nothing to write. Works in three
+        contexts:
 
         - Async context (running event loop in this thread): schedules a task.
         - Sync context (no running loop): creates a temporary loop to flush.
@@ -1519,16 +1529,17 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         if in_temporal_workflow():
             return
 
+        owner = AtlanLoggerAdapter._sink_owner or self
         try:
             try:
                 loop = asyncio.get_running_loop()
                 # We're in an async context — schedule non-blocking flush
-                loop.create_task(self._flush_buffer(force=True))
+                loop.create_task(owner._flush_buffer(force=True))
             except RuntimeError:
                 # No running loop in this thread. Safe to create one.
                 loop = asyncio.new_event_loop()
                 try:
-                    loop.run_until_complete(self._flush_buffer(force=True))
+                    loop.run_until_complete(owner._flush_buffer(force=True))
                 finally:
                     loop.close()
         except Exception:
