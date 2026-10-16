@@ -719,18 +719,80 @@ class SilentSwallowMixin:
                 continue
             logger_alias_lines[alias] = statement.lineno
 
-        def _is_traceback_selector(value: ast.expr, name: str) -> bool:
-            return (
-                isinstance(value, ast.UnaryOp)
-                and isinstance(value.op, ast.Not)
-                and isinstance(value.operand, ast.Call)
-                and isinstance(value.operand.func, ast.Name)
-                and value.operand.func.id == "isinstance"
-                and len(value.operand.args) == 2
-                and not value.operand.keywords
-                and isinstance(value.operand.args[0], ast.Name)
-                and value.operand.args[0].id == name
-                and isinstance(value.operand.args[0].ctx, ast.Load)
+        def _extra_carries_parameter(value: ast.expr, log_line: int) -> bool:
+            """Whether an ``extra=`` mapping holds the input's text on every path.
+
+            A conditional ``exc_info`` drops the traceback on its false branch,
+            so the exception must reach the record some other way. The mapping
+            qualifies only as a single top-level dict literal whose entry for
+            the input is never overwritten or removed, and which is not handed
+            to anything that could mutate it.
+            """
+            if not isinstance(value, ast.Name):
+                return False
+            name = value.id
+            bindings = [
+                statement
+                for statement in helper.body
+                if isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == name
+            ]
+            if len(bindings) != 1 or bindings[0].lineno >= log_line:
+                return False
+            binding = bindings[0]
+            if not isinstance(binding.value, ast.Dict):
+                return False
+            carrying_keys = {
+                key.value
+                for key, entry in zip(
+                    binding.value.keys, binding.value.values, strict=True
+                )
+                if isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and self._expression_represents_parameter(entry, parameter)
+            }
+            if not carrying_keys:
+                return False
+            loop_keys: dict[str, set[object]] = {}
+            for node in ast.walk(helper):
+                if (
+                    isinstance(node, (ast.For, ast.AsyncFor))
+                    and isinstance(node.target, ast.Name)
+                    and isinstance(node.iter, (ast.Tuple, ast.List))
+                    and all(isinstance(item, ast.Constant) for item in node.iter.elts)
+                ):
+                    loop_keys.setdefault(node.target.id, set()).update(
+                        item.value
+                        for item in node.iter.elts
+                        if isinstance(item, ast.Constant)
+                    )
+            allowed: set[int] = {id(binding.targets[0]), id(value)}
+            for node in ast.walk(helper):
+                if not (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == name
+                ):
+                    continue
+                if isinstance(node.ctx, ast.Load):
+                    allowed.add(id(node.value))
+                    continue
+                key = node.slice
+                if isinstance(key, ast.Constant):
+                    written = {key.value}
+                elif isinstance(key, ast.Name) and key.id in loop_keys:
+                    written = loop_keys[key.id]
+                else:
+                    return False
+                if written & carrying_keys:
+                    return False
+                allowed.add(id(node.value))
+            return all(
+                id(node) in allowed
+                for node in ast.walk(helper)
+                if isinstance(node, ast.Name) and node.id == name
             )
 
         def _called_logger_alias(statement: ast.stmt) -> ast.Call | None:
@@ -827,8 +889,8 @@ class SilentSwallowMixin:
                             *(keyword.value for keyword in logged_call.keywords),
                         ]
                     ) or any(
-                        keyword.arg == "exc_info"
-                        and _is_traceback_selector(keyword.value, parameter)
+                        keyword.arg == "extra"
+                        and _extra_carries_parameter(keyword.value, statement.lineno)
                         for keyword in logged_call.keywords
                     )
                     if carries_exception:

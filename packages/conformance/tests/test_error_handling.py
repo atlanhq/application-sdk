@@ -2225,6 +2225,73 @@ def inspect():
     _none(src)
 
 
+def test_p007_still_flags_when_only_a_conditional_exc_info_carries_the_exception() -> (
+    None
+):
+    # exc_info=False on the ExpectedFailure branch records neither the traceback
+    # nor the exception value, so the fallback return is still silent there.
+    src = """\
+def _report_problem(operation, problem):
+    audit.warning(
+        "%s failed",
+        operation,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_entry_for_the_exception_is_overwritten() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra["detail"] = None
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_mapping_is_mutated_by_a_call() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra.pop("detail")
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_still_flags_when_module_helper_uses_an_unresolved_callable_alias() -> (
     None
 ):
