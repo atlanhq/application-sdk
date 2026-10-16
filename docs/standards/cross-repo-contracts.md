@@ -90,14 +90,19 @@ structural.
 cannot copy the worker's in-process value. It stamps the worker's
 `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one
 (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`, from the app's `atlan.yaml`
-`deploy.env`), and derives from the app's name and its own
-`ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` only when there is none. It never
-reads the bare `ATLAN_TASK_QUEUE`, `ATLAN_DEPLOYMENT_NAME` or
-`ATLAN_APPLICATION_NAME`: on the host those are the host's own, shared by every
-hosted app (`resolve_manifest_tokens(from_process_env=False)`). With neither
-per-app key set it stamps nothing and logs an ERROR. The residual risk is an
-override set on the worker some other way (not in `deploy.env`): the host
-cannot see it. Pinned by `test_metadata_route_parity.py`.
+`deploy.env`), and otherwise derives from the app's name and the deployment
+name. It never reads the bare `ATLAN_TASK_QUEUE` or `ATLAN_APPLICATION_NAME`:
+an override and an app name are one app's, and the host serves many
+(`resolve_manifest_tokens(from_process_env=False)`). The deployment name is
+`ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` when set, else the host's own
+`ATLAN_DEPLOYMENT_NAME`: the atlan-app chart gives the host and every app's
+worker the same tenant-wide `deploymentName`. A Self-Deployed Runtime run
+polls a different queue, but Heracles re-stamps every agent-side node with
+`atlan-<sdr deployment>` on create and update (`stampSDRTaskQueue`), so the
+served queue only reaches cloud-side nodes. With no deployment name at all it
+stamps nothing and logs an ERROR. The residual risk is an override set on the
+worker some other way (not in `deploy.env`): the host cannot see it. Pinned by
+`test_metadata_route_parity.py`.
 
 That is the FND-195 fix, and the failure it removed is silent by construction:
 when the served queue and the polled queue disagree, nothing errors. AE submits
