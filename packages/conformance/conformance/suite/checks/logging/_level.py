@@ -70,10 +70,10 @@ def _is_terminal_return_summary(
     """True when a bare log is followed by a return that exits its function.
 
     The log may be the last statement in an ``if`` branch when the enclosing
-    ``if`` is immediately followed by the return. A ``finally: break`` or
-    ``finally: continue`` anywhere between the return and *outermost* (the
-    function's outermost loop) overrides the return and can let a loop repeat
-    the log, so such logs are not terminal summaries.
+    ``if`` is immediately followed by the return. A ``finally: continue``
+    between the return and *outermost* (the function's outermost loop)
+    overrides the return and repeats the log. A ``finally: break`` does too
+    unless the loop it breaks is *outermost*: then no loop is left to repeat.
     """
     parents = {
         child: parent
@@ -97,15 +97,22 @@ def _is_terminal_return_summary(
 
     child: ast.AST = following
     ancestor = parents.get(following)
+    break_pending = False
     while ancestor is not None:
         if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             return False
-        if (
-            isinstance(ancestor, (ast.Try, ast.TryStar))
-            and not any(child is value for value in ancestor.finalbody)
-            and _continues_enclosing_loop(ancestor.finalbody, include_break=True)
+        if isinstance(ancestor, (ast.For, ast.AsyncFor, ast.While)):
+            # A ``finally: break`` exits this loop; an outer loop can re-log.
+            if break_pending and ancestor is not outermost:
+                return False
+            break_pending = False
+        if isinstance(ancestor, (ast.Try, ast.TryStar)) and not any(
+            child is value for value in ancestor.finalbody
         ):
-            return False
+            if _continues_enclosing_loop(ancestor.finalbody):
+                return False
+            if _continues_enclosing_loop(ancestor.finalbody, include_break=True):
+                break_pending = True
         child = ancestor
         ancestor = parents.get(ancestor)
     return True
