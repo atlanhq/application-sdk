@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 
 from .._ast_common._sanitizers import call_uses_sanitizer, is_sanitizer_call
-from ._constants import _BROAD_EXCEPT_TYPES, _OPTIONAL_IMPORT_TYPES
+from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, _OPTIONAL_IMPORT_TYPES
 from ._helpers import (
     _any_logging_in,
     _body_always_raises,
@@ -596,9 +596,13 @@ class SilentSwallowMixin:
         return False
 
     def _helper_logs_parameter_before_return(
-        self, helper: ast.FunctionDef, parameter: str
+        self,
+        helper: ast.FunctionDef,
+        parameter: str,
+        *,
+        call: ast.Call | None = None,
     ) -> bool:
-        """Prove a helper logs its un-rebound input on every path before return."""
+        """Prove a helper logs its input or traceback on every path before return."""
         if any(
             isinstance(node, (ast.Yield, ast.YieldFrom))
             for node in _iter_shallow(helper)
@@ -607,10 +611,160 @@ class SilentSwallowMixin:
             for statement in helper.body
         ):
             return False
+
+        def _is_log_level(value: ast.expr | None) -> bool:
+            return (
+                isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+                and value.value in _LOG_METHODS
+            )
+
+        def _parameter_default(name: str) -> ast.expr | None:
+            positional = [*helper.args.posonlyargs, *helper.args.args]
+            offset = len(positional) - len(helper.args.defaults)
+            for index, formal in enumerate(positional):
+                if formal.arg == name and index >= offset:
+                    return helper.args.defaults[index - offset]
+            for formal, default in zip(
+                helper.args.kwonlyargs, helper.args.kw_defaults, strict=True
+            ):
+                if formal.arg == name:
+                    return default
+            return None
+
+        def _selector_is_log_level(selector: ast.expr) -> bool:
+            if _is_log_level(selector):
+                return True
+            if not isinstance(selector, ast.Name) or call is None:
+                return False
+            selected = _call_argument_for_parameter(call, helper, selector.id)
+            if selected is not None:
+                return _is_log_level(selected)
+            positional = [*helper.args.posonlyargs, *helper.args.args]
+            explicitly_bound = selector.id in {
+                formal.arg for formal in positional[: len(call.args)]
+            } or any(keyword.arg == selector.id for keyword in call.keywords)
+            if explicitly_bound:
+                return False
+            return _is_log_level(_parameter_default(selector.id))
+
+        # The alias must be a top-level, unconditional binding to a logger's
+        # recognized fallback method. It cannot be rebound before invocation.
+        logger_alias_lines: dict[str, int] = {}
+        formal_names = {
+            formal.arg
+            for formal in [
+                *helper.args.posonlyargs,
+                *helper.args.args,
+                *helper.args.kwonlyargs,
+            ]
+        }
+        for statement in helper.body:
+            if isinstance(statement, ast.Assign):
+                if len(statement.targets) != 1 or not isinstance(
+                    statement.targets[0], ast.Name
+                ):
+                    continue
+                target = statement.targets[0]
+                expression = statement.value
+            elif isinstance(statement, ast.AnnAssign):
+                if (
+                    not isinstance(statement.target, ast.Name)
+                    or statement.value is None
+                ):
+                    continue
+                target = statement.target
+                expression = statement.value
+            else:
+                continue
+            if not (
+                isinstance(expression, ast.Call)
+                and isinstance(expression.func, ast.Name)
+                and expression.func.id == "getattr"
+                and len(expression.args) == 3
+                and not expression.keywords
+                and not any(isinstance(arg, ast.Starred) for arg in expression.args)
+            ):
+                continue
+            receiver, selector, fallback = expression.args
+            if not (
+                isinstance(receiver, ast.Name)
+                and receiver.id not in formal_names
+                and isinstance(fallback, ast.Attribute)
+                and isinstance(fallback.value, ast.Name)
+                and fallback.value.id == receiver.id
+                and fallback.attr in _LOG_METHODS
+                and _selector_is_log_level(selector)
+                and not any(
+                    self._statement_rebinds_name(item, receiver.id)
+                    for item in helper.body
+                )
+            ):
+                continue
+            alias = target.id
+            writes = [
+                node
+                for node in ast.walk(helper)
+                if isinstance(node, ast.Name)
+                and node.id == alias
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ]
+            if len(writes) != 1 or writes[0] is not target:
+                continue
+            if any(
+                self._statement_rebinds_name(item, alias)
+                for item in helper.body
+                if item is not statement
+            ):
+                continue
+            logger_alias_lines[alias] = statement.lineno
+
+        def _is_traceback_selector(value: ast.expr, name: str) -> bool:
+            return (
+                isinstance(value, ast.UnaryOp)
+                and isinstance(value.op, ast.Not)
+                and isinstance(value.operand, ast.Call)
+                and isinstance(value.operand.func, ast.Name)
+                and value.operand.func.id == "isinstance"
+                and len(value.operand.args) == 2
+                and not value.operand.keywords
+                and isinstance(value.operand.args[0], ast.Name)
+                and value.operand.args[0].id == name
+                and isinstance(value.operand.args[0].ctx, ast.Load)
+            )
+
+        def _called_logger_alias(statement: ast.stmt) -> ast.Call | None:
+            if not isinstance(statement, ast.Expr):
+                return None
+            expression = statement.value
+            if isinstance(expression, ast.Await):
+                expression = expression.value
+            if not (
+                isinstance(expression, ast.Call)
+                and isinstance(expression.func, ast.Name)
+                and expression.func.id in logger_alias_lines
+                and logger_alias_lines[expression.func.id] < statement.lineno
+            ):
+                return None
+            return expression
+
+        def _loop_setup_is_safe(statements: list[ast.stmt]) -> bool:
+            for statement in statements:
+                if isinstance(
+                    statement,
+                    (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Expr, ast.Pass),
+                ):
+                    continue
+                if isinstance(statement, ast.If):
+                    if not _loop_setup_is_safe(
+                        statement.body
+                    ) or not _loop_setup_is_safe(statement.orelse):
+                        return False
+                    continue
+                return False
+            return True
+
         opaque_control_flow = (
-            ast.For,
-            ast.AsyncFor,
-            ast.While,
             ast.Try,
             ast.TryStar,
             ast.With,
@@ -652,21 +806,37 @@ class SilentSwallowMixin:
                     exited.update(active)
                     active.clear()
                     continue
+                if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+                    if not _loop_setup_is_safe(
+                        statement.body
+                    ) or not _loop_setup_is_safe(statement.orelse):
+                        return None
+                    continue
+                logged_call = None
                 if _is_log_call_stmt(statement):
-                    call = statement.value
-                    if isinstance(call, ast.Await):
-                        call = call.value
-                    if isinstance(call, ast.Call) and any(
+                    logged_call = statement.value
+                    if isinstance(logged_call, ast.Await):
+                        logged_call = logged_call.value
+                else:
+                    logged_call = _called_logger_alias(statement)
+                if isinstance(logged_call, ast.Call):
+                    carries_exception = any(
                         self._expression_represents_parameter(value, parameter)
                         for value in [
-                            *call.args,
-                            *(keyword.value for keyword in call.keywords),
+                            *logged_call.args,
+                            *(keyword.value for keyword in logged_call.keywords),
                         ]
-                    ):
+                    ) or any(
+                        keyword.arg == "exc_info"
+                        and _is_traceback_selector(keyword.value, parameter)
+                        for keyword in logged_call.keywords
+                    )
+                    if carries_exception:
                         active = {True}
                     continue
-                # Loops, try/with blocks, match, and jumps cannot prove that all
-                # paths log the input before returning.
+                # Try/with blocks, match, and jumps cannot prove that all paths
+                # log the input before returning. Only simple loop setup without
+                # a function-exiting or bypassing statement is accepted above.
                 if isinstance(statement, opaque_control_flow):
                     return None
                 # Straight-line setup (assignments, metrics calls) neither logs
@@ -721,7 +891,6 @@ class SilentSwallowMixin:
                     helper is None
                     or helper.decorator_list
                     or helper.args.vararg is not None
-                    or helper.args.kwarg is not None
                 ):
                     continue
                 parameters = [
@@ -735,7 +904,7 @@ class SilentSwallowMixin:
                         isinstance(passed, ast.Name)
                         and passed.id == handler.name
                         and self._helper_logs_parameter_before_return(
-                            helper, parameter.arg
+                            helper, parameter.arg, call=call
                         )
                     ):
                         return True
