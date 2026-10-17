@@ -344,15 +344,43 @@ class _DeepSizer:
         return sized * total // count if count else 0
 
 
+def _is_categorical(dtype: Any) -> bool:
+    return getattr(dtype, "name", None) == "category"
+
+
 def _frame_size(batch: Any, memory_usage: Callable[..., Any]) -> int:
-    """Deep byte size of a pandas DataFrame/Series from a strided row sample."""
+    """Deep byte size of a pandas DataFrame/Series from a strided row sample.
+
+    Row-proportional memory is measured on the sample and scaled to the full
+    row count. A categorical column is the exception: a sample keeps the whole
+    category pool, a fixed cost that scaling would multiply by
+    ``rows / len(sample)``. Categorical columns are therefore sized whole —
+    integer codes plus the pool, O(categories) rather than O(rows).
+    """
     rows = len(batch)
-    if rows > _SIZE_SAMPLE_ROWS:
+    if rows <= _SIZE_SAMPLE_ROWS:
+        usage = memory_usage(deep=True)
+        return int(getattr(usage, "sum", lambda: usage)())
+
+    dtypes = getattr(batch, "dtypes", None)
+    if dtypes is None or not hasattr(dtypes, "items"):  # a Series
+        if _is_categorical(batch.dtype):
+            return int(memory_usage(deep=True))
         sample = batch.iloc[:: rows // _SIZE_SAMPLE_ROWS]
-        usage = sample.memory_usage(deep=True)
-        return int(getattr(usage, "sum", lambda: usage)()) * rows // len(sample)
-    usage = memory_usage(deep=True)
-    return int(getattr(usage, "sum", lambda: usage)())
+        return int(sample.memory_usage(deep=True)) * rows // len(sample)
+
+    sample = batch.iloc[:: rows // _SIZE_SAMPLE_ROWS]
+    scale = rows / len(sample)
+    # Index first, then one entry per column in order — positional, so
+    # duplicate column names cannot mis-attribute a column's bytes.
+    sampled = list(sample.memory_usage(index=True, deep=True))
+    total = int(sampled[0] * scale)
+    for position, (_, dtype) in enumerate(dtypes.items()):
+        if _is_categorical(dtype):
+            total += int(batch.iloc[:, position].memory_usage(index=False, deep=True))
+        else:
+            total += int(sampled[position + 1] * scale)
+    return total
 
 
 def _default_size_estimator(batch: Any) -> int:

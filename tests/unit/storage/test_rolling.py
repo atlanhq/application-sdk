@@ -705,6 +705,27 @@ class TestDefaultSizeEstimator:
         # +1: a dict pair sizes its value even when its key spent the last node.
         assert calls <= _SIZE_MAX_NODES + 1
 
+    @pytest.mark.parametrize("shape", ["frame", "series"])
+    def test_categorical_pool_is_not_scaled_by_row_count(self, shape: str) -> None:
+        """A row sample keeps the whole category pool, a fixed cost.
+
+        Scaling it by ``rows / len(sample)`` over-counted a 100k-row,
+        20k-category column ~250x, so ``SizePolicy`` rolled every append.
+        """
+        pd = pytest.importorskip("pandas")
+        rows = 100_000
+        cats = [f"category-value-{i:06d}" for i in range(20_000)]
+        df = pd.DataFrame(
+            {
+                "id": range(rows),
+                "c": pd.Categorical([cats[i % len(cats)] for i in range(rows)]),
+            }
+        )
+        batch = df if shape == "frame" else df["c"]
+        full = int(pd.Series(batch.memory_usage(deep=True)).sum())
+
+        assert abs(_default_size_estimator(batch) - full) / full < 0.05
+
     def test_dataframe_estimate_samples_rows(self) -> None:
         """``memory_usage(deep=True)`` walks every object cell — sample it.
 
