@@ -19,6 +19,7 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.infrastructure._dapr.client import (
     classify_secret_fetch_error,
+    dapr_error_detail,
     is_dapr_transport_unavailable,
 )
 from application_sdk.infrastructure._dapr.http import (
@@ -52,6 +53,23 @@ _MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+
+#: Dapr binding error messages that mean the requested key is absent.
+#: Azure Blob's binding answers a GET for a missing blob with HTTP 500 and
+#: "blob not found" (or the storage error code ``BlobNotFound``); S3-backed
+#: bindings surface ``NoSuchKey``. A 5xx alone cannot tell these apart from a
+#: sidecar that is still starting, so the body decides.
+_MISSING_OBJECT_RE = re.compile(
+    r"blob not found|BlobNotFound|NoSuchKey|specified (?:blob|key) does not exist",
+    re.IGNORECASE,
+)
+
+
+def _is_missing_object_error(exc: BaseException) -> bool:
+    """True if *exc* is an object-store binding saying the key does not exist."""
+    detail = dapr_error_detail(exc) if isinstance(exc, Exception) else None
+    return detail is not None and _MISSING_OBJECT_RE.search(detail) is not None
 
 
 class _CredentialSource(str, Enum):
@@ -229,6 +247,11 @@ class DaprCredentialVault:
         race here would be indistinguishable from "no config" and get
         collapsed into a non-retryable ``CredentialNotFoundError``.
 
+        A binding 5xx whose Dapr error body says the key does not exist (Azure
+        Blob's "blob not found", S3's ``NoSuchKey``) is the missing-config
+        answer, not an outage, and fails at once with "No credential config
+        found" instead of being retried.
+
         Raises:
             CredentialVaultError: If the GUID contains unsafe characters or no
                 config is found in the upstream store.
@@ -280,6 +303,11 @@ class DaprCredentialVault:
             try:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
             except BindingError as exc:
+                # Treated as the "no config" answer below, not a cold start:
+                # retrying a key that does not exist only delays the failure
+                # and relabels it as an unreachable sidecar.
+                if exc.cause is not None and _is_missing_object_error(exc.cause):
+                    return BindingResponse(data=None, metadata={})
                 if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
                     # str() of a dropped connection (e.g. ReadError) is empty,
                     # so name the cause by type as well.
