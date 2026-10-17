@@ -12,7 +12,8 @@ contract/app.pkl (developer writes)
     ├─▶ app/generated/{name}.json         — Workflow config (setup form)
     ├─▶ app/generated/atlan-connectors-{name}.json  — Credential config
     ├─▶ app/generated/manifest.json       — AE DAG
-    └─▶ app/generated/_input.py           — Python AppInputContract
+    ├─▶ app/generated/_input.py           — Python AppInputContract
+    └─▶ app/generated/release_schedule.yaml — Release-train slots (only when `releaseSchedule` is set)
 ```
 
 **Consumption flow:**
@@ -699,6 +700,57 @@ form.
 
 See [`examples/artifact-schemas/`](../examples/artifact-schemas/) for a full worked
 example. Not available on the legacy `NativeApp.pkl`.
+
+### Release Schedule (release train)
+
+The weekly release-train slots a `semver` app wants (FND-3529, FND-4039). Rendered to its
+own file, `app/generated/release_schedule.yaml`, so a release-train scheduler can read it
+without parsing `atlan.yaml`.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `releaseSchedule` | `Listing<ReleaseSlot>` | empty | One to four weekly slots. Empty means no schedule and no file. Not nullable — leave it unset rather than assigning `null`. |
+
+`ReleaseSlot`:
+
+| Property | Type | Description |
+|---|---|---|
+| `day` | `"mon"\|"tue"\|"wed"\|"thu"` | Weekday the release goes out. Monday to Thursday only. |
+| `slot` | `"09:00"\|"12:00"\|"15:00"\|"18:00"\|"21:00"` | Time of day, IST (fixed UTC+05:30, no DST). |
+
+```pkl
+metadata {
+  ["release_model"] = "semver"
+}
+releaseSchedule {
+  new { day = "mon"; slot = "12:00" }
+  new { day = "wed"; slot = "18:00" }
+}
+```
+
+**When it is emitted.** Only when `releaseSchedule` is non-empty. A contract that never
+sets it generates byte-identical output to before the property existed. `atlan.yaml`,
+`manifest.json` and the other generated files are unchanged either way. In a
+multi-entrypoint bundle the file lands at the top of `app/generated/`, not under an
+entrypoint folder.
+
+**Validation.** Each rule fails `pkl eval` with a message naming the problem:
+
+- A `day` outside `mon`–`thu` or a `slot` outside the five times is a type error.
+- More than four entries, or the same `day` twice, is refused. Releases are one per day.
+- The app's release model must be `semver` (the deprecated alias `versioned` is
+  accepted). It is read from the merged `atlan.yaml` data, which is `metadata` plus
+  `atlanYamlOverrides`, the same value the publish step reads. A missing
+  `release_model` means `cd`, and a `cd` app publishes on every merge, so it has no
+  release to schedule. That case is refused too. This applies even when
+  `emitAtlanYaml = false`.
+- On a bundle, declare it once on the root, where `metadata` lives. An entrypoint
+  contract that declares it is refused, not relocated under `app/generated/<entrypoint>/`.
+
+Entries render in declaration order. See
+[`examples/release-schedule/`](../examples/release-schedule/) and
+[Release Schedule output](#release-schedule-appgeneratedrelease_scheduleyaml). Not
+available on the legacy `NativeApp.pkl`.
 
 ### E2E Test Harness
 
@@ -3926,6 +3978,29 @@ multi-entrypoint app each entrypoint's copy lands at
 
 See [Artifact Schemas (data hand-off declarations)](#artifact-schemas-data-hand-off-declarations)
 for the type vocabulary and the per-format mapping.
+
+### Release Schedule (`app/generated/release_schedule.yaml`)
+
+Emitted **only** when the contract declares a non-empty `releaseSchedule`. One file per
+app, at the top of `app/generated/`, in both single- and multi-entrypoint mode.
+
+```yaml
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+schema_version: 1
+timezone: IST   # fixed UTC+05:30
+releases:
+  - day: mon
+    slot: "12:00"
+```
+
+- `schema_version` — envelope version of the file shape. Bumped only on a breaking
+  structural change.
+- `timezone` — always `IST`; every `slot` is IST wall-clock time.
+- `releases` — one entry per declared `ReleaseSlot`, in declaration order. `slot` is
+  always quoted, because an unquoted `12:00` is a base-60 integer in YAML 1.1.
+
+See [Release Schedule (release train)](#release-schedule-release-train) for the rules.
 
 ---
 

@@ -1,0 +1,165 @@
+// Tests for `releaseSchedule` — per-app release-train slots (FND-4039, FND-3529).
+//
+// The load-bearing behaviours asserted here:
+//   - an app that declares nothing emits NO `release_schedule.yaml`, so the
+//     property is opt-in and existing consumer repos see no spurious diff.
+//   - a declared schedule renders byte-exactly: banner, schema_version, the fixed
+//     IST timezone, and each slot quoted (unquoted `12:00` is base-60 in YAML 1.1).
+//   - the file is the only output that changes; atlan.yaml is untouched.
+//   - malformed or meaningless schedules fail `pkl eval` by name: a duplicate day,
+//     more than four entries, or an app whose release model is not semver.
+//   - a bundle declares it once on the root; an entrypoint-level declaration is
+//     refused rather than relocated under `app/generated/<entrypoint>/`.
+
+amends "pkl:test"
+
+import "../examples/release-schedule/app.pkl" as releaseScheduleApp
+import "../examples/minimal/app.pkl" as minimalApp
+import "../examples/bundle/app.pkl" as bundleApp
+import "../examples/bundle/miner.pkl" as Miner
+import "../src/App.pkl" as App
+
+local schedulePath = "app/generated/release_schedule.yaml"
+
+local function semverApp(model: String?) = (minimalApp) {
+  name = "release-schedule-test"
+  metadata {
+    when (model != null) { ["release_model"] = model }
+  }
+  releaseSchedule {
+    new { day = "tue"; slot = "09:00" }
+  }
+}
+
+local duplicateDayApp = (releaseScheduleApp) {
+  releaseSchedule {
+    new { day = "mon"; slot = "21:00" }
+  }
+}
+
+local tooManyApp = (minimalApp) {
+  metadata { ["release_model"] = "semver" }
+  releaseSchedule {
+    new { day = "mon"; slot = "09:00" }
+    new { day = "tue"; slot = "09:00" }
+    new { day = "wed"; slot = "09:00" }
+    new { day = "thu"; slot = "09:00" }
+    new { day = "mon"; slot = "12:00" }
+  }
+}
+
+// semver supplied through atlanYamlOverrides rather than metadata — the merged
+// atlan.yaml data is what the publish step reads, so it must count.
+local overrideSemverApp = (minimalApp) {
+  atlanYamlOverrides { ["release_model"] = "semver" }
+  releaseSchedule {
+    new { day = "thu"; slot = "21:00" }
+  }
+}
+
+local bundleRootApp = (bundleApp) {
+  metadata { ["release_model"] = "semver" }
+  releaseSchedule {
+    new { day = "wed"; slot = "15:00" }
+  }
+}
+
+local bundleEntrypointApp = (bundleApp) {
+  metadata { ["release_model"] = "semver" }
+  entrypoints {
+    new App.Entrypoint {
+      name = "scheduled-miner"
+      contract = (Miner) {
+        releaseSchedule {
+          new { day = "mon"; slot = "12:00" }
+        }
+      }
+    }
+  }
+}
+
+facts {
+  ["An app with no releaseSchedule emits no release_schedule.yaml"] {
+    !minimalApp.output.files.containsKey(schedulePath)
+    !bundleApp.output.files.containsKey(schedulePath)
+  }
+
+  ["A declared schedule renders byte-exactly in declaration order"] {
+    releaseScheduleApp.output.files[schedulePath].text ==
+      """
+      # AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+      # To regenerate: pkl eval -m . contract/app.pkl
+      schema_version: 1
+      timezone: IST   # fixed UTC+05:30
+      releases:
+        - day: mon
+          slot: "12:00"
+        - day: wed
+          slot: "18:00"
+
+      """
+  }
+
+  ["A single-entry schedule renders one release"] {
+    semverApp("semver").output.files[schedulePath].text.endsWith(
+      "releases:\n  - day: tue\n    slot: \"09:00\"\n"
+    )
+  }
+
+  ["The deprecated 'versioned' alias counts as semver"] {
+    semverApp("versioned").output.files.containsKey(schedulePath)
+  }
+
+  ["release_model declared via atlanYamlOverrides counts"] {
+    overrideSemverApp.output.files.containsKey(schedulePath)
+  }
+
+  ["atlan.yaml does not carry the schedule"] {
+    !releaseScheduleApp.output.files["atlan.yaml"].text.contains("releases")
+    !releaseScheduleApp.output.files["atlan.yaml"].text.contains("timezone")
+  }
+
+  ["A duplicate day is refused by name"] {
+    module.catch(() -> duplicateDayApp.output.files)
+      .contains("releaseSchedule declares day(s) mon more than once")
+  }
+
+  ["More than four entries are refused"] {
+    module.catch(() -> tooManyApp.output.files)
+      .contains("releaseSchedule declares 5 entries; at most 4 are allowed")
+  }
+
+  ["An explicit cd app is refused"] {
+    module.catch(() -> semverApp("cd").output.files)
+      .contains("releaseSchedule is only valid for semver apps, but this app's release_model is 'cd'")
+  }
+
+  ["An app with no release_model (defaults to cd) is refused"] {
+    module.catch(() -> semverApp(null).output.files)
+      .contains("releaseSchedule is only valid for semver apps, but this app's release_model is 'cd'")
+  }
+
+  ["A day outside mon-thu is a type error"] {
+    module.catch(() -> (minimalApp) {
+      metadata { ["release_model"] = "semver" }
+      releaseSchedule { new { day = "fri"; slot = "12:00" } }
+    }.output.files[schedulePath].text).contains("fri")
+  }
+
+  ["A slot outside the five fixed times is a type error"] {
+    module.catch(() -> (minimalApp) {
+      metadata { ["release_model"] = "semver" }
+      releaseSchedule { new { day = "mon"; slot = "10:00" } }
+    }.output.files[schedulePath].text).contains("10:00")
+  }
+
+  ["A bundle root schedule emits at the top of app/generated"] {
+    bundleRootApp.output.files.containsKey(schedulePath)
+    !bundleRootApp.output.files.keys.any((k) -> k.endsWith("/release_schedule.yaml") && k != schedulePath)
+  }
+
+  ["An entrypoint-level schedule is refused by name"] {
+    module.catch(() -> bundleEntrypointApp.output.files)
+      .contains("releaseSchedule is declared on entrypoint contract(s) scheduled-miner")
+  }
+}

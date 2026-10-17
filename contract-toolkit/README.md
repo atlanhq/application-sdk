@@ -110,6 +110,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/scheduled/`](examples/scheduled/) — cron background job via `schedules`; renders `triggers.schedules` into `manifest.json` (multiple schedules, non-UTC timezone, a `PAUSED` one). See [Schedules](docs/reference.md#schedules-background-jobs).
 - [`examples/streaming/`](examples/streaming/) — streaming dispatch via `streaming.enabled`: AE starts one short run per Kafka micro-batch and hands it the batch (the generated input model reads it from `batch_key`), instead of a per-batch run that reads the Iceberg events table. Two streaming triggers and `streamingWorkflowType` on the entrypoint. Its own app because a streaming entrypoint cannot also carry schedules or batch triggers — one extract node cannot serve both shells. See [Streaming Dispatch](docs/reference.md#streaming-dispatch-on-event-triggers).
 - [`examples/artifact-schemas/`](examples/artifact-schemas/) — data hand-off declarations via `artifactSchemas`; renders `app/generated/artifact_schemas.json` (parquet + NDJSON, nested paths, arrays of structs via the `[]` element step, an input artifact). See [Artifact Schemas](docs/reference.md#artifact-schemas-data-hand-off-declarations).
+- [`examples/release-schedule/`](examples/release-schedule/) — per-app release-train slots via `releaseSchedule` on a `semver` app; renders `app/generated/release_schedule.yaml`. See [Release Schedule](docs/reference.md#release-schedule-release-train).
 
 ## What Gets Generated
 
@@ -218,6 +219,41 @@ workflow config and manifest, this file does not depend on `uiConfig`. Multi-ent
 apps declare it per entrypoint and each copy lands under
 `app/generated/{entrypoint}/`. See
 [`docs/reference.md`](docs/reference.md#artifact-schemas-data-hand-off-declarations).
+
+### Release Schedule (`app/generated/release_schedule.yaml`)
+
+The weekly release-train slots a `semver` app wants (FND-3529): one to four weekdays
+(`mon`–`thu`, each at most once), each with a slot of `09:00`, `12:00`, `15:00`,
+`18:00` or `21:00` in IST (fixed UTC+05:30). Declared with `releaseSchedule`:
+
+```pkl
+metadata {
+  ["release_model"] = "semver"
+}
+releaseSchedule {
+  new { day = "mon"; slot = "12:00" }
+}
+```
+
+which renders:
+
+```yaml
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+schema_version: 1
+timezone: IST   # fixed UTC+05:30
+releases:
+  - day: mon
+    slot: "12:00"
+```
+
+**Opt-in and emitted only when declared** — an app with no `releaseSchedule` generates
+byte-identical output, and `atlan.yaml` never carries the schedule. Generation fails, with
+a message naming the problem, on a duplicate day, more than four entries, or an app
+whose `release_model` (read from `metadata` + `atlanYamlOverrides`, missing = `cd`) is not
+`semver` (the deprecated alias `versioned` is accepted). A bundle declares it once on the
+root; an entrypoint-level declaration is refused. See
+[`docs/reference.md`](docs/reference.md#release-schedule-release-train).
 
 ## Modules
 

@@ -1,0 +1,18 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: release-schedule
+display_name: Release Schedule Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: release-schedule
+  display_name: Release Schedule Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+  type: connector
+  package_id: '@atlan/release-schedule'
+  marketplace_card: true
+release_model: semver
