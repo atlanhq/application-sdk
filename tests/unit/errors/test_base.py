@@ -714,3 +714,100 @@ def test_safe_traceback_redacts_azure_connection_string() -> None:
         out = safe_traceback(exc)
     assert "FAKEsasKEY0123" not in out
     assert "SharedAccessKeyName=ExamplePolicy" in out
+
+
+# Synthetic token-shaped values: no real credential material.
+_FAKE_JWT = "eyJhbGciOiJGQUtFIn0.eyJzdWIiOiJGQUtFIn0.FAKEsig0123"
+
+
+def test_redact_secrets_redacts_authorization_bearer_header() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(f"request failed; headers: Authorization: Bearer {_FAKE_JWT}")
+    assert _FAKE_JWT not in out and "FAKEsig0123" not in out
+    assert "Authorization: Bearer ***" in out
+
+
+def test_redact_secrets_redacts_authorization_basic_header() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("Proxy-Authorization: Basic RkFLRXVzZXI6RkFLRXB3")
+    assert out == "Proxy-Authorization: Basic ***"
+
+
+def test_redact_secrets_redacts_other_authorization_schemes() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("authorization: SharedKey exampleacct:FAKEsharedKEY789=")
+    assert "FAKEsharedKEY789" not in out
+    assert out == "authorization: SharedKey ***"
+
+
+def test_redact_secrets_redacts_authorization_in_a_rendered_header_dict() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(f"{{'Authorization': 'Bearer {_FAKE_JWT}', 'Accept': 'x'}}")
+    assert "FAKEsig0123" not in out
+    assert "'Authorization': 'Bearer ***'" in out
+    assert "'Accept': 'x'" in out
+
+
+def test_redact_secrets_redacts_a_bare_bearer_token() -> None:
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(f"token refresh sent Bearer {_FAKE_JWT} and got 401")
+    assert "FAKEsig0123" not in out
+    assert "Bearer *** and got 401" in out
+
+
+def test_redact_secrets_leaves_bearer_and_authorization_prose_alone() -> None:
+    from application_sdk.errors import redact_secrets
+
+    for benign in (
+        "the bearer of bad news",
+        "Bearer authentication failed for the service principal",
+        "Bearer token expired",
+        "Authorization failed: check the role grants",
+        "authorization header missing",
+    ):
+        assert redact_secrets(benign) == benign
+
+
+def test_redact_secrets_redacts_percent_encoded_secret_params() -> None:
+    """A URL-encoded Authorization value encodes ``=`` as ``%3D``, so the
+    plain ``sig=`` pattern never matches it."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(
+        f"Authorization=type%3Daad%26ver%3D1.0%26sig%3D{_FAKE_JWT}%2B%3D%3D next"
+    )
+    assert "FAKEsig0123" not in out and "%2B" not in out
+    assert out == "Authorization=type%3Daad%26ver%3D1.0%26sig%3D*** next"
+
+    out = redact_secrets("dsn=user%3Dsvc%26password%3dFAKEpw%2540x%26db%3Dmeta")
+    assert "FAKEpw" not in out
+    assert "password%3d***%26db%3Dmeta" in out
+    assert "user%3Dsvc" in out
+
+
+def test_redact_secrets_leaves_percent_encoded_non_secret_params_alone() -> None:
+    from application_sdk.errors import redact_secrets
+
+    for benign in (
+        "q=type%3Daad%26ver%3D1.0",
+        "design%3Dmodern%26next_token%3Dabc123",
+    ):
+        assert redact_secrets(benign) == benign
+
+
+def test_sanitize_cause_repr_redacts_authorization_header_and_encoded_sig() -> None:
+    from application_sdk.errors import sanitize_cause_repr
+
+    out = sanitize_cause_repr(
+        RuntimeError(
+            f"401 from gateway, Authorization: Bearer {_FAKE_JWT}; "
+            f"retry with Authorization=type%3Daad%26ver%3D1.0%26sig%3D{_FAKE_JWT}"
+        )
+    )
+    assert "FAKEsig0123" not in out
+    assert "Bearer ***" in out and "sig%3D***" in out
