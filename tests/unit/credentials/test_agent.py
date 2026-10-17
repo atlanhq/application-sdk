@@ -28,7 +28,6 @@ from application_sdk.credentials.agent import (
     resolve_agent_json,
 )
 from application_sdk.credentials.errors import (
-    CredentialError,
     CredentialNotFoundError,
     CredentialParseError,
     CredentialRoutingError,
@@ -458,12 +457,18 @@ class TestResolveAgentJsonErrorPaths:
         with pytest.raises(CredentialNotFoundError):
             await resolve_agent_json(agent_json, store)
 
-    async def test_generic_store_failure_wrapped_in_credential_error(self) -> None:
+    async def test_generic_store_failure_raised_as_store_error_not_auth(
+        self,
+    ) -> None:
         """A SecretStore backend that raises a plain SecretStoreError directly
         (not via classify_secret_fetch_error's not-found/cold-start typing)
         is a genuine, undifferentiated failure and must escalate — this
         module stays backend-opaque and never re-interprets SecretStoreError
-        itself; only SecretNotFoundError means "absent". Dapr's own
+        itself; only SecretNotFoundError means "absent".
+
+        It escalates as a ``SecretStoreError`` (DEPENDENCY_UNAVAILABLE), not a
+        ``CredentialError``: the latter is an ``AuthError``, which counted every
+        failing vault as an AUTH failure blamed on the user (FND-4077). Dapr's own
         genuinely-missing-key case is classified as SecretNotFoundError at
         the source (see test_classify_secret_fetch_error_missing_key_is_not_found
         in tests/unit/infrastructure/test_dapr_wrappers.py), not here.
@@ -479,8 +484,43 @@ class TestResolveAgentJsonErrorPaths:
         )
         # The clean, customer-facing message is raised; the raw backend detail
         # ("dapr outage") is logged (scrubbed), not embedded in the message.
-        with pytest.raises(CredentialError, match="Secret store is not reachable"):
+        with pytest.raises(SecretStoreError, match="Secret store failed") as exc_info:
             await resolve_agent_json(agent_json, FlakyStore())  # type: ignore[arg-type]
+
+        from application_sdk.errors import AuthError, FailureCategory
+
+        assert not isinstance(exc_info.value, AuthError)
+        assert exc_info.value.category is FailureCategory.DEPENDENCY_UNAVAILABLE
+        assert "dapr outage" not in str(exc_info.value)
+        assert exc_info.value.cause is None
+        assert exc_info.value.__cause__ is None
+
+    async def test_throttled_bundle_fetch_stays_retryable(self) -> None:
+        """The retry hint survives the clean re-raise, so Temporal retries a
+        throttled vault instead of failing the run."""
+
+        class ThrottledStore:
+            async def get(self, name: str) -> str:
+                raise SecretStoreError(
+                    "ThrottlingException: Rate exceeded",
+                    secret_name=name,
+                    retryable=True,
+                )
+
+        class RejectingStore:
+            async def get(self, name: str) -> str:
+                raise SecretStoreError("bad binding", secret_name=name, retryable=False)
+
+        agent_json = json.dumps(
+            {"agent-name": "test", "secret-path": "p", "basic.username": "u"}
+        )
+        with pytest.raises(SecretStoreError) as throttled:
+            await resolve_agent_json(agent_json, ThrottledStore())  # type: ignore[arg-type]
+        assert throttled.value.effective_retryable is True
+
+        with pytest.raises(SecretStoreError) as rejected:
+            await resolve_agent_json(agent_json, RejectingStore())  # type: ignore[arg-type]
+        assert rejected.value.effective_retryable is False
 
     async def test_bundle_not_valid_json_raises_parse_error(self) -> None:
         import pytest
@@ -565,9 +605,10 @@ class TestBundleFetchReadinessRetry:
                 calls["n"] += 1
                 raise SecretStoreUnavailableError("p")
 
-        with pytest.raises(CredentialError):
+        with pytest.raises(SecretStoreUnreachableError) as exc_info:
             await resolve_agent_json(self._AGENT_JSON, AlwaysDown())  # type: ignore[arg-type]
         assert calls["n"] == 2  # retried once, then gave up at the deadline
+        assert exc_info.value.attempts == 2
 
     async def test_non_transient_error_fails_fast(self, monkeypatch) -> None:
         # A genuine, non-connection store error (bad auth / binding / path) must
@@ -584,8 +625,9 @@ class TestBundleFetchReadinessRetry:
                 calls["n"] += 1
                 raise SecretStoreError("Failed to get secret: access denied")
 
-        with pytest.raises(CredentialError):
+        with pytest.raises(SecretStoreError) as exc_info:
             await resolve_agent_json(self._AGENT_JSON, BadBinding())  # type: ignore[arg-type]
+        assert not isinstance(exc_info.value, SecretStoreUnavailableError)
         assert calls["n"] == 1  # not retried — not a transient/connection error
 
     async def test_genuine_store_error_fails_fast_regardless_of_message(
@@ -606,8 +648,9 @@ class TestBundleFetchReadinessRetry:
                 calls["n"] += 1
                 raise SecretStoreError("All connection attempts failed")
 
-        with pytest.raises(CredentialError):
+        with pytest.raises(SecretStoreError) as exc_info:
             await resolve_agent_json(self._AGENT_JSON, ConnectionyMessage())  # type: ignore[arg-type]
+        assert not isinstance(exc_info.value, SecretStoreUnavailableError)
         assert (
             calls["n"] == 1
         )  # not retried — type is SecretStoreError, not Unavailable
@@ -641,7 +684,7 @@ class TestBundleFetchReadinessRetry:
 
         # A second resolution that hits an outage must NOT re-enter the 30s
         # retry window — only the short warm ladder (1 call + 2 retries).
-        with pytest.raises(CredentialError):
+        with pytest.raises(SecretStoreUnavailableError):
             await resolve_agent_json(self._AGENT_JSON, ReadyThenDown())  # type: ignore[arg-type]
         assert calls["n"] == 1 + 3
 
@@ -675,7 +718,7 @@ class TestBundleFetchReadinessRetry:
             )
         assert calls["n"] == 1
 
-        with pytest.raises(CredentialError):
+        with pytest.raises(SecretStoreUnavailableError):
             await resolve_agent_json(
                 self._AGENT_JSON,
                 ReadyButMissingThenDown(),  # type: ignore[arg-type]

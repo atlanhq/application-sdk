@@ -53,7 +53,12 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
-from application_sdk.errors import redact_secrets
+from application_sdk.errors import (
+    AppError,
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+    redact_secrets,
+)
 from application_sdk.errors.leaves import DependencyUnavailableError
 from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
@@ -62,7 +67,9 @@ from application_sdk.infrastructure import (
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
+    SecretStoreError,
     SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -115,7 +122,10 @@ async def resolve_agent_credential(
         CredentialParseError: If the fetched bundle isn't valid JSON.
         CredentialNotFoundError: If the secret store does not have
             a bundle at ``secret_path``.
-        CredentialError: For any other secret-store failure.
+        SecretStoreError: For any other secret-store failure, in either
+            mode — a dependency failure, not a credential one. The
+            :class:`SecretStoreUnavailableError` /
+            :class:`SecretStoreUnreachableError` subtypes mark an outage.
 
     Note:
         Resolution mode is selected by the spec:
@@ -196,24 +206,20 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
         )
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
-    except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here at the boundary; a clean-message CredentialError is raised for the caller/UI
-        # The secret store returned an error or is unreachable (distinct from a
-        # missing bundle, handled above). Log the scrubbed underlying cause for
-        # diagnosis, then raise a clean-message CredentialError WITHOUT chaining
-        # the raw exception: Temporal surfaces the *innermost* ApplicationError to
-        # the UI, so a chained httpx error would leak a raw
+    except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here at the boundary; a clean-message SecretStoreError is raised for the caller/UI
+        # The secret store failed or is unreachable (distinct from a missing
+        # bundle, handled above). Log the scrubbed underlying cause for
+        # diagnosis, then raise a clean-message error WITHOUT chaining the raw
+        # exception: Temporal surfaces the *innermost* ApplicationError to the
+        # UI, so a chained httpx error would leak a raw
         # "HTTPStatusError: 500 ... http://localhost:3500/v1.0/secrets/..." string
         # (exactly the unfriendly message seen in preflight). ``from None`` keeps
         # the customer-facing message clean while the log preserves the detail.
         logger.warning(  # conformance: ignore[L009,L004] the raise below drops the raw exception (`from None`), so this scrubbed redact_secrets() dump is the only record of the underlying cause — context the caller does not have; exc_info=True would re-log the unscrubbed traceback
-            "Agent secret-bundle fetch failed — secret store unreachable:\n%s",
+            "Agent secret-bundle fetch failed — secret store error:\n%s",
             redact_secrets("".join(traceback.format_exception(exc))),
         )
-        raise CredentialError(
-            "Secret store is not reachable. Check that your secret store is "
-            "running and reachable, and that the configured secret-path exists.",
-            credential_name=secret_path,
-        ) from None
+        raise _bundle_store_error(secret_path, exc) from None
 
     if isinstance(raw, dict):
         # Some SecretStore backends may return a dict directly; accept it.
@@ -233,6 +239,33 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
             credential_name=secret_path,
         )
     return bundle
+
+
+def _bundle_store_error(secret_path: str, exc: Exception) -> SecretStoreError:
+    """Clean, cause-free secret-store error for a failed bundle fetch.
+
+    A store failure is a dependency failure, not a credential one: raising
+    ``CredentialError`` (an ``AuthError``) here counted every throttled or
+    unreachable vault as an AUTH failure blamed on the user (FND-4077). Keeps
+    the outage subtype (terminal vs transient) and the ``retryable`` hint, so a
+    throttled vault is retried rather than failing the run.
+    """
+    if isinstance(exc, DaprSidecarUnreachableError):
+        return SecretStoreUnreachableError(
+            secret_path,
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        )
+    if isinstance(exc, ColdStartRaceError):
+        return SecretStoreUnavailableError(secret_path)
+    return SecretStoreError(
+        "Secret store failed to return the secret bundle at the configured "
+        "secret-path. Check that your secret store is healthy and that this "
+        "app is allowed to read the secret-path.",
+        secret_name=secret_path,
+        retryable=exc.effective_retryable if isinstance(exc, AppError) else None,
+    )
 
 
 async def _fetch_per_key_bundle(
