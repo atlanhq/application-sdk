@@ -349,3 +349,155 @@ version it deployed — which is the case this change exists to correct. A
 deployment that needs the deployer's value to win should stop baking the file
 (`ATLAN_BUILD_INFO_PATH` pointed at a path that does not exist), not reorder the
 precedence: the file is the only source a single-app SDR customer has.
+
+## Release train scheduler
+
+The central job that releases each semver app at its slot (FND-4036, design
+FND-3529). It complements the **Release train** section (FND-4039), which
+covers how an app declares its release days. This section covers the job that
+acts on them. It does the two human steps of Stage 1: it comments `/gate-check` on the
+bump PR and lets the merge queue merge it.
+
+| | |
+|---|---|
+| Workflow | `.github/workflows/release-train.yml` |
+| Script | `.github/scripts/release_train.py` (tests: `.github/scripts/tests/test_release_train.py`) |
+| Config | `.github/release-train.yaml` — days, slots, caps, scope, exclusions, default schedules. Reviewed like code. |
+| Per-app schedule | `app/generated/release_schedule.yaml` on the app's `main` (generated from `contract/app.pkl`). Until an app has one, `default_schedule` in the config applies. With neither, the app is *not scheduled*: it is tracked but never released. |
+| Identity | The `atlan-app-fleet` App (`FLEET_APP_ID` / `FLEET_APP_PRIVATE_KEY`). The workflow asserts the minted slug. |
+
+### Phases
+
+All times are IST, a fixed UTC+05:30. Releases happen Monday to Thursday only;
+the config rejects `fri`, `sat` and `sun`.
+
+| Phase | Cron (UTC) | IST | Does |
+|---|---|---|---|
+| `sync` | `30 2 * * 1-5` | 08:00 Mon–Fri | Checks eligibility and the schedule. Sets the bump PR title suffix and status comment. Disarms auto-merge the job armed on an earlier day that did not merge. On a release day, posts a new comment that mentions the app's CODEOWNERS: `Releasing today at HH:MM IST. To skip: /release-skip <reason>`. |
+| `slot` | `30 3,6,9,12,15 * * 1-4` | 09/12/15/18/21 Mon–Thu | For each app due by now, runs pre-flight, then comments `/gate-check` (the bare command, nothing else), sets the plain title and arms auto-merge. Also re-gates apps armed this week whose head moved. |
+| `close` | `30 17 * * 4` | 23:00 Thu | Disarms everything still armed, expires this week's skips, and writes the weekly summary to the job summary. |
+
+The current slot comes from the wall clock, not the cron. A scheduled run that
+starts late still works on the slot it falls in. Apps due in an earlier slot
+that a missed run never reached are released by the next run.
+
+**Caps.** At most `per_slot_cap` apps start per slot. Overflow moves to the
+next slot that day with room. At most `per_day_cap` apps start per day. An app
+that does not fit waits for its next scheduled day.
+
+**Pre-flight.** A due app is released only if it passes all of these:
+
+- It is eligible (see below).
+- Its slot is not skipped.
+- Its bump PR exists and is ahead of `main`.
+- Its bump branch is not behind `main`. This is read from the compare API's
+  `behind_by`, never `mergeStateStatus`.
+- The GM canary check passes. This is a stub returning `unknown` until FND-4044.
+
+A branch that is behind is deferred to the next slot, because `/gate-check`
+refuses it. The job dispatches the app's `release.yaml` first if that workflow
+declares `workflow_dispatch`. The bootstrap template does not today, so the
+branch waits for the next merge to `main` to refresh it. The title shows why.
+
+**Auto-merge** is armed with `enablePullRequestAutoMerge`, pinned to the head
+commit that passed pre-flight (`expectedHeadOid`). The merge method follows the
+repository's settings: squash, then merge, then rebase. A merge-queue branch
+merges through the queue. The job only ever disarms auto-merge that its own App
+enabled, never a human's.
+
+**Re-gate.** A push to an armed bump PR moves its head to a commit with no
+`gate-check` verdict, so Release Gate holds it. The next slot comments
+`/gate-check` again. This happens at most `max_regate_per_pr` times a week;
+past that the PR is `Blocked`.
+
+### Eligibility
+
+An app rides the train only if all of these hold. Otherwise its title says
+`Not on the train: <next action>`.
+
+- `release_model` in `atlan.yaml` on `main` is `semver` (or its alias
+  `versioned`). A missing value means `cd`.
+- `.github/scripts/release_gate.py` on `main` reads the `gate-check` status.
+  If it does not, run `bootstrap --resync`.
+- The `main` ruleset requires both `Release Gate` and `tests / Tests Gate`.
+- The app is not listed in the config's `exclude` (system and partner apps).
+
+### What the bump PR shows
+
+The title keeps `Bump version to X` and adds one suffix. The job edits the
+title only when it changes. Each edit is an `edited` event, which
+`commits.yaml` subscribes to; that workflow exempts bump PRs at job level, so
+an edit bills nothing.
+
+| Suffix | Meaning |
+|---|---|
+| `· Next release Mon 26 Oct 12:00 IST` | Planned. |
+| `· Skipped, next release …` | The next slot is skipped. |
+| `· Blocked: <reason>` | Pre-flight or the gate failed; the reason says which. |
+| `· Not on the train: <next action>` | Ineligible or not scheduled. |
+| *(none)* | `/gate-check` requested and auto-merge armed. |
+
+### Skips
+
+Skips are PR comments, never labels:
+
+- `/release-skip <reason>` skips the app's next slot. The reason is required.
+- `/release-resume` cancels a pending skip.
+
+The job reads the PR's comments itself. It honours only commenters with the
+Write, Maintain or Admin role, read from the collaborator-permission API in the
+same way as `pr_test_command.py`. `author_association` is not enough, and bots
+are always ignored. An honoured command gets a 👍. A command must start the
+comment, so a comment that only mentions it, such as the release-day notice,
+is not a command. A skip posted after Thursday's last slot applies to next
+Monday. An app skipped two weeks running is flagged in the weekly summary.
+
+### State: the release record
+
+There is no store outside GitHub. Each bump PR carries one status comment,
+found by `<!-- release-train:status -->` and edited in place. Only a comment
+posted by the job's own App counts, so anyone else posting the marker changes
+nothing. The comment has a human section (schedule, next slot, state, gate,
+commands) and a hidden JSON record:
+
+```
+<!-- release-train:record v1
+{"week": "2026-W44", "repo": "atlanhq/atlan-example-app",
+ "schedule": [{"day": "mon", "slot": "12:00"}], "schedule_source": "declared",
+ "state": "armed", "reason": null,
+ "events": [{"at": "2026-10-26T06:31:04Z", "slot": "2026-10-26T12:00+05:30",
+             "action": "gate_requested", "sha": "<sha>", "by": "release-train"}],
+ "regates": 0, "gm": {"stage": "unknown"},
+ "seen_commands": [], "skip_weeks": []}
+-->
+```
+
+`state` is one of `planned`, `gate_requested`, `armed`, `merged`, `blocked`,
+`skipped` or `not_on_train`. The event actions are:
+
+- `gate_requested`, `armed`, `disarmed`, `regated`, `titled`;
+- `skipped`, `resumed`, `expired`;
+- `deferred`, `notified`, `merged`.
+
+Every event is keyed by `(week, slot, action, sha)`, plus the comment id for a
+command. Re-running a phase does nothing new, and a missed run catches up. In
+the JSON, `<`, `>` and `&` are escaped, so no value can close the HTML comment.
+When a new week starts, the record keeps skips that target the new week or
+later, plus the skip history.
+
+### Safety
+
+- **Dry run by default.** The script makes no write unless `--mode live`. A dry
+  run prints every write it would make and lists them in the job summary.
+- **Live** needs `vars.RELEASE_TRAIN_LIVE == 'true'` and either a scheduled
+  run or a dispatch with `dry_run: false`.
+- **Kill switch.** If `vars.RELEASE_TRAIN_ENABLED` is not `'true'`, the job
+  runs report-only.
+- The workflow computes the mode in a single expression
+  (`test_workflow_mode_expression` pins it); the script does the branching.
+- A dispatch's `repos` can narrow the configured scope but never widen it.
+- Runs are serialised (`concurrency: release-train`, never cancelled).
+
+**Dependencies.** `pr_test_command.py` must honour the fleet App's bare
+`/gate-check` (FND-4037), and `upsert_release_pr.py` must keep the title suffix
+across bump pushes (FND-4038). Until both ship, run the job dry.

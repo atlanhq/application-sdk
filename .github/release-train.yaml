@@ -1,0 +1,24 @@
+# App release train (FND-3529, FND-4036). Read by .github/scripts/release_train.py,
+# run by .github/workflows/release-train.yml. Reviewed like code: a change here
+# changes when apps ship. See docs/standards/release-flow.md#release-train-scheduler.
+schema_version: 1
+timezone: IST            # fixed UTC+05:30
+# Only mon..thu are accepted: nothing ships into a weekend.
+days: [mon, tue, wed, thu]
+# Each slot must be one the workflow's slot cron fires for (09/12/15/18/21 IST).
+slots: ["09:00", "12:00", "15:00", "18:00", "21:00"]
+per_slot_cap: 10
+per_day_cap: 40
+max_regate_per_pr: 2
+# Empty list = every eligible app. Pilot: the three canonical apps.
+scope:
+  - atlanhq/atlan-openapi-app
+  - atlanhq/atlan-mysql-app
+  - atlanhq/atlan-metabase-app
+# Never released by the train (system / partner apps). Tracked as "not on the train".
+exclude: []
+# Used until an app's own app/generated/release_schedule.yaml exists.
+default_schedule:
+  atlanhq/atlan-openapi-app: [{day: mon, slot: "12:00"}]
+  atlanhq/atlan-mysql-app: [{day: mon, slot: "12:00"}]
+  atlanhq/atlan-metabase-app: [{day: mon, slot: "12:00"}]

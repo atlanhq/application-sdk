@@ -1,0 +1,99 @@
+name: Release Train
+
+# Releases each app at its slot (FND-4036, design FND-3529). Every app repo
+# keeps one bump-version PR open; releasing it means commenting `/gate-check`
+# and merging. .github/scripts/release_train.py does that on a schedule, for
+# the apps and slots in .github/release-train.yaml (or each app's own
+# app/generated/release_schedule.yaml). See
+# docs/standards/release-flow.md#release-train-scheduler.
+#
+# Phases (IST = UTC+05:30):
+#   sync   08:00 Mon-Fri  — titles, status comments, release-day notices,
+#                           disarm what an earlier day left armed
+#   slot   09/12/15/18/21 Mon-Thu — /gate-check + auto-merge the apps due now
+#   close  23:00 Thu      — disarm what did not merge, expire skips, summary
+# The crons must match release_train.CRON_PHASES exactly (tested). Each fires
+# once per phase boundary and no more: a slot is a release window, so a slot
+# cron cannot be less frequent than the slots it serves, and the script
+# catches up on a late or missed run from the wall clock.
+#
+# State lives on each bump PR (one status comment, edited in place) — there is
+# no other store and no artifact.
+#
+# Safety:
+#   * vars.RELEASE_TRAIN_ENABLED != 'true' → report-only (the kill switch).
+#   * Live only when vars.RELEASE_TRAIN_LIVE == 'true' AND (a scheduled run OR
+#     a dispatch with dry_run false). Anything else is a dry run that prints
+#     every write it would make. A dispatch's boolean input arrives in
+#     github.event.inputs as the string 'false'; comparing to that string fails
+#     closed if it ever arrives in another shape.
+#   * Writes are made as the atlan-app-fleet App (asserted below), which the
+#     app repos' pr_test_command honours for a bare `/gate-check` (FND-4037).
+#
+# Runner: ubuntu-latest, not ubuntu-slim. This repo is public, so slim saves
+# nothing (docs/standards/ci.md, Runner sizing); a full-fleet run can pass
+# slim's hard 15-minute cap; and the script needs the full image's PyYAML.
+
+on:
+  schedule:
+    - cron: "30 2 * * 1-5"
+    - cron: "30 3,6,9,12,15 * * 1-4"
+    - cron: "30 17 * * 4"
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: "Phase to run. auto = from the cron (a manual auto run is a sync)."
+        type: choice
+        options: [auto, sync, slot, close]
+        default: auto
+      dry_run:
+        description: "Dry run: read everything, print every intended write, perform none."
+        type: boolean
+        default: true
+      repos:
+        description: 'Optional JSON list of "owner/repo" within the configured scope.'
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# One run at a time, queued not cancelled: a cancelled run could leave a PR
+# commented but not armed, and the next run would have to repair it.
+concurrency:
+  group: release-train
+  cancel-in-progress: false
+
+jobs:
+  train:
+    name: Release train
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Mint atlan-app-fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - name: Assert the token is the fleet App
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: python3 .github/scripts/assert_app_token_slug.py atlan-app-fleet
+
+      - name: Run the release train
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          PHASE: ${{ github.event.inputs.phase || 'auto' }}
+          SCHEDULE_CRON: ${{ github.event.schedule }}
+          REPOS: ${{ github.event.inputs.repos }}
+          MODE: >-
+            ${{ vars.RELEASE_TRAIN_ENABLED != 'true' && 'report' || ((vars.RELEASE_TRAIN_LIVE == 'true' && (github.event_name == 'schedule' || github.event.inputs.dry_run == 'false')) && 'live' || 'dry-run') }}
+        run: python3 .github/scripts/release_train.py --phase "$PHASE" --cron "$SCHEDULE_CRON" --repos "$REPOS" --mode "$MODE"
