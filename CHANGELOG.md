@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.50.0 (October 17, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.2...v3.50.0
+
+### Features
+
+- add HTTP status-to-leaf classifiers (#3976) (by @fyzanshaik-atlan in [6cb96a8](https://github.com/atlanhq/application-sdk/commit/6cb96a8))
+
+### Bug Fixes
+
+- flush the sink owner's log buffer on error() from any logger [FND-4074] (#4430) (by @cmgrote in [90b5d72](https://github.com/atlanhq/application-sdk/commit/90b5d72))
+- write console logs from a background thread [FND-4075] (#4434) (by @cmgrote in [b77fcd3](https://github.com/atlanhq/application-sdk/commit/b77fcd3))
+- RollingFileWriter heartbeats reach Temporal, batch sizes are accurate [FND-4076] (#4435) (by @cmgrote in [7cc103f](https://github.com/atlanhq/application-sdk/commit/7cc103f))
+- stop treating every Dapr ERR_SECRET_GET as not-found [FND-4077] (#4439) (by @cmgrote in [9dffd66](https://github.com/atlanhq/application-sdk/commit/9dffd66))
+
+### Chores
+
+- lock file maintenance (#4426) (by @renovate[bot] in [2776e76](https://github.com/atlanhq/application-sdk/commit/2776e76))
+- update atlanhq/application-sdk action to v3.49.2 (#4432) (by @renovate[bot] in [1eb6c7e](https://github.com/atlanhq/application-sdk/commit/1eb6c7e))
+- lock file maintenance (#4433) (by @renovate[bot] in [58b36c0](https://github.com/atlanhq/application-sdk/commit/58b36c0))
+- lock file maintenance (#4438) (by @renovate[bot] in [7182802](https://github.com/atlanhq/application-sdk/commit/7182802))
+
+
 ## v3.49.2 (October 16, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.1...v3.49.2
