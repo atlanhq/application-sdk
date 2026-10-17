@@ -9,7 +9,7 @@ BLOCKING = {"F006", "F007"}
 #: Retired in 0.39.0 and deleted in 0.40.0; the ids are never reused.
 DELETED = {"F017", "F018"}
 PREFLIGHT_IDS = [
-    f"F{number:03}" for number in range(1, 22) if f"F{number:03}" not in DELETED
+    f"F{number:03}" for number in range(1, 21) if f"F{number:03}" not in DELETED
 ]
 
 

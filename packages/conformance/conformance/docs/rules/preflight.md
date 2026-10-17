@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**19 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/unit/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes.
+**18 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/unit/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes.
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -44,7 +44,6 @@ never reused.
 | [F016](#f016) | `PreflightBehaviorContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F020](#f020) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
-| [F021](#f021) | `PreflightFixedLeafInBroadExcept` | `warn` | `app` | `preflight-gate` | — | 0.51.0 |
 
 ---
 
@@ -629,39 +628,5 @@ if the finding it covered is gone or its rule was retired.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f020).
-
----
-
-## F021 — `PreflightFixedLeafInBroadExcept` {#f021}
-
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.51.0
-
-> Classify a broadly caught preflight failure before naming it an auth or permission problem.
-
-**Rationale:** Customer impact: an empty credential, a DNS failure or a source 500 is reported to the
-customer as a missing grant, and the ticket chases source-side permissions that were
-never the problem.
-
-### What correct looks like
-
-- **Compliant example:** atlan-metabase-app app/handler.py — the authenticationCheck probe catches
-  `(InvalidInputError, AuthError)` first and returns that typed error, and only its
-  trailing `except Exception` builds a leaf, `MetabaseSourceUnavailableError`, so a
-  failure it cannot name is never reported as a credential or grant problem.
-- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
-
-A broad `except` in `preflight_check` or a helper it reaches through direct calls
-raises, or puts in a `PreflightCheck` / `PreflightOutput` `error=`, an `AuthError` or
-`AppPermissionDeniedError` subclass with no condition around it and no earlier exit, so
-every failure it catches is reported as a credential or grant problem. Classify it first
-— `application_sdk.errors.classify_http_exception` for httpx failures, or an
-`isinstance` chain — and fall back to a leaf that does not blame the customer
-(`InternalError` when the cause is unknown), or narrow the except clause. The check
-judges the shape, not the guard: a condition around the leaf or an earlier statement
-that can exit, a leaf stored in a name or passed to another function, and callbacks
-produce no finding, so a clean F021 does not prove the classification is right.
-
-[Investigation, remediation and verification
-guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f021).
 
 ---

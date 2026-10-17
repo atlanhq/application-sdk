@@ -444,11 +444,7 @@ def reachable_preflight_sites(reg: Registry):
             continue
         visited.add(key)
         yield src, func
-        params = func.args
-        bound = {
-            arg.arg for arg in [*params.posonlyargs, *params.args, *params.kwonlyargs]
-        }
-        bound.update(arg.arg for arg in (params.vararg, params.kwarg) if arg)
+        bound = {arg.arg for arg in func.args.args}
         bound.update(
             n.id
             for n in iter_function_nodes(func)

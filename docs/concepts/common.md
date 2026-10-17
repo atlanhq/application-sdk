@@ -289,8 +289,7 @@ def preflight_error(exc: Exception) -> AppError:
 
 Validate what you know is a credential problem (an empty or malformed credential) with its
 own typed error before the call that can fail; the fallback is for causes you cannot name,
-and `InternalError` files them against the app rather than the customer (conformance rule
-F021).
+and `InternalError` files them against the app rather than the customer.
 
 ### Catch by shape or by domain
 

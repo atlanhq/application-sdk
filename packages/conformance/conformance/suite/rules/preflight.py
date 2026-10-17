@@ -10,8 +10,7 @@ metadata (F003), the silent metadata/contract drift that no runtime signal
 can catch (F004), and preflight failures logged below the customer's default
 ERROR filter (F005, FND-901).
 
-F006-F020 add the CONNECT-812 contract, lifetime and behavioral rules. F021
-flags a fixed auth or permission leaf built in a broad except (CONNECT-1358).
+F006-F020 add the CONNECT-812 contract, lifetime and behavioral rules.
 
 There is deliberately no preflight rule for a ``PARTIAL`` verdict: it is a
 read of the deprecated ``PreflightStatus.PARTIAL`` member, which B001 already
@@ -725,49 +724,6 @@ _CONTRACT_RULES = (
             "no signal that the stale directive is the cause."
         ),
         help_uri=f"{_HELP_BASE}#f020",
-        remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="docs/preflight-guide.md",
-        ),
-    ),
-    RuleDefinition(
-        id="F021",
-        canonical_reference=(
-            "atlan-metabase-app app/handler.py — the authenticationCheck probe "
-            "catches `(InvalidInputError, AuthError)` first and returns that typed "
-            "error, and only its trailing `except Exception` builds a leaf, "
-            "`MetabaseSourceUnavailableError`, so a failure it cannot name is never "
-            "reported as a credential or grant problem."
-        ),
-        name="PreflightFixedLeafInBroadExcept",
-        scope=RuleScope.APP,
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.51.0",
-        short_description="Classify a broadly caught preflight failure before naming it an auth or permission problem.",
-        full_description=(
-            "A broad ``except`` in ``preflight_check`` or a helper it reaches "
-            "through direct calls raises, or puts in a ``PreflightCheck`` / ``PreflightOutput`` "
-            "``error=``, an ``AuthError`` or ``AppPermissionDeniedError`` subclass "
-            "with no condition around it and no earlier exit, so every failure it "
-            "catches is reported as a credential or grant problem. Classify it "
-            "first — ``application_sdk.errors.classify_http_exception`` for httpx "
-            "failures, or an ``isinstance`` chain — and fall back to a leaf that "
-            "does not blame the customer (``InternalError`` when the cause is "
-            "unknown), or narrow the except clause. The check judges the shape, "
-            "not the guard: a condition around the leaf or an earlier statement "
-            "that can exit, a leaf stored in a name "
-            "or passed to another function, and callbacks produce no finding, so "
-            "a clean F021 does not prove the classification is right."
-        ),
-        rationale=(
-            "Customer impact: an empty credential, a DNS failure or a source 500 is "
-            "reported to the customer as a missing grant, and the ticket chases "
-            "source-side permissions that were never the problem."
-        ),
-        help_uri=f"{_HELP_BASE}#f021",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="docs/preflight-guide.md",
