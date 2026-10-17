@@ -58,9 +58,10 @@ _AUTH_MSG_HINTS = (
     # "TSocket read 0 bytes" and "Bad status: 3" are left out: impalad sends
     # them on a rejected login, but other Thrift servers send them for a dropped
     # connection or a mechanism mismatch, so they are the connector's call.
+    # "Could not start SASL" is left out too: the client raises it before any
+    # credential reaches the server, e.g. when no local SASL mechanism exists.
     "authentication failure",
     "bad sasl result",
-    "could not start sasl",
 )
 
 # Network / DNS / TLS / connection-refused / generic OperationalError without
@@ -70,6 +71,8 @@ _NETWORK_CLASS_HINTS = (
     "connectionrefused",
     "gaierror",
     "sslerror",
+    # ``ssl.SSLCertVerificationError`` — its name does not contain "sslerror".
+    "sslcertverificationerror",
     "oserror",
     "operationalerror",
     "interfaceerror",

@@ -9,6 +9,7 @@ DBAPI error.
 
 from __future__ import annotations
 
+import ssl
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -132,10 +133,21 @@ _CASES: list[tuple[str, Any, type[AppError], FailureCategory]] = [
         FailureCategory.AUTH,
     ),
     (
-        "thrift-could-not-start-sasl",
-        lambda: _thrift_sasl("Could not start SASL: Error in sasl_client_start"),
-        SqlClientAuthFailedError,
-        FailureCategory.AUTH,
+        "ssl-cert-verification",
+        lambda: ssl.SSLCertVerificationError(
+            1, "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+        ),
+        SqlClientSourceUnavailableError,
+        FailureCategory.SOURCE_UNAVAILABLE,
+    ),
+    (
+        "thrift-sasl-no-local-mechanism",
+        lambda: _thrift_sasl(
+            "Could not start SASL: Error in sasl_client_start (-4) "
+            "SASL(-4): no mechanism available"
+        ),
+        SqlClientConnectUnclassifiedError,
+        FailureCategory.INTERNAL,
     ),
     (
         "thrift-tsocket-eof",
