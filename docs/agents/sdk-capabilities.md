@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.48.0
-source-sha:    c997fdd00ed75137f1d70809eace2117031881bb
-source-date:   2026-10-14T16:20:28+01:00
+sdk-version:   3.49.1
+source-sha:    2b2dd154231dff018b1e5c5e1433f46712b3cda7
+source-date:   2026-10-14T11:16:33+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,9 +18,9 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 48 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 56 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -60,6 +60,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `class AppContext(app_name: str, ...)`
 - **Summary:** Execution context passed to Apps during execution.
 - **Defined in:** `application_sdk/app/context.py`
+
+#### `AppContextError`
+
+- **Import:** `from application_sdk.app.base import AppContextError`
+- **Signature:** `class AppContextError(message: str, *, error_code: ErrorCode | None = None)`
+- **Summary:** Raised when App or task context is accessed outside of valid execution scope.
+- **Defined in:** `application_sdk/_context_errors.py`
 
 #### `AppError`
 
@@ -721,6 +728,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Use DuckDB to compare current tables vs previous current-state.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
 
+#### `get_logger`
+
+- **Import:** `from application_sdk.common.logger import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
+- **Defined in:** `application_sdk/_logging.py`
+
 #### `get_persistent_artifacts_path`
 
 - **Import:** `from application_sdk.common.incremental import get_persistent_artifacts_path`
@@ -993,7 +1007,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Import:** `from application_sdk.contracts import MaxItems`
 - **Signature:** `class MaxItems(limit: int)`
 - **Summary:** Constraint marker indicating maximum collection size.
-- **Defined in:** `application_sdk/contracts/types.py`
+- **Defined in:** `application_sdk/contracts/base.py`
 
 #### `Output`
 
@@ -1537,7 +1551,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Import:** `from application_sdk.credentials import parse_credentials_extra`
 - **Signature:** `parse_credentials_extra(credentials: dict[str, Any], *, strict: bool = True)`
 - **Summary:** Decode the ``extra`` field of a credential dict.
-- **Defined in:** `application_sdk/credentials/utils.py`
+- **Defined in:** `application_sdk/credentials/extra.py`
 
 #### `register_credential_type`
 
@@ -7828,7 +7842,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
   - `metadata_template_key: str` `= Field(default='', validation_alias=(AliasChoices('metadata_template_key', 'metadataTemplateKey', 'type')))` — Metadata source routing key for multi-source metadata widgets (e.g.
-  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration.
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig, validation_alias=(AliasChoices('connection_config', 'connectionConfig')))` — Connection configuration.
   - `object_filter: str` `= ''` — Filter pattern (e.g., 'public.*', 'mydb.myschema.*').
   - `include_fields: bool` `= True` — Whether to include field/column details.
   - `max_objects: int` `= 1000` — Maximum number of objects to return.
@@ -7868,7 +7882,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig, validation_alias=(AliasChoices('connection_config', 'connectionConfig')))` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
@@ -7931,7 +7945,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
   - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
-  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig, validation_alias=(AliasChoices('connection_config', 'connectionConfig')))` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
   - `probe_timeout_seconds: int` `= 10` — How long this probe may wait for the source to answer — the app's

@@ -32,6 +32,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Generic, ParamSpec, TypeVar
 
+from application_sdk._logging import get_logger
 from application_sdk._runtime.progress import (
     DEFAULT_MAX_NO_PROGRESS_SECONDS,
     ProgressTracker,
@@ -39,7 +40,6 @@ from application_sdk._runtime.progress import (
     declared_hold_active,
 )
 from application_sdk.errors import InvalidInputValueError
-from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 
 logger = get_logger(__name__)
 
@@ -66,6 +66,25 @@ _BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=min(32, (os.cpu_count() or 1) + 4),
     thread_name_prefix="sdk-blocking-",
 )
+
+# The pool ``run_in_thread`` uses instead of _BLOCKING_EXECUTOR in this context.
+# The consolidated API host serves many apps from one process and gives each its
+# own pool (``handler.asgi``), so one app's stuck blocking calls exhaust only
+# that app's pool. Unset on the worker, which keeps the shared pool.
+_BLOCKING_EXECUTOR_OVERRIDE: contextvars.ContextVar[
+    concurrent.futures.Executor | None
+] = contextvars.ContextVar("_BLOCKING_EXECUTOR_OVERRIDE", default=None)
+
+
+@contextlib.contextmanager
+def blocking_executor(executor: concurrent.futures.Executor) -> Iterator[None]:
+    """Make ``run_in_thread`` use ``executor`` for the duration of the block."""
+    token = _BLOCKING_EXECUTOR_OVERRIDE.set(executor)
+    try:
+        yield
+    finally:
+        _BLOCKING_EXECUTOR_OVERRIDE.reset(token)
+
 
 # Executor for CancelHandle actions — a driver cancel (cursor.cancel(), a
 # statement-cancel request) fired when the task awaiting a run_in_thread call is
@@ -477,11 +496,12 @@ async def run_in_thread(
     if scopes:
         call = _tracked_offload(call, scopes, label)
     cancel_handle = _bound_handle(func)
+    executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
         if cancel_handle is None:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+            return await loop.run_in_executor(executor, call)
         try:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+            return await loop.run_in_executor(executor, call)
         except asyncio.CancelledError:
             # Non-blocking: the action is handed to the cancel pool.
             cancel_handle.request()
@@ -685,10 +705,9 @@ def submit_in_thread(
         never ran. Ignoring the return value is the normal case.
     """
     ctx = contextvars.copy_context()
+    executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     try:
-        future = _BLOCKING_EXECUTOR.submit(
-            ctx.run, functools.partial(func, *args, **kwargs)
-        )
+        future = executor.submit(ctx.run, functools.partial(func, *args, **kwargs))
     except RuntimeError:
         # The pool refuses work only once it has been shut down, which happens
         # at interpreter exit. Nothing is left running to clean up after, and the
@@ -922,7 +941,7 @@ async def run_best_effort(
     func: Callable[..., T],
     *args: Any,
     label: str,
-    logger: AtlanLoggerAdapter,
+    logger: Any,
     timeout: float | None = None,
     max_workers: int | None = None,
     **kwargs: Any,
@@ -977,3 +996,25 @@ async def run_best_effort(
     except Exception:  # noqa: BLE001 — best-effort work must never break the caller
         logger.warning("%s skipped due to an unexpected error", label, exc_info=True)
     return None
+
+
+#: Names this module re-exported before it moved to the light logger; served on
+#: first access (the worker's structured logger class — absent on an api-only
+#: install, which never asks for it).
+_LAZY: dict[str, tuple[str, str]] = {
+    "AtlanLoggerAdapter": (
+        "application_sdk.observability.logger_adaptor",
+        "AtlanLoggerAdapter",
+    ),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib  # noqa: PLC0415 — only for the lazy names above
+
+    value = getattr(importlib.import_module(target[0]), target[1])
+    globals()[name] = value
+    return value

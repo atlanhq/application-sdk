@@ -14,8 +14,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # atlan-application-sdk depends on atlan-application-sdk-api==<version> and
+      # no longer ships its files, so the SDK must never be published without
+      # the api package. Fail before anything is tagged when the api package's
+      # PyPI credential is missing (FND-3161), instead of half-way through.
+      API_PUBLISH_TOKEN_SET: ${{ secrets.PYPI_API_TOKEN_SDK_API != '' }}
 
     steps:
+      - name: Require the api package's PyPI token
+        if: env.API_PUBLISH_TOKEN_SET != 'true'
+        run: |
+          echo "::error::PYPI_API_TOKEN_SDK_API is not set. The SDK depends on atlan-application-sdk-api at the same version, so neither is released until the token exists (FND-3161)."
+          exit 1
+
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,6 +108,17 @@ jobs:
       #   run: |
       #     uv build
       #     uv publish --index testpypi
+
+      # Lockstep release: atlan-application-sdk pins atlan-application-sdk-api at
+      # its own version, so the api package (packages/api) is published first,
+      # from this same commit. If it fails, the SDK is not published.
+      # Available at: https://pypi.org/project/atlan-application-sdk-api/
+      - name: Build and publish the api package to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN_SDK_API }}
+        run: |
+          uv build packages/api --out-dir dist-api
+          uv publish dist-api/*
 
       # Available at: https://pypi.org/project/atlan-application-sdk/
       - name: Build and publish to PyPI

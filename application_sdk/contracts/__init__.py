@@ -8,6 +8,9 @@ and their callers. Using these base classes ensures:
 4. Backwards compatibility - Add new fields with defaults
 """
 
+import importlib
+from typing import TYPE_CHECKING, Any
+
 from application_sdk.contracts.base import (
     ContractMetadata,
     ContractValidationError,
@@ -26,34 +29,77 @@ from application_sdk.contracts.base import (
     validate_is_contract,
     validate_payload_safety,
 )
-from application_sdk.contracts.storage import (
-    DeclaredFile,
-    DownloadInput,
-    DownloadOutput,
-    UploadInput,
-    UploadOutput,
-    UploadRefsInput,
-    UploadRefsOutput,
-    VerifyRefsInput,
-    VerifyRefsOutput,
-)
-from application_sdk.contracts.types import (
-    CONNECTION_QN_MIN_SEGMENTS,
-    AssetArtifact,
-    BoundedDict,
-    BoundedList,
-    ConnectionRef,
-    FileReference,
-    GitReference,
-    Lazy,
-    MaxItems,
-    StorageTier,
-    StoreTarget,
-    TreeSelection,
-    asset_artifact_fields,
-    asset_artifact_marker,
-    connection_qualified_name_defect,
-)
+
+if TYPE_CHECKING:
+    from application_sdk.contracts.storage import (
+        DeclaredFile,
+        DownloadInput,
+        DownloadOutput,
+        UploadInput,
+        UploadOutput,
+        UploadRefsInput,
+        UploadRefsOutput,
+        VerifyRefsInput,
+        VerifyRefsOutput,
+    )
+    from application_sdk.contracts.types import (
+        CONNECTION_QN_MIN_SEGMENTS,
+        AssetArtifact,
+        BoundedDict,
+        BoundedList,
+        ConnectionRef,
+        FileReference,
+        GitReference,
+        Lazy,
+        MaxItems,
+        StorageTier,
+        StoreTarget,
+        TreeSelection,
+        asset_artifact_fields,
+        asset_artifact_marker,
+        connection_qualified_name_defect,
+    )
+
+#: Worker-side names: imported on first access, so the api distribution
+#: (which ships this ``__init__`` without them) imports cleanly.
+_LAZY: dict[str, tuple[str, str]] = {
+    "CONNECTION_QN_MIN_SEGMENTS": (
+        "application_sdk.contracts.types",
+        "CONNECTION_QN_MIN_SEGMENTS",
+    ),
+    "TreeSelection": ("application_sdk.contracts.types", "TreeSelection"),
+    "connection_qualified_name_defect": (
+        "application_sdk.contracts.types",
+        "connection_qualified_name_defect",
+    ),
+    "AssetArtifact": ("application_sdk.contracts.types", "AssetArtifact"),
+    "BoundedDict": ("application_sdk.contracts.types", "BoundedDict"),
+    "BoundedList": ("application_sdk.contracts.types", "BoundedList"),
+    "ConnectionRef": ("application_sdk.contracts.types", "ConnectionRef"),
+    "DeclaredFile": ("application_sdk.contracts.storage", "DeclaredFile"),
+    "DownloadInput": ("application_sdk.contracts.storage", "DownloadInput"),
+    "DownloadOutput": ("application_sdk.contracts.storage", "DownloadOutput"),
+    "FileReference": ("application_sdk.contracts.types", "FileReference"),
+    "GitReference": ("application_sdk.contracts.types", "GitReference"),
+    "Lazy": ("application_sdk.contracts.types", "Lazy"),
+    "MaxItems": ("application_sdk.contracts.types", "MaxItems"),
+    "StorageTier": ("application_sdk.contracts.types", "StorageTier"),
+    "StoreTarget": ("application_sdk.contracts.types", "StoreTarget"),
+    "UploadInput": ("application_sdk.contracts.storage", "UploadInput"),
+    "UploadOutput": ("application_sdk.contracts.storage", "UploadOutput"),
+    "UploadRefsInput": ("application_sdk.contracts.storage", "UploadRefsInput"),
+    "UploadRefsOutput": ("application_sdk.contracts.storage", "UploadRefsOutput"),
+    "VerifyRefsInput": ("application_sdk.contracts.storage", "VerifyRefsInput"),
+    "VerifyRefsOutput": ("application_sdk.contracts.storage", "VerifyRefsOutput"),
+    "asset_artifact_fields": (
+        "application_sdk.contracts.types",
+        "asset_artifact_fields",
+    ),
+    "asset_artifact_marker": (
+        "application_sdk.contracts.types",
+        "asset_artifact_marker",
+    ),
+}
 
 __all__ = [
     "CONNECTION_QN_MIN_SEGMENTS",
@@ -97,3 +143,21 @@ __all__ = [
     "validate_is_contract",
     "validate_payload_safety",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY.get(name)
+    if target is None:
+        from application_sdk._install import import_submodule  # noqa: PLC0415
+
+        module = import_submodule(__name__, name)
+        if module is None:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        return module
+    value = getattr(importlib.import_module(target[0]), target[1])
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
