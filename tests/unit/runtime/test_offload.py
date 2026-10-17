@@ -1,8 +1,7 @@
 """Unit tests for application_sdk._runtime.offload — dispatch mechanics.
 
-Strict no-real-thread policy: ``asyncio.get_running_loop`` is patched so the
-SDK's blocking pool is never touched, and ``_BLOCKING_EXECUTOR`` is swapped for
-an inline or pending stand-in where the detached path is under test.
+Strict no-real-thread policy: ``_BLOCKING_EXECUTOR`` is swapped for an inline
+or pending stand-in, so the SDK's blocking pool is never touched.
 
 The hold behaviour these primitives layer on top of the progress tracker lives
 in ``tests/unit/execution/test_offload_holds.py``, which exercises it through a
@@ -15,7 +14,7 @@ import concurrent.futures
 import functools
 from collections.abc import Callable
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -28,68 +27,43 @@ from application_sdk._runtime.offload import run_in_thread
 
 class TestRunInThread:
     @pytest.mark.asyncio
-    async def test_dispatches_through_loop_executor(self) -> None:
-        """Verify run_in_thread uses asyncio.run_in_executor + the SDK pool.
+    async def test_dispatches_to_the_sdk_pool(self) -> None:
+        """run_in_thread submits to the SDK-owned pool, never the loop's default executor.
 
-        We patch asyncio.get_running_loop to return a Mock whose
-        run_in_executor is an AsyncMock. The blocking executor passed
-        in must be the module-level _BLOCKING_EXECUTOR.
+        The callable submitted is a wrapper (``partial(ctx.run, partial(...))``),
+        not the raw function: that is what carries the caller's ContextVars.
         """
         from application_sdk._runtime import offload as hb_mod
 
-        sentinel = object()
-        fake_loop = MagicMock()
-        fake_loop.run_in_executor = AsyncMock(return_value=sentinel)
+        executor = InlineExecutor()
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", executor):
+            result = await run_in_thread(lambda x: x, "passed through")
 
-        with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
-            result = await run_in_thread(lambda x: x, "ignored")
-
-        assert result is sentinel
-        # Ensure the SDK-owned executor was the one passed.
-        called_args, _ = fake_loop.run_in_executor.call_args
-        assert called_args[0] is hb_mod._BLOCKING_EXECUTOR
-        # And a callable (not the raw lambda — wrapped via partial(ctx.run, partial(...)))
-        assert callable(called_args[1])
+        assert result == "passed through"
+        assert len(executor.submissions) == 1
 
     @pytest.mark.asyncio
     async def test_propagates_function_kwargs(self) -> None:
         """The wrapped callable must close over the original args and kwargs."""
         from application_sdk._runtime import offload as hb_mod
 
-        captured = {}
-
-        async def fake_run_in_executor(executor, fn):
-            # Invoke the wrapped callable directly to confirm args propagate.
-            captured["result"] = fn()
-            return captured["result"]
-
-        fake_loop = MagicMock()
-        fake_loop.run_in_executor = fake_run_in_executor
-
         def adder(a, b, c=0):
             return a + b + c
 
-        with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", InlineExecutor()):
             result = await run_in_thread(adder, 1, 2, c=10)
 
         assert result == 13
-        assert captured["result"] == 13
 
     @pytest.mark.asyncio
     async def test_exception_inside_func_propagates(self) -> None:
         """If the wrapped function raises, the exception bubbles to the caller."""
         from application_sdk._runtime import offload as hb_mod
 
-        async def fake_run_in_executor(executor, fn):
-            return fn()  # call wrapped fn synchronously here
-
-        fake_loop = MagicMock()
-        fake_loop.run_in_executor = fake_run_in_executor
-
         def bad():
             raise ValueError("nope")
 
-        with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
+        with patch.object(hb_mod, "_BLOCKING_EXECUTOR", InlineExecutor()):
             with pytest.raises(ValueError):
                 await run_in_thread(bad)
 
