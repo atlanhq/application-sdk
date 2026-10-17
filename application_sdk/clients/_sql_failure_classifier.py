@@ -53,6 +53,14 @@ _AUTH_MSG_HINTS = (
     "login failed",
     "password authentication failed",
     "invalid credentials",
+    # Thrift SASL handshake (impyla, PyHive): the server refused the sign-in.
+    # Its transport error class says nothing about auth, so only the message can.
+    # "TSocket read 0 bytes" and "Bad status: 3" are left out: impalad sends
+    # them on a rejected login, but other Thrift servers send them for a dropped
+    # connection or a mechanism mismatch, so they are the connector's call.
+    "authentication failure",
+    "bad sasl result",
+    "could not start sasl",
 )
 
 # Network / DNS / TLS / connection-refused / generic OperationalError without

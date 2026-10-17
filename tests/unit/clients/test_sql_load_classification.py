@@ -54,6 +54,11 @@ def _mysql_access_denied() -> Exception:
     )
 
 
+def _thrift_sasl(message: str) -> Exception:
+    """impyla raises Thrift's own transport error; SQLAlchemy never rewraps it."""
+    return _driver_error("TTransportException", message)
+
+
 def _wrapped(orig: Exception) -> sa_exc.OperationalError:
     """Raise ``orig`` the way SQLAlchemy does, so ``__cause__`` is set."""
     try:
@@ -119,6 +124,24 @@ _CASES: list[tuple[str, Any, type[AppError], FailureCategory]] = [
         _mysql_access_denied,
         SqlClientAuthFailedError,
         FailureCategory.AUTH,
+    ),
+    (
+        "thrift-bad-sasl-result",
+        lambda: _thrift_sasl("Bad SASL result: authentication failure"),
+        SqlClientAuthFailedError,
+        FailureCategory.AUTH,
+    ),
+    (
+        "thrift-could-not-start-sasl",
+        lambda: _thrift_sasl("Could not start SASL: Error in sasl_client_start"),
+        SqlClientAuthFailedError,
+        FailureCategory.AUTH,
+    ),
+    (
+        "thrift-tsocket-eof",
+        lambda: _thrift_sasl("TSocket read 0 bytes"),
+        SqlClientConnectUnclassifiedError,
+        FailureCategory.INTERNAL,
     ),
     (
         "unrecognised",
