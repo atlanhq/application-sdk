@@ -5,7 +5,7 @@
 
 # Optimisation / Recommendation Rules (O-series)
 
-**6 rules** · Checker: `suite.checks.optimizations` (AST-based)
+**8 rules** · Checker: `suite.checks.optimizations` (AST-based) and `suite.checks.worker_volume` (O009, line-based over `atlan.yaml`)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -19,7 +19,8 @@ ignore[...]` suppressions across the fleet.  An id therefore **never migrates an
 changes**, even if a future domain series (S/B/T/A/…) later subsumes the same topic.
 When a domain series takes over an area, the rule is retired in place (kept documented,
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
-reassigned.
+reassigned. O007 and O008 were drafted as worker-disk recommendations and graduated to
+the mandatory P060 and P061 before any release; those O-ids stay vacant.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
@@ -29,6 +30,8 @@ reassigned.
 | [O004](#o004) | `LegacyPyatlanAssetImport` | `warn` | `app` | `asset-mapper` | — | 0.8.0 |
 | [O005](#o005) | `UnresolvedAppNamePlaceholder` | `warn` | `both` | `dag-write-path` | yes | 0.18.0 |
 | [O006](#o006) | `DirectRocksdictImport` | `warn` | `app` | `canonical-dependency` | — | 0.18.0 |
+| [O009](#o009) | `WorkerVolumeWithoutAutoresize` | `warn` | `app` | `worker-disk` | yes | 0.51.0 |
+| [O010](#o010) | `WholePrefixStagedOnDisk` | `warn` | `app` | `worker-disk` | — | 0.51.0 |
 
 ---
 
@@ -328,5 +331,152 @@ so each call site needs review before migrating.  Suppress with `# conformance:
 ignore[O006] <reason>` when a from-scratch wrapper is deliberate (e.g. custom RocksDB
 tuning, or association-list output like `rocks_backed_dict.py`'s `append_to_key` that
 `SpillableDict` does not provide).
+
+---
+
+## O009 — `WorkerVolumeWithoutAutoresize` {#o009}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `worker-disk` · **Autofixable:** yes · **Since:** 0.51.0
+
+> atlan.yaml worker storage entry has no resize.topolvm.io/storage_limit annotation, so the volume is a fixed size sized for the largest tenant
+
+**Rationale:** A worker volume declared in atlan.yaml's deploy block without pvc-autoresizer
+annotations is a fixed-size PVC: it never grows, so it must be sized up front for the
+largest run any tenant makes, and every pod that mounts it gets that full size whether
+its own run needs it or not. A review of connector worker disks found a connector giving
+every worker a fixed volume more than ten times larger than its largest normal run used.
+The connector on the fleet's smallest worker disk declares 8Gi that grows by 8Gi when
+half of it is used, up to 192Gi (atlan-snowflake-app contract/app.pkl). WARN because a
+fixed size is a cost and headroom trade-off rather than a broken deploy: the annotations
+can be added mechanically, but how far the base can come down depends on the app's own
+disk use.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app atlan.yaml — its `deploy:` block declares no `storage` or
+  `storageWorker` entry, so there is no fixed-size worker volume for this rule to grade.
+  No reference app declares a worker volume, so none shows the compliant entry: a small
+  base `size` plus the `resize.topolvm.io/storage_limit`, `threshold` and `increase`
+  annotations, the shape this rule's description spells out.
+- **Fix by:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+
+Flags each worker storage entry in `atlan.yaml`'s `deploy:` block — `deploy.storage`
+(mounted on every pod) and `deploy.storageWorker` (worker pods only) — that carries no
+`resize.topolvm.io/storage_limit` annotation.  The finding sits on the entry's `-` line
+and names its `name`, `mountPath` and declared `size`.  `deploy.storageServer` is not
+graded: it mounts on server pods only.
+
+Without a `storage_limit` the pvc-autoresizer never grows the PVC, so the volume is a
+fixed `size`: it must cover the largest run any tenant makes, and every pod that mounts
+it gets the full size.
+
+**Fix, in two steps.**  The first is mechanical: add whichever of the three annotations
+is missing, keep any already present, and leave the declared `size` alone —
+`storage_limit: 192Gi` (twice the declared size when that is already 192Gi or more,
+since a limit at or below the base never lets the volume grow), `threshold: "50%"` and
+`increase: 8Gi`:
+
+```yaml
+storage:
+  - name: local-data
+    mountPath: /app/local
+    size: 100Gi
+    annotations:
+      resize.topolvm.io/storage_limit: 192Gi
+      resize.topolvm.io/threshold: "50%"
+      resize.topolvm.io/increase: 8Gi
+```
+
+The second is not: once the app is clean on P060–P062 and O010, lower the base toward
+`8Gi` from each pod's 30-day disk peak, so that about 1% of pods need to grow (roughly
+the p99 peak).
+
+**Where to edit.**  `atlan.yaml` is graded because it is what the platform deploys,
+hand-written or generated.  When `contract/app.pkl` emits it, the storage list comes
+from the contract's `deploy` → `overrides` mapping (the toolkit models no storage
+field), so make the change there and regenerate; never hand-edit a generated
+`atlan.yaml`:
+
+```pkl
+overrides {
+  ["storage"] = new Listing {
+    new Mapping {
+      ["name"] = "local-data"
+      ["mountPath"] = "/app/local"
+      ["size"] = "100Gi"
+      ["annotations"] = new Mapping {
+        ["resize.topolvm.io/storage_limit"] = "192Gi"
+        ["resize.topolvm.io/threshold"] = "50%"
+        ["resize.topolvm.io/increase"] = "8Gi"
+      }
+    }
+  }
+}
+```
+
+Otherwise `atlan.yaml` is hand-owned; edit it directly.
+
+The scan is line-based (no YAML dependency) and reads block-style sequences in both
+layouts the fleet uses; a flow-style sequence, a YAML anchor or merge key, per-pool
+storage under `workerPools` and raw `extraVolumes` PVC templates are not graded.
+Suppress with `# conformance: ignore[O009] <reason>` on the entry's `-` line or the line
+above it — possible only in a hand-written `atlan.yaml`, since regeneration drops
+comments from a generated one.
+
+---
+
+## O010 — `WholePrefixStagedOnDisk` {#o010}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `worker-disk` · **Autofixable:** — · **Since:** 0.51.0
+
+> download_prefix() then upload_prefix() of the same local tree stages a whole prefix on the worker's disk — move it in bounded batches
+
+**Rationale:** download_prefix followed by upload_prefix of the same directory puts every object under
+the prefix on the worker's disk before any of it leaves, so the step's disk need grows
+with the largest prefix any tenant has instead of with a batch. Moving data across
+stores through the worker is expected — a self-deployed runtime hands data from the
+customer's deployment store to Atlan's upstream store — but staging the whole prefix to
+do it is not needed. The connector on the fleet's smallest worker disk writes and ships
+one bounded slice at a time (256 MiB of decoded input per slice, uploaded with
+upload_prefix and removed before the next: atlan-snowflake-app
+app/pipeline/crawler/duckdb_transform.py). WARN because some steps need every file at
+once (a merge, a baseline build), and only the code's owner can say which.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/storage/transfer.py — `_upload_from_store` copies a single object
+  between stores through a temp file it unlinks in a `finally`, and the SDK's
+  cross-store hand-off runs it per object, so moving a prefix from one store to another
+  never stages the whole prefix on the worker. No reference app calls download_prefix.
+- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+- **Interacts with:** P060: removing the staged directory after the upload clears P060 but not this rule,
+  which stays until the move is bounded.
+
+Flags an SDK `upload_prefix` call whose local directory was filled by a
+`download_prefix` earlier in the same function — the same directory, one under it, or
+one holding it — so every object under the prefix sits on the worker's disk at once.
+The finding sits on the `upload_prefix` call and names the `download_prefix` line.
+Calls resolve through import bindings, like P060.
+
+Not flagged: moving data across stores, which the SDK expects; a per-file move
+(`download_file` → `upload_file` → delete); the SDK's own cross-store hand-off
+(`App.upload` / `App.upload_refs` and the `application_sdk.storage.transfer` helpers
+behind them, which move one object at a time); and a loop that downloads, uploads and
+removes its local batch in the same iteration, which is bounded by the batch.
+
+Fix, in order of preference:
+
+1. **Bounded batches.**  List the keys, group them into batches capped    by bytes (256
+MiB slices are a proven size), and per batch download,    upload — the bulk helpers keep
+their `max_concurrency=4` within    each batch — and delete the batch before the next.
+2. **A bounded pipeline.**  Move single files with about 4 in flight,    each download →
+upload → delete, matching the bulk helpers'    `max_concurrency=4` rather than a
+strictly serial loop (up to 4x    slower on many small files).  It overlaps download and
+upload and    holds only a few files on disk.
+
+Only when both calls provably use the same store (both omit `store=`, or pass the same
+expression) is a copy inside the store worth asking about; the message says when.  Not a
+mechanical rewrite: a step that needs every file at once (a merge, a baseline build) is
+a deliberate staging — suppress with `# conformance: ignore[O010] <reason>` naming why.
 
 ---
