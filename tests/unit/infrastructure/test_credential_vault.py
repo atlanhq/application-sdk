@@ -283,13 +283,13 @@ class TestDaprCredentialVaultGetCredentials:
         # _try_fetch, not the original SecretStoreUnavailableError("secret_key_ref").
         assert "secret_key_ref" not in str(exc_info.value)
 
-    async def test_single_key_failure_summary_does_not_leak_ref_key_in_logs(
+    async def test_single_key_store_error_raises_without_leaking_ref_key(
         self,
     ) -> None:
         """A definitive (non-cold-start) rejection during single-key probing
-        must not leak the raw ref-key in either the per-field DEBUG log or
-        the aggregated ERROR summary — mirrors credentials.agent's ref-key
-        hashing for the identical single-key-probe shape."""
+        stops resolution (FND-4077) rather than leaving the ref-key in place as
+        the password — and neither the WARNING log nor the raised error leaks
+        the raw ref-key."""
         ref_key = "SNOWFLAKE_PROD_PASSWORD"
         expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
         config = {"credentialSource": "agent", "password": ref_key}
@@ -306,20 +306,20 @@ class TestDaprCredentialVaultGetCredentials:
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
             patch(
-                "application_sdk.infrastructure._dapr.credential_vault.logger"
+                "application_sdk.infrastructure._single_key_probe.logger"
             ) as mock_logger,
+            pytest.raises(CredentialVaultError) as exc_info,
         ):
             vault = self._make_vault(mock_client)
-            result = await vault.get_credentials("my-guid")
+            await vault.get_credentials("my-guid")
 
-        # Unresolved placeholder retained — mirrors the "not a secret" fallthrough.
-        assert result.get("password") == ref_key
+        # The first failing candidate in config order is raised (here the
+        # ``credentialSource`` value, which this path also probes).
+        assert ref_key not in str(exc_info.value)
+        assert "sha256:" in str(exc_info.value)
 
         logged = " ".join(
-            str(arg)
-            for call in mock_logger.debug.call_args_list
-            + mock_logger.error.call_args_list
-            for arg in call.args
+            str(arg) for call in mock_logger.warning.call_args_list for arg in call.args
         )
         assert ref_key not in logged
         assert f"sha256:{expected_hash}" in logged
@@ -831,11 +831,11 @@ class TestSingleKeyProbeConcurrency:
 
     async def test_concurrency_is_bounded(self) -> None:
         """Fan-out is capped so a wide config can't burst a vault into
-        throttling — which Dapr reports indistinguishably from 'key absent'."""
+        throttling."""
         import asyncio
 
-        from application_sdk.infrastructure._dapr.credential_vault import (
-            _MAX_CONCURRENT_SINGLE_KEY_PROBES as CAP,
+        from application_sdk.infrastructure._single_key_probe import (
+            MAX_CONCURRENT_SINGLE_KEY_PROBES as CAP,
         )
 
         state = {"in_flight": 0, "peak": 0}
@@ -959,18 +959,24 @@ class TestSingleKeyProbeConcurrency:
         assert "sha256:" in str(err)
         assert err.cause is None
 
-    async def test_store_errors_still_fall_through_and_are_summarised(self) -> None:
-        """A genuine store error on one field stays non-fatal (it may simply
-        not be a secret), and the existing failure summary is preserved."""
+    async def test_store_error_on_one_field_stops_resolution(self) -> None:
+        """A store error on one field is fatal even when another field resolved
+        (FND-4077): skipping it would send that field's ref-key as its value.
+        A key the store definitively lacks is still skipped (``_get_secret``
+        returns ``{}`` for it, covered above)."""
         from application_sdk.infrastructure.secrets import SecretStoreError
 
         async def _get_secret(value: str, *, log_label: str | None = None):
             if value == "real-key":
                 return {"password": "resolved"}
-            raise SecretStoreError("vault denied", secret_name=value)
+            raise SecretStoreError(
+                "ThrottlingException", secret_name=value, retryable=True
+            )
 
-        config = {"a": "real-key", "b": "literal-value"}
+        config = {"a": "real-key", "b": "throttled-key"}
 
-        collected = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+        with pytest.raises(SecretStoreError) as exc_info:
+            await self._vault(_get_secret)._fetch_single_key_secrets(config)
 
-        assert collected == {"password": "resolved"}
+        assert exc_info.value.effective_retryable is True
+        assert "throttled-key" not in str(exc_info.value)

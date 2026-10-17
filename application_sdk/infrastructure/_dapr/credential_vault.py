@@ -4,19 +4,14 @@ Fetches credential config from S3 via Dapr binding, then resolves secret
 references via the Dapr secret store.
 """
 
-import asyncio
 import copy
-import hashlib
 import re
 from enum import Enum
 from typing import Any
 
 import orjson
 
-from application_sdk.errors.leaves import (
-    ColdStartRaceError,
-    DaprSidecarUnreachableError,
-)
+from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.infrastructure._dapr.client import (
     classify_secret_fetch_error,
     is_dapr_transport_unavailable,
@@ -28,26 +23,15 @@ from application_sdk.infrastructure._dapr.http import (
     retry_past_dapr_cold_start,
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
+from application_sdk.infrastructure._single_key_probe import probe_single_keys
 from application_sdk.infrastructure.bindings import BindingError
-from application_sdk.infrastructure.secrets import (
-    SecretNotFoundError,
-    SecretStoreUnavailableError,
-    SecretStoreUnreachableError,
-)
+from application_sdk.infrastructure.secrets import SecretNotFoundError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 # Allowlist: UUIDs, hex strings, and similar safe identifiers.
 _SAFE_GUID_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
-
-#: Bounded fan-out for the single-key probe sweep (BLDX-1594). Duplicated rather
-#: than imported from :mod:`application_sdk.credentials.agent`'s twin, which
-#: lives in the ``credentials`` layer this one must not depend on. The two copies
-#: can drift; centralizing them is tracked in
-#: https://github.com/atlanhq/application-sdk/issues/2995.
-_MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
-
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -405,159 +389,43 @@ class DaprCredentialVault:
     ) -> dict[str, Any]:
         """Fetch secrets in single-key mode — one lookup per string field value.
 
-        Probes run **concurrently**, bounded by
-        :data:`_MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until
-        BLDX-1594: a probe that misses pays a full Dapr retry ladder, so serial
-        probing cost *ladder × number of non-secret fields*.
+        Probing, classification and redaction are shared with the agent-shape
+        resolver via
+        :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`:
+        a definitively-absent key is skipped (:meth:`_get_secret` returns
+        ``{}``), any store failure stops resolution rather than leaving the
+        ref-key in place as the credential value.
 
-        Results are merged **in candidate order**, not completion order: each
-        probe's *inner* keys merge into one dict, so a key returned by two
-        probes is last-writer-wins, and serial order was the tiebreak. Keeping
-        it makes the resolved credential identical to the serial behaviour.
+        Each probe's *inner* keys merge into one dict in **candidate order**, so
+        a key returned by two probes is last-writer-wins with serial probing's
+        tiebreak.
 
         Raises:
-            SecretStoreUnavailableError: If any probe found the store
-                unreachable (cold-start outage past the retry budget).
+            SecretStoreError: If any probe's store lookup failed (the subtypes
+                :class:`SecretStoreUnavailableError` /
+                :class:`SecretStoreUnreachableError` for an outage).
+                Hash-labelled.
         """
         logger.debug("Single-key mode: fetching secrets per field")
 
-        candidates = _single_key_candidates(credential_config)
-        if not candidates:
-            return {}
+        async def _fetch(value: str, label: str) -> dict[str, Any]:
+            return await self._get_secret(value, log_label=label)
 
-        sem = asyncio.Semaphore(_MAX_CONCURRENT_SINGLE_KEY_PROBES)
-
-        async def _probe(label: str, value: str) -> tuple[dict[str, Any], str | None]:
-            async with sem:
-                return await self._probe_single_key(label, value)
-
-        # return_exceptions=True: cancelling siblings on the first raise unwinds
-        # them mid-backoff and buries the real failure under CancelledError.
-        results = await asyncio.gather(
-            *(_probe(label, value) for label, value in candidates),
-            return_exceptions=True,
+        resolved = await probe_single_keys(
+            _single_key_candidates(credential_config), _fetch
         )
 
         collected: dict[str, Any] = {}
-        failed_lookups: list[str] = []
-        cold_start_exc: BaseException | None = None
-
-        for (label, value), result in zip(candidates, results, strict=True):
-            if isinstance(result, BaseException):
-                # Only _probe_single_key's two cold-start branches raise (the
-                # terminal SecretStoreUnreachableError and the transient
-                # SecretStoreUnavailableError, both ColdStartRaceError
-                # subtypes); anything else is a bug, not "this field isn't a
-                # secret". First-in-candidate-order wins, which within one
-                # sweep is unambiguous: every probe checks the per-component
-                # readiness gate before any of them can arm it, so a single
-                # gather never mixes the terminal and transient labels.
-                if isinstance(result, ColdStartRaceError):
-                    cold_start_exc = cold_start_exc or result
-                    continue
-                raise result
-            single_secret, failure_type = result
-            if failure_type is not None:
-                value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
-                failed_lookups.append(
-                    "  '%s' → sha256:%s: %s" % (label, value_hash, failure_type)
-                )
-                continue
+        for _, single_secret in resolved:
             for k, v in single_secret.items():
                 if v is None or v == "":
                     continue
                 collected[k] = v
-
-        if cold_start_exc is not None:
-            raise cold_start_exc
-
-        if not collected and failed_lookups:
-            logger.error(
-                "Single-key secret resolution failed: no secrets resolved. "
-                "%d attempted, all failed:\n%s",
-                len(failed_lookups),
-                "\n".join(failed_lookups),
-            )
-        elif failed_lookups:
-            logger.debug(
-                "Single-key mode: resolved %d secrets, skipped %d non-secret fields",
-                len(collected),
-                len(failed_lookups),
-            )
-
         return collected
 
-    async def _probe_single_key(
-        self, label: str, value: str
-    ) -> tuple[dict[str, Any], str | None]:
-        """Probe one candidate ref-key.
 
-        Returns ``(secret, failure_type)`` — ``failure_type`` is the exception's
-        type name on a genuine store error, else ``None``. A definitively-absent
-        key is not a failure here: :meth:`_get_secret` already collapses it to
-        ``{}`` without raising.
-
-        Raises:
-            SecretStoreUnreachableError: If the store never answered across the
-                whole cold-start budget (the terminal case), hash-labelled (see
-                below).
-            SecretStoreUnavailableError: If the store failed *without* the
-                budget being spent (the transient case) — only reachable once
-                this component has already answered once, so
-                ``retry_past_dapr_cold_start`` skips the cold-start wait and
-                gives it only the short warm retry. Also hash-labelled.
-        """
-        value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
-        try:
-            single_secret = await self._get_secret(
-                value, log_label=f"sha256:{value_hash}"
-            )
-        except DaprSidecarUnreachableError as exc:
-            # Terminal: budget exhausted without one usable answer — not a race a
-            # later attempt warms. Keep the terminal type so a persistent outage
-            # stays distinguishable from a still-cold one, with the same
-            # redaction as the transient branch below (hash label, no cause) and
-            # the secret-free component/attempts/elapsed diagnostics preserved.
-            raise SecretStoreUnreachableError(
-                f"sha256:{value_hash}",
-                component=exc.component,
-                attempts=exc.attempts,
-                elapsed_seconds=exc.elapsed_seconds,
-            ) from None
-        except ColdStartRaceError:
-            # A *steady-state* blip, not an exhausted budget: budget exhaustion
-            # always raises DaprSidecarUnreachableError and is caught above, so
-            # the only way a bare ColdStartRaceError reaches here is
-            # retry_past_dapr_cold_start skipping its cold-start wait — this
-            # component has already answered once, so the error propagates from
-            # `call()` after only the short warm retry. Either way the store did not answer,
-            # which is not "this field isn't a secret" (that case is already
-            # collapsed to {} by _get_secret without raising). Propagate so the
-            # caller raises a typed CredentialVaultError instead of silently
-            # proceeding with an incomplete credential, mirroring the
-            # multi-key branch above.
-            #
-            # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
-            # (the only ColdStartRaceError subtype this path raises) carries
-            # the raw ref-key in both `.secret_name` and `__str__()`, and its
-            # `cause` (the underlying httpx exception) can re-embed the same
-            # ref-key via a percent-encoded request URL. Re-raise a
-            # hash-labelled, cause-free equivalent instead of the original.
-            raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
-        # conformance: ignore[E004] exc_info=True would leak the raw ref-key (SecretStoreError.__str__ embeds `secret=<ref-key>`); hash + exception type name logged instead, mirroring retry_past_dapr_cold_start's warning log
-        except Exception as e:
-            logger.debug(
-                "Secret resolution failed for '%s' (sha256:%s): %s",
-                label,
-                value_hash,
-                type(e).__name__,
-            )
-            return {}, type(e).__name__
-        return single_secret or {}, None
-
-
-def _single_key_candidates(credential_config: dict[str, Any]) -> list[tuple[str, str]]:
-    """Ordered, de-duplicated ``(label, value)`` pairs to probe as secret keys.
+def _single_key_candidates(credential_config: dict[str, Any]) -> list[str]:
+    """Ordered, de-duplicated field values to probe as secret keys.
 
     Collected up-front because the probes run concurrently — a ``seen`` set
     mutated per-probe would race. Order matters: the caller merges in candidate
@@ -568,20 +436,20 @@ def _single_key_candidates(credential_config: dict[str, Any]) -> list[tuple[str,
     and inventing a set here risks skipping a field some deployment does use as
     a ref-key. With probes overlapping the extra lookups are cheap.
     """
-    candidates: list[tuple[str, str]] = []
+    candidates: list[str] = []
     seen: set[str] = set()
 
-    def _add(label: str, value: Any) -> None:
+    def _add(value: Any) -> None:
         if isinstance(value, str) and value.strip() and value not in seen:
             seen.add(value)
-            candidates.append((label, value))
+            candidates.append(value)
 
     for field, value in credential_config.items():
         if isinstance(value, str):
-            _add(field, value)
+            _add(value)
         elif field == "extra" and isinstance(value, dict):
-            for extra_key, extra_value in value.items():
-                _add(f"extra.{extra_key}", extra_value)
+            for extra_value in value.values():
+                _add(extra_value)
 
     return candidates
 

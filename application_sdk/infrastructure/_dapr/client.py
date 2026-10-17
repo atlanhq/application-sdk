@@ -1,5 +1,6 @@
 """Dapr client implementations."""
 
+import re
 from typing import Any
 
 import httpx
@@ -185,18 +186,30 @@ def dapr_error_detail(exc: Exception) -> str | None:
 #: ``pkg/api/http/http_test.go`` in ``dapr/dapr`` for the canonical mapping.
 _ERR_SECRET_STORES_NOT_CONFIGURED = "ERR_SECRET_STORES_NOT_CONFIGURED"
 
-#: Dapr's "failed to get the secret" code for an already-ready, correctly
-#: configured store — the shape it uses for a genuinely-missing key. NOT a
-#: safe signal on its own (see :data:`_ERR_SECRET_STORES_NOT_CONFIGURED`'s
-#: docstring for why a bare 5xx isn't enough), but combined with a 5xx status
-#: and the "not configured" code having already been ruled out, this is the
-#: narrowest available "probably absent, not a real rejection" signal. A 4xx
-#: (bad auth/binding/path) never carries this code and always escalates.
+#: Dapr's "failed to get the secret" code. Dapr wraps *every* backend failure
+#: in it — a genuinely-missing key, but also a throttled vault, an IAM/KMS
+#: denial, or a secret scheduled for deletion — so the code alone never means
+#: "absent". :func:`classify_secret_fetch_error` additionally requires the
+#: message to match :data:`_SECRET_ABSENT_MESSAGE_RE`.
 _ERR_SECRET_GET = "ERR_SECRET_GET"
 
+#: Backend wordings for "this key does not exist", matched against the
+#: ``ERR_SECRET_GET`` message (``failed getting secret with key <k> from secret
+#: store <s>: <backend error>``) once the key itself is removed from it.
+#: Allowlist, not denylist: a wording not listed here (throttling, access
+#: denied, KMS) is a store failure, so an unknown backend fails loudly instead
+#: of being silently read as "absent". Covers ``secretstores.local.file``
+#: (``secret <k> not found``), Kubernetes (``secrets "<k>" not found``), AWS
+#: Secrets Manager (``ResourceNotFoundException: Secrets Manager can't find
+#: the specified secret.``), Azure Key Vault (``SecretNotFound``) and GCP
+#: (``code = NotFound``).
+_SECRET_ABSENT_MESSAGE_RE = re.compile(
+    r"not ?found|can'?t find|cannot find|does not exist", re.IGNORECASE
+)
 
-def _dapr_secrets_error_code(exc: httpx.HTTPStatusError) -> str | None:
-    """Best-effort extraction of the Dapr secrets-API error body's ``errorCode``
+
+def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | None:
+    """Best-effort parse of the Dapr secrets-API JSON error body
     (e.g. ``{"errorCode": "ERR_SECRET_GET", "message": "..."}``).
 
     Returns ``None`` if the response isn't that JSON shape — callers must
@@ -209,12 +222,25 @@ def _dapr_secrets_error_code(exc: httpx.HTTPStatusError) -> str | None:
             "Could not parse Dapr secrets error body as JSON: %s", e, exc_info=True
         )
         return None
-    return body.get("errorCode") if isinstance(body, dict) else None
+    return body if isinstance(body, dict) else None
+
+
+def _is_secret_absent_message(name: str, message: object) -> bool:
+    """Whether an ``ERR_SECRET_GET`` message says the key *name* doesn't exist.
+
+    The key is removed first so a key that itself contains "not found"
+    can't make a throttling error look like an absence.
+    """
+    if not isinstance(message, str):
+        return False
+    if name:
+        message = message.replace(name, "")
+    return _SECRET_ABSENT_MESSAGE_RE.search(message) is not None
 
 
 def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
     """Classify a raw Dapr secret-fetch exception as unreachable / not-found /
-    rejected.
+    store failure / rejected.
 
     Raising a distinct type for the unreachable case lets callers retry a
     cold-start race without duck-typing exception text; raising
@@ -237,21 +263,40 @@ def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
     sidecar — see :data:`_ERR_SECRET_STORES_NOT_CONFIGURED`'s docstring).
     Treating that as retryable would retry a permanently-missing secret for
     the full cold-start budget and then misreport it as a platform outage
-    instead of "not found". A 4xx, or a 5xx that carries neither the
-    "not configured" nor the "get failed" code, is a definitive rejection
-    (bad auth/binding/path) — never collapsed to "not found", since that
-    would silently hide a real misconfiguration.
+    instead of "not found".
+
+    ``ERR_SECRET_GET`` is "not found" only when its message also has the
+    not-found shape (:data:`_SECRET_ABSENT_MESSAGE_RE`). Any other
+    ``ERR_SECRET_GET`` — a throttled vault, an IAM or KMS denial — is the
+    store failing to answer, raised as a *retryable* :class:`SecretStoreError`
+    carrying the cause. Collapsing it to "not found" let single-key resolution
+    send the ref-key itself as the password: an auth failure blamed on the
+    user, plus a burned lockout attempt at the source.
+
+    A 4xx (including Dapr's 403 ``ERR_PERMISSION_DENIED`` for a key outside
+    the store's scoping policy), or a 5xx that carries neither the "not configured" nor the
+    "get failed" code, is a definitive rejection (bad auth/binding/path) —
+    never collapsed to "not found", since that would silently hide a real
+    misconfiguration.
     """
     if isinstance(exc, httpx.TransportError):
         return SecretStoreUnavailableError(name, cause=exc)
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
         if status >= 500:
-            code = _dapr_secrets_error_code(exc)
+            body = _dapr_secrets_error_body(exc) or {}
+            code = body.get("errorCode")
             if code == _ERR_SECRET_STORES_NOT_CONFIGURED:
                 return SecretStoreUnavailableError(name, cause=exc)
             if code == _ERR_SECRET_GET:
-                return SecretNotFoundError(name)
+                if _is_secret_absent_message(name, body.get("message")):
+                    return SecretNotFoundError(name)
+                return SecretStoreError(
+                    f"Secret store failed to return the secret: {dapr_error_detail(exc)}",
+                    secret_name=name,
+                    cause=exc,
+                    retryable=True,
+                )
         # A 4xx, or a 5xx that isn't either recognized code, is a definitive
         # rejection (bad auth/binding/path) — retrying the identical request
         # would fail identically every time, so mark it explicitly
