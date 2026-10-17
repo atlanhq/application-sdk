@@ -96,6 +96,18 @@ PACKAGES = (
         },
         changelog_files=("contract-toolkit/CHANGELOG.md",),
     ),
+    # server_release.py carries conformance_release.py's hard-error verbatim --
+    # a declared version with no matching tag wedges every later release -- so
+    # it needs the same guard (ARUN-942).
+    Package(
+        name="server",
+        bump_branch="bump-version-server",
+        version_files={
+            "packages/server/pyproject.toml": _PYPROJECT_VERSION,
+            "packages/server/server_sdk/__init__.py": _PY_DUNDER_VERSION,
+        },
+        changelog_files=("packages/server/CHANGELOG.md",),
+    ),
 )
 
 
