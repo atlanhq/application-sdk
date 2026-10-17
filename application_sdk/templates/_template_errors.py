@@ -80,6 +80,18 @@ class SqlCredentialRefMissingError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
+class SqlTreeFilterInputUnsupportedError(InvalidInputError):
+    """A tree-selection input was passed to a SQL extraction template."""
+
+    code: ClassVar[str] = "INVALID_INPUT_SQL_TREE_FILTER_UNSUPPORTED"
+    message: str = (
+        "TreeSelectionExtractionInput filters keep every tree level, but SQL "
+        "extraction task inputs keep two; extend ExtractionInput instead"
+    )
+    field: str | None = None
+
+
+@dataclass(kw_only=True)
 class SqlSecretStoreMissingError(InvalidInputError):
     """No secret store available for SQL credential resolution."""
 

@@ -11,7 +11,9 @@ under 1 second with pre-set events to avoid hangs.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import sys
+import threading
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -98,6 +100,43 @@ class TestTemporalHeartbeatController:
         details = ctl.get_last_heartbeat_details()
         assert details == ("resumed", 42)
         fake_temporalio.info.assert_called_once()
+
+    async def test_heartbeat_from_a_worker_thread_is_sent_on_the_loop(
+        self, fake_temporalio
+    ) -> None:
+        """Temporal's heartbeat needs the loop's thread (``asyncio.create_task``).
+
+        A beat from ``run_in_thread`` — e.g. a ``RollingFileWriter`` sync
+        ``on_chunk_complete`` — must be handed back to the loop, in the
+        caller's context, rather than raising "no running event loop".
+        """
+        loop_thread = threading.get_ident()
+        marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker")
+        sent: list[tuple[tuple[Any, ...], int, str]] = []
+        done = asyncio.Event()
+
+        def _heartbeat(*details: Any) -> None:
+            asyncio.get_running_loop()  # what Temporal's create_task requires
+            sent.append((details, threading.get_ident(), marker.get("")))
+            done.set()
+
+        fake_temporalio.heartbeat.side_effect = _heartbeat
+        ctl = TemporalHeartbeatController()
+
+        def _in_thread() -> None:
+            marker.set("activity-context")
+            ctl.heartbeat("chunk", 3)
+
+        await asyncio.to_thread(_in_thread)
+        await asyncio.wait_for(done.wait(), timeout=5)
+
+        assert sent == [(("chunk", 3), loop_thread, "activity-context")]
+        assert ctl.last_sent_details() == ("chunk", 3)
+
+    async def test_heartbeat_on_the_loop_is_sent_inline(self, fake_temporalio) -> None:
+        ctl = TemporalHeartbeatController()
+        ctl.heartbeat("inline")
+        fake_temporalio.heartbeat.assert_called_once_with("inline")
 
 
 # ---------------------------------------------------------------------------

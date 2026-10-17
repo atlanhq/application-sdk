@@ -47,7 +47,8 @@ here and requiring a byte-identical result:
 costs an image pull and a package install.
 
 The lane (``.github/scripts/conformance_resync.py``) imports
-:func:`stage_like_the_lane`, :data:`ACCEPTED_DROPS` and the marker from here, so
+:func:`stage_like_the_lane` (with :data:`ACCEPTED_DROPS` and
+:data:`ACCEPTED_LINE_DROPS`) and the marker from here, so
 the two cannot drift; if they ever did, the trees would differ, which fails
 CLOSED (no approval), never open.
 
@@ -506,14 +507,86 @@ def _unquote_yaml_scalar(value: str) -> str:
     return inner
 
 
-def _normalise_for(path: str, line: str) -> str:
+def _strip_yaml_comment(value: str) -> str:
+    """``value`` without a trailing ``# ...`` comment.
+
+    As in YAML, a comment starts at a ``#`` preceded by whitespace, outside a
+    quoted scalar. A quote opens a scalar only where one can start: at the
+    beginning of ``value`` or after a flow indicator (``[{,:``). Anything this
+    cannot read as a closed quote is left as is, so a misread only ever keeps
+    a comment (a false hold), never drops a value.
+    """
+    quote = ""
+    prev = ""  # last non-blank character outside a quote
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if quote == "'":
+            if c == "'":
+                if value[i + 1 : i + 2] == "'":
+                    i += 2
+                    continue
+                quote = ""
+        elif quote == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                quote = ""
+        elif c in "\"'" and prev in ("", "[", "{", ",", ":"):
+            quote = c
+        elif c == "#" and (i == 0 or value[i - 1] in " \t"):
+            return value[:i].rstrip()
+        if not c.isspace():
+            prev = c
+        i += 1
+    return value
+
+
+def _normalise_for(path: str, line: str, literal: bool = False) -> str:
+    """``line`` as :func:`lost_setting_lines` compares it. ``literal`` marks a
+    line of a YAML block scalar's body, where ``#`` is text, not a comment."""
     norm = _normalise(line)
     if not path.endswith(_YAML_SUFFIXES):
         return norm
     match = _YAML_KEY_VALUE.match(norm)
     if not match:
         return norm
-    return f"{match.group(1)} {_unquote_yaml_scalar(match.group(2))}"
+    # A trailing comment is not part of the setting: the re-render drops it
+    # (FND-3945), and an unchanged value must still match.
+    value = match.group(2) if literal else _strip_yaml_comment(match.group(2))
+    if not value:
+        return match.group(1)
+    return f"{match.group(1)} {_unquote_yaml_scalar(value)}"
+
+
+def _block_scalar_lines(path: str, text: str) -> set[int]:
+    """Indexes of the body lines of every YAML block scalar (``key: |``,
+    ``key: >-``, ...) in ``text``. A body line is literal text: a ``#`` in a
+    ``run: |`` script is part of the value, so it is never read as a comment."""
+    if not path.endswith(_YAML_SUFFIXES):
+        return set()
+    body: set[int] = set()
+    block_indent: int | None = None
+    for i, line in enumerate(text.splitlines()):
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None and (not line.strip() or indent > block_indent):
+            body.add(i)
+            continue
+        block_indent = None
+        norm = _normalise(line)
+        match = _YAML_KEY_VALUE.match(norm)
+        # `key: |` or a bare list item `- |`.
+        header = (
+            match.group(2) if match else norm[1:].strip() if norm[:2] == "- " else ""
+        )
+        if _YAML_BLOCK_SCALAR.match(header):
+            # The body sits deeper than the node that owns it: the key's
+            # column for `- key: |`, the dash's for `- |`.
+            stripped = line.lstrip()
+            dash = len(stripped) - len(stripped.lstrip("- "))
+            block_indent = indent + dash if match else indent
+    return body
 
 
 def _description_lines(path: str, text: str) -> set[int]:
@@ -564,6 +637,31 @@ ACCEPTED_DROPS: dict[str, frozenset[str]] = {
     ),
 }
 
+# Lines with no key of their own that the canonical templates deliberately
+# stopped carrying: a list item, or a line of a block scalar's body. Matched
+# on the whole line after the same normalisation :func:`lost_setting_lines`
+# applies, never on a prefix, so a repo that customised the line is still
+# held. Each entry excuses one lost line, as for :data:`ACCEPTED_DROPS`.
+ACCEPTED_LINE_DROPS: dict[str, tuple[str, ...]] = {
+    ".github/workflows/tests.yaml": (
+        # FND-3839 (#4359): e2e and the bump-version opt-in are requested by
+        # PR comment, so the canonical tests.yaml no longer runs on `labeled`
+        # and its `tests` job condition no longer reads labels.
+        "- labeled",
+        "!startsWith(github.head_ref, 'bump-version') || "
+        "(contains(github.event.pull_request.labels.*.name, 'gate-check') && "
+        "(github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || "
+        "(contains(github.event.pull_request.labels.*.name, 'e2e') && "
+        "(github.event.action != 'labeled' || github.event.label.name == 'e2e'))",
+        # FND-3947: the bump-version skip moved inside the reusable
+        # (`skip-on-bump-pr`), so the `tests` job has no `if:` at all. Either
+        # condition above goes with its `if: >-` header. Mirrors
+        # RETIRED_TESTS_JOB_CONDITIONS in conformance.bootstrap.extract.
+        "if: >-",
+        "!startsWith(github.head_ref, 'bump-version')",
+    ),
+}
+
 
 def _setting_key(line: str) -> str:
     head = line.strip().split(":", 1)[0] if ":" in line else ""
@@ -571,49 +669,61 @@ def _setting_key(line: str) -> str:
 
 
 def still_lost(path: str, lost: list[str]) -> list[str]:
-    """Lost lines for ``path`` minus the accepted drops.
+    """Lost lines for ``path`` minus the accepted drops, each reported once.
 
-    Each accepted key excuses ONE lost line: the canonical template carried
-    that setting once. A second lost line with the same key is a repo's own
-    value that happens to share the name, and it is still reported.
+    Each accepted key or line excuses ONE lost line: the canonical template
+    carried it once. A second lost line with the same key, or a second copy of
+    the same line, is a repo's own and is still reported. ``lost`` must hold
+    one entry per lost occurrence, as :func:`lost_setting_lines` returns it.
     """
     accepted = ACCEPTED_DROPS.get(path, frozenset())
+    accepted_lines = Counter(
+        _normalise_for(path, x) for x in ACCEPTED_LINE_DROPS.get(path, ())
+    )
     excused: set[str] = set()
     remaining: list[str] = []
     for line in lost:
+        norm = _normalise_for(path, line)
+        if accepted_lines[norm] > 0:
+            accepted_lines[norm] -= 1
+            continue
         key = _setting_key(line)
         if key in accepted and key not in excused:
             excused.add(key)
             continue
-        remaining.append(line)
+        if line not in remaining:
+            remaining.append(line)
     return remaining
 
 
 def lost_setting_lines(backup_text: str, new_text: str, path: str = "") -> list[str]:
     """Non-comment lines in the ``.bak`` absent from its replacement
     (reorder-immune, counted per line so a duplicate elsewhere in the file
-    cannot stand in for a removed one). In a YAML or JSON ``path``,
+    cannot stand in for a removed one), one entry per lost occurrence so
+    :func:`still_lost` can excuse exactly one. In a YAML or JSON ``path``,
     descriptions are not compared, and in YAML a value that only gained or
     lost its quotes still matches. The lane imports this function."""
     new_skip = _description_lines(path, new_text)
+    new_literal = _block_scalar_lines(path, new_text)
     remaining = Counter(
-        _normalise_for(path, x)
+        _normalise_for(path, x, i in new_literal)
         for i, x in enumerate(new_text.splitlines())
         if i not in new_skip
     )
     skip = _description_lines(path, backup_text)
+    literal = _block_scalar_lines(path, backup_text)
     lost: list[str] = []
     for i, line in enumerate(backup_text.splitlines()):
         if i in skip:
             continue
-        norm = _normalise_for(path, line)
+        norm = _normalise_for(path, line, i in literal)
         if not norm or norm.startswith("#") or norm.startswith("//"):
             continue
         if norm in {"{", "}", "[", "]", "},", "],"}:
             continue
         if remaining[norm] > 0:
             remaining[norm] -= 1
-        elif line.strip() not in lost:
+        else:
             lost.append(line.strip())
     return lost
 

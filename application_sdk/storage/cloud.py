@@ -32,7 +32,8 @@ Usage::
 Credential format (standard ``csa-connectors-objectstore``)::
 
     S3:   authType="s3",   username=access_key, password=secret_key,
-          extra={s3_bucket, region, aws_role_arn?, aws_external_id?}
+          extra={s3_bucket, region?, aws_role_arn?, aws_external_id?}
+          (a blank region is looked up from the bucket before the first call)
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
     ADLS: authType="adls", username=client_id,   password=client_secret,
@@ -43,11 +44,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
+import aiohttp
 import obstore as obs
 import orjson
+from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
 from obstore.store import ObjectStore
 
 from application_sdk._runtime.offload import run_in_thread
@@ -56,11 +61,14 @@ from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
     StorageNotFoundError,
+    StoragePermissionError,
 )
 from application_sdk.storage.ops import (
     BoundStore,
     _list_items,
+    _obstore_http_evidence,
     _safe_join_under,
+    _store_target,
     download_file_chunked,
     upload_file,
 )
@@ -82,6 +90,35 @@ def _log():
     return _logger
 
 
+# Statuses that mean the caller's credential or the bucket's policy refused the
+# request. obstore maps some of these to a typed error and leaves the rest as
+# text, so both are checked.
+_DENIED_STATUSES = frozenset({401, 403})
+_DENIED_ERROR_STATUS: tuple[tuple[type[Exception], int], ...] = (
+    (PermissionDeniedError, 403),
+    (UnauthenticatedError, 401),
+)
+
+
+def _denied_evidence(exc: BaseException) -> tuple[int, str | None] | None:
+    """Return ``(http_status, provider_code)`` when *exc* is a 401/403.
+
+    Walks explicit ``__cause__`` links so a ``StorageError`` the shared
+    primitives already wrapped is judged by the driver error inside it.
+    """
+    current: BaseException | None = exc
+    while current is not None:
+        http_status, provider_code = _obstore_http_evidence(current)
+        if http_status is None:
+            http_status = next(
+                (s for t, s in _DENIED_ERROR_STATUS if isinstance(current, t)), None
+            )
+        if http_status in _DENIED_STATUSES:
+            return http_status, provider_code
+        current = current.__cause__
+    return None
+
+
 class CloudStore:
     """Async client for external customer-provided cloud object stores.
 
@@ -98,6 +135,8 @@ class CloudStore:
         self._store = store
         self._provider = provider
         self._put_attributes: dict[str, str] | None = put_attributes
+        self._region_lookup: tuple[str, Callable[[str], ObjectStore]] | None = None
+        self._region_lock = asyncio.Lock()
 
     @property
     def provider(self) -> str:
@@ -106,7 +145,11 @@ class CloudStore:
 
     @property
     def store(self) -> ObjectStore:
-        """Underlying obstore instance (for advanced use)."""
+        """Underlying obstore instance (for advanced use).
+
+        For S3 with a blank region, this is the store as built until the
+        first async call resolves the bucket's region.
+        """
         return self._store
 
     # ------------------------------------------------------------------
@@ -150,8 +193,22 @@ class CloudStore:
             or _infer_auth_type(extra)
         )
 
+        region_lookup: tuple[str, Callable[[str], ObjectStore]] | None = None
         if auth_type == "s3":
             store, put_attrs = _create_s3_store(credentials, extra)
+            if _needs_region_lookup(extra):
+                creds = {
+                    k: credentials[k]
+                    for k in ("username", "password", "token")
+                    if k in credentials
+                }
+                base_extra = dict(extra)
+                region_lookup = (
+                    base_extra["s3_bucket"],
+                    lambda region: _create_s3_store(
+                        creds, {**base_extra, "region": region}
+                    )[0],
+                )
         elif auth_type == "gcs":
             store, put_attrs = _create_gcs_store(credentials, extra)
         elif auth_type == "adls":
@@ -163,7 +220,30 @@ class CloudStore:
             )
 
         _log().debug("Created CloudStore provider=%s", auth_type)
-        return cls(store, provider=auth_type, put_attributes=put_attrs)
+        cloud_store = cls(store, provider=auth_type, put_attributes=put_attrs)
+        cloud_store._region_lookup = region_lookup
+        return cloud_store
+
+    async def _ensure_region(self) -> None:
+        """Rebuild an S3 store that has no region with the bucket's own region.
+
+        Runs once, before the first request. obstore does not follow S3
+        region redirects, so a store without a region fails on a bucket in
+        any other region. A failed lookup keeps the store as built.
+        """
+        if self._region_lookup is None:
+            return
+        async with self._region_lock:
+            if self._region_lookup is None:
+                return
+            bucket, rebuild = self._region_lookup
+            region = await _lookup_bucket_region(bucket)
+            if region:
+                self._store = rebuild(region)
+                _log().info(
+                    "Resolved S3 bucket region bucket=%s region=%s", bucket, region
+                )
+            self._region_lookup = None
 
     # ------------------------------------------------------------------
     # Read operations
@@ -181,6 +261,7 @@ class CloudStore:
         Raises:
             StorageNotFoundError: If the key does not exist.
         """
+        await self._ensure_region()
         try:
             result = await obs.get_async(self._store, key)
             return bytes(await result.bytes_async())
@@ -193,6 +274,7 @@ class CloudStore:
             # - S3/GCS/Azure: obstore.exceptions.NotFoundError
             if type(exc).__name__ == "NotFoundError":
                 raise StorageNotFoundError(f"Key not found: {key}", key=key) from exc
+            self._raise_if_denied(exc, "reading", key)
             raise StorageError(f"Failed to get key: {key}", cause=exc) from exc
 
     async def download(
@@ -228,6 +310,7 @@ class CloudStore:
         """
         if key and prefix:
             raise StorageConfigError("Provide either 'key' or 'prefix', not both.")
+        await self._ensure_region()
 
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
@@ -249,13 +332,17 @@ class CloudStore:
         # protocol, so sidecar_present=False saves a guaranteed-miss probe per
         # file; the byte-count check against the declared size still runs.
         # (BLDX-1513 / FND-306)
-        await download_file_chunked(
-            key,
-            local_path,
-            store=self._store,
-            normalize=False,
-            sidecar_present=False,
-        )
+        try:
+            await download_file_chunked(
+                key,
+                local_path,
+                store=self._store,
+                normalize=False,
+                sidecar_present=False,
+            )
+        except StorageError as exc:
+            self._raise_if_denied(exc, "reading", key)
+            raise
         _log().info("Downloaded key=%s local_path=%s", key, str(local_path))
         return [local_path]
 
@@ -297,17 +384,21 @@ class CloudStore:
                 # Pass the listing's size + etag so large objects chunk (with
                 # version-pinned range GETs) and small ones stream — no per-file
                 # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
-                await download_file_chunked(
-                    obj_key,
-                    local_path,
-                    store=self._store,
-                    normalize=False,
-                    file_size=size,
-                    etag=etag,
-                    # External bucket: the SDK never wrote sidecars here, so
-                    # skip the per-file probe that could only ever miss.
-                    sidecar_present=False,
-                )
+                try:
+                    await download_file_chunked(
+                        obj_key,
+                        local_path,
+                        store=self._store,
+                        normalize=False,
+                        file_size=size,
+                        etag=etag,
+                        # External bucket: the SDK never wrote sidecars here, so
+                        # skip the per-file probe that could only ever miss.
+                        sidecar_present=False,
+                    )
+                except StorageError as exc:
+                    self._raise_if_denied(exc, "reading", obj_key)
+                    raise
                 return local_path
 
         results = await asyncio.gather(*[_dl(k, s, e) for k, s, e in items])
@@ -315,13 +406,43 @@ class CloudStore:
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
+    def _raise_if_denied(self, exc: Exception, action: str, key: str) -> None:
+        """Raise ``StoragePermissionError`` from *exc* when it is a 401/403.
+
+        A 401/403 is a credential or bucket-policy problem (IAM, a VPC Service
+        Controls perimeter) that no retry fixes. Every store this class talks
+        to belongs to the customer, so it is a non-retryable USER error rather
+        than the retryable platform outage the shared primitives report (they
+        cannot tell a customer bucket from the deployment's own store).
+        """
+        if isinstance(exc, StoragePermissionError):
+            return
+        denied = _denied_evidence(exc)
+        if denied is None:
+            return
+        http_status, provider_code = denied
+        target = _store_target(self._store, key)
+        detail = f"{http_status} {provider_code}" if provider_code else str(http_status)
+        raise StoragePermissionError(
+            f"Permission denied {action} {target or key} ({detail}). Check the "
+            "credential's IAM access and any VPC Service Controls perimeter "
+            "on the bucket.",
+            key=key,
+            cause=exc,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        ) from exc
+
     async def _list_keys(
         self, list_prefix: str, suffix_filter: set[str] | None = None
     ) -> list[str]:
         # Lowercase once so endswith checks are case-insensitive (e.g. ".JSON" matches ".json").
         lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
-            items = await _list_items(self._store, list_prefix or None)
+            items = await _list_items(
+                self._store, list_prefix or None, suffixes=suffix_filter or ()
+            )
             return sorted(
                 path
                 for path, _, _ in items
@@ -329,6 +450,7 @@ class CloudStore:
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
+            self._raise_if_denied(exc, "listing", list_prefix)
             raise StorageError(
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
             ) from exc
@@ -341,7 +463,9 @@ class CloudStore:
         and version-pin the range GETs — without a HEAD."""
         lfilter = {s.lower() for s in suffix_filter} if suffix_filter else None
         try:
-            items = await _list_items(self._store, list_prefix or None)
+            items = await _list_items(
+                self._store, list_prefix or None, suffixes=suffix_filter or ()
+            )
             return sorted(
                 (path, size, etag)
                 for path, size, etag in items
@@ -349,6 +473,7 @@ class CloudStore:
             )
         # conformance: ignore[E004] re-raise only; wraps obstore listing failure into StorageError
         except Exception as exc:
+            self._raise_if_denied(exc, "listing", list_prefix)
             raise StorageError(
                 f"Failed to list keys with prefix: {list_prefix!r}", cause=exc
             ) from exc
@@ -366,10 +491,12 @@ class CloudStore:
         Returns:
             Sorted list of matching object keys.  Zero-byte objects that act as
             GCS-style directory markers (i.e. they have at least one child key
-            under them) are excluded; zero-byte files with no children are
-            returned normally.  For raw access including markers, use the
+            under them) are excluded, and so are S3 ``folder/`` markers with
+            no children; zero-byte files with no children are returned
+            normally.  For raw access including markers, use the
             underlying :attr:`store` property directly.
         """
+        await self._ensure_region()
         list_prefix = f"{prefix.strip('/')}/" if prefix else ""
         suffix_filter = {suffix} if suffix else None
         return await self._list_keys(list_prefix, suffix_filter)
@@ -415,6 +542,7 @@ class CloudStore:
             count and does not surface it; no caller needs the exact figure, so
             this does not spend a second HEAD to recover it.
         """
+        await self._ensure_region()
         path = Path(local_path)
         try:
             size = path.stat().st_size
@@ -429,13 +557,17 @@ class CloudStore:
         # write loop is not lost with the loop: ``upload_file`` marks
         # ``storage.upload_part`` per part, so the stall watchdog still sees a
         # long external upload making progress. Only the label changed.
-        await upload_file(
-            key,
-            path,
-            BoundStore(self._store, self._put_attributes),
-            normalize=False,
-            compute_hash=False,
-        )
+        try:
+            await upload_file(
+                key,
+                path,
+                BoundStore(self._store, self._put_attributes),
+                normalize=False,
+                compute_hash=False,
+            )
+        except StorageError as exc:
+            self._raise_if_denied(exc, "writing", key)
+            raise
         _log().info("Uploaded key=%s bytes=%d", key, size)
         return size
 
@@ -449,10 +581,12 @@ class CloudStore:
         Returns:
             Number of bytes uploaded.
         """
+        await self._ensure_region()
         try:
             await obs.put_async(self._store, key, data, attributes=self._put_attributes)
         # conformance: ignore[E004] re-raise only; wraps obstore put failure into StorageError
         except Exception as exc:
+            self._raise_if_denied(exc, "writing", key)
             raise StorageError(f"Failed to upload key: {key}", cause=exc) from exc
         return len(data)
 
@@ -479,6 +613,7 @@ class CloudStore:
         Returns:
             List of uploaded object keys.
         """
+        await self._ensure_region()
         local = Path(local_dir)
 
         def _collect_files() -> list[tuple[str, Path]]:
@@ -516,6 +651,69 @@ class CloudStore:
 # ---------------------------------------------------------------------------
 # Store creation helpers
 # ---------------------------------------------------------------------------
+
+
+_S3_REGION_LOOKUP_URL = "https://{host}/{bucket}"
+_S3_REGION_LOOKUP_TIMEOUT_SECONDS = 10.0
+
+
+def _needs_region_lookup(extra: dict[str, Any]) -> bool:
+    """True when an S3 store has no region and talks to AWS S3 itself."""
+    return not extra.get("region") and not (
+        os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("AWS_ENDPOINT")
+    )
+
+
+_S3_GLOBAL_LOOKUP_HOST = "s3.amazonaws.com"
+_S3_CHINA_LOOKUP_HOST = "s3.cn-north-1.amazonaws.com.cn"
+
+
+def _region_lookup_hosts() -> list[str]:
+    """S3 endpoint hosts for the region lookup, in probe order.
+
+    The ambient region's endpoint (else the global one) comes first, then the
+    other partition's: a partition's endpoint cannot see the other partition's
+    buckets, and a blank-region store has no region to pick the partition from.
+    """
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    if not region:
+        return [_S3_GLOBAL_LOOKUP_HOST, _S3_CHINA_LOOKUP_HOST]
+    if region.startswith("cn-"):
+        return [f"s3.{region}.amazonaws.com.cn", _S3_GLOBAL_LOOKUP_HOST]
+    return [f"s3.{region}.amazonaws.com", _S3_CHINA_LOOKUP_HOST]
+
+
+async def _lookup_bucket_region(bucket: str) -> str:
+    """Return the bucket's region from ``x-amz-bucket-region``, or ``""``.
+
+    An unsigned path-style HEAD on the bucket returns the header on 200, 301
+    and 403, so no credentials are needed and dotted bucket names work. The
+    pod's own regional endpoint is used when ``AWS_REGION`` is set, so a
+    network that reaches only its own region still answers. A response without
+    the header means the bucket is not in that partition, so the other
+    partition is probed next; a failed request stops the lookup rather than
+    spend a second timeout on an unreachable network.
+    """
+    timeout = aiohttp.ClientTimeout(total=_S3_REGION_LOOKUP_TIMEOUT_SECONDS)
+    try:
+        from application_sdk.clients.ssl_utils import get_ssl_context  # noqa: PLC0415
+
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            for host in _region_lookup_hosts():
+                url = _S3_REGION_LOOKUP_URL.format(
+                    host=host, bucket=quote(bucket, safe="")
+                )
+                async with session.head(
+                    url, allow_redirects=False, ssl=get_ssl_context()
+                ) as response:
+                    region = response.headers.get("x-amz-bucket-region", "")
+                if region:
+                    return region
+            return ""
+    # conformance: ignore[E004] best-effort lookup; any failure keeps the store as built and is logged
+    except Exception as exc:
+        _log().warning("S3 bucket region lookup failed bucket=%s error=%s", bucket, exc)
+        return ""
 
 
 def _infer_auth_type(extra: dict[str, Any]) -> str:

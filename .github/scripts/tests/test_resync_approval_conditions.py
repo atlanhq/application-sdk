@@ -424,6 +424,96 @@ def test_yaml_quotes_that_change_the_value_still_count_as_lost(old, new):
     assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
 
 
+def test_yaml_inline_comment_alone_is_not_a_lost_setting():
+    # FND-3945: the re-render writes the bare line; the value is unchanged.
+    backup = (
+        "    with:\n"
+        "      private-git-deps: true  # query-redaction; ORG_PAT_GITHUB below\n"
+        "      git-lfs-skip-smudge: true\t# its repo LFS-tracks a jar\n"
+        "      e2e-test-path: 'tests/e2e' # quoted value, comment after\n"
+        "      runtime-sdk-ref: # nothing set\n"
+    )
+    new = (
+        "    with:\n"
+        "      private-git-deps: true\n"
+        "      git-lfs-skip-smudge: true\n"
+        '      e2e-test-path: "tests/e2e"\n'
+        "      runtime-sdk-ref:\n"
+    )
+    lost = resync.lost_setting_lines(backup, new, TESTS_YAML)
+    assert lost == []
+    assert resync.still_lost(TESTS_YAML, lost) == []
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ("private-git-deps: true  # keep", "private-git-deps: false"),
+        ("private-git-deps: true  # keep", "private-git-deps: false  # keep"),
+        ("args: -k slow # comment", "args: -k"),
+        ("runtime-sdk-ref: # unset", "runtime-sdk-ref: main"),
+    ],
+)
+def test_yaml_value_change_with_inline_comment_still_counts_as_lost(old, new):
+    assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        # `#` inside a quoted scalar is part of the value.
+        ("args: 'a #b'", "args: 'a'"),
+        ('args: "a #b"', 'args: "a"'),
+        ('args: "a \\" #b"', 'args: "a \\""'),
+        ("args: 'it''s #b'", "args: 'it''s'"),
+        ("if: ${{ contains(x, ' #b') }}", "if: ${{ contains(x, '') }}"),
+        ("key: [a, ' #b']", "key: [a, '"),
+        # `#` with no whitespace before it is not a comment.
+        ("args: a#b", "args: a"),
+        # A quote that never closes keeps the rest of the line.
+        ("args: 'a #b", "args: 'a"),
+    ],
+)
+def test_yaml_hash_that_is_not_a_comment_still_counts(old, new):
+    assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
+
+
+@pytest.mark.parametrize(
+    "header, body_indent",
+    [
+        ("      run: |", "        "),
+        ("      - run: >-", "          "),
+        ("      run: | # script", "        "),
+        ("      - |", "        "),
+    ],
+)
+def test_yaml_hash_in_a_block_scalar_body_is_text_not_a_comment(header, body_indent):
+    # A `#` inside a block scalar is part of the value, so a change after it
+    # is a real change even when the line looks like `key: value # ...`.
+    backup = f"{header}\n{body_indent}setting: enabled #old\n"
+    new = f"{header}\n{body_indent}setting: enabled #new\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == [
+        "setting: enabled #old"
+    ]
+
+
+def test_yaml_comment_after_a_block_scalar_ends_is_still_a_comment():
+    backup = (
+        "      run: |\n"
+        "        echo hi # kept\n"
+        "      private-git-deps: true  # dropped by the render\n"
+    )
+    new = "      run: |\n        echo hi # kept\n      private-git-deps: true\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == []
+
+
+def test_inline_comments_are_compared_in_files_that_are_not_yaml():
+    for path in ("pyproject.toml", "README.md"):
+        assert resync.lost_setting_lines("a = 1  # x\n", "a = 1\n", path) == [
+            "a = 1  # x"
+        ]
+
+
 def test_json_quoting_is_never_ignored():
     backup = '{\n  "automerge": "true",\n  "groupName": "x"\n}\n'
     new = '{\n  "automerge": true,\n  "groupName": "x"\n}\n'
@@ -633,6 +723,105 @@ def test_accepted_drops_mirror_the_lane():
             {"container-health-timeout-seconds", "e2e-clouds"}
         )
     }
+
+
+# The canonical tests.yaml before FND-3839 (#4359) dropped label triggers:
+# `labeled` in the pull_request types, and the bump-version opt-in condition
+# that read the `gate-check` / `e2e` labels.
+OLD_LABEL_CONDITION = (
+    "!startsWith(github.head_ref, 'bump-version') || "
+    "(contains(github.event.pull_request.labels.*.name, 'gate-check') && "
+    "(github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || "
+    "(contains(github.event.pull_request.labels.*.name, 'e2e') && "
+    "(github.event.action != 'labeled' || github.event.label.name == 'e2e'))"
+)
+NEW_CONDITION = "!startsWith(github.head_ref, 'bump-version')"
+
+
+def _tests_yaml(types: list[str], condition: str | None) -> str:
+    lines = [
+        "on:",
+        "  pull_request:",
+        "    types:",
+        *(f"      - {t}" for t in types),
+        "jobs:",
+        "  tests:",
+    ]
+    if condition is not None:
+        lines += ["    if: >-", f"      {condition}"]
+    lines.append("    uses: atlanhq/application-sdk/.github/workflows/x.yaml@main")
+    return "\n".join(lines) + "\n"
+
+
+OLD_TYPES = ["opened", "synchronize", "reopened", "labeled"]
+NEW_TYPES = ["opened", "synchronize", "reopened"]
+
+
+def _lost(backup: str, new: str) -> list[str]:
+    return resync.still_lost(
+        TESTS_YAML, resync.lost_setting_lines(backup, new, TESTS_YAML)
+    )
+
+
+def test_label_trigger_lines_the_canonical_dropped_are_accepted():
+    backup = _tests_yaml(OLD_TYPES, OLD_LABEL_CONDITION)
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION)
+    # The raw compare still sees both lines go; only the accepted list excuses them.
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == [
+        "- labeled",
+        OLD_LABEL_CONDITION,
+    ]
+    assert _lost(backup, new) == []
+
+
+def test_labeled_alone_is_accepted_when_the_repo_never_had_the_condition():
+    # Repos still on the pre-FND-3748 template: no `if:` on the tests job.
+    backup = _tests_yaml(OLD_TYPES, None)
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION)
+    assert _lost(backup, new) == []
+
+
+@pytest.mark.parametrize(
+    "custom",
+    [
+        # A repo's own extra clause on the old condition.
+        OLD_LABEL_CONDITION + " || github.actor == 'release-bot'",
+        # A prefix of the old canonical text is not the old canonical text.
+        "!startsWith(github.head_ref, 'bump-version') || "
+        "contains(github.event.pull_request.labels.*.name, 'gate-check')",
+    ],
+)
+def test_a_repo_customised_condition_is_still_held(custom):
+    backup = _tests_yaml(OLD_TYPES, custom)
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION)
+    assert _lost(backup, new) == [custom]
+
+
+def test_a_second_labeled_beyond_the_canonical_one_is_still_held():
+    backup = _tests_yaml(OLD_TYPES, OLD_LABEL_CONDITION) + (
+        "  pull_request_target:\n    types:\n      - labeled\n"
+    )
+    new = _tests_yaml(NEW_TYPES, NEW_CONDITION) + (
+        "  pull_request_target:\n    types:\n      - opened\n"
+    )
+    assert _lost(backup, new) == ["- labeled"]
+
+
+def test_accepted_lines_only_apply_to_tests_yaml():
+    assert resync.still_lost(".github/workflows/other.yaml", ["- labeled"]) == [
+        "- labeled"
+    ]
+
+
+def test_the_lane_does_not_hold_a_repo_for_the_dropped_label_triggers(tmp_path):
+    work = str(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "tests.yaml").write_text(_tests_yaml(NEW_TYPES, NEW_CONDITION))
+    (wf / "tests.yaml.bak").write_text(_tests_yaml(OLD_TYPES, OLD_LABEL_CONDITION))
+    manifest = {"touched": [".github/workflows/tests.yaml"]}
+    assert resync.stage_like_the_lane(work, manifest, subprocess.run) == {}
 
 
 @pytest.mark.parametrize(
@@ -957,6 +1146,13 @@ def test_an_accepted_key_excuses_one_lost_line_not_every_line_using_it():
     assert resync.still_lost(path, ["e2e-clouds: aws"]) == []
 
 
+def test_two_identical_lost_lines_under_an_accepted_key_are_not_both_excused():
+    backup = "a:\n  e2e-clouds: aws\nb:\n  e2e-clouds: aws\n"
+    lost = resync.lost_setting_lines(backup, "a:\nb:\n", TESTS_YAML)
+    assert lost == ["e2e-clouds: aws", "e2e-clouds: aws"]
+    assert resync.still_lost(TESTS_YAML, lost) == ["e2e-clouds: aws"]
+
+
 def test_call_turns_a_timeout_into_a_gh_error():
     def runner(cmd, **kwargs):
         assert kwargs["timeout"] == resync.GH_TIMEOUT
@@ -964,3 +1160,25 @@ def test_call_turns_a_timeout_into_a_gh_error():
 
     with pytest.raises(resync.GhError, match="timed out"):
         resync.call(runner, ["gh", "api", "x"])
+
+
+# FND-3947: the bump-version skip moved inside the reusable, so the canonical
+# `tests` job has no `if:` at all.
+
+
+@pytest.mark.parametrize(
+    ("types", "condition"),
+    [(NEW_TYPES, NEW_CONDITION), (OLD_TYPES, OLD_LABEL_CONDITION)],
+    ids=["fnd-3839-template", "fnd-3748-template"],
+)
+def test_the_dropped_tests_job_condition_is_accepted(types, condition):
+    backup = _tests_yaml(types, condition)
+    new = _tests_yaml(NEW_TYPES, None)
+    assert "if: >-" in resync.lost_setting_lines(backup, new, TESTS_YAML)
+    assert _lost(backup, new) == []
+
+
+def test_a_customised_condition_is_held_when_the_if_goes():
+    custom = NEW_CONDITION + " && github.actor != 'release-bot'"
+    backup = _tests_yaml(NEW_TYPES, custom)
+    assert _lost(backup, _tests_yaml(NEW_TYPES, None)) == [custom]

@@ -1,0 +1,99 @@
+name: Test commands
+
+# `/e2e` and `/gate-check` PR comments for application-sdk itself (FND-3839).
+# They replace the `e2e` / `gate-check` labels, whose `labeled` events created
+# a duplicate run of every PR workflow on the same commit for every label any
+# bot added.
+#
+#   /e2e         run the PR-time e2e path on the head commit: the SDK base
+#                image, the connector e2e dispatch, SDR K8s e2e and storage
+#                integration. The merge queue still runs e2e on its own.
+#   /gate-check  opt a bump-version PR into its release gate (FND-3748); on
+#                bump-version-main that includes e2e. Admin role only here:
+#                it gates an SDK release (`--gate-check-requires-admin`).
+#   … force      run again even though the commit was already asked for.
+#
+# Connector repos run their commands by dispatch (test-commands-reusable.yaml).
+# Here that would collide: dispatching PR Checks or SDK Gate publishes their
+# inline required checks again, and GitHub reads a required check from the
+# NEWEST run, where a skipped job counts as a pass. So instead the request is a
+# marker status on the head commit (`e2e-request`, `gate-check`), and the
+# command re-runs the runs on that commit that started before the marker; they
+# read it live (bump_pr_opt_in.py). A re-run keeps the `pull_request` event,
+# which Storage Integration's Azure federated credential requires.
+#
+# Security shape: `issue_comment` runs this file from the default branch with
+# its secrets. It never checks out PR code — only this repo's scripts at the
+# default branch — and only re-runs existing runs and writes statuses. Who may
+# trigger is decided in pr_test_command.py (tested): the Write, Maintain or
+# Admin role on this repo (Admin only for /gate-check; read live from the
+# permissions API),
+# no bots, no forks. Replies use GITHUB_TOKEN, which triggers no workflow.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  command:
+    name: Test command
+    if: >-
+      github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/e2e') ||
+      startsWith(github.event.comment.body, '/gate-check'))
+    # Not ubuntu-slim: the command waits (bounded, 30 min) for a run that is
+    # still going before re-running it — GitHub refuses to re-run a run in
+    # progress — and a slim runner is killed at 15 minutes (FND-3335).
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # One run per PR AND command at a time, so two identical comments cannot
+    # both pass the "already requested?" check. Not cancelled: the running one
+    # finishes and the next sees its marker. A group holds ONE pending run (a
+    # third arrival evicts the waiting one), so it is keyed on the command: the
+    # newest identical request supersedes an older one, but an `/e2e` never
+    # evicts a waiting `/gate-check` (lens F-dbdbf2). JOB-level: entered only
+    # once the `if:` above passes, so ordinary PR comments never take the slot.
+    concurrency:
+      group: test-commands-${{ github.event.issue.number }}-${{ startsWith(github.event.comment.body, '/gate-check') && 'gate-check' || 'e2e' }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write # re-run the runs that predate the marker
+      statuses: write # the `e2e-request` / `gate-check` marker
+      issues: write # the reply and the reaction
+      pull-requests: write # the PR's head commit and branch; the sticky comment
+    steps:
+      - name: Check out the command scripts (default branch, trusted)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Acknowledge the comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: eyes
+        run: python3 .github/scripts/react_to_comment.py
+
+      - name: Run the command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 .github/scripts/pr_test_command.py
+          --repo "$REPO"
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"
+          --mode rerun
+          --run-url "$RUN_URL"
+          --gate-check-requires-admin

@@ -207,12 +207,32 @@ def _resolve_secret_ref(ref: dict, secrets: SecretMap | None) -> str | None:
     return os.environ.get(key)
 
 
+def _has_value(item: dict) -> bool:
+    """Return True when a Dapr metadata item carries a ``value``.
+
+    Mirrors Dapr's ``NameValuePair.HasValue``: a bare YAML ``value:`` is null,
+    which Dapr drops on decode, so it counts as absent — not as the string
+    ``"None"``, and not as a value that shadows ``secretKeyRef``.
+    """
+    return item.get("value") is not None
+
+
+def _secret_key_ref(item: dict) -> dict | None:
+    """Return a Dapr metadata item's ``secretKeyRef``, or ``None`` when it has none.
+
+    A bare YAML ``secretKeyRef:`` is null; Dapr decodes it to an empty ref with
+    no name and skips it, so it counts as absent rather than as a ref to resolve.
+    """
+    ref = item.get("secretKeyRef")
+    return ref if isinstance(ref, dict) and ref else None
+
+
 def _resolve_metadata_value(item: dict, secrets: SecretMap | None = None) -> str:
     """Resolve a single Dapr metadata item to its string value."""
-    if "value" in item:
+    if _has_value(item):
         return str(item["value"])
 
-    secret_ref = item.get("secretKeyRef")
+    secret_ref = _secret_key_ref(item)
     if secret_ref:
         return _resolve_secret_ref(secret_ref, secrets) or ""
 
@@ -241,11 +261,10 @@ def _find_broken_metadata_fields(
     broken: list[str] = []
     for item in metadata_list or []:
         field_name = item.get("name", "<unknown>")
-        if "value" in item:
+        if _has_value(item):
             if _TEMPLATE_PLACEHOLDER_RE.search(str(item["value"])):
                 broken.append(field_name)
-        elif "secretKeyRef" in item:
-            ref = item["secretKeyRef"]
+        elif (ref := _secret_key_ref(item)) is not None:
             _, key = _secret_ref_target(ref)
             if key and _resolve_secret_ref(ref, secrets) is None:
                 broken.append(field_name)

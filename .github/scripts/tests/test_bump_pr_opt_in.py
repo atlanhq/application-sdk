@@ -1,13 +1,16 @@
-"""Tests for .github/scripts/bump_pr_opt_in.py (FND-3748).
+"""Tests for .github/scripts/bump_pr_opt_in.py (FND-3748, FND-3839).
 
 Covers the three modes the bump-PR CI opt-in rests on:
 
-* ``clear`` — removes ``gate-check`` from the open bump PR before a push, and
-  fails open (warns, never raises) so a broken label call can't stop a release;
-* ``check`` — answers from the PR's *live* labels, ``true`` off a bump PR and
-  whenever the labels can't be read;
-* ``rerun`` — waits out an in-flight gate run, then re-runs it, and is loud
-  when there is nothing to re-run.
+* ``clear`` — removes a legacy ``gate-check`` label from the open bump PR
+  before a push, and fails open (warns, never raises) so a broken label call
+  can't stop a release;
+* ``check`` — answers from the head commit's ``gate-check`` status (posted by
+  a ``/gate-check`` comment), ``true`` off a bump PR and whenever the status
+  can't be read;
+* ``e2e-requested`` — answers from the ``e2e-request`` status (or, on
+  ``bump-version-main``, the ``gate-check`` opt-in), and fails CLOSED: an
+  unreadable request does not justify a live-tenant suite.
 """
 
 from __future__ import annotations
@@ -144,102 +147,191 @@ def test_gh_calls_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 # ── check ─────────────────────────────────────────────────────────────────────
 
+BUMP = "bump-version-main"
+SHA = "a96a27b0000000000000000000000000000000aa"
+
+
+class TestCommitStatus:
+    def test_reads_the_context_from_the_head_commit(self, gh) -> None:
+        fake = gh({("gh", "api"): [(0, "success\n")]})
+        assert bump_pr_opt_in.commit_status("o/r", SHA, "gate-check") == "success"
+        (call,) = fake.calls
+        assert f"repos/o/r/commits/{SHA}/status?per_page=100" in call
+        assert '.statuses[] | select(.context == "gate-check") | .state' in call
+
+    def test_absent_is_empty_and_unreadable_is_none(self, gh) -> None:
+        """The two must differ: `check` fails open only on unreadable."""
+        gh({("gh", "api"): [(0, ""), (1, "")]})
+        assert bump_pr_opt_in.commit_status("o/r", SHA, "gate-check") == ""
+        assert bump_pr_opt_in.commit_status("o/r", SHA, "gate-check") is None
+
 
 class TestCheck:
     @pytest.mark.parametrize(
-        ("head_ref", "pr"), [("", ""), ("feat/x", "7"), ("bump-version-main", "")]
+        ("head_ref", "sha"), [("", ""), ("feat/x", SHA), (BUMP, "")]
     )
-    def test_not_a_bump_pr_always_runs(self, gh, head_ref: str, pr: str) -> None:
+    def test_not_a_bump_pr_always_runs(self, gh, head_ref: str, sha: str) -> None:
         fake = gh({})
-        assert bump_pr_opt_in.is_opted_in("o/r", head_ref, pr)[0] is True
+        assert bump_pr_opt_in.is_opted_in("o/r", head_ref, sha)[0] is True
         assert fake.calls == []
 
     @pytest.mark.parametrize(
-        ("labels", "opted_in"),
+        ("state", "opted_in"),
         [
-            ("release\ngate-check\n", True),
-            ("release\ne2e\n", True),
-            ("release\n", False),
+            ("success\n", True),
+            # `/gate-check` posts `pending` while its dispatched runs go.
+            ("pending\n", True),
+            ("failure\n", False),
+            ("error\n", False),
             ("", False),
         ],
     )
-    def test_bump_pr_reads_live_labels(self, gh, labels: str, opted_in: bool) -> None:
-        gh({("gh", "api"): [(0, labels)]})
-        ok, reason = bump_pr_opt_in.is_opted_in("o/r", "bump-version-conformance", "7")
+    def test_bump_pr_reads_the_head_commit_status(
+        self, gh, state: str, opted_in: bool
+    ) -> None:
+        gh({("gh", "api"): [(0, state)]})
+        ok, reason = bump_pr_opt_in.is_opted_in("o/r", "bump-version-conformance", SHA)
         assert ok is opted_in
         if not opted_in:
-            assert "'gate-check'" in reason
+            assert "/gate-check" in reason
 
-    def test_unreadable_labels_fail_open(self, gh) -> None:
+    def test_unreadable_status_fails_open(self, gh) -> None:
         gh({("gh", "api"): [(1, "")]})
-        assert bump_pr_opt_in.is_opted_in("o/r", "bump-version-main", "7")[0] is True
+        ok, reason = bump_pr_opt_in.is_opted_in("o/r", BUMP, SHA)
+        assert ok is True
+        assert "failing open" in reason
 
     def test_main_emits_outputs(
         self, gh, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        gh({("gh", "api"): [(0, "release\n")]})
+        gh({("gh", "api"): [(0, "")]})
         out = tmp_path / "out"
         monkeypatch.setenv("GITHUB_OUTPUT", str(out))
         rc = bump_pr_opt_in.main(
-            ["--repo", "o/r", "check", "--head-ref", "bump-version-main", "--pr", "7"]
+            ["--repo", "o/r", "check", "--head-ref", BUMP, "--sha", SHA]
         )
         assert rc == 0
         assert "opted_in=false" in out.read_text().splitlines()
 
 
-# ── rerun ─────────────────────────────────────────────────────────────────────
+# ── e2e-requested ─────────────────────────────────────────────────────────────
 
 
-def _runs(status: str) -> str:
-    return json.dumps([{"databaseId": 42, "status": status}])
+def _statuses(**states: str | None):
+    """A `gh api` stub answering per context; None means unreadable."""
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess:
+        query = cmd[cmd.index("--jq") + 1]
+        context = query.split('"')[1]
+        state = states.get(context.replace("-", "_"), "")
+        if state is None:
+            return subprocess.CompletedProcess(cmd, 1, "", "boom")
+        return subprocess.CompletedProcess(cmd, 0, f"{state}\n" if state else "", "")
+
+    return run
 
 
-class TestRerun:
-    def test_reruns_a_completed_run(self, gh) -> None:
-        fake = gh({("gh", "run", "list"): [(0, _runs("completed"))]})
-        assert bump_pr_opt_in.rerun_gate("o/r", "sdk-gate.yaml", "abc") == "42"
-        assert ["gh", "run", "rerun", "42", "--repo", "o/r"] in fake.calls
-
-    def test_waits_for_an_in_flight_run(self, gh) -> None:
-        fake = gh(
-            {
-                ("gh", "run", "list"): [
-                    (0, _runs("in_progress")),
-                    (0, _runs("queued")),
-                    (0, _runs("completed")),
-                ]
-            }
+class TestE2eRequested:
+    @pytest.mark.parametrize(
+        ("fork", "author"), [(True, "a-human"), (False, "dependabot[bot]")]
+    )
+    def test_fork_and_dependabot_never_run_e2e(
+        self, monkeypatch: pytest.MonkeyPatch, fork: bool, author: str
+    ) -> None:
+        """No secrets there — even a recorded request cannot change that."""
+        monkeypatch.setattr(bump_pr_opt_in, "run", _statuses(e2e_request="success"))
+        ok, _ = bump_pr_opt_in.is_e2e_requested(
+            "o/r", "feat/x", SHA, fork=fork, author=author
         )
-        sleeps: list[float] = []
-        bump_pr_opt_in.rerun_gate(
-            "o/r", "sdk-gate.yaml", "abc", poll_s=5, sleep=sleeps.append
-        )
-        assert sleeps == [5, 5]
-        assert fake.calls[-1][:3] == ["gh", "run", "rerun"]
+        assert ok is False
 
-    def test_times_out_loudly(self, gh) -> None:
-        gh({("gh", "run", "list"): [(0, _runs("in_progress"))]})
-        with pytest.raises(SystemExit, match="still in_progress"):
-            bump_pr_opt_in.rerun_gate(
+    def test_no_sha_is_false(self, gh) -> None:
+        fake = gh({})
+        assert (
+            bump_pr_opt_in.is_e2e_requested(
+                "o/r", "feat/x", "", fork=False, author="a"
+            )[0]
+            is False
+        )
+        assert fake.calls == []
+
+    @pytest.mark.parametrize(
+        ("state", "requested"),
+        [("success", True), ("pending", False), ("failure", False), ("", False)],
+    )
+    def test_the_e2e_request_status(
+        self, monkeypatch: pytest.MonkeyPatch, state: str, requested: bool
+    ) -> None:
+        monkeypatch.setattr(bump_pr_opt_in, "run", _statuses(e2e_request=state))
+        ok, _ = bump_pr_opt_in.is_e2e_requested(
+            "o/r", "feat/x", SHA, fork=False, author="a"
+        )
+        assert ok is requested
+
+    @pytest.mark.parametrize(
+        ("head_ref", "gate_check", "requested"),
+        [
+            (BUMP, "success", True),
+            (BUMP, "pending", True),
+            (BUMP, "failure", False),
+            (BUMP, "", False),
+            # The conformance / contract-toolkit lanes never run tenant e2e.
+            ("bump-version-conformance", "success", False),
+            ("feat/x", "success", False),
+        ],
+    )
+    def test_gate_check_implies_e2e_only_on_the_sdk_bump_branch(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        head_ref: str,
+        gate_check: str,
+        requested: bool,
+    ) -> None:
+        monkeypatch.setattr(bump_pr_opt_in, "run", _statuses(gate_check=gate_check))
+        ok, _ = bump_pr_opt_in.is_e2e_requested(
+            "o/r", head_ref, SHA, fork=False, author="a"
+        )
+        assert ok is requested
+
+    @pytest.mark.parametrize("head_ref", [BUMP, "feat/x"])
+    def test_unreadable_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch, head_ref: str
+    ) -> None:
+        monkeypatch.setattr(
+            bump_pr_opt_in, "run", _statuses(e2e_request=None, gate_check=None)
+        )
+        ok, _ = bump_pr_opt_in.is_e2e_requested(
+            "o/r", head_ref, SHA, fork=False, author="a"
+        )
+        assert ok is False
+
+    @pytest.mark.parametrize(
+        ("fork", "expected"), [("false", "true"), ("TRUE", "false")]
+    )
+    def test_main_emits_outputs(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        fork: str,
+        expected: str,
+    ) -> None:
+        monkeypatch.setattr(bump_pr_opt_in, "run", _statuses(e2e_request="success"))
+        out = tmp_path / "out"
+        monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+        rc = bump_pr_opt_in.main(
+            [
+                "--repo",
                 "o/r",
-                "sdk-gate.yaml",
-                "abc",
-                timeout_s=10,
-                poll_s=5,
-                sleep=lambda _: None,
-            )
-
-    def test_nothing_to_rerun_is_loud(self, gh) -> None:
-        gh({("gh", "run", "list"): [(0, "[]")]})
-        with pytest.raises(SystemExit, match="no sdk-gate.yaml run"):
-            bump_pr_opt_in.rerun_gate("o/r", "sdk-gate.yaml", "abc")
-
-    def test_rerun_failure_is_loud(self, gh) -> None:
-        gh(
-            {
-                ("gh", "run", "list"): [(0, _runs("completed"))],
-                ("gh", "run", "rerun"): [(1, "")],
-            }
+                "e2e-requested",
+                "--head-ref",
+                "feat/x",
+                "--sha",
+                SHA,
+                "--fork",
+                fork,
+                "--author",
+                "a-human",
+            ]
         )
-        with pytest.raises(SystemExit, match="could not re-run"):
-            bump_pr_opt_in.rerun_gate("o/r", "sdk-gate.yaml", "abc")
+        assert rc == 0
+        assert f"requested={expected}" in out.read_text().splitlines()

@@ -31,6 +31,7 @@ from conformance.bootstrap.render import (
     MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
     RETIRED_CONNECTOR_REVIEW_FILES,
+    RETIRED_FILES,
     RETIRED_WORKFLOWS,
     SARIF_UPLOAD_WORKFLOW,
     render,
@@ -2151,16 +2152,17 @@ def test_parse_bootstrap_args_system_deps_rejects_shell_metacharacters(
     assert "invalid package name" in capsys.readouterr().err
 
 
-def test_checks_yml_without_deps_declares_no_inputs() -> None:
+def test_checks_yml_without_deps_declares_only_the_bump_skip() -> None:
     """The <% if %> tags hug their content so an un-taken block leaves no stray
     blank line -- a one-line whitespace difference here would surface as C002
-    drift in every already-bootstrapped repo (none of which passes this flag)."""
+    drift in every already-bootstrapped repo (none of which passes this flag).
+    The `with:` block always carries `skip-on-bump-pr` (FND-3947)."""
     rendered = render("checks.yml")
     assert "system_deps" not in rendered
-    # The concurrency block is the last thing in the job, with nothing (not even
-    # an empty line) where the conditional `with:` sat.
     assert rendered.endswith(
         "cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}\n"
+        "    with:\n"
+        "      skip-on-bump-pr: true\n"
     )
 
 
@@ -2392,6 +2394,48 @@ def test_cmd_bootstrap_json_reports_a_removal_as_touched(
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     for name in RETIRED_WORKFLOWS:
         assert f".github/workflows/{name}" in payload["touched"]
+
+
+# ---------------------------------------------------------------------------
+# Dependabot config: superseded by the Renovate preset, never managed
+# ---------------------------------------------------------------------------
+
+_DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
+
+
+def test_dependabot_configs_are_retired() -> None:
+    assert set(_DEPENDABOT_CONFIGS) <= set(RETIRED_FILES)
+    # Not a workflow, so C002's workflow-directory scan must not list it.
+    assert not {"dependabot.yml", "dependabot.yaml"} & set(RETIRED_WORKFLOWS)
+
+
+@pytest.mark.parametrize("rel", _DEPENDABOT_CONFIGS)
+def test_cmd_bootstrap_removes_a_dependabot_config_and_leaves_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys, rel: str
+) -> None:
+    """The file is deleted, reported as touched so the resync lane stages the
+    deletion, and the same run leaves renovate.json as the one updater."""
+    dest = tmp_path / rel
+    dest.parent.mkdir(parents=True)
+    dest.write_text("version: 2\nupdates: []\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert not dest.exists()
+    assert rel in payload["touched"]
+    assert (tmp_path / "renovate.json").exists()
+
+
+def test_cmd_bootstrap_without_dependabot_config_reports_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    for rel in _DEPENDABOT_CONFIGS:
+        assert rel not in payload["touched"]
+        assert rel not in payload["unchanged"]
+        assert not (tmp_path / rel).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -3542,6 +3586,14 @@ def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
         "base-image-ref",
         "agent-name-override",
         "e2e-clouds",
+        "head-sha",
+        "pr-number",
+        # Hardcoded `false` by the template: the scaffold no longer subscribes
+        # to `labeled`, so it must not read labels either (FND-3839).
+        "e2e-label-trigger",
+        # Hardcoded `true`: the scaffold always skips every reusable job on a
+        # bump PR's own run, so the required contexts resolve (FND-3947).
+        "skip-on-bump-pr",
         # Policy drop, not a slot — see redundant_install_app_to_tenant.
         "install-app-to-tenant",
     }

@@ -6,8 +6,9 @@ generate contract classes combinatorially and pin the invariant:
 
 * a contract whose every field is bounded (scalars, ``Annotated[...,
   MaxItems(n)]`` collections) ALWAYS validates
-* injecting any single unbounded field (``dict[str, Any]``, bare ``list``,
-  ``Any``, ``bytes``, bounded collections of unbounded elements) ALWAYS
+* injecting any single unbounded field (``dict[str, Any]``, ``set[str]``,
+  ``tuple[str, ...]``, ``Sequence[str]``, ``Any``, ``bytes``, bounded
+  collections of unbounded elements) ALWAYS
   raises ``PayloadSafetyError`` naming exactly that field
 * the documented escape hatches (``skip_fields``, ``_allow_unbounded_fields``)
   neutralize the rejection
@@ -15,6 +16,7 @@ generate contract classes combinatorially and pin the invariant:
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 
 import pytest
@@ -36,6 +38,13 @@ _SAFE_TYPES: tuple[Any, ...] = (
     Annotated[list[int], MaxItems(100)],
     Annotated[dict[str, str], MaxItems(10)],
     Annotated[dict[str, int], MaxItems(5)],
+    Annotated[set[str], MaxItems(10)],
+    Annotated[frozenset[int], MaxItems(10)],
+    Annotated[tuple[str, ...], MaxItems(10)],
+    Annotated[Sequence[str], MaxItems(10)],
+    Annotated[Mapping[str, str], MaxItems(10)],
+    # Fixed arity bounds a tuple by its shape.
+    tuple[str, int],
 )
 
 # Forbidden field types: unbounded or unvalidatable payloads.
@@ -50,6 +59,12 @@ _UNSAFE_TYPES: tuple[Any, ...] = (
     list[dict[str, Any]],
     # Bounded collection of UNBOUNDED elements is still forbidden.
     Annotated[list[dict[str, Any]], MaxItems(10)],
+    set[str],
+    frozenset[str],
+    tuple[str, ...],
+    Sequence[str],
+    Mapping[str, str],
+    Annotated[set[bytes], MaxItems(10)],
 )
 
 # Field names: valid identifiers that aren't skipped by the validator

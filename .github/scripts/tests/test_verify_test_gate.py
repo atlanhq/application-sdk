@@ -1349,3 +1349,100 @@ def test_the_matrix_skipped_anomaly_still_reads_as_failure_with_a_clean_lease() 
     )
     assert outputs["conclusion"] == "failure"
     assert outputs["passed"] == "false"
+
+
+# --- an e2e-only run: unit skipped on purpose (FND-3839) -------------------
+#
+# A `/e2e` comment dispatches the connector's tests.yaml with `run-e2e: only`.
+# Unit is skipped there because the PR's own pull_request run already measured
+# it and owns the required `tests / …` contexts. The gate has to tell that
+# deliberate skip from an unexplained one — but only the skip: a unit job that
+# ran and failed is a failure whatever the run was asked for.
+
+_E2E_ONLY_PASSED = ("skipped", "skipped", "skipped", "success", "success")
+
+
+def test_an_e2e_only_run_with_unit_skipped_passes() -> None:
+    assert evaluate(*_E2E_ONLY_PASSED, e2e_only="true") == []
+    assert render(*_E2E_ONLY_PASSED, e2e_only="true")["passed"] == "true"
+
+
+@pytest.mark.parametrize("e2e_only", ["false", "", "yes", "1"])
+def test_a_skipped_unit_still_fails_unless_the_run_is_e2e_only(e2e_only: str) -> None:
+    """Only the literal "true" excuses the skip; anything else is a caller that
+    did not ask for e2e-only, where a skipped unit is the bug."""
+    errors = evaluate(*_E2E_ONLY_PASSED, e2e_only=e2e_only)
+    assert len(errors) == 1
+    assert "unit tests" in errors[0]
+
+
+def test_e2e_only_is_case_and_whitespace_tolerant() -> None:
+    """A workflow expression renders booleans as `true`; trimming keeps a stray
+    space from silently re-reddening every `/e2e` run."""
+    assert evaluate(*_E2E_ONLY_PASSED, e2e_only=" True ") == []
+
+
+@pytest.mark.parametrize("unit", ["failure", "cancelled"])
+def test_e2e_only_never_excuses_a_unit_job_that_ran(unit: str) -> None:
+    errors = evaluate(unit, "skipped", "skipped", "success", "success", e2e_only="true")
+    assert len(errors) == 1
+    assert "unit tests" in errors[0]
+
+
+def test_e2e_only_does_not_excuse_the_e2e_verdict() -> None:
+    """The point of the run is e2e; excusing unit must not excuse that too."""
+    errors = evaluate(
+        "skipped", "skipped", "skipped", "success", "failure", e2e_only="true"
+    )
+    assert len(errors) == 1
+    assert "e2e suites" in errors[0]
+
+
+def test_e2e_only_defaults_to_requiring_unit(capsys: pytest.CaptureFixture) -> None:
+    """A caller pinned at @main that never passes the flag keeps requiring unit."""
+    assert evaluate(*_E2E_ONLY_PASSED) != []
+    main(
+        [
+            "--unit",
+            "skipped",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--discover-e2e",
+            "success",
+            "--e2e",
+            "success",
+        ]
+    )
+    assert "passed=false" in capsys.readouterr().out
+
+
+def test_main_accepts_the_e2e_only_flag(capsys: pytest.CaptureFixture) -> None:
+    main(
+        [
+            "--unit",
+            "skipped",
+            "--integration",
+            "skipped",
+            "--detect-integration",
+            "skipped",
+            "--discover-e2e",
+            "success",
+            "--e2e",
+            "success",
+            "--e2e-only",
+            "true",
+        ]
+    )
+    assert "passed=true" in capsys.readouterr().out
+
+
+def test_the_action_forwards_e2e_only_to_the_script() -> None:
+    """An input the composite action declares but never passes on would leave
+    every `/e2e` run red on its skipped unit job."""
+    action = (
+        Path(__file__).parent.parent.parent / "actions/verify-test-gate/action.yaml"
+    ).read_text(encoding="utf-8")
+    assert "E2E_ONLY: ${{ inputs.e2e-only }}" in action
+    assert '--e2e-only "$E2E_ONLY"' in action

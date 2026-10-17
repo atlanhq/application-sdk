@@ -66,7 +66,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Any-typed field and class creation raises PayloadSafetyError; with "
             "the opt-out, the class-level finding still fires. Any is refused "
             "unconditionally. MaxItems bounds a collection only when its "
-            "element/value type is already payload-safe. Note also that an "
+            "element/value type is already payload-safe, and every variable-size "
+            "collection needs it: set, frozenset, tuple[T, ...], Sequence and Mapping "
+            "are refused without it just as dict and list are, so retyping one as "
+            "another does not clear the finding. Note also that an "
             "app-level OVERRIDE of a base-class field is often what introduces "
             "the Any — the SDK's own ExtractionInput already models its filters "
             "payload-safely — and dropping an override is not a retype of your "
@@ -94,7 +97,9 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.3.0",
         rationale=(
             "Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008). "
-            "Unbounded fields can silently grow past it in production, failing the workflow "
+            "Unbounded fields (any variable-size collection without MaxItems: a set, "
+            "tuple[T, ...] or Sequence grows with the source as freely as a list) "
+            "can silently grow past it in production, failing the workflow "
             "with a cryptic size error instead of a type error at import time. Typing every "
             "field payload-safely and removing the opt-out restores that import-time check; "
             "an opt-out that genuinely cannot be removed carries a justified inline "
@@ -107,8 +112,8 @@ RULES: tuple[RuleDefinition, ...] = (
         short_description="Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety",
         full_description=(
             "An ``Input``/``Output`` contract subclass that sets ``allow_unbounded_fields=True``\n"
-            "(or a truthy ``_allow_unbounded_fields`` class attribute, set on the class or\n"
-            "inherited from a class in the same file) opts out of the SDK's\n"
+            "(or a truthy ``_allow_unbounded_fields`` class attribute), on the class or\n"
+            "inherited from a class in the same file, opts out of the SDK's\n"
             "payload-safety check, so untyped or unbounded fields can cross task boundaries\n"
             "and fail at Temporal's 2MB limit in the tenant with the largest source.  Each\n"
             "finding names the fields this class declares that block removing it (the\n"
@@ -129,18 +134,30 @@ RULES: tuple[RuleDefinition, ...] = (
             "2. *Drop an override of an SDK base field.*  Re-declaring ``connection`` as\n"
             "``dict[str, Any]`` over ``ConnectionRef``, or filters as ``dict[str, Any]``\n"
             "over ``FilterMap | str``, is how most ``Any`` arrives.  Deleting the override\n"
-            "inherits the safe type and keeps the wire shape.\n"
+            "inherits the safe type and keeps the wire shape.  ``FilterMap`` keeps two\n"
+            "levels, so a tree widget the app reads deeper loses those levels: set\n"
+            "``treeSelection = true`` on the widget instead (step 3).\n"
             "\n"
             "3. *Use the SDK's types in the same outer shape.*  ``ConnectionRef``;\n"
             "``CredentialRef`` or ``credential_guid`` (credentials cross tasks by\n"
             "reference, never inline); ``AgentCredentialSpec`` for ``agent_json``; a\n"
-            "``BaseMetadataConfig`` subclass for wizard metadata; ``FilterMap`` for\n"
-            "filter maps; a small ``BaseModel`` for a dict whose keys are known.  Absorb\n"
+            "``BaseMetadataConfig`` subclass for wizard metadata; ``FilterMap`` for flat\n"
+            "filter maps; ``TreeSelection`` (``application_sdk.contracts.types``) for a\n"
+            "tree-widget selection (``APITree`` and similar) read below its second level, which a\n"
+            "generated contract gets from ``treeSelection = true`` on the widget; for an\n"
+            "extraction app's include/exclude filters it extends ``TreeSelectionExtractionInput``,\n"
+            "whose filters are ``TreeSelection | str``; a small\n"
+            "``BaseModel`` for a dict whose keys are known.  Absorb\n"
             "legacy wire shapes with a ``mode='before'`` validator.\n"
             "\n"
             "4. *Bound a collection of safe values* with ``Annotated[..., MaxItems(n)]``,\n"
-            "``n`` taken from the field's real cardinality.  Every nested ``dict`` or\n"
-            "``list`` needs its own bound.\n"
+            "``n`` taken from the field's real cardinality.  That covers every\n"
+            "variable-size collection, not only ``dict`` and ``list``: ``set``,\n"
+            "``frozenset``, ``tuple[T, ...]``, ``Sequence``, ``Mapping`` and the like are\n"
+            "refused without it, bare or parameterised, so retyping a list as a set is not\n"
+            "a fix.  A fixed-arity\n"
+            "``tuple[A, B]`` is bounded by its shape.  Every nested collection needs its\n"
+            "own bound.\n"
             "\n"
             "5. *Data that grows with the source system* (file lists, event batches,\n"
             "per-object results) moves by reference: write it to the object store and\n"
@@ -150,8 +167,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "``x-lifecycle: sunset``, regenerate the ledger, then remove it from source.\n"
             "\n"
             "**Not fixes.**  ``object``, ``JsonValue``, a bare ``dict`` or ``list``, a\n"
-            "recursive alias, or a nested ``BaseModel(extra='allow')`` pass the check while\n"
-            "bounding nothing; reach for them only as an owner's recorded decision.\n"
+            "recursive alias with no bound (``TreeSelection`` bounds every level), or a\n"
+            "nested ``BaseModel(extra='allow')`` pass the check while bounding nothing;\n"
+            "reach for them only as an owner's recorded decision.  Changing a ``dict`` to\n"
+            "a ``str`` (a ``mode='before'`` validator that JSON-encodes it) is not a fix\n"
+            "either: it hides the shape from the check and bounds nothing.\n"
             "``MaxItems`` never makes ``Any`` safe.  Removing the opt-out while an ``Any``\n"
             "field remains raises ``PayloadSafetyError`` at class definition, so the app\n"
             "stops importing: import the module after the change, because a base class or\n"
@@ -159,7 +179,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Generated contracts** (``app/generated/``) are fixed at their source: the\n"
             "``contract/*.pkl`` widget, or the toolkit when it emits ``dict[str, Any]``\n"
-            "for a widget (``APITree`` and similar).  Never hand-edit the generated file,\n"
+            "for a widget (``APITree`` and similar; set ``treeSelection = true``).  Never\n"
+            "hand-edit the generated file,\n"
             "and never let a post-generate hook re-insert the opt-out.\n"
             "\n"
             "**Narrowing changes what the app accepts.**  Before narrowing, list the shapes\n"
@@ -470,15 +491,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "modeling nudge toward a typed nested model."
         ),
         short_description=(
-            "Input/Output contract field uses a container of primitives/Any — "
-            "replace with a typed nested model"
+            "Input/Output contract field uses a dict of primitives or a container "
+            "of Any — replace with a typed nested model"
         ),
         full_description=(
             "A field on an ``Input``/``Output`` contract whose annotation is a "
-            "container of primitives or ``Any`` — ``dict[str, str]``,\n"
-            "``list[str]``, ``set[int]``, or the bounded equivalents\n"
-            "``Annotated[dict[str, str], MaxItems(N)]`` — is considered an\n"
-            "unmodeled boundary.  Even though the bounded form satisfies the\n"
+            "dict of primitives or a container of ``Any`` — ``dict[str, str]``,\n"
+            "``list[Any]``, a bare ``list``/``set``/``dict``, or the bounded\n"
+            "equivalents ``Annotated[dict[str, str], MaxItems(N)]`` — is\n"
+            "considered an unmodeled boundary.  Even though the bounded form satisfies the\n"
             "payload-safety gate (P001), the container has no schema: keys and\n"
             "values are opaque strings, typos are runtime-only failures, and the\n"
             "field is invisible to contract diffing and the SDK's\n"
@@ -490,6 +511,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Exempt:** ``list[FooModel]``, ``dict[str, FooModel]`` — containers\n"
             "of a typed class are the canonical bounded pattern and are fine.\n"
+            "Lists and sets of a scalar primitive (``str``, ``int``,\n"
+            "``float``, ``bool``, ``bytes``) or a ``Literal``, optional items\n"
+            "included, or of such collections —\n"
+            "``list[str]``, ``set[int]``, ``Annotated[list[str], MaxItems(N)]``,\n"
+            "``list[list[str]]`` — are exempt too: a collection of plain values\n"
+            "has no keys to mistype, and wrapping each value in a model changes\n"
+            "the wire shape without adding safety.\n"
             "\n"
             "This rule lands as ``WARN`` (not ``BLOCK``) because the bounded form\n"
             "is technically sanctioned — this is a modeling nudge, not a gate\n"
@@ -815,7 +843,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "inverse is on the child type.  Many-to-many ends such as\n"
             "``Process.inputs`` are not in it, and assigning ``None`` is not\n"
             "flagged.  Raw-dict mappers are out of scope — move them to\n"
-            "``pyatlan_v9`` first (O004).\n"
+            "``pyatlan_v9`` first (O004, P058).\n"
             "\n"
             "Fix: drop the list from the parent and set the single reference on\n"
             "each child, e.g. ``activity.fabric_process =\n"
@@ -826,6 +854,159 @@ RULES: tuple[RuleDefinition, ...] = (
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
+        ),
+    ),
+    RuleDefinition(
+        id="P058",
+        # Pinned by tests/test_raw_dict_entity.py::test_silent_on_canonical_reference,
+        # which scans verbatim copies of both cited files (tests/fixtures/p058_openapi/).
+        canonical_reference=(
+            "atlan-openapi-app app/asset_mapper.py — every mapper builds its "
+            "entity with a `pyatlan_v9.model.assets` creator and "
+            "app/connector.py writes each one through `entity_bytes(...)`; no "
+            "entity is assembled as a `typeName` / `attributes` dict."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P058] <reason>` is "
+            "correct only for a type `pyatlan_v9` does not model, and only when "
+            'the dict carries top-level `"status": "ACTIVE"` on a non-delete '
+            "upsert. The reason must name the unmodelled type. A directive on "
+            "a type `pyatlan_v9` models is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="RawDictEntity",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.49.0",
+        rationale=(
+            "A hand-built dict is the app's own wire shape: no pyatlan_v9 "
+            "creator computes its qualifiedName and no model checks its keys. "
+            "Written without entity_bytes it also misses every central fix the "
+            "seam applies, including the top-level status ACTIVE default; "
+            "Atlas restores a soft-deleted entity on upsert only when the "
+            "payload carries it, so a reappearing entity stays DELETED and "
+            "nothing reports it. Moving the app onto pyatlan_v9 assets puts "
+            "every entity on that seam."
+        ),
+        short_description=(
+            "Atlas entity built as a raw typeName/attributes dict instead of a "
+            "pyatlan_v9 asset"
+        ),
+        full_description=(
+            "App code under ``app/`` (``app/generated/`` excluded) emits an Atlas\n"
+            "entity it built as a raw dict — a dict display with literal\n"
+            '``"typeName"`` and ``"attributes"`` keys, or\n'
+            "``dict(typeName=..., attributes=...)`` — instead of a\n"
+            "``pyatlan_v9.model.assets`` object.\n"
+            "\n"
+            "Atlas encodes struct values and nested refs in the same shape, so the\n"
+            "rule fires only where the dict is emitted:\n"
+            "\n"
+            "* ``<x>.append(D)``, ``<x>.insert(i, D)``, or an element of\n"
+            "  ``<x>.extend([...])`` (a list / tuple display or comprehension);\n"
+            "* ``entity_bytes(D)``;\n"
+            "* ``yield D``;\n"
+            "* ``return D`` from a ``map_<entity>`` mapper.\n"
+            "\n"
+            "``D`` is the dict itself or a simple name bound to one in the same\n"
+            "scope.  A dict stored under a subscript, nested in another dict,\n"
+            "passed to ``model_validate`` or returned from a helper that is not a\n"
+            "``map_`` mapper is not flagged, and neither is a ``typeName`` without\n"
+            "``attributes`` (a ``uniqueAttributes`` ref, a search filter).\n"
+            "\n"
+            "Passed a dict, ``entity_bytes`` still stamps ``connectionName`` /\n"
+            "``lastSync*``, strips a placeholder guid and applies the envelope;\n"
+            "from FND-3928 it also defaults top-level ``status`` to ``ACTIVE``.\n"
+            "What it cannot add is a model: the dict's type name, attribute names\n"
+            "and qualifiedName grammar stay the app's own, unchecked.  A dict\n"
+            "written any other way gets none of those fixes — and Atlas restores a\n"
+            "soft-deleted entity on upsert only when the payload carries\n"
+            "``status: ACTIVE``.\n"
+            "\n"
+            "Fix: build the entity with the ``pyatlan_v9.model.assets`` creator\n"
+            "for its type and serialize it with ``entity_bytes``.  WARN tier —\n"
+            "where ``pyatlan_v9`` does not model the type, keep the dict, give it\n"
+            'top-level ``"status": "ACTIVE"`` on every non-delete upsert, and\n'
+            "suppress with ``# conformance: ignore[P058] <reason>`` naming the type.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p058",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
+    ),
+    RuleDefinition(
+        id="P059",
+        canonical_reference=(
+            "atlan-metabase-app app/contracts.py — structured task data crosses "
+            "the boundary as typed models (`CollectionFilter = Annotated[dict[str, "
+            "CollectionSelection], MaxItems(1000)]`, `residual_files: "
+            "Annotated[dict[str, FileReference], MaxItems(16)]`); no field holds a "
+            "`json.dumps` string that a task decodes again."
+        ),
+        scope=RuleScope.APP,
+        name="JsonEncodedContractField",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.51.0",
+        rationale=(
+            "A str field that holds json.dumps output is a structure declared as "
+            "text. Payload safety (P001) and the unmodeled-container check (P015) "
+            "grade the declared type, so the real shape and its size pass "
+            "unchecked, and the contract ledger records a string whose keys can "
+            "change with no diff. Packing a dict into a string is also the shape "
+            "an app reaches for to get past P001 without modeling the data."
+        ),
+        short_description=(
+            "Contract str / list[str] field carries JSON text — declare the "
+            "decoded value as a typed model"
+        ),
+        full_description=(
+            "A field on an ``Input``/``Output`` contract typed ``str`` or a\n"
+            "list/set of ``str`` (bare, bounded with ``MaxItems``, or optional)\n"
+            "whose value app code under the scanned tree (tests excluded) writes\n"
+            "as JSON or reads back as JSON:\n"
+            "\n"
+            "* written: ``Contract(FIELD=json.dumps(...))`` (also\n"
+            "  ``orjson.dumps(...)`` with or without ``.decode()``, and\n"
+            "  ``.model_dump_json()``), a list or set comprehension of those,\n"
+            "  ``x.FIELD = json.dumps(...)``, or a ``field_validator`` naming\n"
+            "  ``FIELD`` that returns ``json.dumps(...)``;\n"
+            "* read: ``json.loads(x.FIELD)`` (also ``x.FIELD or default`` and\n"
+            "  ``getattr(x, 'FIELD')``), ``json.loads(s) for s in x.FIELD``,\n"
+            "  ``map(json.loads, x.FIELD)``, ``Model.model_validate_json(x.FIELD)``\n"
+            "  or ``TypeAdapter(...).validate_json(x.FIELD)``.\n"
+            "\n"
+            "``x`` counts only when it is typed as a contract class: a parameter\n"
+            "annotated with one, a local bound to ``Contract(...)`` /\n"
+            "``Contract.model_validate(...)``, or ``self`` in a method of the\n"
+            "contract.  An attribute of the same name on any other object is not\n"
+            "evidence.  The evidence is matched to the field declared on that\n"
+            "class or one of its bases, across files, because the contract and the\n"
+            "task code usually live apart.  One finding per declaration, anchored\n"
+            "at the field; the message names the first evidence site.\n"
+            "\n"
+            "Fix: declare the decoded value as a typed field — a\n"
+            "``pydantic.BaseModel``, or ``list[Model]`` for a list of records,\n"
+            "bounded with ``MaxItems`` where payload safety needs it — and delete\n"
+            "the encode and decode steps.  A value that grows with the source\n"
+            "belongs in a ``FileReference``.  On a field recorded in the contract\n"
+            "ledger, add the typed field under a new name and retire the old one\n"
+            "(retyping in place is a B005 break).\n"
+            "\n"
+            "WARN tier.  Suppress with ``# conformance: ignore[P059] <reason>``\n"
+            "only when a system outside the app needs the value as JSON text.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p059",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
 )

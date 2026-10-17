@@ -512,7 +512,7 @@ class DaprBinding:
             # default sidecar log levels; without it a customer's log shows a
             # bare 500 with no way to tell a rejected request from a blocked one.
             detail = dapr_error_detail(e)
-            message = f"Failed to invoke binding: {e}"
+            message = f"Failed to invoke binding: {type(e).__name__} {e}".rstrip()
             if detail:
                 message = f"{message} ({detail})"
             raise BindingError(

@@ -43,7 +43,7 @@ jobs:
         # this PR (GitHub blocks self-approval regardless of author identity),
         # so there's no bypass-actor dependency to preserve here.
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -65,7 +65,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.0"
+          version: "0.13.1"
 
       - name: Compute version, bump PklProject, update CHANGELOG
         id: versions
@@ -112,9 +112,6 @@ jobs:
           git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md \
             packages/conformance/conformance/data/toolkit_baseline.json
           git commit -m "chore(contract-toolkit): release v${new_version}"
-          # Clear the `gate-check` CI opt-in before the push moves the branch
-          # (FND-3748; see bump_pr_opt_in.py). Fails open.
-          python3 .github/scripts/bump_pr_opt_in.py clear --base main --head "${BUMP_BRANCH}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 
           body_file="$(mktemp)"

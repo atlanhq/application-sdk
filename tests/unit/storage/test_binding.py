@@ -136,6 +136,22 @@ class TestResolveMetadataValue:
     def test_no_value_no_ref_returns_empty(self):
         assert _resolve_metadata_value({"name": "x"}) == ""
 
+    def test_null_value_resolves_to_empty(self):
+        assert _resolve_metadata_value({"name": "accessKey", "value": None}) == ""
+
+    def test_null_value_falls_through_to_secret_ref(self, monkeypatch):
+        # Dapr drops a null ``value`` on decode, so ``secretKeyRef`` still applies.
+        monkeypatch.setenv("MY_SECRET", "from-env")
+        item = {"name": "x", "value": None, "secretKeyRef": {"key": "MY_SECRET"}}
+        assert _resolve_metadata_value(item) == "from-env"
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("AKIAEXAMPLE", "AKIAEXAMPLE"), (True, "True"), (5432, "5432")],
+    )
+    def test_non_null_values_are_stringified(self, value, expected):
+        assert _resolve_metadata_value({"name": "x", "value": value}) == expected
+
     def test_value_takes_precedence_over_secret_ref(self, monkeypatch):
         monkeypatch.setenv("MY_SECRET", "from-env")
         item = {
@@ -240,6 +256,72 @@ class TestS3StaticCredentials:
 
         config = mock_s3_cls.call_args.kwargs["config"]
         assert config["aws_session_token"] == "TOKEN"
+
+    @patch("obstore.store.S3Store")
+    def test_blank_yaml_keys_fall_back_to_ambient_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # A bare ``value:`` parses to YAML null; it must read as unset, not as
+        # the literal key id "None".
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        (components_dir / "objectstore.yaml").write_text(
+            "apiVersion: dapr.io/v1alpha1\n"
+            "kind: Component\n"
+            "metadata:\n"
+            "  name: objectstore\n"
+            "spec:\n"
+            "  type: bindings.aws.s3\n"
+            "  metadata:\n"
+            "    - name: bucket\n"
+            "      value: b\n"
+            "    - name: region\n"
+            "      value: us-east-1\n"
+            "    - name: accessKey\n"
+            "      value:\n"
+            "    - name: secretKey\n"
+            "      value:\n"
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+
+    @patch("obstore.store.S3Store")
+    def test_blank_value_and_blank_secret_ref_fall_back_to_ambient_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # A bare ``secretKeyRef:`` is null too; Dapr skips it, so it must not be
+        # dereferenced as a ref once a null ``value`` stops shadowing it.
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        (components_dir / "objectstore.yaml").write_text(
+            "apiVersion: dapr.io/v1alpha1\n"
+            "kind: Component\n"
+            "metadata:\n"
+            "  name: objectstore\n"
+            "spec:\n"
+            "  type: bindings.aws.s3\n"
+            "  metadata:\n"
+            "    - name: bucket\n"
+            "      value: b\n"
+            "    - name: region\n"
+            "      value: us-east-1\n"
+            "    - name: accessKey\n"
+            "      value:\n"
+            "      secretKeyRef:\n"
+            "    - name: secretKey\n"
+            "      value:\n"
+            "      secretKeyRef:\n"
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
 
     @patch("obstore.store.S3Store")
     def test_access_key_only_warns_and_omits_credentials(
@@ -1493,6 +1575,17 @@ class TestFindBrokenMetadataFields:
         items = [
             {
                 "name": "accessKey",
+                "secretKeyRef": {"name": "MISSING_VAR", "key": "MISSING_VAR"},
+            }
+        ]
+        assert _find_broken_metadata_fields(items) == ["accessKey"]
+
+    def test_null_value_does_not_hide_unresolved_secret_ref(self, monkeypatch) -> None:
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        items = [
+            {
+                "name": "accessKey",
+                "value": None,
                 "secretKeyRef": {"name": "MISSING_VAR", "key": "MISSING_VAR"},
             }
         ]

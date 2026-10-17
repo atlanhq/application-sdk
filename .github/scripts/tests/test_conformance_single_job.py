@@ -28,6 +28,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _bump_skip import without_bump_skip  # noqa: E402
 from _conformance_series import filters, load_workflow, series, suite_job  # noqa: E402
 from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
@@ -137,7 +138,7 @@ def test_suite_skips_only_on_an_identical_queue_tree(
     runs: bool,
 ) -> None:
     contexts = {"needs": {"queue-diff": {"outputs": {"identical": identical}}}}
-    assert evaluate(job["if"], contexts) is runs
+    assert evaluate(without_bump_skip(job["if"]), contexts) is runs
 
 
 def test_every_series_is_present_once(job: dict) -> None:  # type: ignore[type-arg]

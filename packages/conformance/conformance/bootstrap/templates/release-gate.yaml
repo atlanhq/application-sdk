@@ -1,26 +1,29 @@
 name: Release Gate
 
-# Blocks release PRs (auto-labeled `release` by the SDK release-version-bump
-# workflow) from being merged until a reviewer adds the `gate-check` label,
-# which opts the PR in to CI — the full suite including e2e — as the final gate
-# before a release is cut. CI does not run on a release PR at all until then
-# (FND-3748), and the release automation clears `gate-check` before each new
-# bump commit. `e2e` is still honoured while the fleet resyncs.
+# Blocks release PRs (bump-version branches, labelled `release` by the SDK
+# release-version-bump workflow) from merging until their full release gate —
+# tests with e2e, pre-commit, conformance and the vulnerability scan — has run
+# AND passed on the head commit. No CI runs on a release PR until a reviewer
+# comments `/gate-check` (FND-3748, FND-3839). The PR's own run skips every job
+# inside the gated reusables (`skip-on-bump-pr`, FND-3947), so their required
+# `<caller> / <job>` checks resolve as `skipped`, which reads as a pass. This
+# check is therefore the only thing holding a release PR, and it must stay
+# fail-closed.
 #
-# The label is consumed: the SDK's Tests Gate removes it once the run finishes
-# and records the verdict as an `e2e` commit status on the head (FND-3411). So
-# the gate passes on EITHER the label OR a successful `e2e` status on the head
-# commit. A push moves the head to a commit with no status, which re-blocks
-# until the label is added again. The decision lives in
+# The verdict is the head commit's `gate-check` status. `/gate-check` posts it
+# as `pending` and dispatches the gated workflows (test-commands.yaml); when the
+# last of them finishes it becomes `success` or `failure`, and this workflow is
+# re-run to read it. A push moves the head to a commit with no status, which
+# re-blocks until `/gate-check` is asked again. The decision lives in
 # .github/scripts/release_gate.py, vendored alongside this file.
 #
-# All other PRs pass this check immediately — it exists solely to gate the
-# auto-created bump-version PRs without requiring `e2e` on every PR.
+# All other PRs pass this check immediately.
 #
 # Branch-protection target: "Release Gate"
 # Add this alongside "tests / Tests Gate" in branch protection so that:
-# (a) this check blocks release PRs missing the label, and (b) the
-# Tests Gate check enforces that unit, integration, and e2e tests all pass.
+# (a) this check blocks release PRs whose release gate has not passed on the
+# head commit, and (b) the Tests Gate check enforces that unit, integration,
+# and e2e tests all pass.
 #
 # Those two strings are shaped differently because a ruleset's
 # required_status_checks `context` is the check-run name, which never includes
@@ -35,7 +38,10 @@ name: Release Gate
 
 on:
   pull_request:
-    types: [opened, synchronize, labeled, unlabeled, reopened]
+    # No `labeled`/`unlabeled`: a label is no longer the opt-in, and a same-SHA
+    # label event only ever added a duplicate run (FND-3839). The verdict
+    # arriving re-runs this workflow instead.
+    types: [opened, synchronize, reopened]
     branches: [main]
   # A merge queue evaluates required contexts against the `merge_group` event
   # on the gh-readonly-queue/<base>/pr-N-<sha> ref, not against the pull
@@ -49,17 +55,11 @@ on:
 permissions:
   contents: read
   pull-requests: read
-  # Reads the head commit's `e2e` status once the label has been consumed.
+  # Reads the head commit's `gate-check` status.
   statuses: read
 
 # A new commit retires the previous commit's run; see conformance.yaml for why
 # the group is run-unique off the PR path and why only `synchronize` cancels.
-# That matters doubly here: `labeled`/`unlabeled` fire on the SAME head SHA
-# (the bump-version PR is labelled `release` at creation; a reviewer adds
-# `e2e`), so they take a run-unique group. In the PR's group, two label events
-# on top of a running check would evict the pending one and leave a
-# `cancelled` "Release Gate" on the head. Run-unique, each runs to completion,
-# and the newest run's verdict is the one the required check reads.
 concurrency:
   group: release-gate-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
@@ -74,8 +74,9 @@ jobs:
     # files its `Release Gate` check run with conclusion `skipped` — which a
     # required check counts as a pass, so the queue still drains. Keep the
     # `name:` static: the skipped run must carry the same context string.
-    # Nothing is lost by passing here: a release PR missing `e2e` fails this
-    # gate on the PR itself and so never becomes eligible to enter the queue.
+    # Nothing is lost by passing here: a release PR without a passed
+    # `gate-check` fails this gate on the PR itself and so never becomes
+    # eligible to enter the queue.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-slim
     timeout-minutes: 2
@@ -85,15 +86,17 @@ jobs:
         with:
           persist-credentials: false
 
-      # A failed lookup leaves the file empty, which the gate reads as "no e2e
+      # A failed lookup leaves the file empty, which the gate reads as "no
       # verdict" and fails on - see release_gate.py.
       #
-      # The endpoint pages its `statuses` list, so on a commit with many
-      # contexts `e2e` can sit past the first page; `--paginate` walks them
-      # all. `--jq` runs once per page, and the script takes the last
-      # non-blank line. Not `--slurp`: gh rejects it alongside `--jq`, and
-      # that error would leave the file empty on every run.
-      - name: Fetch the head commit's e2e status
+      # The per-commit statuses list, not the combined status: only the list
+      # carries each status's `creator`, and the script trusts a verdict only
+      # from github-actions[bot] (FND-3947). The list is newest first and
+      # paged; `--paginate` walks every page, and `--jq` prints one
+      # `<state> <creator>` line per gate-check status. Not `--slurp`: gh
+      # rejects it alongside `--jq`, and that error would leave the file empty
+      # on every run.
+      - name: Fetch the head commit's gate-check status
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -101,16 +104,18 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=100" \
+          gh api "repos/${REPO}/commits/${HEAD_SHA}/statuses?per_page=100" \
             --paginate \
-            --jq '.statuses[] | select(.context == "e2e") | .state' > e2e-state.txt
+            --jq '.[] | select(.context == "gate-check") | "\(.state) \(.creator.login)"' > gate-check-state.txt
 
       - name: Verify release readiness
         env:
+          HEAD_REF: ${{ github.head_ref }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
-          touch e2e-state.txt
+          touch gate-check-state.txt
           python3 .github/scripts/release_gate.py \
+            --head-ref "$HEAD_REF" \
             --labels "$LABELS" \
-            --e2e-state-file e2e-state.txt
+            --gate-check-state-file gate-check-state.txt

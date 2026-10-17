@@ -21,6 +21,7 @@ directly.
 """
 
 import asyncio
+import contextvars
 import math
 import time
 from collections.abc import Callable
@@ -287,24 +288,46 @@ class TemporalHeartbeatController:
         # sent nothing", and collapsing the two lets a stale carried checkpoint
         # outlive the attempt that superseded it.
         self._sent = False
+        # The activity's loop, captured at construction (the activity wrapper
+        # builds the controller on it). Temporal's `activity.heartbeat`
+        # schedules its send with `asyncio.create_task`, so it only works on
+        # this loop's thread; `_send` hands an off-loop call back to it.
+        try:
+            self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
 
     def heartbeat(self, *details: Any) -> None:
-        """Send a heartbeat to Temporal with optional progress details."""
-        from temporalio import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-            activity,
-        )
+        """Send a heartbeat to Temporal with optional progress details.
 
+        Safe to call from a worker thread (e.g. inside ``run_in_thread``): the
+        beat is handed to the activity's event loop instead of being lost.
+        """
         self._last_details = details
         self._sent = True
-        activity.heartbeat(*details)
+        self._send(details)
 
     def heartbeat_keepalive(self) -> None:
         """Send a keepalive heartbeat re-using the most recently set details."""
+        self._send(self._last_details)
+
+    def _send(self, details: tuple[Any, ...]) -> None:
         from temporalio import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
             activity,
         )
 
-        activity.heartbeat(*self._last_details)
+        try:
+            running: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if self._loop is None or running is self._loop:
+            activity.heartbeat(*details)
+            return
+        # Off the loop: run the send on it, in this thread's context — the copy
+        # `run_in_thread` made, which carries Temporal's activity context.
+        self._loop.call_soon_threadsafe(
+            activity.heartbeat, *details, context=contextvars.copy_context()
+        )
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
         """Get details from the last heartbeat before activity was retried."""
