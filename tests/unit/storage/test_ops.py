@@ -2254,6 +2254,94 @@ class TestUploadPartSizeConfiguration:
         assert writer.call_args.kwargs["max_concurrency"] == 4
 
 
+class TestUploadPartCountBounded:
+    """A large file must not upload as thousands of parts.
+
+    Behind an S3 proxy that emulates multipart, completing an upload costs time
+    proportional to the part count, so a multi-GiB object at the 8 MiB default
+    outruns the proxy's request timeout.  Unless the operator pinned a part
+    size, the part grows with the file.
+    """
+
+    _MIB = 1024 * 1024
+
+    def test_large_file_part_size_keeps_part_count_bounded(self) -> None:
+        from application_sdk.storage.ops import _compute_part_size
+
+        file_size = 9 * 1024 * self._MIB
+        part = _compute_part_size(file_size, 8 * self._MIB, max_parts=128)
+
+        assert -(-file_size // part) <= 128
+        assert part >= 72 * self._MIB
+        assert part % self._MIB == 0
+
+    def test_small_file_keeps_default_part_size(self) -> None:
+        from application_sdk.storage.ops import _compute_part_size
+
+        part = _compute_part_size(500 * self._MIB, 8 * self._MIB, max_parts=128)
+
+        assert part == 8 * self._MIB
+
+    def test_part_size_never_exceeds_s3_per_part_maximum(self) -> None:
+        from application_sdk.storage.ops import _compute_part_size
+
+        part = _compute_part_size(
+            2 * 1024 * 1024 * self._MIB, 8 * self._MIB, max_parts=128
+        )
+
+        assert part == 5 * 1024 * self._MIB
+
+    async def test_explicit_part_size_override_still_wins(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", True
+        )
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES",
+            2 * self._MIB,
+        )
+        monkeypatch.setattr("application_sdk.constants.STORAGE_UPLOAD_MAX_PARTS", 2)
+        f = tmp_path / "o.bin"
+        f.write_bytes(b"x" * (8 * self._MIB))
+
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file("k", f, store, normalize=False, verify=False)
+
+        assert writer.call_args.kwargs["buffer_size"] == 2 * self._MIB
+
+    async def test_large_parts_reduce_concurrency_to_hold_peak_memory(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", False
+        )
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES",
+            self._MIB,
+        )
+        monkeypatch.setattr("application_sdk.constants.STORAGE_UPLOAD_MAX_PARTS", 2)
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_MEMORY_BUDGET_BYTES",
+            8 * self._MIB,
+        )
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_MAX_CONCURRENCY", 12
+        )
+        f = tmp_path / "m.bin"
+        f.write_bytes(b"x" * (8 * self._MIB))
+
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file("k", f, store, normalize=False, verify=False)
+
+        assert writer.call_args.kwargs["buffer_size"] == 4 * self._MIB
+        assert writer.call_args.kwargs["max_concurrency"] == 2
+
+
 class TestUploadFileRelocationClassification:
     """A mid-run bucket relocation must surface typed, not as a generic StorageError.
 
