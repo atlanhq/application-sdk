@@ -980,3 +980,19 @@ class TestSingleKeyProbeConcurrency:
 
         assert exc_info.value.effective_retryable is True
         assert "throttled-key" not in str(exc_info.value)
+
+
+def test_outage_types_stay_importable_from_this_module() -> None:
+    """These shipped as importable names of ``credential_vault``; dropping the
+    re-export would turn an app's import into ``ImportError``
+    (docs/standards/symbols.md)."""
+    from application_sdk.errors.leaves import DaprSidecarUnreachableError
+    from application_sdk.infrastructure._dapr import credential_vault
+    from application_sdk.infrastructure.secrets import (
+        SecretStoreUnavailableError,
+        SecretStoreUnreachableError,
+    )
+
+    assert credential_vault.DaprSidecarUnreachableError is DaprSidecarUnreachableError
+    assert credential_vault.SecretStoreUnavailableError is SecretStoreUnavailableError
+    assert credential_vault.SecretStoreUnreachableError is SecretStoreUnreachableError

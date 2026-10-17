@@ -218,7 +218,10 @@ class TestDaprSecretStore:
             # Azure Key Vault
             "SecretNotFound: A secret with (name/id) example was not found",
             # GCP Secret Manager
-            "rpc error: code = NotFound desc = Secret [example] not found",
+            "failed to access secret version: rpc error: code = NotFound desc "
+            "= Secret [projects/123/secrets/db/creds] not found or has no versions.",
+            # HashiCorp Vault
+            "getSecret db/creds failed secret key or version not exist",
         ],
     )
     async def test_err_secret_get_with_not_found_shape_is_not_found(
@@ -261,6 +264,11 @@ class TestDaprSecretStore:
                 "DecryptionFailure: Access to KMS is not allowed",
                 id="kms",
             ),
+            pytest.param(
+                "couldn't get secret: operation error Secrets Manager: "
+                "GetSecretValue, KMS key not found",
+                id="other-resource-not-found",
+            ),
         ],
     )
     async def test_err_secret_get_store_failure_is_retryable_store_error(
@@ -283,6 +291,21 @@ class TestDaprSecretStore:
         assert isinstance(exc.value.cause, httpx.HTTPStatusError)
         # The backend's own wording reaches the message for diagnosis.
         assert backend_error.split(": ")[-1] in exc.value.message
+
+    async def test_dapr_wrapper_words_never_count_as_absence(self):
+        """Only the backend's own error is matched: Dapr's
+        ``failed getting secret with key … from secret store …:`` wrapper says
+        "secret" too, and must not combine with a later "not found" about
+        another resource."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            "secretstore: KMS key not found",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretNotFoundError)
 
     async def test_key_containing_not_found_does_not_mask_a_store_failure(self):
         """The key name is removed before matching, so a key that itself says

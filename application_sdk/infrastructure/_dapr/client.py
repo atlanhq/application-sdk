@@ -193,18 +193,40 @@ _ERR_SECRET_STORES_NOT_CONFIGURED = "ERR_SECRET_STORES_NOT_CONFIGURED"
 #: message to match :data:`_SECRET_ABSENT_MESSAGE_RE`.
 _ERR_SECRET_GET = "ERR_SECRET_GET"
 
-#: Backend wordings for "this key does not exist", matched against the
-#: ``ERR_SECRET_GET`` message (``failed getting secret with key <k> from secret
-#: store <s>: <backend error>``) once the key itself is removed from it.
-#: Allowlist, not denylist: a wording not listed here (throttling, access
-#: denied, KMS) is a store failure, so an unknown backend fails loudly instead
-#: of being silently read as "absent". Covers ``secretstores.local.file``
-#: (``secret <k> not found``), Kubernetes (``secrets "<k>" not found``), AWS
-#: Secrets Manager (``ResourceNotFoundException: Secrets Manager can't find
-#: the specified secret.``), Azure Key Vault (``SecretNotFound``) and GCP
-#: (``code = NotFound``).
+#: Each secret-store backend's wording for "the requested secret does not
+#: exist", matched against the backend part of the ``ERR_SECRET_GET`` message
+#: (after :data:`_DAPR_SECRET_GET_PREFIX_RE` and the key itself are removed).
+#: Allowlist, not denylist, and specific to the *secret* rather than any
+#: "not found": a backend failure that names some other missing resource
+#: (``KMS key not found``) is a store failure, as is any wording not listed, so
+#: an unknown backend fails loudly instead of being silently read as "absent".
+#: One alternative per backend (wordings from ``dapr/components-contrib``):
+#:
+#: * ``secretstores.local.file`` — ``secret <k> not found``
+#: * Kubernetes — ``secrets "<k>" not found``
+#: * GCP Secret Manager — ``rpc error: code = NotFound desc = Secret [<path>] not found``
+#: * AWS Secrets Manager — ``ResourceNotFoundException: Secrets Manager can't
+#:   find the specified secret.``
+#: * Azure Key Vault — ``ERROR CODE: SecretNotFound``
+#: * HashiCorp Vault — ``getSecret <k> failed secret key or version not exist``
+#:
+#: ``secretstores.local.env`` never errors: it answers a missing variable with
+#: an empty value, which callers already treat as absent.
 _SECRET_ABSENT_MESSAGE_RE = re.compile(
-    r"not ?found|can'?t find|cannot find|does not exist", re.IGNORECASE
+    r"""\bsecrets?\s*(?:"[^"]*"|\[[^\]]*\])?\s*not\s+found"""
+    r"|\bcode\s*=\s*NotFound\b"
+    r"|\bResourceNotFoundException\b"
+    r"|can'?t find the specified secret"
+    r"|\bSecretNotFound\b"
+    r"|secret key or version not exist",
+    re.IGNORECASE,
+)
+
+#: Dapr's own wrapper around the backend error (``pkg/messages`` in
+#: ``dapr/dapr``): ``failed getting secret with key <k> from secret store <s>:``.
+#: Stripped before matching so the wrapper's own words never count.
+_DAPR_SECRET_GET_PREFIX_RE = re.compile(
+    r"^failed getting secret with key\s.*?\sfrom secret store\s\S+:\s*", re.DOTALL
 )
 
 
@@ -228,14 +250,16 @@ def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | Non
 def _is_secret_absent_message(name: str, message: object) -> bool:
     """Whether an ``ERR_SECRET_GET`` message says the key *name* doesn't exist.
 
-    The key is removed first so a key that itself contains "not found"
-    can't make a throttling error look like an absence.
+    Dapr's wrapper is stripped and the key removed first, so neither the
+    wrapper's words nor a key that itself says "not found" can make a
+    throttling error look like an absence.
     """
     if not isinstance(message, str):
         return False
+    backend_error = _DAPR_SECRET_GET_PREFIX_RE.sub("", message, count=1)
     if name:
-        message = message.replace(name, "")
-    return _SECRET_ABSENT_MESSAGE_RE.search(message) is not None
+        backend_error = backend_error.replace(name, "")
+    return _SECRET_ABSENT_MESSAGE_RE.search(backend_error) is not None
 
 
 def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:

@@ -11,7 +11,10 @@ from typing import Any
 
 import orjson
 
-from application_sdk.errors.leaves import ColdStartRaceError
+from application_sdk.errors.leaves import (  # noqa: F401 — DaprSidecarUnreachableError is a re-export kept for importers of this module (shipped surface)
+    ColdStartRaceError,
+    DaprSidecarUnreachableError,
+)
 from application_sdk.infrastructure._dapr.client import (
     classify_secret_fetch_error,
     is_dapr_transport_unavailable,
@@ -25,7 +28,11 @@ from application_sdk.infrastructure._dapr.http import (
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
 from application_sdk.infrastructure.bindings import BindingError
-from application_sdk.infrastructure.secrets import SecretNotFoundError
+from application_sdk.infrastructure.secrets import (  # noqa: F401 — the two outage types are re-exports kept for importers of this module (shipped surface)
+    SecretNotFoundError,
+    SecretStoreUnavailableError,
+    SecretStoreUnreachableError,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
