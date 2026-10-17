@@ -213,10 +213,10 @@ Each rule lands at `warn`, the catalog's only entry tier.
 
 | ID | Name | Flags |
 | --- | --- | --- |
-| F021 | SourceEndpointUndeclared | an app that constructs a source client (`BaseSQLClient` subclass, HTTP client, driver `connect`) and declares no `source_endpoints` |
-| F022 | HandRolledNetworkProbe | preflight-reachable `socket.getaddrinfo` / `socket.create_connection` / `ssl.wrap_socket` in app code, where the SDK probe applies. Complements F011, which flags the same calls when they are *unbounded* |
-| F023 | NonCanonicalSourceCheckName | a `PreflightCheck(name=...)` literal that is a known synonym of a canonical name. The canonical vocabulary is the allowlist |
-| F024 | NotRunReportedAsFailure | `PreflightCheck(passed=False)` used to report a check that did not run (a `*_NOT_RUN` / skipped code) |
+| F022 | SourceEndpointUndeclared | an app that constructs a source client (`BaseSQLClient` subclass, HTTP client, driver `connect`) and declares no `source_endpoints` |
+| F023 | HandRolledNetworkProbe | preflight-reachable `socket.getaddrinfo` / `socket.create_connection` / `ssl.wrap_socket` in app code, where the SDK probe applies. Complements F011, which flags the same calls when they are *unbounded* |
+| F024 | NonCanonicalSourceCheckName | a `PreflightCheck(name=...)` literal that is a known synonym of a canonical name. The canonical vocabulary is the allowlist |
+| F025 | NotRunReportedAsFailure | `PreflightCheck(passed=False)` used to report a check that did not run (a `*_NOT_RUN` / skipped code) |
 | S003 | TlsVerificationDisabled | `verify=False`, `ssl.CERT_NONE`, `check_hostname = False`, `ssl._create_unverified_context`, or a literal driver option that disables verification (e.g. `TrustServerCertificate=yes`). Promoted to `block` once the fleet is clean |
 
 ## Options Considered
@@ -230,7 +230,7 @@ Each rule lands at `warn`, the catalog's only entry tier.
   every app.
 
 **Cons:**
-* A new declaration for every app with a network source (F021 tracks adoption).
+* A new declaration for every app with a network source (F022 tracks adoption).
 * `NEGOTIATED` TLS needs a dialect hook before it is covered.
 
 ### Option 2: A shared helper apps call from their own `preflight_check`
@@ -280,4 +280,4 @@ matters, and it puts a customer host into a second system. **Rejected.**
 * [ADR-0013](0013-error-hierarchy-and-failure-taxonomy.md): the categories every row routes on.
 * `application_sdk/handler/_preflight_outcome.py`: the attribution ladder hard mode reuses unchanged.
 * `application_sdk/common/sql_filters.py`: the filter resolution `sourceFilterMatch` reuses.
-* Conformance F011 (blocking probe) and F003 (untyped check failure): the rules F021–F024 sit beside.
+* Conformance F011 (blocking probe) and F003 (untyped check failure): the rules F022–F025 sit beside.

@@ -745,7 +745,7 @@ _CONTRACT_RULES = (
         mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
-        since="0.47.0",
+        since="0.51.0",
         short_description="Classify a broadly caught preflight failure before naming it an auth or permission problem.",
         full_description=(
             "A broad ``except`` in ``preflight_check`` or a helper it reaches "

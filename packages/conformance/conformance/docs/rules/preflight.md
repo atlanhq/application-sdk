@@ -44,7 +44,7 @@ never reused.
 | [F016](#f016) | `PreflightBehaviorContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F020](#f020) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
-| [F021](#f021) | `PreflightFixedLeafInBroadExcept` | `warn` | `app` | `preflight-gate` | — | 0.47.0 |
+| [F021](#f021) | `PreflightFixedLeafInBroadExcept` | `warn` | `app` | `preflight-gate` | — | 0.51.0 |
 
 ---
 
@@ -634,7 +634,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## F021 — `PreflightFixedLeafInBroadExcept` {#f021}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.47.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.51.0
 
 > Classify a broadly caught preflight failure before naming it an auth or permission problem.
 
