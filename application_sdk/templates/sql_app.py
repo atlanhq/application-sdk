@@ -121,6 +121,7 @@ from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
+    DependencyUnavailableError,
     InternalError,
     SourceUnavailableError,
 )
@@ -640,6 +641,11 @@ class SqlApp(App):
             — a single ~100ms probe round-trip per workflow run.
 
         Failure semantics (return-not-raise + zero Temporal retries):
+            Credential infrastructure failures propagate as their original
+            ``DependencyUnavailableError`` rather than a SQL failure verdict.
+            The task's zero-retry override still applies; this preserves routing
+            without adding automatic source login attempts.
+
             If the probe fails (auth rejected, network unreachable,
             wrong host, etc.) this task catches the exception, classifies
             it *here* — while the live exception and its ``__cause__``
@@ -683,6 +689,12 @@ class SqlApp(App):
                 await client.get_results("SELECT 1")
             finally:
                 await client.close()
+        except DependencyUnavailableError:
+            # Credential infrastructure failures are not source login attempts.
+            # Preserve their typed routing instead of classifying an underlying
+            # HTTP timeout as a SQL probe timeout. Source failures still return
+            # a verdict below, without activity-level retries.
+            raise
         # conformance: ignore[E004] exc_info=True would embed the SQLAlchemy connection string (incl. password) in structured logs; safe_traceback with secrets redacted is logged instead
         except Exception as exc:
             duration_ms = (time.perf_counter() - start) * 1000.0
