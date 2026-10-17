@@ -23,6 +23,7 @@ def test_base_url_is_ipv4_loopback_literal(monkeypatch: pytest.MonkeyPatch) -> N
     ipaddress.ip_address(urlsplit(url).hostname or "")  # raises if a hostname
 
 
+@pytest.mark.allow_hosts(["127.0.0.1"])
 async def test_request_succeeds_while_default_executor_is_saturated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
