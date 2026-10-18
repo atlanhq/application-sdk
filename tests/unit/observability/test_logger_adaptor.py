@@ -34,6 +34,7 @@ from application_sdk.observability.logger_adaptor import (
     _has_remote_otlp_endpoint,
     _make_log_record_dict,
     _normalize_log_extra_value,
+    _redact_exception_records,
     get_logger,
 )
 from application_sdk.testing.hypothesis.strategies.common.logger import (
@@ -3483,3 +3484,80 @@ def test_apply_atlan_context_imports_nothing_at_log_time() -> None:
         _correlation_ctx.reset(token)
 
     assert kwargs["correlation_id"] == "corr-123"
+
+
+# --- FND-4149: exceptions leave the adaptor redacted, on every sink ---
+
+
+def _raise_with_url_in_source_and_cause() -> None:
+    """The raise line holds a literal URL, and the cause's message quotes one."""
+    try:
+        raise RuntimeError("transport refused https://h.example.com/q?apikey=FAKEK1")
+    except RuntimeError as inner:
+        raise ValueError(
+            "fetch https://svc:FAKEPW2@h.example.com/p?page=2#token=FAKEF3"
+        ) from inner
+
+
+def _captured_exc_info() -> tuple[Any, Any, Any]:
+    try:
+        _raise_with_url_in_source_and_cause()
+    except ValueError:
+        return sys.exc_info()
+    raise AssertionError("unreachable")
+
+
+_FAKE_SECRETS = ("FAKEK1", "FAKEPW2", "FAKEF3")
+
+
+def test_otel_exception_attributes_are_redacted():
+    """``exception.message`` and ``exception.stacktrace`` (which carries the
+    chained cause and the source lines) are redacted before export."""
+    exc_type, exc_value, exc_tb = _captured_exc_info()
+    attrs = _extract_exception_attributes(
+        mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb)
+    )
+    for secret in _FAKE_SECRETS:
+        assert secret not in attrs["exception.message"]
+        assert secret not in attrs["exception.stacktrace"]
+    assert attrs["exception.message"] == (
+        "fetch https://***@h.example.com/p?page=2#***"
+    )
+    assert "?apikey=***" in attrs["exception.stacktrace"]
+    # Frames are kept: redaction is not a substitute for the traceback.
+    assert "_raise_with_url_in_source_and_cause" in attrs["exception.stacktrace"]
+
+
+@pytest.mark.parametrize("diagnose", [False, True])
+def test_console_sink_renders_exceptions_redacted(diagnose: bool):
+    """loguru renders the traceback itself, so redaction must run on the
+    finished line. With ``diagnose`` on, the annotated values are covered too,
+    for the shapes ``redact_secrets`` knows."""
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="{message}\n{exception}",
+        diagnose=diagnose,
+        backtrace=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error("request failed")
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in _FAKE_SECRETS:
+        assert secret not in line
+    assert "request failed" in line
+    assert "_raise_with_url_in_source_and_cause" in line
+
+
+def test_console_sink_passes_records_without_an_exception_through():
+    """No exception, no redaction: the per-line cost stays one lookup."""
+    lines: list[Any] = []
+    sink_id = logger.add(_redact_exception_records(lines.append), format="{message}")
+    try:
+        logger.info("see https://h.example.com/p?page=2")
+    finally:
+        logger.remove(sink_id)
+    assert str(lines[0]).strip() == "see https://h.example.com/p?page=2"

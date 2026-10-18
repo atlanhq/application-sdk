@@ -563,10 +563,11 @@ def test_redact_secrets_stops_at_the_path_and_keeps_a_query_email() -> None:
     never userinfo. The password is still fully redacted here; nothing leaks."""
     from application_sdk.errors import redact_secrets
 
-    # The `@b` in the query string is no longer swallowed; the password is.
+    # The `@b` in the query string is not taken as userinfo. The query value
+    # is redacted by the separate query pass (FND-4149), not by this one.
     assert (
         redact_secrets("postgresql://u:p@host/db?to=a@b")
-        == "postgresql://***@host/db?to=a@b"
+        == "postgresql://***@host/db?to=***"
     )
     # A whitespace boundary still protects the common "URL then prose" case.
     out = redact_secrets("postgresql://u:p@host/db connected as a@b")
@@ -629,13 +630,21 @@ def test_redact_secrets_covers_an_empty_username_with_a_password() -> None:
 
 
 def test_redact_secrets_leaves_a_port_and_query_email_alone() -> None:
+    """A port and an ``@`` in the query are not userinfo, so host and path
+    survive. The query value itself is redacted by the query pass (FND-4149)."""
     from application_sdk.errors import redact_secrets
 
-    for text in (
-        "https://host.internal:8080/api?owner=alice@corp.com",
-        "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
+    for text, expected in (
+        (
+            "https://host.internal:8080/api?owner=alice@corp.com",
+            "https://host.internal:8080/api?owner=***",
+        ),
+        (
+            "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
+            "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=*** failed 403",
+        ),
     ):
-        assert redact_secrets(text) == text
+        assert redact_secrets(text) == expected
 
 
 # Synthetic Azure connection strings: no real credential material.
@@ -714,3 +723,136 @@ def test_safe_traceback_redacts_azure_connection_string() -> None:
         out = safe_traceback(exc)
     assert "FAKEsasKEY0123" not in out
     assert "SharedAccessKeyName=ExamplePolicy" in out
+
+
+# --- FND-4149: every URL query value and fragment, plus common bare names ---
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A query param under a name no keyword list would know.
+        (
+            "GET https://api.example.com/v1/items?page=2&x_custom=FAKEVAL1 failed",
+            "GET https://api.example.com/v1/items?page=2&x_custom=*** failed",
+        ),
+        # Params a client merged into the sent URL (``params={"apikey": ...}``).
+        (
+            "RuntimeError: transport refused https://api.example.com/q?limit=10&apikey=FAKEKEY2",
+            "RuntimeError: transport refused https://api.example.com/q?limit=10&apikey=***",
+        ),
+        # A fragment is redacted whole, query or not.
+        (
+            "redirect to https://app.example.com/cb#access_token=FAKETOK3&state=s",
+            "redirect to https://app.example.com/cb#***",
+        ),
+        (
+            "https://api.example.com/p?a=1#token=FAKETOK4",
+            "https://api.example.com/p?a=***#***",
+        ),
+        # Userinfo, query and fragment in one URL.
+        (
+            "https://svc:FAKEPW5@api.example.com/p?code=FAKECODE5#frag",
+            "https://***@api.example.com/p?code=***#***",
+        ),
+        # A value-less param could itself be a bare token.
+        ("https://h.example.com/hook?FAKEBARE6", "https://h.example.com/hook?***"),
+        # Empty values and an empty fragment have nothing to hide.
+        ("https://h.example.com/p?a=&b=1#", "https://h.example.com/p?a=&b=***#"),
+        # Off the allowlist, a common-looking name is still redacted.
+        (
+            "https://h.example.com/p?state=FAKE12&cursor=FAKE13",
+            "https://h.example.com/p?state=***&cursor=***",
+        ),
+    ],
+)
+def test_redact_secrets_redacts_every_url_query_value_and_fragment(
+    text: str, expected: str
+) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+def test_redact_secrets_keeps_the_quote_that_closes_a_url() -> None:
+    """httpx and tracebacks quote URLs; the closing quote must survive both the
+    query pass and the bare ``token=`` pass that follows it."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("Client error for url 'https://h.example.com/p?token=FAKE7'")
+        == "Client error for url 'https://h.example.com/p?token=***'"
+    )
+    assert (
+        redact_secrets('client.get("https://h.example.com/p?q=FAKE8")')
+        == 'client.get("https://h.example.com/p?q=***")'
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "token",
+        "apikey",
+        "api-key",
+        "refresh_token",
+        "id_token",
+        "client_secret",
+        "auth",
+    ],
+)
+def test_redact_secrets_redacts_common_bare_secret_names(name: str) -> None:
+    """Bare ``key=value`` with no URL around it, under names the list missed."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(f"login failed: {name}=FAKESECRET9 user=svc")
+    assert "FAKESECRET9" not in out
+    assert f"{name}=***" in out
+    assert "user=svc" in out
+
+
+def test_redact_secrets_bare_token_and_auth_keep_cursor_like_names() -> None:
+    """``token`` / ``auth`` carry the ``sig`` lookbehind: a suffix is not a match."""
+    from application_sdk.errors import redact_secrets
+
+    for diagnostic in ("next_token=abc", "page_token=xyz", "oauth=enabled"):
+        assert redact_secrets(diagnostic) == diagnostic
+
+
+def test_safe_traceback_redacts_a_chained_cause_quoting_a_url() -> None:
+    """``SourceUnavailableError(cause=exc)`` chains the raw exception; its
+    message must come out redacted wherever the chain is formatted."""
+    from application_sdk.errors import safe_traceback
+
+    try:
+        try:
+            raise RuntimeError(
+                "send failed: https://h.example.com/p?apikey=FAKE10#token=FAKE11"
+            )
+        except RuntimeError as inner:
+            raise AuthError(message="source unavailable", cause=inner) from inner
+    except AuthError as exc:
+        out = safe_traceback(exc)
+    assert "FAKE10" not in out and "FAKE11" not in out
+    assert "?apikey=***#***" in out
+    assert "source unavailable" in out
+
+
+def test_redact_secrets_keeps_values_of_allowlisted_query_params() -> None:
+    """Pagination and Azure SAS scope/expiry are kept: ``se`` is what tells an
+    on-call the SAS expired. Matching is case-insensitive; the signature next
+    to them still goes."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(
+            "https://a.blob.core.windows.net/c/k"
+            "?sv=2021-08-06&sr=b&sp=r&se=2026-01-01T00%3A00Z&sig=FAKESIG14"
+        )
+        == "https://a.blob.core.windows.net/c/k"
+        "?sv=2021-08-06&sr=b&sp=r&se=2026-01-01T00%3A00Z&sig=***"
+    )
+    assert (
+        redact_secrets("https://h.example.com/p?LIMIT=10&Page=2&offset=40&q=FAKE15")
+        == "https://h.example.com/p?LIMIT=10&Page=2&offset=40&q=***"
+    )

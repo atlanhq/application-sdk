@@ -78,8 +78,8 @@ def _sub_userinfo(m: re.Match[str]) -> str:
 # failure. It also has no word boundary in this alternation, so it would match
 # the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
 # correlation IDs an on-call needs.
-# A generic ``token`` is deliberately NOT here, for the same reason ``uid``
-# is not: it would redact ``next_token=`` / ``page_token=`` /
+# A suffix-matching ``token`` is deliberately NOT here, for the same reason
+# ``uid`` is not: it would redact ``next_token=`` / ``page_token=`` /
 # ``continuation_token=``, the pagination cursors an on-call needs to see.
 # The list stays an enumeration of things that are only ever credentials.
 # ``signature`` and ``sig`` cover presigned object-store URLs, which object-store
@@ -90,13 +90,88 @@ def _sub_userinfo(m: re.Match[str]) -> str:
 # left the usable half in the string. ``sig`` carries a lookbehind because it is
 # short enough to appear as the tail of a longer word; the other tokens are
 # distinctive enough not to need one.
+#
+# Inside an absolute URL none of this matters: :data:`_URL_QUERY_FRAGMENT_RE`
+# redacts every query value, cursors included. This list only governs bare
+# ``key=value`` text with no URL around it (connection strings, DSNs, prose),
+# where a cursor is still worth keeping. ``token`` and ``auth`` therefore carry
+# the same lookbehind as ``sig``: they match the bare name but not the tail of
+# ``next_token`` / ``page_token`` / ``oauth``. ``code`` is deliberately absent —
+# bare, it is far more often ``status code=500`` than an OAuth code.
+# The leading ``\*\*\*`` alternative leaves a value the URL pass already
+# redacted alone, so the quote that closes ``'https://h/p?token=***'`` survives;
+# it only applies when ``***`` is the whole value, so it can never stop short
+# of a real secret.
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    r"(?i)((?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])(?:sig|token|auth))=)(?:\*\*\*(?=['\"<>]?(?:[\s&,;#]|$))|\{[^}]*\}|[^\s&,;#]+)",
+)
+# An absolute URL's query and/or fragment: everything from the first ``?`` or
+# ``#`` up to the end of the URL. The URL ends at whitespace, a quote, an angle
+# bracket or an ANSI escape (loguru's colorized console), which covers the ways
+# a URL is quoted inside an error message or a traceback source line. The scheme
+# boundary is the one :data:`_URL_USERINFO_RE` uses.
+_URL_QUERY_FRAGMENT_RE = re.compile(
+    r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://[^\s?#'\"<>\x1b]*)([?#][^\s'\"<>\x1b]*)",
+    re.IGNORECASE,
 )
 
 
+# Query params whose value is kept. An allowlist, so an unknown name is redacted
+# by default; add a name only if its value can never be a credential. The Azure
+# SAS fields say which resource, which permissions and which validity window a
+# URL had (``se`` is what tells an on-call the SAS expired); the rest are
+# pagination. These values reach the ``FailureDetails`` envelope a person
+# reads, not only logs.
+_SAFE_QUERY_PARAMS = frozenset({"sv", "se", "sr", "sp", "limit", "page", "offset"})
+
+
+def _redact_query_param(param: str) -> str:
+    """``name=value`` → ``name=***``; a value-less param could be a bare token."""
+    name, sep, value = param.partition("=")
+    if sep:
+        if not value or name.lower() in _SAFE_QUERY_PARAMS:
+            return param
+        return f"{name}=***"
+    return "***" if param else param
+
+
+def _sub_query_fragment(m: re.Match[str]) -> str:
+    """Replacement for :data:`_URL_QUERY_FRAGMENT_RE`: keep param names, drop values."""
+    tail = m.group(2)
+    query, hash_, fragment = tail.partition("#")
+    if query.startswith("?"):
+        query = "?" + "&".join(_redact_query_param(p) for p in query[1:].split("&"))
+    if hash_:
+        query += "#***" if fragment else "#"
+    return m.group(1) + query
+
+
 def redact_secrets(text: str) -> str:
-    """Redact URL userinfo and known secret query-params from a string.
+    """Redact credentials from a string bound for a log or the wire.
+
+    Three passes:
+
+    * URL userinfo (``scheme://user:pass@``) → ``scheme://***@``, except Azure
+      blob ``container@account`` addressing.
+    * Every query value and the whole fragment of any absolute URL →
+      ``?owner=***&token=***#***``, except values of the few params in
+      :data:`_SAFE_QUERY_PARAMS` (pagination, Azure SAS scope and expiry).
+      Param names stay so the line is still diagnosable. The URL ends at
+      whitespace, a quote or ``<``/``>``.
+    * Bare ``key=value`` pairs outside a URL whose key is a known credential
+      name (``password``, ``token``, ``apikey``, ``pwd``, ``sig``, …).
+
+    Why a URL query is redact-by-default but bare text is redact-by-name: a
+    URL's ``?`` marks exactly where its params start, so every value can be
+    masked and only known-harmless ones kept. Free text has no such marker —
+    ``status code=500``, ``attempt=3``, ``run_guid=…`` and ``next_token=…`` are
+    diagnostics, not secrets — so outside a URL only names that are always
+    credentials can be masked without wiping every message.
+
+    Known limits: a secret in a URL *path* (``/keys/<token>/…``) is not
+    redacted, nor is a URL with no ``scheme://`` (``host/p?token=x``) or one
+    escaped inside JSON (``https:\\/\\/…``); bare pairs under an unlisted key
+    name survive. Use it as a backstop, not a licence to log raw payloads.
 
     Use this when logging strings that may embed credentials but are not a
     single cause exception — e.g. a formatted traceback whose frames are worth
@@ -107,6 +182,7 @@ def redact_secrets(text: str) -> str:
     for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
     """
     text = _URL_USERINFO_RE.sub(_sub_userinfo, text)
+    text = _URL_QUERY_FRAGMENT_RE.sub(_sub_query_fragment, text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
     return text
 
