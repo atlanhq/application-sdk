@@ -1,4 +1,5 @@
 import asyncio
+import re
 import warnings
 from typing import Any, Literal, overload
 
@@ -531,9 +532,9 @@ def _request_failed(
     loop, is re-raised unchanged. Without it, the exception is logged and the
     helper returns ``None``.
 
-    The log line carries a :func:`safe_traceback` with the request URL
-    swapped for ``endpoint``, not ``exc_info``. A transport's error message
-    can quote the full request URL, userinfo and query included, and the
+    The log line carries a :func:`safe_traceback` with every URL query
+    removed, not ``exc_info``. Any exception, httpx's or a custom
+    transport's, can quote the sent URL with ``params`` merged in, and the
     query may carry a secret under a name the redaction patterns do not
     know; ``exc_info`` would export it as is.
     """
@@ -552,25 +553,22 @@ def _request_failed(
         "Request failed for %s %s: %s",
         method,
         endpoint,
-        safe_traceback(exc, replace=dict.fromkeys(_request_urls(url, exc), endpoint)),
+        _strip_url_queries(safe_traceback(exc)),
     )
     return None
 
 
-def _request_urls(url: str, exc: Exception) -> set[str]:
-    """Every spelling of the request URL an exception message may quote.
+# An absolute URL's query: the ``?`` and everything up to whitespace, a quote,
+# an angle bracket or a fragment. Group 1 keeps the URL before the ``?``.
+_URL_QUERY_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s?#'\"<>]*)\?[^\s#'\"<>]*")
 
-    The caller's string, httpx's normalised form of it, and the sent
-    request's URL, which also carries the merged ``params``.
+
+def _strip_url_queries(text: str) -> str:
+    """Replace the query of every absolute URL in ``text`` with a marker.
+
+    The query of a request URL can carry a secret under any name, merged in
+    from ``params`` or a custom transport, so no list of secret names can
+    recognise it. Dropping every query keeps scheme, host and path for
+    diagnosis whatever exception quoted the URL.
     """
-    urls = {url}
-    try:
-        urls.add(str(httpx.URL(url)))
-    except httpx.InvalidURL:
-        pass
-    if isinstance(exc, httpx.RequestError):
-        try:
-            urls.add(str(exc.request.url))
-        except RuntimeError:  # raised by httpx when no request was attached
-            pass
-    return urls
+    return _URL_QUERY_RE.sub(r"\1?<query removed>", text)

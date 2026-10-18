@@ -251,18 +251,25 @@ async def test_unsupported_scheme_on_default_transport_propagates_unchanged() ->
 
 
 @pytest.mark.asyncio
-async def test_failure_log_does_not_leak_the_request_url(
-    loguru_capture: list[dict[str, Any]],
+@pytest.mark.parametrize(
+    "exc_factory",
+    [
+        lambda r: httpx.ConnectError(f"cannot reach {r.url}", request=r),
+        lambda r: RuntimeError(f"cannot reach {r.url}"),
+    ],
+    ids=["httpx-error", "custom-transport-error"],
+)
+async def test_failure_log_does_not_leak_the_request_query(
+    exc_factory: Any, loguru_capture: list[dict[str, Any]]
 ) -> None:
-    """A transport error quoting the full URL is logged with the URL stripped.
+    """An exception quoting the sent URL is logged without its query.
 
-    ``token`` and ``apikey`` are names the generic secret-param redaction does
-    not know, so only swapping the request URL for its endpoint hides them.
+    The sent URL carries ``params`` merged into the query, and ``token`` and
+    ``apikey`` are names the generic secret-param redaction does not know, so
+    only dropping the query hides them, whatever type of exception quoted it.
     """
     client = _LoadedClient()
-    client.http_retry_transport = _raising(
-        lambda r: httpx.ConnectError(f"cannot reach {r.url}", request=r)
-    )
+    client.http_retry_transport = _raising(exc_factory)
     try:
         result = await client.execute_http_get_request(
             _URL, params={"apikey": "p4ram"}, raise_on_error=False
@@ -274,7 +281,10 @@ async def test_failure_log_does_not_leak_the_request_url(
     (record,) = [r for r in loguru_capture if "Request failed" in str(r["message"])]
     logged = str(record["message"])
     assert record["exception"] is None, "a raw exc_info traceback is not redacted"
-    assert f"cannot reach {_ENDPOINT}" in logged
-    assert "ConnectError" in logged and "Traceback" in logged
+    assert (
+        "cannot reach http://***@source.example.test:8080/api/items?<query removed>"
+        in logged
+    )
+    assert "Traceback" in logged
     for secret in ("secret", "p4ram", "pw@", "user:"):
         assert secret not in logged
