@@ -81,6 +81,7 @@ class Checker(
         sdk_errors: frozenset[str] = frozenset(),
         raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
+        deprecated_module: bool = False,
     ) -> None:
         self._filename = filename
         self._directives = directives
@@ -90,6 +91,7 @@ class Checker(
         self._sdk_errors = sdk_errors
         self._exception_helpers = raised_error_helpers or {}
         self._dependency_classes = dependency_classes
+        self._deprecated_module = deprecated_module
         self._findings: list[Finding] = []
         self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
