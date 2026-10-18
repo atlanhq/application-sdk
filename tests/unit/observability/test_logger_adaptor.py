@@ -3552,6 +3552,28 @@ def test_console_sink_renders_exceptions_redacted(diagnose: bool):
     assert "_raise_with_url_in_source_and_cause" in line
 
 
+def test_colorized_console_sink_renders_exceptions_redacted():
+    """``LOG_LEVEL=DEBUG`` colorizes the line: a colour code glued to a URL at
+    the start of the message must not hide it from redaction."""
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="<level>{message}</level>\n{exception}",
+        colorize=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error(
+            "https://h.example.com/p?x_custom=FAKEC4 failed"
+        )
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in (*_FAKE_SECRETS, "FAKEC4"):
+        assert secret not in line
+    assert "x_custom=***" in line
+
+
 def test_console_sink_passes_records_without_an_exception_through():
     """No exception, no redaction: the per-line cost stays one lookup."""
     lines: list[Any] = []

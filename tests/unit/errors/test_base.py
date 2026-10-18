@@ -856,3 +856,28 @@ def test_redact_secrets_keeps_values_of_allowlisted_query_params() -> None:
         redact_secrets("https://h.example.com/p?LIMIT=10&Page=2&offset=40&q=FAKE15")
         == "https://h.example.com/p?LIMIT=10&Page=2&offset=40&q=***"
     )
+
+
+def test_redact_secrets_sees_through_ansi_colour_codes() -> None:
+    """loguru's DEBUG console wraps the message in a colour code ending in
+    ``m``; glued to ``https://`` it defeated the scheme-boundary lookbehind,
+    for the query pass and the userinfo pass alike."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("\x1b[31mhttps://h.example.com/p?x_custom=FAKE16\x1b[0m")
+    assert "FAKE16" not in out
+    assert out == "https://h.example.com/p?x_custom=***"
+
+    out = redact_secrets("\x1b[1mhttps://svc:FAKEPW17@h.example.com/p\x1b[0m")
+    assert "FAKEPW17" not in out
+
+
+def test_redact_secrets_splits_query_params_on_semicolons() -> None:
+    """``;`` is a separator too: an allowlisted param must not carry the next
+    one's value through whole."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("https://h.example.com/p?page=2;owner=FAKE18&limit=5;sig=FAKE19")
+        == "https://h.example.com/p?page=2;owner=***&limit=5;sig=***"
+    )

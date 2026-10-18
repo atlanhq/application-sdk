@@ -106,14 +106,22 @@ _SECRET_PARAM_RE = re.compile(
     r"(?i)((?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])(?:sig|token|auth))=)(?:\*\*\*(?=['\"<>]?(?:[\s&,;#]|$))|\{[^}]*\}|[^\s&,;#]+)",
 )
 # An absolute URL's query and/or fragment: everything from the first ``?`` or
-# ``#`` up to the end of the URL. The URL ends at whitespace, a quote, an angle
-# bracket or an ANSI escape (loguru's colorized console), which covers the ways
-# a URL is quoted inside an error message or a traceback source line. The scheme
-# boundary is the one :data:`_URL_USERINFO_RE` uses.
+# ``#`` up to the end of the URL. The URL ends at whitespace, a quote or an angle
+# bracket, which covers the ways a URL is quoted inside an error message or a
+# traceback source line. The scheme boundary is the one :data:`_URL_USERINFO_RE`
+# uses.
 _URL_QUERY_FRAGMENT_RE = re.compile(
-    r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://[^\s?#'\"<>\x1b]*)([?#][^\s'\"<>\x1b]*)",
+    r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://[^\s?#'\"<>]*)([?#][^\s'\"<>]*)",
     re.IGNORECASE,
 )
+# Query params are split on ``;`` as well as ``&``: some servers accept either,
+# and splitting on ``&`` alone would let an allowlisted ``page=2;owner=x`` carry
+# the unknown ``owner`` value through whole.
+_QUERY_SEPARATOR_RE = re.compile(r"([&;])")
+# ANSI CSI escapes (loguru's colorized console). Stripped before matching: a
+# colour code ending in ``m`` glued to ``https://`` defeats the scheme-boundary
+# lookbehind, and a code inside a URL would end the match early.
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 # Query params whose value is kept. An allowlist, so an unknown name is redacted
@@ -140,7 +148,10 @@ def _sub_query_fragment(m: re.Match[str]) -> str:
     tail = m.group(2)
     query, hash_, fragment = tail.partition("#")
     if query.startswith("?"):
-        query = "?" + "&".join(_redact_query_param(p) for p in query[1:].split("&"))
+        query = "?" + "".join(
+            part if part in ("&", ";") else _redact_query_param(part)
+            for part in _QUERY_SEPARATOR_RE.split(query[1:])
+        )
     if hash_:
         query += "#***" if fragment else "#"
     return m.group(1) + query
@@ -149,7 +160,7 @@ def _sub_query_fragment(m: re.Match[str]) -> str:
 def redact_secrets(text: str) -> str:
     """Redact credentials from a string bound for a log or the wire.
 
-    Three passes:
+    ANSI colour escapes are stripped first, then three passes:
 
     * URL userinfo (``scheme://user:pass@``) → ``scheme://***@``, except Azure
       blob ``container@account`` addressing.
@@ -181,6 +192,8 @@ def redact_secrets(text: str) -> str:
     should stringify first (the sibling :func:`sanitize_cause_repr` does this
     for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
     """
+    if "\x1b" in text:
+        text = _ANSI_ESCAPE_RE.sub("", text)
     text = _URL_USERINFO_RE.sub(_sub_userinfo, text)
     text = _URL_QUERY_FRAGMENT_RE.sub(_sub_query_fragment, text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
