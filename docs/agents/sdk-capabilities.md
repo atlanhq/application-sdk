@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.49.2
-source-sha:    fd06a290103d25860bcaa63bdab474f77049d46f
-source-date:   2026-10-18T19:08:43+01:00
+source-sha:    4c6ab2807eae5f0c66083116681a81e9dd4095b3
+source-date:   2026-10-18T19:51:38+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1868,7 +1868,7 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 #### `safe_traceback`
 
 - **Import:** `from application_sdk.errors import safe_traceback`
-- **Signature:** `safe_traceback(exc: BaseException | None, *, ...)`
+- **Signature:** `safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)`
 - **Summary:** Return a secret-redacted, length-capped full-frame traceback.
 - **Defined in:** `application_sdk/errors/base.py`
 
