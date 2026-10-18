@@ -1,5 +1,5 @@
 import asyncio
-import re
+import traceback
 import warnings
 from typing import Any, Literal, overload
 
@@ -21,7 +21,6 @@ from application_sdk.constants import (
     _HTTP_POOL_LIMITS,
     _HTTP_POOL_TIMEOUT_SECONDS,
 )
-from application_sdk.errors.base import safe_traceback
 from application_sdk.errors.http import classify_http_exception
 from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -532,11 +531,11 @@ def _request_failed(
     loop, is re-raised unchanged. Without it, the exception is logged and the
     helper returns ``None``.
 
-    The log line carries a :func:`safe_traceback` with every URL query
-    removed, not ``exc_info``. Any exception, httpx's or a custom
-    transport's, can quote the sent URL with ``params`` merged in, and the
-    query may carry a secret under a name the redaction patterns do not
-    know; ``exc_info`` would export it as is.
+    The log line is built only from parts the SDK controls (see
+    :func:`_failure_trace`), never from exception message text. A
+    transport's error message is free text that can quote the sent URL,
+    query and fragment included, so scrubbing it means guessing every shape
+    a secret can take; leaving it out cannot miss one.
     """
     endpoint = _endpoint(url)
     if raise_on_error:
@@ -549,26 +548,26 @@ def _request_failed(
                 cause=exc,
             ) from exc
         raise exc
-    logger.error(
-        "Request failed for %s %s: %s",
-        method,
-        endpoint,
-        _strip_url_queries(safe_traceback(exc)),
-    )
+    logger.error("Request failed for %s %s: %s", method, endpoint, _failure_trace(exc))
     return None
 
 
-# An absolute URL's query: the ``?`` and everything up to whitespace, a quote,
-# an angle bracket or a fragment. Group 1 keeps the URL before the ``?``.
-_URL_QUERY_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://[^\s?#'\"<>]*)\?[^\s#'\"<>]*")
+def _failure_trace(exc: BaseException) -> str:
+    """Exception types along the cause chain, then each one's stack frames.
 
-
-def _strip_url_queries(text: str) -> str:
-    """Replace the query of every absolute URL in ``text`` with a marker.
-
-    The query of a request URL can carry a secret under any name, merged in
-    from ``params`` or a custom transport, so no list of secret names can
-    recognise it. Dropping every query keeps scheme, host and path for
-    diagnosis whatever exception quoted the URL.
+    Carries type names, file names, line numbers, function names and source
+    lines: code, never runtime values. Exception messages are left out.
     """
-    return _URL_QUERY_RE.sub(r"\1?<query removed>", text)
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and all(current is not seen for seen in chain):
+        chain.append(current)
+        current = current.__cause__ or current.__context__
+    lines = [" <- ".join(type(e).__name__ for e in chain)]
+    for e in chain:
+        lines.append(f"{type(e).__name__} raised at:")
+        lines.extend(
+            frame.rstrip("\n")
+            for frame in traceback.format_list(traceback.extract_tb(e.__traceback__))
+        )
+    return "\n".join(lines)

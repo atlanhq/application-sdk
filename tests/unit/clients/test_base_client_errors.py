@@ -252,21 +252,26 @@ async def test_unsupported_scheme_on_default_transport_propagates_unchanged() ->
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "exc_factory",
+    ("exc_factory", "exc_name"),
     [
-        lambda r: httpx.ConnectError(f"cannot reach {r.url}", request=r),
-        lambda r: RuntimeError(f"cannot reach {r.url}"),
+        (
+            lambda r: httpx.ConnectError(f"cannot reach {r.url}", request=r),
+            "ConnectError",
+        ),
+        (lambda r: RuntimeError(f"cannot reach {r.url}"), "RuntimeError"),
+        (lambda r: RuntimeError(f"cannot reach {r.url}#k=fr4g"), "RuntimeError"),
+        (lambda r: RuntimeError("cannot reach: token=s3cret"), "RuntimeError"),
     ],
-    ids=["httpx-error", "custom-transport-error"],
+    ids=["httpx-quotes-url", "custom-quotes-url", "fragment", "bare-param"],
 )
-async def test_failure_log_does_not_leak_the_request_query(
-    exc_factory: Any, loguru_capture: list[dict[str, Any]]
+async def test_failure_log_carries_no_exception_message_text(
+    exc_factory: Any, exc_name: str, loguru_capture: list[dict[str, Any]]
 ) -> None:
-    """An exception quoting the sent URL is logged without its query.
+    """The failure log is built from types and frames, never message text.
 
-    The sent URL carries ``params`` merged into the query, and ``token`` and
-    ``apikey`` are names the generic secret-param redaction does not know, so
-    only dropping the query hides them, whatever type of exception quoted it.
+    A transport's message is free text: it can quote the sent URL with
+    ``params`` merged into the query, a fragment, or a bare ``token=``, under
+    names no redaction pattern knows. Leaving the message out covers them all.
     """
     client = _LoadedClient()
     client.http_retry_transport = _raising(exc_factory)
@@ -281,10 +286,8 @@ async def test_failure_log_does_not_leak_the_request_query(
     (record,) = [r for r in loguru_capture if "Request failed" in str(r["message"])]
     logged = str(record["message"])
     assert record["exception"] is None, "a raw exc_info traceback is not redacted"
-    assert (
-        "cannot reach http://***@source.example.test:8080/api/items?<query removed>"
-        in logged
-    )
-    assert "Traceback" in logged
-    for secret in ("secret", "p4ram", "pw@", "user:"):
+    assert logged.startswith(f"Request failed for GET {_ENDPOINT}: {exc_name}")
+    assert f"{exc_name} raised at:" in logged and "in handler" in logged
+    assert "cannot reach" not in logged, "exception message text was logged"
+    for secret in ("secret", "s3cret", "p4ram", "fr4g", "pw@", "user:"):
         assert secret not in logged
