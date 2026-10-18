@@ -2160,6 +2160,202 @@ def get_value():
     )
 
 
+@pytest.mark.parametrize("sentinel", ["None", "[]", "{}", "()", '""', "dict()"])
+def test_p007_broad_catch_that_logs_then_returns_a_sentinel(sentinel: str) -> None:
+    # Logging leaves a trace in the log, not in the result: the caller still
+    # cannot tell the failure from a genuine empty value.
+    src = f"""\
+def get_tables():
+    try:
+        return fetch()
+    except Exception:
+        logger.warning("fetch failed", exc_info=True)
+        return {sentinel}
+"""
+    _single(src, "E007")
+
+
+def test_p007_broad_tuple_catch_that_logs_then_returns_none() -> None:
+    src = """\
+def get_tables():
+    try:
+        return fetch()
+    except (ValueError, Exception) as exc:
+        logger.error("fetch failed: %s", exc, exc_info=True)
+        return None
+"""
+    _single(src, "E007")
+
+
+def test_p007_bare_catch_that_logs_then_returns_none() -> None:
+    src = """\
+def get_tables():
+    try:
+        return fetch()
+    except:
+        logger.error("fetch failed", exc_info=True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_broad_catch_whose_same_class_helper_logs_then_returns_none() -> None:
+    src = """\
+class Probe:
+    def _report(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self):
+        try:
+            return list_keys()
+        except Exception as problem:
+            self._report(problem)
+            return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_logged_sentinel_under_a_narrow_catch_is_not_flagged() -> None:
+    # A narrow lookup miss returning None is usually the lookup's contract.
+    _none(
+        """\
+def get_value():
+    try:
+        return cache[key]
+    except KeyError:
+        logger.debug("cache miss for %s", key)
+        return None
+"""
+    )
+
+
+def test_p007_logged_non_sentinel_return_is_not_flagged() -> None:
+    _none(
+        """\
+def get_label():
+    try:
+        return render()
+    except Exception:
+        logger.warning("render failed", exc_info=True)
+        return "<unrenderable>"
+"""
+    )
+
+
+def test_p007_logged_return_none_in_a_procedure_is_not_flagged() -> None:
+    # In a ``-> None`` function ``return None`` is a plain early exit.
+    _none(
+        """\
+def flush() -> None:
+    try:
+        send()
+    except Exception:
+        logger.warning("flush failed", exc_info=True)
+        return None
+    cleanup()
+"""
+    )
+
+
+def test_p007_logged_empty_container_in_a_procedure_is_still_flagged() -> None:
+    # Only ``return None`` is a procedure's early exit; the annotation does not
+    # make ``[]`` one.
+    src = """\
+def flush() -> None:
+    try:
+        send()
+    except Exception:
+        logger.warning("flush failed", exc_info=True)
+        return []
+"""
+    _single(src, "E007")
+
+
+def test_p007_logged_bare_return_is_not_flagged() -> None:
+    _none(
+        """\
+def flush():
+    try:
+        send()
+    except Exception:
+        logger.warning("flush failed", exc_info=True)
+        return
+    cleanup()
+"""
+    )
+
+
+def test_p007_logged_sentinel_is_suppressible() -> None:
+    _none(
+        """\
+def get_tables():
+    try:
+        return fetch()
+    except Exception:
+        logger.warning("fetch failed", exc_info=True)
+        return None  # conformance: ignore[E007] optional probe; caller treats None as absent
+"""
+    )
+
+
+_LOGGED_SENTINEL_MODULE = """\
+def get_tables():
+    try:
+        return fetch()
+    except Exception:
+        logger.warning("fetch failed", exc_info=True)
+        return None
+"""
+
+_DEPRECATED_PACKAGE_INIT = """\
+import warnings
+
+warnings.warn("legacy is deprecated", DeprecationWarning, stacklevel=2)
+"""
+
+
+def test_p007_logged_sentinel_in_a_deprecated_module_is_not_flagged() -> None:
+    _none(
+        """\
+import warnings
+
+warnings.warn("this module is deprecated", category=DeprecationWarning)
+
+"""
+        + _LOGGED_SENTINEL_MODULE
+    )
+
+
+def test_p007_logged_sentinel_under_a_deprecated_package_is_not_flagged(
+    tmp_path: Path,
+) -> None:
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/legacy/__init__.py": _DEPRECATED_PACKAGE_INIT,
+        "pkg/legacy/sub/__init__.py": "",
+        "pkg/legacy/sub/mod.py": _LOGGED_SENTINEL_MODULE,
+        "pkg/live/__init__.py": "",
+        "pkg/live/mod.py": _LOGGED_SENTINEL_MODULE,
+    }
+    assert _scan_repo(tmp_path, files, "pkg/legacy/sub/mod.py") == []
+    assert _scan_repo(tmp_path, files, "pkg/live/mod.py") == ["E007"]
+
+
+def test_p007_deprecation_marker_outside_the_scan_root_is_ignored(
+    tmp_path: Path,
+) -> None:
+    # The walk stops at the repo root: a deprecated package above it is not
+    # part of the scanned repo.
+    from conformance.suite.checks.error_handling import scan_path
+
+    (tmp_path / "__init__.py").write_text(_DEPRECATED_PACKAGE_INIT)
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    target = repo / "app" / "mod.py"
+    target.write_text(_LOGGED_SENTINEL_MODULE)
+    assert [f.rule_id for f in scan_path(target, repo)] == ["E007"]
+
+
 def test_p007_no_finding_when_same_class_helper_logs_caught_exception() -> None:
     src = """\
 class Probe:
@@ -2223,6 +2419,37 @@ def inspect():
         return None
 """
     _none(src)
+
+
+def test_p007_broad_catch_whose_module_helper_logs_then_returns_none() -> None:
+    # The delegated-log shape cleared above, under a broad catch. The helper
+    # proof still counts as logging (the unlogged message must not fire), but
+    # under a broad catch a logged empty return is the FND-4080 arm: the
+    # caller gets None with no error code. Pinned so a later false-positive
+    # fix to the helper proof cannot quietly clear it again.
+    src = """\
+def _report_problem(operation, problem, level="warning", **metadata):
+    extra = {"detail": str(problem)}
+    for key in ("status", "reason"):
+        extra[key] = metadata.get(key)
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def fetch_table(table_id):
+    try:
+        return read_table(table_id)
+    except Exception as problem:
+        _report_problem("table fetch", problem, table_id=table_id)
+        return None
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E007"]
+    assert len(findings) == 1
+    assert "logs and then returns an empty sentinel" in findings[0].message
 
 
 def test_p007_still_flags_when_only_a_conditional_exc_info_carries_the_exception() -> (
