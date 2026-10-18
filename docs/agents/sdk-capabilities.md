@@ -2921,7 +2921,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `get_deployment_secret`
 
 - **Import:** `from application_sdk.infrastructure import get_deployment_secret`
-- **Signature:** `get_deployment_secret(key: str)`
+- **Signature:** `get_deployment_secret(key: str, *, raise_on_error: bool | None = None)`
 - **Summary:** Get a specific key from deployment configuration in the deployment secret store.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
