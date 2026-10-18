@@ -124,9 +124,10 @@ def in_temporal_workflow() -> bool:
     ``in_workflow()`` reads Temporal's own ContextVar, so it is correct in
     both cases and returns False outside Temporal entirely.
 
-    Looked up in ``sys.modules``, not imported: it runs on every buffered
-    record, and an import while temporalio is still being imported can return
-    a partially initialised module. A process that has not loaded
+    Looked up in ``sys.modules``, not imported: a record logged on the thread
+    that is importing ``temporalio.workflow`` reaches this predicate before
+    ``in_workflow`` is defined, and importing there returns the partially
+    initialised module. A process that has not finished loading
     ``temporalio.workflow`` cannot be inside a workflow, so the answer is False.
     The lookup is still a deliberate coupling to Temporal (the P006 exception
     the import used to carry): relocating it behind ``execution/_temporal/``

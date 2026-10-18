@@ -28,10 +28,10 @@ keep passing if the guarded operation were later removed or renamed.
 from __future__ import annotations
 
 import asyncio
-import builtins
+import os
+import subprocess
 import sys
-import types
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from datetime import datetime
 from typing import Any
 from unittest import mock
@@ -128,40 +128,74 @@ class TestInTemporalWorkflow:
         with mock.patch("temporalio.workflow.in_workflow", return_value=True):
             assert in_temporal_workflow() is True
 
-    @staticmethod
-    @contextmanager
-    def _temporal_import_forbidden():
-        real_import = builtins.__import__
+    def test_log_emitted_mid_temporal_import_is_buffered(self):
+        """A record logged while ``temporalio.workflow`` is importing is kept.
 
-        def guard(name, *args, **kwargs):
-            if name.startswith("temporalio"):
-                raise AssertionError(f"in_temporal_workflow imported {name}")
-            return real_import(name, *args, **kwargs)
+        Python registers a module in ``sys.modules`` before running its body, so
+        a log line emitted on the importing thread mid-import (an import hook,
+        app code imported by a dependency) reaches the predicate while
+        ``in_workflow`` is not yet defined. Importing ``temporalio.workflow``
+        from the predicate then returns that half-built module, and the store
+        sink drops the record with ``Error adding record``.
 
-        with mock.patch.object(builtins, "__import__", guard):
-            yield
-
-    def test_false_without_importing_when_temporal_is_not_loaded(self):
-        """The predicate runs on every buffered record, so it must not import.
-
-        A worker logs its first records while temporalio is still being
-        imported; importing it from the predicate at that moment can hit the
-        partially initialised module. A process that has not loaded
-        ``temporalio.workflow`` cannot be inside a workflow.
+        Runs in a fresh interpreter so the import, and the half-built module,
+        are real rather than planted in ``sys.modules``.
         """
-        with (
-            mock.patch.dict(sys.modules, {"temporalio.workflow": None}),
-            self._temporal_import_forbidden(),
-        ):
-            assert in_temporal_workflow() is False
+        # tests/conftest.py turns the store sink off for the suite; the child
+        # needs it on, since the store sink is where the record is dropped.
+        env = {**os.environ, "ATLAN_ENABLE_OBSERVABILITY_STORE_SINK": "true"}
+        result = subprocess.run(
+            [sys.executable, "-c", _LOG_MID_TEMPORAL_IMPORT],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        # The SDK console sink also writes to stdout; read only the verdict line.
+        verdict = [ln for ln in result.stdout.splitlines() if ln.startswith("VERDICT")]
+        assert verdict == ["VERDICT fired half-built buffered"], result.stdout
 
-    def test_false_on_a_partially_initialised_module(self):
-        half_loaded = types.ModuleType("temporalio.workflow")
-        with (
-            mock.patch.dict(sys.modules, {"temporalio.workflow": half_loaded}),
-            self._temporal_import_forbidden(),
-        ):
-            assert in_temporal_workflow() is False
+
+# Logs through the SDK store sink from a meta-path finder that runs while
+# temporalio.workflow is mid-import, then reports what the sink kept.
+_LOG_MID_TEMPORAL_IMPORT = """
+import logging, sys
+
+sink_errors = []
+
+class Capture(logging.Handler):
+    def emit(self, record):
+        sink_errors.append(record.getMessage())
+
+logging.getLogger().addHandler(Capture())
+
+from application_sdk.observability.logger_adaptor import get_logger
+
+log = get_logger("mid_import_probe")
+assert "temporalio.workflow" not in sys.modules, "temporalio.workflow preloaded"
+state = {}
+
+class LogMidImport:
+    def find_spec(self, name, path=None, target=None):
+        wf = sys.modules.get("temporalio.workflow")
+        if wf is not None and wf.__spec__._initializing and not state:
+            state["half_built"] = not hasattr(wf, "in_workflow")
+            log.info("MID_IMPORT_MARKER")
+        return None
+
+sys.meta_path.insert(0, LogMidImport())
+import temporalio.workflow
+
+owner = type(log)._sink_owner or log
+buffered = any("MID_IMPORT_MARKER" in str(r) for r in owner._buffer)
+print(
+    "VERDICT",
+    "fired" if state else "not-fired",
+    "half-built" if state.get("half_built") else "complete",
+    "buffered" if buffered and not sink_errors else f"dropped {sink_errors}",
+)
+"""
 
 
 # ---------------------------------------------------------------------------
