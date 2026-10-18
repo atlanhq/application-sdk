@@ -1034,6 +1034,8 @@ async def _upload_once(
     h = hashlib.sha256() if compute_hash else None
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+    )
+    from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_UPLOAD_MAX_CONCURRENCY,
     )
 
