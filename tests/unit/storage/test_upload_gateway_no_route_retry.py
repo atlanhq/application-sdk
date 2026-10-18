@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.storage import ops
 from application_sdk.storage.errors import StorageError
 from application_sdk.storage.ops import upload_file
 
@@ -62,21 +63,46 @@ def src(tmp_path):
 
 
 @pytest.fixture
-def sleeps(monkeypatch) -> AsyncMock:
-    """Record the backoff delays instead of sleeping through them."""
-    fake = AsyncMock()
-    monkeypatch.setattr("application_sdk.storage.ops._retry_sleep", fake, raising=False)
-    return fake
+def sleeps(monkeypatch) -> list[float]:
+    """Record the backoff delays instead of sleeping through them.
+
+    Jitter is pinned to 1.0 so the recorded delays are the base delays.
+    """
+    recorded: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        recorded.append(delay)
+
+    monkeypatch.setattr("application_sdk.storage.ops._retry_sleep", fake_sleep)
+    monkeypatch.setattr("application_sdk.storage.ops._retry_jitter", lambda: 1.0)
+    return recorded
 
 
-async def test_upload_succeeds_after_transient_gateway_no_route(src, sleeps) -> None:
+@pytest.fixture
+def storage_events():
+    """Spy on ``_log_storage_event`` while still running it."""
+    with patch(
+        "application_sdk.storage.ops._log_storage_event",
+        wraps=ops._log_storage_event,
+    ) as spy:
+        yield spy
+
+
+def _failure_events(spy) -> list:
+    return [c for c in spy.call_args_list if c.kwargs.get("outcome") == "failure"]
+
+
+async def test_upload_succeeds_after_transient_gateway_no_route(
+    src, sleeps, storage_events
+) -> None:
     opener = _writer_factory([_GATEWAY_NO_ROUTE, _GATEWAY_NO_ROUTE, None])
     with patch("application_sdk.storage.ops.obstore.open_writer_async", opener):
         digest = await upload_file("k", src, MagicMock(), normalize=False, verify=False)
 
     assert opener.call_count == 3
     assert isinstance(digest, str)
-    assert [c.args[0] for c in sleeps.await_args_list] == [5.0, 10.0]
+    assert sleeps == [5.0, 10.0]
+    assert _failure_events(storage_events) == []
 
 
 async def test_other_404_raises_without_retry(src, sleeps) -> None:
@@ -88,11 +114,11 @@ async def test_other_404_raises_without_retry(src, sleeps) -> None:
         await upload_file("k", src, MagicMock(), normalize=False, verify=False)
 
     assert opener.call_count == 1
-    sleeps.assert_not_awaited()
+    assert sleeps == []
 
 
 async def test_persistent_gateway_no_route_raises_after_retry_budget(
-    src, sleeps
+    src, sleeps, storage_events
 ) -> None:
     opener = _writer_factory([_GATEWAY_NO_ROUTE] * 5)
     with (
@@ -101,6 +127,23 @@ async def test_persistent_gateway_no_route_raises_after_retry_budget(
     ):
         await upload_file("k", src, MagicMock(), normalize=False, verify=False)
 
-    assert opener.call_count == 4
-    assert [c.args[0] for c in sleeps.await_args_list] == [5.0, 10.0, 20.0]
+    assert opener.call_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+    assert sleeps == list(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS)
     assert excinfo.value.http_status == 404
+    assert len(_failure_events(storage_events)) == 1
+
+
+@pytest.mark.parametrize("factor", [0.5, 1.5])
+async def test_retry_delays_are_scaled_by_jitter(src, monkeypatch, factor) -> None:
+    recorded: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        recorded.append(delay)
+
+    monkeypatch.setattr("application_sdk.storage.ops._retry_sleep", fake_sleep)
+    monkeypatch.setattr("application_sdk.storage.ops._retry_jitter", lambda: factor)
+    opener = _writer_factory([_GATEWAY_NO_ROUTE, _GATEWAY_NO_ROUTE, None])
+    with patch("application_sdk.storage.ops.obstore.open_writer_async", opener):
+        await upload_file("k", src, MagicMock(), normalize=False, verify=False)
+
+    assert recorded == [5.0 * factor, 10.0 * factor]

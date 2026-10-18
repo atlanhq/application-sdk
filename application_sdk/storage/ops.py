@@ -36,11 +36,13 @@ to target a specific store instead.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import logging
 import math
 import os
+import random
 import re
 import tempfile
 import time
@@ -647,6 +649,36 @@ def _storage_error_for(
     return StorageError(message, **evidence)
 
 
+# A Kong gateway instance that joins the load balancer before its route table
+# has synced answers every request with ``404 {"message":"no Route matched with
+# those values"}`` for a few seconds. object_store's Rust client retries only
+# 5xx/429/408, so without this the first such answer fails the whole upload even
+# though the next gateway instance would have accepted it. Matched on the 404
+# *and* the gateway's own text so a real missing bucket or container still fails
+# on the first attempt. This is a status the Rust layer never retries, so the
+# loop adds a retry where there was none rather than multiplying an existing one.
+_GATEWAY_NO_ROUTE_TEXT = "no route matched"
+# Worst case total sleep is 1.5 x (5 + 10 + 20) = 52.5s: each delay is scaled by
+# a jitter factor in [0.5, 1.5] so a burst of uploads that all hit a scaling-up
+# gateway does not retry in lockstep.
+_GATEWAY_NO_ROUTE_RETRY_DELAYS: tuple[float, ...] = (5.0, 10.0, 20.0)
+# Indirections so tests can record the backoff without sleeping through it.
+_retry_sleep = asyncio.sleep
+
+
+def _retry_jitter() -> float:
+    """Multiplier applied to each retry delay."""
+    return random.uniform(0.5, 1.5)
+
+
+def _is_gateway_no_route(exc: BaseException) -> bool:
+    """True for the gateway's transient "no Route matched" 404, and only that."""
+    if not isinstance(exc, Exception):
+        return False
+    http_status, _ = _obstore_http_evidence(exc)
+    return http_status == 404 and _GATEWAY_NO_ROUTE_TEXT in str(exc).lower()
+
+
 def _log_storage_event(
     level: int,
     op: str,
@@ -960,6 +992,69 @@ async def _finalize_upload_integrity(
         await integrity.write_digest_sidecar(store, key, digest)
 
 
+async def _upload_once(
+    resolved: ObjectStore,
+    key: str,
+    path: Path,
+    *,
+    effective_chunk: int,
+    put_attributes: dict[str, str] | None,
+    compute_hash: bool,
+    started: float,
+    file_size: int,
+) -> tuple[hashlib._Hash | None, int]:
+    """Run one upload attempt; return ``(hasher, bytes_sent)``.
+
+    The file is read from the start every call, so the hash and byte count
+    belong to this attempt alone.
+    """
+    h = hashlib.sha256() if compute_hash else None
+    from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+        STORAGE_UPLOAD_MAX_CONCURRENCY,
+    )
+
+    last_progress = started
+    bytes_sent = 0
+    async with obstore.open_writer_async(
+        resolved,
+        key,
+        buffer_size=effective_chunk,
+        max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+        attributes=put_attributes,
+    ) as writer:
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(effective_chunk)
+                if not chunk:
+                    break
+                if h is not None:
+                    h.update(chunk)
+                await writer.write(chunk)
+                bytes_sent += len(chunk)
+                # One multipart part on its way to the store is one
+                # observable unit (ADR-0018). Marking per part rather than
+                # per file is what keeps a single multi-GB upload — the
+                # common shape for a large connector's parquet output —
+                # from looking like one long quiet window to the stall
+                # watchdog. Unconditional, unlike the progress *log* below:
+                # a mark is two stores under an uncontended lock, so it
+                # needs no interval gate.
+                current_progress_tracker().mark_progress("storage.upload_part")
+                if _progress_interval > 0:
+                    now = time.monotonic()
+                    if now - last_progress >= _progress_interval:
+                        _log_transfer_progress(
+                            "upload",
+                            key,
+                            bytes_so_far=bytes_sent,
+                            elapsed_ms=(now - started) * 1000.0,
+                            total_bytes=file_size,
+                        )
+                        last_progress = now
+    return h, bytes_sent
+
+
 async def upload_file(
     key: str,
     local_path: str | Path,
@@ -980,6 +1075,13 @@ async def upload_file(
 
     A single pass over the file simultaneously feeds each chunk to the
     SHA-256 hasher and the store writer.
+
+    The only in-function retry covers uploads, and only the blobstorage
+    gateway's transient ``404 "no Route matched"`` (a gateway instance serving
+    traffic before its routes synced), with jittered backoff. object_store's
+    Rust retry layer never retries a 404, and Temporal's task retries can land
+    back on the same gateway instance within a second or two, so the upload
+    retries on its own schedule. Every other failure raises on the first attempt.
 
     **Integrity (FND-306).** This is the single upstream convergence point for
     every upload in the SDK, so the write-side validations live here rather
@@ -1049,7 +1151,6 @@ async def upload_file(
         key = normalize_key(key)
 
     from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_UPLOAD_MAX_CONCURRENCY,
         STORAGE_UPLOAD_PART_SIZE_BYTES,
         STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
     )
@@ -1087,77 +1188,66 @@ async def upload_file(
             key,
         )
 
-    h = hashlib.sha256() if compute_hash else None
-    started = time.monotonic()
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-    )
+    # Each attempt re-reads the file from the start, so the hash, byte count and
+    # clock restart with it; only the gateway's transient no-route 404 loops.
+    retry_delays = iter(_GATEWAY_NO_ROUTE_RETRY_DELAYS)
+    while True:
+        started = time.monotonic()
+        delay: float | None = None
+        try:
+            h, bytes_sent = await _upload_once(
+                resolved,
+                key,
+                path,
+                effective_chunk=effective_chunk,
+                put_attributes=put_attributes,
+                compute_hash=compute_hash,
+                started=started,
+                file_size=file_size,
+            )
+            break
+        # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+        except BaseException as exc:
+            # BaseException is the umbrella for Exception and its siblings
+            # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
+            # ensures cancellation mid-writer-close is logged rather than silently
+            # discarding the buffer and leaving no object in the store.
+            delay = (
+                next(retry_delays, None)
+                if isinstance(exc, Exception) and _is_gateway_no_route(exc)
+                else None
+            )
+            if delay is None:
+                elapsed_ms = (time.monotonic() - started) * 1000.0
+                from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
+                    redact_secrets,
+                )
 
-    last_progress = started
-    bytes_sent = 0
-    try:
-        async with obstore.open_writer_async(
-            resolved,
-            key,
-            buffer_size=effective_chunk,
-            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
-            attributes=put_attributes,
-        ) as writer:
-            with path.open("rb") as fh:
-                while True:
-                    chunk = fh.read(effective_chunk)
-                    if not chunk:
-                        break
-                    if h is not None:
-                        h.update(chunk)
-                    await writer.write(chunk)
-                    bytes_sent += len(chunk)
-                    # One multipart part on its way to the store is one
-                    # observable unit (ADR-0018). Marking per part rather than
-                    # per file is what keeps a single multi-GB upload — the
-                    # common shape for a large connector's parquet output —
-                    # from looking like one long quiet window to the stall
-                    # watchdog. Unconditional, unlike the progress *log* below:
-                    # a mark is two stores under an uncontended lock, so it
-                    # needs no interval gate.
-                    current_progress_tracker().mark_progress("storage.upload_part")
-                    if _progress_interval > 0:
-                        now = time.monotonic()
-                        if now - last_progress >= _progress_interval:
-                            _log_transfer_progress(
-                                "upload",
-                                key,
-                                bytes_so_far=bytes_sent,
-                                elapsed_ms=(now - started) * 1000.0,
-                                total_bytes=file_size,
-                            )
-                            last_progress = now
-    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-    except BaseException as exc:
-        # BaseException is the umbrella for Exception and its siblings
-        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
-        # ensures cancellation mid-writer-close is logged rather than silently
-        # discarding the buffer and leaving no object in the store.
-        elapsed_ms = (time.monotonic() - started) * 1000.0
-        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
-            redact_secrets,
-        )
+                _log_storage_event(
+                    logging.WARNING,
+                    "upload",
+                    key,
+                    outcome="failure",
+                    elapsed_ms=elapsed_ms,
+                    size_bytes=file_size,
+                    error_class=_exc_class_name(exc),
+                    error_message=redact_secrets(str(exc)),
+                )
+                if isinstance(exc, Exception):
+                    raise _storage_error_for(
+                        exc, key, f"Failed to upload file to key '{key}'", resolved
+                    ) from exc
+                raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
-        _log_storage_event(
-            logging.WARNING,
-            "upload",
+        # Only a retried attempt reaches here. Its failure is not logged as a
+        # storage failure event: the upload has not failed yet.
+        delay *= _retry_jitter()
+        logger.warning(
+            "Gateway answered 'no Route matched' uploading key '%s'; retrying in %.1fs",
             key,
-            outcome="failure",
-            elapsed_ms=elapsed_ms,
-            size_bytes=file_size,
-            error_class=_exc_class_name(exc),
-            error_message=redact_secrets(str(exc)),
+            delay,
         )
-        if isinstance(exc, Exception):
-            raise _storage_error_for(
-                exc, key, f"Failed to upload file to key '{key}'", resolved
-            ) from exc
-        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
+        await _retry_sleep(delay)
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
