@@ -1,4 +1,4 @@
-# Sub-agent — CORRECTNESS Review (GPT-5.3-codex)
+# Sub-agent — CORRECTNESS Review
 
 ## Role
 

@@ -28,7 +28,11 @@ suppressions).  An id never migrates, changes, or gets reused.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -101,6 +105,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "negatives.  All are suppressible with ``# conformance: ignore[B001]``.\n"
         ),
         help_uri=f"{_HELP_BASE}#b001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-deprecated-symbols",
+        ),
     ),
     RuleDefinition(
         id="B002",
@@ -219,20 +227,47 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         rule_interactions=(
             "ledger-guard is append-only: a recorded type cannot change and an entry "
-            "cannot be deleted — only the status may move. That is why `sunset` is "
+            "cannot be deleted — only the status may move, and never straight from "
+            "`active` to `sunset`; `required` may relax but never tighten, and a "
+            "required entry cannot join a contract the base ref records. That is "
+            "why `sunset` is "
             "the retirement path rather than a retype or a delete. P001 also bears "
             "on this: it refuses `Any` on a contract field, so replacing `Any` in "
             "place with a concrete type is required and no longer counts as a break "
             "here — a constructor change off `Any` is still a break."
         ),
         terminal_state=(
-            "Four shapes are NOT breaks and do not fire: a field whose ledger status "
+            "Five shapes are NOT breaks and do not fire: a field whose ledger status "
             "is `sunset` (the retirement marker — `deprecated` still requires the "
-            "field to be present), a type that was WIDENED (including nested "
+            "field to be present), an INHERITED field the SDK retired (absent "
+            "because an SDK contract the class still inherits from, directly or "
+            "through in-repo bases, dropped it and the SDK's own bundled ledger "
+            "records it `sunset` on that contract with the same name and type — a "
+            "field the app or an in-repo base declared under another type, or one "
+            "lost by leaving the SDK base, still fires; a removed app field with "
+            "the SDK field's exact name and type cannot be told apart from it and "
+            "is excused too), a "
+            "type that was WIDENED (including nested "
             "containers), an INHERITED field whose base class changed the type, and "
             "a move OFF `Any` that keeps the same outer shape (`Any` replaced in "
-            "place). To retire a field "
-            "deliberately, mark it `sunset` in contract_schema.lock.json. Before "
+            "place; a type alias declared at the top level of the same module, "
+            "including a chain of such aliases, or a public SDK type alias bound by "
+            "`from application_sdk… import X` (such as `FilterMap`), is expanded "
+            "to its target before "
+            "the comparison, a generic alias taking its subscript's arguments "
+            "(`BoundedDict[str, str]`) or `Any` for each parameter when used bare "
+            "— the ledger side is not expanded, and an alias "
+            "declared under `if TYPE_CHECKING:` / `try`, as a string, or as a "
+            "plain `X = <name>` such as `Ident = str` is not recognised, an alias "
+            "whose name is bound more than once anywhere in the file (in any "
+            "scope, even a function local), or any alias in a file with a "
+            "`from x import *`, is not expanded, and a "
+            "chain that expands past a size budget is compared unexpanded). To "
+            "retire a field "
+            "deliberately, mark it `deprecated` in source, regenerate and merge "
+            "that; mark it `sunset` in a later PR. To add a field callers must "
+            "eventually send, add it with a default and migrate callers; a new "
+            "entrypoint contract may declare required fields freely. Before "
             "treating a removal as dead code, grep the whole repo — including "
             "scripts/ and *.sh JSONPath args like $.extract.outputs.<field> — for "
             "readers the contract does not know about."
@@ -243,15 +278,23 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-backwards-compatibility",
-        autofixable=False,
+        autofixable=True,
         since="0.7.0",
         rationale=(
             "Entrypoint contract fields are a serialization promise to every deployed "
             "consumer. Removing a field or changing its type silently corrupts payloads "
             "that already encode the old shape — the damage is invisible until runtime. "
             "The only valid operations on an existing entrypoint field are: mark it "
-            "deprecated (keep it, discourage use), mark it sunset (keep it, stop "
-            "consuming), or leave it unchanged. A rename must be expressed as "
+            "deprecated (keep it, discourage use), mark a deprecated field sunset "
+            "(keep it, stop consuming), or leave it unchanged — never active straight "
+            "to sunset, which gives callers no deprecation window. A field added to "
+            "an existing contract must have a default, and an existing field must "
+            "keep the default it has: a caller's saved config or DAG node that "
+            "predates the field does not send it. The requiredness check turns no "
+            "passing repo red when it ships: a ledger written before it records no "
+            "requiredness, so until a repo regenerates it can fire only on a field "
+            "the ledger lacks, which B006 already blocks. A rename must be "
+            "expressed as "
             "deprecate/sunset the old field + add a new field. The committed "
             "contract_schema.lock.json ledger (append-only, regenerated in-PR) "
             "provides the baseline so the check is single-checkout and offline. "
@@ -262,7 +305,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "fails or silently mis-parses — a break they hit with zero changes on their side."
         ),
         short_description=(
-            "An entrypoint contract field was removed or had its type changed"
+            "An entrypoint contract field was removed, had its type changed, was "
+            "sunset without first being deprecated, or became required on an "
+            "existing contract"
         ),
         full_description=(
             "Fires when a ledger entry for an entrypoint contract field is either:\n"
@@ -270,7 +315,32 @@ RULES: tuple[RuleDefinition, ...] = (
             "* **absent from the live contract** — the field was removed (a rename is\n"
             "  caught here: the old name is gone); or\n"
             "* **present with a different canonical type** — the field's annotation\n"
-            "  changed (e.g. ``str`` → ``int``, or ``Optional[str]`` → ``str``).\n"
+            "  changed (e.g. ``str`` → ``int``, or ``Optional[str]`` → ``str``); or\n"
+            "* **marked ``sunset`` in source while the ledger records anything else**\n"
+            "  — ``gen-contract-ledger`` records ``sunset`` only over ``deprecated``\n"
+            "  and keeps ``active`` otherwise, so a ledger ``active`` means the\n"
+            "  deprecation step was skipped (mark the field ``deprecated`` first),\n"
+            "  and a ledger ``deprecated`` means it was not regenerated, or was\n"
+            "  hand-edited, since the source moved.  A hand-edited ledger that\n"
+            "  writes ``sunset`` directly is what ``ledger-guard`` reports against\n"
+            "  the base ref; or\n"
+            "* **required in source while the ledger records it not required** —\n"
+            "  required means Pydantic v2's: no default, ``Optional`` or not.  A field\n"
+            "  had its default removed, or was added to a contract the ledger already\n"
+            "  records without one: ``gen-contract-ledger`` never records ``required``\n"
+            "  moving from ``false`` to ``true``, and records a field new to a\n"
+            "  recorded contract ``false``.  Before regeneration such a new field is\n"
+            "  reported here alongside B006, since regenerating does not clear it.\n"
+            "  Callers that predate the field — a saved workflow config, another\n"
+            "  app's DAG node — do not send it, so their first run on the new version\n"
+            "  fails validation.  Add the field with a default and migrate callers;\n"
+            "  a contract new to the ledger may declare required fields freely.  An\n"
+            "  entry with ``required`` unknown (a ledger written before the key\n"
+            "  existed) is not checked, and its first regeneration records the\n"
+            "  source's requiredness as the baseline.  A field inherited from an SDK\n"
+            "  contract the app's repo does not contain is not checked either: the\n"
+            "  SDK's own B005 run guards it.  ``ledger-guard`` refuses the same two\n"
+            "  moves in a hand-edited ledger against the base ref.\n"
             "\n"
             "Type comparison uses canonical normalized strings: ``Optional[X]`` and\n"
             "``X | None`` are equivalent, as are ``List[X]`` and ``list[X]``, so\n"
@@ -283,18 +353,51 @@ RULES: tuple[RuleDefinition, ...] = (
             "contract from a mixin (the documented pattern) does not require\n"
             "redeclaring the mixin's fields to stay ledger-protected.\n"
             "\n"
+            "The same resolution means an app ledger records fields its contract\n"
+            "only inherits from an SDK template (``ExtractionInput`` and the rest)\n"
+            "or an SDK contract base (``Input``, ``Output``, ``PublishInputMixin``).\n"
+            "When the SDK deliberately retires one, it marks the field ``sunset``\n"
+            "in its own ledger — the SDK repo's root ``contract_schema.lock.json``,\n"
+            "which this package ships as package data. A missing field\n"
+            "that ledger records ``sunset`` on an SDK contract the app contract\n"
+            "still inherits from is not reported: the SDK's own B005 run guards\n"
+            "that field, and the app did not remove it and cannot restore it.\n"
+            "The app's ledger entry is left as it is.\n"
+            "\n"
             "Only entrypoint contracts are gated — Input/Output classes bound to an\n"
-            "``@entrypoint``-decorated method or an ``App.run()`` method.  ``@task``\n"
+            "``@entrypoint``-decorated method or an undecorated ``async def run``\n"
+            "on a class that subclasses, directly or through in-repo bases, ``App``\n"
+            "or an SDK App template imported from ``application_sdk`` (``SqlApp``,\n"
+            "``BaseMetadataExtractor``, ...).  ``@task``\n"
             "boundary contracts are explicitly excluded: tasks are internal and may\n"
             "evolve with breaking changes.\n"
             "\n"
             "The ledger is append-only and machine-generated, so regeneration can\n"
             "only *add* — it can never launder a removal.  To retire a field: mark\n"
-            "it ``deprecated`` or ``sunset`` in the Pkl widget definition, regenerate\n"
-            "the contract, run ``gen-contract-ledger`` to record the new status, and\n"
-            "commit the updated ledger in the same PR.\n"
+            "it ``deprecated`` in the Pkl widget definition, regenerate the\n"
+            "contract, run ``gen-contract-ledger`` to record the new status, and\n"
+            "commit the updated ledger in the same PR.  Once that has merged, mark\n"
+            "it ``sunset`` the same way in a later PR.  ``ledger-guard`` refuses an\n"
+            "``active`` → ``sunset`` move between the base ref and HEAD as well,\n"
+            "which also catches a hand-edited ledger.  The order is enforced per\n"
+            "merge, not per release: both checks see one checkout or one base ref,\n"
+            "not the tags in between.\n"
+            "\n"
+            "A field keeps its recorded type for life: the ledger keys entries by\n"
+            "contract and field name, so a retype cannot be recorded under the same\n"
+            "name. To change a type deliberately, either revert it, or retire the\n"
+            "field (``sunset``) and add a new field under a new name with the new\n"
+            "type, moving producers to it. Replacing an untyped object\n"
+            "(``dict[str, Any]``) with a model is such a retype — a model can require\n"
+            "keys or value types that payloads already in flight do not carry — and\n"
+            "not the in-place\n"
+            "``Any`` replacement P001 mandates, which keeps the outer shape.\n"
         ),
         help_uri=f"{_HELP_BASE}#b005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
     RuleDefinition(
         id="B006",
@@ -318,7 +421,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-backwards-compatibility",
-        autofixable=False,
+        autofixable=True,
         since="0.7.0",
         rationale=(
             "B005 can only guard removals and type changes against the committed "
@@ -345,6 +448,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "as one declared directly on the contract, so adopting a new mixin can\n"
             "also trigger this on the fields it contributes.\n"
             "\n"
+            "Regenerating is the whole fix for an inherited field: **do not redeclare\n"
+            "the base's fields on the subclass to 'keep' them tracked.**  The\n"
+            "generator resolves the full base-class chain and records an inherited\n"
+            "field exactly like a declared one; a hand-copied redeclaration adds no\n"
+            "protection and becomes a drift site the moment the base changes.\n"
+            "\n"
+            "Turning a module-level rebinding (``MyInput = AppInputContract``) into a\n"
+            "subclass does raise this once per inherited field, and that is the rule\n"
+            "working rather than a false positive: the subclass is a distinct wire\n"
+            "surface, and it is the subclass's own entries that B005 consults if it\n"
+            "later changes base and drops a field.  One regeneration clears all of\n"
+            "them.  The rebinding itself is guarded too — it resolves to the class it\n"
+            "names, so a pkl-generated contract exposed under a domain name is\n"
+            "ledgered under the generated class's name rather than skipped (FND-2605).\n"
+            "\n"
             "Fix: run the exact command the finding names — in a consumer app that is\n"
             "``uvx atlan-application-sdk-conformance==<version> gen-contract-ledger``,\n"
             "version-pinned to the checker that raised it — and commit the updated\n"
@@ -357,7 +475,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "leaves the finding standing with no diff to commit — a dead end on a\n"
             "BLOCK-tier rule, which is what FND-607 hit.  In the SDK repo itself the\n"
             "suite is in-tree, so there the command is ``uv run\n"
-            "atlan-application-sdk-conformance gen-contract-ledger``.\n"
+            "atlan-application-sdk-conformance gen-contract-ledger``, which writes\n"
+            "the repo-root ``contract_schema.lock.json`` from any directory in the\n"
+            "checkout.\n"
             "\n"
             "The generator is append-only — it appends new live fields and refreshes\n"
             "``status`` from source but never deletes an entry or rewrites a recorded\n"
@@ -369,13 +489,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "the ledger will be regenerated before the first deploy.\n"
         ),
         help_uri=f"{_HELP_BASE}#b006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.COMMAND,
+            target="uvx atlan-application-sdk-conformance==<version> gen-contract-ledger",
+            note="<version> is the version of the checker that raised the finding; "
+            "copy the pinned command from the finding message verbatim (FND-607)",
+        ),
     ),
     RuleDefinition(
         id="B007",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — transformation runs through the SDK's "
-            "DuckDB/pyarrow path. The daft-only DataFrame calls this rule looks for "
-            "(count_rows, to_pylist, .names) appear in none of the four reference apps; "
+            "atlan-mysql-app app/mysql.py — `MySQLApp` transforms through SqlApp's "
+            "transform tasks: raw records mapped by its `map_*` methods and serialised with "
+            "the SDK's `entity_bytes`, with no DataFrame method called on them. The "
+            "daft-only DataFrame calls this rule looks for (count_rows, to_pylist, .names) "
+            "appear in no SDK-importing module of the three reference apps; "
             "daft was removed from the SDK in 3.20.0, so they are dead on any current "
             "runtime."
         ),
@@ -443,15 +571,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` where the receiver is genuinely not an SDK reader frame.\n"
         ),
         help_uri=f"{_HELP_BASE}#b007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-off-daft",
+        ),
     ),
     RuleDefinition(
         id="B008",
         canonical_reference=(
             "atlan-openapi-app app/connector.py — every third-party import names a "
-            "public module (application_sdk.app, application_sdk.contracts, "
-            "application_sdk.errors, httpx, pyatlan_v9.model.assets). None of the "
-            "four reference apps imports an underscore-prefixed module or name it "
-            "does not own, in app code or in tests."
+            "public module: application_sdk.app, .contracts, .credentials, .errors, "
+            ".observability and .outputs, plus msgspec and orjson. No module under the "
+            "three reference apps' app/ directories imports an underscore-prefixed module "
+            "or name it does not own."
         ),
         scope=RuleScope.APP,
         name="PrivateModuleImport",
@@ -535,5 +667,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "false positives.\n"
         ),
         help_uri=f"{_HELP_BASE}#b008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-deprecated-symbols",
+        ),
     ),
 )

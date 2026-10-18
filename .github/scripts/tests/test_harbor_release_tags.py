@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import harbor_release_tags as mod  # noqa: E402
 
-HARBOR = "registry.atlan.com/public/app-runtime-base"
 GHCR = "ghcr.io/atlanhq/app-runtime-base"
 
 
@@ -76,7 +75,7 @@ def test_a_legal_branch_name_is_untouched() -> None:
 
 def test_stable_release_publishes_the_full_alias_ladder() -> None:
     tags = mod.build_tags("release", "3.1.4", "main", "abc1234")
-    assert _suffixes(tags, HARBOR) == [
+    assert _suffixes(tags, GHCR) == [
         "latest",
         "3.1.4",
         "3.1",
@@ -89,7 +88,7 @@ def test_stable_release_publishes_the_full_alias_ladder() -> None:
 def test_a_prerelease_never_advances_a_floating_alias(version: str) -> None:
     """`:latest`, `:MAJOR` and `:MAJOR.MINOR` are what tenants resolve. A
     pre-release moving any of them ships an unstable base fleet-wide."""
-    suffixes = _suffixes(mod.build_tags("release", version, "main", "abc1234"), HARBOR)
+    suffixes = _suffixes(mod.build_tags("release", version, "main", "abc1234"), GHCR)
     assert suffixes == [version, "sha-abc1234"]
     assert "latest" not in suffixes
     assert not any(s in {"3", "3.1", "4", "4.0"} for s in suffixes)
@@ -98,21 +97,17 @@ def test_a_prerelease_never_advances_a_floating_alias(version: str) -> None:
 def test_workflow_dispatch_scopes_every_alias_to_the_prefix() -> None:
     """A dev build must not collide with the release ladder."""
     suffixes = _suffixes(
-        mod.build_tags("workflow_dispatch", "3.1.4", "refactor-v3", "abc1234"), HARBOR
+        mod.build_tags("workflow_dispatch", "3.1.4", "refactor-v3", "abc1234"), GHCR
     )
     assert suffixes == ["refactor-v3-latest", "refactor-v3-3.1.4", "sha-abc1234"]
     assert "latest" not in suffixes
 
 
-def test_both_registries_get_an_identical_ladder() -> None:
-    """The two registries must be interchangeable for a given tag — that is the
-    whole premise of the GHCR base redirect in build-and-publish-app.yaml."""
-    tags = mod.build_tags("release", "3.1.4", "main", "abc1234")
-    assert _suffixes(tags, HARBOR) == _suffixes(tags, GHCR)
-
-
-def test_harbor_and_ghcr_are_the_only_targets() -> None:
-    assert set(mod.REPOS) == {HARBOR, GHCR}
+def test_ghcr_is_the_only_target() -> None:
+    """``registry.atlan.com`` is the registry gateway in front of GHCR, so a
+    second push to it would only fail at login — which is how Harbor's
+    retirement first surfaced in CI."""
+    assert mod.REPOS == (GHCR,)
 
 
 @pytest.mark.parametrize(
@@ -131,7 +126,7 @@ def test_the_sha_tag_is_always_present() -> None:
         ("release", "3.1.4-rc1"),
         ("workflow_dispatch", "3.1.4"),
     ]:
-        suffixes = _suffixes(mod.build_tags(event, version, "p", "abc1234"), HARBOR)
+        suffixes = _suffixes(mod.build_tags(event, version, "p", "abc1234"), GHCR)
         assert "sha-abc1234" in suffixes
 
 

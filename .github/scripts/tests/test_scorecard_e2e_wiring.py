@@ -14,11 +14,16 @@ test_build_scorecard_args.py.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _bump_skip import without_bump_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
@@ -58,7 +63,7 @@ def test_a_skipped_e2e_does_not_skip_the_scorecard(scorecard: dict[str, Any]) ->
     losing `always()` here would stop emitting scorecards fleet-wide rather
     than emit one without e2e.
     """
-    assert scorecard["if"].startswith("always()")
+    assert without_bump_skip(scorecard["if"]).startswith("always()")
 
 
 def test_the_scorecard_still_never_runs_on_pull_request(
@@ -151,6 +156,9 @@ def test_the_generate_step_passes_the_job_results_the_script_needs(
 ) -> None:
     env = _generate_step(scorecard)["env"]
     assert env["E2E_RESULT"] == "${{ needs.e2e.result }}"
+    # A crashed integration job must reach the script, or its empty junit reads
+    # as "no integration tier" (FND-3299).
+    assert env["INTEGRATION_RESULT"] == "${{ needs.integration.result }}"
     assert env["OBSERVED_CLOUDS"] == "${{ needs.discover-e2e.outputs.clouds }}"
     assert env["CONFIGURED_KNOWN"] == (
         "${{ steps.configured-clouds.outcome == 'success' }}"

@@ -44,6 +44,7 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, TypedDict
 
@@ -74,6 +75,7 @@ if TYPE_CHECKING:
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
+from application_sdk.common.atomic import disk_full_guard, ensure_free_space
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -419,7 +421,11 @@ def _is_precondition(exc: BaseException) -> bool:
 # attribute. Matches ``safe_traceback``'s ceiling.
 _LOG_CAUSE_MAX_LEN = 8000
 
-_OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
+# Two shapes reach here: the backend-response form above ("non-2xx status
+# code: 403 ...") and the retry layer's "Client error with status 403
+# Forbidden: ...", which is how GCS client errors arrive. Matching only the
+# first left ``http_status`` empty on every GCS 4xx.
+_OBSTORE_HTTP_STATUS_RE = re.compile(r"status(?: code:)?\s*(\d{3})\b")
 _PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
 # Not every store behind an S3 API answers in S3's XML dialect. Atlan's
 # ``/api/blobstorage`` proxy is a Kong plugin that rejects before the request
@@ -708,6 +714,7 @@ async def _list_items(
     prefix: str | None,
     *,
     include_markers: bool = False,
+    suffixes: Iterable[str] = (),
 ) -> list[tuple[str, int, str | None]]:
     """Collect listing results under *prefix*, optionally filtering GCS directory markers.
 
@@ -719,6 +726,10 @@ async def _list_items(
 
     A zero-byte object is excluded when its path is a strict path-prefix of at least
     one other listed key — i.e. it acts as a parent directory for real files.
+    Before that filter, each zero-byte object is probed with a HEAD; one that is
+    not found and lists under its own path is an S3 ``folder/`` marker listed
+    without its trailing slash and is dropped, so it is neither returned nor
+    counted as a parent.
 
     Args:
         store: An obstore-compatible store instance.
@@ -727,6 +738,8 @@ async def _list_items(
             every object including zero-byte markers.  Use this when the caller must
             operate on *all* objects (e.g. ``delete_prefix``) so that no orphan
             objects are left behind on any store backend.
+        suffixes: Case-insensitive key suffixes the caller keeps. When given,
+            only zero-byte objects ending in one of them are probed.
 
     Returns:
         ``(path, size, e_tag)`` tuples in listing order (``e_tag`` may be
@@ -740,7 +753,112 @@ async def _list_items(
 
     if include_markers:
         return all_items
+    # Offloaded: two passes over the whole listing with no await in between,
+    # which at 100k keys holds the event loop (and the activity heartbeat).
+    phantoms = await _childless_marker_paths(store, all_items, suffixes)
+    return await run_in_thread(_drop_markers, all_items, phantoms)
 
+
+def _drop_markers(
+    all_items: list[tuple[str, int, str | None]],
+    phantoms: set[str],
+) -> list[tuple[str, int, str | None]]:
+    """Drop *phantoms*, then the directory markers among the remaining items."""
+    if phantoms:
+        all_items = [item for item in all_items if item[0] not in phantoms]
+    return _drop_directory_markers(all_items)
+
+
+async def _childless_marker_paths(
+    store: ObjectStore,
+    items: list[tuple[str, int, str | None]],
+    suffixes: Iterable[str],
+) -> set[str]:
+    """Return zero-byte listed paths that are S3 ``folder/`` markers.
+
+    An S3 ``folder/`` marker lists without its trailing slash, so a HEAD of its
+    listed path finds nothing. A real zero-byte key deleted after the listing
+    finds nothing too, so a not-found HEAD is confirmed by listing under the
+    path: the marker lists there as itself, the vanished key lists nothing and
+    is kept, so its download reports it. Only the error class decides
+    not-found: obstore error text carries the key, so a substring match would
+    misread a key like ``dt=20240404/_SUCCESS`` on a 403 or 503.
+
+    A fixed pool of workers drains the candidates, so a listing with 100k
+    zero-byte keys holds only that many tasks, not one per key.
+    """
+    candidates = await run_in_thread(
+        _zero_byte_paths, items, tuple(suffix.lower() for suffix in suffixes)
+    )
+    if not candidates:
+        return set()
+    from application_sdk.constants import (  # noqa: PLC0415
+        MAX_CONCURRENT_STORAGE_TRANSFERS,
+    )
+    from application_sdk.storage._concurrency import _run_bounded  # noqa: PLC0415
+
+    markers: set[str] = set()
+    pending = iter(candidates)
+
+    async def _worker() -> None:
+        # One shared iterator: each worker takes the next path when it is free.
+        for path in pending:
+            if await _head_not_found(store, path) and await _lists_under_itself(
+                store, path
+            ):
+                markers.add(path)
+
+    workers = min(max(MAX_CONCURRENT_STORAGE_TRANSFERS, 1), len(candidates))
+    await _run_bounded([_worker() for _ in range(workers)], None)
+    return markers
+
+
+async def _head_not_found(store: ObjectStore, path: str) -> bool:
+    """True only when a HEAD of *path* fails with a not-found error class."""
+    try:
+        await obstore.head_async(store, path)
+    except FileNotFoundError:
+        return True
+    # conformance: ignore[E004] probe only; any other error keeps the key and the download reports it
+    except Exception as exc:
+        return _ObstoreNotFoundError is not None and isinstance(
+            exc, _ObstoreNotFoundError
+        )
+    return False
+
+
+async def _lists_under_itself(store: ObjectStore, path: str) -> bool:
+    """True when listing under *path* returns anything.
+
+    obstore lists *path* as the prefix ``path/``, which holds an S3
+    ``path/`` marker (listed as *path*) but never a plain key named *path*.
+    """
+    try:
+        async for batch in obstore.list(store, prefix=path, chunk_size=1):
+            if batch:
+                return True
+    # conformance: ignore[E004] probe only; any error keeps the key and the download reports it
+    except Exception:
+        return False
+    return False
+
+
+def _zero_byte_paths(
+    items: list[tuple[str, int, str | None]],
+    lsuffixes: tuple[str, ...],
+) -> list[str]:
+    """Zero-byte listed paths, limited to *lsuffixes* (lowercase) when given."""
+    return [
+        path
+        for path, size, _ in items
+        if size == 0 and (not lsuffixes or path.lower().endswith(lsuffixes))
+    ]
+
+
+def _drop_directory_markers(
+    all_items: list[tuple[str, int, str | None]],
+) -> list[tuple[str, int, str | None]]:
+    """Drop zero-byte objects whose path is an ancestor of another listed key."""
     parent_dirs: set[str] = set()
     for path, _, _ in all_items:
         parts = path.split("/")
@@ -1149,8 +1267,12 @@ async def download_file(
 
     Raises:
         StorageNotFoundError: If *key* does not exist in the store.
-        StorageError: If the download or write fails, or fewer bytes reached
-            disk than the store declared for the object.
+        StorageDiskFullError: If the local volume is out of space
+            (``ENOSPC`` / ``EDQUOT``) for the object, or already has less free
+            space than the store declared for it. A ``DiskFullError``
+            (``RESOURCE_EXHAUSTED_DISK_FULL``) that is also a ``StorageError``.
+        StorageError: If the download or write fails for any other reason, or
+            fewer bytes reached disk than the store declared for the object.
         StorageIntegrityError: If the downloaded content does not match the
             digest its producer recorded.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
@@ -1160,7 +1282,6 @@ async def download_file(
         key = normalize_key(key)
 
     path = Path(local_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     verifying = integrity.verification_enabled(verify)
     # Hash while streaming whenever verification is on: the bytes are already
@@ -1209,48 +1330,61 @@ async def download_file(
     published = False
     try:
         try:
-            staging_dir = path.parent / PARTIAL_DIRNAME
-            # mode hardens only the first creation (ignored when the directory
-            # exists) — it keeps a staging dir under a shared temp root private.
-            os.makedirs(staging_dir, mode=0o700, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(
-                dir=str(staging_dir), prefix=path.name + "."
-            )
-            from application_sdk.constants import (  # noqa: PLC0415
-                STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-            )
+            # A full volume is its own failure, not a generic storage one: it
+            # names the volume to resize, where StorageError reads as the store.
+            # The declared size is known before the first byte arrives, so a
+            # volume that plainly cannot hold the object fails here, in seconds,
+            # and the message can say what was needed.
+            declared = result.meta["size"]
+            ensure_free_space(path, declared, operation="download")
+            with disk_full_guard(path, operation="download", required_bytes=declared):
+                # Inside the guard: a missing parent needs room for its own
+                # directory entry, and a full volume there is the same failure.
+                path.parent.mkdir(parents=True, exist_ok=True)
+                staging_dir = path.parent / PARTIAL_DIRNAME
+                # mode hardens only the first creation (ignored when the directory
+                # exists) — it keeps a staging dir under a shared temp root private.
+                os.makedirs(staging_dir, mode=0o700, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=str(staging_dir), prefix=path.name + "."
+                )
+                from application_sdk.constants import (  # noqa: PLC0415
+                    STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+                )
 
-            last_progress = started
-            with os.fdopen(fd, "wb") as fh:
-                async for chunk in result.stream(min_chunk_size=min_chunk_size):
-                    raw = bytes(chunk)
-                    fh.write(raw)
-                    bytes_written += len(raw)
-                    if h is not None:
-                        h.update(raw)
-                    # One streamed chunk landed on disk — see the matching mark in
-                    # upload_file for why this is per chunk and ungated.
-                    current_progress_tracker().mark_progress("storage.download_chunk")
-                    if _progress_interval > 0:
-                        now = time.monotonic()
-                        if now - last_progress >= _progress_interval:
-                            _log_transfer_progress(
-                                "download",
-                                key,
-                                bytes_so_far=bytes_written,
-                                elapsed_ms=(now - started) * 1000.0,
-                            )
-                            last_progress = now
-                # fsync before the publish: on a delayed-allocation filesystem
-                # ENOSPC can surface only at writeback, and without this a
-                # short file would be published as complete (the FND-318
-                # argument). Offloaded so a large flush does not hold the
-                # event loop and the activity heartbeat with it.
-                fh.flush()
-                await run_in_thread(os.fsync, fh.fileno())
-            os.replace(tmp_name, path)
-            published = True
-        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+                last_progress = started
+                with os.fdopen(fd, "wb") as fh:
+                    async for chunk in result.stream(min_chunk_size=min_chunk_size):
+                        raw = bytes(chunk)
+                        fh.write(raw)
+                        bytes_written += len(raw)
+                        if h is not None:
+                            h.update(raw)
+                        # One streamed chunk landed on disk — see the matching mark in
+                        # upload_file for why this is per chunk and ungated.
+                        current_progress_tracker().mark_progress(
+                            "storage.download_chunk"
+                        )
+                        if _progress_interval > 0:
+                            now = time.monotonic()
+                            if now - last_progress >= _progress_interval:
+                                _log_transfer_progress(
+                                    "download",
+                                    key,
+                                    bytes_so_far=bytes_written,
+                                    elapsed_ms=(now - started) * 1000.0,
+                                )
+                                last_progress = now
+                    # fsync before the publish: on a delayed-allocation filesystem
+                    # ENOSPC can surface only at writeback, and without this a
+                    # short file would be published as complete (the FND-318
+                    # argument). Offloaded so a large flush does not hold the
+                    # event loop and the activity heartbeat with it.
+                    fh.flush()
+                    await run_in_thread(os.fsync, fh.fileno())
+                os.replace(tmp_name, path)
+                published = True
+        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and the exception is re-raised as StorageDiskFullError or StorageError
         except Exception as exc:
             elapsed_ms = (time.monotonic() - started) * 1000.0
             _log_storage_event(
@@ -1262,6 +1396,18 @@ async def download_file(
                 size_bytes=bytes_written,
                 error_class=_exc_class_name(exc),
             )
+            from application_sdk.errors import DiskFullError  # noqa: PLC0415
+
+            if isinstance(exc, DiskFullError):
+                # Also a StorageError, so `except StorageError:` and the
+                # fan-out unwrapping in `_run_bounded` still see it.
+                from application_sdk.storage.errors import (  # noqa: PLC0415
+                    StorageDiskFullError,
+                )
+
+                raise StorageDiskFullError.from_disk_full(exc, key=key) from (
+                    exc.__cause__ or exc
+                )
             from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
             raise StorageError(

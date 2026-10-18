@@ -36,6 +36,7 @@ from application_sdk.app.task import task
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
+    strip_sql_block_comments,
 )
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
@@ -46,6 +47,7 @@ from application_sdk.templates._template_errors import (
     SqlCredentialRefMissingError,
     SqlMetadataExtractorNotImplementedError,
     SqlSecretStoreMissingError,
+    SqlTreeFilterInputUnsupportedError,
 )
 from application_sdk.templates.base_metadata_extractor import BaseMetadataExtractor
 from application_sdk.templates.contracts.sql_metadata import (
@@ -64,6 +66,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     FetchTablesOutput,
     TransformInput,
     TransformOutput,
+    TreeSelectionExtractionInput,
 )
 
 if TYPE_CHECKING:
@@ -82,6 +85,8 @@ def _task_input(
     cred_ref: CredentialRef | None,
 ) -> _ET:
     """Build a typed task input from the top-level extraction input."""
+    if isinstance(src, TreeSelectionExtractionInput):
+        raise SqlTreeFilterInputUnsupportedError()
     return input_cls(
         workflow_id=src.workflow_id,
         connection=src.connection,
@@ -253,7 +258,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 else self.extract_temp_table_regex_table_sql
             )
             if fragment:
-                temp_table_sql = fragment.replace(
+                temp_table_sql = strip_sql_block_comments(fragment).replace(
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 
@@ -449,6 +454,8 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
 
         Override to customize the orchestration order or add additional steps.
         """
+        if isinstance(input, TreeSelectionExtractionInput):
+            raise SqlTreeFilterInputUnsupportedError()
         workflow_id = input.workflow_id
         logger.info("Starting SQL metadata extraction: %s", workflow_id)
 

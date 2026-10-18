@@ -102,6 +102,128 @@ def test_s001_silent_on_env_var_name_reference() -> None:
     assert _ids('cfg = {"client_secret": "ATLAN_OAUTH2_CLIENT_SECRET"}\n') == []
 
 
+def test_s001_silent_on_prose_value() -> None:
+    src = (
+        "_SUGGESTED_ACTIONS = {\n"
+        '    "AUTH_NO_CREDENTIALS": ("Select a credential on the workflow\'s Credential step."),\n'
+        '    "AUTH_INVALID_CREDENTIALS": (\n'
+        '        "Check the access key, secret key and region on the configured credential."\n'
+        "    ),\n"
+        "}\n"
+    )
+    assert _ids(src) == []
+
+
+def test_s001_silent_on_credential_name_alias_map() -> None:
+    src = (
+        "_LEGACY_ALIASES = {\n"
+        '    "username": "aws_access_key_id",\n'
+        '    "password": "aws_secret_access_key",\n'
+        '    "accountid": "aws_account_id",\n'
+        "}\n"
+    )
+    assert _ids(src) == []
+    assert (
+        _ids(
+            'aliases = dict(username="aws_access_key_id", '
+            'password="aws_secret_access_key")\n'
+        )
+        == []
+    )
+
+
+def test_s001_still_fires_on_real_secret_literals() -> None:
+    assert _ids('cfg = {"password": "hunter2"}\n') == ["S001"]
+    assert _ids('password = "s3cr3t_Value"\n') == ["S001"]
+
+
+def test_s001_still_fires_on_whitespace_bearing_secrets() -> None:
+    assert _ids('private_key = "-----BEGIN RSA PRIVATE KEY-----\\nMIIEow..."\n') == [
+        "S001"
+    ]
+    assert _ids('private_key = "-----BEGIN PRIVATE KEY----- MIIEvQ. Ends here."\n') == [
+        "S001"
+    ]
+    assert _ids('cfg = {"token": "Bearer eyJhbGciOiJIUzI1NiJ9.e30.abc"}\n') == ["S001"]
+    assert _ids('api_key = "Basic dXNlcjpwYXNz"\n') == ["S001"]
+    assert _ids('password = "correct horse battery staple"\n') == ["S001"]
+    assert _ids('password = "Let me in now!"\n') == ["S001"]
+    assert _ids('connect(password="Summer is here 2024!")\n') == ["S001"]
+    assert _ids('cfg = {"password": "correct horse battery staple"}\n') == ["S001"]
+    assert _ids('password = "Let me in right now please!"\n') == ["S001"]
+    assert _ids('password = "correct horse battery staple glue lamp."\n') == ["S001"]
+    assert _ids('cfg = {"password": "this is my very secret password."}\n') == ["S001"]
+    assert _ids('connect(password="Summer is here and it is 2024!")\n') == ["S001"]
+    assert _ids('password = "Enter the password for the service account."\n') == [
+        "S001"
+    ]
+    src = (
+        "DATABASE = {\n"
+        '    "USER": "admin",\n'
+        '    "PASSWORD": "correct horse battery staple glue lamp.",\n'
+        "}\n"
+    )
+    assert _ids(src) == ["S001"]
+
+
+def test_s001_message_table_does_not_hide_secrets() -> None:
+    help_text = "Check the access key and region on the configured credential."
+    for value in (
+        "Use ghp_AbC123dEf456GhI789 to call the API on the server.",
+        "The key sk_live_abcdef123456 is the one to use for the API.",
+        " Bearer eyJhbGciOiJIUzI1NiJ9.e30.abc is the token for the API.",
+        "correct horse battery staple glue lamp.",
+        "Let me in right now please!",
+        "Use `ghp_abcdefghijklmnopqrst` to call the API on the server.",
+        "Set the header to key:ghp_abcdefghijklmnopqrst for the API.",
+    ):
+        src = (
+            "_SUGGESTED_ACTIONS = {\n"
+            f'    "AUTH_INVALID_CREDENTIALS": "{help_text}",\n'
+            f'    "AUTH_TOKEN": "{value}",\n'
+            "}\n"
+        )
+        assert _ids(src) == ["S001", "S001"], value
+    src = (
+        "SETTINGS = {\n"
+        '    "DB_PASSWORD": "correct horse battery staple glue lamp.",\n'
+        '    "ADMIN_PASSWORD": "Let me in right now please!",\n'
+        "}\n"
+    )
+    assert _ids(src) == ["S001", "S001"]
+
+
+def test_s001_still_fires_on_credential_name_shaped_weak_defaults() -> None:
+    assert _ids('db_password = "secret"\n') == ["S001"]
+    assert _ids('cfg = {"password": "secret"}\n') == ["S001"]
+    assert _ids('cfg = {"password": "api_key"}\n') == ["S001"]
+    assert _ids('password = "aws_secret_access_key"\n') == ["S001"]
+    src = (
+        "cfg = {\n"
+        '    "username": "aws_access_key_id",\n'
+        '    "password": "hunter2",\n'
+        "}\n"
+    )
+    assert _ids(src) == ["S001"]
+    assert _ids('cfg = {"username": "svc_user", "password": "admin_password"}\n') == [
+        "S001"
+    ]
+    assert _ids(
+        'cfg = {"client_id": "my_app", "client_secret": "abc123_def456"}\n'
+    ) == ["S001"]
+    assert _ids('cfg = {"password": "my_secret", "api_key": "test_token"}\n') == [
+        "S001",
+        "S001",
+    ]
+    assert _ids('cfg = {"password": "default_password", "token": "dev_token"}\n') == [
+        "S001",
+        "S001",
+    ]
+    assert _ids('cfg = {"user": "svc_id", "password": "admin_db_password"}\n') == [
+        "S001"
+    ]
+
+
 def test_s001_silent_on_enum_member() -> None:
     src = (
         "from enum import Enum\n"
@@ -269,3 +391,55 @@ def test_warn_violation_is_warning_disposition_and_keeps_gate_green(
     report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
     dispositions = [derive_disposition(r) for r in report.runs[0].results]
     assert dispositions == [Disposition.WARNING]
+
+
+# ── S002: standalone utility scripts at the repo root ──────────────────────────────
+# A root-level script with its own __main__ block never ships (images copy app/ and
+# main.py) and reads its credentials from a local .env, like a dev harness. Flagging
+# it sent the remediation lane to wrap two such scripts in a SecretStore and add
+# tests for them, which only added code nothing in production runs.
+
+_UTILITY = (
+    "import os\n"
+    "def fetch():\n"
+    "    return os.getenv('NETSUITE_CONSUMER_SECRET')\n"
+    "if __name__ == '__main__':\n"
+    "    fetch()\n"
+)
+
+
+def _s002(src: str, file: str) -> list[str]:
+    return [f.rule_id for f in scan_text(src, file) if f.rule_id == "S002"]
+
+
+def test_s002_skips_a_standalone_utility_script_at_the_repo_root() -> None:
+    assert _s002(_UTILITY, "hailmary.py") == []
+
+
+def test_s002_still_flags_the_same_read_in_shipped_or_imported_code() -> None:
+    assert _s002(_UTILITY, "app/hailmary.py") == ["S002"]  # inside the shipped package
+    assert _s002(_UTILITY, "main.py") == ["S002"]  # the container entry point
+    no_guard = _UTILITY.split("if __name__")[0]
+    assert _s002(no_guard, "helpers.py") == ["S002"]  # a root module other code imports
+
+
+def test_s002_a_non_equality_name_test_is_not_a_main_guard() -> None:
+    # `if __name__ != "__main__":` runs when the module is imported, so the read ships.
+    src = "import os\nif __name__ != '__main__':\n    token = os.getenv('API_TOKEN')\n"
+    assert _s002(src, "worker.py") == ["S002"]
+
+
+def test_s001_still_flags_a_hardcoded_secret_in_a_standalone_utility() -> None:
+    src = _UTILITY + "password = 'hunter2-real-value'\n"
+    assert [f.rule_id for f in scan_text(src, "seed_fixtures.py")] == ["S001"]
+
+
+def test_secret_hygiene_rules_are_never_applied_unattended() -> None:
+    # Their fixes change where a credential comes from at runtime, or what an auth
+    # value holds; no gate proves the replacement resolves the same secret, so the
+    # remediation lane must route them to a person (security.prose.md, suggest-only).
+    for rule_id in ("S001", "S002"):
+        rule = get_rule(rule_id)
+        assert rule.autofixable is False, rule_id
+        assert rule.remediation_reference is not None
+        assert rule.remediation_reference.kind.value == "guide"

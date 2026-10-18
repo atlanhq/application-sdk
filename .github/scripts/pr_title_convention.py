@@ -6,7 +6,8 @@ files require, per the precedence rules documented in
 .github/workflows/pr-title-convention.yaml:
 
   0. Version-bump / release automation -> ignored entirely.
-  0.5 dependency manifests/locks only -> chore:/ci: required.
+  0.5 dependency manifests/locks only (plus files generated from them)
+      -> chore:/ci: required.
   1. application_sdk/ touched         -> no restriction.
   2. Dockerfile / entrypoint.sh       -> feat:/fix: required.
   3. contract-toolkit/ core           -> feat(contract-toolkit):/fix(contract-toolkit): required.
@@ -55,6 +56,17 @@ DEP_MANIFEST_NAMES = frozenset(
         "poetry.lock",
         "Pipfile",
         "Pipfile.lock",
+    }
+)
+
+# Files generated from a resolved lock rather than written by hand. The lock
+# refresh lane (bound_lock_branch.py) regenerates these when it moves the
+# dependency they describe, so they ride along in a dependency update. They count
+# as dependency files only beside a manifest/lock — on their own they keep their
+# usual zone.
+LOCK_DERIVED_PATHS = frozenset(
+    {
+        "packages/conformance/conformance/data/relationship_directions.json",
     }
 )
 
@@ -225,7 +237,10 @@ def classify_files(files: list) -> str:
 
     One of "deps", "sdk", "docker-img", "ct-core", "cf-core", or "other".
     """
-    if files and all(is_dependency_manifest(f) for f in files):
+    manifests = [f for f in files if is_dependency_manifest(f)]
+    if manifests and all(
+        is_dependency_manifest(f) or f in LOCK_DERIVED_PATHS for f in files
+    ):
         return "deps"
 
     sdk = docker_img = ct_core = cf_core = False

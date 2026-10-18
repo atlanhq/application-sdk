@@ -66,12 +66,28 @@ contributors cannot.
 - **Developer Experience** — API ergonomics, error messages, migration paths
 - **Structural** — symptoms vs causes, file health, design coherence
 
+### CI Cost
+
+Applies to any change under `.github/workflows/`, a reusable workflow, or
+a bootstrap template. The rules and the reasoning behind them are in
+[CI cost](../standards/ci.md#ci-cost). Anything in a template or reusable
+runs in ~140 repos, so judge it by its fleet total.
+
+- New billed jobs — could the work be steps in an existing job?
+- "Nothing to do" filters sit on the job's `if:`, not on steps
+- No matrix whose legs finish in under a minute
+- Every PR-triggered workflow cancels superseded runs, or explains why not
+- Every `upload-artifact` sets `retention-days`
+- A new `workflow_run` trigger states its fan-in; a new cron justifies
+  its frequency
+- No check re-runs on PR, merge queue and release with unchanged inputs
+
 ### Cross-Model Review
 
-The review uses two model families to eliminate bias:
+The review uses two models to reduce bias:
 
-- **Claude Opus 4.6** reviews the code (3 domain agents in parallel)
-- **GPT-5.3-codex** challenges every finding (adversarial)
+- **gpt-6-sol** reviews the code (3 domain agents in parallel)
+- **gpt-6-luna** challenges every finding (adversarial)
 - Findings where the models disagree are dropped (model bias)
 - Guardrail violations are always kept regardless of model agreement
 
@@ -111,8 +127,8 @@ honouring the override. Logged for audit trail.
 
 ## Required configuration
 
-The `sdk-review` and `sdk-evolution-cron` workflows (both mothership
-flows) need these repo-level secrets and variables.
+The `sdk-review` workflow (a mothership flow) needs these repo-level
+secrets and variables.
 
 | Kind | Name | Purpose |
 |---|---|---|

@@ -12,21 +12,29 @@ def _cmd_detect(argv: list[str]) -> int:
     return main(argv)
 
 
-def _cmd_programs_dir(_argv: list[str]) -> int:
+def _print_package_dir(name: str) -> int:
     import importlib.resources as _ir
 
-    programs = _ir.files("conformance") / "programs"
+    target = _ir.files("conformance") / name
     # Resolve to a real filesystem path (works for both installed wheels and
     # editable installs where the files are already on disk).
     try:
-        ctx = _ir.as_file(programs)
+        ctx = _ir.as_file(target)
         with ctx as p:
             print(str(p))
     except (FileNotFoundError, ModuleNotFoundError):
         # Fallback: direct path (editable installs)
         here = pathlib.Path(__file__).parent
-        print(str(here / "programs"))
+        print(str(here / name))
     return 0
+
+
+def _cmd_programs_dir(_argv: list[str]) -> int:
+    return _print_package_dir("programs")
+
+
+def _cmd_skills_dir(_argv: list[str]) -> int:
+    return _print_package_dir("skills")
 
 
 def _cmd_gen_rule_docs(argv: list[str]) -> int:
@@ -51,6 +59,26 @@ def _cmd_gen_deprecations(argv: list[str]) -> int:
 
 def _cmd_gen_public_errors(argv: list[str]) -> int:
     from conformance.tools.generate_public_errors import main
+
+    try:
+        main(argv)
+        return 0
+    except SystemExit as e:
+        return int(e.code) if e.code is not None else 0
+
+
+def _cmd_gen_sdk_type_aliases(argv: list[str]) -> int:
+    from conformance.tools.generate_sdk_type_aliases import main
+
+    try:
+        main(argv)
+        return 0
+    except SystemExit as e:
+        return int(e.code) if e.code is not None else 0
+
+
+def _cmd_gen_relationship_directions(argv: list[str]) -> int:
+    from conformance.tools.generate_relationship_directions import main
 
     try:
         main(argv)
@@ -122,11 +150,14 @@ def _cmd_scorecard(argv: list[str]) -> int:
 _COMMANDS = {
     "detect": _cmd_detect,
     "programs-dir": _cmd_programs_dir,
+    "skills-dir": _cmd_skills_dir,
     "gen-rule-docs": _cmd_gen_rule_docs,
     "gen-deprecations": _cmd_gen_deprecations,
     "gen-contract-ledger": _cmd_gen_contract_ledger,
     "gen-toolkit-baseline": _cmd_gen_toolkit_baseline,
     "gen-public-errors": _cmd_gen_public_errors,
+    "gen-sdk-type-aliases": _cmd_gen_sdk_type_aliases,
+    "gen-relationship-directions": _cmd_gen_relationship_directions,
     "ledger-guard": _cmd_ledger_guard,
     "remediate": _cmd_remediate,
     "bootstrap": _cmd_bootstrap,
@@ -140,11 +171,13 @@ usage: atlan-application-sdk-conformance <command> [args]
 commands:
   detect         Run the conformance suite and emit SARIF
   programs-dir   Print the absolute path to the bundled .prose.md programs
+  skills-dir     Print the absolute path to the bundled migration skills
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   gen-deprecations  Regenerate the deprecated-symbol manifest from SDK source
   gen-contract-ledger  Regenerate the entrypoint-contract ledger (contract_schema.lock.json)
                        --repo DIR    repo root to scan (default: auto-detected)
-                       --outfile PATH  ledger path (default: contract_schema.lock.json in cwd)
+                       --outfile PATH  ledger path (default: contract_schema.lock.json in cwd;
+                                       repo root in the SDK)
                        --check       verify ledger is current; exit 1 if stale
   gen-toolkit-baseline Regenerate data/toolkit_baseline.json from contract-toolkit/src/PklProject
                        --sdk-root DIR  repo root to read (default: auto-detected)
@@ -152,7 +185,12 @@ commands:
   gen-public-errors    Regenerate data/public_errors.json from application_sdk.errors.__all__
                        --sdk-root DIR  repo root to read (default: auto-detected)
                        --check       verify allowlist is current; exit 1 if stale
-  ledger-guard         CI append-only guard: block ledger deletions and type changes between
+  gen-sdk-type-aliases Regenerate data/sdk_type_aliases.json from application_sdk/ type aliases
+                       --sdk-root DIR  repo root to read (default: auto-detected)
+                       --check       verify table is current; exit 1 if stale
+  gen-relationship-directions Regenerate data/relationship_directions.json from pyatlan_v9
+                       --check       verify table is current; exit 1 if stale
+  ledger-guard        CI append-only guard: block ledger deletions and type changes between
                        base ref and HEAD (run after fetch-depth: 0 checkout)
                          --base-ref REF      git ref for the base (default: origin/main)
                          --ledger-path PATH  repo-relative path to the ledger file

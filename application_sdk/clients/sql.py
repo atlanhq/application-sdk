@@ -5,24 +5,42 @@ This module provides SQL client classes for both synchronous and asynchronous
 database operations, supporting batch processing and server-side cursors.
 """
 
-import asyncio
-import concurrent
+import concurrent.futures
+import contextlib
+import contextvars
+import datetime
+import functools
 import hashlib
-from collections.abc import AsyncIterator, Iterator
-from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Union, cast
+import re
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 from urllib.parse import quote, quote_plus
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import (
+    CancelHandle,
+    run_in_thread,
+    submit_in_thread,
+)
 from application_sdk.clients._interface import ClientInterface
+from application_sdk.clients._sql_failure_classifier import (
+    SqlFailureKind,
+    classify_sql_exception,
+)
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_errors import (
     EngineNotInitializedError,
     InvalidSqlEngineTypeError,
     MissingSqlParamError,
     SqlAwsCredentialsError,
+    SqlBindParameterError,
     SqlClientAuthFailedError,
     SqlClientConfigError,
+    SqlClientConnectTimeoutError,
+    SqlClientConnectUnclassifiedError,
+    SqlClientSourceUnavailableError,
     SqlCredentialsParseError,
     SqlPandasResultError,
     UnsupportedSqlCursorError,
@@ -39,25 +57,195 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+T = TypeVar("T")
 
-def _escape_colons_for_text(query: str) -> str:
-    """Backslash-escape *every* literal colon so SQLAlchemy ``text()`` does not treat them as bind params.
 
-    Callers pass fully-rendered SQL (all values inlined; no bind params to supply). ``text()``
-    reads any ``:name`` as a required bind parameter and raises at compile time on colon-bearing
-    SQL — a regex ``(?:...)``, a ``::text`` cast, a ``'12:30:00'`` literal. SQLAlchemy strips the
-    backslash before the driver, so the DB receives the original literal colon.
+SqlBindValue = (
+    str
+    | int
+    | float
+    | bool
+    | Decimal
+    | datetime.datetime
+    | datetime.date
+    | datetime.time
+    | bytes
+    | None
+)
+"""A value ``run_query`` can bind to a ``:name`` placeholder: a scalar every DB-API driver accepts."""
 
-    Note: this escapes *all* colons. Any future call site that genuinely needs ``:name`` bind
-    parameters must not route through this helper.
+# SQL read just far enough to find placeholders: quoted text and comments are skipped whole, so a
+# ``:name`` inside them stays literal; outside them, a ``:name`` placeholder by SQLAlchemy
+# ``text()``'s own rule (not preceded by a colon, word character or backslash), or any other colon.
+# Escaping and validating ``params`` both read the query through this pattern, so they cannot
+# disagree on what is a bind. Quoting is standard SQL ('' doubles a quote; a backslash is literal)
+# plus MySQL backtick identifiers and Postgres dollar quotes.
+_SQL_COLON_SCAN = re.compile(
+    r"""
+      (?P<quoted>
+          '[^']*(?:''[^']*)*'
+        | "[^"]*(?:""[^"]*)*"
+        | `[^`]*`
+        | (?<!\w)\$(?P<tag>(?:[A-Za-z_]\w*)?)\$.*?\$(?P=tag)\$
+        | --[^\n]*
+        | /\*.*?\*/
+      )
+    | (?<![:\w\\]):(?P<name>\w+)
+    | :
+    """,
+    re.DOTALL | re.VERBOSE,
+)
+
+
+def _escape_colons_for_text(
+    query: str, bind_names: frozenset[str] = frozenset()
+) -> str:
+    """Backslash-escape literal colons so SQLAlchemy ``text()`` does not treat them as bind params.
+
+    ``text()`` reads any ``:name`` as a required bind parameter and raises at compile time on
+    colon-bearing SQL -- a regex ``(?:...)``, a ``::text`` cast, a ``'12:30:00'`` literal.
+    SQLAlchemy strips the backslash before the driver, so the DB receives the literal colon.
+
+    Every colon is escaped except a ``:name`` placeholder whose name is in ``bind_names``,
+    the parameters the caller is binding. A colon inside quoted text or a comment is always
+    escaped, so ``':name'`` stays a literal. Both colons of ``::`` are escaped, so ``x::name``
+    is never taken for the bind ``:name`` while ``:name::type`` binds ``name`` and keeps the cast.
     """
-    return query.replace(":", "\\:")
+
+    def escape(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if match.group("name") in bind_names:
+            return token
+        return token.replace(":", "\\:")
+
+    return _SQL_COLON_SCAN.sub(escape, query)
+
+
+def _bound_params(
+    query: str, params: Mapping[str, SqlBindValue] | None
+) -> dict[str, SqlBindValue] | None:
+    """``params`` checked against ``query``, or None when nothing is bound.
+
+    Raises :class:`SqlBindParameterError` for a name that ``query`` never references as a
+    ``:name`` placeholder outside quoted text and comments: executing anyway would run the query without that value, so a
+    filter would silently not apply.
+    """
+    if not params:
+        return None
+    referenced = {
+        m.group("name") for m in _SQL_COLON_SCAN.finditer(query) if m.group("name")
+    }
+    for name in params:
+        if name not in referenced:
+            raise SqlBindParameterError(
+                message=f"Bind parameter {name!r} is not referenced as a :name placeholder in the query"
+            )
+    return dict(params)
 
 
 if TYPE_CHECKING:
     import pandas as pd
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.engine.interfaces import DBAPICursor, ExecutionContext
     from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
+
+
+@dataclass(frozen=True)
+class _CancellableRead:
+    """One cancellable read, as seen from the worker thread running it."""
+
+    handle: CancelHandle
+    cancel_cursor: "Callable[[DBAPICursor], None]"
+
+
+#: The read the current worker thread is running, if it is cancellable. Set
+#: only inside the thread (run_in_thread runs each call in its own copy of the
+#: context), so it never leaks into the task or across calls.
+_ACTIVE_READ: contextvars.ContextVar[_CancellableRead | None] = contextvars.ContextVar(
+    "_ACTIVE_READ", default=None
+)
+
+
+@contextlib.contextmanager
+def _reading(read: _CancellableRead) -> Iterator[None]:
+    token = _ACTIVE_READ.set(read)
+    try:
+        yield
+    finally:
+        _ACTIVE_READ.reset(token)
+
+
+def _register_cursor_for_cancel(
+    conn: "Connection",
+    cursor: "DBAPICursor",
+    statement: str,
+    parameters: object,
+    context: "ExecutionContext | None",
+    executemany: bool,
+) -> None:
+    """``before_cursor_execute`` listener: hand the cursor to the read's handle.
+
+    Runs on the worker thread, at the first moment the DBAPI cursor exists.
+    A statement on any other thread — or outside a cancellable read — is left
+    alone.
+    """
+    read = _ACTIVE_READ.get()
+    if read is None:
+        return
+    read.handle.set(functools.partial(read.cancel_cursor, cursor))
+    if read.handle.requested:
+        # The caller is already gone; the action fired on set. Don't start a
+        # statement nobody is waiting for.
+        raise concurrent.futures.CancelledError
+
+
+def _install_cursor_cancel_listener(engine: object) -> None:
+    """Attach the cursor listener to ``engine`` once; skip anything not an Engine.
+
+    Done lazily on each read rather than in ``load()``, so a subclass that
+    builds its own engine is covered too. An async engine's reads don't run
+    on a worker thread, and a test double has no event surface.
+    """
+    from sqlalchemy import event  # noqa: PLC0415 — optional dep: sqlalchemy
+    from sqlalchemy.engine import Engine  # noqa: PLC0415 — optional dep: sqlalchemy
+
+    if not isinstance(engine, Engine):
+        return
+    if not event.contains(engine, "before_cursor_execute", _register_cursor_for_cancel):
+        event.listen(engine, "before_cursor_execute", _register_cursor_for_cancel)
+
+
+def _invalidate_if_cancelled(connection: "Connection", handle: CancelHandle) -> None:
+    """Drop a connection whose statement was cancelled instead of pooling it.
+
+    A cancelled connection may be mid-protocol, or carry server state the next
+    borrower does not expect; and a pool that pings or re-runs session setup on
+    checkout would pay a round trip to find out.
+    """
+    if handle.requested:
+        connection.invalidate()
+
+
+def _load_failure(exc: Exception) -> AppError:
+    """Type a failed ``load()`` by its root cause instead of calling it auth.
+
+    Classified by the same reader ``SqlApp.prime_sql_auth`` uses. An
+    unrecognised failure is reported as pending classification, not as a
+    rejected password.
+
+    No message carries driver text: SQLAlchemy embeds the connection string,
+    password included. The driver error rides ``cause``, which serialises
+    sanitised.
+    """
+    kind = classify_sql_exception(exc)
+    if kind is SqlFailureKind.AUTH:
+        return SqlClientAuthFailedError(cause=exc)
+    if kind is SqlFailureKind.TIMEOUT:
+        return SqlClientConnectTimeoutError(cause=exc)
+    if kind is SqlFailureKind.SOURCE_UNAVAILABLE:
+        return SqlClientSourceUnavailableError(cause=exc)
+    return SqlClientConnectUnclassifiedError(cause=exc)
 
 
 class BaseSQLClient(ClientInterface):
@@ -111,7 +299,14 @@ class BaseSQLClient(ClientInterface):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            SqlClientAuthFailedError: If credentials are invalid or engine creation fails.
+            SqlClientAuthFailedError: If the source rejected the credentials.
+            SqlClientSourceUnavailableError: If the source could not be reached
+                (DNS, refused or filtered connection, TLS).
+            SqlClientConnectTimeoutError: If the connect or login timed out.
+            SqlClientConnectUnclassifiedError: If the failure matched none of
+                the above.
+            AppError: Any typed error raised while connecting, unchanged — e.g.
+                ``MissingSqlParamError`` or ``SqlCredentialsParseError``.
         """
         if not self.DB_CONFIG:
             raise SqlClientConfigError()
@@ -167,7 +362,11 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise SqlClientAuthFailedError(cause=e) from e
+            # Already typed (a MissingSqlParamError from building the
+            # connection string, a connector's own leaf): keep its verdict.
+            if isinstance(e, AppError):
+                raise
+            raise _load_failure(e) from e
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -175,6 +374,30 @@ class BaseSQLClient(ClientInterface):
             self.engine.dispose()
             self.engine = None
         self.connection = None  # Should already be None, but ensure cleanup
+
+    def cancel_cursor(self, dbapi_cursor: "DBAPICursor") -> None:
+        """Stop the statement running on ``dbapi_cursor``. Default: do nothing.
+
+        Called when the task awaiting a read (``get_results``,
+        ``get_batched_results``, ``run_query``) is cancelled while the
+        statement is still running on its worker thread. It runs on the SDK's
+        ``sdk-cancel-`` pool — a third thread, concurrently with the blocked
+        driver call — so override it only with a driver call documented as
+        safe from another thread, e.g. ``dbapi_cursor.cancel()`` or
+        ``dbapi_cursor.connection.cancel()``.
+
+        DBAPI has no standard cancel, so the default is a no-op: the read
+        still hands control back at once, and the statement runs to
+        completion on its thread. Either way the connection is invalidated
+        rather than returned to the pool.
+
+        A failure is logged at WARNING and otherwise ignored. Never stop or
+        suspend a warehouse here: that is not this statement's to stop.
+
+        Args:
+            dbapi_cursor: The driver's own cursor, as passed to SQLAlchemy's
+                ``before_cursor_execute`` event.
+        """
 
     def get_iam_user_token(self):
         """Get an IAM user token for AWS RDS database authentication.
@@ -380,7 +603,12 @@ class BaseSQLClient(ClientInterface):
 
         return conn_str
 
-    async def run_query(self, query: str, batch_size: int = 100000):
+    async def run_query(
+        self,
+        query: str,
+        batch_size: int = 100000,
+        params: Mapping[str, SqlBindValue] | None = None,
+    ):
         """Execute a SQL query and return results in batches using lazy connections.
 
         This method creates a connection on-demand, executes the query in batches,
@@ -391,6 +619,10 @@ class BaseSQLClient(ClientInterface):
             query (str): SQL query to execute.
             batch_size (int, optional): Number of records to fetch in each batch.
                 Defaults to 100000.
+            params (Mapping[str, SqlBindValue], optional): Values to bind to ``:name``
+                placeholders in ``query``. The driver receives them as bound
+                values, never as SQL text, so a user-supplied filter value cannot
+                change the statement. Every name must appear in ``query``.
 
         Yields:
             List[Dict[str, Any]]: Batches of query results, where each result is
@@ -398,45 +630,84 @@ class BaseSQLClient(ClientInterface):
 
         Raises:
             EngineNotInitializedError: If engine is not initialized.
+            SqlBindParameterError: If ``params`` does not match the query.
         """
         if not self.engine:
             raise EngineNotInitializedError()
+        bound = _bound_params(query, params)
 
-        loop = asyncio.get_running_loop()
         logger.debug(
-            "Running query (sha=%s, len=%d)",
+            "Running query (sha=%s, len=%d, bound=%d)",
             hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
             len(query),
+            len(bound or {}),
         )
 
-        # Use context manager for automatic connection cleanup
-        with self.engine.connect() as connection:
+        _install_cursor_cancel_listener(self.engine)
+        engine = self.engine
+        # Driver calls, connect included, go through run_in_thread, so a cancelled caller stops
+        # waiting at once — but the thread keeps using the connection until the
+        # call returns. The lock keeps the close (below) from running on the
+        # connection while an abandoned call still holds it. The cancel handle
+        # is what makes that call return early: the listener registers the
+        # cursor on it, and cancel_cursor() fires off both of those threads.
+        in_use = threading.Lock()
+        handle = CancelHandle()
+        read = _CancellableRead(handle, self.cancel_cursor)
+        opened: list["Connection"] = []
+
+        def _holding_connection(func: Callable[..., T]) -> Callable[..., T]:
+            @functools.wraps(func)  # keeps the callee's name for run_in_thread's label
+            def call(*args: Any) -> T:
+                with in_use, _reading(read):
+                    return func(*args)
+
+            return call
+
+        def _connect() -> "Connection":
+            connection = engine.connect()
+            if handle.requested:
+                connection.close()
+                raise concurrent.futures.CancelledError
+            opened.append(connection)
+            return connection
+
+        def _close() -> None:
+            for connection in opened:
+                _invalidate_if_cancelled(connection, handle)
+                connection.close()
+
+        try:
+            connection = await run_in_thread(handle.bind(_holding_connection(_connect)))
             if self.use_server_side_cursor:
                 connection = connection.execution_options(yield_per=batch_size)
 
-            with ThreadPoolExecutor() as pool:
-                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
+            from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-                cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(_escape_colons_for_text(query))
-                )
-                if not cursor or not cursor.cursor:
-                    raise UnsupportedSqlCursorError()
-                column_names: list[str] = [
-                    description.name.lower()
-                    for description in cursor.cursor.description
-                ]
+            statement = text(_escape_colons_for_text(query, frozenset(bound or ())))
+            execute = handle.bind(_holding_connection(connection.execute))
+            cursor = await run_in_thread(execute, statement, bound)
+            if not cursor or not cursor.cursor:
+                raise UnsupportedSqlCursorError()
+            column_names: list[str] = [
+                description.name.lower() for description in cursor.cursor.description
+            ]
 
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
+            fetchmany = handle.bind(_holding_connection(cursor.fetchmany))
+            while True:
+                rows = await run_in_thread(fetchmany, batch_size)
+                if not rows:
+                    break
 
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            # Connection automatically closed by context manager
+                results = [dict(zip(column_names, row)) for row in rows]
+                yield results
+        except BaseException:
+            # Cancellation, an early aclose(), or a failure. A driver call may
+            # still be running, so closing here on the loop would block it on
+            # that call; hand the close to the pool to run once the call ends.
+            submit_in_thread(_holding_connection(_close))
+            raise
+        await run_in_thread(_holding_connection(_close))
 
         logger.info("Query execution completed")
 
@@ -498,7 +769,12 @@ class BaseSQLClient(ClientInterface):
             raise EngineNotInitializedError()
 
         with self.engine.connect() as conn:
-            return self._execute_pandas_query(conn, query, chunksize)
+            try:
+                return self._execute_pandas_query(conn, query, chunksize)
+            finally:
+                read = _ACTIVE_READ.get()
+                if read is not None:
+                    _invalidate_if_cancelled(conn, read.handle)
 
     async def _execute_async_read_operation(
         self, query: str, chunksize: int | None
@@ -528,11 +804,27 @@ class BaseSQLClient(ClientInterface):
                     self._read_sql_query, query, chunksize=chunksize
                 )
         else:
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_running_loop().run_in_executor(
-                    executor, self._execute_query, query, chunksize
-                )
+            # run_in_thread, not a per-call ThreadPoolExecutor: leaving that
+            # executor's `with` block on cancellation calls shutdown(wait=True)
+            # on the loop thread, which freezes the loop until the query ends.
+            # The shared pool lets a cancelled read return at once while its
+            # thread drains on its own — and the handle lets cancel_cursor()
+            # cut that drain short at the driver.
+            _install_cursor_cancel_listener(self.engine)
+            handle = CancelHandle()
+            read = _CancellableRead(handle, self.cancel_cursor)
+            execute_query = self._execute_query
+
+            @functools.wraps(execute_query)  # keeps the name for the hold label
+            def _cancellable_query(
+                query: str, chunksize: int | None
+            ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
+                with _reading(read):
+                    return execute_query(query, chunksize)
+
+            return await run_in_thread(
+                handle.bind(_cancellable_query), query, chunksize
+            )
 
     async def get_batched_results(
         self,
@@ -618,7 +910,14 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
         Raises:
             SqlClientConfigError: If DB_CONFIG is not set.
-            SqlClientAuthFailedError: If credentials are invalid or engine creation fails.
+            SqlClientAuthFailedError: If the source rejected the credentials.
+            SqlClientSourceUnavailableError: If the source could not be reached
+                (DNS, refused or filtered connection, TLS).
+            SqlClientConnectTimeoutError: If the connect or login timed out.
+            SqlClientConnectUnclassifiedError: If the failure matched none of
+                the above.
+            AppError: Any typed error raised while connecting, unchanged — e.g.
+                ``MissingSqlParamError`` or ``SqlCredentialsParseError``.
         """
         self.credentials = credentials
         if not self.DB_CONFIG:
@@ -658,7 +957,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise SqlClientAuthFailedError(cause=e) from e
+            # Already typed (a MissingSqlParamError from building the
+            # connection string, a connector's own leaf): keep its verdict.
+            if isinstance(e, AppError):
+                raise
+            raise _load_failure(e) from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
@@ -667,7 +970,12 @@ class AsyncBaseSQLClient(BaseSQLClient):
             self.engine = None
         self.connection = None
 
-    async def run_query(self, query: str, batch_size: int = 100000):
+    async def run_query(
+        self,
+        query: str,
+        batch_size: int = 100000,
+        params: Mapping[str, SqlBindValue] | None = None,
+    ):
         """Execute a SQL query asynchronously and return results in batches using lazy connections.
 
         This method creates an async connection on-demand, executes the query in batches,
@@ -678,6 +986,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
             query (str): SQL query to execute.
             batch_size (int, optional): Number of records to fetch in each batch.
                 Defaults to 100000.
+            params (Mapping[str, SqlBindValue], optional): Values to bind to ``:name``
+                placeholders in ``query``, as for :meth:`BaseSQLClient.run_query`.
 
         Yields:
             List[Dict[str, Any]]: Batches of query results, where each result is
@@ -688,11 +998,13 @@ class AsyncBaseSQLClient(BaseSQLClient):
         """
         if not self.engine:
             raise EngineNotInitializedError()
+        bound = _bound_params(query, params)
 
         logger.debug(
-            "Running query (sha=%s, len=%d)",
+            "Running query (sha=%s, len=%d, bound=%d)",
             hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
             len(query),
+            len(bound or {}),
         )
         use_server_side_cursor = self.use_server_side_cursor
 
@@ -706,11 +1018,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
                         yield_per=batch_size
                     )
 
-                escaped_query = _escape_colons_for_text(query)
+                statement = text(_escape_colons_for_text(query, frozenset(bound or ())))
                 result = (
-                    await connection.stream(text(escaped_query))
+                    await connection.stream(statement, bound)
                     if use_server_side_cursor
-                    else await connection.execute(text(escaped_query))
+                    else await connection.execute(statement, bound)
                 )
 
                 column_names = list(result.keys())

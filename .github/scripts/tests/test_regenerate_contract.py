@@ -679,7 +679,7 @@ def test_format_generated_covers_all_py(tmp_path, monkeypatch):
 
     def spy_run(cmd, *, check=False):
         if cmd[:2] == ["uvx", "ruff"] and cmd[2] == "format":
-            formatted.extend(cmd[3:])
+            formatted.extend(a for a in cmd[3:] if not a.startswith("-"))
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/uvx")

@@ -36,7 +36,11 @@ unit-test fixture that then passed forever.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -47,8 +51,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P043",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — control flow branches on `AppError` and "
-            "`AuthError`, both from `application_sdk.errors`. Branching on a class the "
+            "atlan-mysql-app app/handler.py — control flow branches on "
+            "`isinstance(e, AppError)`, and app/failures.py subclasses `AuthError`; both "
+            "come from `application_sdk.errors`. Branching on a class the "
             "package does not export binds the app to a name the SDK can move without a "
             "deprecation cycle."
         ),
@@ -105,14 +110,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p043",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P045",
         canonical_reference=(
-            "atlan-hello-world-app app/errors.py — `from application_sdk.errors import "
-            "InvalidInputError`. The package re-exports every error an app should touch; "
-            "reaching into a submodule for the same class buys nothing and forfeits the "
-            "stability promise."
+            "atlan-metabase-app app/errors.py — its SDK error classes all come from "
+            "`from application_sdk.errors import (...)`: leaves from the package root, "
+            "nothing from application_sdk.errors.base or "
+            "application_sdk.storage.formats. Reaching into a submodule for the same "
+            "class forfeits the stability promise."
         ),
         scope=RuleScope.APP,
         name="PrivateErrorClassImport",
@@ -162,5 +172,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p045",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
 )

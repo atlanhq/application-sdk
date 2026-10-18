@@ -107,7 +107,7 @@ def test_t020_rule_metadata() -> None:
     assert rule.name == "BespokeFullDagE2EWorkflow"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.since == "0.18.0"
     assert rule.category == "e2e-ci"
     assert rule.rationale.strip()

@@ -16,12 +16,15 @@ Run 1 (Full Extraction):
 
 Run 2 (Incremental Extraction):
   1. fetch_marker: Reads marker.txt → marker_timestamp ✓
-  2. read_current_state: Downloads current-state/ → current_state_available ✓
+  2. read_current_state: Probes current-state/ (one listing + the manifest,
+     no download) → current_state_available ✓
   3. All prerequisites met → incremental mode activates
   4. fetch_tables: Uses incremental_table_sql (labels CREATED/UPDATED/NO CHANGE)
   5. fetch_columns: SKIPPED (handled by incremental pipeline)
   6. prepare_column_extraction_queries:
      - Downloads transformed table JSONs
+     - Materializes the committed snapshot into
+       {output_path}/incremental/previous-state/
      - DuckDB analyzes incremental_state labels
      - DuckDB detects backfill tables
      - Batches table_ids into JSON files
@@ -31,9 +34,12 @@ Run 2 (Incremental Extraction):
      - Executes SQL → extracts columns for changed tables only
   8. write_current_state:
      a. Download current run's transformed output
-     b. Download previous current-state (becomes "previous state")
+     b. Materialize the committed snapshot into
+        {output_path}/incremental/previous-state/ (synced: a same-run retry
+        resumes, a partial tree is completed and pruned, never trusted)
      c. Detect table scope (which tables are CREATED/UPDATED/NO CHANGE)
-     d. Copy non-column entities (table, schema, database) to new current-state
+     d. Copy non-column entities (table, schema, database) to
+        {output_path}/incremental/current-state/
      e. Lightweight column copy:
         - Copy columns from current run's transformed output only
         - NO CHANGE table columns are NOT carried forward
@@ -41,7 +47,9 @@ Run 2 (Incremental Extraction):
      f. Create incremental-diff (only changed assets, with deletion detection):
         - delete/table/: Tables in previous state but absent from current scope
         - delete/column/: Cascade from deleted tables + columns missing from UPDATED tables
-     g. Upload new current-state/ to S3
+     g. Upload the diff, then commit current-state/ via CurrentStateStore:
+        upload (run-stamped file names) → write .sdk-manifest LAST → prune
+        every key the manifest does not name
   9. update_marker: Writes next_marker_timestamp → marker.txt
 ```
 
@@ -57,7 +65,7 @@ Content: "2024-06-15T00:00:00Z" (single line, UTC ISO 8601)
 ### Marker Flow
 
 ```python
-# fetch_marker_from_storage() in marker.py
+# fetch_marker() in marker.py
 
 1. Download marker.txt from S3 (via ObjectStore)
 2. If not found → first run, marker = None
@@ -83,16 +91,44 @@ Preponed by 3h: 2024-06-15T09:00:00Z  ← This is what SQL queries use
 ## Current State Structure
 
 ```
-current-state/
+persistent-artifacts/apps/{app}/connection/{conn_id}/current-state/
+├── .sdk-manifest            # names every key of the snapshot; written LAST
 ├── database/
-│   └── database_0.json, database_1.json, ...
+│   └── {stamp}--chunk-0.json, ...
 ├── schema/
-│   └── schema_0.json, schema_1.json, ...
+│   └── {stamp}--chunk-0.json, ...
 ├── table/
-│   └── table_0.json, table_1.json, ...
+│   └── {stamp}--chunk-0.json, ...
 └── column/
-    └── column_0.json, column_1.json, ...
+    └── {stamp}--chunk-0.json, ...
 ```
+
+`{stamp}` is 12 hex characters derived from the committing run ID, so a new
+commit never overwrites a key the previous manifest names. Read entity files
+with a `{entity}/*.json` glob — never by file name. This layout is a
+cross-repo contract (`docs/standards/cross-repo-contracts.md`).
+
+### Working with the snapshot in code
+
+```python
+from application_sdk.common.incremental.state.store import (
+    CurrentStateStore,
+    RunStateDirs,
+)
+
+store = CurrentStateStore.for_connection(connection_qualified_name, application_name)
+snapshot = await store.probe()          # one listing + manifest; downloads nothing
+dirs = RunStateDirs.for_output_path(output_path)
+if snapshot.exists:
+    await store.materialize(snapshot, dirs.previous_state)   # exact mirror, synced
+# ... build this run's snapshot under dirs.current_state ...
+await store.commit(dirs.current_state, run_id)   # upload → manifest → prune
+```
+
+Inside `IncrementalSqlMetadataExtractor` you do not call these yourself: the
+template's `read_current_state`, `prepare_column_extraction_queries` and
+`write_current_state` tasks do. To run connector logic over the snapshot at
+read time, override the `after_current_state_read(snapshot, local_dir)` hook.
 
 Each JSON file contains Atlas-format entities:
 
@@ -117,21 +153,18 @@ across all runs.
 
 ### Algorithm
 
-```python
-# Simplified from state_writer.py
+`create_current_state_snapshot()` in `state_writer.py` builds the run's
+snapshot in `{output_path}/incremental/current-state/`:
 
-def _copy_columns_from_transformed(
-    transformed_dir,      # Current run's transformed output
-    current_state_dir,    # Output directory (current-state/column/)
-    copy_workers=4,
-):
-    column_dir = transformed_dir / "column"
-    if not column_dir.exists():
-        return 0
-    # Parallel copy of all column files from this run
-    return copy_directory_parallel(column_dir, current_state_dir / "column",
-                                   max_workers=copy_workers)
-```
+1. Reset that directory (a same-run retry reuses it).
+2. `copy_non_column_entities()` — copy `table/`, `schema/` and `database/`
+   from this run's transformed output.
+3. Copy `column/` from this run's transformed output — nothing else.
+4. Build the diff in `{output_path}/incremental/diff/` and upload it.
+5. `CurrentStateStore.commit()` — only after the diff is durable.
+
+Every step is offloaded with `run_in_thread`; do not call these helpers
+inline from connector code.
 
 ### Column Handling by Table State
 
@@ -186,62 +219,59 @@ persistent-artifacts/apps/{app}/connection/{conn_id}/runs/{run_id}/incremental-d
 
 ## Table Scope Detection
 
-```python
-# table_scope.py uses DuckDB to classify tables
-
-def get_current_table_scope(transformed_dir, column_chunk_size):
-    conn = get_duckdb_connection()
-
-    # Read all table JSONs and extract qualified names + states
-    result = conn.sql(f"""
-        SELECT
-            json_extract_string(attributes, '$.qualifiedName') AS qn,
-            json_extract_string(attributes, '$.incremental_state') AS state
-        FROM read_json_auto('{transformed_dir}/table/*.json')
-    """).fetchall()
-
-    scope = TableScope()
-    for qn, state in result:
-        scope.table_qualified_names.add(qn)
-        scope.table_states[qn] = state or "NO CHANGE"
-
-    return scope
-```
-
-## Cleanup and Error Handling
-
-### Previous State Cleanup
-
-Previous state is downloaded to a temp directory for comparison. This temp
-directory is cleaned up in a `finally` block to ensure no leaks:
+`get_current_table_scope(transformed_dir, conn=None)` in `table_scope.py`
+scans `{transformed_dir}/table/*.json` with DuckDB and returns a `TableScope`:
+each table's qualified name and its `incremental_state` (defaulting to
+`INCREMENTAL_DEFAULT_STATE`, `NO CHANGE`). The states are kept in a
+disk-backed RocksDB store, so release it with `close_scope(scope)` when done.
 
 ```python
-# In write_current_state activity
-previous_state_dir = None
-try:
-    previous_state_dir = await prepare_previous_state(...)
-    result = await create_current_state_snapshot(...)
-except Exception as e:
-    raise
-finally:
-    cleanup_previous_state(previous_state_dir)  # Always cleanup
+from application_sdk.common.incremental.state.table_scope import (
+    close_scope,
+    get_current_table_scope,
+    get_scope_length,
+    get_table_state,
+)
+from application_sdk.common.incremental.storage.duckdb_utils import (
+    DuckDBConnectionManager,
+)
+
+with DuckDBConnectionManager() as manager:
+    scope = get_current_table_scope(transformed_dir, conn=manager.connection)
+    try:
+        print(get_scope_length(scope), get_table_state(scope, some_table_qn))
+    finally:
+        close_scope(scope)
 ```
 
-### Stale State Prevention
+## Commit Safety and Local Directories
 
-Before downloading current state from S3, existing local files are cleared:
+### Nothing to clean up
 
-```python
-# In state_reader.py
-import shutil
+Every local directory is run-scoped under `{output_path}/incremental/`
+(`previous-state/`, `current-state/`, `diff/`). Two runs of one connection on a
+worker never share one, and there is no per-connection directory to clear or
+remove — no `finally` cleanup, no `rmtree` of a shared path.
 
-if current_state_dir.exists():
-    shutil.rmtree(current_state_dir)  # Clear stale files from prior runs
-current_state_dir.mkdir(parents=True, exist_ok=True)
-```
+### Stale state cannot leak in
 
-This prevents leftover JSON files from a previous run's state from contaminating
-the current run's state comparison.
+`CurrentStateStore.materialize` mirrors exactly the manifest's keys into the
+directory with sync semantics: files already current are skipped, and anything
+else in the directory (a killed attempt's partial download, a stray file) is
+deleted. So a leftover tree is never mistaken for the previous state.
+
+### A commit that fails before its manifest changes nothing
+
+`CurrentStateStore.commit` writes the manifest only after every file is
+uploaded, and file names carry a stamp of the committing run, so the upload
+never overwrites a key the previous manifest names. A commit that dies before
+its manifest leaves the previous snapshot committed and whole, and the marker
+is only advanced after `write_current_state` succeeds.
+
+The manifest write is the commit point. The prune runs after it, so a commit
+that fails *in the prune* has already committed: readers see the new snapshot,
+and the keys it did not get to delete are left for a later commit's prune.
+Every reader that goes through the manifest ignores them already.
 
 ## Configuration Parameters
 

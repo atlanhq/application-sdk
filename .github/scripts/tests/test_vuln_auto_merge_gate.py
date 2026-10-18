@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import vuln_auto_merge_gate as gate
 
-TRUSTED = {"atlan-ci", "atlan-app-fleet[bot]", "mothership-ai[bot]"}
+TRUSTED = {"atlan-ci", "atlan-app-fleet[bot]"}
 LABEL = "vuln-auto-merge"
 
 
@@ -97,9 +97,15 @@ def test_evaluate_untrusted_author_rejected():
     assert not ok
 
 
-def test_evaluate_mothership_bot_trusted():
-    ok, _r, _s = _eval(author="mothership-ai[bot]")
+def test_evaluate_fleet_bot_trusted():
+    ok, _r, _s = _eval(author="atlan-app-fleet[bot]")
     assert ok
+
+
+def test_retired_rover_identity_is_not_trusted_by_default():
+    # The mothership rover is retired; its App still acts for sdk-review, so it
+    # must not be able to put a PR on the auto-merge path.
+    assert "mothership-ai[bot]" not in gate.DEFAULT_AUTHORS.split(",")
 
 
 def test_evaluate_draft_rejected():
@@ -160,7 +166,7 @@ class _FakeRunner:
 APPROVER = "atlan-ci"
 
 
-def _meta(author="mothership-ai[bot]", **kw):
+def _meta(author="atlan-app-fleet[bot]", **kw):
     base = {
         "author": author,
         "state": "open",
@@ -173,7 +179,7 @@ def _meta(author="mothership-ai[bot]", **kw):
 
 
 def test_process_pr_approves_and_merges_rover_pr():
-    # Rover PR (mothership-ai[bot]) → atlan-ci approves + auto-merges.
+    # Triage PR (atlan-app-fleet[bot]) → atlan-ci approves + auto-merges.
     r = _FakeRunner(_meta(), [".security/base-allowlist.json"])
     acted = gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, APPROVER, r)
     assert acted is True

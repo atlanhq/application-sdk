@@ -197,15 +197,21 @@ class ProgressTracker:
             :class:`ClosedHold`. This is the warn-mode audit seam (FND-292);
             it defaults to no observer. Exceptions raised by the observer are
             logged and swallowed — telemetry must never fail an activity.
+        max_no_progress_seconds: The attempt's resolved no-progress allowance,
+            carried so code below ``execution/`` can apply the same number
+            without importing the resolver. ``None`` when the owner did not
+            resolve one. The tracker itself never reads it.
     """
 
     def __init__(
         self,
         clock: Callable[[], float] = time.monotonic,
         on_hold_closed: Callable[[ClosedHold], None] | None = None,
+        max_no_progress_seconds: float | None = None,
     ) -> None:
         self._clock = clock
         self._on_hold_closed = on_hold_closed
+        self.max_no_progress_seconds = max_no_progress_seconds
         self._last_label: str = ""
         self._last_at: float = clock()
         self._holds: dict[int, _Hold] = {}

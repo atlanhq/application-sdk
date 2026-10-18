@@ -24,6 +24,11 @@ order is load-bearing for cost as well as for the log):
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
   g. atlan-ci has not already posted an APPROVED review with our signature
 
+A PR by ``atlan-conformance-sync[bot]`` on ``bot/conformance-resync`` never reaches
+(a)–(g): :func:`process_pr` hands it to ``resync_approval_conditions``, whose
+approval rests on an independent byte-identical ``bootstrap --resync`` render
+(FND-2848, FND-2868). Every other PR is judged exactly as before.
+
 **Fail closed.** Every condition withholds approval on anything other than an
 affirmative signal. A missing value is never a falsy default that reads as
 "fine": an absent ``renovate/artifacts`` context classifies as ``"missing"`` and
@@ -45,18 +50,29 @@ Environment:
     DISPATCH_PR             PR number (workflow_dispatch manual testing).
     EXTRA_DEP_PATTERN       optional ERE alternation of repo-specific dependency
                             paths, appended to the built-in allowlist.
+    CHECKS_WAIT_MINUTES     optional fan-in wait (FND-3317): how long to keep
+                            polling while required checks are still PENDING
+                            before judging (e). Empty or 0 = no wait. See
+                            :func:`wait_for_pending_checks`.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
+
+# Sibling module: the script runs as `python3 .../renovate_approval_conditions.py`,
+# so its own directory is sys.path[0] and this resolves in the reusable too.
+import resync_approval_conditions as resync
 
 # ---------------------------------------------------------------------------
 # Constants that other automation keys off. Changing any of these is a
@@ -188,7 +204,50 @@ APPROVAL_BODY = (
     "HEAD's required checks are green."
 )
 
+#: ``gh pr checks`` exit code for "checks pending" (``gh pr checks --help``,
+#: "Additional exit codes"). The only exit the fan-in wait keeps polling on;
+#: pass (0) and fail (1) both end the wait and are judged by condition (e).
+CHECKS_PENDING_EXIT = 8
+
+#: Seconds between polls while required checks are pending.
+CHECKS_POLL_SECONDS = 30
+
+#: Ceiling on the fan-in wait, whatever the caller asks for. It has to fit
+#: inside the reusable job's ``timeout-minutes`` with room for the conditions
+#: themselves, and a wait that long already means the anchor workflow is not
+#: the one that usually finishes last — the caller's anchor choice is wrong.
+MAX_CHECKS_WAIT_SECONDS = 15 * 60
+
 Runner = Callable[..., subprocess.CompletedProcess]
+
+
+class WaitOutcome(Enum):
+    """How the fan-in wait for one PR ended."""
+
+    #: No required check is pending any more; condition (e) judges them.
+    SETTLED = "settled"
+    #: The run's wait budget ran out with a required check still pending.
+    STILL_PENDING = "still_pending"
+    #: The PR's HEAD moved off the evaluated SHA mid-wait.
+    HEAD_MOVED = "head_moved"
+
+
+@dataclass
+class FanInBudget:
+    """The fan-in wait for one run, shared by every candidate PR.
+
+    One budget per run, not per PR: ``resolve_prs`` can return several open PRs
+    at a SHA, and a per-PR budget would let the second one wait past the job's
+    ``timeout-minutes`` and be killed mid-evaluation. PRs still pending when the
+    budget runs out are collected in ``still_pending`` for a follow-up.
+    """
+
+    polls_left: int
+    still_pending: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_seconds(cls, seconds: int) -> FanInBudget:
+        return cls(polls_left=math.ceil(seconds / CHECKS_POLL_SECONDS))
 
 
 @dataclass(frozen=True)
@@ -219,7 +278,7 @@ class Offender:
     reason: str
 
 
-class GhError(RuntimeError):
+class GhError(resync.GhError):
     """A ``gh`` call whose failure must abort the step rather than be absorbed.
 
     Used only for the calls the original bash left ungated under ``set -e``:
@@ -528,9 +587,12 @@ def resolve_prs(
 ) -> tuple[list[str], str]:
     """Return ``(pr_numbers, eval_sha)`` for the triggering event.
 
-    ``workflow_dispatch`` evaluates exactly the PR it was given, at that PR's
-    current HEAD. ``workflow_run`` evaluates every OPEN PR whose HEAD is the
-    completed run's SHA — a single commit can be the HEAD of several.
+    ``workflow_dispatch`` evaluates exactly the PR(s) it was given, as a
+    comma-separated ``pr_number``: at ``run_sha`` when the dispatch carries one
+    (a fan-in follow-up, which must judge the SHA its anchor judged, and shares
+    that run's lock), otherwise at the PR's current HEAD, which needs exactly
+    one PR. ``workflow_run`` evaluates every OPEN PR whose HEAD
+    is the completed run's SHA — a single commit can be the HEAD of several.
 
     The two lookups fail differently, matching the original bash: the dispatch
     lookup raises (a manual re-evaluation of a PR that cannot be read is a
@@ -538,6 +600,13 @@ def resolve_prs(
     candidates and the step exits cleanly. Both approve nothing.
     """
     if event_name == "workflow_dispatch":
+        prs = [p.strip() for p in dispatch_pr.split(",") if p.strip()]
+        if run_sha:
+            return prs, run_sha
+        if len(prs) > 1:
+            raise GhError(
+                f"a dispatch naming several PRs ({dispatch_pr}) must also name head_sha"
+            )
         meta = _gh_json(
             ["api", f"repos/{repo}/pulls/{dispatch_pr}"],
             runner,
@@ -547,7 +616,7 @@ def resolve_prs(
             raise GhError(
                 f"resolving HEAD of dispatched PR #{dispatch_pr}: unexpected payload shape"
             )
-        eval_sha = str((meta.get("head") or {}).get("sha") or "")
+        eval_sha = run_sha or str((meta.get("head") or {}).get("sha") or "")
         return ([dispatch_pr] if dispatch_pr else []), eval_sha
 
     try:
@@ -614,8 +683,8 @@ def required_checks_green(repo: str, pr: str, runner: Runner) -> bool:
 
     Non-required failures are correctly excluded — the ruleset, not this script,
     decides what "required" means, so a repo changing its required contexts needs
-    no change here. Pending required checks exit non-zero; a later workflow_run
-    completion re-fires and re-evaluates.
+    no change here. Pending required checks exit non-zero; the fan-in wait and
+    its one follow-up (``request_follow_up``) are what re-evaluate them.
     """
     result = _gh(["pr", "checks", pr, "--repo", repo, "--required"], runner)
     # Echo gh's own table so the step log still shows which check was red.
@@ -623,6 +692,170 @@ def required_checks_green(repo: str, pr: str, runner: Runner) -> bool:
         if stream and stream.strip():
             print(stream.rstrip())
     return result.returncode == 0
+
+
+def parse_wait_seconds(raw: str) -> int:
+    """``CHECKS_WAIT_MINUTES`` as seconds, clamped to [0, MAX_CHECKS_WAIT_SECONDS].
+
+    An unreadable value means no wait, with a warning, rather than an error:
+    waiting less can only withhold an approval this run, never grant one.
+    """
+    raw = raw.strip()
+    if not raw:
+        return 0
+    try:
+        minutes = float(raw)
+    except ValueError:
+        print(f"::warning::CHECKS_WAIT_MINUTES={raw!r} is not a number; not waiting.")
+        return 0
+    # Clamp in minutes, before converting: `minutes * 60` overflows to inf for a
+    # finite value near float max, and int(inf) raises instead of clamping.
+    if not math.isfinite(minutes) or minutes <= 0:
+        return 0
+    if minutes >= MAX_CHECKS_WAIT_SECONDS / 60:
+        return MAX_CHECKS_WAIT_SECONDS
+    return int(minutes * 60)
+
+
+def wait_for_pending_checks(
+    repo: str,
+    pr: str,
+    eval_sha: str,
+    runner: Runner,
+    *,
+    budget: FanInBudget,
+    sleep: Callable[[float], None] = time.sleep,
+) -> WaitOutcome:
+    """Fan-in (FND-3317): poll while any required check is still PENDING.
+
+    The caller fires this workflow once per SHA, on the completion of the
+    workflow that usually finishes last (the anchor), instead of once per
+    upstream workflow. When some other required check is still running at
+    that moment, nothing else would re-fire the gate, so it waits here,
+    drawing on the run's shared ``budget``. Only "pending" keeps it waiting:
+    pass or fail both return SETTLED at once and condition (e) judges them as
+    before. A budget that runs out returns STILL_PENDING, and ``main`` then
+    asks for one follow-up evaluation (see ``request_follow_up``).
+
+    Returns HEAD_MOVED when the PR's HEAD moved off ``eval_sha``: the new
+    HEAD has its own anchor run coming, and these checks no longer describe
+    the PR. ``gh pr checks`` reads the checks of the PR's CURRENT head, so
+    HEAD is re-read after checks settle (a push since the last read would
+    otherwise pass off the new head's checks as ``eval_sha``'s) and after
+    each sleep (so a push does not cost the rest of the budget).
+    """
+    while True:
+        result = _gh(["pr", "checks", pr, "--repo", repo, "--required"], runner)
+        if result.returncode != CHECKS_PENDING_EXIT:
+            if not _head_still_at(repo, pr, eval_sha, runner):
+                return WaitOutcome.HEAD_MOVED
+            return WaitOutcome.SETTLED
+        if budget.polls_left <= 0:
+            print(f"PR #{pr}: wait budget spent with required checks still pending.")
+            return WaitOutcome.STILL_PENDING
+        budget.polls_left -= 1
+        print(
+            f"PR #{pr}: required checks still pending — waiting "
+            f"{CHECKS_POLL_SECONDS}s ({budget.polls_left} poll(s) left this run)."
+        )
+        sleep(CHECKS_POLL_SECONDS)
+        if not _head_still_at(repo, pr, eval_sha, runner):
+            return WaitOutcome.HEAD_MOVED
+
+
+def _head_still_at(repo: str, pr: str, eval_sha: str, runner: Runner) -> bool:
+    """Re-read the PR and confirm its HEAD is still ``eval_sha``."""
+    meta = fetch_pr_meta(repo, pr, runner)
+    head_sha = str(((meta.get("head") or {}).get("sha")) or "")
+    ok, message = check_head_unchanged(pr, head_sha, eval_sha)
+    if not ok:
+        print(message)
+    return ok
+
+
+def caller_workflow_file(workflow_ref: str) -> str:
+    """The caller's workflow file name from ``github.workflow_ref``.
+
+    In a reusable workflow ``github.workflow_ref`` names the CALLER, shaped
+    ``owner/repo/.github/workflows/<file>@<ref>``. Returns "" for anything else.
+    """
+    path = workflow_ref.split("@", 1)[0]
+    marker = "/.github/workflows/"
+    if marker not in path:
+        return ""
+    return path.split(marker, 1)[1]
+
+
+def request_follow_up(
+    repo: str,
+    event_name: str,
+    workflow_ref: str,
+    prs: list[str],
+    eval_sha: str,
+    runner: Runner,
+    *,
+    enabled: bool,
+) -> None:
+    """Dispatch one follow-up evaluation for each PR still pending at budget end.
+
+    The fan-in only fires on the anchor's completion, so a required check that
+    finishes after the anchor's wait would otherwise never re-evaluate the PR:
+    its own first-attempt completion is filtered out by the caller's ``if:``.
+    The follow-up is ONE workflow_dispatch of the caller per SHA, with every
+    pending PR in ``pr_number`` (comma-separated) and ``head_sha``; it waits
+    again with a fresh budget. Carrying the SHA keeps it in the reusable's
+    per-SHA concurrency group, so it serialises with any re-run evaluating the
+    same commit and the two cannot both approve; and it evaluates that SHA, so
+    a push since then makes it stand down. One dispatch, not one per PR: that
+    group holds a single pending run, so a second same-SHA dispatch would
+    evict the first.
+
+    Only an anchor (workflow_run) run asks for one. A follow-up that is itself
+    still pending stops there, so a check stuck pending forever costs at most
+    one extra run. It is then the fleet scanner's stuck-PR signal to report.
+
+    ``enabled`` is the caller's ``follow_up_when_pending``. A caller that still
+    fires on every upstream workflow leaves it off: there, the late check's own
+    completion re-fires the gate.
+    """
+    if not enabled:
+        return
+    if event_name != "workflow_run":
+        print(
+            f"PR(s) {', '.join('#' + p for p in prs)}: still pending after a "
+            f"{event_name} evaluation; not dispatching another follow-up."
+        )
+        return
+    workflow = caller_workflow_file(workflow_ref)
+    if not workflow:
+        print(
+            f"::warning::Cannot dispatch a follow-up evaluation: "
+            f"CALLER_WORKFLOW_REF={workflow_ref!r} does not name a workflow file."
+        )
+        return
+    pr_list = ",".join(prs)
+    result = _gh(
+        [
+            "workflow",
+            "run",
+            workflow,
+            "--repo",
+            repo,
+            "-f",
+            f"pr_number={pr_list}",
+            "-f",
+            f"head_sha={eval_sha}",
+        ],
+        runner,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        print(
+            f"::warning::PR(s) {pr_list}: could not dispatch a follow-up "
+            f"evaluation of {workflow}: {detail}"
+        )
+    else:
+        print(f"PR(s) {pr_list}: dispatched one follow-up evaluation ({workflow}).")
 
 
 def fetch_artifact_state(repo: str, eval_sha: str, runner: Runner) -> str:
@@ -654,19 +887,30 @@ def fetch_reviews(repo: str, pr: str, runner: Runner) -> list[Any]:
     return payload
 
 
-def approve(repo: str, pr: str, runner: Runner) -> None:
-    """Post the atlan-ci code-owner approval. A failure aborts the step."""
+def approve(repo: str, pr: str, eval_sha: str, runner: Runner) -> None:
+    """Post the atlan-ci code-owner approval ON ``eval_sha``. A failure aborts
+    the step.
+
+    Posted through the reviews API with ``commit_id``, not ``gh pr review``,
+    which reviews whatever the head is when the request lands. A push between
+    the last HEAD check and this call would then get a commit no condition
+    examined approved. Bound to ``eval_sha``, such an approval sits on the old
+    commit, and the ruleset's dismiss-stale-reviews does not count it for the
+    new head.
+    """
     runner(
         [
             "gh",
-            "pr",
-            "review",
-            pr,
-            "--repo",
-            repo,
-            "--approve",
-            "--body",
-            APPROVAL_BODY,
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/pulls/{pr}/reviews",
+            "-f",
+            f"commit_id={eval_sha}",
+            "-f",
+            "event=APPROVE",
+            "-f",
+            f"body={APPROVAL_BODY}",
         ],
         check=True,
     )
@@ -678,7 +922,14 @@ def approve(repo: str, pr: str, runner: Runner) -> None:
 
 
 def process_pr(
-    repo: str, pr: str, eval_sha: str, extra_pattern: str, runner: Runner
+    repo: str,
+    pr: str,
+    eval_sha: str,
+    extra_pattern: str,
+    runner: Runner,
+    *,
+    budget: FanInBudget | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     """Evaluate one PR and approve it if every condition holds.
 
@@ -687,6 +938,12 @@ def process_pr(
     ahead of it have passed, so a non-Renovate PR costs one API call, not six.
     """
     meta = fetch_pr_meta(repo, pr, runner)
+    # conformance-resync lane PRs take their own, narrower
+    # path: approval there rests on an independent byte-identical re-render,
+    # never on the author or branch (see resync_approval_conditions). Every
+    # other PR falls through to the Renovate conditions below, unchanged.
+    if resync.is_candidate(meta):
+        return resync.process_resync_pr(repo, pr, eval_sha, meta, runner)
     author = str(((meta.get("user") or {}).get("login")) or "")
     state = str(meta.get("state") or "")
     draft = bool(meta.get("draft"))
@@ -726,7 +983,19 @@ def process_pr(
     if any(f.filename.startswith(WORKFLOWS_PREFIX) for f in changed_files):
         print(f"PR #{pr}: workflow changes are pin-only.")
 
-    # e. All ruleset-required checks must be green.
+    # e. All ruleset-required checks must be green. Waiting happens only here,
+    # after the cheap conditions, so a PR that can never qualify never waits.
+    if budget is None:
+        budget = FanInBudget(polls_left=0)
+    outcome = wait_for_pending_checks(
+        repo, pr, eval_sha, runner, budget=budget, sleep=sleep
+    )
+    if outcome is WaitOutcome.HEAD_MOVED:
+        return False
+    if outcome is WaitOutcome.STILL_PENDING:
+        budget.still_pending.append(pr)
+        print(f"PR #{pr}: required checks not yet all green — skipping.")
+        return False
     print(f"PR #{pr}: checking required CI status...")
     if not required_checks_green(repo, pr, runner):
         print(f"PR #{pr}: required checks not yet all green — skipping.")
@@ -751,17 +1020,30 @@ def process_pr(
         )
         return False
 
-    approve(repo, pr, runner)
+    # h. HEAD is still the evaluated SHA. Everything above may have taken
+    # minutes (the fan-in wait), so stand down cleanly on a push; the approval
+    # itself is also bound to eval_sha, which closes the window after this read.
+    if not _head_still_at(repo, pr, eval_sha, runner):
+        return False
+
+    approve(repo, pr, eval_sha, runner)
     print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
     return True
 
 
-def main(runner: Runner = subprocess.run) -> int:
+def main(
+    runner: Runner = subprocess.run, sleep: Callable[[float], None] = time.sleep
+) -> int:
     repo = os.environ["REPO"]
     event_name = os.environ.get("EVENT_NAME", "workflow_run")
     run_sha = os.environ.get("RUN_SHA", "")
     dispatch_pr = os.environ.get("DISPATCH_PR", "")
     extra_pattern = os.environ.get("EXTRA_DEP_PATTERN", "")
+    workflow_ref = os.environ.get("CALLER_WORKFLOW_REF", "")
+    follow_up = os.environ.get("FOLLOW_UP_WHEN_PENDING", "").strip().lower() == "true"
+    budget = FanInBudget.from_seconds(
+        parse_wait_seconds(os.environ.get("CHECKS_WAIT_MINUTES", ""))
+    )
 
     try:
         pr_numbers, eval_sha = resolve_prs(
@@ -772,8 +1054,26 @@ def main(runner: Runner = subprocess.run) -> int:
             return 0
         for pr in pr_numbers:
             print(f"--- Evaluating PR #{pr} ---")
-            process_pr(repo, pr, eval_sha, extra_pattern, runner)
-    except GhError as exc:
+            process_pr(
+                repo,
+                pr,
+                eval_sha,
+                extra_pattern,
+                runner,
+                budget=budget,
+                sleep=sleep,
+            )
+        if budget.still_pending:
+            request_follow_up(
+                repo,
+                event_name,
+                workflow_ref,
+                budget.still_pending,
+                eval_sha,
+                runner,
+                enabled=follow_up,
+            )
+    except resync.GhError as exc:  # also this module's GhError, a subclass
         # Abort rather than continue on a partial view — the inherited
         # `set -euo pipefail` semantics. A red step is visible; the next
         # workflow_run completion re-evaluates every candidate PR anyway.

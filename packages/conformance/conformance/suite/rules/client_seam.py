@@ -49,7 +49,11 @@ dependency and never in scope for this rule.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -60,16 +64,20 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P019",
         canonical_reference=(
-            "atlan-openapi-app app/asset_mapper.py — Atlan is reached through pyatlan "
-            "model types and `ConnectionRef`, never by requesting /api/meta directly. Raw "
-            "HTTP skips auth refresh, retry and the client's own request shaping."
+            "atlan-openapi-app app/api_client.py — the only app/ module that imports "
+            'httpx, and every request it makes (`self._client.stream("GET", spec_url)`, '
+            "`self._client.get(spec_url)`) targets the customer's spec URL with no "
+            "/api/meta or /api/service marker. Atlan itself is reached through the SDK — "
+            "app/connector.py's `self.upload(...)` and the publish DAG node — never by raw "
+            "HTTP, which would skip auth refresh, retry and the client's own request "
+            "shaping."
         ),
         scope=RuleScope.BOTH,
         name="RawHttpToAtlan",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="client-seam",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.7.0",
         rationale=(
@@ -89,14 +97,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``urllib.request.urlopen``/``Request`` — targets an Atlan service: its\n"
             "URL statically contains ``/api/meta`` (Atlas metastore) or\n"
             "``/api/service`` (Heracles).  ``pyatlan`` is the supported client for\n"
-            "these and is a core SDK dependency; the SDK wraps it behind\n"
+            "these and is a core SDK dependency.  The SDK seam in\n"
             "``application_sdk.credentials`` —\n"
             "``AtlanClientMixin.get_or_create_async_atlan_client()`` for App\n"
-            "subclasses, or ``create_async_atlan_client(cred)`` for ad-hoc use — so\n"
-            "callers get auth, retries, pagination, typed models, and the\n"
-            "``x-atlan-app-*`` observability headers for free.  Hand-rolling HTTP\n"
-            "reinvents all of that and diverges from the fleet-wide contract — see\n"
-            "BLDX-1430.\n"
+            "subclasses, or ``create_async_atlan_client(cred)`` for ad-hoc use — returns\n"
+            "``pyatlan_v9.AsyncAtlanClient``.  Pair it with the v9-native search\n"
+            "surface.  If the replacement needs classic ``FluentSearch``, use a\n"
+            "compatible classic ``pyatlan`` client constructed directly; do not mix\n"
+            "``FluentSearch`` with the v9 client.  The SDK seam provides auth, retries,\n"
+            "pagination, typed models, and the ``x-atlan-app-*`` observability\n"
+            "headers.  Hand-rolling HTTP reinvents all of that and diverges from the\n"
+            "fleet-wide contract — see BLDX-1430.\n"
             "\n"
             "Constructing ``pyatlan``'s ``AtlanClient`` / ``AsyncAtlanClient`` directly\n"
             "is **not** flagged — that is reuse of the blessed dependency.\n"
@@ -114,5 +125,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p019",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
 )

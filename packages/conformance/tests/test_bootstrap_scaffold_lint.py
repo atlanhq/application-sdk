@@ -33,6 +33,7 @@ from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
+    SARIF_UPLOAD_WORKFLOW,
     render,
 )
 from conformance.cli import _cmd_bootstrap
@@ -70,6 +71,8 @@ _TEMPLATE_RENDERED_FORCE_WRITTEN = (
     *MANAGED_ACTION_FILES,
     *((dest, template) for dest, template, _ in MANAGED_CONNECTOR_REVIEW_FILES),
     *((f".github/workflows/{name}", name) for name in MANAGED_WORKFLOWS),
+    # Opt-in, but force-written on every public repo that opted in.
+    (f".github/workflows/{SARIF_UPLOAD_WORKFLOW}", SARIF_UPLOAD_WORKFLOW),
     (".claude/skills/remediate/SKILL.md", "remediate.md"),
     ("CLAUDE.md", "connector-review-claude.md"),
 )

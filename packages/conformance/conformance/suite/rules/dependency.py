@@ -33,7 +33,11 @@ SDK upgrades.  These rules enforce two invariants:
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -45,9 +49,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D001",
         canonical_reference=(
-            "atlan-openapi-app pyproject.toml — `atlan-application-sdk>=3.24.1,<4.0.0`. "
-            "Bounded at both ends: a floor for the features the app uses, a ceiling at the "
-            "next major so a breaking release cannot arrive through a lockfile refresh."
+            "atlan-openapi-app pyproject.toml — the `atlan-application-sdk` entry in "
+            "[project.dependencies] carries a `>=` floor and a `<4.0.0` ceiling, with a "
+            "comment naming the SDK behaviour each floor constraint buys. Bounded at both "
+            "ends: a floor for the features the app uses, a ceiling at the next major so a "
+            "breaking release cannot arrive through a lockfile refresh."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -85,14 +91,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d001"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D002",
         canonical_reference=(
-            "atlan-hello-world-app pyproject.toml — [project.dependencies] holds exactly "
-            "one entry, the SDK. Everything the SDK already resolves (orjson, pydantic, "
-            "temporalio) is imported without being redeclared, so there is one place a "
-            "version can move."
+            "atlan-openapi-app pyproject.toml — [project.dependencies] holds exactly "
+            "one entry, the SDK. orjson and the pyatlan models are imported under app/ "
+            "without being redeclared there or in any dependency group, so there is "
+            "one place a version can move."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -128,14 +138,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d002"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D004",
         canonical_reference=(
-            "atlan-metabase-app pyproject.toml — the dev and test groups hold only what "
-            "the SDK does not ship (pre-commit, pyright, ruff, poethepoet, testcontainers, "
-            "httpx, docker), several with a comment on why. Nothing the SDK already pins "
-            "is repeated there."
+            "atlan-openapi-app pyproject.toml — [dependency-groups].dev pulls the SDK's "
+            "own test tooling in through `atlan-application-sdk[tests]` and adds only "
+            "packages the SDK does not pin as core (pytest-asyncio, pytest-timeout, respx, "
+            "pre-commit, coverage, scalene, poethepoet, the conformance suite). Nothing the "
+            "SDK already pins is repeated there, so an SDK bump never has to touch the group."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -170,12 +185,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d004"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D005",
         canonical_reference=(
             "atlan-mysql-app pyproject.toml — "
-            "`atlan-application-sdk[iam-auth,sql,workflows,pandas]`. All four are extras "
+            "`atlan-application-sdk[iam-auth,pandas,sql,workflows]` in "
+            "[project.dependencies]. All four are extras "
             "the SDK publishes; a typo here resolves to nothing and fails at import, not "
             "at install."
         ),
@@ -185,7 +205,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="dependency-pinning",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
             "uv silently drops an unknown extra, so a typo like "
@@ -207,12 +227,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "dependencies are never installed and the failure appears only at "
             "runtime.  The published set is read from installed metadata; if "
             "the SDK is not importable, this rule is skipped silently.  The fix "
-            "(map a typo to the intended extra) is judgment, so findings route "
-            "to residue rather than auto-fix.  Cite: BLDX-1410."
+            "(map a typo to the intended extra) is judgment, so the fix is "
+            "written per site rather than applied mechanically.  Cite: BLDX-1410."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d005"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -255,6 +279,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d006"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D007",
@@ -287,6 +315,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d007"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -325,14 +357,47 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d008"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D003",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — aiomysql is declared with no import to "
-            "justify it, and carries an inline ignore[D003] saying SQLAlchemy loads it "
-            'dynamically from the "mysql+aiomysql" dialect string. A dynamically-loaded '
-            "dependency is real; it just has to say so."
+            "atlan-mysql-app pyproject.toml — aiomysql is declared in "
+            "[project.dependencies] with no Python import anywhere in the repo, and "
+            "carries no suppression. SQLAlchemy loads the driver from the "
+            '"mysql+aiomysql" dialect string in app/client.py, which the checker reads '
+            "via _collect_dialect_drivers, so the dependency is counted as used. The "
+            "checker also matches a URL scheme (``crate://``, ``foo+bar://``) against "
+            "the ``sqlalchemy.dialects`` entry points each dependency registers, so a "
+            "third-party dialect package loaded only through that entry point is "
+            "counted as used too, whether the repo imports SQLAlchemy directly or "
+            "builds its engine through the SDK's ``BaseSQLClient`` "
+            "(``application_sdk.clients.sql``). A dynamically-loaded dependency the "
+            "checker can see is not a finding at all."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[D003] <reason>` IS the correct "
+            "end state for a dependency that is genuinely loaded without a static "
+            "import — a driver resolved from a dialect/plugin string, an entry-point "
+            "registration, a CLI invoked as a subprocess. The reason must name the "
+            "mechanism that loads it — and only where the checker cannot already see "
+            "that mechanism itself, as it does for atlan-mysql-app's aiomysql or a "
+            "dialect entry point a URL scheme in source selects. A generic transitive "
+            "floor is not an exception: remove the app-local direct requirement or "
+            "constraint and move any generally required floor to the SDK. A separate "
+            "justified exception is a dependency retained to enforce a documented "
+            "app-specific minimum version for an SDK-managed transitive package when "
+            "the SDK's declared range does not guarantee that minimum. Keep the app "
+            "requirement until the SDK range guarantees the floor, and make the D003 "
+            "reason name the app requirement and the SDK range gap; a currently "
+            "resolved lockfile version does not guarantee a future minimum. Outside "
+            "these cases, a directive that only asserts the dependency is needed is "
+            "unremediated: if nothing loads it dynamically and there is no documented "
+            "app-specific floor, remove the dependency rather than suppressing the "
+            "finding."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
@@ -340,15 +405,18 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dependency-hygiene",
-        autofixable=False,
+        autofixable=True,
         since="0.5.0",
         rationale=(
-            "A package declared in core dependencies but never imported is either dead "
+            "A package declared in core dependencies but never imported may be dead "
             "weight that slows resolution and widens the supply-chain/CVE surface, or it "
-            "was meant to live elsewhere (a test/dev group). Surfacing it turns the "
-            "recurring manual question during a version bump — 'is this even used?' — "
-            "into a deterministic, reviewable signal. It stays advisory (WARN, no "
-            "autofix) because a dependency can be loaded dynamically, via an entry "
+            "may belong in a test/dev group. A documented app-specific minimum version "
+            "for an SDK-managed transitive package is another legitimate reason to keep "
+            "an otherwise unimported dependency when the SDK's declared range does not "
+            "guarantee that minimum. Surfacing the finding turns the recurring manual "
+            "question during a version bump — 'is this even used?' — into a "
+            "deterministic, reviewable signal. It stays advisory (WARN, no mechanical "
+            "fix) because a dependency can be loaded dynamically, via an entry "
             "point/plugin, or run as a server (e.g. uvicorn) without an explicit import."
         ),
         short_description=(
@@ -364,33 +432,59 @@ RULES: tuple[RuleDefinition, ...] = (
             "belongs in a test group, not core dependencies).  The finding is advisory: "
             "before removing, confirm the dependency is not imported dynamically (via "
             "``importlib``), pulled in by an entry point or plugin, or required by a "
-            "framework/server it is never directly imported by.  Only core "
-            "``[project.dependencies]`` is analysed — optional-dependency extras and "
-            "dependency groups routinely carry tools and plugins that are legitimately "
-            "never imported.  A dependency that cannot be resolved in the analysis "
-            "environment is skipped (and reported), never flagged.  "
-            "**Operating note:** resolution maps a distribution to its import "
-            "name(s) via installed package metadata, so the analysed repo's "
-            "dependencies must be importable in the running interpreter — run "
-            "``uv sync`` first.  In an isolated runner (e.g. ``uvx "
-            "atlan-application-sdk-conformance detect --series D``) no dependency "
-            "is installed, so every one is skipped to stderr and the rule reports "
-            "nothing; that is an unresolved environment, not a clean repo.  The "
-            "conformance CI runs the D-series leg in a synced environment for this "
-            "reason.  See BLDX-1462."
+            "framework/server it is never directly imported by.  Also check whether "
+            "the dependency is intentionally declared to enforce a documented "
+            "app-specific minimum version for an SDK-managed transitive package. Such "
+            "a dependency remains a D003 finding, but may be retained with a reasoned "
+            "D003 exception when the SDK's declared range does not guarantee the "
+            "required minimum. Remove the app requirement only after the SDK range "
+            "guarantees that floor; a currently resolved lockfile version is not a "
+            "future guarantee. Only core ``[project.dependencies]`` is analysed — "
+            "optional-dependency extras and dependency groups routinely carry tools "
+            "and plugins that are legitimately never imported.  A dependency that "
+            "cannot be resolved in the analysis environment is skipped (and "
+            "reported), never flagged.  **Operating note:** resolution maps a "
+            "distribution to its import name(s) via installed package metadata, so "
+            "the analysed repo's dependencies must be importable in the running "
+            "interpreter — run ``uv sync`` first.  In an isolated runner (e.g. "
+            "``uvx atlan-application-sdk-conformance detect --series D``) no "
+            "dependency is installed, so every one is skipped to stderr and the "
+            "rule reports nothing; that is an unresolved environment, not a clean "
+            "repo.  The conformance CI runs the D-series leg in a synced environment "
+            "for this reason.  See BLDX-1462.  **Constraint floors:** in an app repo, "
+            "every ``[tool.uv] constraint-dependencies`` entry is still a D003 "
+            "finding; the check surfaces it but does not mean every app-local floor "
+            "should be deleted. Generic transitive floors belong in the SDK, not in "
+            "an app's direct dependencies or constraints; remove a generic app-local "
+            "requirement or constraint and move any generally required floor upstream "
+            "rather than merely relocating it, since an app-local copy can go stale "
+            "when the SDK's range moves. By contrast, retain a documented app-specific "
+            "minimum when the SDK's declared range does not guarantee the "
+            "required version, whether declared as a direct dependency or a constraint. "
+            "Because the entry is still a D003 finding, retain it with a reasoned "
+            "D003 exception naming the app floor and the SDK range gap. Remove the "
+            "app-local requirement and exception only after the SDK range guarantees "
+            "that floor; a currently resolved lockfile version alone is not enough. "
+            "The SDK's own pyproject is exempt."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d003"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D009",
         canonical_reference=(
-            "atlan-hello-world-app pyproject.toml — [tool.poe.tasks.download-components] "
-            "copies the Dapr component YAMLs out of the installed application_sdk wheel. "
-            "Components then match whatever SDK version uv.lock resolved, instead of "
-            "whatever main happened to hold."
+            "atlan-metabase-app pyproject.toml — [tool.poe.tasks.download-components] "
+            'runs under `interpreter = "python"`, binds `src = '
+            'pathlib.Path(application_sdk.__file__).parent / "components"` and calls '
+            '`shutil.copytree(src, "components", dirs_exist_ok=True)`, with a comment '
+            "saying components/ is gitignored so each environment copies the set matching "
+            "the SDK in uv.lock. No poe task names raw.githubusercontent.com."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -430,13 +524,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "dirs_exist_ok=True)``. This requires application-sdk to already "
             "be installed into the venv before the task runs (true both "
             "locally and in the Docker build, where ``uv sync`` precedes "
-            "``poe download-components``). Inline suppression: "
+            "``poe download-components``). Copy the whole folder and name no "
+            "files: the set the wheel ships changes between versions (an early "
+            "``secretstore.yaml`` ships as ``secretstore.yaml.example`` later), "
+            "so a copy of named files fails against the SDK the app locks. "
+            "Inline suppression: "
             "``# conformance: ignore[D009] <reason>`` on the line above the "
             "offending entry."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d009"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -503,8 +605,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "automated upgrade crossing the 3.22 line.  That is fixed at the\n"
             "root: from 3.28.0 ``[daft]`` aliases ``[sql]`` again, and a version\n"
             "bump alone resolves ``duckdb`` for every such app with no repo-side\n"
-            "change.  If this rule fires on an app pinned to ``[daft]``, upgrade\n"
-            "the SDK rather than editing the app's extras.\n"
+            "change.  If this rule fires on a live import in an app pinned to\n"
+            "``[daft]``, upgrade the SDK rather than editing the app's extras.\n"
             "\n"
             "Resolution order of the check:\n"
             "\n"
@@ -522,7 +624,30 @@ RULES: tuple[RuleDefinition, ...] = (
             "  specifically.  Dependency groups and optional-dependency arrays do\n"
             "  not count: they are not installed by default.\n"
             "\n"
-            "**Remediation:** change the SDK reference to\n"
+            "**Remediation:** first confirm the import site the finding names is\n"
+            "live — that a production code path imports that module.  The check\n"
+            "matches the import anywhere in the source and does not test\n"
+            "reachability, so it also fires on dead code: a superseded\n"
+            "transformer module nothing imports any more, or frozen reference\n"
+            "code kept during a port.  Adding ``[sql]`` there ships an unused\n"
+            "``duckdb`` to production for no runtime benefit.\n"
+            "\n"
+            "*Dead code* (nothing imports the module): delete it.  The finding\n"
+            "clears because its cause is gone, with no dependency change.\n"
+            "\n"
+            "*Code the repo keeps on purpose* (e.g. reference code for an\n"
+            "in-progress port): suppress D010 with a trailing\n"
+            "``# conformance: ignore[D010] <reason>`` on the finding's anchor line\n"
+            "in ``pyproject.toml``: the SDK dependency line in\n"
+            "``[project] dependencies``, or line 1 of the file when no SDK\n"
+            "dependency is declared there (the finding names the line).  Only\n"
+            "that file's suppressions are read, so a directive on the Python\n"
+            "import line has no effect.  Name the dead import path in the reason,\n"
+            "and remove the suppression when that code is deleted.  This applies\n"
+            "on a ``[daft]`` pin too: the SDK bump below is for live imports only,\n"
+            "and would ship an unused ``duckdb`` here.\n"
+            "\n"
+            "*A live import*: change the SDK reference to\n"
             "``atlan-application-sdk[sql]`` (or ``[incremental]`` for the\n"
             "incremental analytics stack) in ``[project.dependencies]`` and relock\n"
             "(``uv lock``).  That is the fix.\n"
@@ -542,20 +667,28 @@ RULES: tuple[RuleDefinition, ...] = (
             "``uv.lock`` the check walks what the app's own extras actually resolve,\n"
             "so once the SDK bump to >= 3.28.0 is locked (where ``[daft]`` aliases\n"
             "``[sql]``) ``duckdb`` is reachable and the finding clears with no\n"
-            "app-side edit.  Bump the SDK; do not reach for a suppression.\n"
+            "app-side edit.  For a live import, bump the SDK; do not reach for a\n"
+            "suppression.  Retained code that nothing imports is the exception:\n"
+            "suppress it as above, since the bump would activate ``[sql]`` and\n"
+            "ship an unused ``duckdb``.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d010"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D011",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — "
-            "`atlan-application-sdk-conformance>=0.17.0,<1.0.0` in a dependency group, "
-            "with a comment recording that the D-series CI leg resolves the suite from "
-            "this repo's own environment. A hard pin freezes that one leg while every "
+            "atlan-openapi-app pyproject.toml — "
+            '`"atlan-application-sdk-conformance<=1.0.0"` in [dependency-groups].dev, '
+            "the rule's canonical form, and resolved in uv.lock, so the D-series CI leg "
+            "that reads the suite from this repo's lock grades it with a current "
+            "ruleset. A hard pin freezes that one leg while every "
             "other leg runs the latest; a declaration in [project.dependencies] ships the "
             "linter to production."
         ),
@@ -667,15 +800,20 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d011"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D012",
         canonical_reference=(
-            "atlan-hello-world-app pyproject.toml — `[[tool.uv.index]]` names pypi at "
-            "https://pypi.org/simple with `default = true`, above a comment recording "
-            "which machine-wide index the pin displaces and why it cannot move to a "
-            "project-level uv.toml. Declared in pyproject.toml, so the repo's [tool.uv] "
-            "constraint-dependencies keep being read."
+            "atlan-mysql-app pyproject.toml — `[[tool.uv.index]]` names pypi at "
+            "https://pypi.org/simple with `default = true`. Declared in "
+            "pyproject.toml rather than a project-level uv.toml, because a uv.toml "
+            "suppresses [tool.uv] in pyproject.toml entirely and would silently drop "
+            "any constraint-dependencies added later — and pinned as the default, a "
+            "machine-wide index cannot rewrite uv.lock on whoever resolves next."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
@@ -744,15 +882,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d012"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D013",
         canonical_reference=(
-            "atlan-hello-world-app uv.lock — every download URL names "
-            "files.pythonhosted.org, because that repo's D012 pin was in place before "
-            "the lock was last resolved. A lock that has already picked up a proxy host "
-            "is repaired by restoring the committed one, not by re-locking on the "
-            "machine that rewrote it."
+            "atlan-openapi-app uv.lock — every download URL names "
+            "files.pythonhosted.org or pypi.org and none carries userinfo, so CI "
+            "installs from the same host the lock was resolved against. A lock that "
+            "has already picked up a proxy host is repaired by restoring the committed "
+            "one, not by re-locking on the machine that rewrote it."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
@@ -760,7 +902,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
-        autofixable=False,
+        autofixable=True,
         since="0.30.0",
         rationale=(
             "D012 is preventive; this is the damage. A uv.lock whose URLs name an internal "
@@ -818,6 +960,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d013"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D014",
@@ -835,7 +981,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="supply-chain",
-        autofixable=False,
+        autofixable=True,
         since="0.31.0",
         rationale=(
             "A repo-local '[tool.uv] exclude-newer' pinned to a fixed date is written as a "
@@ -900,7 +1046,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "fingerprint and re-notify on an unchanged repo daily, forever.\n"
             "The message names the date; the reader subtracts.\n"
             "\n"
-            "Not autofixable, deliberately.  Deleting the key is one line, but\n"
+            "Deliberately not a mechanical rewrite.  Deleting the key is one line, but\n"
             "the next resolve then jumps the repo across every release the\n"
             "fence was holding back, and at least one instance is a documented\n"
             "owner-gated hold (FND-1125) rather than drift.  Which of those a\n"
@@ -918,6 +1064,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d014"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D015",
@@ -925,10 +1075,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "atlan-openapi-app pyproject.toml — `[tool.pyright]` sets venvPath, venv, "
             "typeCheckingMode and two report levels, and declares no `exclude` at all, "
             "so pyright's built-in defaults stay in force and `**/.*` keeps .venv out "
-            "of the walk. A repo that does need an exclude restates `**/.*` beside its "
-            "own entries; atlan-mysql-app and atlan-metabase-app both exclude "
-            "`.github/**` without it and are open findings, which is why neither is "
-            "cited here."
+            "of the walk. A repo that does need an exclude restates the defaults beside "
+            "its own entries, as atlan-mysql-app pyproject.toml does: `.github/**` "
+            'followed by `"**/.*"`, `"**/node_modules"` and `"**/__pycache__"`, with a '
+            "comment saying why they are there."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.BOTH,
@@ -1017,6 +1167,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d015"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
 )

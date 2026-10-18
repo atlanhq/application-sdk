@@ -60,8 +60,9 @@ class RuleMechanism(str, Enum):
 
     * ``STATIC`` — AST / regex analysis; milliseconds, no execution needed.
       Safe to run in a pre-commit hook (``--static`` flag).
-    * ``TEST``   — requires a built environment and test execution; slower,
-      can flake.  Only run in CI and the full gate.
+    * ``TEST``   — requires a built environment and test execution.  No
+      rule uses it: conformance checks that tests are defined, and the test
+      gate runs them.  Kept so SARIF that recorded it still parses.
     """
 
     STATIC = "static"

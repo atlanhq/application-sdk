@@ -5,7 +5,11 @@ import importlib
 import pytest
 
 import application_sdk.constants as constants
-from application_sdk.constants import _load_worker_liveness_max_idle_seconds
+from application_sdk.constants import (
+    _load_dirty_restart_max_wait_seconds,
+    _load_oom_restart_check,
+    _load_worker_liveness_max_idle_seconds,
+)
 
 
 class TestLoadWorkerLivenessMaxIdleSeconds:
@@ -190,6 +194,13 @@ class TestStorageLockWaitProgressSeconds:
 
         registry = PathLockRegistry("test.lock_wait")
         tracker = MagicMock()
+        marked_twice = asyncio.Event()
+
+        def _count_mark(*_args: object) -> None:
+            if tracker.mark_progress.call_count >= 2:
+                marked_twice.set()
+
+        tracker.mark_progress.side_effect = _count_mark
 
         with (
             patch.object(constants, "STORAGE_LOCK_WAIT_PROGRESS_SECONDS", 0.01),
@@ -202,12 +213,20 @@ class TestStorageLockWaitProgressSeconds:
                 waiter = asyncio.create_task(
                     self._hold_briefly(registry, "/tmp/contended")
                 )
-                await asyncio.sleep(0.1)
-                assert tracker.mark_progress.call_count >= 2, (
-                    "a queued waiter marked progress "
-                    f"{tracker.mark_progress.call_count} times in ~10 intervals — "
-                    "the stall watchdog would kill it"
-                )
+                # Wait for the marks, not for a fixed sleep. A starved runner
+                # can fire fewer than two 10ms intervals in any fixed window
+                # (FND-4018). A waiter that never marks still fails, at the
+                # timeout. The interval stays 0.01s, so passing still proves
+                # the guard reads the patched constant: the 30s default would
+                # not mark twice before the timeout.
+                try:
+                    await asyncio.wait_for(marked_twice.wait(), timeout=10)
+                except TimeoutError:
+                    pytest.fail(
+                        "a queued waiter marked progress "
+                        f"{tracker.mark_progress.call_count} times in 10s at a "
+                        "0.01s interval — the stall watchdog would kill it"
+                    )
                 assert tracker.mark_progress.call_args[0][0] == "test.lock_wait"
             await waiter
 
@@ -215,6 +234,36 @@ class TestStorageLockWaitProgressSeconds:
     async def _hold_briefly(registry, path: str) -> None:
         async with registry.guard(path):
             pass
+
+
+class TestLoadDirtyRestartMaxWaitSeconds:
+    """Cover the ``ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS`` loader."""
+
+    ENV = "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS"
+
+    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv(self.ENV, raising=False)
+        assert _load_dirty_restart_max_wait_seconds() == 150
+
+    def test_valid_positive_value(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "900")
+        assert _load_dirty_restart_max_wait_seconds() == 900
+
+    def test_zero_is_the_kill_switch(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "0")
+        assert _load_dirty_restart_max_wait_seconds() == 0
+
+    def test_negative_clamped_to_zero(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "-30")
+        assert _load_dirty_restart_max_wait_seconds() == 0
+
+    def test_non_numeric_falls_back_to_the_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A typo in a deployment must not stop a worker from running at all."""
+        monkeypatch.setenv(self.ENV, "abc")
+        with pytest.warns(UserWarning, match="not a valid integer"):
+            assert _load_dirty_restart_max_wait_seconds() == 150
 
 
 class TestLoadBuildInfo:
@@ -277,3 +326,32 @@ class TestLoadBuildInfo:
             monkeypatch.delenv("ATLAN_BUILD_INFO_PATH")
             monkeypatch.delenv("ATLAN_APPLICATION_VERSION")
             importlib.reload(constants)
+
+
+class TestLoadOomRestartCheck:
+    """Cover the ``ATLAN_OOM_RESTART_CHECK`` loader."""
+
+    ENV = "ATLAN_OOM_RESTART_CHECK"
+
+    def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
+        """The default asks nothing, so a restart resumes as it always did."""
+        monkeypatch.delenv(self.ENV, raising=False)
+        assert _load_oom_restart_check() == "none"
+
+    def test_the_api_check_is_opted_into(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv(self.ENV, "api")
+        assert _load_oom_restart_check() == "api"
+
+    def test_case_and_padding_are_tolerated(self, monkeypatch: pytest.MonkeyPatch):
+        """Helm renders values with whatever whitespace the template had."""
+        monkeypatch.setenv(self.ENV, " API\n")
+        assert _load_oom_restart_check() == "api"
+
+    def test_an_unknown_word_falls_back_and_says_so(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Without this the typo would land on whichever branch is the else, and
+        a fleet would quietly be running handling nobody selected."""
+        monkeypatch.setenv(self.ENV, "apiserver")
+        with pytest.warns(UserWarning, match="is not one of"):
+            assert _load_oom_restart_check() == "none"

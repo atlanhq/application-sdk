@@ -8,7 +8,7 @@ This reference covers unit testing patterns for incremental extraction implement
 |-----------|-------|--------|
 | `build_incremental_column_sql()` | YES | Business logic - SQL generation |
 | `resolve_database_placeholders()` | YES | Business logic - placeholder replacement |
-| `execute_column_batch()` | NO | Concrete in SDK, don't override |
+| `execute_single_column_batch()` | NO | Concrete in SDK, don't override |
 | `fetch_tables()` | NO | SDK handles, test via integration |
 | `fetch_incremental_marker()` | NO | SDK handles, test via integration |
 
@@ -21,34 +21,37 @@ Tests cover YourDB's build_incremental_column_sql implementation which generates
 database-specific SQL syntax for incremental column extraction.
 
 Generic column extraction tests (get_backfill_tables, get_transformed_dir)
-live in the SDK: tests/unit/common/test_column_extraction.py
+live in the SDK: tests/unit/common/incremental/column_extraction/
 """
 
 import pytest
-from app.activities.metadata_extraction.your_db import YourDBActivities
+from application_sdk.templates.contracts.incremental_sql import (
+    FetchTablesIncrementalInput,
+    IncrementalRunContext,
+)
+
+from app.your_db import YourDBExtractor
 
 
 class TestBuildIncrementalColumnSql:
     """Tests for YourDB-specific build_incremental_column_sql method."""
 
-    def _make_activities(self, template_sql):
-        """Create a YourDBActivities instance for testing without __init__."""
-        obj = YourDBActivities.__new__(YourDBActivities)
+    def _make_app(self, template_sql, schema_name):
+        """Create a YourDBExtractor instance for testing without __init__."""
+        obj = YourDBExtractor.__new__(YourDBExtractor)
         obj.incremental_column_sql = template_sql
+        obj.system_schema = schema_name
         return obj
 
     def _build(self, template, table_ids, schema_name, marker):
-        """Helper to call build_incremental_column_sql with mock workflow_args."""
-        activities = self._make_activities(template)
-        workflow_args = {
-            "metadata": {
-                "marker_timestamp": marker,
-                "next_marker_timestamp": marker,
-                "system_schema_name": schema_name,
-                "incremental-extraction": True,
-            }
-        }
-        return activities.build_incremental_column_sql(table_ids, workflow_args)
+        """Helper to call build_incremental_column_sql with a run context."""
+        app = self._make_app(template, schema_name)
+        ctx = IncrementalRunContext(
+            marker_timestamp=marker,
+            current_state_available=True,
+            incremental_extraction=True,
+        )
+        return app.build_incremental_column_sql(table_ids, ctx)
 ```
 
 ## Essential Test Cases
@@ -183,27 +186,24 @@ ORDER BY c.OWNER, c.TABLE_NAME"""
 class TestResolveDatabasePlaceholders:
     """Tests for database-specific placeholder resolution."""
 
-    def _make_activities(self):
-        obj = YourDBActivities.__new__(YourDBActivities)
+    def _make_app(self, schema_name="SYS"):
+        obj = YourDBExtractor.__new__(YourDBExtractor)
+        obj.system_schema = schema_name
         return obj
 
     def test_replaces_system_schema(self):
-        activities = self._make_activities()
+        app = self._make_app("CUSTOM_SYS")
         sql = "SELECT * FROM {system_schema}.DBA_TABLES"
-        workflow_args = {
-            "metadata": {"system_schema_name": "CUSTOM_SYS"}
-        }
 
-        result = activities.resolve_database_placeholders(sql, workflow_args)
+        result = app.resolve_database_placeholders(sql, FetchTablesIncrementalInput())
 
         assert result == "SELECT * FROM CUSTOM_SYS.DBA_TABLES"
 
     def test_no_op_when_no_placeholders(self):
-        activities = self._make_activities()
+        app = self._make_app()
         sql = "SELECT * FROM system.tables"
-        workflow_args = {"metadata": {}}
 
-        result = activities.resolve_database_placeholders(sql, workflow_args)
+        result = app.resolve_database_placeholders(sql, FetchTablesIncrementalInput())
 
         assert result == sql
 ```
@@ -225,6 +225,6 @@ uv run pytest tests/unit/test_column_utils.py -v --cov=app
 ## Common Test Mistakes
 
 1. **Calling old method name**: Always use `build_incremental_column_sql()`, not `_build_column_cte_sql` or any private name
-2. **Not using `__new__`**: Use `YourDBActivities.__new__(YourDBActivities)` to create instances without `__init__` side effects
-3. **Testing SDK methods**: Don't test `execute_column_batch`, `run_column_query`, etc. - those are SDK's responsibility
-4. **Forgetting `{marker_timestamp}` in assertions**: The SDK resolves this, not your method, so it may still be present after `build_incremental_column_sql`
+2. **Not using `__new__`**: Use `YourDBExtractor.__new__(YourDBExtractor)` to create instances without `__init__` side effects
+3. **Testing SDK methods**: Don't test `execute_single_column_batch`, `prepare_column_extraction_queries`, etc. - those are SDK's responsibility
+4. **Leaving `{marker_timestamp}` unresolved**: The SDK does not substitute it in your column SQL; if your template uses it, `build_incremental_column_sql` must replace it from `ctx.marker_timestamp`

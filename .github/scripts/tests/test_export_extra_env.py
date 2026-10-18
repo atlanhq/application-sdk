@@ -482,6 +482,24 @@ def test_cli_mask_only_flag_selects_mask_output():
     assert "<<" not in masks.stdout
 
 
+@pytest.mark.parametrize("flags", [(), ("--mask-only",)], ids=["write", "mask"])
+def test_cli_refuses_a_reserved_name_in_both_passes(flags: tuple[str, ...]):
+    # FND-3542: the e2e harness gates direct-to-AE suites on E2E_TENANT_POOL,
+    # which only the tenant resolver may write. Refused in the mask pass too,
+    # so the step fails before anything reaches $GITHUB_ENV.
+    result = _run("--json", '{"E2E_TENANT_POOL": "system", "OK": "1"}', *flags)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "E2E_TENANT_POOL" in result.stderr
+
+
+def test_render_still_accepts_a_reserved_name():
+    # The resolver renders its own E2E_TENANT_POOL through this module.
+    assert _parse(render('{"E2E_TENANT_POOL": "system"}')) == {
+        "E2E_TENANT_POOL": "system"
+    }
+
+
 def test_cli_without_the_flag_still_writes_env_lines_only():
     payload = '{"KEY": %s}' % json.dumps(_FAKE_PEM)
     env = _run("--json", payload)

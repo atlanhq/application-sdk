@@ -15,7 +15,11 @@ name: Tests
 #                 pytest fixtures (see mysql/metabase conftest.py); uncomment
 #                 services-script below only if that pattern doesn't fit.
 #   e2e         — full-DAG tests against a real tenant via e2e-full-reusable.
-#                 Triggered by the 'e2e' PR label or workflow_dispatch.
+#                 Requested with a `/e2e` PR comment (test-commands.yaml),
+#                 which dispatches this workflow with `run_e2e: only` on the
+#                 PR's head commit. That run reports under `e2e / …`, never
+#                 under the required `tests / …` checks, and its verdict lands
+#                 as the `e2e` commit status on that commit (FND-3839).
 #   Tests Gate  — aggregator gate; the check INTENDED to be the required one
 #                 for branch protection.  tests must pass; e2e can be skipped.
 #
@@ -44,17 +48,14 @@ on:
     branches:
       - main
   pull_request:
+    # No `labeled`: nothing here is requested by a label any more (FND-3839).
+    # A label add on the same commit used to start a second run whose unit job
+    # cancelled the first run's, leaving a failed `tests / Tests Gate` on the
+    # PR. One push, one run. E2e and the bump-PR opt-in are PR comments now.
     types:
-      # `labeled` is what makes adding the `e2e` label start a run. GitHub has
-      # no trigger-level filter for WHICH label, so an unrelated label add
-      # creates a run here too — the SDK's reusable workflow gates on
-      # `github.event.label.name` so those runs skip in seconds instead of
-      # re-running the live-tenant suite (FND-48). Keep the type; the filtering
-      # is not this file's job.
       - opened
       - synchronize
       - reopened
-      - labeled
     branches:
       - main
   merge_group:
@@ -95,6 +96,22 @@ on:
         required: false
         default: ""
         type: string
+      head_sha:
+        description: |
+          The PR head commit a `/e2e` or `/gate-check` comment was made on,
+          set by test-commands.yaml. The run stands its e2e down when the
+          branch has moved past it, so a verdict is only ever recorded for
+          the commit that was actually tested. Empty = no check.
+        required: false
+        default: ""
+        type: string
+      pr_number:
+        description: |
+          The PR a `/e2e` comment came from, set by test-commands.yaml so the
+          run can edit that PR's `/e2e` comment as it goes. Empty = none.
+        required: false
+        default: ""
+        type: string
       e2e_clouds:
         description: |
           Cloud providers to run the e2e suites against, comma-separated
@@ -107,6 +124,24 @@ on:
 
 jobs:
   tests:
+    # An e2e-only run (a `/e2e` comment) reports as `e2e / …`, everything else
+    # as `tests / …`. Load-bearing: GitHub resolves a required check to the
+    # NEWEST run on the commit and counts a skipped job as a pass, so an
+    # e2e-only run publishing a skipped `tests / Unit` would override a real
+    # unit failure from the PR's own run. test-commands refuses `/e2e` on a
+    # branch whose copy of this file lacks this line (FND-3839).
+    name: ${{ inputs.run_e2e == 'only' && 'e2e' || 'tests' }}
+    # Bump-version PR CI is opt-in (FND-3748): a `/gate-check` comment
+    # dispatches this workflow, and that run tests everything. On the PR's own
+    # run, `skip-on-bump-pr` (below) skips every job inside the reusable
+    # (FND-3947). Each skipped job still files its required `tests / …` check,
+    # which costs no runner and resolves the PR's required checks; Release Gate
+    # is the blocker, failing until the `/gate-check` verdict on the head commit
+    # passes. Skipping this caller job instead would file only `tests` and
+    # leave `tests / Tests Gate` "Expected" forever, because GitHub does not
+    # count a dispatched run toward a PR's required checks. Every bump commit
+    # needs its own `/gate-check`: the verdict is a status on the commit, and a
+    # push makes a new one.
     # Declared rather than inherited from the repository default, because a
     # called workflow's permissions can only EQUAL or NARROW its caller's. Every
     # scope below is one the reusable workflow's own jobs declare; leaving this
@@ -132,7 +167,8 @@ jobs:
       packages: write
       # The unit tier's coverage-delta comment and the e2e tier's PR reporting.
       pull-requests: write
-      # The e2e tier's commit status on the SDK commit that dispatched it.
+      # The `e2e` commit status on this repo's tested commit, and the e2e
+      # tier's status on the SDK commit that dispatched it.
       statuses: write
       # Mints the run's OIDC token for the dataforge source-credential exchange
       # (no stored dataforge secret). Never granted by a repository default at
@@ -164,6 +200,7 @@ jobs:
 <% endif %><% if dataforge_env_tier %>      dataforge-env-tier: "<< dataforge_env_tier >>"
 <% endif %><% if dataforge_output_prefix %>      dataforge-output-prefix: "<< dataforge_output_prefix >>"
 <% endif %><% if dataforge_hermetic_fallback %>      dataforge-hermetic-fallback: "<< dataforge_hermetic_fallback >>"
+<% endif %><% if dataforge_lifecycle %>      dataforge-lifecycle: << dataforge_lifecycle >>
 <% endif %><% if enable_e2e != 'true' %>
       enable-e2e: << enable_e2e >>
 <% endif %>
@@ -181,6 +218,15 @@ jobs:
       application-sdk-ref: ${{ inputs.application_sdk_ref }}
       distinct-id: ${{ inputs.distinct_id }}
       run-e2e: ${{ inputs.run_e2e }}
+      head-sha: ${{ inputs.head_sha }}
+      pr-number: ${{ inputs.pr_number }}
+      # This file no longer subscribes to `labeled`, so the reusable must not
+      # read the `e2e` / `gate-check` labels either: a stale label on a push
+      # would otherwise still start e2e in the PR's own run.
+      e2e-label-trigger: false
+      # Skip every job on a bump-version PR's own run; see the comment on the
+      # `tests` job above (FND-3947).
+      skip-on-bump-pr: true
       base-image-ref: ${{ inputs.base_image_ref }}
       agent-name-override: ${{ inputs.agent_name_override }}
       # Cross-CSP e2e matrix (FND-6): every e2e suite runs once per cloud
@@ -198,6 +244,8 @@ jobs:
       # from `objectstore` to `atlan-objectstore` shows up as zero
       # downstream assets/lineage in Atlas. See atlan-mysql-app#381 for
       # the first adopter + confirmed end-to-end proof of the boundary
-      # crossing.
-      two-store: true
+      # crossing. Per-repo (FND-3656): an app with nothing to observe at
+      # that boundary — no SDR, no SDK objectstore bindings — may set false,
+      # and --resync keeps it. T022 decides whether false is allowed.
+      two-store: << two_store >>
 <% if secrets_block %><< secrets_block >><% else %>    secrets: inherit<% endif %>

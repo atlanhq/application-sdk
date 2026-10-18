@@ -28,7 +28,10 @@ keep passing if the guarded operation were later removed or renamed.
 from __future__ import annotations
 
 import asyncio
-from contextlib import ExitStack
+import builtins
+import sys
+import types
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from typing import Any
 from unittest import mock
@@ -125,6 +128,41 @@ class TestInTemporalWorkflow:
         with mock.patch("temporalio.workflow.in_workflow", return_value=True):
             assert in_temporal_workflow() is True
 
+    @staticmethod
+    @contextmanager
+    def _temporal_import_forbidden():
+        real_import = builtins.__import__
+
+        def guard(name, *args, **kwargs):
+            if name.startswith("temporalio"):
+                raise AssertionError(f"in_temporal_workflow imported {name}")
+            return real_import(name, *args, **kwargs)
+
+        with mock.patch.object(builtins, "__import__", guard):
+            yield
+
+    def test_false_without_importing_when_temporal_is_not_loaded(self):
+        """The predicate runs on every buffered record, so it must not import.
+
+        A worker logs its first records while temporalio is still being
+        imported; importing it from the predicate at that moment can hit the
+        partially initialised module. A process that has not loaded
+        ``temporalio.workflow`` cannot be inside a workflow.
+        """
+        with (
+            mock.patch.dict(sys.modules, {"temporalio.workflow": None}),
+            self._temporal_import_forbidden(),
+        ):
+            assert in_temporal_workflow() is False
+
+    def test_false_on_a_partially_initialised_module(self):
+        half_loaded = types.ModuleType("temporalio.workflow")
+        with (
+            mock.patch.dict(sys.modules, {"temporalio.workflow": half_loaded}),
+            self._temporal_import_forbidden(),
+        ):
+            assert in_temporal_workflow() is False
+
 
 # ---------------------------------------------------------------------------
 # AtlanObservability._flush_records
@@ -187,6 +225,71 @@ class TestFlushRecordsWorkflowGuard:
         uploads = await self._flush_collecting_uploads(obs_instance, in_workflow=False)
 
         assert len(uploads) == 1, uploads
+
+    @pytest.mark.asyncio
+    async def test_returns_records_to_the_buffer_in_workflow(self, obs_instance):
+        """Skipping the write must not drop the batch the caller swapped out.
+
+        Every caller has already taken the records out of the buffer, so a bare
+        ``return`` here discarded them — including other runs' lines logged on
+        the same worker since the last flush.
+        """
+        later = _record(_BASE_TS + 1)
+        obs_instance._buffer = [later]
+        await self._flush_collecting_uploads(obs_instance, in_workflow=True)
+
+        assert [r["timestamp"] for r in obs_instance._buffer] == [
+            _BASE_TS,
+            _BASE_TS + 1,
+        ], "the refused batch must go back ahead of newer records, in order"
+
+
+# ---------------------------------------------------------------------------
+# AtlanObservability.add_record
+# ---------------------------------------------------------------------------
+
+
+class TestAddRecordWorkflowGuard:
+    """``add_record`` starts no flush on the workflow loop."""
+
+    @staticmethod
+    def _add_with_flush_due(obs_instance, *, in_workflow: bool) -> mock.MagicMock:
+        """Add one record with the batch full; return the task-spawn mock."""
+        obs_instance._batch_size = 1
+        with (
+            mock.patch(f"{_OBS_MODULE}.in_temporal_workflow", return_value=in_workflow),
+            mock.patch(f"{_OBS_MODULE}.asyncio.create_task") as create_task,
+        ):
+            obs_instance.add_record(_record(_BASE_TS))
+        for call in create_task.call_args_list:
+            call.args[0].close()  # silence "never awaited"
+        return create_task
+
+    def test_keeps_record_buffered_in_workflow(self, obs_instance):
+        create_task = self._add_with_flush_due(obs_instance, in_workflow=True)
+
+        create_task.assert_not_called()
+        assert len(obs_instance._buffer) == 1
+
+    @pytest.mark.asyncio
+    async def test_starts_flush_outside_workflow(self, obs_instance):
+        """Positive control: the same full batch flushes on a running worker loop."""
+        create_task = self._add_with_flush_due(obs_instance, in_workflow=False)
+
+        create_task.assert_called_once()
+        assert obs_instance._buffer == []
+
+    def test_keeps_record_buffered_without_a_running_loop(self, obs_instance):
+        """On a thread with no event loop (a sync activity), only append.
+
+        ``asyncio.create_task`` would raise there, after the batch had already
+        been swapped out of the buffer, losing it. The periodic flush drains
+        what is left behind.
+        """
+        create_task = self._add_with_flush_due(obs_instance, in_workflow=False)
+
+        create_task.assert_not_called()
+        assert len(obs_instance._buffer) == 1
 
 
 # ---------------------------------------------------------------------------

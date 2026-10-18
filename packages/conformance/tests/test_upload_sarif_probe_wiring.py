@@ -59,7 +59,7 @@ _REUSABLE_REF = "conformance-upload-sarif-reusable.yaml"
 _REUSABLE = _REPO_ROOT / ".github/workflows" / _REUSABLE_REF
 
 #: The suite whose SARIF artifacts these legs collect. Read rather than
-#: restated, so a series added to the matrix shows up here as an unuploaded
+#: restated, so a series added to the suite shows up here as an unuploaded
 #: slug instead of as silence.
 _SUITE = _REPO_ROOT / ".github/workflows/conformance-reusable.yaml"
 
@@ -250,11 +250,19 @@ def test_caller_keeps_the_workflow_run_trigger(label: str, source: str) -> None:
 
 
 def _suite_sarif_slugs() -> set[str]:
-    """Every `slug` the conformance suite's matrix publishes SARIF for."""
-    matrix = yaml.safe_load(_SUITE.read_text(encoding="utf-8"))["jobs"]["suite"][
-        "strategy"
-    ]["matrix"]["include"]
-    return {entry["slug"] for entry in matrix}
+    """Every `slug` the conformance suite publishes SARIF for.
+
+    One detect step per series in the suite's single job (FND-3318), each
+    handing its `slug` to the run-conformance-detect action.
+    """
+    steps = yaml.safe_load(_SUITE.read_text(encoding="utf-8"))["jobs"]["suite"]["steps"]
+    slugs = {
+        step["with"]["slug"]
+        for step in steps
+        if str(step.get("uses", "")).endswith("/run-conformance-detect")
+    }
+    assert slugs, "no detect steps found in the conformance suite job"
+    return slugs
 
 
 def _sdk_caller_slug_entries() -> list[dict]:  # type: ignore[type-arg]
@@ -275,7 +283,7 @@ def test_the_sdk_caller_uploads_every_series_the_suite_produces() -> None:
     every other assertion in this file still green, because a slug matching no
     artifact is indistinguishable from a series that had no relevant changes.
 
-    Derived from the suite's own matrix rather than restated as ten literals: a
+    Derived from the suite's own detect steps rather than restated as ten literals: a
     series added there must be added here too, or named in
     `_NOT_UPLOADED_BY_THE_SDK` on purpose.
     """

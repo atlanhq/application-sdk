@@ -69,7 +69,11 @@ being present in ``atlan.yaml``.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -103,7 +107,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="sdr-readiness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.9.0",
         rationale=(
@@ -189,13 +193,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p029"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P030",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — `run()` uploads each transformed "
-            "typename with `raise_on_empty=True`, and uploads residual/ separately. An SDR "
-            "app with no self.upload() call leaves the ENABLE_ATLAN_UPLOAD path "
+            "atlan-metabase-app app/connector.py — the `extract_metadata` @entrypoint "
+            "delivers every transformed typename with one "
+            "`self.upload_refs(UploadRefsInput(...))` and uploads residual/ separately "
+            "with `self.upload(UploadInput(..., raise_on_empty=True))`. An SDR app with no "
+            "self.upload() or self.upload_refs() call leaves the ENABLE_ATLAN_UPLOAD path "
             "unreachable, so the e2e leg greens without moving a byte to the tenant "
             "bucket."
         ),
@@ -291,6 +301,42 @@ RULES: tuple[RuleDefinition, ...] = (
             "  written, but never to the tenant bucket (observed for a key-value\n"
             "  store connector in fleet testing).\n"
             "\n"
+            "**Transfers that still fire P030.**  Two shapes move bytes but are not\n"
+            "``self.upload`` / ``self.upload_refs`` and are not the named\n"
+            "``upload_to_atlan`` bridge P042 reports.  An app task that calls\n"
+            "``storage.transfer.upload`` (against ``create_store_from_binding`` or\n"
+            "``upstream_storage``) skips the SDK's upstream checks, dual-write and\n"
+            "cross-pod fallback.  A call to the inherited\n"
+            "``BaseMetadataExtractor.upload_to_atlan`` shim forwards to\n"
+            "``self.upload(local_path=output_path, tier=RETAINED)``, which writes\n"
+            "under ``App.upload``'s own run prefix: it works only when the app hands\n"
+            "that same prefix downstream, and is the re-rooting trap above when it\n"
+            "does not.  Convert both, as a refactor that must not move a key — and\n"
+            "if the shim's keys and the published prefix differ, the conversion is\n"
+            "the fix.\n"
+            "\n"
+            "*Conversion recipe.*  ``App.upload`` and ``upload_refs`` are tasks, so\n"
+            "call them from the entrypoint, never from inside another task.  Either\n"
+            "keep the activity and have it stage a local tree that mirrors the key\n"
+            "layout, returned as a directory ``FileReference``, then upload it once\n"
+            "with ``storage_path`` pinned to the prefix the app returns.  That is\n"
+            "replay-safe only for runs pinned to the build that started them\n"
+            "(``PINNED`` worker versioning); an unversioned or ``AUTO_UPGRADE``\n"
+            "worker replays in-flight runs against the new entrypoint, so guard the\n"
+            "new ``App.upload`` call with ``workflow.patched(...)``.  Or declare the\n"
+            "task outputs to\n"
+            "``upload_refs`` with a ``DeclaredFile.label`` per key.  Skip empty\n"
+            "entities (``upload_refs`` raises on an empty declared file), keep side\n"
+            "outputs such as ``resolvable/`` or miner files in a delivery, and\n"
+            "upload the whole tree when downstream nodes read more than\n"
+            "``transformed/``.  For the shim, swap in its own body, and pin\n"
+            "``storage_path`` if the published prefix differs from the run prefix.\n"
+            "\n"
+            "*Verification.*  Run the full-DAG e2e on main first as a baseline, then\n"
+            "on the change, and compare the Atlas inventory per type.  The\n"
+            "inventory need not list every type a connector writes; a type absent\n"
+            "from both runs is not proven either way.\n"
+            "\n"
             "**Never mark a P030 finding a false positive without a green full-DAG\n"
             "e2e** (extract → publish) proving assets actually land in Atlas.  The\n"
             "workflow status is not evidence — every failure mode above reports\n"
@@ -348,6 +394,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p030"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P037",
@@ -395,6 +445,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "  picks the agent vs. direct-GUID route.\n"
             "* ``CredentialRef.from_workflow_args(workflow_args)`` — the same,\n"
             "  reading ``agent_json`` off the args payload.\n"
+            "* ``route_credentials(input)`` (``application_sdk.credentials``,\n"
+            "  SDK >= 3.40.0) — routes through ``CredentialRef.resolve`` and also\n"
+            "  owns the pre-built-ref and inline channels; on an SDK that has it,\n"
+            "  P053 prescribes it over a hand-rolled ``CredentialRef.resolve``.\n"
             "\n"
             "An app that resolves strictly by ``credential_guid`` (a custom local\n"
             "vault read that only ever builds ``CredentialRef(name=guid,\n"
@@ -421,13 +475,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p037"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P038",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — the upload's storage_path comes from "
-            "`base_result.transformed_data_prefix`, which the SDK roots from "
-            "APPLICATION_NAME. An input field named application_name defaults to empty, so "
+            "atlan-mysql-app app/mysql.py — `run()` passes "
+            "`base_result.transformed_data_prefix` as both `source_prefix` and `prefix` of "
+            "its `self.upload_refs(UploadRefsInput(...))`, a prefix the SDK roots from the "
+            "running app's registered name (APPLICATION_NAME is only the fallback). An "
+            "input field named application_name defaults to empty, so "
             "rooting the prefix from it silently writes to the bucket root."
         ),
         scope=RuleScope.APP,
@@ -510,15 +570,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p038"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P039",
         canonical_reference=(
-            "atlan-metabase-app app/contracts.py — `MetabaseInput` declares `agent_json` "
-            "as a typed field, and atlan-metabase-app app/generated/_input.py extends the "
-            "SDK's `ExtractionInput` rather than a bare `Input`. Either route keeps the "
-            "forwarded value; a bare Input subclass with no agent_json field drops it "
-            "before the credential resolver sees it."
+            "atlan-metabase-app app/generated/_input.py — the generated "
+            "`class AppInputContract(ExtractionInput)` extends the SDK's ExtractionInput "
+            "family, which declares agent_json, rather than a bare `Input`; that "
+            "generated contract is what this rule reads. (The hand-written MetabaseInput "
+            "in app/contracts.py also types agent_json, but it is runtime context, not "
+            "the checked site.) A bare Input subclass with no agent_json field drops the "
+            "forwarded value before the credential resolver sees it."
         ),
         rule_interactions=(
             "The finding may anchor on generated output (app/generated/**), which is "
@@ -610,12 +676,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p039"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P042",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — the tenant-bucket hand-off is `await "
-            "self.upload(UploadInput(...))`. A hand-rolled upload_to_atlan bridge "
+            "atlan-metabase-app app/connector.py — the tenant-bucket hand-off is "
+            "`self.upload_refs(UploadRefsInput(...))` for the transformed tree plus "
+            "`self.upload(UploadInput(...))` for residual/ and the lineage stage; there is "
+            "no upload_to_atlan bridge. A hand-rolled bridge "
             "re-implements the routing to upstream_storage and then has to track it as the "
             "SDK changes."
         ),
@@ -715,13 +787,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p042"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P051",
         canonical_reference=(
-            "atlan-mysql-app uv.lock — the SDK resolves to 3.32.0, above the 3.30.0 floor "
-            "that carries interactive setup (test auth, preflight, metadata browsing). The "
-            "declared range in pyproject.toml is what lets the lock reach it."
+            "atlan-mysql-app uv.lock — the locked atlan-application-sdk version sits "
+            "above the 3.30.0 floor that carries interactive setup (test auth, preflight, "
+            "metadata browsing), because the lower bound declared in pyproject.toml is "
+            "itself above that floor. The rule reads the lock, not the specifier: a floor "
+            "at or above 3.30.0 keeps every re-lock compliant."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -816,6 +894,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p051"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
 )

@@ -34,6 +34,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk import constants
+from application_sdk.errors import PreconditionError
 from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.service import create_app_handler_service
 from tests.unit.server.mcp.conftest import APP_NAME, ProbeApp
@@ -194,7 +195,7 @@ class TestMissingExtra:
             monkeypatch.delitem(sys.modules, mod, raising=False)
         monkeypatch.setitem(sys.modules, "fastmcp", None)
 
-        with pytest.raises(RuntimeError, match="'mcp' extra"):
+        with pytest.raises(PreconditionError, match="'mcp' extra"):
             create_app_handler_service(DefaultHandler(), app_name=APP_NAME)
 
     def test_unrelated_import_error_is_reraised_unchanged(

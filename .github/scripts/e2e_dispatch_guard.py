@@ -53,7 +53,7 @@ One ref per ``(app, sha)``, with a FIXED name::
 ``POST /git/refs`` on a name that already exists returns 422, and that 422 is an
 atomic test-and-set evaluated by GitHub: of N simultaneous callers exactly one
 sees 201, whatever the order. Same primitive as the ``(app, cloud)`` tenant
-lease (``.github/actions/e2e-tenant-lease``), deliberately — the precedent and
+lease (``.github/scripts/e2e_tenant_lease.py``), deliberately — the precedent and
 the failure modes are already understood, and the alternative (probe the SHA for
 an existing ``Connector E2E run / <app>`` check and skip if present) is
 read-then-act with no atomicity. The observed gap between the duplicate dispatch

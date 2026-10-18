@@ -77,8 +77,9 @@ and do not model new failure types on this approach.
 
 **`audience` override pattern** — when an SDK base default doesn't fit the locus,
 override `audience` on a minimal subclass. For an unreachable *source* system,
-prefer `SourceUnavailableError` (already `audience=USER`) over overriding
-`DependencyUnavailableError`. The override pattern still applies where no leaf
+use `SourceUnavailableError` (already `audience=USER`), never a
+`DependencyUnavailableError` overridden to `USER`: conformance rule E021 flags
+that, because DEPENDENCY_UNAVAILABLE never blocks a hard preflight gate. The override pattern still applies where no leaf
 fits the locus — e.g. a source-side read timeout is an `AppTimeoutError` whose
 default `APP_OWNER` should be overridden to `USER` in the connector's
 `failures.py`. The SDK's own code should follow the same logic.
@@ -630,12 +631,12 @@ Columns: `legacy constant` | `target leaf` | `suggested code` |
 | `ACTIVITY_START_ERROR` | `DependencyUnavailableError` | `DEPENDENCY_UNAVAILABLE_ACTIVITY_START` | — | Temporal activity start failure |
 | `ACTIVITY_END_ERROR` | `InternalError` | `INTERNAL_ACTIVITY_END` | — | activity teardown invariant |
 | `QUERY_EXTRACTION_ERROR` | `InternalError` | `INTERNAL_QUERY_EXTRACTION` | — | query extraction activity |
-| `QUERY_EXTRACTION_SQL_ERROR` | `DependencyUnavailableError` | `DEPENDENCY_UNAVAILABLE_QUERY_SQL` | — | SQL source unreachable during extraction |
+| `QUERY_EXTRACTION_SQL_ERROR` | `SourceUnavailableError` | `SOURCE_UNAVAILABLE_QUERY_SQL` | — | SQL source unreachable during extraction (customer-owned, not a platform dependency) |
 | `QUERY_EXTRACTION_PARSE_ERROR` | `DataIntegrityError` | `DATA_INTEGRITY_QUERY_EXTRACTION_PARSE` | — | returned data unparseable |
 | `QUERY_EXTRACTION_VALIDATION_ERROR` | `DataIntegrityError` | `DATA_INTEGRITY_QUERY_EXTRACTION_VALIDATION` | — | extracted data fails schema check |
 | `METADATA_EXTRACTION_ERROR` | `InternalError` | `INTERNAL_METADATA_EXTRACTION` | — | generic extraction failure |
-| `METADATA_EXTRACTION_SQL_ERROR` | `DependencyUnavailableError` | `DEPENDENCY_UNAVAILABLE_METADATA_SQL` | — | SQL source unreachable |
-| `METADATA_EXTRACTION_REST_ERROR` | `DependencyUnavailableError` | `DEPENDENCY_UNAVAILABLE_METADATA_REST` | — | REST source unreachable |
+| `METADATA_EXTRACTION_SQL_ERROR` | `SourceUnavailableError` | `SOURCE_UNAVAILABLE_METADATA_SQL` | — | SQL source unreachable (customer-owned, not a platform dependency) |
+| `METADATA_EXTRACTION_REST_ERROR` | `SourceUnavailableError` | `SOURCE_UNAVAILABLE_METADATA_REST` | — | REST source unreachable (customer-owned, not a platform dependency) |
 | `METADATA_EXTRACTION_PARSE_ERROR` | `DataIntegrityError` | `DATA_INTEGRITY_METADATA_EXTRACTION_PARSE` | — | |
 | `METADATA_EXTRACTION_VALIDATION_ERROR` | `DataIntegrityError` | `DATA_INTEGRITY_METADATA_EXTRACTION_VALIDATION` | — | |
 | `ATLAN_UPLOAD_ERROR` | `DependencyUnavailableError` | `DEPENDENCY_UNAVAILABLE_ATLAN_UPLOAD` | — | set `service="atlan_api"` |

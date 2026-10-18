@@ -69,6 +69,7 @@ import shutil
 import subprocess
 import tempfile
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 
 # Repo-root files both families emit at the top level of the eval output. They
@@ -136,7 +137,7 @@ POST_GENERATE_INTERPRETERS = (
 )
 
 # Checked before POST_GENERATE_INTERPRETERS: CI formats the generated Python
-# itself (``regenerate_contract._format_generated``, ``renovate_pkl_sync``), so
+# itself (``format_generated_python``, on every regeneration path), so
 # `uvx ruff format` is not a transformation regeneration drops.
 POST_GENERATE_FORMATTERS = ("ruff", "black", "prettier", "pre-commit")
 
@@ -689,3 +690,56 @@ def run_post_generate(contract_dir: str = "contract") -> None:
             "output, so anything this step installs over them is missing. Review "
             "the diff before merging."
         )
+
+
+def format_generated_python(
+    run: Callable[[list[str]], object], root: Path = Path(".")
+) -> bool:
+    """ruff-fix + format every generated ``*.py`` under ``<root>/app/generated``.
+
+    The ONE definition of "formatted" for generated Python, shared by every
+    regeneration entry point. ``renovate_pkl_sync`` (and through it the
+    Generated Artifact Freshness gate) and ``regenerate_contract`` used to carry
+    their own copies, and the copies drifted: one passed ``--force-exclude`` and
+    the app's own rule selection, the other pinned ``--select F401`` and
+    honoured no excludes. An app excluding ``app/generated`` from ruff then got
+    raw pkl output from the gate and reformatted output from local regeneration,
+    and the gate failed the latter as hand-edited (FND-3560). Keep it one
+    function; ``tests/test_generated_formatting_parity.py`` checks both callers.
+
+    The calls mirror ``contract-toolkit/scripts/regenerate-all.sh``:
+
+      * No ``--select``: ``ruff check --fix`` applies whatever the consumer's
+        own pyproject.toml configures, so the output matches what that repo's
+        pre-commit enforces. Fleet configs are not uniform (some select ``I``).
+      * ``--force-exclude``: ruff otherwise ignores ``exclude`` /
+        ``extend-exclude`` for paths named on the command line. With it, an app
+        that excludes ``app/generated`` keeps raw pkl output (CNCT-70).
+      * Paths stay relative to cwd when ``root`` is relative: path-scoped
+        ``per-file-ignores`` / ``exclude`` patterns only match the real
+        repo-relative path, never an absolute temp-dir one.
+
+    ``run`` is the caller's subprocess seam, so each script's tests keep
+    stubbing their own module's ``run``.
+
+    Best-effort: prefers ``uvx ruff`` and falls back to ``ruff`` on PATH; with
+    neither (the e2e pre-build path runs before uv is installed) it skips with a
+    notice — unformatted generated Python still imports. Returns True iff the
+    generated Python is formatted, with "nothing to format" counting as True;
+    ``regenerate_contract.warn_on_drift`` narrows its comparison on False."""
+    gen = root / GENERATED_DIR
+    if not gen.is_dir():
+        return True
+    paths = sorted(str(p) for p in gen.rglob("*.py"))
+    if not paths:
+        return True
+    if shutil.which("uvx"):
+        ruff = ["uvx", "ruff"]
+    elif shutil.which("ruff"):
+        ruff = ["ruff"]
+    else:
+        print("::notice::ruff/uvx not on PATH — skipping generated-Python formatting.")
+        return False
+    run([*ruff, "check", "--fix", "--quiet", "--force-exclude", *paths])
+    run([*ruff, "format", "--force-exclude", *paths])
+    return True

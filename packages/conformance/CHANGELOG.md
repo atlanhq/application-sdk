@@ -2,6 +2,356 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.50.2] - 2026-10-16
+
+### Bug fixes
+
+- E007 false positive on compliant code (1 repo) (#4428) ([a998fcd](https://github.com/atlanhq/application-sdk/commit/a998fcd))
+- correct D003's fix guidance (1 repo) (#4427) ([045f420](https://github.com/atlanhq/application-sdk/commit/045f420))
+- correct O001's fix guidance (1 repo) (#4429) ([1682259](https://github.com/atlanhq/application-sdk/commit/1682259))
+- L006 false positive on compliant code (1 repo) (#4422) ([4d53dea](https://github.com/atlanhq/application-sdk/commit/4d53dea))
+- correct P019's fix guidance (1 repo) (#4423) ([71f76d8](https://github.com/atlanhq/application-sdk/commit/71f76d8))
+- E016 false positive on compliant code (1 repo) (#4413) ([1f701b5](https://github.com/atlanhq/application-sdk/commit/1f701b5))
+- retire Dependabot config in favour of the Renovate preset [FND-4034] (#4415) ([fc19e58](https://github.com/atlanhq/application-sdk/commit/fc19e58))
+
+## [0.50.1] - 2026-10-15
+
+### Bug fixes
+
+- FND-4015 resolve duplicate contract class names by module in the ledger generator and B005 (#4404) ([902cc90](https://github.com/atlanhq/application-sdk/commit/902cc90))
+- B005 false positive when a sibling entrypoint's fields are recorded under the same contract name (#4379) ([61a66c4](https://github.com/atlanhq/application-sdk/commit/61a66c4))
+- FND-3733 register TreeSelectionExtractionInput and lock SDK 3.49.0 (#4391) ([a6c793d](https://github.com/atlanhq/application-sdk/commit/a6c793d))
+- FND-3981 require MaxItems on set, tuple, Sequence and every other collection field (#4400) ([4fdac1f](https://github.com/atlanhq/application-sdk/commit/4fdac1f))
+- FND-3964 P015 skips lists of plain values; P059 flags JSON text in contract fields (#4393) ([e0e60bc](https://github.com/atlanhq/application-sdk/commit/e0e60bc))
+- FND-3962 correct migrate-storage retirement, delivery and tier guidance (#4389) ([3768167](https://github.com/atlanhq/application-sdk/commit/3768167))
+
+## [0.50.0] - 2026-10-14
+
+### Features
+
+- assert which asset types lineage connects (expected_lineage_edges) (#4380) ([54bee54](https://github.com/atlanhq/application-sdk/commit/54bee54))
+
+### Bug fixes
+
+- resolve bump-version PR required checks by skipping jobs inside the gated reusables (FND-3947) (#4385) ([095df87](https://github.com/atlanhq/application-sdk/commit/095df87))
+
+## [0.49.0] - 2026-10-14
+
+### Features
+
+- FND-3733 TreeSelectionExtractionInput for tree-picker filters (#4349) ([a678fce](https://github.com/atlanhq/application-sdk/commit/a678fce))
+- flag Atlas entities emitted as raw dicts instead of pyatlan_v9 assets (FND-3929) (#4371) ([23dc6c0](https://github.com/atlanhq/application-sdk/commit/23dc6c0))
+
+### Bug fixes
+
+- FND-3914 P001 reports a subclass that inherits the class-keyword opt-out (#4356) ([dc14441](https://github.com/atlanhq/application-sdk/commit/dc14441))
+- dispatch /gate-check as the fleet App so its verdict settles [FND-3934] (#4373) ([d9e2527](https://github.com/atlanhq/application-sdk/commit/d9e2527))
+- make T004, T008, T013, T014, T015 and T023 migration rules (suggest-only) (#4370) ([79e3b0e](https://github.com/atlanhq/application-sdk/commit/79e3b0e))
+- route S001/S002 to a person; S002 skips standalone utility scripts (#4369) ([219fd5e](https://github.com/atlanhq/application-sdk/commit/219fd5e))
+
+## [0.48.0] - 2026-10-13
+
+### Features
+
+- request e2e and release gates by PR comment, not label (#4359) ([27c734c](https://github.com/atlanhq/application-sdk/commit/27c734c))
+- network source probes prototype and ADR-0021 source validation (#4358) ([4017e57](https://github.com/atlanhq/application-sdk/commit/4017e57))
+
+### Bug fixes
+
+- L006 false positive on compliant code (1 repo) (#4345) ([90e6888](https://github.com/atlanhq/application-sdk/commit/90e6888))
+- E004 false positive on compliant code (1 repo) (#4344) ([63e2783](https://github.com/atlanhq/application-sdk/commit/63e2783))
+- E007 false positive on compliant code (1 repo) (#4341) ([daf6176](https://github.com/atlanhq/application-sdk/commit/daf6176))
+- correct S001's fix guidance (1 repo) (#4342) ([5bb467b](https://github.com/atlanhq/application-sdk/commit/5bb467b))
+
+## [0.47.0] - 2026-10-13
+
+### Features
+
+- flag BaseClient subclasses that are never closed, and close() overrides that skip super() (FND-3778) (#4325) ([ec6cf27](https://github.com/atlanhq/application-sdk/commit/ec6cf27))
+- add E021 for a DEPENDENCY_UNAVAILABLE error overridden to USER audience (#4328) ([4c4b381](https://github.com/atlanhq/application-sdk/commit/4c4b381))
+- bind parameters in BaseSQLClient.run_query (#4310) ([63c9b34](https://github.com/atlanhq/application-sdk/commit/63c9b34))
+- render every non-ci commit type in changelogs, and make bump-version PR CI opt-in via gate-check [FND-3748] (#4306) ([7a41e84](https://github.com/atlanhq/application-sdk/commit/7a41e84))
+
+### Bug fixes
+
+- correct T014's fix guidance (1 repo) (#4323) ([bb3cc63](https://github.com/atlanhq/application-sdk/commit/bb3cc63))
+- E010 false positive on compliant code (1 repo) (#4322) ([6e55b5d](https://github.com/atlanhq/application-sdk/commit/6e55b5d))
+- hard gate blocks on a source that stays unavailable or rate-limited at its final attempt, a behaviour change (FND-3774) (#4324) ([b4e845b](https://github.com/atlanhq/application-sdk/commit/b4e845b))
+- T005 false positive on compliant code (1 repo) (#4317) ([f60319e](https://github.com/atlanhq/application-sdk/commit/f60319e))
+- E007 false positive on compliant code (1 repo) (#4319) ([0b8260e](https://github.com/atlanhq/application-sdk/commit/0b8260e))
+- L006 false positive on compliant code (1 repo) (#4315) ([85b81d4](https://github.com/atlanhq/application-sdk/commit/85b81d4))
+- E018 false positive on compliant code (1 repo) (#4314) ([316b3e8](https://github.com/atlanhq/application-sdk/commit/316b3e8))
+- correct E014's fix guidance (1 repo) (#4320) ([f6fb7eb](https://github.com/atlanhq/application-sdk/commit/f6fb7eb))
+- E004 false positive on compliant code (1 repo) (#4307) ([79f23bb](https://github.com/atlanhq/application-sdk/commit/79f23bb))
+- E020 false positive on compliant code (1 repo) (#4308) ([bd7f9f2](https://github.com/atlanhq/application-sdk/commit/bd7f9f2))
+- F008 allows retryable SOURCE_UNAVAILABLE raises; E004/E007 accept a classifier proven by its annotation and a typed cause= under from None (#4302) ([50722b6](https://github.com/atlanhq/application-sdk/commit/50722b6))
+- correct D003's fix guidance (1 repo) (#4304) ([6cc57dd](https://github.com/atlanhq/application-sdk/commit/6cc57dd))
+- confirm connection-delete purged the seed root instead of deleting it from the runner [FND-3572] (#4300) ([90ab880](https://github.com/atlanhq/application-sdk/commit/90ab880))
+- keep a repo's two-store value across bootstrap --resync [FND-3656] (#4298) ([f6738e3](https://github.com/atlanhq/application-sdk/commit/f6738e3))
+- K004 no longer requires manifest.json of system apps (#4292) ([42c47a3](https://github.com/atlanhq/application-sdk/commit/42c47a3))
+
+### Other changes
+
+- refactor(storage): run App.upload through the persist engine — manifest, local markers, shared path guard (FND-3796) (#4332) ([f7db8f8](https://github.com/atlanhq/application-sdk/commit/f7db8f8))
+- chore(deps): update non-critical python dependencies (#4326) ([c45afae](https://github.com/atlanhq/application-sdk/commit/c45afae))
+
+## [0.46.0] - 2026-10-09
+
+### Features
+
+- T026 checks the e2e harness base against the app's declared type [FND-3558] (#4286) ([1da9b58](https://github.com/atlanhq/application-sdk/commit/1da9b58))
+- refuse new required fields on existing contracts [FND-3597] (#4279) ([a069892](https://github.com/atlanhq/application-sdk/commit/a069892))
+- FND-3555 P026 becomes auto-fixable as judgment (#4256) ([79cc64a](https://github.com/atlanhq/application-sdk/commit/79cc64a))
+- require deprecated before sunset on contract ledger fields [FND-3596] (#4272) ([470534c](https://github.com/atlanhq/application-sdk/commit/470534c))
+- FND-3556 P054 becomes auto-fixable as judgment (#4255) ([039ba8f](https://github.com/atlanhq/application-sdk/commit/039ba8f))
+
+### Bug fixes
+
+- T005 false positive on compliant code (1 repo) (#4270) ([b5ea451](https://github.com/atlanhq/application-sdk/commit/b5ea451))
+- correct D003's fix guidance (1 repo) (#4269) ([943d484](https://github.com/atlanhq/application-sdk/commit/943d484))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#4267) ([eb84623](https://github.com/atlanhq/application-sdk/commit/eb84623))
+
+## [0.45.0] - 2026-10-08
+
+### Features
+
+- FND-3521 add TreeSelection, a payload-safe type for tree-widget selections (#4241) ([01cd774](https://github.com/atlanhq/application-sdk/commit/01cd774))
+
+### Bug fixes
+
+- K018 skips args wired to non-value widgets (SageV2 preflight) (#4242) ([3adaf46](https://github.com/atlanhq/application-sdk/commit/3adaf46))
+
+## [0.44.1] - 2026-10-08
+
+### Bug fixes
+
+- P001 is a migration rule that names its fields and guides the fix (#4235) ([b7774d4](https://github.com/atlanhq/application-sdk/commit/b7774d4))
+
+## [0.44.0] - 2026-10-07
+
+### Features
+
+- add P055 OneToManyLinkFromParent rule (FND-3490) (#4225) ([764fa3a](https://github.com/atlanhq/application-sdk/commit/764fa3a))
+
+### Bug fixes
+
+- correct P001's fix guidance (1 repo) (#4224) ([05a45e2](https://github.com/atlanhq/application-sdk/commit/05a45e2))
+- P016 advises renaming to the tile name behind a legacy alias (#4228) ([6cfb108](https://github.com/atlanhq/application-sdk/commit/6cfb108))
+- P013/P014 resolve aliases over same-named contracts via by_name_all [FND-3461] (#4209) ([4df59d3](https://github.com/atlanhq/application-sdk/commit/4df59d3))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.30.0 (#4218) ([1f16973](https://github.com/atlanhq/application-sdk/commit/1f16973))
+
+## [0.43.1] - 2026-10-07
+
+### Bug fixes
+
+- sync SDK contract registry with atlan-application-sdk 3.42.0 (#4203) ([fa871e7](https://github.com/atlanhq/application-sdk/commit/fa871e7))
+- retire the app-side Renovate auto-approve workflow (#4201) ([163f5be](https://github.com/atlanhq/application-sdk/commit/163f5be))
+
+## [0.43.0] - 2026-10-06
+
+### Features
+
+- four migration skills and a B007 false-positive fix (FND-3097, FND-3098, FND-3099, FND-3100) (#4180) ([891ee76](https://github.com/atlanhq/application-sdk/commit/891ee76))
+- add a preflight gate warmup tier with a stateless warmup probe, PENDING verdicts and category-gated hard mode, plus driver-level read cancellation and a worker-free handler (FND-3237) (#4130) ([f6a0eaa](https://github.com/atlanhq/application-sdk/commit/f6a0eaa))
+- remediation references and skill hand-off for every rule (FND-3088) (#4076) ([ea29dcd](https://github.com/atlanhq/application-sdk/commit/ea29dcd))
+- FND-3140 unique entrypoint contract class names and conformance K027 (#4102) ([1eb754a](https://github.com/atlanhq/application-sdk/commit/1eb754a))
+
+### Bug fixes
+
+- consume the e2e label after each run and let Release Gate read the e2e commit status (FND-3411) (#4195) ([1b78117](https://github.com/atlanhq/application-sdk/commit/1b78117))
+- stop re-running PR-verified CI on merge queue and release, and reject refused Renovate locks in the gate (#4184) ([3230926](https://github.com/atlanhq/application-sdk/commit/3230926))
+- FND-3384 P030 guidance covers working bridges and the conversion recipe (#4182) ([9e6726a](https://github.com/atlanhq/application-sdk/commit/9e6726a))
+- FND-3292 D010 guidance checks the import site is live before adding [sql] (#4151) ([5d4e34d](https://github.com/atlanhq/application-sdk/commit/5d4e34d))
+- FND-3367 F007 guidance names the error audience and voice (#4176) ([323f036](https://github.com/atlanhq/application-sdk/commit/323f036))
+- cut fleet CI billed jobs by collapsing job fan-out, right-sizing runners and retiring per-repo SARIF and dashboard workflows (#4170) ([ba684e4](https://github.com/atlanhq/application-sdk/commit/ba684e4))
+- keep run_query connect and close off the event loop, add conformance rule P054 (#4167) ([28e24be](https://github.com/atlanhq/application-sdk/commit/28e24be))
+- L004 false positive on compliant code (1 repos) (#4179) ([1434113](https://github.com/atlanhq/application-sdk/commit/1434113))
+- T001 always accepts the integration marker (#4178) ([2fcc900](https://github.com/atlanhq/application-sdk/commit/2fcc900))
+- L017 and L004 guidance agrees with ruff (G201, BLE001) (#4165) ([8e244aa](https://github.com/atlanhq/application-sdk/commit/8e244aa))
+- E018 false positive on compliant code (1 repos) (#4149) ([071055b](https://github.com/atlanhq/application-sdk/commit/071055b))
+- cut redundant fleet CI runs from superseded pushes, scheduled sweeps, Renovate rebases and auto-approve fan-out (#4159) ([c5006a0](https://github.com/atlanhq/application-sdk/commit/c5006a0))
+- E005 false positive on compliant code (1 repos) (#4148) ([7a92c4d](https://github.com/atlanhq/application-sdk/commit/7a92c4d))
+- retire the auto-fix.yml bootstrap shim (#4157) ([5800da9](https://github.com/atlanhq/application-sdk/commit/5800da9))
+- FND-3299 score a crashed integration job as failing, not absent (#4153) ([45f1c04](https://github.com/atlanhq/application-sdk/commit/45f1c04))
+- FND-3094 recognise run() on SDK template bases as the entrypoint (#4078) ([2cab46f](https://github.com/atlanhq/application-sdk/commit/2cab46f))
+
+### Other changes
+
+- chore(deps): update non-critical python dependencies (#4121) ([48eb23f](https://github.com/atlanhq/application-sdk/commit/48eb23f))
+
+## [0.42.1] - 2026-10-05
+
+### Bug fixes
+
+- B005/P015/D009 guidance, and the lane's per-rule fix guidance folded into E004/E008/L004/T003/T013 (#4137) ([15477d5](https://github.com/atlanhq/application-sdk/commit/15477d5))
+
+## [0.42.0] - 2026-10-02
+
+### Features
+
+- introduce CurrentStateStore with run-scoped state, and type the incremental contracts (#4074) ([20db225](https://github.com/atlanhq/application-sdk/commit/20db225))
+
+### Bug fixes
+
+- E008 false positive on compliant code (1 repos) (#4095) ([dba9356](https://github.com/atlanhq/application-sdk/commit/dba9356))
+- carry dataforge-lifecycle through the tests.yaml scaffold [FND-3089] (#4077) ([2508834](https://github.com/atlanhq/application-sdk/commit/2508834))
+
+## [0.41.0] - 2026-09-30
+
+### Features
+
+- FND-3017 rename the first-party Renovate group to atlan framework dependencies (#4056) ([0b5caab](https://github.com/atlanhq/application-sdk/commit/0b5caab))
+
+### Bug fixes
+
+- E005 false positive on compliant code (1 repos) (#4088) ([1e9f30f](https://github.com/atlanhq/application-sdk/commit/1e9f30f))
+- T025 is not auto-fixable (#4092) ([9e7f811](https://github.com/atlanhq/application-sdk/commit/9e7f811))
+- L004 false positive on compliant code (1 repos) (#4090) ([7554098](https://github.com/atlanhq/application-sdk/commit/7554098))
+- E004 false positive on compliant code (1 repos) (#4085) ([410c1e4](https://github.com/atlanhq/application-sdk/commit/410c1e4))
+- correct L021's rule labels and document T005's no-raise marker (#4084) ([d4178ec](https://github.com/atlanhq/application-sdk/commit/d4178ec))
+- harden storage primitives and fix incremental state correctness (#4070) ([e738386](https://github.com/atlanhq/application-sdk/commit/e738386))
+
+## [0.40.1] - 2026-09-29
+
+### Bug fixes
+
+- P037 no longer crashes on required keyword-only parameters (#4053) ([9a8367d](https://github.com/atlanhq/application-sdk/commit/9a8367d))
+
+## [0.40.0] - 2026-09-29
+
+### Features
+
+- FND-2981 group SDK, conformance and contract-toolkit bumps into one Renovate PR (#4027) ([d6d1af7](https://github.com/atlanhq/application-sdk/commit/d6d1af7))
+- add P053 LocalCredentialRouting for hand-rolled credential routing (#4030) ([f0a0efb](https://github.com/atlanhq/application-sdk/commit/f0a0efb))
+- route workflow-input credentials centrally with route_credentials (#4029) ([5ef14b8](https://github.com/atlanhq/application-sdk/commit/5ef14b8))
+
+### Bug fixes
+
+- delete F017/F018 and the no-ops scheduled for 0.40.0 (#4049) ([1584bad](https://github.com/atlanhq/application-sdk/commit/1584bad))
+- mirror exclude_table_regex and pin SDK 3.39.1 (#4045) ([d5f3f98](https://github.com/atlanhq/application-sdk/commit/d5f3f98))
+- D003 credits dialect schemes loaded through the SDK SQL client (FND-2983) (#4021) ([160447f](https://github.com/atlanhq/application-sdk/commit/160447f))
+- O001 terminal state for externally byte-consumed json.dumps (FND-2509) (#4022) ([c9d0b5a](https://github.com/atlanhq/application-sdk/commit/c9d0b5a))
+- F011 sees run_in_thread probes P031 prescribes (FND-2509) (#4023) ([831c97c](https://github.com/atlanhq/application-sdk/commit/831c97c))
+
+## [0.39.1] - 2026-09-27
+
+### Bug fixes
+
+- FND-2570 expand SDK-imported aliases in B005 and correct E019's fix form (#3988) ([5a5c880](https://github.com/atlanhq/application-sdk/commit/5a5c880))
+- FND-2584 P023 flags only blocking requests calls, not constructors (#3974) ([98c4217](https://github.com/atlanhq/application-sdk/commit/98c4217))
+- FND-2584 F008 resolves SDK error ancestry for caught-type matching (#3973) ([71472e8](https://github.com/atlanhq/application-sdk/commit/71472e8))
+- D003 recognises SQLAlchemy entry-point dialects as used (#3967) ([0e488cc](https://github.com/atlanhq/application-sdk/commit/0e488cc))
+
+### Other changes
+
+- chore(deps): update dependency ruff to v0.16.9 (#4010) ([af034be](https://github.com/atlanhq/application-sdk/commit/af034be))
+- chore(contract-toolkit): release v0.27.0 (#3991) ([1f9a363](https://github.com/atlanhq/application-sdk/commit/1f9a363))
+
+## [0.39.0] - 2026-09-24
+
+### Features
+
+- separate conformance from tests — F016 checks scenarios are defined, never runs them (#3963) ([51521f4](https://github.com/atlanhq/application-sdk/commit/51521f4))
+- P052 flags app-side serialization that bypasses entity_bytes (#3966) ([91d2740](https://github.com/atlanhq/application-sdk/commit/91d2740))
+
+## [0.38.0] - 2026-09-23
+
+### Features
+
+- connector-review merge gate, warn-only (#3919) ([2544502](https://github.com/atlanhq/application-sdk/commit/2544502))
+- name the build in the App lifecycle messages, drop the log attributes (#3928) ([db5da5f](https://github.com/atlanhq/application-sdk/commit/db5da5f))
+
+### Bug fixes
+
+- repoint E020 at the typed-catch shape and F020 at a live directive (#3958) ([f9be355](https://github.com/atlanhq/application-sdk/commit/f9be355))
+- L010 exempts resource-id tokens used as URL path segments (#3954) ([0b1b7ef](https://github.com/atlanhq/application-sdk/commit/0b1b7ef))
+- D003 flags app constraint floors; O001 and P001 prescription gaps (#3956) ([6931047](https://github.com/atlanhq/application-sdk/commit/6931047))
+- name O001's byte-changing orjson defaults in the prescription (#3945) ([486c78f](https://github.com/atlanhq/application-sdk/commit/486c78f))
+- keep the redacted stack in L004's credential-safe form (#3947) ([ec22928](https://github.com/atlanhq/application-sdk/commit/ec22928))
+- re-verify canonical references against the three reference apps (FND-2702) (#3949) ([bfef916](https://github.com/atlanhq/application-sdk/commit/bfef916))
+- E004 sanitizer exemption is warning+; preflight builds typed rows inline (#3941) ([aa71d7f](https://github.com/atlanhq/application-sdk/commit/aa71d7f))
+- FND-2569 S001 skips prose values and credential-name alias maps (#3934) ([a9c02ce](https://github.com/atlanhq/application-sdk/commit/a9c02ce))
+- FND-2501 treat SDK App-family run() as workflow context and report its I/O as P021 (#3932) ([34041df](https://github.com/atlanhq/application-sdk/commit/34041df))
+- FND-2501 carry a typed error on AuthOutput and surface it from test_auth (#3939) ([6105ad1](https://github.com/atlanhq/application-sdk/commit/6105ad1))
+- FND-2569 E004 sanitized-log exemption needs warning+, record E004/F005 deadlock (#3933) ([85308e5](https://github.com/atlanhq/application-sdk/commit/85308e5))
+- expand same-module type aliases before B005 retype check (FND-2569) (#3935) ([8f34735](https://github.com/atlanhq/application-sdk/commit/8f34735))
+- preserve private-atlanhq-dep opt-ins on always-overwrite shims (#3936) ([3da9f16](https://github.com/atlanhq/application-sdk/commit/3da9f16))
+- L021 prescription: order after L001, scope T201, flag formatter churn (#3940) ([4d978a9](https://github.com/atlanhq/application-sdk/commit/4d978a9))
+- O001 must warn that orjson bypasses `default=` for native types (#3913) ([3d8c31b](https://github.com/atlanhq/application-sdk/commit/3d8c31b))
+- E007 treats a typed-data return of the caught exception as compliant (#3938) ([d925da5](https://github.com/atlanhq/application-sdk/commit/d925da5))
+- honour --exclude in F016 entrypoint discovery (FND-2682) (#3925) ([dc79551](https://github.com/atlanhq/application-sdk/commit/dc79551))
+
+## [0.37.0] - 2026-09-22
+
+### Features
+
+- grade preflight scenarios from the test job's report (#3908) ([bb4a27d](https://github.com/atlanhq/application-sdk/commit/bb4a27d))
+- let a caller run the preflight leg with --with-tests (#3904) ([d329643](https://github.com/atlanhq/application-sdk/commit/d329643))
+
+### Bug fixes
+
+- a reference that is a suppression must declare a terminal_state (#3906) ([bc715b0](https://github.com/atlanhq/application-sdk/commit/bc715b0))
+- license the suppressions six rules already call compliant (#3907) ([5d1270f](https://github.com/atlanhq/application-sdk/commit/5d1270f))
+
+### Other changes
+
+- ci(testing): wake the pinned dataforge e2e source before a run, pause it after (FND-1992) (#3909) ([d1c887a](https://github.com/atlanhq/application-sdk/commit/d1c887a))
+
+## [0.36.1] - 2026-09-22
+
+### Bug fixes
+
+- P001 taught the wrong lesson about what is blocked (#3902) ([544e96e](https://github.com/atlanhq/application-sdk/commit/544e96e))
+- rule feedback from an auto-fixable remediation run (#3891) ([ba7e8ea](https://github.com/atlanhq/application-sdk/commit/ba7e8ea))
+
+## [0.36.0] - 2026-09-21
+
+### Features
+
+- reclassify P021, P036 and P051 as migration rules (#3892) ([25b3a49](https://github.com/atlanhq/application-sdk/commit/25b3a49))
+- reclassify the primary-mechanical K-series rules as auto-fixable (#3889) ([db2c7f6](https://github.com/atlanhq/application-sdk/commit/db2c7f6))
+
+### Bug fixes
+
+- E004 exempts a broad catch that returns the exception as typed data (#3890) ([618c413](https://github.com/atlanhq/application-sdk/commit/618c413))
+- F019's checks= gate reads the rows, not the node type (#3888) ([f0190db](https://github.com/atlanhq/application-sdk/commit/f0190db))
+- B005/B006 guard a contract exposed under a module-level alias (#3884) ([90e6989](https://github.com/atlanhq/application-sdk/commit/90e6989))
+- F019 reads the behavioural summary it tells you to write (#3885) ([81b634b](https://github.com/atlanhq/application-sdk/commit/81b634b))
+- resolve module-level contract aliases in the preflight registry (#3883) ([bd39dff](https://github.com/atlanhq/application-sdk/commit/bd39dff))
+- resolve a caught AppError's to_failure_details() in F019 (#3880) ([3fea5cd](https://github.com/atlanhq/application-sdk/commit/3fea5cd))
+- E004 exempts a severed re-raise that redacts its cause (#3879) ([5bf3370](https://github.com/atlanhq/application-sdk/commit/5bf3370))
+
+### Other changes
+
+- chore(deps): update non-critical python dependencies (#3856) ([7e82e71](https://github.com/atlanhq/application-sdk/commit/7e82e71))
+
+## [0.35.0] - 2026-09-21
+
+### Features
+
+- classify every app-facing rule as auto-fixable or migration and make fixes reference-app driven (#3873) ([ce0e355](https://github.com/atlanhq/application-sdk/commit/ce0e355))
+
+### Bug fixes
+
+- emit a typed FailureCategory from the SDK's remaining untyped raise sites (#3857) ([45a8be1](https://github.com/atlanhq/application-sdk/commit/45a8be1))
+
+## [0.34.0] - 2026-09-19
+
+### Features
+
+- gate symbol removals against the last release, and stop apps importing SDK privates (#3844) ([c928cce](https://github.com/atlanhq/application-sdk/commit/c928cce))
+
+### Bug fixes
+
+- restore the last two names #3685 removed without a migration window (#3853) ([4fc1ce8](https://github.com/atlanhq/application-sdk/commit/4fc1ce8))
+- restore the gate symbols #3685 removed, as deprecated aliases (#3843) ([cd13c20](https://github.com/atlanhq/application-sdk/commit/cd13c20))
+
 ## [0.33.0] - 2026-09-18
 
 ### Features

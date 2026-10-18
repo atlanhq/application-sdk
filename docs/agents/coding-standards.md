@@ -108,33 +108,39 @@ verdict was reached.
 - **Source-attributable** (`gate_classification="source_unverifiable"`) — a `NOT_READY`
   verdict, anything the handler raises (typed or not), a probe overrunning
   `App.preflight_gate_timeout_seconds`, a killed attempt whose earlier attempt left typed
-  evidence, or a provably absent credential. Subject to `preflight_gate_mode`: hard aborts
-  the run, soft reports `would_block` and proceeds. A verdict is reached on the attempt it
-  happens on.
+  evidence, or a provably absent credential. Subject to `preflight_gate_mode`: soft reports
+  `would_block` and proceeds; hard aborts the run only when the attributed failure's category
+  is `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND` or (on the final
+  attempt only) `SOURCE_UNAVAILABLE` or `RATE_LIMITED`, and otherwise reports `would_block` and proceeds — it
+  never blocks on `TIMEOUT` or the deprecated fail-open categories. A verdict is reached on
+  the attempt it happens on, except that a hard gate retries `SOURCE_UNAVAILABLE` and
+  `RATE_LIMITED` until its final attempt.
 - **Frame lost** (`gate_classification="frame_lost"`) — Temporal ended a running attempt
   and nothing survived: a probe that stalled the loop past the gate's cancel, or a worker
-  that died under it. The chain cannot tell them apart, so this is its own value; the mode
-  applies as for a source-attributable failure.
+  that died under it. The chain cannot tell them apart, so this is its own value. Its
+  evidence is a `TIMEOUT`, so hard mode reports it rather than blocking.
 - **Gate plumbing** (`gate_classification="gate_broken"`) — the gate's own credential
   resolution failing (secret-store outage, a collapsed not-found wrapping a transport error),
   or no worker ever running the attempt. **Always** fails open, in both postures: a platform
   blip must never fail a healthy run.
 - **Deprecated fail-open** (`gate_classification="deprecated_fail_open"`) — a typed leaf in
-  `DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED` or `CANCELLED` raised from
+  `DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED` or `CANCELLED` raised from
   `preflight_check`. The pre-3.35 gate treated these as plumbing, and every hard-mode app that
   predates the origin rule raises them on purpose, so they keep failing open in both postures
   until 3.40.0 with a `DeprecationWarning` naming the app and the leaf. From 3.40.0 they are
-  source-attributable like any other raise.
+  source-attributable like any other raise, and still never block a hard gate.
 
 So a handler signals "ask me later" by **returning** `READY` with the failed check carrying
 a typed retryable error as an advisory row, never by raising one and never by returning
-`NOT_READY` — from 3.40.0
-raising blocks a hard gate on a transient and discards the other checks; `NOT_READY` blocks it
-today.
+`NOT_READY`: raising discards the other checks, and an untyped `NOT_READY` is attributed to
+`PRECONDITION`, which blocks a hard gate on a transient.
 
 Every gated run emits a structured `Preflight gate outcome` event
 (`outcome ∈ {proceeded, blocked, would_block, no_verdict, skipped}`), plus a
-`Preflight gate posture` event per app at worker boot.
+`Preflight gate posture` event per app at worker boot. An app that declares a warmup
+also stamps `gate_tier` and `warmup_outcome` on its rows (plus `warmup_duration_ms` /
+`warmup_transitions` once the wait has ended); every new row key must be added to
+`_KNOWN_EXTRA_KEYS`, or it is dropped before export and cannot be queried.
 
 ### Logging contract
 
@@ -143,20 +149,25 @@ customer-facing log view filters at ERROR, so a block must be the ERROR record, 
 beside one). Each row stamps `failure.audience` (who must act) except `proceeded`/`skipped`.
 
 - **Verdict blocks** (`PreflightFailed` from a handler `NOT_READY`) — the outcome row at
-  `error`, no stack trace, audience from the primary check's typed error (typically `USER`).
+  `error`, no stack trace, audience from the primary check's typed error (typically `USER`),
+  plus `failure.check` / `failure.message` naming the check and why it failed.
   The block is an expected typed outcome, not a crash — but it aborted the customer's run.
 - **No-verdict outcomes** (budget overrun, handler crash — `source_unverifiable`; a killed
   frame — `frame_lost`) — the outcome row at `error` with `exc_info`, in both modes: the
   failure is real even when soft mode proceeds. There is a real exception behind these and it
   is the only diagnostic.
 - **Gate plumbing failures** (exception during dispatch — `gate_broken`) — the workflow's
-  `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`.
+  `no_verdict` row at `error` with `exc_info=True`, audience `APP_OWNER`, and `failure.message`
+  from the envelope the plumbing error left at `details[0]` when it is readable.
 - **Advisory failures** (`proceeded` with any failed check — PARTIAL, or READY with a failed
   advisory row) — the outcome row at `warning`. F005 bans the handler from logging the
   warning itself, so the gate owns the one level that case is semantically for.
 - **Clean `proceeded` / `skipped` / verdict `would_block`** — `info`.
 - The interceptor's `workflow.ended` / `activity.ended … BLOCKED (preflight gate)` lifecycle
-  records stay `warning`, terse, no stack.
+  records stay `warning` with no stack or frame, but carry the block's attributed sentence — the
+  same `details[0].message` the outcome row's `failure.message` holds — so the reason is findable
+  by a `Body` search and the two surfaces cannot disagree. A soft-mode `would_block` raises no
+  block, so it has no such record and is reachable through `failure.message` only.
 - **Interactive surfaces** (the HTTP `/workflows/v1/check` endpoint and the SDR
   `sdr:preflight_check` activity) emit the sibling `Preflight check outcome` row via
   `emit_preflight_check_outcome`, with `preflight_surface` naming the surface. The level
@@ -308,8 +319,10 @@ that encapsulates the common pattern:
   - `max_buffer_bytes` — buffer ceiling in bytes (default **50 MB**)
   - `max_buffer_records` — buffer ceiling in records (default `None`,
     opt-in)
-- Optional `on_chunk_complete(chunk_index, chunk_path)` callback wires
-  cleanly to `activity.heartbeat(...)` for within-heartbeat checkpointing.
+- Optional `on_chunk_complete(chunk_index, chunk_path)` callback for
+  per-chunk checkpointing. Heartbeat with the SDK's `self.heartbeat(...)`.
+  A plain-function callback runs in the SDK's blocking pool, like `flush_fn`,
+  so it never stalls the event loop. `self.heartbeat` works from there.
 - `writer.file_reference` returns an ephemeral `FileReference` for your
   typed Output; the activity interceptor uploads on task return.
 
@@ -351,16 +364,12 @@ async def extract_users(self, inp: ExtractInput) -> ExtractOutput:
         extension=".parquet",
         flush_fn=_flush_parquet,
         chunk_interval_seconds=60.0,
-        on_chunk_complete=self._heartbeat_chunk,   # optional — see below
+        # optional: per-chunk checkpoint, resumable via get_last_heartbeat_details()
+        on_chunk_complete=lambda idx, path: self.heartbeat(f"wrote {path}"),
     ) as writer:
         async for df in self._stream_users():
             await writer.append(df)
     return ExtractOutput(data=writer.file_reference)
-
-
-async def _heartbeat_chunk(self, chunk_index: int, chunk_path: str) -> None:
-    from temporalio import activity  # noqa: PLC0415
-    activity.heartbeat(f"wrote {chunk_path}")
 ```
 
 #### JSON (line-delimited, `orjson`)
@@ -395,6 +404,27 @@ async def extract_events(self, inp: ExtractInput) -> ExtractOutput:
 To support a new format, write a 3-line `flush_fn` and plug it in. CSV via
 `pandas.to_csv`, Arrow IPC via `pyarrow.ipc`, msgpack via `msgpack.pack` —
 all the same shape.
+
+#### Throughput vs the deprecated writers
+
+Each run writes 200k rows (20 batches of 10k, 4 columns), with uploads
+excluded on both sides. `RollingFileWriter` uses the two examples above:
+DataFrame batches for Parquet, `list[dict]` + orjson for JSON.
+
+| Writer | Parquet | JSON |
+|---|---|---|
+| `ParquetFileWriter` / `JsonFileWriter`, as shipped (per-slice `gc.collect()`) | 0.77 s | 0.80 s |
+| same, `gc.collect()` removed | 0.11 s | 0.19 s |
+| `RollingFileWriter` | **0.07 s** | **0.07 s** |
+
+Measured on arm64 macOS, Python 3.12, with the worker's imports loaded.
+The `gc.collect()` cost grows with the heap. With a production-sized heap
+the deprecated writers took 11.7 s (Parquet) and 15.5 s (JSON); without the
+GC they took 1.1 s and 1.4 s.
+
+`tests/unit/storage/test_rolling_throughput.py` re-runs this comparison on
+every CI leg. It fails if `RollingFileWriter` is slower than the deprecated
+writer it replaces.
 
 ### Alternative: bare copy-paste (no helper class)
 

@@ -6,6 +6,68 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.34.0] - 2026-10-14
+
+### Features
+
+- FND-3733 TreeSelectionExtractionInput for tree-picker filters (#4349) ([a678fce](https://github.com/atlanhq/application-sdk/commit/a678fce))
+
+### Bug fixes
+
+- deprecate QI input args the app no longer accepts (#4350) ([a3d8481](https://github.com/atlanhq/application-sdk/commit/a3d8481))
+
+## [0.33.0] - 2026-10-09
+
+### Features
+
+- first-class system apps: no card, typed inputs, SystemAppE2ETest base, generated caller contract (#4262) ([cc86087](https://github.com/atlanhq/application-sdk/commit/cc86087))
+
+### Other changes
+
+- ci(contract-toolkit): format generated Python identically in every regeneration path (#4260) ([63c50db](https://github.com/atlanhq/application-sdk/commit/63c50db))
+
+## [0.32.0] - 2026-10-08
+
+### Features
+
+- FND-3521 add TreeSelection, a payload-safe type for tree-widget selections (#4241) ([01cd774](https://github.com/atlanhq/application-sdk/commit/01cd774))
+
+## [0.31.0] - 2026-10-07
+
+### Features
+
+- fill out TagsInput settings (#4220) ([a9122d3](https://github.com/atlanhq/application-sdk/commit/a9122d3))
+
+## [0.30.0] - 2026-10-07
+
+### Features
+
+- add placeholderText to TagsInput (#4215) ([f756182](https://github.com/atlanhq/application-sdk/commit/f756182))
+
+## [0.29.0] - 2026-10-05
+
+### Features
+
+- declare an app's warmup on the SageV2 widget (#4162) ([9d4301b](https://github.com/atlanhq/application-sdk/commit/9d4301b))
+- FND-3140 unique entrypoint contract class names and conformance K027 (#4102) ([1eb754a](https://github.com/atlanhq/application-sdk/commit/1eb754a))
+
+## [0.28.0] - 2026-10-02
+
+### Features
+
+- render streaming dispatch config for the micro-batch shell (#4025) ([1b9d27c](https://github.com/atlanhq/application-sdk/commit/1b9d27c))
+
+### Bug fixes
+
+- keep metadataTemplateKey on an apitree ConditionalInput [FND-3199] (#4118) ([deef931](https://github.com/atlanhq/application-sdk/commit/deef931))
+- FND-2984 honour anyOfRequiredFields in the JDBC url group anyOf (#3992) ([4bdf7ad](https://github.com/atlanhq/application-sdk/commit/4bdf7ad))
+
+## [0.27.0] - 2026-09-25
+
+### Features
+
+- add Entrypoint.e2eOverrides for bundle e2e harness identity (#3986) ([7fb9f91](https://github.com/atlanhq/application-sdk/commit/7fb9f91))
+
 ## [0.26.0] - 2026-09-14
 
 ### Breaking changes

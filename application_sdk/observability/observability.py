@@ -29,6 +29,16 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.utils import in_temporal_workflow
 
+
+def _has_running_loop() -> bool:
+    """Whether the calling thread is running an asyncio event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
 # SDR (ENABLE_ATLAN_UPLOAD=true):     sdr/logs/, sdr/metrics/, sdr/traces/
@@ -369,8 +379,6 @@ class AtlanObservability(Generic[T], ABC):
         - Safely copies and clears the buffer
         - Flushes records if buffer is not empty
         """
-        if not self._flush_can_run_here():
-            return
         with self._buffer_lock:
             if self._buffer:
                 # Swap rather than copy: O(1) instead of O(n) — the old list reference
@@ -381,27 +389,6 @@ class AtlanObservability(Generic[T], ABC):
                 buffer_copy = None
         if buffer_copy:
             await self._flush_records(buffer_copy)
-
-    def _flush_can_run_here(self) -> bool:
-        """Whether a flush started from the current frame would reach the store.
-
-        Two frames must leave the buffer alone. Workflow code runs on Temporal's
-        deterministic loop, which cannot do the file and network work, so
-        :meth:`_flush_records` refuses it; that half guards both callers. A
-        thread with no running loop cannot schedule the flush task at all; that
-        half matters only in the synchronous :meth:`add_record`, since the
-        awaited :meth:`_flush_buffer` always has a loop. Handing the buffer off
-        from either frame lost the whole batch: the swap had already happened
-        when the refusal came, and the records the worker's activities had
-        appended went with it. Deferring leaves them for the periodic flush.
-        """
-        if in_temporal_workflow():
-            return False
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return False
-        return True
 
     async def _flush_records(self, records: list[dict[str, Any]]):
         """Flush records to json.gz files and upload to object stores.
@@ -435,12 +422,18 @@ class AtlanObservability(Generic[T], ABC):
 
         # Blocking file I/O, the object-store upload and the retention sweep's
         # thread offload below are all illegal on Temporal's deterministic
-        # workflow loop — skip the store sink there; records are still exported
-        # via OTLP/console. Shares one predicate with SegmentClient.flush() so
-        # both guards answer "am I in a workflow" the same way; the previous
-        # ``workflow.unsafe.in_sandbox()`` check missed passed-through modules
-        # and unsandboxed workers. See utils.in_temporal_workflow.
+        # workflow loop — so don't write here. Every caller has already taken
+        # *records* out of the buffer, so put them back at the front rather
+        # than dropping them: the batch holds whatever any workflow or activity
+        # on this worker logged since the last flush, and the periodic flush on
+        # the worker loop writes it in order. Shares one predicate with
+        # SegmentClient.flush() so both guards answer "am I in a workflow" the
+        # same way; the previous ``workflow.unsafe.in_sandbox()`` check missed
+        # passed-through modules and unsandboxed workers. See
+        # utils.in_temporal_workflow.
         if in_temporal_workflow():
+            with self._buffer_lock:
+                self._buffer[:0] = records
             return
 
         # ``current_writer`` is non-None iff a gzip partition file is currently open.
@@ -668,15 +661,22 @@ class AtlanObservability(Generic[T], ABC):
             # Process the record
             processed_record = self.process_record(record)
 
-            # Add to buffer
+            # Add to buffer. Only append, and leave the batch to the periodic
+            # flush, when a flush cannot be started from here:
+            # - inside a workflow, it would run on Temporal's workflow loop,
+            #   where ``_flush_records`` cannot write;
+            # - on a thread with no running event loop (sync activities run in
+            #   the worker's thread pool), ``asyncio.create_task`` raises, and
+            #   the batch already swapped out of the buffer would be lost.
+            in_workflow = in_temporal_workflow()
+            can_flush_here = not in_workflow and _has_running_loop()
             with self._buffer_lock:
                 self._buffer.append(processed_record)
                 now = time()
-                due = (
+                if can_flush_here and (
                     len(self._buffer) >= self._batch_size
                     or (now - self._last_flush_time) >= self._flush_interval
-                )
-                if due and self._flush_can_run_here():
+                ):
                     self._last_flush_time = now
                     # Swap rather than copy: O(1) instead of O(n).
                     buffer_copy = self._buffer

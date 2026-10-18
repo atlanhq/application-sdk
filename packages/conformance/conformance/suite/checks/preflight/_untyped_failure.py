@@ -7,7 +7,12 @@ import ast
 from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.schema.findings import Finding
 
-from ._common import Registry, is_preflightcheck_call, sdk_preflightcheck_locals
+from ._common import (
+    SCENARIO_COVERAGE,
+    Registry,
+    is_preflightcheck_call,
+    sdk_preflightcheck_locals,
+)
 
 _F003 = "F003"
 _MISSING = object()
@@ -132,6 +137,7 @@ def scan(reg: Registry) -> list[Finding]:
                     node=node,
                     message=message,
                     directives=src.directives,
+                    cleared_by=frozenset() if definite_failure else SCENARIO_COVERAGE,
                 )
             )
     return findings

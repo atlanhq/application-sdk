@@ -675,7 +675,7 @@ def _read_csv(path: Path) -> list[dict[str, Any]]:
 def _read_parquet(path: Path) -> list[dict[str, Any]]:
     try:
         import pyarrow.parquet as pq  # noqa: PLC0415
-    except ImportError as exc:  # conformance: ignore[E008] re-raised as a typed error naming the missing extra
+    except ImportError as exc:
         from application_sdk.testing.integration._errors import (  # noqa: PLC0415
             GoldenParquetSupportError,
         )

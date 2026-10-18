@@ -14,7 +14,7 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -31,13 +31,6 @@ jobs:
           stale-pr-label: 'Stale'
           days-before-stale: 60
           debug-only: 'true'
-
-  trivy:
-    name: Trivy Code Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: "./.github/actions/trivy"
 
   # Nightly real-cloud storage integration tests against main (no PR context →
   # no label gate). Same suites as the label-gated job in pull_request.yaml;

@@ -43,19 +43,28 @@ import asyncio
 import os
 import tempfile
 import time
-from pathlib import Path
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
 from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
 from application_sdk.storage._locks import PathLockRegistry
+from application_sdk.storage._manifest import (
+    MANIFEST_SUFFIX,
+    DirectoryManifest,
+    ManifestEntry,
+)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.storage.batch import DataObject
+    from application_sdk.storage.ops import BoundStore
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage import integrity
@@ -66,16 +75,183 @@ logger = get_logger(__name__)
 _INFO_LOG_THRESHOLD = 10 * 1024 * 1024  # 10 MiB
 
 
-def _make_storage_path(ref: FileReference, *, output_path: str | None = None) -> str:
+class _Reuse(Enum):
+    """When the transfer engine may keep a local copy instead of downloading.
+
+    ``materialize_file_reference`` and ``transfer.download`` share one engine
+    (``_materialize_single_file`` / ``_materialize_directory``); this is the one
+    policy on which they differ. A manifest digest, when there is one, always
+    decides, whatever the policy.
+
+    * ``VERIFIED`` — materialise: reuse a local copy that hashes to its local
+      ``.sha256`` sidecar (directory) or to the stored digest (single file).
+    * ``REMOTE_DIGEST`` — ``download(skip_if_exists=True)``: reuse a local copy
+      only if it hashes to the stored digest; a local marker is not consulted,
+      since the object may have changed since it was written.
+    * ``NEVER`` — ``download(skip_if_exists=False)``: always download.
+    """
+
+    VERIFIED = "verified"
+    REMOTE_DIGEST = "remote_digest"
+    NEVER = "never"
+
+
+class _Dedup(Enum):
+    """When the upload engine may skip sending a file the store already holds.
+
+    ``persist_file_reference`` and ``transfer.upload`` share one engine
+    (``_persist_file`` / ``_persist_directory``); this is the one policy on
+    which they differ — the upload-side counterpart of :class:`_Reuse`.
+
+    * ``NEVER`` — persist, and ``upload(skip_if_exists=False)``: always upload.
+    * ``REMOTE_DIGEST`` — ``upload(skip_if_exists=True)``: skip a file whose
+      local bytes hash to the store's ``{key}.sha256`` sidecar, and only when
+      the data object itself is in the store too (a sidecar can outlive its
+      data). The local file is always hashed: its local marker only says what
+      was uploaded or downloaded last time, not what the file holds now.
+    """
+
+    NEVER = "never"
+    REMOTE_DIGEST = "remote_digest"
+
+
+@dataclass(frozen=True)
+class _StoreCopy:
+    """One object a directory upload copies store-to-store, not from local disk.
+
+    ``transfer.upload`` decides which objects these are (its cross-pod
+    reconcile and its local-absent fallback); the engine moves them alongside
+    the local files so the manifest, written last, covers both.
+    """
+
+    source_store: ObjectStore
+    source: DataObject
+    """The object as listed in *source_store* — the listing proves it is there."""
+    rel: str
+    """Its key relative to the target prefix, ``/``-separated."""
+
+
+@dataclass(frozen=True)
+class _Persisted:
+    """What a directory pass through the upload engine produced."""
+
+    file_count: int
+    transferred: int
+    """Files whose bytes crossed the wire; the rest were deduplicated."""
+    manifest_path: str | None
+    """``None`` when no manifest was asked for, or one entry's digest is unknown."""
+
+
+# System directories that must never be uploaded.
+_SENSITIVE_SYSTEM_PREFIXES = (
+    "/etc/",
+    "/proc/",
+    "/sys/",
+    "/dev/",
+    "/root/",
+    "/private/etc/",
+)
+
+# Hidden credential/config directories that must never be uploaded.
+_SENSITIVE_DIR_NAMES = frozenset({".aws", ".ssh", ".gnupg", ".kube", ".vault"})
+
+# File name prefixes for environment/secret files.
+_SENSITIVE_FILE_PREFIXES = (".env",)
+
+
+def _parse_blocked_paths() -> list[str]:
+    """Parse ATLAN_UPLOAD_FILE_BLOCKED_PATHS env var (comma-separated patterns).
+
+    Each pattern is returned in ``/`` form, whichever separator it was written
+    with, to be matched by :func:`_is_user_blocked`.
+    """
+    val = os.environ.get("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "")
+    return (
+        [p.strip().replace("\\", "/") for p in val.split(",") if p.strip()]
+        if val
+        else []
+    )
+
+
+def _is_user_blocked(path: PurePath, patterns: list[str]) -> bool:
+    """Whether *path* contains any ATLAN_UPLOAD_FILE_BLOCKED_PATHS pattern.
+
+    A substring match, so both sides are put in one spelling first: the path
+    by ``as_posix()``, the patterns by :func:`_parse_blocked_paths`. Matching
+    against ``str(path)`` used the platform's separator, so on Windows a
+    pattern written ``/custom/secrets/`` never matched anything.
+    """
+    full = path.as_posix()
+    return any(pattern in full for pattern in patterns)
+
+
+def _is_sensitive_component(part: str) -> bool:
+    """Whether one path component is a credential directory or an ``.env*`` name.
+
+    Compared component by component, never as a string, so it holds for
+    either separator.
+    """
+    return part in _SENSITIVE_DIR_NAMES or part.startswith(_SENSITIVE_FILE_PREFIXES)
+
+
+def _validate_upload_path(path: Path) -> None:
+    """Block uploads from sensitive system paths, credential dirs, and env files.
+
+    Checked on the root handed to the engine — the file, or the directory —
+    so ``App.upload()`` and the interceptor's persist refuse the same paths
+    (FND-3796). A protected system directory is refused itself as well as
+    anything under it: ``/etc`` resolves without the trailing ``/`` the
+    prefixes carry. Every component of the resolved path is checked, so a
+    root under a credential directory or an ``.env*`` directory
+    (``/tmp/.env.local/output``) is refused as well as a root that is one.
+    The files a directory upload walks are checked too, by
+    :func:`_list_upload_files`.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        UnsafeUploadPathError,
+    )
+
+    if ".." in path.parts:
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+    resolved = path.resolve()
+
+    # The trailing "/" makes the directory itself match its own prefix, so
+    # ``/etc`` is refused like ``/etc/passwd`` — without the separator check
+    # loosening to ``/etcetera``. Unix system paths: on Windows nothing
+    # resolves under them, by design.
+    if (resolved.as_posix().rstrip("/") + "/").startswith(_SENSITIVE_SYSTEM_PREFIXES):
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+    # Every component, not only the last and not only for a file: a directory
+    # root inside ``.env.local/`` or ``.aws/`` carries what they hold.
+    if any(_is_sensitive_component(part) for part in resolved.parts):
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+    # User-defined blocked paths via ATLAN_UPLOAD_FILE_BLOCKED_PATHS (comma-separated).
+    # Each entry is matched as a substring against the full resolved path.
+    # e.g. ATLAN_UPLOAD_FILE_BLOCKED_PATHS="/custom/secrets/,.vault,.credentials"
+    if _is_user_blocked(resolved, _parse_blocked_paths()):
+        raise UnsafeUploadPathError(unsafe_path=str(path))
+
+
+def _make_storage_path(
+    ref: FileReference,
+    *,
+    output_path: str | None = None,
+    suffix: str | None = None,
+) -> str:
     """Generate a unique storage path for a single-file FileReference.
 
-    Delegates to :meth:`StorageTier._make_file_ref_path`.
+    Delegates to :meth:`StorageTier._make_file_ref_path`. *suffix* defaults to
+    the local file's extension; the directory branch passes the manifest suffix.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         APPLICATION_NAME,
     )
 
-    suffix = Path(ref.local_path).suffix if ref.local_path else ""
+    if suffix is None:
+        suffix = Path(ref.local_path).suffix if ref.local_path else ""
     return ref.tier._make_file_ref_path(
         suffix=suffix,
         run_prefix=output_path or "",
@@ -96,6 +272,45 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
         run_prefix=output_path or "",
         app_name=APPLICATION_NAME,
     )
+
+
+def _require_run_scoped_pin(
+    ref: FileReference, pinned: str, output_path: str | None
+) -> None:
+    """Reject a run-scoped-tier directory pin that sits outside the run prefix.
+
+    ``TRANSIENT`` and ``RETAINED`` data belongs to one run: cleanup deletes a
+    tracked ``TRANSIENT`` ref's whole prefix at run end, and ``RETAINED`` is
+    run-scoped by contract. Two runs pinning the same prefix outside their own
+    run prefix (``shared/results/``) would write the same keys, and either
+    run's cleanup would delete the other's data. The manifest makes leftovers
+    inert, not a concurrently running neighbour. ``PERSISTENT`` pins are
+    shared across runs by design and are never cleaned, so they are exempt.
+
+    Without *output_path* there is no run to scope to (local scripts, tests),
+    and no cleanup either, so the pin is accepted as given.
+
+    Raises:
+        StorageConfigError: If the pin escapes ``{output_path}/``.
+    """
+    from application_sdk.contracts.types import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        StorageTier,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageConfigError,
+    )
+
+    if ref.tier is StorageTier.PERSISTENT or not output_path:
+        return
+    run_prefix = output_path.strip("/") + "/"
+    if not (pinned.strip("/") + "/").startswith(run_prefix):
+        raise StorageConfigError(
+            f"Directory FileReference pins storage_path '{pinned}' outside its "
+            f"run prefix '{run_prefix}'. {ref.tier.value.upper()} data is "
+            f"run-scoped: pin it under the run prefix, or use "
+            f"StorageTier.PERSISTENT for data shared across runs.",
+            key=pinned,
+        )
 
 
 #: Per-destination mutex for the whole materialise-and-verify step.
@@ -135,6 +350,255 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
         )
 
 
+def _list_upload_files(root: Path) -> list[Path]:
+    """Every file a directory upload sends: the tree minus local ``.sha256`` markers.
+
+    A local marker is a materialize-time cache key, not data. Uploaded, it
+    would land on the store-side sidecar key of its own data file; with
+    ``skip_if_exists`` the data file's dedup check could then read that
+    sidecar, match, and skip the data upload entirely. Blocking (fsync +
+    scandir): call it through ``run_in_thread``.
+
+    Raises:
+        UnsafeUploadPathError: If any file in the tree is one the guard
+            refuses — see :func:`_validate_upload_tree`.
+    """
+    files = [
+        fp for fp in safe_list_directory(root) if not integrity.is_sidecar_key(fp.name)
+    ]
+    _validate_upload_tree(root, files)
+    return files
+
+
+def _validate_upload_tree(root: Path, files: list[Path]) -> None:
+    """Refuse a directory upload that would carry a credential or env file.
+
+    Checking only the root let an ordinary output directory ship a ``.env``
+    or a ``.aws/credentials`` that happened to sit inside it. Each file's
+    path below *root* gets the same tests :func:`_validate_upload_path`
+    applies to a root: no credential directory on the way down, no
+    ``.env``-prefixed name, nothing matching ``ATLAN_UPLOAD_FILE_BLOCKED_PATHS``.
+    Fail-closed: the whole upload is refused, naming the file, rather than
+    silently dropping it from the hand-off. Symlinks never reach here —
+    ``safe_list_directory`` does not follow them.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        UnsafeUploadPathError,
+    )
+
+    user_blocked = _parse_blocked_paths()
+    resolved_root = root.resolve()
+    for fp in files:
+        rel = fp.relative_to(root)
+        if any(_is_sensitive_component(part) for part in rel.parts):
+            raise UnsafeUploadPathError(unsafe_path=str(fp))
+        if user_blocked and _is_user_blocked(resolved_root / rel, user_blocked):
+            raise UnsafeUploadPathError(unsafe_path=str(fp))
+
+
+async def _persist_file(
+    store: ObjectStore,
+    local: Path,
+    key: str,
+    *,
+    dedup: _Dedup,
+    data_present: bool | None = None,
+    sidecar_present: bool | None = None,
+) -> tuple[str, bool]:
+    """Upload one local file under *key* and stamp its local ``.sha256`` marker.
+
+    The upload engine's per-file step, shared by ``persist_file_reference``
+    and ``transfer.upload``. The store-side ``{key}.sha256`` sidecar is
+    ``upload_file``'s job (FND-306); the local marker beside *local* is what
+    lets a materialize of the returned ref on this worker reuse the file
+    instead of downloading it back (FND-3796). No path guard here: callers
+    check the root they were handed once, with :func:`_validate_upload_path`.
+
+    *data_present* / *sidecar_present* carry what a listing of the target
+    already established, so a directory pass pays no per-file probe; ``None``
+    means unknown and the dedup check probes for itself.
+
+    Returns ``(sha256, transferred)`` — the file's digest either way.
+    """
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        exists,
+        upload_file,
+    )
+
+    try:
+        # data_present=False: nothing to dedup against, so skip the local hash too.
+        if dedup is _Dedup.REMOTE_DIGEST and data_present is not False:
+            local_digest = await integrity.sha256_file(local)
+            remote_digest = await integrity.read_expected_digest(
+                store, key, sidecar_present=sidecar_present
+            )
+            if remote_digest == local_digest and (
+                data_present or await exists(key, store, normalize=False)
+            ):
+                await run_in_thread(_write_local_sidecar, str(local), local_digest)
+                return local_digest, False
+        sha256 = await upload_file(key, local, store, normalize=False)
+        # compute_hash defaults to True, so the digest is always returned here.
+        assert sha256 is not None
+        await run_in_thread(_write_local_sidecar, str(local), sha256)
+        return sha256, True
+    finally:
+        # One file resolved — uploaded or deduplicated — is one unit of
+        # progress (ADR-0018): an idempotent retry that skips thousands of
+        # matching files is doing real work and must not read as a stall.
+        current_progress_tracker().mark_progress("storage.upload_file")
+
+
+async def _list_target_objects(
+    prefix: str, store: ObjectStore
+) -> dict[str, DataObject] | None:
+    """List the data objects already under a directory upload's target *prefix*.
+
+    One LIST answers, for every file of a deduplicating directory upload,
+    both whether its data object is in the store and whether its sidecar is —
+    instead of a sidecar HEAD per file, plus a data HEAD per matching file.
+
+    Returns ``None`` when the target cannot be listed (e.g. a policy that grants
+    put/get but not list), so the caller falls back to per-file probes rather
+    than failing an upload that never needed a LIST before.
+    """
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        list_data_objects,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+    )
+
+    try:
+        objects = await list_data_objects(prefix, store, normalize=False)
+    except StorageError:
+        logger.warning(
+            "Could not list upload target prefix '%s' — falling back to "
+            "per-file existence checks for skip_if_exists",
+            prefix,
+            exc_info=True,
+        )
+        return None
+    return {obj.key: obj for obj in objects}
+
+
+async def _persist_directory(
+    store: ObjectStore,
+    root: Path | None,
+    files: list[Path],
+    prefix: str,
+    *,
+    dedup: _Dedup,
+    manifest_path: str | None,
+    copies: list[_StoreCopy] | None = None,
+    max_concurrency: int,
+) -> _Persisted:
+    """Upload a directory: *files* under *root*, plus *copies*, then the manifest.
+
+    The upload engine's directory pass, shared by ``persist_file_reference``
+    and ``transfer.upload`` (FND-3796). Each local file goes through
+    :func:`_persist_file`, so it gets its store sidecar and its local marker;
+    each :class:`_StoreCopy` goes through ``transfer._upload_from_store``.
+    Transfers run concurrently, and the first failure cancels and drains the
+    rest.
+
+    Last, and only after every object landed, the manifest — the exact file
+    set, with each digest and size — is written at *manifest_path*: its
+    presence is the proof the hand-off is complete (FND-3762). It is skipped
+    when *manifest_path* is ``None``, or when a copy's digest is unknown (a
+    same-object copy reads no sidecar); the ref then lists, as before.
+
+    Args:
+        root: The directory *files* sit under, already checked with
+            :func:`_validate_upload_path`; ``None`` when there is nothing local.
+        files: From :func:`_list_upload_files` — no local markers.
+        prefix: Target prefix, with or without a trailing ``/``.
+    """
+    from application_sdk.storage._concurrency import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _gather_with_semaphore,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
+    )
+    from application_sdk.storage.transfer import (  # noqa: PLC0415 — circular: transfer imports this module's engine lazily too
+        _upload_from_store,
+    )
+
+    base = prefix.rstrip("/") + "/" if prefix.strip("/") else ""
+    copies = copies or []
+
+    # One LIST of the target replaces the per-file sidecar HEAD and lets the
+    # dedup check confirm each data object exists. An empty prefix would
+    # list the whole store, so that case keeps the per-file probes.
+    listed: dict[str, DataObject] | None = None
+    if dedup is _Dedup.REMOTE_DIGEST and files and base:
+        listed = await _list_target_objects(base, store)
+
+    async def _one_local(file_path: Path) -> tuple[ManifestEntry, bool]:
+        assert root is not None  # files is empty without a root
+        relative = str(file_path.relative_to(root)).replace(os.sep, "/")
+        key = f"{base}{relative}"
+        data_present: bool | None = None
+        sidecar_present: bool | None = None
+        if listed is not None:
+            obj = listed.get(key)
+            data_present = obj is not None
+            sidecar_present = obj.has_sidecar if obj is not None else False
+        sha256, transferred = await _persist_file(
+            store,
+            file_path,
+            key,
+            dedup=dedup,
+            data_present=data_present,
+            sidecar_present=sidecar_present,
+        )
+        size = (await run_in_thread(file_path.stat)).st_size
+        return (
+            ManifestEntry(path=relative, sha256=sha256, size_bytes=size),
+            transferred,
+        )
+
+    async def _one_copy(copy: _StoreCopy) -> tuple[ManifestEntry | None, bool]:
+        transferred, _, sha256 = await _upload_from_store(
+            copy.source_store,
+            copy.source.key,
+            store,
+            f"{base}{copy.rel}",
+            source_listed=True,
+        )
+        entry = (
+            ManifestEntry(path=copy.rel, sha256=sha256, size_bytes=copy.source.size)
+            if sha256 is not None
+            else None
+        )
+        return entry, transferred
+
+    sem = asyncio.Semaphore(max_concurrency)
+    results = await _gather_with_semaphore(
+        [*(_one_local(fp) for fp in files), *(_one_copy(c) for c in copies)], sem
+    )
+    transferred = sum(1 for _, moved in results if moved)
+
+    entries = [entry for entry, _ in results if entry is not None]
+    if manifest_path is not None and base and len(entries) == len(results):
+        manifest = DirectoryManifest(files=sorted(entries, key=lambda e: e.path))
+        await _put(
+            manifest_path, manifest.model_dump_json().encode(), store, normalize=False
+        )
+    elif manifest_path is not None:
+        logger.debug(
+            "No manifest for upload prefix '%s': the prefix is empty or a copied "
+            "object's digest is unknown, so the ref lists the prefix",
+            base,
+        )
+        manifest_path = None
+    return _Persisted(
+        file_count=len(results),
+        transferred=transferred,
+        manifest_path=manifest_path,
+    )
+
+
 async def persist_file_reference(
     store: ObjectStore,
     ref: FileReference,
@@ -150,16 +614,21 @@ async def persist_file_reference(
     ``materialize_file_reference`` calls can verify integrity without
     re-downloading.
 
-    For directories, walks the directory tree, uploads each file under a
-    generated prefix, and writes per-file sidecars.
+    For directories, walks the directory tree, uploads each file under the
+    pinned or generated prefix, and writes per-file sidecars both to the store
+    and locally, so a same-pod materialize of the prefix downloads nothing.
+    Existing local ``.sha256`` sidecars in the tree are not uploaded. Last, it
+    writes a manifest of the exact files (path, sha256, size) at a key outside
+    the prefix and returns it as ``manifest_path``; consumers download exactly
+    those files, so a pinned prefix reused across attempts is safe.
 
     Args:
         store: Destination obstore store.
         ref: An ephemeral ``FileReference`` with ``local_path`` set.
-        key: Explicit object-store key (single files only). Precedence:
-            ``key`` → ``ref.storage_path`` → UUID-keyed
-            ``file_refs/<uuid>.json`` fallback. Pass ``None`` (default)
-            to let ``ref.storage_path`` or the fallback decide.
+        key: Explicit object-store key (single file) or prefix
+            (directory). Precedence: ``key`` → ``ref.storage_path`` →
+            UUID-keyed ``file_refs/<uuid>`` fallback. Pass ``None``
+            (default) to let ``ref.storage_path`` or the fallback decide.
         output_path: Run-scoped base prefix (e.g.
             ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}``).  Required
             when ``ref.tier`` is ``StorageTier.RETAINED``; ignored otherwise.
@@ -173,11 +642,11 @@ async def persist_file_reference(
         ValueError: If ``ref.tier`` is ``RETAINED`` and *output_path* is not
             provided.
     """
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        MAX_CONCURRENT_STORAGE_TRANSFERS,
+    )
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         StorageError,
-    )
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        upload_file,
     )
 
     if ref.is_durable:
@@ -190,6 +659,9 @@ async def persist_file_reference(
         )
 
     local = Path(ref.local_path)
+    # The same guard App.upload() applies: a task returning a ref to a
+    # credentials directory must not have it uploaded either (FND-3796).
+    _validate_upload_path(local)
 
     # Structured kwargs in the logger calls below are intentional: every key used
     # (storage_path, local_path, file_count, file_size_bytes, bytes_uploaded,
@@ -199,10 +671,30 @@ async def persist_file_reference(
     # Grafana+ClickHouse. Do not rewrite to %-style; that would lose the promotion.
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
-        prefix = _make_storage_prefix(ref, output_path=output_path)
+        # Same precedence as the single-file branch: explicit ``key`` →
+        # pinned ``ref.storage_path`` → generated UUID prefix. A pinned
+        # prefix is safe only because of the manifest the engine writes
+        # last: a consumer reads exactly the manifest's entries, so leftovers
+        # from an earlier attempt under the same prefix are inert (FND-3762).
+        pinned = key or ref.storage_path
+        if pinned:
+            _require_run_scoped_pin(ref, pinned, output_path)
+        prefix = (
+            pinned.rstrip("/") + "/"
+            if pinned
+            else _make_storage_prefix(ref, output_path=output_path)
+        )
+        # The manifest never lives inside the prefix: an older SDK lists the
+        # prefix and would read it as data. It goes under the tier's
+        # ``file_refs`` namespace rather than beside the prefix, because the
+        # sibling of a pinned canonical prefix sits inside the parent tree a
+        # publish step walks.
+        manifest_path = _make_storage_path(
+            ref, output_path=output_path, suffix=MANIFEST_SUFFIX
+        )
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
-        files = await run_in_thread(safe_list_directory, local)
+        files = await run_in_thread(_list_upload_files, local)
         _t0 = time.monotonic()
         # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
@@ -213,24 +705,16 @@ async def persist_file_reference(
             tier=str(ref.tier),
         )
 
-        async def _upload_one(file_path: Path) -> None:
-            relative = str(file_path.relative_to(local)).replace(os.sep, "/")
-            file_key = f"{prefix}{relative}"
-            # upload_file validates the write and writes the store-side
-            # ``{key}.sha256`` sidecar itself (FND-306) — one implementation of
-            # the sidecar protocol, shared by every upload path.
-            await upload_file(file_key, file_path, store, normalize=False)
-
         try:
-            from application_sdk.constants import (  # noqa: PLC0415
-                MAX_CONCURRENT_STORAGE_TRANSFERS,
+            persisted = await _persist_directory(
+                store,
+                local,
+                files,
+                prefix,
+                dedup=_Dedup.NEVER,
+                manifest_path=manifest_path,
+                max_concurrency=MAX_CONCURRENT_STORAGE_TRANSFERS,
             )
-            from application_sdk.storage._concurrency import (  # noqa: PLC0415
-                _gather_with_semaphore,
-            )
-
-            sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
-            await _gather_with_semaphore([_upload_one(fp) for fp in files], sem)
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
@@ -246,7 +730,8 @@ async def persist_file_reference(
         logger.info(
             "file_ref.persist.complete",
             storage_path=prefix,
-            file_count=len(files),
+            manifest_path=persisted.manifest_path,
+            file_count=persisted.file_count,
             duration_ms=int((time.monotonic() - _t0) * 1000),
             tier=str(ref.tier),
         )
@@ -254,8 +739,9 @@ async def persist_file_reference(
             local_path=ref.local_path,
             is_durable=True,
             storage_path=prefix,
-            file_count=len(files),
+            file_count=persisted.file_count,
             tier=ref.tier,
+            manifest_path=persisted.manifest_path,
         )
 
     else:
@@ -290,14 +776,9 @@ async def persist_file_reference(
         )
 
         try:
-            # upload_file validates the write and writes the store-side
-            # ``{key}.sha256`` sidecar itself (FND-306); only the *local*
-            # sidecar — a materialize-time cache key, not part of the store
-            # protocol — is this module's business.
-            sha256 = await upload_file(storage_path, local, store, normalize=False)
-            # compute_hash defaults to True, so the digest is always returned here.
-            assert sha256 is not None
-            _write_local_sidecar(ref.local_path, sha256)
+            sha256, _ = await _persist_file(
+                store, local, storage_path, dedup=_Dedup.NEVER
+            )
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
@@ -342,14 +823,22 @@ async def materialize_file_reference(
     stored sha256 sidecar confirms it is intact, the local sidecar is
     (re-)written and the function returns without downloading.
 
-    **Directory**: fast path is always skipped; all files under the prefix
-    are re-listed and downloaded.
+    **Directory with a manifest** (``ref.manifest_path`` set): the prefix is
+    not listed. Exactly the manifest's files are fetched; each one whose local
+    copy hashes to the manifest digest is skipped, the rest are downloaded and
+    checked against it.
+
+    **Directory without a manifest**: all files under the prefix are
+    re-listed; each one whose local copy matches its local ``.sha256`` sidecar
+    is skipped, the rest are downloaded. Fewer listed objects than
+    ``ref.file_count`` fails (retryable); more only warns.
 
     **Empty prefix**: nothing under the prefix, and either no object at the
     exact key or only a 0-byte directory marker. A ref whose ``local_path`` is
-    a directory is returned unchanged, naming that (normally empty) directory —
-    what an empty hand-off *means* is the consumer's judgement, not the storage
-    layer's. With no local directory to hand back, ``StorageNotFoundError`` is
+    a directory and that declares ``file_count=0`` is returned unchanged,
+    naming that (normally empty) directory. One that declares files fails
+    (retryable): an empty listing is also what missing list permission looks
+    like. With no local directory to hand back, ``StorageNotFoundError`` is
     raised as before.
 
     Args:
@@ -365,7 +854,10 @@ async def materialize_file_reference(
     Raises:
         StorageNotFoundError: If the key resolves to no objects and *ref* has
             no local directory to hand back.
-        StorageError: If the downloaded data does not match the stored sidecar.
+        StorageError: Retryable, if fewer objects are visible than the ref
+            declares, or its manifest is not in the store.
+        StorageIntegrityError: If downloaded data does not match the stored
+            sidecar or the manifest digest, or the manifest is malformed.
 
     Concurrency: a stable destination — ``ref.local_path``, or the resolved
     directory — is serialised under a per-path lock (CONNECT-1126), so
@@ -383,6 +875,16 @@ async def materialize_file_reference(
     if not ref.is_durable or ref.storage_path is None:
         return ref  # nothing to materialise
 
+    if ref.manifest_path is not None:
+        # The producer named exactly which objects the hand-off covers, so the
+        # prefix is not listed: retry leftovers and late writes under it are
+        # ignored by construction, and there is no paginated LIST to pay.
+        items = await _read_manifest_items(store, ref)
+        local_directory = _resolve_local_directory(ref, local_dir)
+        async with _materialize_guard(local_directory):
+            out, _ = await _materialize_directory(store, ref, items, local_directory)
+            return out
+
     # Determine single-file vs directory by listing sub-keys under the path.
     # Sizes come back with the listing so the directory branch can chunk large
     # files without a per-file HEAD (BLDX-1513).
@@ -392,17 +894,29 @@ async def materialize_file_reference(
     data_objects = await list_data_objects(ref.storage_path, store)
 
     if data_objects:
-        if ref.local_path is not None:
-            local_directory = ref.local_path
-        elif local_dir is not None:
-            local_directory = local_dir
-        else:
-            local_directory = tempfile.mkdtemp()
-        Path(local_directory).mkdir(parents=True, exist_ok=True)
-        async with _materialize_guard(local_directory):
-            return await _materialize_directory(
-                store, ref, data_objects, local_directory
+        # No manifest, so the listing is all there is. It is a lower bound
+        # check only: an under-count is a hand-off that is not (yet) fully
+        # visible, but an over-count is expected — hand-built directory refs
+        # keep the default ``file_count=1`` whatever they hold.
+        if len(data_objects) < ref.file_count:
+            raise _handoff_not_visible(ref, found=len(data_objects))
+        if len(data_objects) > ref.file_count:
+            # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
+            logger.warning(
+                "file_ref.materialize.count_mismatch",
+                storage_path=ref.storage_path,
+                file_count=ref.file_count,
+                files_listed=len(data_objects),
             )
+        local_directory = _resolve_local_directory(ref, local_dir)
+        async with _materialize_guard(local_directory):
+            out, _ = await _materialize_directory(
+                store,
+                ref,
+                [(obj, None) for obj in data_objects],
+                local_directory,
+            )
+            return out
 
     # An empty listing does not mean "nothing is there". ``list_keys`` appends a
     # trailing slash before listing, so a real single object at the exact key
@@ -467,6 +981,13 @@ async def materialize_file_reference(
         # either, so a directory left behind by an earlier pass keeps its
         # contents, and this log must not assert they are not there.
         if local is not None and local.is_dir():
+            # A ref that declares files is not satisfied by an empty listing:
+            # GCS under conditional IAM lists empty without list permission,
+            # and a consumer handed an empty directory would process nothing
+            # without a word. Only a ref declaring zero files — the shape
+            # ``download()`` returns for an empty prefix — gets it back.
+            if ref.file_count > 0:
+                raise _handoff_not_visible(ref, found=0)
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
                 "file_ref.materialize.empty_prefix",
@@ -482,13 +1003,134 @@ async def materialize_file_reference(
         # with a 0-byte object it materialises those zero bytes as before.
 
     if ref.local_path is None:
-        return await _materialize_single_file(
+        out, _ = await _materialize_single_file(
             store, ref, local_dir, remote_meta=remote_meta
         )
+        return out
     async with _materialize_guard(ref.local_path):
-        return await _materialize_single_file(
+        out, _ = await _materialize_single_file(
             store, ref, local_dir, remote_meta=remote_meta
         )
+        return out
+
+
+def _resolve_local_directory(ref: FileReference, local_dir: str | None) -> str:
+    """Pick and create the local directory a directory ref materialises into."""
+    if ref.local_path is not None:
+        local_directory = ref.local_path
+    elif local_dir is not None:
+        local_directory = local_dir
+    else:
+        local_directory = tempfile.mkdtemp()
+    Path(local_directory).mkdir(parents=True, exist_ok=True)
+    return local_directory
+
+
+def _handoff_not_visible(ref: FileReference, *, found: int) -> Exception:
+    """Retryable error for a directory hand-off with fewer objects than declared.
+
+    Retryable rather than a data-integrity failure: a short or empty listing is
+    as often the store's view (eventual listing, an IAM condition that lists
+    empty) as a lost upload, and the next attempt sees the store afresh. A
+    hand-off that is really short keeps failing until retries run out.
+    """
+    from application_sdk.errors import (  # noqa: PLC0415 — circular: errors imports storage evidence helpers
+        STORAGE_HANDOFF_INCOMPLETE,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+    )
+
+    return StorageError(
+        f"Directory FileReference '{ref.storage_path}' declares "
+        f"{ref.file_count} file(s) but {found} are visible under the prefix. "
+        f"Either the producer's upload is incomplete, or the store credentials "
+        f"lack list permission on this location.",
+        key=ref.storage_path,
+        error_code=STORAGE_HANDOFF_INCOMPLETE,
+    )
+
+
+async def _fetch_manifest(
+    store: BoundStore | ObjectStore, manifest_path: str
+) -> DirectoryManifest | None:
+    """Read and parse the manifest at *manifest_path*; ``None`` if absent.
+
+    Raises:
+        StorageIntegrityError: If the object is not a valid manifest.
+    """
+    from pydantic import (  # noqa: PLC0415 — keep pydantic.ValidationError import local to its only use
+        ValidationError,
+    )
+
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageIntegrityError,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_bytes,
+    )
+
+    raw = await _get_bytes(manifest_path, store, normalize=False)
+    if raw is None:
+        return None
+    try:
+        return DirectoryManifest.model_validate_json(raw)
+    except ValidationError as exc:
+        raise StorageIntegrityError(
+            f"Object '{manifest_path}' is not a valid directory manifest. "
+            f"Re-run the step that produced it.",
+            key=manifest_path,
+            check="manifest",
+            cause=exc,
+        ) from exc
+
+
+async def _read_manifest_items(
+    store: ObjectStore, ref: FileReference
+) -> list[tuple[DataObject, str | None]]:
+    """Fetch *ref*'s manifest and turn it into the exact objects to download."""
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        DataObject,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+        StorageIntegrityError,
+    )
+
+    assert ref.manifest_path is not None and ref.storage_path is not None
+    manifest = await _fetch_manifest(store, ref.manifest_path)
+    if manifest is None:
+        # Not a fallback to listing: the ref says a manifest exists, so a
+        # listing could only pick up objects the producer did not hand off.
+        raise StorageError(
+            f"Directory FileReference '{ref.storage_path}' names manifest "
+            f"'{ref.manifest_path}', which is not in the store. Either it is "
+            f"not visible yet, or the store credentials lack read permission.",
+            key=ref.manifest_path,
+        )
+    if len(manifest.files) < ref.file_count:
+        raise StorageIntegrityError(
+            f"Manifest '{ref.manifest_path}' lists {len(manifest.files)} "
+            f"file(s) but the FileReference declares {ref.file_count}. Re-run "
+            f"the step that produced it.",
+            key=ref.manifest_path,
+            check="manifest",
+            expectation=f">= {ref.file_count} files",
+            observed=f"{len(manifest.files)} files",
+        )
+    prefix = ref.storage_path.rstrip("/") + "/"
+    return [
+        (
+            DataObject(
+                key=prefix + entry.path,
+                size=entry.size_bytes,
+                etag=None,
+                has_sidecar=False,
+            ),
+            entry.sha256,
+        )
+        for entry in manifest.files
+    ]
 
 
 # Structured kwargs in the logger calls of the two helpers below are intentional: every key used
@@ -504,8 +1146,11 @@ async def _materialize_single_file(
     local_dir: str | None,
     *,
     remote_meta: tuple[int, str | None] | None = None,
-) -> FileReference:
+    reuse: _Reuse = _Reuse.VERIFIED,
+) -> tuple[FileReference, int]:
     """Materialise one durable single-file ref (see ``materialize_file_reference``).
+
+    Returns the local ref and how many files were downloaded (0 on reuse).
 
     Callers with a stable ``ref.local_path`` hold the per-path materialise
     lock around this call; the fast-path re-check below is therefore the
@@ -542,13 +1187,17 @@ async def _materialize_single_file(
     # directory-backed ref away from here, so this is the second line of
     # defence for a ref that reaches this helper by another path.
     stored_hash: str | None = None
-    if ref.local_path is not None and Path(ref.local_path).is_file():
+    if (
+        reuse is not _Reuse.NEVER
+        and ref.local_path is not None
+        and Path(ref.local_path).is_file()
+    ):
         local_hash = await integrity.sha256_file(Path(ref.local_path))
         stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 
         if stored_hash is not None and local_hash == stored_hash:
             # File is intact — stamp local sidecar and reuse.
-            _write_local_sidecar(ref.local_path, local_hash)
+            await run_in_thread(_write_local_sidecar, ref.local_path, local_hash)
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
                 "file_ref.materialize.skipped",
@@ -556,29 +1205,9 @@ async def _materialize_single_file(
                 local_path=ref.local_path,
                 is_cache_hit=True,
             )
-            return ref
+            return ref, 0
         # Otherwise (no stored sidecar OR hash mismatch) fall through
         # to re-download — conservative since we cannot verify.
-
-    # Determine output path. owns_temp: a fresh mkstemp name per call
-    # means a resume checkpoint could never be reused on retry — disable
-    # resume and clean up the partial + sidecar on failure. A stable
-    # ref.local_path keeps the default (env-driven) resume behaviour so a
-    # Temporal retry on the same pod fetches only the missing ranges.
-    owns_temp = ref.local_path is None
-    if ref.local_path is not None:
-        out_path = ref.local_path
-        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    else:
-        suffix = Path(ref.storage_path).suffix or ""
-        if local_dir:
-            Path(local_dir).mkdir(parents=True, exist_ok=True)
-            fd, out_path = tempfile.mkstemp(suffix=suffix, dir=local_dir)
-        else:
-            fd, out_path = tempfile.mkstemp(suffix=suffix)
-        os.close(
-            fd
-        )  # close immediately; this only reserves the destination name — the download stages in .sdk-partial/ and publishes over it
 
     # Use get_file_meta (HEAD) for two purposes: existence check (avoids
     # the ambiguous empty-listing → misleading 404 from download_file) and
@@ -624,6 +1253,28 @@ async def _materialize_single_file(
         tier=str(ref.tier),
     )
 
+    # Determine output path — only now, after the HEAD proved there is
+    # something to fetch, so a missing key strands no temp file. owns_temp:
+    # a fresh mkstemp name per call
+    # means a resume checkpoint could never be reused on retry — disable
+    # resume and clean up the partial + sidecar on failure. A stable
+    # ref.local_path keeps the default (env-driven) resume behaviour so a
+    # Temporal retry on the same pod fetches only the missing ranges.
+    owns_temp = ref.local_path is None
+    if ref.local_path is not None:
+        out_path = ref.local_path
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    else:
+        suffix = Path(ref.storage_path).suffix or ""
+        if local_dir:
+            Path(local_dir).mkdir(parents=True, exist_ok=True)
+            fd, out_path = tempfile.mkstemp(suffix=suffix, dir=local_dir)
+        else:
+            fd, out_path = tempfile.mkstemp(suffix=suffix)
+        os.close(
+            fd
+        )  # close immediately; this only reserves the destination name — the download stages in .sdk-partial/ and publishes over it
+
     try:
         # Dispatch to chunked (parallel range-GET) or single-stream download.
         if _is_chunked:
@@ -664,16 +1315,18 @@ async def _materialize_single_file(
                 key=ref.storage_path,
             )
 
-        _write_local_sidecar(out_path, sha256)
-    except Exception as exc:
-        # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
-        logger.error(
-            "file_ref.materialize.failed",
-            storage_path=ref.storage_path,
-            error_type=type(exc).__name__,
-            bytes_transferred_before_failure=0,
-            exc_info=True,
-        )
+        await run_in_thread(_write_local_sidecar, out_path, sha256)
+    # conformance: ignore[E004] cleanup handler that always re-raises; BaseException so a cancelled transfer strands no owned temp either
+    except BaseException as exc:
+        if isinstance(exc, Exception):
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
+            logger.error(
+                "file_ref.materialize.failed",
+                storage_path=ref.storage_path,
+                error_type=type(exc).__name__,
+                bytes_transferred_before_failure=0,
+                exc_info=True,
+            )
         if owns_temp:
             # A fresh-named temp can never be resumed — don't strand the
             # partial file or its checkpoint sidecar (best-effort).
@@ -700,25 +1353,42 @@ async def _materialize_single_file(
         chunks_total=_chunks_total,
         tier=str(ref.tier),
     )
-    return FileReference(
-        local_path=out_path,
-        is_durable=True,
-        storage_path=ref.storage_path,
-        tier=ref.tier,
+    return (
+        FileReference(
+            local_path=out_path,
+            is_durable=True,
+            storage_path=ref.storage_path,
+            tier=ref.tier,
+            store=ref.store,
+        ),
+        1,
     )
 
 
 async def _materialize_directory(
     store: ObjectStore,
     ref: FileReference,
-    data_objects: list[DataObject],
+    items: list[tuple[DataObject, str | None]],
     local_directory: str,
-) -> FileReference:
+    *,
+    reuse: _Reuse = _Reuse.VERIFIED,
+) -> tuple[FileReference, int]:
     """Materialise a durable directory-prefix ref (see ``materialize_file_reference``).
+
+    Returns the local ref and how many files were downloaded (the rest were
+    reused under *reuse*).
 
     Callers hold the per-path materialise lock on *local_directory*, so two
     activities sharing one directory ref neither duplicate downloads nor
     share an in-flight chunked part file.
+
+    Args:
+        items: Each object to fetch, paired with the digest its manifest
+            records, or ``None`` when the objects came from a listing. With a
+            manifest digest the local copy is reused only if it hashes to that
+            digest, and a download that does not is rejected — independent of
+            the deployment verify switch, because the digest is what makes a
+            pinned prefix safe against a late overwrite.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         FILE_REF_CHUNK_CONCURRENCY,
@@ -731,7 +1401,7 @@ async def _materialize_directory(
 
     assert ref.storage_path is not None  # dispatcher returns early on bare refs
 
-    data_keys = [obj.key for obj in data_objects]
+    data_keys = [obj.key for obj, _ in items]
 
     _t0 = time.monotonic()
     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
@@ -745,8 +1415,20 @@ async def _materialize_directory(
 
     prefix = ref.storage_path.rstrip("/") + "/"
 
-    async def _download_one(obj: DataObject) -> bool:
-        """Download one file from the prefix. Returns True if skipped (cache hit)."""
+    async def _download_one(obj: DataObject, expected_sha256: str | None) -> bool:
+        """Download one file from the prefix. Returns True if skipped (cache hit).
+
+        One file resolved — reused or downloaded — is one unit of progress
+        (ADR-0018), so a large directory keeps the stall watchdog fed.
+        """
+        try:
+            return await _download_one_unmarked(obj, expected_sha256)
+        finally:
+            current_progress_tracker().mark_progress("storage.download_file")
+
+    async def _download_one_unmarked(
+        obj: DataObject, expected_sha256: str | None
+    ) -> bool:
         key = obj.key
         rel = key.removeprefix(prefix)
         # Reject keys whose resolved path escapes local_directory.
@@ -759,10 +1441,36 @@ async def _materialize_directory(
         # file and its sidecar both exist and their hashes agree.
         # This makes same-pod retries (Temporal heartbeat timeouts,
         # OOM recoveries on the same node) free after the first pass.
-        if dest_path.exists() and dest_sidecar.exists():
+        # With a manifest the reference digest is the manifest's, not the
+        # local sidecar's: a file left by an earlier pass agrees with its own
+        # sidecar and may still not be the file this hand-off names.
+        if (
+            reuse is not _Reuse.NEVER or expected_sha256 is not None
+        ) and dest_path.exists():
             try:
-                local_hash = await integrity.sha256_file(dest_path)
-                if local_hash == dest_sidecar.read_text(encoding="utf-8").strip():
+                # REMOTE_DIGEST asks the store and nothing else: a local
+                # marker only says what was downloaded last time, and the
+                # object may have been overwritten since. No stored digest
+                # means no proof, so the file is downloaded.
+                reference: str | None
+                if expected_sha256 is not None:
+                    reference = expected_sha256
+                elif reuse is _Reuse.REMOTE_DIGEST:
+                    reference = await integrity.read_expected_digest(
+                        store, key, sidecar_present=obj.has_sidecar
+                    )
+                elif dest_sidecar.exists():
+                    reference = dest_sidecar.read_text(encoding="utf-8").strip()
+                else:
+                    reference = None
+                local_hash = (
+                    await integrity.sha256_file(dest_path)
+                    if reference is not None
+                    else None
+                )
+                if reference is not None and local_hash == reference:
+                    if reuse is not _Reuse.VERIFIED or expected_sha256 is not None:
+                        await run_in_thread(_write_local_sidecar, dest, local_hash)
                     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.skipped",
@@ -800,9 +1508,20 @@ async def _materialize_directory(
             file_size=obj.size,
             etag=obj.etag,
             sidecar_present=obj.has_sidecar,
+            expected_sha256=expected_sha256,
         )
+        if expected_sha256 is not None and sha256 is not None:
+            # The transfer layer skips this when verification is switched off
+            # deployment-wide; the manifest check must not be.
+            integrity.check_transfer_digest(
+                "download",
+                key,
+                expected=expected_sha256,
+                actual=sha256,
+                local_path=dest,
+            )
         if sha256 is not None:
-            _write_local_sidecar(dest, sha256)
+            await run_in_thread(_write_local_sidecar, dest, sha256)
         return False
 
     try:
@@ -815,7 +1534,7 @@ async def _materialize_directory(
 
         sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
         results = await _gather_with_semaphore(
-            [_download_one(obj) for obj in data_objects], sem
+            [_download_one(obj, digest) for obj, digest in items], sem
         )
         skipped = sum(results)
     except Exception as exc:
@@ -839,12 +1558,17 @@ async def _materialize_directory(
         duration_ms=int((time.monotonic() - _t0) * 1000),
         tier=str(ref.tier),
     )
-    return FileReference(
-        local_path=local_directory,
-        is_durable=True,
-        storage_path=ref.storage_path,
-        file_count=len(data_keys),
-        tier=ref.tier,
+    return (
+        FileReference(
+            local_path=local_directory,
+            is_durable=True,
+            storage_path=ref.storage_path,
+            file_count=len(data_keys),
+            tier=ref.tier,
+            manifest_path=ref.manifest_path,
+            store=ref.store,
+        ),
+        len(data_keys) - skipped,
     )
 
 
@@ -869,8 +1593,9 @@ async def fetch(
     Args:
         ref: A durable ``FileReference``.  If not durable, returned as-is.
         store: Object store to download from.  If ``None``, resolved from the
-            current activity's infrastructure context — requires the call to
-            originate inside an activity.
+            current activity's infrastructure context — the upstream store for
+            a ``store=UPSTREAM`` ref, the deployment store otherwise — which
+            requires the call to originate inside an activity.
 
     Returns:
         A ``FileReference`` with ``local_path`` set to the downloaded file.
@@ -894,6 +1619,10 @@ async def fetch(
             )
 
             raise ObjectStoreNotProvidedError()
-        store = infra.storage
+        from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: file_ref_sync imports this module
+            _resolve_ref_store,
+        )
+
+        store = _resolve_ref_store(ref, infra.storage, infra.upstream_storage)
 
     return await materialize_file_reference(store, ref)

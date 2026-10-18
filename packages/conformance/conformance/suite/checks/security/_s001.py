@@ -4,7 +4,9 @@ A non-empty string literal assigned to (or passed as) a credential-named target
 is a hardcoded secret.  Detection is deliberately conservative — empty strings,
 ``Field(default=…)`` calls (the value is a ``Call``, not a literal), format/URL
 templates, SCREAMING_SNAKE env-var-name *references*, self-referential field-name
-strings, and ``Enum`` members are all excluded — because the surveyed fleet has
+strings, message tables (a dict of SCREAMING_SNAKE code keys whose every value is a
+help-text sentence with no token-shaped word), field-name alias maps (every value a known provider credential
+field name), and ``Enum`` members are all excluded — because the surveyed fleet has
 zero production violations, so this rule is a future-drift guard that must not add
 noise.
 """
@@ -22,6 +24,40 @@ from ._secret_names import is_credential_value_name
 # A value that is itself an env-var *name* (SCREAMING_SNAKE) is a reference, not
 # the secret — e.g. ``client_secret = "ATLAN_OAUTH2_CLIENT_SECRET"``.
 _ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+_KNOWN_FIELD_NAMES: frozenset[str] = frozenset(
+    {
+        "aws_access_key_id",
+        "aws_secret_access_key",
+        "aws_session_token",
+        "aws_account_id",
+    }
+)
+_AUTH_SCHEME_RE = re.compile(r"^(?:bearer|basic|token|digest)\s", re.IGNORECASE)
+_SENTENCE_END = (".", "!", "?")
+_MIN_SENTENCE_WORDS = 6
+_MIN_STOPWORDS = 2
+_STOPWORDS: frozenset[str] = frozenset(
+    {"a", "an", "and", "for", "in", "of", "on", "or", "the", "to", "with", "your"}
+)
+_TOKEN_PREFIXES = (
+    "ghp_",
+    "gho_",
+    "ghs_",
+    "ghu_",
+    "github_pat_",
+    "sk_",
+    "sk-",
+    "pk_",
+    "rk_",
+    "xox",
+    "akia",
+    "asia",
+    "eyj",
+    "bearer",
+    "basic",
+)
+_MIN_RANDOM_WORD = 16
 
 # Bases that mark a class as an enumeration; assignments in an enum body are
 # member declarations, not credential storage.
@@ -51,6 +87,52 @@ def _is_flaggable_secret_literal(value: ast.expr, target_name: str) -> bool:
     if text.lower() == target_name.lower():  # self-referential field/enum label
         return False
     return True
+
+
+def _looks_like_secret_word(word: str) -> bool:
+    lower = word.lower()
+    parts = re.split(r"[^a-z0-9_-]+", lower)
+    return any(part.startswith(_TOKEN_PREFIXES) for part in parts if part) or (
+        len(word) >= _MIN_RANDOM_WORD
+        and any(c.isdigit() for c in word)
+        and any(c.isalpha() for c in word)
+    )
+
+
+def _looks_like_prose(text: str) -> bool:
+    """True for a help sentence; never for a PEM block, auth value or embedded token."""
+    stripped = text.strip()
+    if "-----BEGIN" in stripped or _AUTH_SCHEME_RE.match(stripped):
+        return False
+    words = [w.strip(".,;:!?()'\"") for w in stripped.split()]
+    return (
+        len(words) >= _MIN_SENTENCE_WORDS
+        and stripped.endswith(_SENTENCE_END)
+        and sum(w.lower() in _STOPWORDS for w in words) >= _MIN_STOPWORDS
+        and not any(_looks_like_secret_word(w) for w in words)
+    )
+
+
+def _str_value(node: ast.expr | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _is_field_alias_map(values: list[ast.expr]) -> bool:
+    """True when every value is a known provider credential field name."""
+    return bool(values) and all(_str_value(v) in _KNOWN_FIELD_NAMES for v in values)
+
+
+def _is_message_table(node: ast.Dict) -> bool:
+    """True for a dict of SCREAMING_SNAKE code keys whose every value is a sentence."""
+    keys = [_str_value(k) for k in node.keys]
+    values = [_str_value(v) for v in node.values]
+    return (
+        len(values) >= 2
+        and all(k is not None and _ENV_NAME_RE.match(k) for k in keys)
+        and all(v is not None and _looks_like_prose(v) for v in values)
+    )
 
 
 def _target_credential_name(target: ast.expr) -> str | None:
@@ -129,6 +211,13 @@ class HardcodedCredentialChecker(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "dict"
+            and _is_field_alias_map([kw.value for kw in node.keywords])
+        ):
+            self.generic_visit(node)
+            return
         for kw in node.keywords:
             if (
                 kw.arg
@@ -139,6 +228,9 @@ class HardcodedCredentialChecker(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Dict(self, node: ast.Dict) -> None:
+        if _is_field_alias_map(node.values) or _is_message_table(node):
+            self.generic_visit(node)
+            return
         for key, value in zip(node.keys, node.values):
             if (
                 isinstance(key, ast.Constant)

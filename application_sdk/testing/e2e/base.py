@@ -77,6 +77,7 @@ failure of the thing under test.
 from __future__ import annotations
 
 import os
+import re
 import warnings
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
@@ -100,13 +101,13 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.binding import create_store_from_binding_optional
-from application_sdk.storage.ops import delete as delete_object
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
     DAGProgressStalledError,
     DeployedManifestMismatchError,
     HarnessMethodNotImplementedError,
+    InvalidLineageEdgeDeclarationError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -137,6 +138,7 @@ from application_sdk.testing.e2e.payload import (
     build_ae_payload,
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.e2e.tenant_pool import TenantPool, check_tenant_pool
 from application_sdk.testing.harness import atlas
 from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
@@ -157,11 +159,14 @@ from application_sdk.testing.harness.expectations import (
     AttributeSampleRead,
     CountRead,
     Finding,
+    LineageEdge,
+    LineageEdgeRead,
     SampleRead,
     Unreadable,
     evaluate_attributes,
     evaluate_attributes_at,
     evaluate_counts,
+    evaluate_lineage_edges,
     evaluate_locations,
     normalise_attribute_expectations,
     normalise_attribute_expectations_at,
@@ -178,6 +183,7 @@ from application_sdk.testing.harness.outcome import (
     as_attribute_samples,
     as_count,
     as_counts,
+    as_lineage_edges,
     as_samples,
 )
 from application_sdk.testing.harness.preconditions import (
@@ -191,6 +197,7 @@ from application_sdk.testing.harness.starters import (
     publish_seed_version,
 )
 from application_sdk.testing.harness.teardown import (
+    CONNECTION_DELETE_NODE_ID,
     ConnectionDeletePlan,
     ConnectionDeleteReport,
     DeleteType,
@@ -204,9 +211,42 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
     from obstore.store import ObjectStore
     from pyatlan.client.aio.client import AsyncAtlanClient
 
+    from application_sdk.execution._temporal.store_assert import StoreAssertOutput
     from application_sdk.testing.harness.temporal import PollerInfo
 
 logger = get_logger(__name__)
+
+
+@deprecated(
+    "application_sdk.testing.e2e.base.delete_object is deprecated, does nothing, "
+    "and will be removed in v4.0. Use application_sdk.storage.ops.delete instead."
+)
+async def delete_object(
+    key: str,
+    store: object = None,
+    *,
+    normalize: bool = True,
+) -> bool:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``base``'s import of
+        :func:`application_sdk.storage.ops.delete` for the runner-side
+        seed-object delete, which FND-3572 retired. No consumer used it, so
+        rather than keep a working alias that new code could pick up, it now
+        deletes nothing — call :func:`application_sdk.storage.ops.delete`.
+
+    Args:
+        key: Ignored.
+        store: Ignored.
+        normalize: Ignored.
+
+    Returns:
+        Always ``False``: nothing was deleted.
+    """
+    del key, store, normalize
+    return False
+
 
 # Where the sdr-e2e composite action selects the CI Dapr components, and the
 # name the atlan-configurator emits the tenant blobstorage binding under. Both
@@ -222,6 +262,13 @@ _DEFAULT_SEED_STORE_BINDING = "atlan-objectstore"
 # deprecation in this SDK names its removal version; this is the one for that
 # field.
 DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION = "4.0"
+
+# The mustache key the toolkit's ``ConnectionSelector`` input fills — the
+# connection a utility DAG (connection-delete, a miner) acts on rather than
+# creates. Teardown reads it to tell a submit against another connection from
+# one that may mint the run's own; see
+# BaseE2ETest._submit_may_create_connection.
+_CONNECTION_SELECTOR_SUBSTITUTION = "{{connection-qualified-name}}"
 
 # Node statuses that are a genuine failure and are never tolerated by the
 # skip-tolerant DAG gate (see BaseE2ETest._core_dag_ok). Pending/Scheduled are
@@ -268,10 +315,79 @@ _FINDING_TEMPLATES = {
     "depth": "  - {subject} {detail}",
     "nesting": "  - {subject} {detail}",
     "attribute": "  - {subject} {detail}",
+    "lineage_edge": "  - {subject}: {detail}",
     "missing": "  - {subject}: {detail}",
     "ambiguous": "  - {subject}: {detail}",
     UNREADABLE: "  - {subject}: {detail}",
 }
+
+
+#: A lineage-edge type name: what Atlas accepts as a typeName.
+_EDGE_TYPE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _parse_lineage_edge(key: str) -> LineageEdge:
+    """Split one ``expected_lineage_edges`` key into (source, target) types.
+
+    Args:
+        key: ``"SourceType -> TargetType"``; whitespace around ``->`` is
+            ignored.
+
+    Returns:
+        The two type names.
+
+    Raises:
+        InvalidLineageEdgeDeclarationError: The key is not exactly two valid
+            type names joined by one ``->``.
+    """
+    parts = [part.strip() for part in key.split("->")]
+    if len(parts) != 2 or not all(_EDGE_TYPE_NAME.match(part) for part in parts):
+        raise InvalidLineageEdgeDeclarationError(
+            message=(
+                f"expected_lineage_edges key {key!r} is not of the form "
+                "'SourceType -> TargetType' (two Atlan type names, letters, "
+                "digits and underscores, joined by '->')."
+            ),
+            constraint="'SourceType -> TargetType'",
+        )
+    return LineageEdge(parts[0], parts[1])
+
+
+def _normalise_lineage_edges(declared: Mapping[str, int]) -> dict[LineageEdge, int]:
+    """Validate a lineage-edge declaration and parse its keys.
+
+    Args:
+        declared: ``"Source -> Target"`` -> minimum process count, as a suite
+            writes it.
+
+    Returns:
+        The same floors keyed by the parsed edge.
+
+    Raises:
+        InvalidLineageEdgeDeclarationError: A key is malformed, two keys name
+            the same edge, or a floor is not an integer >= 1.
+    """
+    normalised: dict[LineageEdge, int] = {}
+    for key, floor in declared.items():
+        edge = _parse_lineage_edge(key)
+        if edge in normalised:
+            raise InvalidLineageEdgeDeclarationError(
+                message=(
+                    f"expected_lineage_edges names the edge '{edge}' twice; "
+                    "declare each edge once."
+                ),
+            )
+        if isinstance(floor, bool) or not isinstance(floor, int) or floor < 1:
+            raise InvalidLineageEdgeDeclarationError(
+                message=(
+                    f"expected_lineage_edges[{key!r}] is {floor!r}; the floor must "
+                    "be an integer >= 1. A floor of zero asserts nothing — drop "
+                    "the entry instead."
+                ),
+                constraint=">= 1",
+            )
+        normalised[edge] = floor
+    return normalised
 
 
 def _render_finding(finding: Finding) -> str:
@@ -567,6 +683,20 @@ class FullDAGOutcome:
     :attr:`succeeded` can tell "the connection is missing" apart from "this
     entrypoint was never going to publish one". Defaults True, so an outcome
     built without it grades exactly as before."""
+    store_assert_read: StoreAssertOutput | Unreadable | None = None
+    """The object-store assertion node's verdict, the fact that it could not be
+    read, or ``None`` when the run declared no store expectations. Set only by
+    :class:`~application_sdk.testing.e2e.system_app.SystemAppE2ETest`."""
+    lineage_edge_reads: LineageEdgeRead | None = None
+    """Lineage processes per declared ``"Source -> Target"`` edge, as read, or
+    the fact that they could not be; ``None`` when the suite declared no
+    ``expected_lineage_edges``. What the ladder grades — a read that stopped at
+    its scan cap carries that here, so an unreached floor is ungraded rather
+    than failed."""
+    lineage_edge_counts: dict[str, int] = field(default_factory=dict)
+    """Settled projection of :attr:`lineage_edge_reads`, keyed by the declared
+    edge as ``"Source -> Target"``. Empty when the read was not taken or could
+    not be read — never zeros standing in for a failed search."""
 
     @property
     def succeeded(self) -> bool:
@@ -645,6 +775,9 @@ class DAGSpec:
             the AE workflow name, so N runs in one leg stay N distinguishable
             AE workflows. Defaults to the resolved entrypoint, else
             ``"default"``.
+        expected_lineage_edges: Per-edge floors on lineage processes, keyed by
+            ``"Source -> Target"`` type names. Last, so the fields before it
+            keep their positional slots.
     """
 
     entrypoint: str | None = None
@@ -664,6 +797,7 @@ class DAGSpec:
     ) = None
     connection_qualified_name: str | None = None
     label: str = ""
+    expected_lineage_edges: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -695,6 +829,9 @@ class ResolvedDAG:
         str, Mapping[str, Mapping[str, AttributeExpectationValue]]
     ] = field(default_factory=dict)
     connection_qualified_name: str = ""
+    expected_lineage_edges: Mapping[LineageEdge, int] = field(default_factory=dict)
+    """Validated and parsed once at resolution, so ``"A->B"`` and ``"A -> B"``
+    resolve to the same edge."""
 
 
 class BaseE2ETest:
@@ -752,6 +889,16 @@ class BaseE2ETest:
     argo_template_name: ClassVar[str] = ""
     mode: ClassVar[RunMode] = RunMode.DIRECT
     app_service_url: ClassVar[str] = ""
+
+    # Which of the above setup_method insists on, and which tenant pool the
+    # suite may run on (see application_sdk.testing.e2e.tenant_pool). Fixed per
+    # base class, not per suite: SystemAppE2ETest sets both.
+    _required_class_attrs: ClassVar[tuple[str, ...]] = (
+        "connector_short_name",
+        "argo_package_name",
+        "argo_template_name",
+    )
+    _tenant_pool: ClassVar[TenantPool] = TenantPool.CONNECTOR
 
     # --- source-availability tier --------------------------------------
     # Sourcing is the app owner's responsibility. When a connector has NO
@@ -1255,6 +1402,40 @@ class BaseE2ETest:
         dict[str, dict[str, dict[str, AttributeExpectationValue]]]
     ] = {}
 
+    # Opt-in: assert WHICH TYPES lineage connects, not only that some lineage
+    # exists. Maps "SourceType -> TargetType" -> the minimum number of lineage
+    # processes (Process / ColumnProcess / BIProcess, or any other Process
+    # subtype) under the connection that take an asset of SourceType as an input
+    # and produce an asset of TargetType as an output::
+    #
+    #     expected_lineage_edges = {
+    #         "SigmaDataElementField -> SigmaDataModelColumn": 1,
+    #         "Column -> SigmaDataElementField": 1,
+    #     }
+    #
+    # Why it exists: ``expect_lineage`` passes as soon as any asset has lineage,
+    # and the counts above cannot see processes at all. A connector that keeps
+    # publishing its coarse lineage but stops producing one finer kind — every
+    # field-level link, say — lands asset counts identical to a good run and
+    # stays green. Naming the edge is what makes that drop a failure.
+    #
+    # Scope + contract:
+    #   * Endpoints are matched by typeName only. A process's inputs or outputs
+    #     may be assets of another connection (a warehouse column feeding a BI
+    #     field); the PROCESS is what has to sit under this connection.
+    #   * Every floor must be >= 1, and a key must be two type names joined by
+    #     "->". Anything else is rejected when the run is resolved.
+    #   * Read once, after the count poll. A connection with more lineage
+    #     processes than the reader's scan cap leaves an unreached floor
+    #     ungraded (an Atlas-read error, not a failure) rather than failing on a
+    #     partial count.
+    #   * Independent of ``expect_lineage``, which only relaxes the DAG gate and
+    #     the presence check. A BI connector's transform publishes its
+    #     processes even with the lineage nodes skipped.
+    #
+    # Empty = skip (no extra Atlas call).
+    expected_lineage_edges: ClassVar[dict[str, int]] = {}
+
     # How many assets to sample per type for the attribute check. Separate from
     # the location sampler's fixed 3 because the tradeoff is different: the
     # location check is a systematic-drift detector where three assets prove as
@@ -1287,17 +1468,18 @@ class BaseE2ETest:
                 not strictly below the poll ceiling, so the watchdog could never
                 fire.
             MissingHarnessEnvError: The environment carries no tenant.
+            TenantPoolMismatchError: The suite is not written for the tenant
+                pool this run is on.
         """
-        for required in (
-            "connector_short_name",
-            "argo_package_name",
-            "argo_template_name",
-        ):
+        for required in type(self)._required_class_attrs:
             if not getattr(type(self), required, ""):
                 raise MissingHarnessClassAttrError(
                     message=f"{type(self).__name__}: class attribute '{required}' must be set",
                     field=required,
                 )
+        check_tenant_pool(
+            type(self)._tenant_pool, os.environ, suite=type(self).__name__
+        )
 
         self._node_dispatch = {}
         self._queue_pollers = {}
@@ -1317,13 +1499,21 @@ class BaseE2ETest:
         # "nothing exists here". The two flags below are the existence ones.
         self._connection_seeded = False
         # Whether anything has been sent that can bring this run's own
-        # connection into being: the create write, and a DAG submit. Both are
-        # set on the way *in* to the call, for the reason
-        # :meth:`_own_connection_may_exist` gives.
+        # connection into being: the create write, and a DAG submit — recorded
+        # as the connection that submit was about, because a submit against a
+        # different one creates nothing here. Both are set on the way *in* to
+        # the call, for the reason :meth:`_own_connection_may_exist` gives.
         self._connection_create_attempted = False
+        self._submitted_connection_qns: list[str] = []
+        self._payload_substitutions: MustacheSubstitutions | None = None
         self._dag_submitted = False
+        # AE run ids submitted but not yet seen terminal. Teardown terminates
+        # whatever is left — see :meth:`_terminate_unsettled_runs`.
+        self._unsettled_run_ids: list[str] = []
         self._seeded_connection_qns: list[str] = []
-        self._seeded_prefixes: list[str] = []
+        # Each seed's object-store root, keyed to the connection it was seeded
+        # under — the QN whose connection-delete run is what reclaims it.
+        self._seeded_prefixes: dict[str, str] = {}
         self._validate_dag_runs()
 
         # A pinned progress-stall window that is not strictly below the poll
@@ -1726,9 +1916,10 @@ class BaseE2ETest:
         which submits a one-node ``connection-delete`` DAG the same way
         :meth:`seed_assets` submits its publish node — because the app owns the
         artifacts and runs *on the tenant*, where the byte-stores the harness
-        cannot reach through the s3proxy are ordinary object-store keys. What
-        the harness still deletes itself is the seed NDJSON it wrote, which is
-        no app's to clean up.
+        cannot reach through the s3proxy are ordinary object-store keys. Since
+        FND-3569 that includes each seed root under
+        ``artifacts/apps/<app>/e2e-seed/``; the harness only checks the app's
+        own report that it did.
 
         Nothing here raises. Every step reports, and the module those two
         functions live in explains why that is a stronger guarantee than
@@ -1739,10 +1930,45 @@ class BaseE2ETest:
                 signature.
         """
         try:
+            # First: a run still extracting must not race the delete of the
+            # connection it is writing into.
+            await self._terminate_unsettled_runs()
             await self._delete_connections()
-            await self._delete_seed_objects()
         finally:
             await self._close_clients()
+
+    async def _terminate_unsettled_runs(self) -> None:
+        """Terminate every AE run this test submitted and never saw finish.
+
+        The harness stops watching a run on several exits that leave it going —
+        the progress watchdog, the poll ceiling, a no-worker verdict, or an
+        extract child that AE is retrying after a failed first attempt. The
+        extract node of a CI e2e run is dispatched to a task queue served only
+        by the worker the CI job started, so once the job exits nothing can
+        progress it, and the child waits on that queue until its workflow
+        execution timeout (up to days) closes it as "Timed out". Those orphans
+        are what a fleet-wide "Timed out" pattern on CI tenants is made of.
+
+        Terminating the AE root closes the child with it (children are started
+        with terminate-on-parent-close). Nothing here raises: an unstoppable run
+        is logged, and the connection delete still runs.
+        """
+        run_ids = tuple(getattr(self, "_unsettled_run_ids", ()))
+        ae = getattr(self, "_ae", None)
+        if not run_ids or ae is None:
+            return
+        for run_id in run_ids:
+            try:
+                await ae.terminate_run(run_id)
+            # conformance: ignore[E004] teardown boundary — a cleanup failure must never replace the run's verdict, and one unstoppable run must not skip the rest of teardown
+            except Exception:
+                logger.warning(
+                    "e2e cleanup: could not terminate AE run %s; it may keep "
+                    "running until its workflow execution timeout",
+                    run_id,
+                    exc_info=True,
+                )
+        self._unsettled_run_ids = []
 
     async def _delete_connections(self) -> None:
         """Delete every ephemeral connection this run touched, if there are any.
@@ -1768,8 +1994,8 @@ class BaseE2ETest:
         if conn_qn and not self._own_connection_may_exist():
             logger.info(
                 "e2e cleanup: no cleanup needed for %s — this run seeded no "
-                "connection and submitted no DAG, so nothing was ever created "
-                "under that name",
+                "connection under that name and submitted no DAG that could "
+                "create it, so nothing was ever created there",
                 conn_qn,
             )
             # Emptied rather than filtered out of the loop below, so the
@@ -1777,13 +2003,21 @@ class BaseE2ETest:
             # do not shift when the run's own connection is skipped.
             conn_qn = ""
         seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
+        # A suite that seeds under its own QN registers that name twice — once
+        # as the run's own, once as seeded. One delete reclaims it; a second is
+        # a full AE run against a connection the first already purged.
+        # Skipped in place, for the same ordinal-stability reason as above.
+        reached: set[str] = set()
         for ordinal, target in enumerate((conn_qn, *seeded), start=1):
-            if not target:
+            if not target or target in reached:
                 continue
+            reached.add(target)
             report = await self._delete_connection_via_app(target, ordinal=ordinal)
             if report is not None and report.complete:
+                await self._confirm_seed_roots_purged(target, report)
                 continue
             self._warn_connection_delete_incomplete(target, report)
+            self._warn_seed_roots_left(target, report)
             await self._purge_connection_from_runner(target)
 
     def _own_connection_may_exist(self) -> bool:
@@ -1795,15 +2029,20 @@ class BaseE2ETest:
         create one, and nothing else does:
 
         * the Atlas create :meth:`seed_connection` issues;
-        * a DAG submit, whose run mints the Connection on the tenant.
+        * a DAG submit against that name, whose run mints the Connection on
+          the tenant. A submit against a *different* connection — a
+          :class:`DAGSpec` that rebinds the run, or a utility DAG pointed at a
+          seeded connection (see :meth:`_submit_may_create_connection`) — is
+          recorded under that other name and does not count here.
 
         A run that made neither call holds a freshly minted name under which,
         by construction, nothing can exist — a suite that skipped in
         :meth:`seed_prerequisites`, a leg where the source-availability tier
-        wired no AE client at all, or a test that errored before it submitted.
+        wired no AE client at all, a test that errored before it submitted, or
+        a connection-delete suite whose only DAG purged a seeded connection.
         Deleting that name costs an AE workflow publish, a submit and a
         minute of polling to reclaim nothing, on every leg of every push
-        (FND-1873).
+        (FND-1873, FND-3405).
 
         **Both flags are set on the way in to the call, not on its way out**,
         and each for the same reason: a call whose response never arrived is
@@ -1829,9 +2068,53 @@ class BaseE2ETest:
             Whether teardown has anything to reclaim under
             ``self.connection_qualified_name``.
         """
-        return bool(getattr(self, "_connection_create_attempted", False)) or bool(
-            getattr(self, "_dag_submitted", False)
+        if getattr(self, "_connection_create_attempted", False):
+            return True
+        own_qn = getattr(self, "connection_qualified_name", "")
+        return own_qn in getattr(self, "_submitted_connection_qns", ())
+
+    def _submit_may_create_connection(self) -> bool:
+        """Whether the DAG about to be submitted could create the active connection.
+
+        Answers ``False`` only on positive evidence that the run is about some
+        *other* connection, and both halves of that evidence are required:
+
+        * the run declares ``expect_connection = False`` — it is not graded on
+          landing a Connection, so nothing says it publishes one; and
+        * its ``{{connection-qualified-name}}`` substitution (the toolkit's
+          ``ConnectionSelector`` input) names connections, none of them this
+          one.
+
+        Either half alone is not enough. A crawler expects its connection, and
+        mints it from the ``{{connection}}`` substitution whatever else it is
+        handed. A miner may not expect one, but with no selector pointing
+        elsewhere the harness cannot tell which connection it enriches. Every
+        doubtful case answers ``True``: an extra delete costs a minute of a
+        runner, a missed one leaks a connection onto a shared tenant.
+
+        The selector is read from the substitutions :meth:`_build_ae_payload`
+        recorded for this run, not by calling the hook again: a suite that
+        overrides ``_build_ae_payload`` records none, and is treated as giving
+        no evidence.
+
+        Returns:
+            Whether a submit now may bring ``self.connection_qualified_name``
+            into being.
+        """
+        if self._dag.expect_connection:
+            return True
+        substitutions = getattr(self, "_payload_substitutions", None)
+        if substitutions is None:
+            return True
+        selected = substitutions.model_dump(by_alias=True, mode="json").get(
+            _CONNECTION_SELECTOR_SUBSTITUTION
         )
+        if isinstance(selected, str):
+            selected = [selected]
+        if not isinstance(selected, list):
+            return True
+        named = {qn for qn in selected if isinstance(qn, str) and qn}
+        return not named or self.connection_qualified_name in named
 
     async def _delete_connection_via_app(
         self, qualified_name: str, *, ordinal: int
@@ -1986,77 +2269,133 @@ class BaseE2ETest:
                 exc_info=True,
             )
 
-    async def _delete_seed_objects(self) -> None:
-        """Delete the object-store keys each :meth:`seed_assets` call wrote.
+    def _seed_roots_for(self, qualified_name: str) -> list[str]:
+        """The seed roots registered under one connection, in seed order.
 
-        The one artifact ``connection-delete`` does not cover: its
-        ``archive_storage`` clears the *app-owned* per-connection stores
-        (``connection-cache/``, ``argo-artifacts/``, ``delta/``, publish's
-        state root), and the seed NDJSON under ``artifacts/apps/<app>/e2e-seed/``
-        is harness-specific — nothing on the tenant knows it exists.
+        Args:
+            qualified_name: The connection a teardown delete targeted.
 
-        **By key, never by prefix** — though on current evidence neither
-        reaches the store. ``delete_prefix`` is a LIST plus a bulk
-        ``POST ?delete``, both *bucket-level* URLs, and the tenant's Kong
-        s3proxy path-matches against an allowlist it cannot apply to a URL
-        whose keys live in the request body, so it came back
-        ``403 code 1009``. The per-key DELETE was the fix for that — the
-        allowlist can read a path — and a live e2e run on 2026-09-07
-        (FND-1766's three-cloud A/B) came back ``403`` on it too. The
-        allowlist does not grant DELETE under ``/artifacts/apps/`` to a runner
-        in any request shape.
-
-        This method therefore expects to fail, and is written to fail
-        harmlessly: each key is attempted, a refusal is logged with the key
-        named, and the run's verdict is untouched. Keeping it is still worth
-        more than deleting it — it will start working the moment the allowlist
-        or the store binding changes, and its log line is what names the
-        leftover.
-
-        **The actual fix is on the tenant, not here.** ``connection-delete``'s
-        ``archive_storage`` already clears the app-owned per-connection stores
-        from inside the cluster, where no proxy sits in front of the bucket;
-        bringing the seed root into its scope deletes these keys and publish's
-        own state under the same root (``.../publish-state/``,
-        ``.../current-state/``) in one go. Both are bounded per seed. A third
-        URL shape from the runner is not the answer.
-
-        Run after the connections, on the same ordering rule as before: the
-        entities are what a stranded run trips over, the NDJSON is only bytes,
-        and a store the harness cannot reach must not stop the deletes.
+        Returns:
+            Every root :meth:`seed_assets` registered for it — usually none or
+            one.
         """
-        prefixes = tuple(getattr(self, "_seeded_prefixes", ()))
-        if not prefixes:
+        return [
+            root
+            for root, seeded_qn in getattr(self, "_seeded_prefixes", {}).items()
+            if seeded_qn == qualified_name
+        ]
+
+    async def _confirm_seed_roots_purged(
+        self, qualified_name: str, report: ConnectionDeleteReport
+    ) -> None:
+        """Check the delete's own report that it took this connection's seed roots.
+
+        The harness cannot delete a seed root itself: the tenant's s3proxy
+        refuses DELETE under ``/artifacts/apps/`` from a runner in every request
+        shape (FND-1766's three-cloud A/B;
+        :func:`~application_sdk.testing.harness.seed.seed_object_keys` has the
+        detail). ``connection-delete`` runs on the tenant with no proxy in
+        front of the bucket, and since FND-3569 its PURGE deletes
+        ``artifacts/apps/<app>/e2e-seed/<encoded qn>/`` for every app and
+        reports what it deleted on its output's ``storage_deleted_by_prefix``:
+        non-zero counts only, keyed by prefix with a trailing ``/``.
+
+        So a missing key is the signal. The harness wrote at least
+        :func:`~application_sdk.testing.harness.seed.seed_object_keys` under
+        every root, so a purge that reached one counts at least one object. A
+        report with no ``storage_deleted_by_prefix`` at all is a tenant whose
+        ``connection-delete`` predates FND-3569. Either way the warning names
+        the root and the run: what an operator needs to clean it up and to see
+        why it was left.
+
+        Never raises, on the teardown rule.
+
+        Args:
+            qualified_name: The connection the completed delete targeted.
+            report: That delete's report. ``complete`` is the caller's check.
+        """
+        roots = self._seed_roots_for(qualified_name)
+        if not roots:
             return
+        named_roots = ", ".join(f"{root}/" for root in roots)
+        run_id = report.ae_run_id or "<none>"
         try:
-            store = self.seed_object_store()
-        # conformance: ignore[E004] teardown boundary — see _purge_connection_from_runner; a store the harness cannot resolve leaves bytes behind, which is strictly less harmful than replacing the run's verdict
+            outputs = await self._ae.get_node_outputs(
+                report.ae_run_id, CONNECTION_DELETE_NODE_ID
+            )
+        # conformance: ignore[E004] teardown boundary — see _purge_connection_from_runner; an unreadable report leaves the question open, which is strictly less harmful than replacing the run's verdict
         except Exception:
             logger.warning(
-                "e2e cleanup: no usable seed object store, so the seed NDJSON "
-                "under %s was left behind — manual cleanup may be needed",
-                ", ".join(prefixes),
+                "e2e cleanup: could not read the connection-delete run's "
+                "outputs for %s (run_id=%s), so whether it purged the seed "
+                "root(s) %s is unknown — manual cleanup may be needed",
+                qualified_name,
+                run_id,
+                named_roots,
                 exc_info=True,
             )
             return
-        for prefix in prefixes:
-            for key in harness_seed.seed_object_keys(root=prefix):
-                try:
-                    deleted = await delete_object(key, store)
-                # conformance: ignore[E004] teardown boundary — see above
-                except Exception:
-                    logger.warning(
-                        "e2e cleanup: could not delete the seed object %s — "
-                        "manual cleanup may be needed",
-                        key,
-                        exc_info=True,
-                    )
-                    continue
+        by_prefix = outputs.get("storage_deleted_by_prefix")
+        if not isinstance(by_prefix, dict):
+            logger.warning(
+                "e2e cleanup: the connection-delete run for %s (run_id=%s) "
+                "reported no storage_deleted_by_prefix, so this tenant's "
+                "connection-delete predates FND-3569 and left the seed root(s) "
+                "%s behind — manual cleanup may be needed until the app is "
+                "upgraded",
+                qualified_name,
+                run_id,
+                named_roots,
+            )
+            return
+        for root in roots:
+            deleted = by_prefix.get(f"{root}/")
+            if deleted:
                 logger.info(
-                    "e2e cleanup: %s seed object %s",
-                    "deleted" if deleted else "found no",
-                    key,
+                    "e2e cleanup: connection-delete purged %s object(s) under "
+                    "the seed root %s/ (run_id=%s)",
+                    deleted,
+                    root,
+                    run_id,
                 )
+                continue
+            logger.warning(
+                "e2e cleanup: the connection-delete run for %s (run_id=%s, "
+                "delete_type=%s) did not report purging the seed root %s/, so "
+                "it may still be there — manual cleanup may be needed. "
+                "Prefixes it reported: %s",
+                qualified_name,
+                run_id,
+                self.connection_delete_type.value,
+                root,
+                ", ".join(sorted(by_prefix)) or "<none>",
+            )
+
+    def _warn_seed_roots_left(
+        self, qualified_name: str, report: ConnectionDeleteReport | None
+    ) -> None:
+        """Name the seed roots a delete that did not complete left behind.
+
+        The runner-side fallback reclaims the Atlas half only, so a seed root
+        under a connection whose ``connection-delete`` run did not complete is
+        still there, and nothing else on the tenant will take it.
+
+        Args:
+            qualified_name: The connection whose delete did not complete.
+            report: That delete's report, or ``None`` on a tier with no AE
+                client.
+        """
+        roots = self._seed_roots_for(qualified_name)
+        if not roots:
+            return
+        logger.warning(
+            "e2e cleanup: the seed root(s) %s for %s were left behind — only "
+            "connection-delete can reach them, and its run did not complete "
+            "(run_id=%s). Manual cleanup may be needed",
+            ", ".join(f"{root}/" for root in roots),
+            qualified_name,
+            (report.ae_run_id if report is not None else "") or "<none>",
+        )
 
     async def _close_clients(self) -> None:
         """Release the AE pool this test opened, on the loop that opened it.
@@ -2542,11 +2881,10 @@ class BaseE2ETest:
             resolved, ordinal=len(self._seeded_connection_qns) + 1
         )
         self._seeded_connection_qns.append(resolved.qualified_name)
-        self._seeded_prefixes.append(
-            harness_seed.seed_prefix_root(
-                app_name=plan.app_name, qualified_name=resolved.qualified_name
-            )
+        root = harness_seed.seed_prefix_root(
+            app_name=plan.app_name, qualified_name=resolved.qualified_name
         )
+        self._seeded_prefixes[root] = resolved.qualified_name
         return await harness_seed.seed_assets(
             resolved,
             store=self.seed_object_store(),
@@ -3107,6 +3445,11 @@ class BaseE2ETest:
                     else spec.expected_asset_attributes_at
                 ).items()
             },
+            expected_lineage_edges=_normalise_lineage_edges(
+                self.expected_lineage_edges
+                if spec.expected_lineage_edges is None
+                else spec.expected_lineage_edges
+            ),
             # ``getattr`` rather than the attribute: ``_validate_dag_runs``
             # resolves every declared run inside ``setup_method``, *before* the
             # minter has named this run's connection. Both sides of the
@@ -3301,7 +3644,12 @@ class BaseE2ETest:
 
         Subclasses never override this method — they override the two
         typed hooks above.
+
+        The substitutions are kept on ``_payload_substitutions`` so the submit
+        can read what it is about to send without calling the hook again — see
+        :meth:`_submit_may_create_connection`.
         """
+        self._payload_substitutions = self._mustache_substitutions()
         return build_ae_payload(
             run_id=self.run_id,
             mode=self.mode,
@@ -3310,7 +3658,7 @@ class BaseE2ETest:
             argo_template_name=self.argo_template_name,
             app_service_url=self.app_service_url,
             connection=self.connection_spec(),
-            mustache_subs=self._mustache_substitutions(),
+            mustache_subs=self._payload_substitutions,
             credential_body=self._credential_body(),
             ae_workflow_slug=slug,
             entrypoint=self._resolved_entrypoint(),
@@ -3891,9 +4239,9 @@ class BaseE2ETest:
 
         outcome = await poll_until(
             _read,
-            settled=lambda read: read is not None
-            and bool(read.dag)
-            and _supersedes(read.version, seed),
+            settled=lambda read: (
+                read is not None and bool(read.dag) and _supersedes(read.version, seed)
+            ),
             budget=self._deployed_manifest_budget(),
             label=f"the DAG AE published for slug {slug}",
         )
@@ -4031,6 +4379,10 @@ class BaseE2ETest:
                 inference.
         """
         slug = await self._bootstrap_workflow()
+        # Cleared first so a previous run's substitutions can never stand in
+        # for this one's, under a ``_build_ae_payload`` override that does not
+        # record its own.
+        self._payload_substitutions = None
         payload = self._build_ae_payload(slug)
 
         # Override-proof app-entrypoint injection. Per-app subclasses commonly
@@ -4055,9 +4407,26 @@ class BaseE2ETest:
         # executing orphaned rather than one that never happened, and that run
         # creates the connection teardown has to reclaim. See
         # :meth:`_own_connection_may_exist`.
+        if self._submit_may_create_connection():
+            self._submitted_connection_qns = [
+                *getattr(self, "_submitted_connection_qns", ()),
+                self.connection_qualified_name,
+            ]
         self._dag_submitted = True
+        # The run id is recorded via _track_unsettled_run the instant _submit
+        # knows it — on a normal submit AND on the ambiguous-submit recovery
+        # path, from inside _submit rather than here. AE submit is
+        # non-idempotent: a submit that starts a run but then raises/times out
+        # must not leave an untracked orphan, so tracking cannot wait for this
+        # call to return. Cleared only once AE reports the run terminal; every
+        # exit in between — the watchdog, the ceiling, a no-worker verdict, a
+        # failed manifest check — leaves a run that teardown has to stop.
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
+        # Idempotent fallback for an overridden _submit that does not wire the
+        # sink: the returned id is tracked either way.
+        self._track_unsettled_run(run_id)
+        unsettled = self._unsettled_run_ids
 
         # Before the poll: submit is what makes Heracles fetch the tenant pod's
         # manifest and publish it over our seed, so this is the earliest point
@@ -4066,6 +4435,8 @@ class BaseE2ETest:
         await self._assert_deployed_manifest_matches(slug)
 
         ae_result = await self._poll_dag(run_id)
+        if ae_result.status.is_terminal and run_id in unsettled:
+            unsettled.remove(run_id)
 
         # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
         # indexing lag cannot masquerade as an absence. See
@@ -4073,6 +4444,25 @@ class BaseE2ETest:
         await self._ae.probe_run_is_listed(slug, run_id)
 
         return await self._read_atlas(ae_result)
+
+    def _track_unsettled_run(self, run_id: str) -> None:
+        """Record an AE run id teardown must terminate if it never settles.
+
+        Called the instant a run id becomes known — on a normal submit AND on
+        the ambiguous-submit recovery path, which is why it is a sink
+        :meth:`_submit` hands to ``submit_workflow`` rather than an append the
+        caller does once the submit returns: AE submit is non-idempotent, so a
+        submit that starts a run and then raises/times out must still leave the
+        id tracked. Idempotent — the recovery hook and the normal 2xx return can
+        both fire for one submit.
+
+        Only :meth:`run_full_dag` submissions are tracked. The connection-delete
+        and seed-publish DAGs are tenant-served quick runs that settle on their
+        own, so they are intentionally not recorded here.
+        """
+        unsettled = self.__dict__.setdefault("_unsettled_run_ids", [])
+        if run_id not in unsettled:
+            unsettled.append(run_id)
 
     async def _submit(self, payload: dict[str, Any], *, slug: str) -> str:
         """POST the run to AE, with the tenant-app cold-start budget applied.
@@ -4088,12 +4478,15 @@ class BaseE2ETest:
         """
         retry = self._submit_retry()
         if retry is None:
-            return await self._ae.submit_workflow(payload, slug=slug)
+            return await self._ae.submit_workflow(
+                payload, slug=slug, on_run_id=self._track_unsettled_run
+            )
         return await self._ae.submit_workflow(
             payload,
             slug=slug,
             retries=retry.retries,
             retry_sleep_seconds=retry.sleep_seconds,
+            on_run_id=self._track_unsettled_run,
         )
 
     async def _poll_dag(self, run_id: str) -> DAGRunResult:
@@ -4514,6 +4907,24 @@ class BaseE2ETest:
                 {str(ref): value for ref, value in addressed_reads.items()},
             )
 
+        # Count the declared lineage edges (opt-in). Separate from the lineage
+        # presence read above: that one asks whether assets have lineage at
+        # all, and stays true when one kind of link silently stops landing.
+        edge_read: LineageEdgeRead | None = None
+        if dag.expected_lineage_edges:
+            edge_read = as_lineage_edges(
+                await atlas.count_lineage_edges(
+                    client,
+                    self.connection_qualified_name,
+                    list(dag.expected_lineage_edges),
+                )
+            )
+            logger.info(
+                "Lineage edges under %s: %s",
+                self.connection_qualified_name,
+                edge_read,
+            )
+
         return self._outcome(
             ae_result,
             connection_in_atlas=True,
@@ -4524,6 +4935,7 @@ class BaseE2ETest:
             sample_reads=sample_reads,
             attribute_reads=attribute_reads,
             addressed_reads=addressed_reads,
+            edge_read=edge_read,
         )
 
     async def _poll_asset_counts(
@@ -4594,6 +5006,7 @@ class BaseE2ETest:
         sample_reads: Mapping[str, SampleRead] | None = None,
         attribute_reads: Mapping[str, AttributeSampleRead] | None = None,
         addressed_reads: Mapping[AssetRef, AttributeSampleRead] | None = None,
+        edge_read: LineageEdgeRead | None = None,
     ) -> FullDAGOutcome:
         """Assemble the outcome, projecting each reading into its settled half.
 
@@ -4608,6 +5021,8 @@ class BaseE2ETest:
             sample_reads: Sampled qualified names as read.
             attribute_reads: Sampled attribute values as read.
             addressed_reads: Addressed assets' attribute values as read.
+            edge_read: Lineage processes per declared edge as read, when the
+                suite declared any.
 
         Returns:
             The outcome. Every reading is carried in both shapes: the settled
@@ -4643,6 +5058,12 @@ class BaseE2ETest:
             asset_qn_reads=samples,
             asset_attribute_reads=attributes,
             addressed_attribute_reads=dict(addressed_reads or {}),
+            lineage_edge_reads=edge_read,
+            lineage_edge_counts=(
+                {str(edge): count for edge, count in edge_read.counts.items()}
+                if edge_read is not None and not isinstance(edge_read, Unreadable)
+                else {}
+            ),
             connection_expected=self._dag.expect_connection,
         )
 
@@ -4678,6 +5099,7 @@ class BaseE2ETest:
             # which is exactly what "there is no connection to measure depth
             # from" should do.
             connection_qualified_name=getattr(self, "connection_qualified_name", ""),
+            lineage_edges=dict(dag.expected_lineage_edges),
         )
 
     def _asset_findings(
@@ -4788,6 +5210,30 @@ class BaseE2ETest:
             _render_finding(finding)
             for finding in self._asset_findings(asset_counts, total_assets=total_assets)
         ]
+
+    def _evaluate_lineage_edges(self, edge_reads: LineageEdgeRead | None) -> list[str]:
+        """Evaluate ``expected_lineage_edges`` against the observed edge counts.
+
+        For suites that crawl once in a fixture and assert piecemeal, which
+        never reach the full assertion ladder. Pass the outcome's
+        ``lineage_edge_reads``.
+
+        Args:
+            edge_reads: What the edge read answered, or ``None`` when none was
+                taken (graded as zero processes).
+
+        Returns:
+            One failure line per declared edge below its floor; empty when every
+            edge met it or none is declared.
+
+        Raises:
+            AtlasReadIndeterminateError: An edge could not be graded, because the
+                read failed or the scan stopped at its cap below the floor. Never
+                reported as a count of zero.
+        """
+        findings = evaluate_lineage_edges(edge_reads, self._asset_expectations())
+        self._raise_if_ungraded(findings)
+        return [_render_finding(finding) for finding in findings]
 
     def _validate_asset_locations(
         self, asset_qn_samples: Mapping[str, SampleRead]
@@ -5012,6 +5458,8 @@ class BaseE2ETest:
              landed or where.
           6. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
+          7. Each edge declared in ``expected_lineage_edges`` (opt-in) is linked
+             by at least its floor of lineage processes.
 
         Assertions 2-6 are all about published inventory, so ``expect_connection
         = False`` drops them and leaves assertion 1 as the verdict. That is the
@@ -5183,8 +5631,11 @@ class BaseE2ETest:
         # as one is what sent an Atlas outage to the connector team as "the
         # floors were not met". It is raised first, and as a leaf that is not an
         # AssertionError, so pytest marks the leg an error rather than a failure.
+        edge_findings = evaluate_lineage_edges(
+            outcome.lineage_edge_reads, self._asset_expectations()
+        )
         self._raise_if_ungraded(
-            [*count_findings, *location_findings, *attribute_findings]
+            [*count_findings, *location_findings, *attribute_findings, *edge_findings]
         )
 
         asset_failures = [_render_finding(finding) for finding in count_findings]
@@ -5226,6 +5677,16 @@ class BaseE2ETest:
                 f"{outcome.connection_qualified_name}. The DAG's qi + "
                 "lineage-app + lineage-publish nodes reported success but "
                 "no lineage rows reached Atlas."
+            )
+
+        edge_failures = [_render_finding(finding) for finding in edge_findings]
+        if edge_failures:
+            raise AssertionError(
+                "Declared lineage edges are missing under "
+                f"{outcome.connection_qualified_name} (lineage may exist, but "
+                "not between these types):\n"
+                + "\n".join(edge_failures)
+                + f"\nObserved per edge: {outcome.lineage_edge_counts}"
             )
 
     def _unreadable_probe_findings(self, outcome: FullDAGOutcome) -> Sequence[Finding]:
@@ -5437,6 +5898,7 @@ class BaseE2ETest:
                     "asset_counts": dict(outcome.asset_counts),
                     "total_assets": outcome.total_assets,
                     "lineage_present": outcome.lineage_present,
+                    "lineage_edge_counts": dict(outcome.lineage_edge_counts),
                 }
             )
         artifacts = {"traceback.txt": safe_traceback(failure)}

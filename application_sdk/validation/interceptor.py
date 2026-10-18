@@ -84,7 +84,11 @@ from application_sdk.observability.events import (
     ARTIFACT_VALIDATION_EVENT,
     ARTIFACT_VALIDATION_POSTURE_EVENT,
 )
-from application_sdk.observability.logger_adaptor import ARTIFACT_MODE_KEY, get_logger
+from application_sdk.observability.logger_adaptor import (
+    ARTIFACT_MODE_KEY,
+    ASSET_VALIDATION_ON_UPLOAD_KEY,
+    get_logger,
+)
 from application_sdk.validation.artifacts import (
     ENFORCEMENT_BLOCKED,
     ArtifactValidationReport,
@@ -342,6 +346,11 @@ def log_artifact_validation_posture(
     measurable rather than a code-search artifact, and it is why the soft rows —
     the overwhelming majority — are the ones that matter most here.
 
+    The row also carries ``asset_validation_on_upload`` (``on``/``off``): the
+    transformed-asset check in ``App.upload()`` is a separate switch
+    (``ATLAN_VALIDATE_ASSETS_ON_UPLOAD``), and without it an app emitting no asset
+    outcome rows cannot be told apart from one with that check turned off.
+
     ``enabled=False`` reports :data:`~application_sdk.validation.artifacts.MODE_OFF`
     rather than the declared posture: a hard-mode app on a deployment with
     ``ATLAN_VALIDATE_ARTIFACTS`` down blocks nothing, and a row promising
@@ -356,14 +365,21 @@ def log_artifact_validation_posture(
         enforce: Whether the app resolved to hard mode.
         enabled: Whether artifact validation runs at all on this deployment.
     """
-    # conformance: ignore[L018] app_name is in _KNOWN_EXTRA_KEYS and the mode key is a pinned attribute; %-style would lose the OTLP promotion this event exists for
+    from application_sdk import (  # noqa: PLC0415 — read at call time so a test can patch the switch
+        constants,
+    )
+
+    # conformance: ignore[L018] app_name is in _KNOWN_EXTRA_KEYS and the mode keys are pinned attributes; %-style would lose the OTLP promotion this event exists for
     logger.info(
         ARTIFACT_VALIDATION_POSTURE_EVENT,
         app_name=app_name,
         **{
             ARTIFACT_MODE_KEY: artifact_validation_mode(
                 enforce=enforce, enabled=enabled
-            )
+            ),
+            ASSET_VALIDATION_ON_UPLOAD_KEY: (
+                "on" if constants.VALIDATE_ASSETS_ON_UPLOAD else "off"
+            ),
         },
     )
 

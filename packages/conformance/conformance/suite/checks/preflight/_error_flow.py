@@ -5,8 +5,14 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 
-from ._common import Source, find_preflight_check_sites
+from ._common import SCENARIO_COVERAGE, Source, find_preflight_check_sites
 from ._contracts import Function, _Checker, _kwargs, _literal, _nodes, _qualified, _sdk
+
+# A caught-exception binding whose except clause does not name a typed error:
+# `except Exception as exc`, a bare `except:`, or a third-party class. The value
+# has no guaranteed to_failure_details(), so nothing about the failure is proven
+# and narrowing the clause is the fix that would resolve it.
+UNTYPED_CATCH = object()
 
 
 @dataclass
@@ -122,6 +128,42 @@ class ErrorFlow:
             excluded.update(_qualified(context.source, kind) for kind in kinds)
         return excluded
 
+    def caught(self, context: Context, name: str, line: int, excluded) -> list | None:
+        """Resolve the except-clause types bound to ``name`` at ``line``.
+
+        Returns ``None`` when ``name`` is not an exception binding, and a list —
+        possibly empty, when every caught type is excluded by a preceding
+        ``isinstance`` re-raise — when it is.
+
+        Re-typing a caught SDK error onto a failed row —
+        ``except AppError as exc: ... error=exc.to_failure_details()`` — is the
+        shape the preflight guide asks for, so the binding resolves to the
+        caught types rather than to nothing. A typed clause proves the value is
+        an ``AppError`` and therefore that ``to_failure_details()`` yields typed
+        details; the message and suggested action belong to whichever raise site
+        built the error, so the type node carries no constructor kwargs to grade
+        and ``_Checker.failure`` leaves it alone.
+        """
+        src = context.source
+        resolved: list | None = None
+        for handler in _nodes(context.function):
+            if not isinstance(handler, ast.ExceptHandler) or handler.name != name:
+                continue
+            if not handler.lineno <= line <= (handler.end_lineno or handler.lineno):
+                continue
+            resolved = resolved or []
+            types = (
+                handler.type.elts
+                if isinstance(handler.type, ast.Tuple)
+                else [handler.type]
+            )
+            for kind in types:
+                if kind is None or not self.checker.typed_error(src, kind):
+                    resolved.append(UNTYPED_CATCH)
+                elif not self.checker.error_names(src, kind).intersection(excluded):
+                    resolved.append((src, kind))
+        return resolved
+
     def resolve(self, reference: Reference, excluded=frozenset(), seen=frozenset()):
         node, context = reference.node, reference.context
         key = (id(node), id(context.function))
@@ -154,7 +196,15 @@ class ErrorFlow:
             elif not assignments and node.id in context.arguments:
                 yield from self.resolve(context.arguments[node.id], excluded, seen)
             else:
-                yield None
+                bindings = (
+                    None
+                    if assignments
+                    else self.caught(context, node.id, node.lineno, excluded)
+                )
+                if bindings is None:
+                    yield None
+                else:
+                    yield from bindings
         elif isinstance(node, ast.IfExp):
             branches = (node.body, node.orelse)
             if isinstance(node.test, ast.Constant):
@@ -200,7 +250,10 @@ class ErrorFlow:
                 if _literal(kwargs.get("passed")) is True:
                     if "error" in kwargs:
                         errors = list(self.resolve(Reference(kwargs["error"], context)))
-                        if any(error is not None for error in errors):
+                        if any(
+                            error is not None and error is not UNTYPED_CATCH
+                            for error in errors
+                        ):
                             self.checker.emit(
                                 src,
                                 node,
@@ -212,23 +265,35 @@ class ErrorFlow:
                                 src,
                                 node,
                                 "F019",
-                                "Success-path error expression is unresolved; verify passed checks do not carry failure evidence.",
+                                "Success-path error expression is unresolved; define the F016 scenarios, whose assert_preflight_result checks passed checks carry no failure evidence.",
+                                SCENARIO_COVERAGE,
                             )
                     continue
                 if "error" not in kwargs:
                     continue
-                unresolved = False
+                unresolved = untyped = False
                 for result in self.resolve(Reference(kwargs["error"], context)):
-                    if result is None:
+                    if result is UNTYPED_CATCH:
+                        untyped = True
+                    elif result is None:
                         unresolved = True
                     else:
                         self.checker.failure(result[0], result[1], {})
-                if unresolved:
+                if untyped:
                     self.checker.emit(
                         src,
                         node,
                         "F019",
-                        "Failed-check error flow is unresolved; suggested_action and typing are not verified. Execute a real-handler scenario for this output.",
+                        "Failed-check error is a caught exception whose except clause names no typed error, so its failure details are not verified. Narrow the clause to the AppError subclasses the probe raises, construct a typed error on this path, or define the F016 scenario that drives this failure.",
+                        SCENARIO_COVERAGE,
+                    )
+                elif unresolved:
+                    self.checker.emit(
+                        src,
+                        node,
+                        "F019",
+                        "Failed-check error flow is unresolved; suggested_action and typing are not verified. Define the F016 real-handler scenarios for this output.",
+                        SCENARIO_COVERAGE,
                     )
             child = self.child(context, node)
             if child is not None:

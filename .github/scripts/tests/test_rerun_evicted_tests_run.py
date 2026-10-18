@@ -39,6 +39,7 @@ from rerun_evicted_tests_run import (  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _bump_skip import without_bump_skip  # noqa: E402
 from _gha_expr import evaluate  # noqa: E402
 
 REPO = "atlanhq/atlan-example-app"
@@ -59,11 +60,13 @@ def _run(
     created: str = "2026-09-16T14:28:56Z",
     updated: str = "2026-09-16T14:29:23Z",
     workflow_id: int = WORKFLOW_ID,
+    event: str = "pull_request",
 ) -> dict:
     """A workflow-run payload shaped like the real listing entry."""
     return {
         "id": run_id,
         "workflow_id": workflow_id,
+        "event": event,
         "status": status,
         "conclusion": conclusion,
         "run_attempt": attempt,
@@ -490,4 +493,18 @@ def test_the_gate_job_still_always_reports() -> None:
     `failure` from the `opened` run, and the required context would become
     decorative on exactly the auto-merge path it guards (FND-2167).
     """
-    assert str(_gate_job().get("if")).strip() == "always()"
+    assert without_bump_skip(_gate_job().get("if")) == "always()"
+
+
+def test_a_dispatched_e2e_run_is_never_a_sibling() -> None:
+    """FND-3839: a `/e2e` comment dispatches the same workflow on the same
+    commit. That run reports under `e2e / …`, so even cancelled it owns no
+    required `tests / …` context and must never be re-run as an eviction."""
+    listing = [
+        _run(SELF, conclusion="success"),
+        _run(SELF + 1, event="workflow_dispatch"),
+    ]
+    found = newer_runs(
+        REPO, SHA, WORKFLOW_ID, SELF, _stub(listing=listing), event="pull_request"
+    )
+    assert found == []

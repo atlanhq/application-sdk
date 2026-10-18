@@ -126,12 +126,20 @@ class DownloadInput(Input):
             directly.
         skip_if_exists: When ``True``, skip downloading files whose local
             SHA-256 hash already matches the stored value.
+        tier: Storage lifecycle tier set on the returned ``FileReference``.
+            When ``None`` (default), a download that re-materialises
+            ``ref`` keeps ``ref.tier``, so a run's own ``TRANSIENT`` output
+            is still cleaned up. Any other download is ``RETAINED``: the app
+            reads bytes it did not write (another app's output, a platform
+            object such as the connection cache), and ``App.cleanup_storage``
+            must not delete them at the end of the run.
     """
 
     storage_path: str = ""
     local_path: str | None = None
     ref: FileReference | None = None
     skip_if_exists: bool = False
+    tier: StorageTier | None = None
 
 
 class DownloadOutput(Output):

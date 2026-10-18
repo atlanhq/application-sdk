@@ -49,7 +49,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TypeAlias, Union
+from typing import NamedTuple, TypeAlias, Union
 
 __all__ = [
     "UNREADABLE",
@@ -66,6 +66,9 @@ __all__ = [
     "CountRead",
     "Exactly",
     "Finding",
+    "LineageEdge",
+    "LineageEdgeCounts",
+    "LineageEdgeRead",
     "Present",
     "SampleRead",
     "Unreadable",
@@ -73,6 +76,7 @@ __all__ = [
     "evaluate_attributes",
     "evaluate_attributes_at",
     "evaluate_counts",
+    "evaluate_lineage_edges",
     "evaluate_locations",
     "normalise_attribute_expectations",
     "normalise_attribute_expectations_at",
@@ -175,6 +179,54 @@ class AssetAttributes:
 #: One per-type sample of asset attributes, or the fact that it could not be
 #: read. Same shape and same reason as :data:`SampleRead`.
 AttributeSampleRead: TypeAlias = Union[Sequence[AssetAttributes], Unreadable]
+
+
+# ---------------------------------------------------------------------------
+# Lineage edges: which types a lineage process connects
+# ---------------------------------------------------------------------------
+#
+# "Some lineage exists" cannot see which types a process links. A connector can
+# publish its table-level processes, drop every field-level one, land asset
+# counts identical to a good run and still pass a presence check. Naming the
+# (input type, output type) pair a process must connect is what makes that
+# drop visible.
+
+
+class LineageEdge(NamedTuple):
+    """One declared lineage link: an input asset type and an output asset type.
+
+    Renders as ``"Source -> Target"``, the spelling a suite declares it in.
+    """
+
+    source: str
+    target: str
+
+    def __str__(self) -> str:
+        return f"{self.source} -> {self.target}"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class LineageEdgeCounts:
+    """How many lineage processes connect each requested type pair.
+
+    Attributes:
+        counts: (source type, target type) -> number of processes with at least
+            one input of the source type and at least one output of the target
+            type. Every requested pair is present, zeros included.
+        scanned: How many processes the reader looked at.
+        truncated: True when the reader stopped at its scan cap before seeing
+            every process under the connection. The counts are then lower
+            bounds: a pair that already meets its floor has met it, and a pair
+            that has not cannot be said to have missed it.
+    """
+
+    counts: Mapping[LineageEdge, int] = field(default_factory=dict)
+    scanned: int = 0
+    truncated: bool = False
+
+
+#: The lineage-edge read, or the fact that it could not be taken.
+LineageEdgeRead: TypeAlias = Union[LineageEdgeCounts, Unreadable]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -564,6 +616,12 @@ class AssetExpectations:
             under. Empty skips :func:`evaluate_locations` entirely: depth is
             measured *below this prefix*, so with no prefix there is nothing to
             measure from and no nesting to assert.
+        lineage_edges: (source type, target type) -> minimum number of lineage
+            processes under the connection that take an asset of the source
+            type as input and produce one of the target type as output. Catches
+            a connector that still publishes *some* lineage but has stopped
+            producing one kind of link, which counts and lineage presence
+            cannot see.
     """
 
     floors: Mapping[str, int] = field(default_factory=dict)
@@ -577,6 +635,7 @@ class AssetExpectations:
     )
     require_nonempty: bool = True
     connection_qualified_name: str = ""
+    lineage_edges: Mapping[LineageEdge, int] = field(default_factory=dict)
 
 
 def _unreadable(subject: str, reading: Unreadable, *, checking: str) -> Finding:
@@ -951,6 +1010,64 @@ def _evaluate_one_asset(
                     f"expected {matcher.describe()}"
                 ),
                 expectation="attribute",
+            )
+        )
+    return findings
+
+
+def evaluate_lineage_edges(
+    read: LineageEdgeRead | None,
+    expectations: AssetExpectations,
+) -> Sequence[Finding]:
+    """Evaluate observed lineage-edge counts against the declared floors.
+
+    Args:
+        read: What the reader answered, or ``None`` when no read was taken. A
+            missing read is graded as zero processes, the same way a type absent
+            from the count mapping is: the declaration asked for edges and none
+            were observed.
+        expectations: What was declared.
+
+    Returns:
+        One :class:`Finding` per declared edge below its floor; empty when every
+        edge met it. A finding whose expectation is :data:`UNREADABLE` says the
+        edge could not be graded — the read failed, or the reader stopped at its
+        scan cap before the floor was reached — and is never a claim that the
+        connector dropped the edge.
+    """
+    findings: list[Finding] = []
+    if not expectations.lineage_edges:
+        return findings
+    observed = read if read is not None else LineageEdgeCounts()
+    for edge, floor in expectations.lineage_edges.items():
+        subject = str(edge)
+        if isinstance(observed, Unreadable):
+            findings.append(_unreadable(subject, observed, checking="lineage edge"))
+            continue
+        got = observed.counts.get(edge, 0)
+        if got >= floor:
+            continue
+        if observed.truncated:
+            findings.append(
+                Finding(
+                    subject=subject,
+                    detail=(
+                        f"could not be graded: {got} process(es) observed so far, "
+                        f"expected >= {floor}, but the scan stopped after "
+                        f"{observed.scanned} processes without seeing them all"
+                    ),
+                    expectation=UNREADABLE,
+                )
+            )
+            continue
+        findings.append(
+            Finding(
+                subject=subject,
+                detail=(
+                    f"observed {got} lineage process(es) linking these types, "
+                    f"expected >= {floor}"
+                ),
+                expectation="lineage_edge",
             )
         )
     return findings

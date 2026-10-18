@@ -23,7 +23,11 @@ Scope
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -34,10 +38,12 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P016",
         canonical_reference=(
-            "atlan-openapi-app app/connector.py — the @entrypoint set matches the "
-            "contract's entrypoints exactly; none carries a bespoke one-off entrypoint. "
-            "atlan-metabase-app app/connector.py shows the two-entrypoint form, with a "
-            "comment naming the DAG nodes in contract/app.pkl they correspond to."
+            "atlan-metabase-app app/connector.py — its two @entrypoints, "
+            "`extract_metadata` and `extract_lineage`, are exactly the routes the "
+            "manifest DAG declares, and the comment above them names the DAG nodes in "
+            "contract/app.pkl they correspond to; a third, bespoke @entrypoint would be a "
+            "route the DAG never dispatches. atlan-openapi-app app/connector.py is the "
+            "single-entrypoint form: no @entrypoint at all, just the implicit `run()`."
         ),
         terminal_state=(
             "A temporary migration entrypoint is not a reason to widen the contract. "
@@ -124,20 +130,32 @@ RULES: tuple[RuleDefinition, ...] = (
             "The contract ``app/generated/`` tree is the authoritative source; align"
             " code to it as the default fix:\n"
             "\n"
-            "1. For each ``@entrypoint`` name in *code* that is not in the contract,"
-            ' pin it: ``@entrypoint(name="<contract-name>")``.  Confirm the pairing'
-            " (code name → contract name) intentionally — renaming an entry point is"
-            " a **breaking wire change** (the Temporal workflow type and"
-            " ``?entrypoint=`` value both change; coordinate with callers).\n"
+            "1. For each ``@entrypoint`` name in *code* that backs a tile with a"
+            " different name, rename the entry point to the tile name:"
+            ' ``@entrypoint(name="<tile>")``. The tile name and the entry-point name'
+            " are one identity — a tile cannot start a differently named entry"
+            " point. Renaming changes the entry point's canonical Temporal workflow"
+            " type, so keep the old type dispatching with an inbound-only alias,"
+            " declared twice: ``legacy_workflow_types ="
+            ' {"<app>:<old-name>": "<tile>"}`` on the ``App`` class, and the same'
+            " pair in ``legacyWorkflowTypes`` on every entrypoint contract in"
+            " ``contract/app.pkl`` (K015 holds the two in agreement). An alias may"
+            " stay for as long as callers still dispatch the old type. The alias"
+            " covers Temporal workflow-type dispatch only, not the ``/start``"
+            " selector: ``?entrypoint=`` resolves entry-point names, so a caller"
+            " selecting ``?entrypoint=<old-name>`` must switch to the tile name.\n"
             "\n"
-            "2. For each contract name not matched in code, add or rename an"
-            ' ``@entrypoint(name="<missing-name>")`` on the corresponding App method.\n'
+            "2. For each contract name not matched in code, add an"
+            ' ``@entrypoint(name="<missing-name>")`` on the corresponding App method,'
+            " or rename the entry point that already backs that tile as in step 1.\n"
             "\n"
             "3. If the *code* name is the intended one and the contract is wrong, update"
             ' the ``entrypoints { new Entrypoint { name = "..." } }`` block in'
             " ``contract/app.pkl`` and re-run ``pkl eval`` so the"
             " ``app/generated/<name>/`` dir and ``workflow_type`` follow — never"
-            " hand-edit ``app/generated/`` (C002 catches stale generated artifacts).\n"
+            " hand-edit ``app/generated/`` (C002 catches stale generated artifacts)."
+            " On a released app, prefer step 1: a tile's name is its Marketplace"
+            " card and configmap identity, and no alias covers renaming it.\n"
             "\n"
             "4. For a single-entry-point app that now has multiple ``@entrypoint``s,"
             " either add named ``Entrypoint`` blocks in ``contract/app.pkl`` or"
@@ -150,6 +168,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p016"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
 )

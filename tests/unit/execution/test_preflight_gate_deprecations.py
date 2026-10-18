@@ -23,6 +23,7 @@ import warnings
 
 import pytest
 
+from application_sdk.constants import PREFLIGHT_GATE_MODE_ENV
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import (
@@ -334,3 +335,130 @@ class TestDeprecatedIsGateBroken:
             )
         assert FailureCategory.DEPENDENCY_UNAVAILABLE in categories
         assert broken is True
+
+
+class TestResolveGateEnforcementShim:
+    """The tenth symbol #3685 removed, missed by the first restore pass.
+
+    It lived in ``worker`` rather than ``preflight_gate``, so the name-level diff
+    that found the other nine never saw it. Consumers import it directly and got
+    an ``ImportError`` -- two app repos failed their SDK bump on exactly that.
+    """
+
+    @staticmethod
+    def _app(mode: object) -> type:
+        return type("_App", (), {"preflight_gate_mode": mode})
+
+    def test_hard_declares_enforcement(self) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        assert _resolve_gate_enforcement(self._app("hard")) is True
+
+    @pytest.mark.parametrize("mode", ["soft", "HARDLY", "", None])
+    def test_everything_else_is_soft(self, mode: object) -> None:
+        """Blocking stays a deliberate opt-in; a typo never aborts a run."""
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        assert _resolve_gate_enforcement(self._app(mode)) is False
+
+    def test_undeclared_app_is_soft(self) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        assert _resolve_gate_enforcement(None) is False
+
+    def test_it_warns_like_the_other_nine(self) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _resolve_gate_enforcement(self._app("hard"))
+        assert len(caught) == 1
+        assert issubclass(caught[0].category, DeprecationWarning)
+        message = str(caught[0].message)
+        assert "resolve_gate_mode" in message
+        assert f"removed in v{DEPRECATED_FAIL_OPEN_REMOVED_IN}" in message
+
+    def test_it_tracks_the_enum_rather_than_reimplementing_it(self) -> None:
+        """The shim must not drift from the posture the gate actually applies."""
+        from application_sdk.execution._temporal.preflight_gate import resolve_gate_mode
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        for mode in ("hard", "soft", "nonsense", None):
+            app = self._app(mode)
+            assert _resolve_gate_enforcement(app) is resolve_gate_mode(app).enforces
+
+
+class TestResolveGateEnforcementEnvLever:
+    """The shim must resolve exactly as 3.35 did, env precedence included.
+
+    The first restore returned the declared posture alone, reasoning that #3685
+    had made the lever inert for the gate. Apps test *this function*, not the
+    gate: atlan-dbt-app and atlan-cosmosdb-app both assert the env var can
+    downgrade to soft without an app release, and both went red on a lock
+    refresh that carried the shim. A compatibility shim that changes behaviour
+    is the break it exists to prevent.
+    """
+
+    @staticmethod
+    def _app(mode: object) -> type:
+        return type("_App", (), {"preflight_gate_mode": mode})
+
+    @pytest.fixture(autouse=True)
+    def _clear_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv(PREFLIGHT_GATE_MODE_ENV, raising=False)
+
+    def test_env_soft_overrides_a_declared_hard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ops revert to soft without an app release -- the asserted contract."""
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        monkeypatch.setenv(PREFLIGHT_GATE_MODE_ENV, "soft")
+        assert _resolve_gate_enforcement(self._app("hard")) is False
+
+    def test_env_hard_overrides_a_declared_soft(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        monkeypatch.setenv(PREFLIGHT_GATE_MODE_ENV, "hard")
+        assert _resolve_gate_enforcement(self._app("soft")) is True
+
+    def test_an_empty_value_is_not_an_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Empty falls through to the declared attribute, as 3.35 did."""
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        monkeypatch.setenv(PREFLIGHT_GATE_MODE_ENV, "")
+        assert _resolve_gate_enforcement(self._app("hard")) is True
+
+    def test_a_whitespace_value_IS_an_override_and_resolves_soft(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Faithful to 3.35, which tested truthiness before stripping.
+
+        "   " is truthy, so it takes the override branch and fails the == "hard"
+        comparison. Pinned because it is the kind of edge a rewrite silently
+        "tidies" into falling through -- which would be a behaviour change in a
+        shim whose only job is not to have one.
+        """
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        monkeypatch.setenv(PREFLIGHT_GATE_MODE_ENV, "   ")
+        assert _resolve_gate_enforcement(self._app("hard")) is False
+
+    def test_a_malformed_value_resolves_soft(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Only the literal "hard" enforces; blocking stays deliberate."""
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        monkeypatch.setenv(PREFLIGHT_GATE_MODE_ENV, "HARDLY")
+        assert _resolve_gate_enforcement(self._app("hard")) is False
+
+    def test_unset_env_reads_the_declared_posture(self) -> None:
+        from application_sdk.execution._temporal.worker import _resolve_gate_enforcement
+
+        assert _resolve_gate_enforcement(self._app("hard")) is True
+        assert _resolve_gate_enforcement(self._app("soft")) is False

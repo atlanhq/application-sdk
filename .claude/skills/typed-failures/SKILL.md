@@ -153,7 +153,7 @@ within the grammar.
 |---|---|
 | `AUTH_INVALID_CREDENTIALS` | category prefix; "invalid credentials" is the cross-connector subtype |
 | `PERMISSION_DENIED` | category prefix; no further subtype needed (this IS the common case) |
-| `DEPENDENCY_UNAVAILABLE_NETWORK` | category prefix; "network" subtype distinguishes from other unavailability modes |
+| `SOURCE_UNAVAILABLE_NETWORK` | category prefix; "network" subtype distinguishes an unreachable source from other unavailability modes |
 | `INVALID_INPUT_CONFIG` | category prefix; "config" distinguishes from data / query-shape input errors |
 | `INTERNAL_QUERY_PREP_FAILED` | category prefix; "query_prep_failed" is specific enough to be a runbook entry |
 
@@ -176,7 +176,7 @@ to set it.
 | **evidence fields** (dataclass attrs you add) | instance | ✅ when useful | Add fields specific to the leaf (e.g. `field` on InvalidInput-style errors, `db_name`/`schema_name` on a query failure). These land in `FailureDetails.evidence` automatically. |
 | `app_name` | instance | ❌ deliberately NOT set | AE attributes via DAG node label — single source of truth. Setting it on every leaf creates a second source of truth and confuses Grafana cuts. |
 | `run_id` | instance | ❌ deliberately NOT set | AE attaches from Temporal context at ingest. The producer doesn't carry it. |
-| `suggested_action` | instance | ⚠️ optional, at raise site | Free to set at the raise site when there's specific guidance to convey ("regrant Glue read access"). Don't pre-default per leaf — canned text is rarely better than the activity-specific context the call site has. |
+| `suggested_action` | instance | ⚠️ optional, at raise site | Free to set at the raise site when there's specific guidance to convey ("regrant Glue read access"). Don't pre-default per leaf — canned text is rarely better than the activity-specific context the call site has. Required on any error that reaches a failed preflight check (F007 blocks without it). |
 
 Document the three deliberate non-uses in the app's `failures.py` module
 docstring (see the Athena reference for the exact wording).
@@ -195,28 +195,46 @@ three-value enum:
 - **APP_OWNER** — the app team that wrote the failing code must act. Connector
   bugs, SDK bugs, unimplemented capabilities, data-integrity failures.
 
-**The deliberate override pattern:** when an SDK base class's default
-`audience` doesn't fit your leaf's actual locus, override it. Example from
-Athena:
+**An unreachable source is not an override case.** When the customer's own
+source (their database, SaaS API, BI server, git remote) can't be reached,
+subclass `SourceUnavailableError`. It is already `audience=USER`, so nothing
+is overridden:
 
 ```python
 @dataclass(kw_only=True)
-class AthenaSourceUnreachable(DependencyUnavailableError):
-    """Athena endpoint not reachable.
+class <App>SourceUnreachable(SourceUnavailableError):
+    """Source endpoint not reachable (DNS, TCP, TLS, connection refused)."""
 
-    Audience overridden to USER (the SDK base defaults to PLATFORM) because
-    source-side reachability is the customer's network / firewall, not the
-    platform's.
-    """
-    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_NETWORK"
-    audience: ClassVar[Audience] = Audience.USER
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE_NETWORK"
 ```
 
-**Note:** new code for an *unreachable* source raises `SourceUnavailableError`
-directly (already `audience=USER`), so no override is needed. The override
-pattern above still applies where no leaf fits the locus — e.g. a source-side
-*timeout* is an `AppTimeoutError` whose `APP_OWNER` default you override to
-`USER`.
+Never subclass `DependencyUnavailableError` and override its audience to
+`USER` for this. DEPENDENCY_UNAVAILABLE means an Atlan platform service
+(Dapr, Temporal, object store) is down, so a hard preflight gate never
+blocks on it. SOURCE_UNAVAILABLE blocks a hard gate on its final attempt.
+Typing an unreachable source as DEPENDENCY_UNAVAILABLE lets the run start
+anyway and fail later on the same fault. Conformance rule E021 flags this
+pattern.
+
+**The deliberate override pattern:** override `audience` only when no SDK
+leaf's default fits your leaf's actual locus. Example: a query against the
+source that exceeds its time budget is an `AppTimeoutError`. That leaf
+defaults to `APP_OWNER` because the locus of a timeout is usually unclear,
+but here the source is the slow party:
+
+```python
+@dataclass(kw_only=True)
+class <App>SourceQueryTimeout(AppTimeoutError):
+    """A metadata query exceeded its time budget on the source.
+
+    Audience overridden to USER (the SDK base defaults to APP_OWNER) because
+    the bottleneck is the customer's source: warehouse sizing, query queueing
+    or load on their side.
+    """
+
+    code: ClassVar[str] = "TIMEOUT_SOURCE_QUERY"
+    audience: ClassVar[Audience] = Audience.USER
+```
 
 If you're tempted to override `audience` more than once or twice per app,
 re-check the SDK base default — most apps don't need to override at all.
@@ -483,7 +501,7 @@ def test_<app>_auth_failed_payload(self):
 ```
 
 Cover audience overrides explicitly (a test that asserts the override took
-effect, e.g. `AthenaSourceUnreachable.audience is Audience.USER` not PLATFORM).
+effect, e.g. `<App>SourceQueryTimeout.audience is Audience.USER` not APP_OWNER).
 
 **`TestClassifier`** — parametrised tests over every marker in each tuple,
 asserting dispatch to the right typed class. Plus:
@@ -631,6 +649,10 @@ phase-2 sign-off.
    the action ("aws_role_arn is required" doesn't need a separate
    suggested_action saying "provide aws_role_arn"). Read the property
    matrix above and the Athena `failures.py` module docstring.
+   Exception: an error that reaches a failed preflight check needs a nonblank
+   `suggested_action` (F007, BLOCK) — set it at the construction site, or as a
+   class default on an app subclass whose message is fixed (the mysql and
+   metabase reference apps do this). Write it for the class's audience.
 
 4. **Promoting silent-swallow paths to raises in this skill's output.** That's
    a logic change. It goes in phase 2 after owner approval. Even if you're

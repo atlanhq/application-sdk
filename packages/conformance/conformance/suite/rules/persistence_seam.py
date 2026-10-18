@@ -95,7 +95,11 @@ P-ids are a permanent public contract (see ``prescriptions.py``).
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -181,12 +185,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "SARIF and turns a silent fork into a reviewed decision.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p048",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P049",
         canonical_reference=(
-            "atlan-openapi-app app/asset_mapper.py — connection_qualified_name is passed "
-            "through to the pyatlan creators, never split and validated by the app. The "
+            "atlan-openapi-app app/connector.py — `_extract_spec_async(spec_url, "
+            "connection_qualified_name, ...)` passes the value straight through to "
+            "`build_api_spec_qn` and on to `APISpec.creator()`; it never splits or parses "
+            "it. The "
             "SDK warns and proceeds on a malformed value; an app that parses and raises "
             "turns a recoverable run into a failed one."
         ),
@@ -278,5 +288,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P049] <reason>``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p049",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
 )

@@ -51,10 +51,12 @@ AppError  (base — application_sdk.errors)
 │   ├── NotFoundError          NOT_FOUND                  retryable=False  audience=USER
 │   ├── AlreadyExistsError     ALREADY_EXISTS             retryable=False  audience=USER
 │   ├── InvalidInputError      INVALID_INPUT              retryable=False  audience=USER
+│   │   └── InvalidInputValueError  INVALID_INPUT (INVALID_INPUT_VALUE), also a builtin ValueError  retryable=False  audience=USER
 │   ├── PreconditionError      PRECONDITION               retryable=False  audience=USER
 │   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
 │   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
 │   ├── SourceUnavailableError   SOURCE_UNAVAILABLE        retryable=True   audience=USER
+│   │   └── SourceWarmupExhaustedError  SOURCE_UNAVAILABLE (SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED)  retryable=True   audience=USER
 │   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
 │   │   └── DiskFullError      RESOURCE_EXHAUSTED (RESOURCE_EXHAUSTED_DISK_FULL)  retryable=True   audience=PLATFORM
 │   │   └── LocalVolumeUnwritableError  RESOURCE_EXHAUSTED (RESOURCE_EXHAUSTED_VOLUME_UNWRITABLE)  retryable=True   audience=PLATFORM
@@ -139,7 +141,9 @@ secret store registered yet"), independent of the general `retryable` wire hint.
 from the Dapr *secrets* API is deliberately NOT treated as proof of unreachability on its own:
 verified against a live sidecar, a genuinely-missing secret key also returns 500 with
 `errorCode=ERR_SECRET_GET` — indistinguishable by status code alone from a still-cold
-component — so classification there additionally inspects the JSON error body's `errorCode`
+component — so classification there additionally inspects the JSON error body's `errorCode`,
+and for `ERR_SECRET_GET` its message: only a not-found-shaped message is "absent"; a throttled,
+access-denied or KMS failure is a retryable `SecretStoreError`
 (see `application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`). A generic
 helper — `application_sdk.infrastructure.retry_past_dapr_cold_start` — retries any current or
 future subtype across domains (secret store today; state store, pub/sub, or credential-vault
@@ -181,6 +185,19 @@ while the distinct `TIMEOUT_TASK_STALLED` code and the `TaskStalledError` Tempor
 kills countable apart from `StartToClose` and heartbeat timeouts. App code should not raise it —
 raise the leaf that describes what the source actually did.
 
+### InvalidInputValueError — a compatibility shim, not a leaf to reach for
+
+`InvalidInputValueError(InvalidInputError, ValueError)` exists for one job: typing a public SDK
+entry point whose documented contract was already a bare `ValueError`. `ValueError` stays in the
+bases, so `except ValueError:` in an app keeps catching the failure while the raise now carries a
+typed `INVALID_INPUT` / `USER` envelope. Its own code, `INVALID_INPUT_VALUE`, keeps the shim
+countable apart from the bare leaf — a non-zero rate on it measures how much still depends on the
+builtin contract, which is what decides when it can be retired.
+
+**Do not use it for new APIs.** A new entry point has no `ValueError` contract to preserve, so
+raise plain `InvalidInputError` and let callers catch the typed hierarchy. Copying the shim onto
+new code spreads the builtin dependency this class exists to contain.
+
 ### Raise by failure shape
 
 Pick the leaf whose `FailureCategory` best describes what happened. Prefer a domain subclass
@@ -207,6 +224,74 @@ raise StorageNotFoundError(
     key="artifacts/run-123/output.parquet",
 )
 ```
+
+### Map an HTTP failure to a leaf
+
+`classify_http_status(status)` and `classify_http_exception(exc)` pick the leaf for an HTTP
+failure, so an app does not keep its own status table. Both return the leaf **class**, or
+`None` when nothing maps; the app builds it with its own `message`, `suggested_action` and
+`cause`.
+
+| Status | Leaf |
+| --- | --- |
+| 401 | `AuthError` |
+| 403 | `AppPermissionDeniedError` |
+| 404 | `NotFoundError` |
+| 429 | `RateLimitedError` |
+| 5xx | `SourceUnavailableError` |
+
+`classify_http_exception` looks at the exception and then its explicit `__cause__` links
+(`raise Wrapper(...) from err`). It never follows implicit `__context__`: an error raised
+*while* handling a 403, such as a `KeyError` in your parsing code, is not a permission
+failure. The first `httpx` frame decides. A network error, a timeout or a dropped connection
+is `SourceUnavailableError`, and an `HTTPStatusError` goes through the table. An unmapped
+status, `httpx.PoolTimeout` (the client's own pool running dry, not the source) and any other
+httpx error (a decoding or redirect failure) return `None` instead of borrowing an older
+failure further down the chain. `overrides` replaces an entry, including one in the 5xx
+range, for a source whose statuses mean something else.
+
+The helpers are opt-in: nothing in the SDK calls them for you. The pattern is to keep a
+typed error you already have, classify an untyped HTTP failure, and fall back to
+`InternalError` for anything else, with wording that matches the leaf you picked:
+
+```python
+from application_sdk.errors import (
+    AppError,
+    AppPermissionDeniedError,
+    AuthError,
+    InternalError,
+    NotFoundError,
+    RateLimitedError,
+    SourceUnavailableError,
+    classify_http_exception,
+)
+
+_WORDING = {
+    AuthError: ("The source rejected the credentials.", "Check the API key, then try again."),
+    AppPermissionDeniedError: (
+        "The credentials cannot read the projects.",
+        "Grant the API user read access to the projects, then try again.",
+    ),
+    NotFoundError: ("The configured workspace was not found.", "Check the workspace name."),
+    RateLimitedError: ("The source is rate limiting requests.", "Wait, then try again."),
+    SourceUnavailableError: ("The source did not respond.", "Check that it is up, then retry."),
+    InternalError: ("Could not check the source.", "Retry, then contact support."),
+}
+
+
+def preflight_error(exc: Exception) -> AppError:
+    if isinstance(exc, AppError):
+        return exc
+    leaf = classify_http_exception(exc, overrides={402: AuthError, 503: RateLimitedError})
+    if leaf is None:
+        leaf = InternalError
+    message, action = _WORDING[leaf]
+    return leaf(message=message, suggested_action=action, cause=exc)
+```
+
+Validate what you know is a credential problem (an empty or malformed credential) with its
+own typed error before the call that can fail; the fallback is for causes you cannot name,
+and `InternalError` files them against the app rather than the customer.
 
 ### Catch by shape or by domain
 
@@ -252,7 +337,8 @@ fd = e.to_failure_details()
 # fd.audience      — Audience enum (routing: who acts)
 # fd.retryable     — bool (resolved from class default or per-instance override)
 # fd.code          — str (app-owned fine-grained code, e.g. "NOT_FOUND_STORAGE")
-# fd.suggested_action — str | None (imperative hint; voice shifts with audience)
+# fd.message       — str (the human line; URL userinfo of any credential shape (Azure blob `container@account` addressing excepted) and secret-named params are redacted by the envelope's own validator, at construction and again on model_validate)
+# fd.suggested_action — str | None (imperative hint; voice shifts with audience; redacted the same way as message)
 # fd.evidence      — dict of per-error structured context (dataclass fields)
 # fd.cause_repr    — str | None (sanitised str of wrapped exception: "{ExcType}: {msg}", URL/secret-redacted; cause message capped at 2000 chars; never the live object)
 ```
@@ -337,8 +423,11 @@ safe = redact_wire_value({"dsn": "postgresql://u:p@host/db", "tags": ["pwd=hunte
 # {'dsn': 'postgresql://***@host/db', 'tags': ['pwd=***']}
 ```
 
-Use it on anything handler-authored that crosses a wire: `message`, `suggested_action` and
-`evidence` are not redacted where they are built, unlike `FailureDetails.cause_repr`.
+Use it on anything handler-authored that goes under an `evidence` key: nested values are not
+redacted where they are built. `message` and `suggested_action` **are** — a `field_validator` on
+`FailureDetails` runs `redact_secrets` over both at construction and again on `model_validate`,
+idempotently, so a handler gains nothing by redacting them first. `cause_repr` is redacted where the
+cause is captured, by `sanitize_cause_repr`.
 
 ### Legacy error-code namespaces (backward-compat only)
 
@@ -450,6 +539,12 @@ They differ on who wins because they are different kinds of value. `connectionNa
 
 If the asset declares the attribute but refuses assignment (frozen, or a property with no setter), the value is dropped rather than failing the transform — every asset type that genuinely needs these exposes settable fields.
 
+#### Placeholder `guid` removal
+
+The seam also *removes* one value. pyatlan's `.creator()` methods are wrapped in `@init_guid`, which sets `guid` to a fresh random negative integer on every call. That placeholder means "not yet persisted" to pyatlan's own client; the SDK never saves through that client, so written out it is only noise that changes every run. `atlan-publish-app` hashes the whole entity, so a changing `guid` classifies every entity as DIFF instead of SYNCED and forces a per-entity diff that finds nothing (FND-2720).
+
+`entity_bytes()` therefore clears a placeholder `guid` (a negative-integer string) before the dispatch: set to `UNSET` on a `pyatlan_v9` asset, dropped from a dict. Both envelopes are covered, and the `PYATLAN` path stays on the native encoder. A real guid — a UUID a mapper set on purpose — is kept. Connectors should not clear the guid themselves.
+
 The stamping itself is `application_sdk.common.last_sync.set_last_sync_details_on_asset()`, unwrapped — the seam adds the wider aperture (`entity_bytes` takes an `object`, so the shape may be a dict, may not declare the fields, or may refuse assignment) but not a second definition of what stamping means. An asset object qualifies when it satisfies `LastSyncStampable`, a runtime-checkable Protocol over the three fields; it is a structural type rather than pyatlan's `Asset` because both pyatlan generations are valid targets and they are unrelated classes.
 
 **Resolve `last_sync` once per transform activity**, never per record:
@@ -469,7 +564,7 @@ for record in records:
     )
 ```
 
-`lastSyncRunAt` is a property of the *run*, so every asset one crawl produces must carry the same value; a per-record `time.time()` gives every row in one crawl a different "last synced at". `SqlApp._transform_entity` does this for every SQL connector already. **Non-SQL apps get the same behaviour from the same two calls** — nothing in this seam or in `last_sync` is SQL-specific, and an app that writes `asset.to_nested_bytes()` directly today gets both injections plus the typed-error contract by routing through `entity_bytes()` instead.
+`lastSyncRunAt` is a property of the *run*, so every asset one crawl produces must carry the same value; a per-record `time.time()` gives every row in one crawl a different "last synced at". `SqlApp._transform_entity` does this for every SQL connector already. **Non-SQL apps get the same behaviour from the same two calls** — nothing in this seam or in `last_sync` is SQL-specific, and an app that would otherwise write `asset.to_nested_bytes()` directly gets both injections plus the typed-error contract by routing through `entity_bytes()` instead. Conformance rule **P052** flags that direct call (and `to_nested_dict()` / `pyatlan_v9` `to_atlas_format()`) in app code, so the bypass does not spread from one connector to the next.
 
 `resolve_last_sync_details()` reads the execution and correlation contextvars the SDK's Temporal interceptor populates. Call it on the event loop inside the activity. `run_in_thread` does propagate contextvars (it runs the callable under `contextvars.copy_context()`), so resolving inside an offloaded loop works too — but then the correctness rests on an offload implementation detail rather than on where the call sits.
 

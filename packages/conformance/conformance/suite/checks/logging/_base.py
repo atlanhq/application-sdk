@@ -27,6 +27,7 @@ class _MixinBase:
     _is_adapter_file: bool
     _findings: list[Finding]
     _loop_stack: list[ast.For | ast.AsyncFor | ast.While]
+    _bounded_loop_caps: dict[ast.For | ast.AsyncFor, int]
     _except_stack: list[ast.ExceptHandler]
     _in_main_block: int
     # True when the module is a standalone script/CLI (shebang / __main__
@@ -35,6 +36,9 @@ class _MixinBase:
     # Names assigned a redaction placeholder ("[REDACTED]" etc.) — logging
     # them is a presence indicator, so L010 is exempt.
     _redacted_names: frozenset[str]
+    # Names the enclosing function interpolates as a URL path segment — a
+    # ``<noun>_token`` among them is a resource identifier, so L010 is exempt.
+    _path_segment_names: frozenset[str]
     # Names bound to the logging module (e.g. "logging", "L" after import logging as L)
     _logging_module_names: frozenset[str]
     # Names bound to logging.warn directly (e.g. "warn" after from logging import warn)

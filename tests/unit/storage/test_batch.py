@@ -28,6 +28,17 @@ def store():
     return create_memory_store()
 
 
+def _list_with_phantom(phantom: str):
+    real_list = obstore.list
+
+    async def _list(store, prefix=None, **kwargs):
+        async for batch in real_list(store, prefix=prefix, **kwargs):
+            yield batch
+        yield [{"path": phantom, "size": 0, "e_tag": None}]
+
+    return patch.object(obstore, "list", _list)
+
+
 # ---------------------------------------------------------------------------
 # list_keys
 # ---------------------------------------------------------------------------
@@ -74,6 +85,106 @@ class TestListKeys:
             with pytest.raises(StorageError) as exc_info:
                 await list_keys("anything/", store, normalize=False)
         assert "Failed to list keys" in str(exc_info.value)
+
+    async def test_drops_childless_folder_marker(self, store) -> None:
+        await _put("dump/base/a.json", b"{}", store, normalize=False)
+        await _put("dump/_SUCCESS", b"", store, normalize=False)
+        with _list_with_phantom("dump/empty"):
+            keys = await list_keys("dump/", store, normalize=False)
+        assert keys == ["dump/_SUCCESS", "dump/base/a.json"]
+
+    async def test_childless_marker_does_not_hide_its_real_parent(self, store) -> None:
+        await _put("dump/flag", b"", store, normalize=False)
+        with _list_with_phantom("dump/flag/x"):
+            keys = await list_keys("dump/", store, normalize=False)
+        assert keys == ["dump/flag"]
+
+    async def test_probes_only_keys_matching_suffix(self, store) -> None:
+        await _put("dump/a.json", b"", store, normalize=False)
+        await _put("dump/_SUCCESS", b"", store, normalize=False)
+        head = AsyncMock(wraps=obstore.head_async)
+        with patch.object(obstore, "head_async", head):
+            keys = await list_keys("dump/", store, normalize=False, suffix=".json")
+        assert keys == ["dump/a.json"]
+        assert [call.args[1] for call in head.call_args_list] == ["dump/a.json"]
+
+    async def test_include_markers_keeps_childless_folder_marker(self, store) -> None:
+        await _put("dump/a.json", b"{}", store, normalize=False)
+        with _list_with_phantom("dump/empty"):
+            keys = await list_keys(
+                "dump/", store, normalize=False, include_markers=True
+            )
+        assert "dump/empty" in keys
+
+    async def test_probes_only_zero_byte_keys(self, store) -> None:
+        await _put("dump/a.json", b"{}", store, normalize=False)
+        await _put("dump/zero.json", b"", store, normalize=False)
+        head = AsyncMock(wraps=obstore.head_async)
+        with (
+            _list_with_phantom("dump/empty"),
+            patch.object(obstore, "head_async", head),
+        ):
+            await list_keys("dump/", store, normalize=False)
+        assert sorted(call.args[1] for call in head.call_args_list) == [
+            "dump/empty",
+            "dump/zero.json",
+        ]
+
+    async def test_keeps_zero_byte_key_deleted_after_listing(self, store) -> None:
+        await _put("dump/a.json", b"{}", store, normalize=False)
+        await _put("dump/_SUCCESS", b"", store, normalize=False)
+        snapshot = [b async for b in obstore.list(store, prefix="dump/")]
+        real_list = obstore.list
+
+        async def _stale_list(store, prefix=None, **kwargs):
+            # The listing ran before the delete; the confirming list runs after.
+            if prefix == "dump/":
+                for batch in snapshot:
+                    yield batch
+                return
+            async for batch in real_list(store, prefix=prefix, **kwargs):
+                yield batch
+
+        await obstore.delete_async(store, "dump/_SUCCESS")
+        with patch.object(obstore, "list", _stale_list):
+            keys = await list_keys("dump/", store, normalize=False)
+        assert keys == ["dump/_SUCCESS", "dump/a.json"]
+
+    async def test_probe_tasks_are_bounded_by_concurrency(self, store) -> None:
+        for i in range(50):
+            await _put(f"dump/{i}", b"", store, normalize=False)
+        created = 0
+        real_create_task = asyncio.TaskGroup.create_task
+
+        def _counting_create_task(self, coro, **kwargs):
+            nonlocal created
+            created += 1
+            return real_create_task(self, coro, **kwargs)
+
+        with (
+            patch("application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS", 4),
+            patch.object(asyncio.TaskGroup, "create_task", _counting_create_task),
+        ):
+            keys = await list_keys("dump/", store, normalize=False)
+        assert len(keys) == 50
+        assert created == 4
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            OSError("HTTP 503"),
+            PermissionError(
+                "Error performing HEAD /bucket/dt=20240404/_SUCCESS: 403 Forbidden"
+            ),
+        ],
+    )
+    async def test_keeps_real_key_when_probe_fails_otherwise(
+        self, store, error
+    ) -> None:
+        await _put("dt=20240404/_SUCCESS", b"", store, normalize=False)
+        with patch.object(obstore, "head_async", AsyncMock(side_effect=error)):
+            keys = await list_keys("dt=20240404/", store, normalize=False)
+        assert keys == ["dt=20240404/_SUCCESS"]
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +728,17 @@ class TestDownloadPrefix:
         ):
             await download_prefix("p/", dest, store, normalize=False)
         assert not canary.exists()
+
+    async def test_skips_childless_folder_marker(self, store, tmp_path) -> None:
+        await _put("dump/base/a.json", b"{}", store, normalize=False)
+        with _list_with_phantom("dump/sub/empty"):
+            dests = await download_prefix(
+                "dump/", tmp_path, store, normalize=False, strip_prefix=True
+            )
+        assert [Path(d).relative_to(tmp_path).as_posix() for d in dests] == [
+            "base/a.json"
+        ]
+        assert not (tmp_path / "sub").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -6,13 +6,16 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from obstore.store import LocalStore, MemoryStore
+from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
+from obstore.store import GCSStore, LocalStore, MemoryStore
 
+from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
     StorageConfigError,
     StorageError,
     StorageNotFoundError,
+    StoragePermissionError,
 )
 
 
@@ -21,6 +24,14 @@ def _async_return(value):
         return value
 
     return _inner
+
+
+_REAL_LOOKUP_BUCKET_REGION = _cloud_module._lookup_bucket_region
+
+
+@pytest.fixture(autouse=True)
+def _no_region_lookup(monkeypatch):
+    monkeypatch.setattr(_cloud_module, "_lookup_bucket_region", _async_return(""))
 
 
 class TestInferAuthType:
@@ -205,6 +216,72 @@ class TestFromCredentials:
         session_kwargs = mock_session_cls.call_args.kwargs
         assert "region_name" not in session_kwargs
 
+    @pytest.mark.parametrize(
+        ("external_id", "expected"),
+        [
+            ("ext-id-123", "ext-id-123"),
+            ("  ext-id-123  ", "ext-id-123"),
+            ("", None),
+            ("   ", None),
+            (None, None),
+        ],
+    )
+    @patch(
+        "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
+    )
+    @patch("boto3.Session")
+    @patch("obstore.store.S3Store")
+    def test_s3_role_arn_forwards_external_id(
+        self,
+        mock_s3_cls: MagicMock,
+        mock_session_cls: MagicMock,
+        mock_sts_cls: MagicMock,
+        external_id: str | None,
+        expected: str | None,
+    ):
+        """``extra.aws_external_id`` reaches the STS AssumeRole call as
+        ``ExternalId``; blank values are dropped (STS rejects an empty one)."""
+        extra = {
+            "s3_bucket": "customer-cross-account-bucket",
+            "aws_role_arn": "arn:aws:iam::222222222222:role/CrossAccount",
+        }
+        if external_id is not None:
+            extra["aws_external_id"] = external_id
+
+        CloudStore.from_credentials({"authType": "s3", "extra": extra})
+
+        sts_kwargs = mock_sts_cls.call_args.kwargs
+        assert sts_kwargs["RoleArn"] == "arn:aws:iam::222222222222:role/CrossAccount"
+        if expected is None:
+            assert "ExternalId" not in sts_kwargs
+        else:
+            assert sts_kwargs["ExternalId"] == expected
+        config = mock_s3_cls.call_args.kwargs.get("config") or {}
+        assert "aws_external_id" not in config
+
+    @patch(
+        "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
+    )
+    @patch("obstore.store.S3Store")
+    def test_s3_external_id_ignored_without_role_arn(
+        self, mock_s3_cls: MagicMock, mock_sts_cls: MagicMock
+    ):
+        """Without a role ARN, static keys are used and no STS call is wired."""
+        CloudStore.from_credentials(
+            {
+                "authType": "s3",
+                "username": "AKID",
+                "password": "secret",
+                "extra": {"s3_bucket": "test-bucket", "aws_external_id": "ext-id-123"},
+            }
+        )
+
+        mock_sts_cls.assert_not_called()
+        call_kwargs = mock_s3_cls.call_args.kwargs
+        assert call_kwargs.get("credential_provider") is None
+        assert call_kwargs["config"]["aws_access_key_id"] == "AKID"
+        assert "aws_external_id" not in call_kwargs["config"]
+
     def test_adls_account_key_auth(self):
         # Azure requires base64-encoded account keys
         fake_key = base64.b64encode(b"0" * 32).decode()
@@ -329,6 +406,31 @@ class TestCloudStoreOps:
         store = self._make_store(tmp_path)
         with pytest.raises(StorageError, match="No files found"):
             await store.download(prefix="empty", output_dir=tmp_path / "out")
+
+    async def test_download_prefix_skips_childless_folder_marker(self, tmp_path):
+        import obstore
+
+        store = CloudStore(MemoryStore(), provider="memory")
+        await store.upload_bytes("dump/base/result.json", b"{}")
+        await store.upload_bytes("dump/zero.json", b"")
+        real_list = obstore.list
+
+        async def _list(raw, prefix=None, **kwargs):
+            async for batch in real_list(raw, prefix=prefix, **kwargs):
+                yield batch
+            yield [{"path": "dump/empty", "size": 0, "e_tag": None}]
+
+        out = tmp_path / "out"
+        with patch.object(obstore, "list", _list):
+            assert await store.list("dump") == [
+                "dump/base/result.json",
+                "dump/zero.json",
+            ]
+            paths = await store.download(prefix="dump", output_dir=out)
+        assert sorted(p.relative_to(out).as_posix() for p in paths) == [
+            "base/result.json",
+            "zero.json",
+        ]
 
     async def test_download_empty_prefix_preserves_subdirectories(self, tmp_path):
         """A whole-bucket download (prefix="") must not flatten same-named files
@@ -743,3 +845,427 @@ class TestCloudStorePutAttributes:
             )
 
         assert cs._put_attributes is None
+
+
+class TestS3RegionLookup:
+    @staticmethod
+    def _stub_head(monkeypatch, *, headers=None, error=None, by_host=None):
+        import aiohttp
+
+        seen: dict = {"urls": []}
+
+        class _Response:
+            def __init__(self, response_headers):
+                self.headers = response_headers
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+        def _head(_self, url, **kwargs):
+            seen["urls"].append(url)
+            seen.update(url=url, **kwargs)
+            if error is not None:
+                raise error
+            if by_host is not None:
+                return _Response(by_host.get(url.split("/")[2], {}))
+            return _Response(headers or {})
+
+        monkeypatch.setattr(aiohttp.ClientSession, "head", _head)
+        return seen
+
+    @pytest.mark.parametrize(
+        ("headers", "expected", "urls"),
+        [
+            (
+                {"x-amz-bucket-region": "us-west-2"},
+                "us-west-2",
+                ["https://s3.amazonaws.com/my.bucket"],
+            ),
+            (
+                {},
+                "",
+                [
+                    "https://s3.amazonaws.com/my.bucket",
+                    "https://s3.cn-north-1.amazonaws.com.cn/my.bucket",
+                ],
+            ),
+        ],
+    )
+    async def test_lookup_reads_region_header(
+        self, monkeypatch, headers, expected, urls
+    ):
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        seen = self._stub_head(monkeypatch, headers=headers)
+        assert await _REAL_LOOKUP_BUCKET_REGION("my.bucket") == expected
+        assert seen["urls"] == urls
+        assert seen["allow_redirects"] is False
+
+    @pytest.mark.parametrize(
+        ("env", "region_host", "expected"),
+        [
+            ({}, "s3.cn-north-1.amazonaws.com.cn", "cn-northwest-1"),
+            (
+                {"AWS_REGION": "us-east-1"},
+                "s3.cn-north-1.amazonaws.com.cn",
+                "cn-north-1",
+            ),
+            ({"AWS_REGION": "cn-north-1"}, "s3.amazonaws.com", "eu-west-1"),
+        ],
+    )
+    async def test_lookup_falls_back_to_other_partition(
+        self, monkeypatch, env, region_host, expected
+    ):
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        seen = self._stub_head(
+            monkeypatch,
+            by_host={region_host: {"x-amz-bucket-region": expected}},
+        )
+        assert await _REAL_LOOKUP_BUCKET_REGION("b") == expected
+        assert len(seen["urls"]) == 2
+        assert seen["urls"][-1] == f"https://{region_host}/b"
+
+    @pytest.mark.parametrize(
+        "error", [OSError("unreachable"), RuntimeError("socket blocked")]
+    )
+    async def test_lookup_failure_returns_empty(self, monkeypatch, error):
+        import aiohttp
+
+        seen = self._stub_head(
+            monkeypatch,
+            error=aiohttp.ClientConnectionError("unreachable")
+            if isinstance(error, OSError)
+            else error,
+        )
+        assert await _REAL_LOOKUP_BUCKET_REGION("b") == ""
+        assert len(seen["urls"]) == 1
+
+    @staticmethod
+    def _regions_built(monkeypatch):
+        from application_sdk.storage import _obstore_config
+
+        built: list[str | None] = []
+
+        def _make(bucket, config=None, **_kwargs):
+            built.append((config or {}).get("aws_region"))
+            return MemoryStore()
+
+        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        return built
+
+    async def test_blank_region_rebuilds_store_once_with_bucket_region(
+        self, monkeypatch
+    ):
+        import asyncio
+
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+
+        async def _slow_lookup(_bucket):
+            await asyncio.sleep(0)
+            return "us-west-2"
+
+        lookup = MagicMock(side_effect=_slow_lookup)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        await asyncio.gather(store.list("x"), store.list("y"))
+        assert built == [None, "us-west-2"]
+        lookup.assert_called_once_with("b")
+
+    async def test_explicit_region_skips_lookup(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        lookup = MagicMock(side_effect=_async_return("us-west-2"))
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b", "region": "eu-west-1"}}
+        )
+        await store.list("x")
+        assert built == ["eu-west-1"]
+        lookup.assert_not_called()
+
+    async def test_custom_endpoint_skips_lookup(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        monkeypatch.setenv("AWS_ENDPOINT_URL", "http://127.0.0.1:9000")
+        lookup = MagicMock(side_effect=_async_return("us-west-2"))
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        await store.list("x")
+        assert built == [None]
+        lookup.assert_not_called()
+
+    async def test_failed_lookup_keeps_store(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return(""))
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        before = store.store
+        await store.list("x")
+        assert built == [None]
+        assert store.store is before
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda store, tmp: store.get_bytes("k"),
+            lambda store, tmp: store.download(prefix="p", output_dir=tmp / "out"),
+            lambda store, tmp: store.list("p"),
+            lambda store, tmp: store.upload(tmp / "f.bin", "k"),
+            lambda store, tmp: store.upload_bytes("k", b"x"),
+            lambda store, tmp: store.upload_dir(tmp / "d", "p"),
+        ],
+        ids=["get_bytes", "download", "list", "upload", "upload_bytes", "upload_dir"],
+    )
+    async def test_every_entry_point_resolves_region_first(
+        self, monkeypatch, tmp_path, call
+    ):
+        from application_sdk.storage import cloud
+
+        built = self._regions_built(monkeypatch)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return("us-west-2"))
+        (tmp_path / "f.bin").write_bytes(b"x")
+        (tmp_path / "d").mkdir()
+        (tmp_path / "d" / "g.bin").write_bytes(b"y")
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        try:
+            await call(store, tmp_path)
+        except StorageError:
+            pass
+        assert built == [None, "us-west-2"]
+
+    @pytest.mark.parametrize(
+        ("env", "hosts"),
+        [
+            (
+                {"AWS_REGION": "eu-west-1"},
+                ["s3.eu-west-1.amazonaws.com", "s3.cn-north-1.amazonaws.com.cn"],
+            ),
+            (
+                {"AWS_DEFAULT_REGION": "ap-south-1"},
+                ["s3.ap-south-1.amazonaws.com", "s3.cn-north-1.amazonaws.com.cn"],
+            ),
+            (
+                {"AWS_REGION": "cn-northwest-1"},
+                ["s3.cn-northwest-1.amazonaws.com.cn", "s3.amazonaws.com"],
+            ),
+            ({}, ["s3.amazonaws.com", "s3.cn-north-1.amazonaws.com.cn"]),
+        ],
+    )
+    def test_lookup_uses_ambient_regional_endpoint(self, monkeypatch, env, hosts):
+        from application_sdk.storage import cloud
+
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+        assert cloud._region_lookup_hosts() == hosts
+
+    async def test_lookup_uses_sdk_ssl_context(self, monkeypatch):
+        from application_sdk.clients import ssl_utils
+
+        sentinel = object()
+        monkeypatch.setattr(ssl_utils, "get_ssl_context", lambda: sentinel)
+        seen = self._stub_head(monkeypatch, headers={})
+        await _REAL_LOOKUP_BUCKET_REGION("b")
+        assert seen["ssl"] is sentinel
+
+    async def test_rebuild_uses_credentials_as_given(self, monkeypatch):
+        from application_sdk.storage import _obstore_config, cloud
+
+        built: list[tuple[str, dict]] = []
+
+        def _make(bucket, config=None, **_kwargs):
+            built.append((bucket, dict(config or {})))
+            return MemoryStore()
+
+        monkeypatch.setattr(_obstore_config, "make_s3_store", _make)
+        monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+        monkeypatch.delenv("AWS_ENDPOINT", raising=False)
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", _async_return("us-west-2"))
+        credentials = {
+            "authType": "s3",
+            "username": "access-a",
+            "password": "secret-a",
+            "extra": {"s3_bucket": "b"},
+        }
+        store = CloudStore.from_credentials(credentials)
+        credentials["username"] = "access-b"
+        credentials["extra"]["s3_bucket"] = "other"
+        await store.list("x")
+        bucket, config = built[-1]
+        assert bucket == "b"
+        assert config["aws_access_key_id"] == "access-a"
+        assert config["aws_region"] == "us-west-2"
+
+    async def test_download_checks_arguments_before_lookup(self, monkeypatch):
+        from application_sdk.storage import cloud
+
+        self._regions_built(monkeypatch)
+        lookup = MagicMock(side_effect=_async_return("us-west-2"))
+        monkeypatch.setattr(cloud, "_lookup_bucket_region", lookup)
+        store = CloudStore.from_credentials(
+            {"authType": "s3", "extra": {"s3_bucket": "b"}}
+        )
+        with pytest.raises(StorageConfigError):
+            await store.download(key="k", prefix="p")
+        lookup.assert_not_called()
+
+
+_GCS_VPC_SC_403 = (
+    "Generic GCS error: Error performing list request: Error performing GET "
+    "https://storage.googleapis.com/storage/v1/b/example-bucket/o: Client error "
+    "with status 403 Forbidden: <?xml version='1.0'?><Error>"
+    "<Code>SecurityPolicyViolated</Code>"
+    "<Message>Request violates VPC Service Controls.</Message></Error>"
+)
+_S3_ACCESS_DENIED_403 = (
+    "Generic S3 error: Error performing list request: non-2xx status code: 403 "
+    "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+)
+
+
+class TestListPermissionDenied:
+    """A 401/403 listing a bucket is the caller's to fix, not a retryable outage."""
+
+    @pytest.fixture(params=["_list_keys", "_list_keys_with_meta"])
+    def list_fn(self, request):
+        return request.param
+
+    async def _list(self, monkeypatch, list_fn, message, provider="gcs"):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(_cloud_module, "_list_items", _boom)
+        store = CloudStore(
+            GCSStore("example-bucket", skip_signature=True), provider=provider
+        )
+        return await getattr(store, list_fn)("prefix/")
+
+    async def test_gcs_vpc_sc_403_is_user_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _GCS_VPC_SC_403)
+        err = ei.value
+        assert err.effective_retryable is False
+        assert err.audience.name == "USER"
+        assert err.http_status == 403
+        assert err.provider_code == "SecurityPolicyViolated"
+        assert err.target == "gs://example-bucket/prefix/"
+        assert "VPC Service Controls" in str(err)
+
+    async def test_s3_access_denied_403_is_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _S3_ACCESS_DENIED_403, provider="s3")
+        assert ei.value.provider_code == "AccessDenied"
+        assert ei.value.http_status == 403
+
+    async def test_503_stays_retryable_storage_error(self, monkeypatch, list_fn):
+        with pytest.raises(StorageError) as ei:
+            await self._list(
+                monkeypatch, list_fn, "non-2xx status code: 503 Service Unavailable"
+            )
+        assert not isinstance(ei.value, StoragePermissionError)
+        assert ei.value.effective_retryable is True
+
+    async def test_typed_obstore_denial_without_status_text(self, monkeypatch, list_fn):
+        async def _boom(*_a, **_k):
+            raise UnauthenticatedError("credential rejected")
+
+        monkeypatch.setattr(_cloud_module, "_list_items", _boom)
+        store = CloudStore(
+            GCSStore("example-bucket", skip_signature=True), provider="gcs"
+        )
+        with pytest.raises(StoragePermissionError) as ei:
+            await getattr(store, list_fn)("prefix/")
+        assert ei.value.http_status == 401
+        assert ei.value.provider_code is None
+
+
+def _gcs_store() -> CloudStore:
+    return CloudStore(GCSStore("example-bucket", skip_signature=True), provider="gcs")
+
+
+def _wrapped_403(key: str) -> StorageError:
+    """A 403 as the shared primitives deliver it: a retryable StorageError chained to the driver error."""
+    try:
+        raise RuntimeError(_GCS_VPC_SC_403)
+    except RuntimeError as driver:
+        err = StorageError(f"Failed on {key}", key=key, cause=driver)
+        err.__cause__ = driver
+        return err
+
+
+class TestReadWritePermissionDenied:
+    """Reads and writes map a 401/403 the same way listing does."""
+
+    async def test_get_bytes_403(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise PermissionDeniedError(_GCS_VPC_SC_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert ei.value.target == "gs://example-bucket/data/a.json"
+        assert ei.value.provider_code == "SecurityPolicyViolated"
+        assert ei.value.effective_retryable is False
+
+    async def test_upload_bytes_403(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(_S3_ACCESS_DENIED_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "put_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().upload_bytes("out/a.json", b"x")
+        assert ei.value.provider_code == "AccessDenied"
+
+    async def test_download_single_wrapped_403(self, monkeypatch, tmp_path):
+        async def _boom(key, *_a, **_k):
+            raise _wrapped_403(key)
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value.http_status == 403
+        assert ei.value.key == "data/a.json"
+
+    async def test_upload_wrapped_403(self, monkeypatch, tmp_path):
+        src = tmp_path / "a.json"
+        src.write_bytes(b"x")
+
+        async def _boom(key, *_a, **_k):
+            raise _wrapped_403(key)
+
+        monkeypatch.setattr(_cloud_module, "upload_file", _boom)
+        with pytest.raises(StoragePermissionError):
+            await _gcs_store().upload(src, "out/a.json")
+
+    async def test_wrapped_503_is_reraised_unchanged(self, monkeypatch, tmp_path):
+        original = StorageError("Failed", key="data/a.json")
+
+        async def _boom(*_a, **_k):
+            raise original
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value is original

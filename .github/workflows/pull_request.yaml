@@ -2,7 +2,10 @@ name: PR Checks
 
 on:
   pull_request:
-    types: [opened, synchronize, labeled, reopened]
+    # No `labeled` (FND-3839): e2e and the bump-PR opt-in are `/e2e` and
+    # `/gate-check` PR comments now (test-commands.yml). A label add on the same
+    # commit used to create a second run of this whole workflow.
+    types: [opened, synchronize, reopened]
     branches: [main]
   merge_group:
 
@@ -27,17 +30,32 @@ jobs:
       #          harness itself (the unit/integration deps + docstring-coverage
       #          wrappers), so changing *how* those checks run still re-runs them.
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
+      # 'false' only on a bump-version PR not yet opted in with `/gate-check`
+      # (FND-3748, FND-3839): the remaining jobs skip and Connector Tests Gate
+      # fails fast.
+      opted_in: ${{ steps.opt-in.outputs.opted_in }}
+      # 'storage' — the object-store layer or its real-cloud suite changed, so
+      # Storage Integration runs on the PR without being asked (FND-3839).
+      storage: ${{ steps.filter.outputs.storage }}
       # 'ci'   — pull_request.yaml itself changed. Self-referential entry
       #          (mirrors sdk-gate.yaml's own self-test pattern) so that editing
       #          the connector / sdr-k8s-e2e dispatch glue re-runs those jobs
       #          in the merge queue — otherwise workflow-only PRs merge blind.
       ci: ${{ steps.filter.outputs.ci }}
-      # 'scan' — wider net for the Trivy filesystem scan: every first-party
-      #          source tree + the dependency lockfiles. Still short-circuits on
-      #          pure docs/, .github-meta, and .security-only PRs.
-      scan: ${{ steps.filter.outputs.scan }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Read live from the head commit's `gate-check` status, which a
+      # `/gate-check` comment posts (bump_pr_opt_in.py). A re-run replays the
+      # original event payload, so the answer cannot come from the event: the
+      # comment re-runs this run, and this step then reads the status.
+      - name: Check the bump-PR CI opt-in
+        id: opt-in
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --sha "$HEAD_SHA"
       # No explicit `base`: for pull_request, paths-filter diffs against the PR
       # base automatically; for merge_group it diffs the queued merge ref against
       # the default branch (the same proven setup the conformance jobs use).
@@ -76,13 +94,9 @@ jobs:
               # exclusion is handled in the sdk-refine step below instead.
             ci:
               - '.github/workflows/pull_request.yaml'
-            scan:
-              - 'application_sdk/**'
-              - 'contract-toolkit/**'
-              - 'tests/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - '.github/actions/trivy/**'
+            storage:
+              - 'application_sdk/storage/**'
+              - 'tests/integration/storage/**'
 
       # paths-filter sdk=true is necessary but not sufficient: the broad
       # application_sdk/** pattern also matches .md files, so a PR that only
@@ -121,7 +135,7 @@ jobs:
   docstr:
     name: Docstring Coverage
     needs: changes
-    if: needs.changes.outputs.sdk == 'true'
+    if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,42 +144,17 @@ jobs:
           module-name: application_sdk
           fail-under: "30"
 
-  # Security Checks
-  # Required status check — must ALWAYS run and ALWAYS conclude (never skip via a
-  # job-level `if:`, which GitHub reports as "skipped" and leaves a required check
-  # pending forever, blocking the merge queue). Instead the job always runs and
-  # short-circuits its real steps when no first-party source/deps changed.
-  trivy:
-    name: Trivy Code Scan
-    needs: changes
-    runs-on: ubuntu-latest
-    steps:
-      - name: Short-circuit when nothing to scan
-        if: needs.changes.outputs.scan != 'true'
-        run: echo "No first-party source or dependency changes — Trivy code scan not needed."
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.scan == 'true'
-      - uses: "./.github/actions/trivy"
-        if: needs.changes.outputs.scan == 'true'
-        with:
-          # Reporting and enforcement are separate switches on purpose — see the
-          # action's input docs. Both are passed explicitly so that a future edit
-          # to one is visibly not an edit to the other. The action itself skips
-          # the comments on merge_group; enforcement runs on every event.
-          add-report-comment-to-pr: "true"
-          fail-on-findings: "true"
-
   trivy-container:
     name: Trivy Container Scan
     needs: changes
-    if: needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
+    if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mint fleet App token
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -207,52 +196,83 @@ jobs:
           MATRIX="{\"include\":[{\"repo_name\":\"atlan-openapi-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-mysql-app\",\"target_branch\":\"${TARGET_BRANCH}\"},{\"repo_name\":\"atlan-metabase-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
 
+  # ── Was e2e requested on this commit? (FND-3839) ─────────────────────
+  # A `/e2e` PR comment (test-commands.yml) posts an `e2e-request` status on
+  # the head commit; on `bump-version-main`, a `/gate-check` opt-in implies e2e
+  # as the label did. Read live, from the commit, not from the event: the
+  # comment re-runs THIS job on a run that started before it, and a re-run
+  # replays the original payload. Re-running a job re-runs its dependents, so
+  # this is the root of the PR-time e2e path and nothing upstream re-runs.
+  #
+  # Its own job, cheap and parallel to everything, so that re-run is exactly
+  # the e2e path. Skipped on merge_group, whose e2e is unconditional below.
+  e2e-request:
+    name: Decide e2e request
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
+    outputs:
+      requested: ${{ steps.decide.outputs.requested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Read the e2e request on the head commit
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: >-
+          python3 .github/scripts/bump_pr_opt_in.py --repo "$REPO" e2e-requested
+          --head-ref "$HEAD_REF" --sha "$HEAD_SHA"
+          --fork "$IS_FORK" --author "$PR_AUTHOR"
+
   # Build a PR-scoped SDK runtime base image so the connector e2e tests can
   # build the connector FROM the *rebuilt* base — exercising Dockerfile /
   # base-image / daprd-apk changes that the pip-install (application_sdk_ref)
   # path can't reach.
   #
-  # Gated on the 'e2e' label ONLY (the same deliberate opt-in as
-  # connector-tests below) — NOT on the `container` paths-filter or the
-  # trivy-container scan. On merge_group this job is skipped and the
+  # Gated on an explicit e2e request ONLY (a `/e2e` comment, see e2e-request;
+  # the same deliberate opt-in as connector-tests below) — NOT on the
+  # `container` paths-filter or the trivy-container scan. On merge_group this job is skipped and the
   # connector dispatch passes no base_image_ref, so the connector builds
   # FROM the released base exactly as before.
   #
-  # Pushes to the public Harbor project (anonymous-pull), so the connector
-  # build pulls it through the same path it already uses for
-  # `FROM registry.atlan.com/public/app-runtime-base:<tag>` — no extra
-  # registry auth on the connector side. Fork PRs are excluded (no secrets).
+  # Pushes to ghcr.io/atlanhq/app-runtime-base — the public, anonymous-pull
+  # package that `registry.atlan.com/public/app-runtime-base` is served from —
+  # so the connector build needs no extra registry auth to pull it. Fork PRs
+  # are excluded (no secrets).
   build-sdk-base-image:
     name: Build SDK base image (e2e)
-    needs: changes
+    needs: [changes, e2e-request]
     # sdk OR container: a Dockerfile-only PR (the prime base-image use case,
     # e.g. a daprd / base bump) is container==true / sdk==false — it must
     # still rebuild the base so the connector e2e exercises the new image.
     #
-    # The `github.event.action != 'labeled'` term is the FND-48 gate and appears
-    # on every `e2e`-labelled job in this workflow. `contains(...labels...)` is a
-    # STATE check — "does the PR carry `e2e` right now" — but this workflow also
-    # triggers on `labeled`, and GitHub offers no trigger-level filter for WHICH
-    # label. So on a PR that already carries `e2e`, any unrelated label add (bots
-    # churn size/, area/, dependency and review-state labels constantly) satisfies
-    # the state check and re-fires the whole cross-repo e2e fan-out. Making the
-    # `labeled` event count only when `e2e` is the label just added leaves every
-    # other event type alone: a real push is `synchronize`, so it still
-    # re-triggers, and re-adding `e2e` still triggers. The workflow RUN is still
-    # created either way — the jobs now skip in seconds instead of dispatching
-    # live-tenant suites. Enforced repo-wide by
-    # .github/scripts/tests/test_label_trigger_gates.py.
+    #
+    # The request comes from e2e-request, which reads the commit (FND-3839).
+    # It used to be the `e2e` label, read from the event, which made every
+    # label add on the PR create another run of this whole workflow.
     if: |
       (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'e2e') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+      (
+        needs.e2e-request.outputs.requested == 'true'
+      ) &&
       github.event.pull_request.head.repo.fork != true &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     # One architecture per job, each on a runner native to it — the same shape
     # build-e2e-image uses for the app image, and for the same reason: every leg
     # of that matrix does `FROM` this image, so this must serve both arches, and
-    # emulating either half is a cost paid on every e2e-labelled PR. See
+    # emulating either half is a cost paid on every e2e-requested PR. See
     # docs/standards/connector-ci-e2e.md.
     strategy:
       # Knowing whether ONE arch or BOTH failed is the diagnosis when a base
@@ -287,13 +307,13 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "image=registry.atlan.com/public/app-runtime-base:pr-${PR_NUMBER}-sha-${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
-      - name: Log in to Atlan Harbor Registry
+          echo "image=ghcr.io/atlanhq/app-runtime-base:pr-${PR_NUMBER}-sha-${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          registry: registry.atlan.com
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
       - name: Log in to Chainguard Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -303,7 +323,7 @@ jobs:
       - name: Mint fleet App token
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -323,7 +343,7 @@ jobs:
           # node — and each leg does `FROM <this image>`. A single-arch base
           # fails the arm64 leg outright with "no match for platform in
           # manifest" before a line of the Dockerfile runs, which is what took
-          # down the arm64 leg of every e2e-labelled SDK PR. The claim the
+          # down the arm64 leg of every e2e-requested SDK PR. The claim the
           # comment here used to make ("the connector build is single-platform
           # too") went stale when that matrix landed.
           platforms: ${{ matrix.platform }}
@@ -361,12 +381,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Log in to Atlan Harbor Registry
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
-          registry: registry.atlan.com
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
       # Buildx for `imagetools`, which is a buildx subcommand.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -412,11 +432,11 @@ jobs:
   #     ref-keyed group for anything a merge-queue batch can reach.
   #     build-sdk-base-image is skipped here, so base_image_ref is omitted
   #     and connectors build FROM the released base.
-  #   pull_request + 'e2e' label — opt-in during PR development; also used
-  #     to release-gate the release PR before merging. Tenant access on the
-  #     connector side is serialised by the (app, cloud) lease in
+  #   pull_request + a `/e2e` request (e2e-request) — opt-in during PR
+  #     development; `/gate-check` implies it on bump-version-main.
+  #     Tenant access on the connector side is serialised by the (app, cloud) lease in
   #     tests-reusable's lease-tenant job, which is a real queue: concurrent
-  #     e2e-labelled PRs wait their turn instead of the third one being
+  #     e2e PRs wait their turn instead of the third one being
   #     silently evicted as `cancelled` (FND-218 / FND-250). No cap on how
   #     many can be in flight — a run that waits longer than the lease budget
   #     fails saying the tenant was busy, naming the run that holds it.
@@ -424,7 +444,7 @@ jobs:
   #     the connector is rebuilt on top of the SDK PR's runtime image.
   connector-tests:
     name: Connector E2E dispatch (${{ matrix.repo_name }})
-    needs: [changes, matrix-builder, build-sdk-base-image, merge-sdk-base-image]
+    needs: [changes, e2e-request, matrix-builder, build-sdk-base-image, merge-sdk-base-image]
     # always() so a *skipped* build-sdk-base-image (merge_group path) does
     # not auto-skip this job. The explicit result clause still BLOCKS this
     # job when the base build genuinely fails on the e2e path — a base that
@@ -450,8 +470,9 @@ jobs:
         ) ||
         (
           github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+          (
+            needs.e2e-request.outputs.requested == 'true'
+          ) &&
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
@@ -504,7 +525,7 @@ jobs:
       # triggers that repo's workflow).
       - name: Mint fleet App token (connector dispatch)
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -517,7 +538,7 @@ jobs:
       # versa.
       - name: Mint fleet App token (SDK checks)
         id: checks-app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -552,31 +573,37 @@ jobs:
   #   merge_group — fires on sdk/container/ci changes. The 'ci' entry covers
   #     pull_request.yaml itself, so editing this dispatch glue re-runs the job
   #     in the merge queue — workflow-only PRs no longer merge blind.
-  #   pull_request + 'e2e' label — opt-in regardless of what changed. The label
-  #     is the operator's explicit decision; it is NOT subordinated to the
-  #     sdk/container/ci filter (decoupled so workflow-only PRs can be validated
-  #     by adding the label without touching SDK code).
+  #   pull_request + a `/e2e` request — opt-in regardless of what changed. The
+  #     request is the operator's explicit decision; it is NOT subordinated to
+  #     the sdk/container/ci filter (decoupled so workflow-only PRs can be
+  #     validated with `/e2e` without touching SDK code).
   sdr-k8s-e2e:
     name: SDR K8s E2E (LM)
-    needs: [changes]
+    needs: [changes, e2e-request]
+    # `always()` because e2e-request is skipped on merge_group, and a skipped
+    # need would otherwise skip this job on exactly the path that must run it;
+    # `changes` is then required explicitly.
     if: |
+      always() && needs.changes.result == 'success' && (
       (
         (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.ci == 'true') &&
         github.event_name == 'merge_group'
       ) ||
       (
         github.event_name == 'pull_request' &&
-        contains(github.event.pull_request.labels.*.name, 'e2e') &&
-        (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+        (
+          needs.e2e-request.outputs.requested == 'true'
+        ) &&
         github.event.pull_request.head.repo.fork != true &&
         github.event.pull_request.user.login != 'dependabot[bot]'
+      )
       )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -621,7 +648,7 @@ jobs:
 
   # (No dedicated two-store-e2e job: mysql's own tests.yaml hardcodes
   # `two-store: true` unconditionally, so its EXISTING full-DAG run —
-  # already dispatched by connector-tests below via the 'e2e' label —
+  # already dispatched by connector-tests below on an e2e request —
   # regression-guards the ADR-0014 two-store posture with no extra SDK-
   # side dispatch glue. A standalone per-connector job here would repeat
   # the exact mistake sdr-matrix-builder / sdr-e2e-apps / e2e-full-mysql
@@ -647,6 +674,7 @@ jobs:
     needs:
       [
         changes,
+        e2e-request,
         matrix-builder,
         build-sdk-base-image,
         merge-sdk-base-image,
@@ -660,9 +688,17 @@ jobs:
       # Reading this PR's current head, so a poll for checks that will never
       # exist stops early. Missing, the read 403s, the poll warns and waits the
       # full budget — the old behaviour, which is why this is easy to drop and
-      # never notice.
-      pull-requests: read
+      # never notice. Write: the sticky `/e2e` comment's verdict (FND-3839).
+      pull-requests: write
     steps:
+      # An un-opted bump-version PR (FND-3748) skipped every upstream job; fail
+      # here, before the upstream check would read those skips as a pass.
+      - name: Require the bump-PR CI opt-in
+        if: needs.changes.result == 'success' && needs.changes.outputs.opted_in != 'true'
+        run: |
+          echo "::error::Bump-version PR CI is opt-in (FND-3748). Comment /gate-check on the PR to run it."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # connector-tests now only dispatches (e2e-apps wait-mode: callback) —
@@ -714,15 +750,35 @@ jobs:
             --names-json "$NAMES_JSON" \
             --pr-number "$PR_NUMBER"
 
+      # The PR's sticky `/e2e` comment gets the verdict: one row per connector
+      # e2e check on the head commit (FND-3839). A view of those checks, never
+      # the verdict itself, so fail-open; only when e2e was asked for here.
+      - name: Post the /e2e verdict on the PR
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          needs.e2e-request.outputs.requested == 'true' &&
+          steps.upstream.outputs.dispatched == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 .github/scripts/test_command_comment.py
+          --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
+          sdk-e2e-verdict
+
   # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
   # create_store_from_binding + CloudStore against real buckets/vaults using the
   # *_integration markers (excluded from default addopts; conftest skips when a
   # cloud's creds are absent). Fork PRs are excluded (no secrets). Nightly
   # counterpart lives in schedule.yaml.
   #
-  # FND-1153: gated on the SAME 'e2e' label as the other release-tier suites
-  # above, not on a private 'storage-integration' one, and deliberately NOT on
-  # the merge queue. Two reasons it stays off the required SDK Gate:
+  # Runs on the PR when the storage layer or its suite changed, or when e2e was
+  # requested (FND-3839) — no label to remember, and nothing runs for a PR that
+  # cannot affect storage. Deliberately NOT on the merge queue, for two reasons:
   #
   #   - The Entra federated identity credential is scoped to `pull_request`
   #     subjects. A merge-queue run presents
@@ -731,25 +787,28 @@ jobs:
   #     30s in — before a single test runs. (AWS's trust policy is broad enough
   #     to accept it; GCP's WIF attribute condition is unverified because the
   #     step never got reached.) Re-gating this on merge_group requires fixing
-  #     those cloud-side subject conditions first.
+  #     those cloud-side subject conditions first. A `/e2e` comment re-runs this
+  #     PR's own run, so its event stays `pull_request` and the FIC matches.
   #   - Even once that is fixed, the merge queue runs entries speculatively in
   #     parallel, so every queued PR would pay three cloud logins plus real
   #     S3 / Azure / GCS round trips whether or not it touched storage.
-  #
-  # The cost of this tier is real and accepted: the suite runs only when someone
-  # applies 'e2e', so a storage change can reach main without a real-cloud
-  # request. Apply the label on any PR touching application_sdk/storage/.
   storage-integration:
     name: Storage Integration Tests (S3 / Azure / GCS)
-    # Same FND-48 shape as the e2e gates above — see build-sdk-base-image for the
-    # full rationale. The previous form OR'd the event check with the state check,
-    # which made the event arm redundant: `contains(...)` alone was already true
-    # for the label-just-added case, so every unrelated label add on a PR carrying
-    # the label re-ran the real-cloud suite. AND-ing it is the fix.
+    needs: [changes, e2e-request]
+    # `always()` because e2e-request may be skipped, and a skipped need would
+    # otherwise skip this job; `changes` is then required explicitly.
+    #
+    # Dependabot is excluded: its runs get a read-only GITHUB_TOKEN and no
+    # secrets, so the cloud logins could only fail.
     if: |
-      contains(github.event.pull_request.labels.*.name, 'e2e') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
-      github.event.pull_request.head.repo.fork != true
+      always() && needs.changes.result == 'success' &&
+      github.event_name == 'pull_request' &&
+      (
+        needs.changes.outputs.storage == 'true' ||
+        needs.e2e-request.outputs.requested == 'true'
+      ) &&
+      github.event.pull_request.head.repo.fork != true &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
@@ -810,5 +869,4 @@ jobs:
             -v --timeout=60
 
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
-  # superseded by connector-tests + the 'e2e' label on tests.yaml)
-
+  # superseded by connector-tests + the e2e path in tests.yaml)

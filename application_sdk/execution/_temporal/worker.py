@@ -17,6 +17,7 @@ from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
+from typing_extensions import deprecated
 
 from application_sdk.app.registry import (
     AppRegistry,
@@ -27,6 +28,7 @@ from application_sdk.app.registry import (
 from application_sdk.constants import (
     APP_BUILD_ID,
     APP_DEPLOYMENT_NAME,
+    PREFLIGHT_GATE_MODE_ENV,
     SHUTDOWN_DRAIN_DELAY_SECONDS,
 )
 from application_sdk.execution._temporal.activities import get_all_task_activities
@@ -607,13 +609,22 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
+        build_preflight_warmup_activity,
         gate_attempts,
         gate_budget_seconds,
         log_gate_posture,
         preflight_gate_activity_name,
+        preflight_warmup_activity_name,
         resolve_gate_mode,
     )
-    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
+    from application_sdk.execution._temporal.preflight_transport import (  # noqa: PLC0415 — lazy: loaded with the gate machinery above
+        InProcessPreflightTransport,
+    )
+    from application_sdk.handler._warmup import (  # noqa: PLC0415 — lazy: loaded with the gate machinery above
+        warmup_ceiling_seconds,
+        warmup_probe_timeout_seconds,
+    )
+    from application_sdk.handler.base import DefaultHandler, Handler  # noqa: PLC0415
 
     # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
     # keeps the gate present but non-blocking.
@@ -633,8 +644,19 @@ def create_worker(
     gate_app_names = list(dict.fromkeys(m.name for m in sdr_registered_apps)) or [
         resolved_app_name
     ]
+    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
+
+    # Every app gets the warmup poll activity (FND-3039): whether an app has a
+    # warmup is its handler's answer at run time (Handler.warmup's default
+    # reports READY), not a declaration, so the name is reserved for all and
+    # dispatched only when a run's first probe was not READY.
     gate_activity_names = [
-        preflight_gate_activity_name(name) for name in gate_app_names
+        activity_name
+        for name in gate_app_names
+        for activity_name in (
+            preflight_gate_activity_name(name),
+            preflight_warmup_activity_name(name),
+        )
     ]
 
     # Temporal's own duplicate-activity rejection is an opaque ValueError; surface
@@ -655,13 +677,12 @@ def create_worker(
                 f"App task(s) register activity name(s) {gate_collisions}, which the SDK "
                 "reserves for the injected preflight gate. Rename the offending @task "
                 "method (a discovery step 'preflight' -> 'fetch_databases'/'discover', or "
-                "fold a readiness check into Handler.preflight_check). A worker cannot "
-                "register two activities with the same name."
+                "fold a readiness check into Handler.preflight_check; a warmup step into "
+                "Handler.warmup). A worker cannot register two activities with the "
+                "same name."
             ),
             field="task_name",
         )
-
-    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
 
     # ADR-0020 step 8. Deferred for the same reason activities.py defers it:
     # importing any `validation` submodule loads the package __init__, which pulls
@@ -731,22 +752,53 @@ def create_worker(
             # conformance: ignore[L006] same as the artifact-validation notice above: once per hard-mode app at boot, over a single-digit loop, and it is the one line saying a worker will start aborting runs.
             logger.info(
                 "Preflight gate is HARD for app %r — the run WILL abort before "
-                "extraction on a NOT_READY verdict, and on any outcome the gate "
-                "attributes to the source (probe overrunning the %ds budget, "
-                "handler crash, missing credential). Gate plumbing failures still "
-                "fail open. This is the per-app opt-in; the default posture is "
-                "soft (report only, never block).",
+                "extraction on a NOT_READY verdict or an unverifiable source "
+                "whose failure the customer can act on (auth, permission, "
+                "invalid input, precondition, not found, a source still "
+                "unavailable or rate-limited on the final attempt). Anything else — a probe "
+                "overrunning the %ds budget, a handler crash — is reported and "
+                "the run proceeds, as do gate "
+                "plumbing failures. This is the per-app opt-in; the default "
+                "posture is soft (report only, never block).",
                 name,
                 budget_seconds,
             )
+        ceiling, ceiling_complaint = warmup_ceiling_seconds(
+            getattr(app_cls, "preflight_warmup_ceiling_seconds", None)
+        )
+        if ceiling_complaint:
+            logger.warning(
+                "preflight_warmup_ceiling_seconds: %s; using %ds",
+                ceiling_complaint,
+                ceiling,
+            )
+        probe_timeout, probe_complaint = warmup_probe_timeout_seconds(
+            getattr(app_cls, "preflight_warmup_probe_timeout_seconds", None), ceiling
+        )
+        if probe_complaint:
+            logger.warning(
+                "preflight_warmup_probe_timeout_seconds: %s; using %ds",
+                probe_complaint,
+                probe_timeout,
+            )
         gate_activities.append(
             build_preflight_gate_activity(
-                gate_handler,
+                InProcessPreflightTransport(gate_handler),
                 name,
                 mode=mode,
                 budget_seconds=budget_seconds,
                 attempts=attempts,
                 verify_storage=_resolve_verify_storage(app_cls),
+            )
+        )
+        gate_activities.append(
+            build_preflight_warmup_activity(
+                InProcessPreflightTransport(gate_handler),
+                name,
+                probe_timeout_seconds=probe_timeout,
+                # The default Handler.warmup answers READY; knowing that here
+                # spares every app without a warmup a credential read per run.
+                has_warmup=type(gate_handler).warmup is not Handler.warmup,
             )
         )
     task_activities = [*task_activities, *gate_activities]
@@ -776,6 +828,34 @@ def create_worker(
             type(handler).__name__,
             resolved_app_name,
         )
+
+    # The e2e object-store assertion node (FND-3571). Registered on every
+    # worker so start-up is identical on every tenant; the activity itself
+    # refuses to read anything unless ATLAN_STORE_ASSERT_ENABLED is set — see
+    # store_assert's module docstring.
+    from application_sdk.execution._temporal.store_assert import (  # noqa: PLC0415 — lazy: loaded with the other SDK-owned workflows
+        STORE_ASSERT_ACTIVITY_NAME,
+        StoreAssertWorkflow,
+        store_assert_activity,
+    )
+
+    if STORE_ASSERT_ACTIVITY_NAME in task_activity_names:
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerActivityNameCollisionError,
+        )
+
+        raise WorkerActivityNameCollisionError(
+            message=(
+                f"An app task registers activity name '{STORE_ASSERT_ACTIVITY_NAME}', "
+                "which the SDK reserves for its object-store assertion workflow. "
+                "Rename the task. A worker cannot register two activities with "
+                "the same name."
+            ),
+            field="task_name",
+        )
+
+    app_workflows = [*app_workflows, StoreAssertWorkflow]
+    task_activities = [*task_activities, store_assert_activity]
 
     interceptor_settings = load_interceptor_settings()
 
@@ -1049,3 +1129,49 @@ def create_worker(
         primary_app_name=primary_app_name,
         task_queue=task_queue,
     )
+
+
+@deprecated(
+    "_resolve_gate_enforcement is deprecated; use resolve_gate_mode(app_cls) and "
+    "read PreflightGateMode.enforces, which distinguishes the postures a bool "
+    "cannot — will be removed in v3.40.0."
+)
+def _resolve_gate_enforcement(app_cls: type | None) -> bool:
+    """Whether the preflight gate blocks a ``NOT_READY`` verdict for this app.
+
+    .. deprecated:: 3.37
+        Use :func:`~application_sdk.execution._temporal.preflight_gate.resolve_gate_mode`
+        and read :attr:`~application_sdk.handler.contracts.PreflightGateMode.enforces`.
+        Will be removed in v3.40.0.
+
+    #3685 removed this alongside the nine names the preflight_gate shim restored;
+    it was missed because it lived in *this* module rather than that one, and a
+    name-level diff of one file cannot see it. Consumers import it directly, so
+    its absence is an ImportError at lock refresh with no migration window.
+
+    **This reproduces the pre-#3685 resolution exactly, including the
+    ``ATLAN_PREFLIGHT_GATE_MODE`` precedence, and that is deliberate.** The first
+    restore returned the declared posture alone, on the reasoning that #3685 had
+    made the env lever inert for the gate and a deployment setting it was already
+    being ignored. Both halves of that are true and it was still the wrong call:
+    apps test *this function's* contract, not the gate's, and two repos assert
+    that the env var can downgrade to soft without an app release. Dropping the
+    lever turned their green suites red on a lock refresh — the same undeprecated
+    break this shim exists to prevent, reintroduced by the shim itself.
+
+    So the value here is what 3.35 returned, not what the gate now applies. Those
+    diverge only where a deployment still sets the variable, and a caller in that
+    position is already reading a deprecated function; the warning points at
+    :func:`resolve_gate_mode`, which is the one true source for the live posture.
+    Faithfulness is the whole job of a compatibility shim — a caller who wants
+    current behaviour migrates, and the warning tells them how.
+    """
+    declared_env = os.environ.get(PREFLIGHT_GATE_MODE_ENV)
+    if declared_env:
+        return declared_env.strip().lower() == "hard"
+
+    from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: mirrors create_worker's gate import, avoids a module cycle
+        resolve_gate_mode,
+    )
+
+    return resolve_gate_mode(app_cls).enforces

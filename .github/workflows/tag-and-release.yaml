@@ -47,7 +47,8 @@ permissions:
 jobs:
   create-release:
     name: Create release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
 
     steps:
       - name: Mint fleet App token
@@ -57,7 +58,7 @@ jobs:
         # does and the default GITHUB_TOKEN does not.
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -80,9 +81,9 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.17"
+          version: "0.13.1"
 
       - name: Get version
         id: get_version

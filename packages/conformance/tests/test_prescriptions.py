@@ -833,6 +833,519 @@ def test_p003_sarif_output_validates(tmp_path: Path) -> None:
     validate_sarif(report)
 
 
+# ── P001 finding names the fields it is about ─────────────────────────────────
+
+
+def _p001_message(src: str) -> str:
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P001"]
+    assert len(findings) == 1, findings
+    return findings[0].message
+
+
+def test_p001_an_opt_out_guarding_no_unsafe_field_says_removing_it_is_the_fix() -> None:
+    # Many opt-outs sit on classes whose fields are all str, int, nested models or already
+    # bounded: the generic "type every field" message sent fixes looking for work that was not there.
+    src = (
+        "class TaskStats(Output, allow_unbounded_fields=True):\n"
+        "    total: int = 0\n"
+        "    name: str = ''\n"
+        "    files: Annotated[list[FileReference], MaxItems(100)] = []\n"
+        "    filters: FilterMap = {}\n"
+    )
+    message = _p001_message(src)
+    assert "every field it declares is already payload-safe" in message
+    assert "remove the opt-out" in message
+
+
+def test_p001_treats_tree_selection_as_payload_safe() -> None:
+    src = (
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+        "    tree_or_str: TreeSelection | str = ''\n"
+    )
+    message = _p001_message(src)
+    assert "every field it declares is already payload-safe" in message
+    assert "does not define" not in message
+
+
+def test_p001_does_not_trust_a_local_definition_named_like_an_sdk_type() -> None:
+    src = (
+        "TreeSelection = TypeAliasType('TreeSelection', dict[str, Any])\n\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+    )
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "tree: `TreeSelection`, a type this file does not define" in message
+
+
+@pytest.mark.parametrize(
+    "import_line",
+    [
+        pytest.param("from app.types import Tree as TreeSelection", id="renamed"),
+        pytest.param("from app.types import TreeSelection", id="foreign-module"),
+        pytest.param("from .types import TreeSelection", id="relative"),
+        pytest.param(
+            "from application_sdk.contracts.types import FilterMap as TreeSelection",
+            id="sdk-renamed",
+        ),
+    ],
+)
+def test_p001_does_not_trust_an_imported_type_bound_to_an_sdk_name(
+    import_line: str,
+) -> None:
+    src = (
+        f"{import_line}\n\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+    )
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "tree: `TreeSelection`, a type this file does not define" in message
+
+
+def test_p001_trusts_an_sdk_name_imported_from_the_sdk() -> None:
+    src = (
+        "from application_sdk.contracts.types import TreeSelection\n\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+    )
+    assert "every field it declares is already payload-safe" in _p001_message(src)
+
+
+def test_p001_names_each_unsafe_field_and_why() -> None:
+    src = (
+        "class ExtractInput(Input, allow_unbounded_fields=True):\n"
+        "    credentials: dict[str, Any] = {}\n"
+        "    counts: dict[str, int] = {}\n"
+        "    connection: dict = {}\n"
+        "    payload: bytes = b''\n"
+        "    nested: Annotated[list[list[str]], MaxItems(10)] = []\n"
+        "    blob: Annotated[dict[str, object], MaxItems(20)] = {}\n"
+        "    ok: Annotated[dict[str, int], MaxItems(50)] = {}\n"
+        "    _private: dict[str, Any] = {}\n"
+        "    registry: ClassVar[dict[str, Any]] = {}\n"
+    )
+    message = _p001_message(src)
+    assert "credentials: `Any`" in message
+    assert "counts: `dict[...]` without MaxItems" in message
+    assert (
+        "connection: bare `dict`" in message
+    )  # unbounded although the runtime check misses it
+    assert "payload: `bytes`" in message
+    assert (
+        "nested: `list[...]` without MaxItems" in message
+    )  # the inner list is unbounded
+    assert (
+        "blob: `object` (open-ended" in message
+    )  # passes the runtime check, bounds nothing
+    for safe in ("ok:", "_private", "registry"):
+        assert safe not in message
+    assert (
+        "ConnectionRef" in message
+        and "FilterMap" in message
+        and "FileReference" in message
+    )
+
+
+def test_p001_fires_on_the_class_attribute_opt_out() -> None:
+    # The runtime honours a truthy `_allow_unbounded_fields` on the class as well as the keyword.
+    src = (
+        "class QueryInput(Input):\n"
+        "    _allow_unbounded_fields: ClassVar[bool] = True\n"
+        "    filters: dict[str, Any] = {}\n"
+    )
+    message = _p001_message(src)
+    assert "_allow_unbounded_fields class attribute" in message
+    assert "filters: `Any`" in message
+    assert (
+        _ids(
+            "class Q(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n    x: str = ''\n"
+        )
+        == []
+    )
+
+
+def test_p001_fires_on_a_plain_falsy_attribute_on_a_contract() -> None:
+    # Pydantic stores a non-ClassVar underscore assignment as a private attribute, and the class
+    # reads it back as that truthy descriptor, so validation is skipped despite the literal False.
+    src = "class Q(Input):\n    _allow_unbounded_fields = False\n    x: Any = None\n"
+    message = _p001_message(src)
+    assert "class attribute (line 2)" in message
+    assert "truthy whatever it holds" in message and "ClassVar[bool]" in message
+    assert "does NOT set" not in message
+
+
+def test_p001_class_attribute_opt_out_honours_a_directive() -> None:
+    src = (
+        "# conformance: ignore[P001] the upstream API returns an arbitrary-depth tree\n"
+        "class QueryInput(Input):\n"
+        "    _allow_unbounded_fields = True\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P001"]
+    assert len(findings) == 1 and findings[0].suppressed
+
+
+def test_p001_resolves_a_same_file_alias_to_an_unsafe_type() -> None:
+    # Taking the alias name as safe told owners to drop the opt-out; get_type_hints resolves the
+    # alias, payload safety refuses it, and the module stops importing.
+    src = (
+        "Payload = list[str]\n"
+        "Value = Any\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    payload: Payload = []\n"
+        "    value: Value = None\n"
+    )
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "payload: `list[...]` without MaxItems" in message
+    assert "value: `Any`" in message
+
+
+def test_p001_reads_a_quoted_forward_reference() -> None:
+    message = _p001_message(
+        'class C(Input, allow_unbounded_fields=True):\n    payload: "Any" = None\n'
+    )
+    assert "payload: `Any`" in message and "already payload-safe" not in message
+
+
+def test_p001_reports_a_type_it_cannot_resolve_as_unknown_not_safe() -> None:
+    src = "class C(Input, allow_unbounded_fields=True):\n    spec: ImportedSpec = None\n    name: str = ''\n"
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "spec: `ImportedSpec`, a type this file does not define" in message
+    assert "name:" not in message
+
+
+@pytest.mark.parametrize(
+    ("annotation", "named"),
+    [
+        ("set[int]", "set"),
+        ("frozenset[str]", "frozenset"),
+        ("Set[str]", "Set"),
+        ("FrozenSet[str]", "FrozenSet"),
+        ("AbstractSet[str]", "AbstractSet"),
+        ("tuple[str, ...]", "tuple"),
+        ("Tuple[str, ...]", "Tuple"),
+        ("Sequence[str]", "Sequence"),
+        ("typing.Sequence[str]", "Sequence"),
+        ("MutableSequence[str]", "MutableSequence"),
+        ("Mapping[str, str]", "Mapping"),
+        ("MutableMapping[str, str]", "MutableMapping"),
+        ("deque[str]", "deque"),
+        ("Optional[set[str]]", "set"),
+        ("set[str] | None", "set"),
+        ("'Sequence[str]'", "Sequence"),
+    ],
+)
+def test_p001_names_every_unbounded_collection_as_a_blocker(
+    annotation: str, named: str
+) -> None:
+    # Payload safety refuses every collection without MaxItems, not only dict and list, so
+    # each of these blocks removing the opt-out.
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    message = _p001_message(src)
+    assert f"ids: `{named}[...]` without MaxItems" in message
+    assert "Fields payload safety refuses" in message
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "Annotated[set[int], MaxItems(10)]",
+        "Annotated[tuple[str, ...], MaxItems(10)]",
+        "Annotated[Sequence[str], MaxItems(10)]",
+        "Annotated[Mapping[str, int], MaxItems(10)]",
+        "tuple[str, int]",
+        "Tuple[str, int]",
+        "Annotated[list[Annotated[set[str], MaxItems(3)]], MaxItems(10)]",
+    ],
+)
+def test_p001_accepts_a_bounded_collection_and_a_fixed_arity_tuple(
+    annotation: str,
+) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    assert "already payload-safe" in _p001_message(src)
+
+
+@pytest.mark.parametrize(
+    ("annotation", "why"),
+    [
+        # MaxItems bounds the outer collection; an unbounded one inside it still blocks.
+        ("Annotated[list[set[str]], MaxItems(10)]", "`set[...]` without MaxItems"),
+        ("Annotated[set[bytes], MaxItems(10)]", "`bytes`"),
+        ("Annotated[tuple[Any, ...], MaxItems(10)]", "`Any`"),
+        # A fixed-arity tuple is bounded by its shape; its members are still judged.
+        ("tuple[str, Sequence[str]]", "`Sequence[...]` without MaxItems"),
+    ],
+)
+def test_p001_still_judges_the_elements_of_a_bounded_collection(
+    annotation: str, why: str
+) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    assert f"ids: {why}" in _p001_message(src)
+
+
+@pytest.mark.parametrize("annotation", ["dict", "list"])
+def test_p001_reports_a_bare_dict_or_list_as_open_ended(annotation: str) -> None:
+    # The runtime still accepts a bare builtin dict or list while it bounds nothing.
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    message = _p001_message(src)
+    assert f"ids: bare `{annotation}`" in message
+    assert "Fields it accepts that still bound nothing" in message
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "set",
+        "frozenset",
+        "tuple",
+        "deque",
+        # typing aliases have an origin, so the runtime refuses them bare.
+        "Sequence",
+        "typing.Sequence",
+        "Set",
+        "Tuple",
+        "Dict",
+        "List",
+        "Annotated[list[set], MaxItems(5)]",
+    ],
+)
+def test_p001_names_a_bare_collection_the_runtime_refuses(annotation: str) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    message = _p001_message(src)
+    assert "Fields payload safety refuses" in message
+    assert "without MaxItems" in message
+    assert "bound nothing" not in message
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "Annotated[set, MaxItems(5)]",
+        "Annotated[typing.Sequence, MaxItems(5)]",
+        # Python flattens nested Annotated: the outer MaxItems bounds the inner set.
+        "Annotated[Annotated[set[str], Field(min_length=1)], MaxItems(10)]",
+        "Annotated[Annotated[tuple[str, ...], object()], MaxItems(10)]",
+    ],
+)
+def test_p001_accepts_a_bound_from_any_annotated_level(annotation: str) -> None:
+    src = f"class C(Input, allow_unbounded_fields=True):\n    ids: {annotation}\n"
+    assert "already payload-safe" in _p001_message(src)
+
+
+def test_p001_the_last_class_attribute_assignment_decides() -> None:
+    # The runtime reads the final value: an earlier falsy assignment does not hide a later truthy one.
+    src = (
+        "class C(Input):\n"
+        "    _allow_unbounded_fields = False\n"
+        "    _allow_unbounded_fields = True\n"
+        "    payload: bytes = b''\n"
+    )
+    message = _p001_message(src)
+    assert "class attribute (line 3)" in message and "payload: `bytes`" in message
+    assert (
+        _ids(
+            "class C(Input):\n    _allow_unbounded_fields = True\n"
+            "    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        )
+        == []
+    )
+
+
+def test_p001_fires_on_a_contract_inheriting_the_attribute_from_a_mixin() -> None:
+    src = (
+        "class OptOutMixin:\n"
+        "    _allow_unbounded_fields = True\n"
+        "class Q(Input, OptOutMixin):\n"
+        "    items: dict[str, str] = {}\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P001"]
+    assert len(findings) == 1  # reported on the contract, not again on the mixin
+    assert findings[0].line == 3
+    assert "inherited from OptOutMixin" in findings[0].message
+    assert "items: `dict[...]` without MaxItems" in findings[0].message
+
+
+_KEYWORD_PARENT = (
+    "class ArgsInput(Input, allow_unbounded_fields=True):\n"
+    "    args: dict[str, Any] = {}\n"
+)
+
+
+def _p001_by_line(src: str) -> dict[int, str]:
+    return {f.line: f.message for f in scan_text(src, "x.py") if f.rule_id == "P001"}
+
+
+def test_p001_fires_on_a_subclass_inheriting_the_class_keyword_opt_out() -> None:
+    # The keyword sets _allow_unbounded_fields on the class, so a subclass that does
+    # not repeat it is still opted out at runtime.
+    src = _KEYWORD_PARENT + (
+        "class TagsInput(ArgsInput):\n    refs: list[FileReference] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "inherits the payload-safety opt-out from ArgsInput" in found[3]
+    assert "refs: `list[...]` without MaxItems" in found[3]
+    assert "args:" not in found[3]
+    assert "before ArgsInput drops its opt-out" in found[3]
+
+
+def test_p001_reports_an_inheriting_subclass_only_for_the_fields_it_adds() -> None:
+    # The parent's own finding covers a subclass that adds only safe fields.
+    src = _KEYWORD_PARENT + (
+        "class Mid(ArgsInput):\n    a: int = 0\n"
+        "class Leaf(Mid):\n    refs: list[str] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 5]
+    assert "from ArgsInput" in found[5]
+
+
+def test_p001_a_falsy_keyword_does_not_opt_a_subclass_back_in() -> None:
+    # Input.__init_subclass__ only ever sets the attribute to True, so
+    # allow_unbounded_fields=False leaves the parent's opt-out in force: the
+    # subclass imports fine, and is still exempt.
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput, allow_unbounded_fields=False):\n    extra: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "from ArgsInput" in found[3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_a_plain_falsy_attribute_on_a_contract_does_not_end_the_inherited_opt_out() -> (
+    None
+):
+    # Pydantic stores a non-ClassVar underscore assignment as a private attribute, so
+    # the class still reads the parent's True and imports without validation.
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput):\n    _allow_unbounded_fields = False\n    n: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_a_classvar_falsy_attribute_ends_the_inherited_opt_out() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput):\n"
+        "    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "    n: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "does NOT set" in found[3]
+
+
+def test_p001_the_first_base_that_sets_the_attribute_decides_like_the_mro() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Off(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "class C(Off, ArgsInput):\n    refs: list[str] = []\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1]
+
+
+def test_p001_a_mixin_falsy_on_the_contract_keeps_the_mixin_opt_out() -> None:
+    src = (
+        "class M:\n    _allow_unbounded_fields = True\n"
+        "class C(M, Input):\n    _allow_unbounded_fields = False\n    a: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "inherited from M" in found[3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_reports_a_mixin_opt_out_once_and_descendants_only_for_what_they_add() -> (
+    None
+):
+    # The first contract inheriting the mixin carries the finding; suppressing it must not
+    # leave a BLOCK on a descendant that adds only safe fields.
+    src = (
+        "class M:\n    _allow_unbounded_fields = True\n"
+        "class Parent(Input, M):\n    a: int = 0\n"
+        "class Child(Parent):\n    note: str = ''\n"
+        "class Leaf(Child):\n    refs: list[str] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3, 7]
+    assert "inherited from M" in found[3]
+    assert (
+        "from Parent" in found[7] and "refs: `list[...]` without MaxItems" in found[7]
+    )
+
+
+def test_p001_a_plain_falsy_attribute_on_a_contract_reads_through_to_an_off_base() -> (
+    None
+):
+    # The private attribute leaves the class namespace, so the base's ClassVar False is what
+    # the class reads: still enforced.
+    src = (
+        "class Off(Input):\n    _allow_unbounded_fields: ClassVar[bool] = False\n"
+        "class D(Off):\n    _allow_unbounded_fields = False\n    a: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "does NOT set" in found[3]
+
+
+def test_p001_a_plain_mixin_falsy_attribute_ends_the_opt_out_before_the_parent() -> (
+    None
+):
+    src = _KEYWORD_PARENT + (
+        "class Off:\n    _allow_unbounded_fields = False\n"
+        "class C(Off, ArgsInput):\n    z: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 5]
+    assert "does NOT set" in found[5]
+
+
+def test_p001_a_nested_class_does_not_shadow_a_module_level_base() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Holder:\n    class ArgsInput(Input):\n        n: int = 0\n"
+        "class C(ArgsInput):\n    refs: list[str] = []\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1, 6]
+
+
+def test_p001_a_redefined_class_name_resolves_to_the_definition_in_force() -> None:
+    src = _KEYWORD_PARENT + (
+        "class C1(ArgsInput):\n    a: list[str] = []\n"
+        "class ArgsInput(Input):\n    n: int = 0\n"
+        "class C2(ArgsInput):\n    b: dict[str, Any] = {}\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3, 7]
+    assert "does NOT set" in found[7]
+
+
+def test_p001_resolves_a_long_inheritance_chain_in_one_pass() -> None:
+    src = _KEYWORD_PARENT + "".join(
+        f"class C{i}({'ArgsInput' if i == 0 else f'C{i - 1}'}):\n    n{i}: int = 0\n"
+        for i in range(1500)
+    )
+    assert sorted(_p001_by_line(src)) == [1]
+
+
+def test_p001_inverse_fires_on_an_any_field_in_an_indirect_contract() -> None:
+    src = (
+        "class Base(Input):\n    n: int = 0\n"
+        "class Sub(Base):\n    extra: dict[str, Any] = {}\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "does NOT set" in found[3]
+
+
+def test_p001_is_silent_on_a_safe_subclass_of_an_enforced_contract() -> None:
+    src = "class Base(Input):\n    n: int = 0\nclass Sub(Base):\n    s: str = ''\n"
+    assert _p001_by_line(src) == {}
+
+
 # ── P002 CategoryFieldOverride ─────────────────────────────────────────────────
 
 
@@ -1297,6 +1810,33 @@ def test_p013_silent_on_correctly_typed_entrypoint(tmp_path: Path) -> None:
     assert p013 == []
 
 
+def test_p013_silent_on_subclass_of_a_rebound_generated_contract(
+    tmp_path: Path,
+) -> None:
+    """A base imported by a module-level alias name resolves to the class it names."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "generated/_input.py": (
+            "from application_sdk.contracts import Input\n"
+            "class MinerAppInputContract(Input):\n"
+            "    x: str = ''\n"
+            "AppInputContract = MinerAppInputContract\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "from generated._input import AppInputContract as _Gen\n"
+            "class MinerInputContract(_Gen):\n"
+            "    y: str = ''\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: MinerInputContract) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
 def test_p013_silent_on_contracts_in_same_file(tmp_path: Path) -> None:
     """Contracts defined in the same file as the App → resolved correctly."""
     src = (
@@ -1387,6 +1927,97 @@ def test_p013_implicit_run_fires_on_app_subclass(tmp_path: Path) -> None:
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
+
+
+@pytest.mark.parametrize("base", ["BaseMetadataExtractor", "SqlApp"])
+def test_p013_implicit_run_fires_on_sdk_template_subclass(
+    tmp_path: Path, base: str
+) -> None:
+    """Implicit run() on an SDK App-template subclass with untyped input → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            f"from application_sdk.templates import {base}\n"
+            "from contracts import FetchOutput\n"
+            "\n"
+            f"class MyConnector({base}):\n"
+            "    async def run(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    p013 = [f for f in _scan_files(tmp_path, files) if f.rule_id == "P013"]
+    assert len(p013) == 1
+
+
+def test_p013_implicit_run_silent_on_local_class_named_like_a_template(
+    tmp_path: Path,
+) -> None:
+    """A local class that merely shares a template's name is not an App base."""
+    src = (
+        "class SqlApp:\n"
+        "    pass\n"
+        "\n"
+        "class MyConnector(SqlApp):\n"
+        "    async def run(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    p013 = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P013"]
+    assert p013 == []
+
+
+_RUN_ON_APP_SUBCLASS = (
+    "from contracts import FetchOutput\n"
+    "\n"
+    "class MyConnector(App):\n"
+    "    async def run(self, input: dict) -> FetchOutput:\n"
+    "        return FetchOutput()\n"
+)
+
+
+def _p013_for_app_prelude(tmp_path: Path, prelude: str) -> list:
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": prelude + _RUN_ON_APP_SUBCLASS,
+    }
+    return [f for f in _scan_files(tmp_path, files) if f.rule_id == "P013"]
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [
+        pytest.param("class App:\n    pass\n\n", id="local-class"),
+        pytest.param("from vendor.base import App\n\n", id="non-sdk-import"),
+        pytest.param("from vendor.base import Base as App\n\n", id="non-sdk-alias"),
+        pytest.param(
+            "from application_sdk.app import App\nfrom vendor.base import App\n\n",
+            id="sdk-import-shadowed-by-later-import",
+        ),
+    ],
+)
+def test_p013_implicit_run_silent_when_app_is_not_the_sdk_app(
+    tmp_path: Path, prelude: str
+) -> None:
+    """A base spelled ``App`` that the module binds to something else is not App."""
+    p013 = _p013_for_app_prelude(tmp_path, prelude)
+    assert p013 == []
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [
+        pytest.param("", id="unimported"),
+        pytest.param("from application_sdk.app import App\n\n", id="sdk-import"),
+        pytest.param(
+            "from vendor.base import App\nfrom application_sdk.app import App\n\n",
+            id="later-sdk-import-wins",
+        ),
+    ],
+)
+def test_p013_implicit_run_fires_when_app_is_the_sdk_app(
+    tmp_path: Path, prelude: str
+) -> None:
+    p013 = _p013_for_app_prelude(tmp_path, prelude)
+    assert len(p013) == 1
 
 
 def test_p013_implicit_run_silent_on_non_app_class(tmp_path: Path) -> None:
@@ -2066,19 +2697,54 @@ def _p015_ids(src: str) -> list[str]:
     [
         "dict",
         "dict[str, str]",
+        "dict[str, int]",
         "Dict[str, Any]",
+        "Mapping[str, str]",
+        "Annotated[dict[str, bool], MaxItems(10)]",
+        "list",
+        "List",
+        "set",
+        "list[Any]",
+        "List[Any]",
+        "set[Any]",
+        "frozenset[object]",
+        "Sequence[Any]",
+        "list[bytearray]",
+        "Annotated[list[Any], MaxItems(10)]",
+        "list[dict[str, str]]",
+        "list[list[Any]]",
+    ],
+)
+def test_p015_fires_on_unmodeled_container(annotation: str) -> None:
+    """Dict of primitives, container of Any, or bare container → P015."""
+    src = f"class MyInput(Input):\n    data: {annotation}\n"
+    assert _p015_ids(src) == ["P015"], f"Expected P015 for annotation '{annotation}'"
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
         "list[str]",
         "List[int]",
         "set[str]",
         "Set[str]",
-        "Mapping[str, str]",
-        "Sequence[str]",
+        "frozenset[float]",
+        "FrozenSet[bool]",
+        "Sequence[bytes]",
+        "tuple[str, ...]",
+        "Tuple[int, int]",
+        "Annotated[list[str], MaxItems(100)]",
+        "Optional[Annotated[set[int], MaxItems(100)]]",
+        "list[str] | None",
+        "list[Annotated[str, MaxLen(64)]]",
+        "Annotated[list[Annotated[list[str], MaxItems(500)]], MaxItems(200)]",
+        "list[set[int]]",
     ],
 )
-def test_p015_fires_on_unmodeled_container(annotation: str) -> None:
-    """Container of primitives/Any on a contract field → P015."""
+def test_p015_silent_on_scalar_collection(annotation: str) -> None:
+    """List/set/tuple of a scalar primitive has no keys to model → no P015."""
     src = f"class MyInput(Input):\n    data: {annotation}\n"
-    assert _p015_ids(src) == ["P015"], f"Expected P015 for annotation '{annotation}'"
+    assert _p015_ids(src) == [], f"Expected no P015 for annotation '{annotation}'"
 
 
 def test_p015_fires_on_bounded_annotated_dict(tmp_path: Path) -> None:
@@ -2628,6 +3294,382 @@ def test_p028_no_finding_on_dynamic_prefix_embedded_qn() -> None:
     assert "P028" not in _ids(src)
 
 
+# ── P052 EntitySerializationBypass ─────────────────────────────────────────────
+
+
+def _p052(src: str, file: str = "app/connector.py") -> list:
+    return [f for f in scan_text(src, file) if f.rule_id == "P052"]
+
+
+def test_p052_fires_on_to_nested_bytes() -> None:
+    # A transform that has the asset write its own wire line.
+    src = 'out_f.write(asset.to_nested_bytes() + b"\\n")\n'
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_to_nested_dict() -> None:
+    src = "entity = map_connection(conn).to_nested_dict()\n"
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_to_atlas_format_imported_from_pyatlan_v9() -> None:
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format\n"
+        "def f(asset):\n"
+        "    return to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_aliased_to_atlas_format() -> None:
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format as encode\n"
+        "encode(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from pyatlan_v9.model import transform\ntransform.to_atlas_format(a)\n",
+        "import pyatlan_v9.model.transform as t\nt.to_atlas_format(a)\n",
+        "import pyatlan_v9.model.transform\npyatlan_v9.model.transform.to_atlas_format(a)\n",
+    ],
+    ids=["from-module", "import-as", "dotted"],
+)
+def test_p052_fires_on_to_atlas_format_via_module(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_fires_on_function_local_import() -> None:
+    src = (
+        "def f(asset):\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "    return to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+_P052_ENCODER_IMPORT = "from pyatlan_v9.model.transform import to_atlas_format\n"
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A parameter shadows the module-level import.
+        "def f(to_atlas_format, a):\n    return to_atlas_format(a)\n",
+        # A local helper shadows it.
+        "def f(a):\n"
+        "    def to_atlas_format(x):\n"
+        "        return x\n"
+        "    return to_atlas_format(a)\n",
+        # A later module-level rebinding shadows it for calls after it.
+        "def to_atlas_format(x):\n    return x\nto_atlas_format(1)\n",
+    ],
+    ids=["parameter", "local-def", "module-rebind"],
+)
+def test_p052_no_finding_when_encoder_is_shadowed(src: str) -> None:
+    assert _p052(_P052_ENCODER_IMPORT + src) == []
+
+
+def test_p052_import_in_one_function_does_not_leak_into_another() -> None:
+    src = (
+        "def g(a):\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "    return a\n"
+        "def f(a):\n"
+        "    return to_atlas_format(a)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_unrelated_local_import_does_not_mask_module_encoder() -> None:
+    # g's import of a same-named helper is g's business; f still calls
+    # pyatlan's encoder through the module-level import.
+    src = _P052_ENCODER_IMPORT + (
+        "def g(a):\n"
+        "    from mylib.encoders import to_atlas_format\n"
+        "    return to_atlas_format(a)\n"
+        "def f(a):\n"
+        "    return to_atlas_format(a)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [6]
+
+
+def test_p052_class_body_binding_is_not_visible_to_methods() -> None:
+    # Python skips class scope when resolving names inside a method, so the
+    # method's call is the module-level pyatlan encoder.
+    src = _P052_ENCODER_IMPORT + (
+        "class C:\n"
+        "    to_atlas_format = staticmethod(lambda a: a)\n"
+        "    def m(self, a):\n"
+        "        return to_atlas_format(a)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "from application_sdk.common.entity_envelope import to_atlas_format_dict\n"
+        "to_atlas_format_dict(asset)\n",
+        "from application_sdk.common import entity_envelope as ee\n"
+        "ee.to_atlas_format_dict(asset)\n",
+        "import application_sdk.common.entity_envelope\n"
+        "application_sdk.common.entity_envelope.to_atlas_format_dict(asset)\n",
+        # asset_serialization imports it at module level, so it resolves there
+        # too even though it is not in that module's __all__.
+        "from application_sdk.common.asset_serialization import "
+        "to_atlas_format_dict\n"
+        "to_atlas_format_dict(asset)\n",
+        "from application_sdk.common import asset_serialization as ser\n"
+        "ser.to_atlas_format_dict(asset)\n",
+    ],
+    ids=[
+        "from-import",
+        "module-alias",
+        "dotted",
+        "asset-serialization-from-import",
+        "asset-serialization-module-alias",
+    ],
+)
+def test_p052_fires_on_sdk_to_atlas_format_dict(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_no_finding_on_unrelated_to_atlas_format_dict() -> None:
+    src = "from mylib import to_atlas_format_dict\nto_atlas_format_dict(asset)\n"
+    assert _p052(src) == []
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "encode = asset.to_nested_bytes\nencode()\n",
+        "def f(asset):\n    encode = asset.to_nested_dict\n    return encode()\n",
+        _P052_ENCODER_IMPORT + "enc = to_atlas_format\nenc(asset)\n",
+        _P052_ENCODER_IMPORT + "enc = to_atlas_format\nenc2 = enc\nenc2(asset)\n",
+        "from pyatlan_v9.model import transform\n"
+        "t = transform\n"
+        "t.to_atlas_format(asset)\n",
+    ],
+    ids=[
+        "bound-method",
+        "bound-method-in-function",
+        "encoder-alias",
+        "alias-chain",
+        "module-alias",
+    ],
+)
+def test_p052_follows_saved_serializer_alias(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A rebinding in a branch that may not run leaves the import live.
+        _P052_ENCODER_IMPORT
+        + "if use_other:\n    to_atlas_format = other\nto_atlas_format(asset)\n",
+        # Either branch may bind it; one of them is the encoder.
+        "if flag:\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format as enc\n"
+        "else:\n"
+        "    enc = other\n"
+        "enc(asset)\n",
+        # The try-import fallback shape.
+        "try:\n"
+        "    from pyatlan_v9.model.transform import to_atlas_format\n"
+        "except ImportError:\n"
+        "    to_atlas_format = None\n"
+        "to_atlas_format(asset)\n",
+        # A loop that runs zero times never binds its target.
+        _P052_ENCODER_IMPORT
+        + "for to_atlas_format in callbacks:\n    pass\nto_atlas_format(asset)\n",
+    ],
+    ids=["if-no-else", "if-else", "try-except", "for-target"],
+)
+def test_p052_conditional_rebinding_keeps_the_encoder_visible(src: str) -> None:
+    assert len(_p052(src)) == 1
+
+
+def test_p052_unconditional_rebinding_after_a_branch_hides_it() -> None:
+    # The straight-line rebinding definitely runs last, whatever the branch did.
+    src = _P052_ENCODER_IMPORT + (
+        "if flag:\n" "    enc = to_atlas_format\n" "enc = other\n" "enc(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_finally_rebinding_is_definite_after_the_try() -> None:
+    # finally always runs before the statement after the try is reached.
+    src = _P052_ENCODER_IMPORT + (
+        "try:\n"
+        "    pass\n"
+        "finally:\n"
+        "    to_atlas_format = other\n"
+        "to_atlas_format(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_rebinding_in_try_body_stays_conditional_despite_finally() -> None:
+    # The try body may raise before its rebinding; finally does not change that.
+    src = _P052_ENCODER_IMPORT + (
+        "try:\n"
+        "    risky()\n"
+        "    to_atlas_format = other\n"
+        "except ValueError:\n"
+        "    pass\n"
+        "finally:\n"
+        "    cleanup()\n"
+        "to_atlas_format(asset)\n"
+    )
+    assert len(_p052(src)) == 1
+
+
+def test_p052_rebinding_in_the_calls_own_branch_hides_it() -> None:
+    src = _P052_ENCODER_IMPORT + (
+        "if flag:\n    to_atlas_format = other\n    to_atlas_format(asset)\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_late_global_rebinding_is_seen_by_a_function() -> None:
+    # f reads the module global when it is called — after the rebinding.
+    # By source line the latest binding above f is the harmless one; by
+    # runtime it is the encoder.
+    src = (
+        "enc = other\n"
+        "def f(a):\n"
+        "    return enc(a)\n"
+        "from pyatlan_v9.model.transform import to_atlas_format as enc\n"
+        "f(asset)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [3]
+
+
+def test_p052_comprehension_target_does_not_shadow_the_enclosing_scope() -> None:
+    # The comprehension's target lives in its own scope; the later call is
+    # still pyatlan's encoder.
+    src = _P052_ENCODER_IMPORT + (
+        "[x for to_atlas_format in callbacks]\nto_atlas_format(asset)\n"
+    )
+    fs = _p052(src)
+    assert [f.line for f in fs] == [3]
+
+
+def test_p052_comprehension_target_shadows_inside_the_comprehension() -> None:
+    src = _P052_ENCODER_IMPORT + "[to_atlas_format(a) for to_atlas_format in cbs]\n"
+    assert _p052(src) == []
+
+
+def test_p052_comprehension_reads_its_enclosing_scope_with_control_flow() -> None:
+    # The comprehension runs where it is written, after the rebinding.
+    src = _P052_ENCODER_IMPORT + (
+        "to_atlas_format = other\n[to_atlas_format(a) for a in assets]\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_comprehension_still_catches_the_encoder() -> None:
+    src = _P052_ENCODER_IMPORT + "[to_atlas_format(a) for a in assets]\n"
+    assert len(_p052(src)) == 1
+
+
+@pytest.mark.parametrize("name", ["encode", "retained"])
+def test_p052_chained_assignment_aliases_every_target(name: str) -> None:
+    src = f"encode = retained = asset.to_nested_bytes\n{name}()\n"
+    assert len(_p052(src)) == 1
+
+
+def test_p052_cyclic_alias_terminates() -> None:
+    assert _p052("a = b\nb = a\na()\n") == []
+
+
+def test_p052_no_finding_on_entity_bytes() -> None:
+    # The atlan-mysql-app shape: entity_bytes owns the wire line, the app
+    # decorates what it produced.
+    src = (
+        "import orjson\n"
+        "from application_sdk.common.asset_serialization import entity_bytes\n"
+        "def map_view(asset, envelope):\n"
+        "    entity = orjson.loads(entity_bytes(asset, envelope=envelope))\n"
+        '    entity["defaultSchemaName"] = "s"\n'
+        "    return entity\n"
+    )
+    assert _p052(src) == []
+
+
+def test_p052_no_finding_on_unrelated_to_atlas_format() -> None:
+    # A same-named local helper is not pyatlan's encoder.
+    src = "def to_atlas_format(x):\n" "    return x\n" "to_atlas_format(1)\n"
+    assert _p052(src) == []
+
+
+def test_p052_no_finding_on_to_atlas_format_from_other_package() -> None:
+    src = "from mylib.encoders import to_atlas_format\nto_atlas_format(a)\n"
+    assert _p052(src) == []
+
+
+@pytest.mark.parametrize(
+    "file",
+    ["app/generated/_models.py", "main.py", "scripts/seed.py", "x.py"],
+)
+def test_p052_scoped_to_hand_written_app_source(file: str) -> None:
+    src = "asset.to_nested_bytes()\n"
+    assert _p052(src, file) == []
+
+
+def test_p052_fires_in_nested_app_package() -> None:
+    assert len(_p052("asset.to_nested_bytes()\n", "app/mappers/tables.py")) == 1
+
+
+def test_p052_justified_suppression_is_honoured() -> None:
+    # The sanctioned carve-out: a ConnectionRef, not an entity line.
+    src = (
+        "from pyatlan_v9.model.transform import to_atlas_format\n"
+        "# conformance: ignore[P052] ConnectionRef payload, not an entity line\n"
+        "ref = ConnectionRef.model_validate(to_atlas_format(conn))\n"
+    )
+    fs = _p052(src)
+    assert len(fs) == 1
+    assert fs[0].suppressed
+
+
+def test_p052_unrelated_suppression_does_not_hide_finding() -> None:
+    src = "asset.to_nested_bytes()  # conformance: ignore[P028] wrong rule\n"
+    fs = _p052(src)
+    assert len(fs) == 1
+    assert not fs[0].suppressed
+
+
+def test_p052_scan_all_uses_repo_relative_path(tmp_path: Path) -> None:
+    # scan_all passes the path relative to the repo root, so the app/ scope
+    # gate must hold on the full-suite path too, not just scan_text.
+    app = tmp_path / "app"
+    (app / "generated").mkdir(parents=True)
+    (app / "connector.py").write_text("asset.to_nested_bytes()\n", encoding="utf-8")
+    (app / "generated" / "_m.py").write_text(
+        "asset.to_nested_bytes()\n", encoding="utf-8"
+    )
+    findings = [
+        f
+        for f in scan_all(sorted(tmp_path.rglob("*.py")), tmp_path)
+        if f.rule_id == "P052"
+    ]
+    assert [f.file for f in findings] == [str(Path("app") / "connector.py")]
+
+
+def test_p052_rule_is_app_scoped_warn() -> None:
+    rule = get_rule("P052")
+    assert rule.tier is EnforcementTier.WARN
+    assert rule.scope.value == "app"
+
+
 # ── P013/P014 same-bare-name resolution ───────────────────────────────────────
 
 
@@ -2729,6 +3771,642 @@ def test_p013_silent_when_a_class_shadows_its_own_generated_base(
             "    @entrypoint\n"
             "    async def extract(self, input: AppInputContract) -> AppOutput:\n"
             "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+_ALIASED_SAME_NAME_CONTRACTS = (
+    "from pydantic import BaseModel\n"
+    "from generated import AppInputContract as _GeneratedInput\n"
+    "from generated import AppOutputContract as _GeneratedOutput\n"
+    "class AppInputContract(_GeneratedInput):\n"
+    "    include_filter: str = ''\n"
+    "class AppOutputContract(_GeneratedOutput):\n"
+    "    rows: int = 0\n"
+    "class NotAContract(BaseModel):\n"
+    "    value: str = ''\n"
+    "DomainInput = AppInputContract\n"
+    "DomainOutput = AppOutputContract\n"
+    "ReExportedInput = DomainInput\n"
+    "UnrelatedInput = NotAContract\n"
+)
+
+_ALIASED_SAME_NAME_GENERATED = (
+    "from application_sdk.contracts import Input, Output\n"
+    "class AppInputContract(Input):\n"
+    "    connection_id: str = ''\n"
+    "class AppOutputContract(Output):\n"
+    "    total: int = 0\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        pytest.param(
+            "    async def run(self, input: DomainInput) -> DomainOutput:\n",
+            [],
+            id="p013-input-and-output-aliases",
+        ),
+        pytest.param(
+            "    async def run(self, input: AppInputContract) -> DomainOutput:\n",
+            [],
+            id="p013-output-alias",
+        ),
+        pytest.param(
+            "    @task\n"
+            "    async def fetch(self, input: DomainInput) -> DomainOutput:\n",
+            [],
+            id="p014-task-aliases",
+        ),
+        pytest.param(
+            "    async def run(self, input: ReExportedInput) -> DomainOutput:\n",
+            [],
+            id="p013-alias-of-alias",
+        ),
+        pytest.param(
+            "    async def run(self, input: UnrelatedInput) -> AppOutputContract:\n",
+            ["P013"],
+            id="p013-alias-of-unrelated-class-still-fires",
+        ),
+    ],
+)
+@pytest.mark.parametrize("generated_first", [False, True])
+def test_aliased_same_named_contracts_across_boundary_shapes(
+    tmp_path: Path, method: str, expected: list[str], generated_first: bool
+) -> None:
+    """Aliases of a class that subclasses a same-named contract resolve through
+    that contract on every boundary shape and in both scan orders; an alias of a
+    class that never reaches Input is still a violation."""
+    files = {
+        "contracts.py": _ALIASED_SAME_NAME_CONTRACTS,
+        "generated.py": _ALIASED_SAME_NAME_GENERATED,
+    }
+    if generated_first:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import AppInputContract, AppOutputContract, "
+            "DomainInput, DomainOutput, ReExportedInput, UnrelatedInput\n"
+            "class MyApp(App):\n" + method + "        return DomainOutput()\n"
+        ),
+    }
+    findings = [
+        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+    ]
+    assert [f.rule_id for f in findings] == expected
+    if expected:
+        assert "'UnrelatedInput'" in findings[0].message
+
+
+def test_p013_silent_on_the_rebinding_alias_itself(tmp_path: Path) -> None:
+    """``input: Thing`` where another file binds ``Thing = Foo`` over
+    ``class Foo(Thing)``: the base names the lookup key, so it stays
+    unresolvable, as on main."""
+    files = {
+        "contracts.py": (
+            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
+        ),
+        "rebind.py": "from contracts import Foo\nThing = Foo\n",
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from rebind import Thing\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Thing) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_class(
+    tmp_path: Path,
+) -> None:
+    """``Thing = Foo`` elsewhere must not turn ``class Foo(Thing)`` unresolvable."""
+    files = {
+        "contracts.py": (
+            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
+        ),
+        "rebind.py": "from contracts import Foo\nThing = Foo\n",
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import Foo\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Foo) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = [
+        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+    ]
+    assert [f.rule_id for f in findings] == ["P013"]
+    assert "'Foo'" in findings[0].message
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    "files",
+    [
+        pytest.param(
+            {
+                "contracts.py": (
+                    "from generated import AppInputContract as _G\n"
+                    "class AppInputContract(_G):\n"
+                    "    x: str = ''\n"
+                    "DomainInput = AppInputContract\n"
+                ),
+                "generated.py": (
+                    "from pydantic import BaseModel\n"
+                    "class AppInputContract(BaseModel):\n"
+                    "    a: str = ''\n"
+                ),
+            },
+            id="plain-basemodel-generated-base",
+        ),
+        pytest.param(
+            {
+                "contracts.py": (
+                    "import plain\n"
+                    "class Thing(plain.Thing):\n"
+                    "    x: str = ''\n"
+                    "DomainInput = Thing\n"
+                ),
+                "plain.py": (
+                    "from pydantic import BaseModel\n"
+                    "class Thing(BaseModel):\n"
+                    "    a: str = ''\n"
+                ),
+            },
+            id="attribute-base",
+        ),
+    ],
+)
+def test_p013_fires_on_alias_over_a_same_named_non_contract_base(
+    tmp_path: Path, files: dict[str, str], reverse_order: bool
+) -> None:
+    """The type never reaches Input, so P013 fires in both scan orders."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import DomainInput\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: DomainInput) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+_NO_SDK_CONTRACTS_APP = (
+    "from application_sdk.app import App, entrypoint, task\n"
+    "from x import Output\n"
+    "class O(Output):\n"
+    "    pass\n"
+)
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "app/generated.py": (
+                    "from x import Input\nclass C(Input):\n    a: str = ''\n"
+                ),
+                "app/contracts.py": (
+                    "from .generated import C as _C\n"
+                    "class C(_C):\n"
+                    "    b: str = ''\n"
+                    "Domain = C\n"
+                ),
+            },
+            [],
+            id="relative-import-of-same-named-input",
+        ),
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "gen.py": "from x import Input\nclass C(Input):\n    pass\n",
+                "app/contracts.py": (
+                    "import gen\nclass C(gen.C):\n    pass\nDomain = C\n"
+                ),
+            },
+            [],
+            id="attribute-base-of-same-named-input",
+        ),
+    ],
+)
+def test_p013_same_named_base_resolves_by_import_provenance(
+    tmp_path: Path,
+    files: dict[str, str],
+    expected: list[str],
+    reverse_order: bool,
+) -> None:
+    """A same-named base resolves through the class in the module it is imported
+    from, never through a same-named class elsewhere."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.contracts import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+def test_p013_unrelated_same_named_input_elsewhere_still_fires(
+    tmp_path: Path,
+) -> None:
+    """A third-party same-named base is not resolved through an in-repo class of
+    that name in another module."""
+    files = {
+        "app/__init__.py": "",
+        "app/contracts.py": (
+            "from thirdparty import C as _C\nclass C(_C):\n    pass\nDomain = C\n"
+        ),
+        "app/other.py": "from x import Input\nclass C(Input):\n    pass\n",
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.contracts import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+_PLAIN_X = "from pydantic import BaseModel\nclass X(BaseModel):\n    pass\n"
+_INPUT_X = "from x import Input\nclass X(Input):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "tests/app/gen.py": _INPUT_X,
+            },
+            id="same-path-suffix-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": (
+                    "def _f():\n"
+                    "    from x import Input\n"
+                    "    class X(Input):\n"
+                    "        pass\n"
+                ),
+            },
+            id="function-local-same-named-class",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _PLAIN_X,
+                "src/app/gen.py": _INPUT_X,
+            },
+            id="ambiguous-module",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\n"
+                    "class X(_G):\n"
+                    "    pass\n"
+                    "from app.other import X as _G\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _PLAIN_X,
+                "app/other.py": _INPUT_X,
+            },
+            id="base-name-rebound-after-the-class",
+        ),
+        pytest.param(
+            {
+                "app/y/w.py": (
+                    "from ....gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/y/gen.py": _PLAIN_X,
+                "app/gen.py": _INPUT_X,
+            },
+            id="relative-import-above-the-scan-root",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _INPUT_X + "class Plain:\n    pass\nX = Plain\n",
+            },
+            id="candidate-module-rebinds-the-name",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as Base\n"
+                    "from app.helpers import *\n"
+                    "class X(Base):\n"
+                    "    pass\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+                "app/helpers.py": "class Base:\n    pass\n",
+            },
+            id="star-import-rebinds-the-base",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "import app.gen as g\n"
+                    "g = None\n"
+                    "class X(g.X):\n"
+                    "    pass\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+            },
+            id="module-binding-rebound",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from ..gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "gen.py": _INPUT_X,
+            },
+            id="relative-import-beyond-top-level-package",
+        ),
+        pytest.param(
+            {
+                "src/app/w.py": (
+                    "from ..m import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "src/m.py": _INPUT_X,
+            },
+            id="relative-import-into-src-dir",
+        ),
+    ],
+)
+def test_p013_same_named_base_never_resolves_through_another_module(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    """Only the one top-level class in the exact module the base is bound to
+    once counts; anything else keeps main's finding."""
+    first = next(iter(files))
+    package = first.rsplit("/", 1)[0].replace("/", ".")
+    files = {
+        **files,
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + f"from {package}.w import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "module"),
+    [
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "app/y/__init__.py": "",
+                "app/y/w.py": (
+                    "from ..gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+            },
+            "app.y.w",
+            id="level-2-relative-import",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen/__init__.py": _INPUT_X,
+            },
+            "app.w",
+            id="package-init-module",
+        ),
+        pytest.param(
+            {
+                "src/app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "src/app/gen.py": _INPUT_X,
+            },
+            "app.w",
+            id="src-layout",
+        ),
+    ],
+)
+def test_p013_same_named_base_resolves_across_module_layouts(
+    tmp_path: Path, files: dict[str, str], module: str, reverse_order: bool
+) -> None:
+    """The same-named base resolves for relative, package and src layouts."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _NO_SDK_CONTRACTS_APP + f"from {module} import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def _subclass_entrypoint(files: dict[str, str], reverse_order: bool) -> dict[str, str]:
+    """*files* plus an entrypoint typed as ``app.w.Sub``, a subclass of ``app.w.X``."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    return files | {
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.w import Sub\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Sub) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+
+
+_WRAPPER_SUB = "class X(_G):\n    pass\nclass Sub(X):\n    pass\n"
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("w", "expected"),
+    [
+        pytest.param(
+            "from app.gen import X as _G\ndef _reset():\n    _G = None\n"
+            + _WRAPPER_SUB,
+            [],
+            id="function-local-store",
+        ),
+        pytest.param(
+            "from app.gen import X as _G\nclass Holder:\n    _G = None\n"
+            + _WRAPPER_SUB,
+            [],
+            id="class-body-store",
+        ),
+        pytest.param(
+            "from app.gen import X as _G\nf = lambda _G: _G\n" + _WRAPPER_SUB,
+            [],
+            id="lambda-parameter",
+        ),
+    ],
+)
+def test_p013_nested_scope_store_keeps_base_provenance(
+    tmp_path: Path, w: str, expected: list[str], reverse_order: bool
+) -> None:
+    """Only module-scope bindings make a base import ambiguous; a store in a
+    nested scope does not."""
+    files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, reverse_order)
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+def test_p013_global_store_in_nested_scope_rebinds_the_base(
+    tmp_path: Path,
+) -> None:
+    """A ``global`` store rebinds the module name, so the base has no provenance.
+
+    Forward order only: with ``gen.py`` scanned first, the first-wins registry
+    resolves ``Sub`` through ``gen.X`` before provenance is consulted.
+    """
+    w = (
+        "from app.gen import X as _G\n"
+        "def _reset():\n"
+        "    global _G\n"
+        "    _G = None\n" + _WRAPPER_SUB
+    )
+    files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, False)
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+_W_OVER_GEN = "from app.gen import X as _G\n" + _WRAPPER_SUB
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {
+                "app/earlier.py": "from x import Input\nclass Base(Input):\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": "from app.base_mod import Base\nclass X(Base):\n    pass\n",
+                "app/base_mod.py": "class Base:\n    pass\n",
+            },
+            ["P013"],
+            id="unrelated-same-named-contract-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/earlier.py": "class Base:\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": "from app.base_mod import Base\nclass X(Base):\n    pass\n",
+                "app/base_mod.py": "from x import Input\nclass Base(Input):\n    pass\n",
+            },
+            [],
+            id="imported-contract-shadowed-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/earlier.py": "class Base:\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": (
+                    "from x import Input\n"
+                    "class Base(Input):\n"
+                    "    pass\n"
+                    "class X(Base):\n"
+                    "    pass\n"
+                ),
+            },
+            [],
+            id="same-file-contract-shadowed-elsewhere",
+        ),
+    ],
+)
+def test_p013_same_named_walk_follows_provenance_below_the_base(
+    tmp_path: Path, files: dict[str, str], expected: list[str], reverse_order: bool
+) -> None:
+    """Below the selected same-named base, each parent resolves to the class its
+    import names, never to the first-wins record of that bare name."""
+    findings = _scan_files(tmp_path, _subclass_entrypoint(files, reverse_order))
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_p014_same_named_walk_does_not_poison_the_shared_cache(
+    tmp_path: Path, reverse_order: bool
+) -> None:
+    """The walk into the same-named base must not cache a cycle-cut result for a
+    class a later boundary looks up."""
+    files = {
+        "d.py": "from x import Input\nclass A(Input):\n    pass\n",
+        "c.py": "from d import A\nclass X(A):\n    pass\n",
+        "b.py": "from c import X\nclass A(X):\n    pass\n",
+        "mix.py": "from x import Input\nclass Mixin(Input):\n    pass\n",
+        "a.py": (
+            "from b import A as _A\n"
+            "from mix import Mixin\n"
+            "class A(_A, Mixin):\n"
+            "    pass\n"
+        ),
+    }
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from a import A\n"
+            "from c import X\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: A) -> O:\n"
+            "        return O()\n"
+            "    @task\n"
+            "    async def f(self, input: X) -> O:\n"
+            "        return O()\n"
         ),
     }
     findings = _scan_files(tmp_path, files)
@@ -2856,3 +4534,326 @@ def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
     findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
     assert len(findings) == 1
     assert "does NOT set" in findings[0].message
+
+
+# ── P059 JsonEncodedContractField ─────────────────────────────────────────────
+
+
+_P059_CONTRACTS = (
+    "from typing import Annotated\n"
+    "from application_sdk.contracts import Input, Output, MaxItems\n"
+    "class DiscoverOutput(Output):\n"
+    "    descriptors_json: Annotated[list[str], MaxItems(100)] = []\n"
+    "    names: Annotated[list[str], MaxItems(100)] = []\n"
+    "class ExtractInput(Input):\n"
+    "    credentials_json: str = '{}'\n"
+    "    note: str = ''\n"
+)
+
+
+def _p059(findings: list) -> list:
+    return [f for f in findings if f.rule_id == "P059"]
+
+
+def test_p059_fires_on_list_of_json_strings_across_files(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/extractor.py": (
+            "import json\n"
+            "def discover(all_descriptors):\n"
+            "    return DiscoverOutput(\n"
+            "        descriptors_json=[json.dumps(d) for d in all_descriptors]\n"
+            "    )\n"
+            "def extract(result: DiscoverOutput):\n"
+            "    return [json.loads(s) for s in result.descriptors_json]\n"
+        ),
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert [(f.file, f.line) for f in hits] == [("app/contracts.py", 4)]
+    assert "descriptors_json" in hits[0].message
+    assert "app/extractor.py" in hits[0].message
+
+
+def test_p059_fires_on_str_field_decoded(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/extractor.py": (
+            "import json\n"
+            "def extract(input: ExtractInput):\n"
+            "    return json.loads(input.credentials_json)\n"
+        ),
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert [f.line for f in hits] == [7]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from json import dumps\nx = ExtractInput(credentials_json=dumps({}))\n",
+        "import orjson\nx = ExtractInput(credentials_json=orjson.dumps({}).decode())\n",
+        "def f(m):\n    return ExtractInput(credentials_json=m.model_dump_json())\n",
+        "def f(i: ExtractInput, M):\n    return M.model_validate_json(i.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput):\n    i.credentials_json = json.dumps({})\n",
+    ],
+)
+def test_p059_evidence_forms(tmp_path: Path, code: str) -> None:
+    files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # decode with a fallback, or through getattr
+        "import json\ndef f(i: ExtractInput):\n    return json.loads(i.credentials_json or '{}')\n",
+        "import json\ndef f(i: ExtractInput):\n    return json.loads(getattr(i, 'credentials_json', '{}'))\n",
+        # annotated attribute assignment
+        "import json\ndef f(i: ExtractInput):\n    i.credentials_json: str = json.dumps({})\n",
+        # receiver typed by wrapper, string annotation, or keyword-only param
+        "import json\ndef f(i: ExtractInput | None):\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(i: 'ExtractInput'):\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(*, i: ExtractInput):\n    return json.loads(i.credentials_json)\n",
+        # receiver bound to a constructed or validated contract
+        "import json\ndef f(d):\n    x = ExtractInput.model_validate(d)\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f():\n    x = ExtractInput()\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f(load):\n    x: ExtractInput = load()\n    return json.loads(x.credentials_json)\n",
+        # every binding agrees on the contract
+        "import json\ndef f(d):\n    x = ExtractInput()\n    x = ExtractInput.model_validate(d)\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f():\n    x = y = ExtractInput()\n    return json.loads(y.credentials_json)\n",
+        # outer binding seen from a nested function
+        "import json\ndef f(i: ExtractInput):\n    def g():\n        return json.loads(i.credentials_json)\n    return g\n",
+    ],
+)
+def test_p059_receiver_and_value_forms(tmp_path: Path, code: str) -> None:
+    files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        # receiver of unknown type
+        "import json\ndef f(i):\n    return json.loads(i.credentials_json)\n",
+        # receiver typed as something other than a contract
+        "import json\ndef f(r: Response):\n    return json.loads(r.credentials_json)\n",
+        "import json\ndef f(r: Response):\n    r.credentials_json = json.dumps({})\n",
+        # a nested function re-binds the name to a non-contract
+        "import json\ndef f(i: ExtractInput):\n    def g(i: Response):\n        return json.loads(i.credentials_json)\n    return g\n",
+        # self of a class that is not a contract
+        "import json\nclass Client:\n    credentials_json: str = ''\n    def creds(self):\n        return json.loads(self.credentials_json)\n",
+        # getattr with a computed name
+        "import json\ndef f(i: ExtractInput, n):\n    return json.loads(getattr(i, n))\n",
+        # a contract-typed name re-bound to something else anywhere in the scope
+        "import json\ndef f(r):\n    x = ExtractInput()\n    x = r\n    return json.loads(x.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput, r):\n    i = r\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(rows):\n    x = ExtractInput()\n    for x in rows:\n        json.loads(x.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput):\n    with open('p') as i:\n        return json.loads(i.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput, pairs):\n    i, _ = pairs\n    return json.loads(i.credentials_json)\n",
+        "import json\ndef f(i: ExtractInput, r):\n    if (i := r):\n        return json.loads(i.credentials_json)\n",
+        "import json\nx = ExtractInput()\nx = load()\ndef f():\n    return json.loads(x.credentials_json)\n",
+    ],
+)
+def test_p059_silent_on_untyped_or_foreign_receiver(tmp_path: Path, code: str) -> None:
+    files = {"app/contracts.py": _P059_CONTRACTS, "app/x.py": code}
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_self_in_contract_method(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "import json\n"
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    blob: str = ''\n"
+            "    def decoded(self) -> dict:\n"
+            "        return json.loads(self.blob) if self.blob else {}\n"
+        ),
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [4]
+
+
+def test_p059_field_validator_that_dumps(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "import json\n"
+            "from pydantic import field_validator\n"
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    blob: str = ''\n"
+            "    other: str = ''\n"
+            "    plain: str = ''\n"
+            "    @field_validator('blob', 'other', mode='before')\n"
+            "    @classmethod\n"
+            "    def _ser(cls, v):\n"
+            "        if isinstance(v, dict):\n"
+            "            return json.dumps(v)\n"
+            "        return v\n"
+        ),
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert [f.line for f in hits] == [5, 6]
+    assert "encoded as JSON at app/contracts.py:12" in hits[0].message
+
+
+def test_p059_attributes_evidence_to_the_receivers_class(tmp_path: Path) -> None:
+    """A field name shared by two contracts is flagged only where it is decoded."""
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class A(Input):\n"
+            "    blob: str = ''\n"
+            "class B(Input):\n"
+            "    blob: str = ''\n"
+        ),
+        "app/x.py": "import json\ndef f(b: B):\n    return json.loads(b.blob)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]
+
+
+def test_p059_receiver_typed_as_subclass_flags_base_field(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class Base(Input):\n"
+            "    blob: str = ''\n"
+            "class Child(Base):\n"
+            "    note: str = ''\n"
+        ),
+        "app/x.py": "import json\ndef f(c: Child):\n    return json.loads(c.blob)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [3]
+
+
+def test_p059_map_loads_over_list_field(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/x.py": "import json\ndef f(r: DiscoverOutput):\n    return list(map(json.loads, r.descriptors_json))\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [4]
+
+
+def test_p059_silent_on_plain_text_fields(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/x.py": (
+            "import json\n"
+            "def f(i: ExtractInput, out: DiscoverOutput):\n"
+            "    ids = [n for n in out.names if n]\n"
+            "    blob = json.dumps({'note': i.note})\n"
+            "    return json.loads(blob)\n"
+        ),
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_silent_on_non_text_field(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    payload: dict[str, str] = {}\n"
+        ),
+        "app/x.py": "import json\nx = I(payload=json.dumps({}))\n",
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_silent_on_non_contract_class(tmp_path: Path) -> None:
+    files = {
+        "app/models.py": "class Row:\n    blob: str = ''\n",
+        "app/x.py": "import json\ndef f(r):\n    return json.loads(r.blob)\n",
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_suppressed_with_reason(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS.replace(
+            "    credentials_json: str = '{}'\n",
+            "    credentials_json: str = '{}'  # conformance: ignore[P059] vendor API takes JSON text\n",
+        ),
+        "app/x.py": "import json\ndef f(i: ExtractInput):\n    return json.loads(i.credentials_json)\n",
+    }
+    hits = _p059(_scan_files(tmp_path, files))
+    assert hits and all(f.suppressed for f in hits)
+
+
+def test_p059_silent_on_same_named_keyword_of_other_call(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": (
+            "from application_sdk.contracts import Input\n"
+            "class I(Input):\n"
+            "    data: str = ''\n"
+        ),
+        "app/x.py": (
+            "import json, requests\n"
+            "def f(x):\n"
+            "    return requests.post('u', data=json.dumps(x))\n"
+        ),
+    }
+    assert _p059(_scan_files(tmp_path, files)) == []
+
+
+def test_p059_aliased_json_module(tmp_path: Path) -> None:
+    files = {
+        "app/contracts.py": _P059_CONTRACTS,
+        "app/x.py": "import json as j\ndef f(i: ExtractInput):\n    return j.loads(i.credentials_json)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [7]
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "Optional[str]",
+        "str | None",
+        "Annotated[str, Field(max_length=10)]",
+        "set[str]",
+        "Annotated[list[str], MaxItems(10)] | None",
+        "Optional[Annotated[list[str], MaxItems(10)]]",
+    ],
+)
+def test_p059_text_field_forms(tmp_path: Path, annotation: str) -> None:
+    files = {
+        "app/contracts.py": (
+            "from typing import Annotated, Optional\n"
+            "from pydantic import Field\n"
+            "from application_sdk.contracts import Input, MaxItems\n"
+            "class I(Input):\n"
+            f"    blob: {annotation} = None\n"
+        ),
+        "app/x.py": "import json\ndef f(i: I):\n    return json.loads(i.blob)\n",
+    }
+    assert [f.line for f in _p059(_scan_files(tmp_path, files))] == [5]
+
+
+def _p015_on(annotation: str) -> list[str]:
+    src = (
+        "from typing import Annotated, Any, Literal, Optional\n"
+        "from application_sdk.contracts import Input, MaxItems\n"
+        "class I(Input):\n"
+        f"    f: {annotation} = None\n"
+    )
+    return [f.rule_id for f in scan_text(src, "x.py") if f.rule_id == "P015"]
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "list[str | None]",
+        "list[Optional[str]]",
+        "list[Literal['a', 'b']]",
+        "Annotated[list[Literal['a']], MaxItems(5)] | None",
+    ],
+)
+def test_p015_exempts_optional_and_literal_scalar_items(annotation: str) -> None:
+    assert _p015_on(annotation) == []
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    ["dict[str, str | None]", "list[dict[str, str] | None]", "list[Any | None]"],
+)
+def test_p015_still_fires_on_keyed_or_any_items(annotation: str) -> None:
+    assert _p015_on(annotation) == ["P015"]

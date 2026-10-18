@@ -90,6 +90,11 @@ from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
+from application_sdk.clients._sql_failure_classifier import (
+    SqlFailureKind,
+    classify_sql_failure,
+    root_cause,
+)
 from application_sdk.common.asset_serialization import entity_bytes
 from application_sdk.common.asset_serialization import orjson_default as _orjson_default
 from application_sdk.common.entity_envelope import (
@@ -101,6 +106,7 @@ from application_sdk.common.last_sync import resolve_last_sync_details
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
+    strip_sql_block_comments,
 )
 from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.contracts.base import OutputStatus
@@ -127,6 +133,9 @@ from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    SqlTreeFilterInputUnsupportedError,
+)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -135,6 +144,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     PrimeAuthOutput,
     TransformInput,
     TransformOutput,
+    TreeSelectionExtractionInput,
 )
 from application_sdk.templates.sql_app_errors import (
     SqlProbeTimeoutError,
@@ -254,19 +264,9 @@ class _EnvelopeError(AppError):
         )
 
 
-def _root_cause(exc: BaseException) -> BaseException:
-    """Walk ``__cause__`` to the innermost exception.
-
-    The SDK's SQL client rewraps driver exceptions, so the outermost
-    exception describes the wrapper and the innermost describes what
-    actually happened. Cycle-guarded — a hand-built ``__cause__`` loop
-    would otherwise hang the worker.
-    """
-    seen = {id(exc)}
-    while exc.__cause__ is not None and id(exc.__cause__) not in seen:
-        exc = exc.__cause__
-        seen.add(id(exc))
-    return exc
+# Re-exported under its historical private name; the one implementation lives
+# with the shared SQL failure classifier.
+_root_cause = root_cause
 
 
 def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -382,13 +382,16 @@ def _error_from_failure_details(details: FailureDetails) -> AppError:
     ``category`` / ``audience`` / ``retryable`` on a generic reconstruction
     leaf.
 
-    Reconstruction is an unredacted trust boundary, so every field copied off
-    the envelope is re-redacted here. The ``FailureDetails`` denylist rejects
-    secret-named evidence *keys* only — never a nested value, and never the
-    ``message`` / ``suggested_action`` / ``cause_repr`` strings — so a
-    pre-redaction-era envelope replayed from Temporal history, a hand-built
-    ``PrimeAuthOutput``, or a future producer that forgets to redact would
-    otherwise put a live DSN back onto the wire when this error re-serialises.
+    Reconstruction re-redacts the two free-text fields it copies. This is
+    defence in depth, not the policy: ``FailureDetails`` redacts ``message`` and
+    ``suggested_action`` in a ``field_validator``, and that validator runs on
+    ``model_validate`` too, so an envelope replayed off Temporal history arrives
+    already scrubbed. Kept because it costs one idempotent pass and this is an
+    unredacted trust boundary — a hand-built ``PrimeAuthOutput`` reaches here
+    without ever having been a ``FailureDetails``. What the envelope still does
+    *not* cover is ``cause_repr`` (redacted at construction by
+    :func:`sanitize_cause_repr` instead) and nested values under an
+    evidence key, where the denylist judges the key name alone.
     """
     message = redact_secrets(details.message)
     suggested_action = (
@@ -552,6 +555,8 @@ class SqlApp(App):
         Returns:
             An instance of *input_cls* populated from *src*.
         """
+        if isinstance(src, TreeSelectionExtractionInput):
+            raise SqlTreeFilterInputUnsupportedError()
         return input_cls(
             workflow_id=src.workflow_id,
             connection=src.connection,
@@ -849,20 +854,8 @@ class SqlApp(App):
         ``error_message`` must already be secret-redacted — it is copied
         verbatim into the returned error's evidence fields.
         """
-        msg_lower = error_message.lower()
-
-        # ODBC renders SQLSTATE HYT00 as "Login timeout expired" — no "timeout"
-        # in the class name and no "timed out" in the message, so a generic
-        # substring check misses the production CNCT-197 shape. Match the
-        # driver phrasings explicitly.
-        is_timeout = (
-            "timeout" in error_type.lower()
-            or "timed out" in msg_lower
-            or "login timeout" in msg_lower
-            or "timeout expired" in msg_lower
-            or "hyt00" in msg_lower
-        )
-        if is_timeout:
+        kind = classify_sql_failure(error_type, error_message)
+        if kind is SqlFailureKind.TIMEOUT:
             return SqlProbeTimeoutError(
                 message=(
                     "SQL auth-cache prime probe timed out before parallel "
@@ -878,26 +871,7 @@ class SqlApp(App):
                 ),
             )
 
-        # Auth-class indicators: explicit class name OR driver-specific
-        # message tokens (MySQL "Access denied" / code 1045, generic
-        # "authentication failed"). Driver error_type for MySQL
-        # ``Access denied`` is ``OperationalError`` — that class is
-        # overloaded across both auth and network failures, so message
-        # content has to be the tiebreaker.
-        auth_class_hints = ("authentication", "accessdenied", "authfail")
-        auth_msg_hints = (
-            "access denied",
-            "1045",
-            "authentication failed",
-            "authentication error",
-            "login failed",
-            "password authentication failed",
-            "invalid credentials",
-        )
-        is_auth = any(h in error_type.lower() for h in auth_class_hints) or any(
-            h in msg_lower for h in auth_msg_hints
-        )
-        if is_auth:
+        if kind is SqlFailureKind.AUTH:
             return AuthError(
                 message=(
                     "SQL auth-cache prime rejected by source before parallel "
@@ -918,27 +892,9 @@ class SqlApp(App):
                 ),
             )
 
-        # Network / DNS / TLS / connection-refused / generic
-        # OperationalError without an auth-keyword message. Classify as
-        # SourceUnavailableError (audience=USER) — the customer owns the
-        # source system, and the actionable guidance is "fix the network
-        # path, the source itself may be fine."
-        network_class_hints = (
-            "connectionerror",
-            "connectionrefused",
-            "gaierror",
-            "sslerror",
-            "oserror",
-            "operationalerror",
-            "interfaceerror",
-            # Match wrapped SDK error classnames surfaced as error_type.
-            # "dependencyunavailable" is retained for legacy wrappers that
-            # predate the SourceUnavailableError migration.
-            "sourceunavailable",
-            "dependencyunavailable",
-            "socketerror",
-        )
-        if any(h in error_type.lower() for h in network_class_hints):
+        # The customer owns the source system, and the actionable guidance is
+        # "fix the network path, the source itself may be fine."
+        if kind is SqlFailureKind.SOURCE_UNAVAILABLE:
             return SourceUnavailableError(
                 message=(
                     "SQL auth-cache prime could not reach the source before "
@@ -1662,6 +1618,26 @@ class SqlApp(App):
         await client.load(credentials=creds)
         return client
 
+    def _temp_table_regex_fragment(self, sql: str) -> str:
+        """Pick the temp-table fragment for *sql*.
+
+        The column query gets ``extract_temp_table_regex_column_sql`` when the
+        app declares one: it filters on the column table's own name
+        (``C.TABLE_NAME``) rather than a joined table alias the column query
+        may not have. Every other query, and apps without a column fragment,
+        get ``extract_temp_table_regex_table_sql``. The query is recognised by
+        comparing against ``fetch_column_sql`` so ``_prepare_sql``'s signature,
+        which connector overrides mirror, is unchanged.
+        """
+        column_fragment = self.extract_temp_table_regex_column_sql
+        if (
+            column_fragment
+            and self.fetch_column_sql
+            and sql.strip() == self.fetch_column_sql.strip()
+        ):
+            return column_fragment
+        return self.extract_temp_table_regex_table_sql
+
     def _prepare_sql(self, sql: str, input: ExtractionTaskInput) -> str:
         """Substitute filter placeholders in SQL template."""
         exclude_filter = input.exclude_filter or ""
@@ -1680,11 +1656,15 @@ class SqlApp(App):
         else:
             include_regex = include_filter or ".*"
 
-        # Temp table regex
+        # Temp table regex. The fragment's own ``/* ... */`` header is stripped
+        # first: full templates often mention ``{temp_table_regex_sql}`` inside
+        # their header comment, and a nested block comment closes it early
+        # (FND-2733).
         temp_table_sql = ""
         if hasattr(input, "temp_table_regex") and input.temp_table_regex:
-            if self.extract_temp_table_regex_table_sql:
-                temp_table_sql = self.extract_temp_table_regex_table_sql.replace(
+            fragment = self._temp_table_regex_fragment(sql)
+            if fragment:
+                temp_table_sql = strip_sql_block_comments(fragment).replace(
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 

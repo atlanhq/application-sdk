@@ -269,6 +269,9 @@ def test_every_judged_job_is_also_needed(reusable, job_name: str) -> None:
     job = reusable["jobs"][job_name]
     needed = set(job["needs"])
     for value in _gate_step(job)["with"].values():
+        if "needs." not in str(value):
+            # `e2e-only` reads `inputs.run-e2e`, not a job (FND-3839).
+            continue
         referenced = str(value).split("needs.")[1].split(".")[0]
         assert referenced in needed, (
             f"{job_name} judges `{referenced}` but does not need it, so its "

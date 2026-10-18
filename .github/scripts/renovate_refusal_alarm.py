@@ -2,7 +2,7 @@
 """Fail the dashboard run when a bounded-lock refusal outlived the reaper (FND-909).
 
 Reads what the Renovate dashboard scanner already produced — no GitHub API calls,
-no second fleet walk. ``renovate-dashboard.yaml`` runs the scanner every six hours
+no second fleet walk. ``renovate-dashboard.yaml`` runs the scanner hourly
 and writes ``fleet.json`` plus one ``repos/<slug>.json`` per repo; this reads that
 output and turns one classification into a failing check.
 

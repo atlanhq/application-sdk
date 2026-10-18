@@ -28,6 +28,7 @@ from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.storage.errors import (
     StorageBucketRelocationError,
     StorageConfigError,
+    StorageDiskFullError,
     StorageError,
     StorageIntegrityError,
     StorageNotFoundError,
@@ -76,6 +77,7 @@ def test_storage_error_sets_service_so_evidence_is_not_all_null() -> None:
         (StorageConfigError, {"key": "artifacts/t.json"}),
         (StorageBucketRelocationError, {"key": "artifacts/t.json"}),
         (StorageIntegrityError, {"key": "artifacts/t.json"}),
+        (StorageDiskFullError, {"key": "artifacts/t.json"}),
     ],
 )
 def test_every_storage_class_sets_service(factory: type, kwargs: dict) -> None:
@@ -107,6 +109,20 @@ def test_http_status_and_provider_code_are_parsed_from_the_driver_error() -> Non
     )
     assert status == 400
     assert provider_code == "PreconditionFailed"
+
+
+def test_http_status_is_parsed_from_the_retry_layer_client_error_shape() -> None:
+    """GCS 4xx arrive as "Client error with status 403 Forbidden", not "status code: 403"."""
+    status, provider_code = _obstore_http_evidence(
+        _GenericError(
+            "Generic GCS error: Error performing list request: Error performing "
+            "GET https://storage.googleapis.com/storage/v1/b/example-bucket/o: "
+            "Client error with status 403 Forbidden: <?xml version='1.0'?><Error>"
+            "<Code>SecurityPolicyViolated</Code><Message>m</Message></Error>"
+        )
+    )
+    assert status == 403
+    assert provider_code == "SecurityPolicyViolated"
 
 
 def test_http_evidence_is_none_for_a_non_http_failure() -> None:

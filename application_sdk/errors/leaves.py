@@ -165,6 +165,26 @@ class InvalidInputError(AppError):
     audience: ClassVar[Audience] = Audience.USER
 
 
+class InvalidInputValueError(InvalidInputError, ValueError):
+    """:class:`InvalidInputError` that is also a :class:`ValueError`.
+
+    For public SDK entry points that raised a bare ``ValueError`` before typed
+    errors existed. Keeping ``ValueError`` in the bases preserves the behaviour
+    callers already guard against, while the failure now carries a typed
+    envelope (``INVALID_INPUT`` / ``USER``) for downstream triage.
+
+    Use plain :class:`InvalidInputError` for new APIs — this exists only so an
+    existing ``ValueError`` contract can be typed without a breaking change.
+
+    The ``INVALID_INPUT_`` prefix on the code is the convention every leaf
+    subclass follows (P003), and the distinct code makes the shim countable:
+    a non-zero rate on ``INVALID_INPUT_VALUE`` is the fleet-wide measure of how
+    much still depends on the builtin-``ValueError`` contract.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_VALUE"
+
+
 @dataclass(kw_only=True)
 class PreconditionError(AppError):
     """System state forbids the operation.
@@ -346,6 +366,22 @@ class SourceUnavailableError(AppError):
     default_retryable: ClassVar[bool] = True
     code: ClassVar[str] = "SOURCE_UNAVAILABLE"
     audience: ClassVar[Audience] = Audience.USER
+
+
+@dataclass(kw_only=True)
+class SourceWarmupExhaustedError(SourceUnavailableError):
+    """The source answered but did not finish warming up within the gate's ceiling.
+
+    Raised (as evidence) by the injected preflight gate when an app's warmup —
+    a suspended warehouse resuming, a queued job starting — is still pending
+    when ``App.preflight_warmup_ceiling_seconds`` runs out. Distinct from a bare
+    :class:`SourceUnavailableError` because the remedy differs: an unreachable
+    source is a network or private-link problem, a slow warmup is a sizing or
+    queueing one, and a consumer routes the two on ``code``. Same category, so
+    every ``SOURCE_UNAVAILABLE`` filter and catch site still holds it.
+    """
+
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED"
 
 
 # Temporal wire type string for worker-pod eviction. Set as

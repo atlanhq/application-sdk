@@ -103,9 +103,10 @@ a tier that doesn't exist where expected silently contributes zero coverage:
 signal if the gate that produces it can actually fail and actually measures
 the code that ships:
 
-* ``T014`` — CoverageGateDisabled: ``[tool.coverage]`` is configured but
-  ``[tool.coverage.report].fail_under`` is absent or ``0`` — coverage is
-  measured but never enforced.
+* ``T014`` — CoverageGateDisabled: ``[tool.coverage]`` is configured but the
+  effective unit-tier floor is absent or ``0``. For a ``tests-reusable.yaml``
+  caller that floor is its ``unit-coverage-fail-under`` input (default ``0``),
+  which overrides ``pyproject.toml``.
 * ``T015`` — CoverageOmitsProductCode: ``[tool.coverage.run].omit`` (or a
   narrowed ``source``) excludes real product code under ``app/`` — inflating
   the reported percentage by hiding uncovered code from the denominator.
@@ -196,11 +197,21 @@ halves; ``atlan-mysql-app`` is the reference for each:
   ``mode``, inheriting ``BaseE2ETest``'s ``RunMode.DIRECT`` default.  The reusable
   e2e job always starts a CI-side worker on a per-leg queue that only
   ``RunMode.AGENT`` routes to, so the container under test never runs.
+* ``T025`` — EntrypointWithoutE2ECoverage: a bundle entrypoint has no e2e suite.
+* ``T026`` — E2EHarnessTenantPoolMismatch: an e2e test class's harness base
+  disagrees with the app's declared marketplace ``type`` in ``atlan.yaml`` — a
+  ``system`` app whose suite does not inherit ``SystemAppE2ETest`` (so it runs on
+  the connector tenants), or a ``connector`` whose suite does (claiming the
+  system-app pool).
 """
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -214,8 +225,9 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app tests/integration/test_mysql_workflow.py — a module-level "
             "`pytestmark = pytest.mark.integration`, which marks every test in the file in "
-            "one line. atlan-openapi-app tests/integration/test_openapi.py marks per-test "
-            "with the same marker; either satisfies the unit job's deselection."
+            "one line. atlan-openapi-app tests/integration/test_openapi.py shows the "
+            "other accepted form: `@pytest.mark.integration` on the enclosing "
+            "`TestOpenAPIConnectorExtraction` class, which marks every method in it."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -223,7 +235,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-marking",
-        autofixable=False,
+        autofixable=True,
         since="0.4.0",
         rationale=(
             "Unit/integration separation in CI is enforced purely by pytest markers: "
@@ -249,9 +261,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "integration job runs it.  A test is considered marked when the module "
             "declares ``pytestmark`` containing such a marker (bare or in a "
             "list/tuple), when an enclosing ``Test*`` class is decorated with one, or "
-            "when the test function itself carries one.  The accepted set is derived "
-            "per-repo from the ``-m 'not …'`` expression in ``[tool.pytest."
-            'ini_options].addopts`` (falling back to ``{"integration"}``).  Unmarked '
+            "when the test function itself carries one.  The accepted set is the "
+            "``-m 'not …'`` expression in ``[tool.pytest.ini_options].addopts`` plus "
+            "``integration``, which is always accepted.  Prefer ``integration``: the "
+            "shared integration job runs ``pytest tests/integration/`` with the same "
+            "``addopts``, so marking with a marker ``addopts`` deselects (such as "
+            "``e2e``) hides the test from that job too, and it collects nothing.  Unmarked "
             "tests leak into the unit matrix — where the embedded Temporal/Dapr/"
             "emulator boot can exceed the unit job timeout — and are skipped by the "
             "dedicated integration job.  Tracked in BLDX-1455; chosen over an "
@@ -261,6 +276,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t001"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -277,7 +296,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="sdr-test-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         rationale=(
             "An SDR app that declares self_deployed_runtime: true in atlan.yaml "
@@ -334,6 +353,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t002"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T003",
@@ -349,7 +372,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="sdr-test-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.9.0",
         rationale=(
             "BaseSDRIntegrationTest is deprecated and removed in v4.0; a subclass "
@@ -366,8 +389,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "needs human judgement."
         ),
         short_description=(
-            "Subclasses the deprecated BaseSDRIntegrationTest harness (removed in "
-            "v4.0)"
+            "Subclasses the deprecated BaseSDRIntegrationTest harness (removed in v4.0)"
         ),
         full_description=(
             "``BaseSDRIntegrationTest`` (``application_sdk.testing.sdr.base``) is\n"
@@ -433,19 +455,29 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T003] <reason>`` on the class\n"
             "definition line for a legitimate exception (e.g. a shim that\n"
             "intentionally keeps the legacy harness during migration).\n"
+            "\n**Fixing it well**\n\n"
+            "* Delete the whole SDR test folder (``tests/sdr/``, with its ``__init__.py``, conftest and helpers) once its scenarios have a home; never leave a docstring-only or empty stub where the harness was.\n\n"
+            "* Before deleting, move each scenario where the rationale puts it: auth, preflight and credential resolution to the handler unit tests; the full DAG to the generated E2E base (``tests/e2e/``), which the reference apps extend.\n\n"
+            "* Update anything under ``tests/`` or the docs that points at the deleted path.\n\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t003"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T004",
         canonical_reference=(
-            "atlan-mysql-app main.py — the container entry point imports `main` from "
-            "app.run_dev and awaits it, so the same path serves the image and `uv run "
-            "python main.py`. Calling application_sdk.main.main() directly requires "
-            "ATLAN_APP_MODULE to be set, which CI's dev-mode boot does not set."
+            "atlan-mysql-app main.py — the local/dev entry point imports `main` from "
+            "app.run_dev and runs it with asyncio.run(main()), so `uv run python "
+            "main.py` goes through run_dev_combined. The image never runs main.py (the "
+            "Dockerfile boots via ATLAN_APP_MODULE). Calling application_sdk.main.main() "
+            "from main.py instead requires ATLAN_APP_MODULE, which CI's dev-mode boot "
+            "does not set."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -509,18 +541,29 @@ RULES: tuple[RuleDefinition, ...] = (
             "call's line when the app genuinely has no local dev-mode boot\n"
             "path and relies on ``ATLAN_APP_MODULE`` being set out-of-band\n"
             "even for CI (e.g. some utility/CSA apps).\n"
+            "\n"
+            "Not auto-applied: whether ``main.py`` may stop being the production CLI is a\n"
+            "judgment call (a workflow or stress test may launch it, or an explicit\n"
+            "``ATLAN_APP_MODULE`` default may already make it safe). The remediation lane\n"
+            "routes T004 findings to a person (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t004"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T005",
         canonical_reference=(
-            "atlan-hello-world-app tests/unit/test_connector.py — every test ends in an "
-            "assertion about the value under test. A test whose body only exercises code "
-            "is a smoke test wearing a test's name."
+            "atlan-mysql-app tests/unit/test_parity.py — every test ends in an "
+            "assertion about the mapped entity: `assert_structure` checks the required "
+            "keys and relationship refs, and each qualified-name test asserts on the "
+            "value itself. A test whose body only exercises code is a smoke test "
+            "wearing a test's name."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -528,7 +571,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Code coverage measures whether a line executed, not whether anything was "
@@ -559,6 +602,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "    `pytest.fail(...)` / `self.fail(...)`\n"
             "    an SDK integration-test scenario-helper call: `.equals` / `.contains` /\n"
             "        `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`\n"
+            "    a direct, same-name `super().test_full_dag_runs_end_to_end()` delegation\n"
+            "        from a class whose base is imported from `application_sdk.testing.e2e`\n"
+            "        or the contract-generated `app/generated/_e2e_base.py` (the SDK full-DAG\n"
+            "        scenario grades outcomes through its assertion ladder; an app-local\n"
+            "        intermediate base is not trusted)\n"
+            "    a `# should not raise` / `# must not raise` comment anywhere in the body\n"
+            "        (case-insensitive): the call completing *is* the assertion\n"
             "\n"
             "This vocabulary is intentionally broad — the check is biased toward zero\n"
             "false positives at WARN tier rather than toward catching every possible\n"
@@ -576,22 +626,34 @@ RULES: tuple[RuleDefinition, ...] = (
             "        result = extract_users(client)\n"
             "        assert result.record_count == 3\n"
             "\n"
-            "Suppress with ``# conformance: ignore[T005] <reason>`` only for a test\n"
-            "whose sole purpose is confirming the call doesn't raise (rare — usually\n"
-            "better expressed as ``pytest.raises``'s absence isn't a thing worth a\n"
-            "dedicated test on its own; prefer folding the no-raise expectation into a\n"
-            "test that also asserts on the return value).\n"
+            "A test whose sole purpose is confirming the call doesn't raise (a\n"
+            "best-effort or swallow-errors path) marks the call instead of\n"
+            "suppressing::\n"
+            "\n"
+            "    async def test_close_is_idempotent():\n"
+            "        await client.close()\n"
+            "        await client.close()  # should not raise\n"
+            "\n"
+            "Prefer folding the no-raise expectation into a test that also asserts on\n"
+            "the outcome (the resource is released, the state is reset) when there is\n"
+            "one to assert.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t005"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T006",
         canonical_reference=(
-            "atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the four "
-            "reference apps still assert; none is a `pass` or an ellipsis awaiting a body."
+            "atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the three "
+            "reference apps still assert (`test_none_returns_none`: "
+            "`assert to_epoch_ms(None) is None`); none is a `pass` or an ellipsis "
+            "awaiting a body."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -599,7 +661,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A test whose body is only 'pass', '...', or a docstring is a placeholder "
@@ -630,6 +692,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t006"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T007",
@@ -644,7 +710,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-assertion-quality",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "'assert True' and equivalents (assert 1, assert \"x\") satisfy T005's "
@@ -687,6 +753,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t007"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -739,19 +809,28 @@ RULES: tuple[RuleDefinition, ...] = (
             "of the file only when the repo has a non-default ``python_files``\n"
             "override in ``pyproject.toml`` that legitimately collects this name (the\n"
             "check does not read that override — see the module docstring).\n"
+            "\n"
+            "Not auto-applied: a helper or mixin module with no ``test_`` functions is not\n"
+            "a collectable, and renaming it makes pytest import it twice. A person decides\n"
+            "which files are real test modules (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t008"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T009",
         canonical_reference=(
-            "atlan-openapi-app tests/e2e/test_connection_create.py — the module-level skip "
-            "is conditional: it fires only from the ImportError raised when the installed "
-            "SDK predates the agnostic e2e harness. An unconditional module skip disables "
-            "the file forever and nothing tells you."
+            "atlan-openapi-app tests/e2e/test_connection_create.py — both module-level "
+            "skips are conditional: an `if` guard skips when ATLAN_BASE_URL / "
+            "ATLAN_API_KEY are unset, and a try/except ImportError skips when the "
+            "installed SDK predates the agnostic e2e harness. An unconditional module "
+            "skip disables the file forever and nothing tells you."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.BOTH,
@@ -759,7 +838,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "A module-level pytest.skip(..., allow_module_level=True) that is not "
@@ -806,13 +885,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t009"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T010",
         canonical_reference=(
-            "atlan-hello-world-app tests/unit/ — three modules covering the connector, the "
-            "contracts and the dev entrypoint. This tier is the floor and is not "
-            "exemptable; even the scaffold app has it."
+            "atlan-mysql-app tests/unit/ — unit modules covering the SQL client "
+            "(test_client.py), the handler (test_handler.py), the app's mappers, the "
+            "wire-shape parity spec and the preflight behaviour scenarios. This tier is "
+            "the floor and is not exemptable."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -820,13 +904,13 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Unit tests — method-by-method coverage of helper functions and "
             "activities — are the universal floor of the agreed testing-tier "
-            "architecture: every canonical app, including the minimal hello-world "
-            "scaffold, has one. An app with no tests/unit/ directory (or one with no "
+            "architecture: each of the three reference apps (openapi, mysql, "
+            "metabase) has one. An app with no tests/unit/ directory (or one with no "
             "collectable tests in it) has no fast, hermetic verification of its own "
             "logic at all — every other tier (integration, e2e) is slower, "
             "network-bound, and exercises the app only end-to-end, so a defect in a "
@@ -840,15 +924,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``test_*.py`` / ``*_test.py`` file) exist under ``tests/unit/``. This is\n"
             "the universal floor of the tiering architecture — unlike\n"
             "``tests/integration/`` and ``tests/e2e/`` (T011/T012), this tier has no\n"
-            "``exempt_test_tiers`` opt-out: every canonical app, including the minimal\n"
-            "``hello-world`` scaffold, ships a real unit suite.\n"
+            "``exempt_test_tiers`` opt-out: each of the three reference apps ships a\n"
+            "real unit suite.\n"
             "\n"
             "**Remediation:** add ``tests/unit/test_<module>.py`` files exercising the\n"
             "app's helper functions and ``@task``-decorated activities directly (call\n"
             "them as coroutines — the decorator only attaches metadata outside the\n"
-            "workflow runtime). See ``atlan-hello-world-app/tests/unit/`` for the\n"
-            "minimal reference shape: typed ``Input``/``Output`` contracts, a\n"
-            "``pytest.fixture`` for the app instance, and real outcome assertions\n"
+            "workflow runtime). See the three reference apps' ``tests/unit/``\n"
+            "(``atlan-openapi-app``, ``atlan-mysql-app``, ``atlan-metabase-app``) for\n"
+            "the reference shape: typed ``Input``/``Output`` contracts, a\n"
+            "``pytest.fixture`` for the app instance (e.g. ``atlan-metabase-app``\n"
+            "``tests/unit/test_connector.py``), and real outcome assertions\n"
             "(record counts, on-disk side effects, error paths via\n"
             "``pytest.raises``).\n"
         ),
@@ -856,15 +942,20 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t010"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T011",
         canonical_reference=(
-            "atlan-mysql-app tests/integration/ — handler auth and preflight against a "
-            "real MySQL, plus credential resolution against fake secret stores. Where an "
-            "app genuinely has nothing to exercise at this tier, atlan-hello-world-app "
-            "pyproject.toml declares `[tool.conformance] exempt_test_tiers` and says why "
-            "in a comment."
+            "atlan-mysql-app tests/integration/ — test_mysql_handler.py runs auth, "
+            "preflight and metadata against a real MySQL, "
+            "test_credential_resolution.py resolves credentials against fake secret "
+            "stores, and test_mysql_workflow.py drives the whole extraction on the "
+            "embedded runtime. None of the three reference apps needs the "
+            "`[tool.conformance] exempt_test_tiers` opt-out."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -872,7 +963,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "Integration tests — connecting to the real source and running the app's "
@@ -918,13 +1009,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t011"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T012",
         canonical_reference=(
-            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — one full-DAG suite on the "
-            "generated e2e base. atlan-hello-world-app instead exempts the tier in "
-            "pyproject.toml, which is the other legitimate end state."
+            "atlan-mysql-app tests/e2e/test_mysql_e2e.py — one representative full-DAG "
+            "suite, `TestMySQLE2E`, that skips itself at module level when "
+            "ATLAN_BASE_URL / ATLAN_API_KEY are unset, so the tier is collectable "
+            "everywhere and runs only where a tenant is configured. Each of the three "
+            "reference apps ships this tier rather than exempting it."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -932,7 +1029,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=False,
+        autofixable=True,
         since="0.12.0",
         rationale=(
             "End-to-end tests — the full pipeline including system apps, operating "
@@ -976,12 +1073,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t012"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T013",
         canonical_reference=(
             "atlan-metabase-app tests/ — everything collectable sits under unit/, "
-            "integration/ or e2e/. None of the four reference apps has a tests/sdr/ or a "
+            "integration/ or e2e/. None of the three reference apps has a tests/sdr/ or a "
             "tests/full_dag/; the tier a test belongs to is a directory, not a naming "
             "convention."
         ),
@@ -1026,18 +1127,31 @@ RULES: tuple[RuleDefinition, ...] = (
             "first line for intentional non-tier test infrastructure that happens to\n"
             "match the collection glob (rare — prefer a filename that doesn't match\n"
             "the glob for pure helpers, which also avoids T008-adjacent confusion).\n"
+            "\n**Fixing it well**\n\n"
+            "* A test that subclasses the deprecated SDR harness (``BaseSDRIntegrationTest``) is not moved: T003 retires it, and moving it only carries the T003 finding to the new path.\n\n"
+            "* Otherwise move the file into the tier the reference apps use (``tests/unit``, ``tests/integration``, ``tests/e2e``, ``tests/ui``) and update anything that imports it.\n\n"
+            "\n"
+            "Not auto-applied: a repo-declared tier such as ``tests/parity`` needs a\n"
+            "decision, and moving files must keep their ``conftest.py`` and fixtures. The\n"
+            "remediation lane routes T013 findings to a person (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t013"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T014",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — `fail_under = 84` under "
-            "[tool.coverage.report]. atlan-metabase-app sets 85. A measured number with no "
-            "fail_under is a report nobody's build ever reads."
+            "atlan-mysql-app .github/workflows/tests.yaml — the tests-reusable caller "
+            'sets `unit-coverage-fail-under: "90"`, which T014 reads as the effective '
+            "floor; pyproject.toml keeps `fail_under = 84` under [tool.coverage.report] "
+            "as the fallback for local runs. A measured number with no floor in either "
+            "place is a report nobody's build ever reads."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -1048,60 +1162,86 @@ RULES: tuple[RuleDefinition, ...] = (
         autofixable=False,
         since="0.12.0",
         rationale=(
-            "A coverage percentage that cannot fail a build is decorative: it is "
-            "reported in every PR comment and dashboard, creating the appearance of "
-            "an enforced quality bar, while [tool.coverage.report].fail_under absent "
-            "or 0 means no percentage — however low — actually blocks anything. This "
-            "is the config-level counterpart to T005-T007: those catch tests that run "
-            "without asserting; this catches a coverage number that exists without "
-            "enforcing. The unified test-framework onboarding path deliberately "
-            "starts new adopters at --cov-fail-under=0 and ramps up over time (Athena "
-            "at 20%, mssql at 60%), so WARN (not BLOCK) matches the agreed rollout "
-            "reality — this rule's value is making the '0 is temporary, not the "
-            "final state' expectation visible and trackable, not blocking the "
-            "initial adoption PR."
+            "A reported coverage percentage is decorative unless the effective "
+            "floor used by the coverage run can fail it. A CI floor passed on "
+            "the command line takes precedence over "
+            "``[tool.coverage.report].fail_under``: a ``tests-reusable.yaml`` "
+            "caller's unit tier is gated only by its ``unit-coverage-fail-under`` "
+            "input (default ``0``), so a positive TOML value alone does not "
+            "enforce coverage there. This is the config-level "
+            "counterpart to T005-T007: those catch tests that run without "
+            "asserting; this catches a coverage number that exists without an "
+            "effective floor. The unified test-framework onboarding path "
+            "deliberately starts new adopters at ``--cov-fail-under=0`` and "
+            "ramps up over time (Athena at 20%, mssql at 60%), so WARN (not "
+            "BLOCK) matches the agreed rollout reality — this rule's value is "
+            "making the '0 is temporary, not the final state' expectation "
+            "visible and trackable, not blocking the initial adoption PR."
         ),
         short_description=(
-            "Coverage is configured but fail_under is absent or 0 — the number is "
-            "measured but never enforced"
+            "Coverage is configured but its effective floor is absent or 0 — "
+            "the number is measured but never enforced"
         ),
         full_description=(
-            "``[tool.coverage.report]`` exists in ``pyproject.toml`` — the repo has\n"
-            "opted into coverage measurement — but ``fail_under`` is either absent\n"
-            "(defaults to 0) or explicitly set to ``0``, *and* no CI workflow\n"
-            "declares an overriding floor. Coverage is measured and reported (e.g.\n"
-            "as a PR comment via the ``connector-unit-tests`` composite action) but\n"
-            "can never cause a run to fail, regardless of how low it drops.\n"
+            "``[tool.coverage]`` exists in ``pyproject.toml`` — the repo has\n"
+            "opted into coverage measurement. T014 fires when the effective\n"
+            "coverage floor is absent or ``0``, so a run can report coverage\n"
+            "without failing.\n"
             "\n"
-            "coverage.py's CLI flag always overrides ``pyproject.toml``, so this\n"
-            "rule also checks the repo's own ``.github/workflows/*.yml`` for a\n"
+            "The floor comes from ``[tool.coverage.report].fail_under`` unless\n"
+            "CI passes one on the command line, which always wins. The rule\n"
+            "reads the unit tier's floor from the repo's own\n"
+            "``.github/workflows/*.yml``: for a ``tests-reusable.yaml`` caller,\n"
+            "its ``unit-coverage-fail-under`` input, or the reusable's default\n"
+            "``0`` when omitted (its ``pytest-args`` feed only the integration\n"
+            "tier and are not read); for any other workflow, a\n"
             "``connector-unit-tests`` ``fail-under:`` input or a\n"
-            "``--cov-fail-under=N`` flag embedded in a ``tests-reusable.yaml``\n"
-            "``pytest-args`` override. Either one, if non-zero, is treated as the\n"
-            "effective floor — the finding only fires when neither source enforces\n"
-            "anything.\n"
+            "``--cov-fail-under=N`` flag. A positive CI value is the effective\n"
+            "floor; a CI value of ``0`` overrides TOML but enforces nothing.\n"
             "\n"
-            "**Remediation:** set a real, ratcheting floor:\n"
+            "**Remediation:** set the floor on the input that gates the unit\n"
+            "tier. First read the current *unit* coverage (the unit job's\n"
+            "``coverage.json`` artifact, or ``coverage report`` after\n"
+            "``pytest tests/unit``) and take the whole number at or below it.\n"
             "\n"
-            ".. code-block:: toml\n"
+            "*tests-reusable.yaml caller:* set\n"
+            '``unit-coverage-fail-under: "<N>"`` in the ``with:`` block (the\n'
+            'mysql reference uses ``"90"``). This input is the unit tier\'s only\n'
+            "gate: the unit job runs ``coverage report --fail-under=<input>``,\n"
+            "so ``pyproject.toml`` never applies there. Write a quoted whole\n"
+            "number — ``bootstrap --resync`` reads it back and keeps it; a\n"
+            "decimal is not read back and makes ``--resync`` refuse the file.\n"
             "\n"
-            "    [tool.coverage.report]\n"
-            "    fail_under = 60\n"
+            "Leave ``--cov-fail-under=0`` in ``pytest-args`` alone.\n"
+            "``pytest-args`` only reaches the integration tier; removing the\n"
+            "flag applies the TOML ``fail_under`` to integration coverage — a\n"
+            "different measurement — and leaves the unit gate at ``0``.\n"
             "\n"
-            "Per the unified test-framework's own onboarding guidance, start at the\n"
-            "repo's *current* measured percentage (never below what's already true)\n"
-            "and raise it in follow-up PRs as coverage improves — the agreed target\n"
-            "for unit tests is 90-100%, but a repo mid-adoption is not expected to\n"
-            "jump there in one step.\n"
+            "*Direct connector-unit-tests user:* set its ``fail-under:`` input\n"
+            "to ``<N>``. *No CI coverage gate at all:* set\n"
+            "``[tool.coverage.report].fail_under = <N>``.\n"
+            "\n"
+            "Keep a positive ``fail_under`` in ``pyproject.toml`` as the\n"
+            "fallback for local runs (mysql keeps ``84``). Never set a floor\n"
+            "above current coverage, and ratchet it up in follow-up PRs toward\n"
+            "the 90-100% unit-test goal rather than jumping there in one step.\n"
             "\n"
             "Suppress with ``# conformance: ignore[T014] <reason>`` on the\n"
             "``[tool.coverage.report]`` line only during the initial adoption PR\n"
-            "itself, explicitly naming the follow-up tracking issue that will set a\n"
-            "real floor.\n"
+            "itself, explicitly naming the follow-up tracking issue that will set\n"
+            "a real floor.\n"
+            "\n"
+            "Not auto-applied: the unit coverage floor lives in the ``tests-reusable``\n"
+            "caller under ``.github/`` (``unit-coverage-fail-under``), which a person sets;\n"
+            "``fail_under`` in ``pyproject.toml`` alone does not gate CI (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t014"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1164,10 +1304,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "``source`` line naming the specific module and why it's legitimately\n"
             "excluded (e.g. a vendored third-party shim with no branch logic worth\n"
             "covering).\n"
+            "\n"
+            "Not auto-applied: removing an omit without tests drops coverage below the\n"
+            "floor and fails the unit tier, and vendored third-party code may stay omitted\n"
+            "with a reason. A person applies it (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t015"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1184,7 +1332,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.13.0",
         rationale=(
             "The full-DAG e2e worker derives its Temporal task queue as "
@@ -1242,14 +1390,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t016"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T017",
         canonical_reference=(
             "atlan-openapi-app tests/e2e/test_connection_create.py — `agent_spec()` is "
-            "inherited, not overridden: the generated base derives the worker queue from "
-            "ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME, so each leg lands on the "
-            "queue its own CI action provisioned."
+            "inherited, not overridden: the SDK's `BaseE2ETest.agent_spec` (reached "
+            "through the generated `OpenapiGeneratedE2EBase`) derives the worker queue "
+            "from ATLAN_APPLICATION_NAME + ATLAN_DEPLOYMENT_NAME, so each leg lands on "
+            "the queue its own CI action provisioned."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -1257,7 +1410,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.13.0",
         rationale=(
             "The companion to T016. T016 polices the worker side (the compose "
@@ -1328,6 +1481,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t017"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T018",
@@ -1343,7 +1500,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=False,
+        autofixable=True,
         since="0.16.0",
         rationale=(
             "The reusable Tests workflow (application-sdk#2852) runs the "
@@ -1431,6 +1588,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t018"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T019",
@@ -1445,7 +1606,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-async-config",
-        autofixable=False,
+        autofixable=True,
         since="0.17.0",
         rationale=(
             "pytest-asyncio has two independent loop-scope knobs in "
@@ -1546,13 +1707,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t019"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T020",
         canonical_reference=(
-            "atlan-mysql-app .github/workflows/tests.yaml — the e2e job calls "
+            "atlan-mysql-app .github/workflows/tests.yaml — the one `tests:` job calls "
             "`atlanhq/application-sdk/.github/workflows/tests-reusable.yaml@main` and "
-            "passes inputs. Calling the SDK's sdr-e2e action directly re-implements what "
+            "passes inputs; the reusable owns the e2e leg. Calling the SDK's sdr-e2e action directly re-implements what "
             "the reusable workflow already owns, and then has to track its changes by "
             "hand."
         ),
@@ -1562,11 +1727,11 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns "
-            "the e2e label gate, the discover-e2e-suites matrix (one leg per "
+            "the e2e request gate, the discover-e2e-suites matrix (one leg per "
             "tests/e2e/test_*.py), the per-leg ATLAN_DEPLOYMENT_NAME derivation that "
             "keeps worker and harness on one Temporal queue, the GHCR image build, "
             "the sdr-e2e invocation with the full-DAG config-dir/secrets-script/"
@@ -1630,6 +1795,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t020"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T021",
@@ -1645,7 +1814,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "An e2e suite that no workflow can run is worse than no suite at all: it "
@@ -1685,10 +1854,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "rule fires when none of those hold:\n"
             "\n"
             "* no caller exists and no workflow reaches the tier at all, or\n"
+            "\n"
             "* the caller sets ``enable-e2e: false`` (skips the e2e job entirely), or\n"
+            "\n"
             "* the caller leaves ``app-image-name`` empty, which disables the GHCR\n"
-            "  image build — the e2e job has no connector image to start the worker\n"
-            "  container from.\n"
+            "image build — the e2e job has no connector image to start the worker\n"
+            "container from.\n"
             "\n"
             "**Fix:** add or repair the caller in ``.github/workflows/tests.yaml``::\n"
             "\n"
@@ -1714,6 +1885,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t021"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T022",
@@ -1728,7 +1903,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "P030 polices the silent-zero-assets class statically — a connector whose "
@@ -1790,14 +1965,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t022"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T023",
         canonical_reference=(
-            "atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes, the "
-            "credential body and the Mustache substitutions all come from the generated "
-            "`MetabaseGeneratedE2EBase` and MetabaseMustacheSubstitutions. Hand-declaring "
-            "them in the test freezes a copy of what the contract will regenerate."
+            "atlan-metabase-app tests/e2e/test_metabase_e2e.py — identity attributes come "
+            "from the generated `MetabaseGeneratedE2EBase` (_e2e_base.py), the credential "
+            "body from `MetabaseAgentCredentialBody` (_e2e_credential.py) and the Mustache "
+            "substitutions from `MetabaseMustacheSubstitutions` (_e2e_substitutions.py); "
+            "the test imports them instead of subclassing CredentialBody or "
+            "MustacheSubstitutions. Hand-declaring them in the test freezes a copy of "
+            "what the contract will regenerate."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -1849,12 +2031,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Fix:** import the generated modules and keep only what the contract\n"
             "cannot know — the source under test, the asset floors, and the run mode.\n"
-            "``atlan-mysql-app/tests/e2e/test_mysql_full_dag.py`` is the reference::\n"
+            "``atlan-mysql-app/tests/e2e/test_mysql_e2e.py`` is the reference::\n"
             "\n"
             "    from app.generated._e2e_base import MysqlGeneratedE2EBase\n"
             "    from app.generated._e2e_credential import MysqlAgentCredentialBody\n"
             "\n"
-            "    class TestMySQLFullDAG(MysqlGeneratedE2EBase):\n"
+            "    class TestMySQLE2E(MysqlGeneratedE2EBase):\n"
             "        mode = RunMode.AGENT\n"
             '        include_filter = r"^def\\.e2e_main$"\n'
             '        expected_min_asset_counts = {"Database": 1, "Table": 2}\n'
@@ -1872,10 +2054,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T023] <reason>`` on the flagged\n"
             "line when a genuinely test-only model is meant (e.g. a negative-path\n"
             "credential body that must be malformed on purpose).\n"
+            "\n"
+            "Not auto-applied: the generated e2e models must carry every token the manifest\n"
+            "uses with the same defaults, and a test rule must never change published\n"
+            "contract values. A person applies it and runs one e2e leg (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t023"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1891,7 +2081,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=False,
+        autofixable=True,
         since="0.18.0",
         rationale=(
             "BaseE2ETest.mode defaults to RunMode.DIRECT, but the reusable Tests "
@@ -1950,14 +2140,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t024"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T025",
         canonical_reference=(
-            "atlan-openapi-app tests/e2e/ — two suites, test_connection_create.py and "
-            "test_connection_reuse.py, so each contract entrypoint of the bundle has one. "
-            "A multi-entrypoint contract with a single e2e suite leaves the other "
-            "entrypoints unproven end to end."
+            "application_sdk/testing/e2e/base.py — no reference app is in bundle mode "
+            "(each of the three emits a single generated manifest, so T025 inspects "
+            "none of them), and the coverage T025 asks for is this SDK harness surface: "
+            "one collectable class per entrypoint, resolved through "
+            "`BaseE2ETest.entrypoint` / `manifest_path` (`_derive_entrypoint` maps "
+            "`.../generated/<ep>/manifest.json` to `<ep>`). Metabase's contract — two "
+            "@entrypoint methods on one marketplace card (the BLDX-1342 route/card "
+            "split), with extract-lineage run as a DAG node inside the single full-DAG "
+            "e2e — is the multi-entrypoint shape T025 deliberately does not flag."
         ),
         fix_locus=FixLocus.TESTS,
         scope=RuleScope.APP,
@@ -1988,6 +2187,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "A bundle (multi-entrypoint) contract entrypoint has no e2e suite"
         ),
         full_description=(
+            "A person has to close this, not the remediation lane: covering an\n"
+            "entrypoint means an e2e run against a real source for it (a reachable\n"
+            "system and CI credentials), which only its owners and the test\n"
+            "infrastructure can provide. A class that skips when the source is absent\n"
+            "satisfies the matcher and none of the rationale.\n"
+            "\n"
             "The app is in **bundle mode** — ``app/generated/`` holds one\n"
             "``<name>/manifest.json`` subdir per entrypoint — and at least one of\n"
             "those entrypoints is not exercised by any collectable test class under\n"
@@ -2073,6 +2278,110 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t025"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="T026",
+        canonical_reference=(
+            "application_sdk/testing/e2e/system_app.py — `SystemAppE2ETest` sets "
+            "`_tenant_pool = TenantPool.SYSTEM`, which is what binds a suite to the "
+            "system-app tenant pool; the toolkit's "
+            "contract-toolkit/examples/system-app/app/generated/_e2e_base.py shows "
+            'the generated base a `type = "system"` contract emits, already '
+            "parented to it. None of the reference apps is a system app."
+        ),
+        fix_locus=FixLocus.TESTS,
+        scope=RuleScope.APP,
+        name="E2EHarnessTenantPoolMismatch",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="e2e-tenant-pool",
+        autofixable=False,
+        since="0.46.0",
+        rationale=(
+            "The e2e tenants are split into a connector pool and a system-app pool "
+            "(FND-3542). The harness enforces the split at runtime, but only once a "
+            "suite has picked its base: a SystemAppE2ETest suite refuses to run "
+            "unless E2E_TENANT_POOL=system, and every other suite refuses the "
+            "system pool. Two regressions slip past that gate. A system app that "
+            "adopts the harness on plain BaseE2ETest (or a generated base built "
+            "before its contract was typed 'system') never opts into the system "
+            "pool, so it runs on the connector tenants and turns a connector's test "
+            "bed into a system app's (FND-438). A connector that adopts "
+            "SystemAppE2ETest claims a pool reserved for system apps. The app's "
+            "declared marketplace type in atlan.yaml is the one signal the app "
+            "itself owns, so the rule compares the two instead of keeping a list of "
+            "app names. "
+            "Customer impact: a system app tested against connector tenants can "
+            "ship a regression its own tenants would have caught, and a connector "
+            "on the system pool can break the system apps' test beds."
+        ),
+        short_description=(
+            "An e2e test class's harness base does not match the app's declared "
+            "marketplace type"
+        ),
+        full_description=(
+            "A person has to close a ``system`` finding, not the remediation lane:\n"
+            "switching the base is only half of it, and the suite will not run\n"
+            "until the repo is also added to the system-app tenant secret.\n"
+            "\n"
+            "The top-level ``type`` in ``atlan.yaml`` (generated from\n"
+            "``contract/app.pkl``) is compared case-insensitively against the base\n"
+            "of every SDK-harness e2e test class — a collectable ``Test*`` class\n"
+            "under ``tests/e2e/`` that reaches ``BaseE2ETest``, ``SQLAppE2ETest`` or\n"
+            "``SystemAppE2ETest``, directly, through a repo-local base, or through a\n"
+            "generated ``*GeneratedE2EBase``:\n"
+            "\n"
+            "* ``system`` — the class **must** inherit ``SystemAppE2ETest``.\n"
+            "* ``utility`` — either base is allowed. Some system apps keep\n"
+            "  ``utility`` because they have a marketplace tile and can be run\n"
+            "  directly, but only ever inside a tenant; for them inheriting\n"
+            "  ``SystemAppE2ETest`` *is* the declaration, and the runtime pool gate\n"
+            "  holds the suite there. A utility that never adopts it cannot be told\n"
+            "  apart from any other utility, so it is not flagged.\n"
+            "* ``connector`` — the class **must not** inherit ``SystemAppE2ETest``.\n"
+            "* any other type, or no ``atlan.yaml`` — not graded.\n"
+            "\n"
+            "A base counts as the SDK class only when it is imported from\n"
+            "``application_sdk.testing.e2e``; a same-named class from anywhere else\n"
+            "is resolved against the repo's own classes.\n"
+            "\n"
+            "**Remediation (system):** in this order —\n"
+            "\n"
+            "1. Make ``SystemAppE2ETest`` the first base. For a toolkit-generated\n"
+            "   base, regenerating (``pkl eval -m . contract/app.pkl``) from a\n"
+            "   contract typed ``system`` emits it already::\n"
+            "\n"
+            "       from application_sdk.testing.e2e import SystemAppE2ETest\n"
+            "\n"
+            "       class MyAppGeneratedE2EBase(SystemAppE2ETest):\n"
+            "           ...\n"
+            "\n"
+            "2. Get the repo added to the selected repositories of the\n"
+            "   ``E2E_SYSTEM_TENANT_MATRIX_JSON`` secret, so CI places its legs on\n"
+            "   the system-app pool.\n"
+            "\n"
+            "**Remediation (connector):** base the suite on the generated\n"
+            "``<Name>GeneratedE2EBase`` (or ``BaseE2ETest`` / ``SQLAppE2ETest``).\n"
+            "If the app really is a system app, fix ``type`` in ``contract/app.pkl``\n"
+            "and regenerate instead.\n"
+            "\n"
+            "See ``docs/standards/connector-ci-e2e.md`` → *System apps*.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T026] <reason>`` on the ``class``\n"
+            "line.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t026"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
         ),
     ),
 )

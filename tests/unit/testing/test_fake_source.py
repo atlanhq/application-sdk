@@ -14,6 +14,7 @@ outbound traffic from the unit tier — stays enforced.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
 import http.client
 import ipaddress
@@ -248,24 +249,34 @@ class TestLifecycle:
         it is handed cannot reach a plain-HTTP fake at all, however correct its
         routes are. The self-signed cert is generated here rather than committed,
         so nothing in the repo looks like a real key.
+
+        Both timeouts are generous on purpose. The server drops a connection
+        whose handshake outlasts ``connection_timeout``, and with the 5s default
+        a starved Windows runner lost that race and failed the client with
+        WinError 10053 (FND-4018). This test is about the happy path, so it
+        gives the handshake room. The timeout itself is covered by
+        ``TestThreadTeardown``.
         """
         cert, key = _self_signed_cert(tmp_path, "127.0.0.1")
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
 
-        source = HttpFakeSource(ssl_context=ctx)
+        source = HttpFakeSource(ssl_context=ctx, connection_timeout=60)
         source.route(r"/ping", lambda _r: FakeResponse.json_({"ok": True}))
         with source:
             assert source.base_url.startswith("https://")
             client_ctx = ssl.create_default_context(cafile=str(cert))
-            conn = http.client.HTTPSConnection(
-                "127.0.0.1", source.port, context=client_ctx, timeout=5
-            )
-            conn.request("GET", "/ping")
-            resp = conn.getresponse()
-            assert resp.status == 200
-            assert json.loads(resp.read()) == {"ok": True}
-            conn.close()
+            # Closed even when an assert fails: an open keep-alive socket would
+            # hold stop() for the whole 60s idle budget before the failure shows.
+            with contextlib.closing(
+                http.client.HTTPSConnection(
+                    "127.0.0.1", source.port, context=client_ctx, timeout=60
+                )
+            ) as conn:
+                conn.request("GET", "/ping")
+                resp = conn.getresponse()
+                assert resp.status == 200
+                assert json.loads(resp.read()) == {"ok": True}
 
     def test_plain_http_stays_the_default(self) -> None:
         """No ssl_context means no behaviour change for every existing caller."""

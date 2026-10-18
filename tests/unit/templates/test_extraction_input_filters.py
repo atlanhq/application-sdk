@@ -7,12 +7,16 @@ list, and None. SQL injection is guarded by rejecting single quotes.
 from typing import Annotated
 
 import pytest
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from application_sdk.contracts.types import MaxItems
+from application_sdk.templates.contracts.incremental_sql import (
+    IncrementalExtractionInput,
+)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
+    TreeSelectionExtractionInput,
 )
 
 
@@ -401,3 +405,228 @@ class TestLegacyQuotedCsvNormalisation:
         result = ExtractionTaskInput.model_validate(payload)
         assert result.exclude_filter == "temp_a|temp_b"
         assert isinstance(result.exclude_filter, str)
+
+
+# The generated connector contract, verbatim (fields only) from
+# atlanhq/atlan-mysql-app ``app/generated/_input.py`` (origin/main): the
+# contract toolkit redeclares ``exclude_table_regex`` as a plain ``str`` on every
+# SQL app's ``AppInputContract(ExtractionInput)``.
+class _GeneratedAppInputContract(ExtractionInput):
+    exclude_table_regex: str = ""
+    """Regular expression to exclude temporary tables and views."""
+    preflight_check: str = ""
+    output_dir: str = ""
+    checkpoint_dir: str = ""
+    load_to_atlan: bool = True
+    publish_dry_run: bool = False
+
+
+# The mysql form's placeholder for "Exclude regex for tables & views".
+_MYSQL_FORM_PLACEHOLDER = ".*_TMP|.*_TEMP|TMP:*|TEMP:*"
+
+_INPUT_TYPES = [ExtractionInput, _GeneratedAppInputContract]
+
+
+class TestExcludeTableRegexRouting:
+    """The form's ``exclude_table_regex`` reaches ``temp_table_regex`` (FND-2733).
+
+    The toolkit emits the form key ``exclude-table-regex`` as the workflow arg
+    ``exclude_table_regex``; the SDK only ever renders ``temp_table_regex``
+    into the table/column SQL. Before the fix the key was dropped as unknown
+    on ``ExtractionInput`` and ignored on the generated subclass.
+    """
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    def test_flat_arg_is_routed(self, input_type: type[ExtractionInput]) -> None:
+        result = input_type.model_validate({"exclude_table_regex": "^tmp_"})
+        assert result.temp_table_regex == "^tmp_"
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    @pytest.mark.parametrize("key", ["exclude-table-regex", "exclude_table_regex"])
+    def test_nested_metadata_is_routed(
+        self, input_type: type[ExtractionInput], key: str
+    ) -> None:
+        result = input_type.model_validate({"metadata": {key: "^tmp_"}})
+        assert result.temp_table_regex == "^tmp_"
+
+    def test_top_level_kebab_key_is_routed(self) -> None:
+        result = ExtractionInput.model_validate({"exclude-table-regex": "^tmp_"})
+        assert result.temp_table_regex == "^tmp_"
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    def test_explicit_temp_table_regex_wins(
+        self, input_type: type[ExtractionInput]
+    ) -> None:
+        result = input_type.model_validate(
+            {"temp_table_regex": "^explicit$", "exclude_table_regex": "^form$"}
+        )
+        assert result.temp_table_regex == "^explicit$"
+
+    def test_explicit_nested_temp_table_regex_wins(self) -> None:
+        result = ExtractionInput.model_validate(
+            {
+                "metadata": {
+                    "temp-table-regex": "^explicit$",
+                    "exclude-table-regex": "^form$",
+                }
+            }
+        )
+        assert result.temp_table_regex == "^explicit$"
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    @pytest.mark.parametrize("value", ["", None])
+    def test_empty_or_null_leaves_filter_off(
+        self, input_type: type[ExtractionInput], value: str | None
+    ) -> None:
+        result = input_type.model_validate({"exclude_table_regex": value})
+        assert result.temp_table_regex == ""
+        assert result.exclude_table_regex == ""
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    def test_mysql_form_placeholder_accepted(
+        self, input_type: type[ExtractionInput]
+    ) -> None:
+        result = input_type.model_validate(
+            {"exclude_table_regex": _MYSQL_FORM_PLACEHOLDER}
+        )
+        assert result.temp_table_regex == _MYSQL_FORM_PLACEHOLDER
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"exclude_table_regex": "x' OR '1'='1"},
+            {"metadata": {"exclude-table-regex": "x' OR '1'='1"}},
+            {"exclude_table_regex": "tmp_--"},
+            {"exclude_table_regex": "tmp_*/ OR 1=1 /*"},
+        ],
+    )
+    def test_injection_payload_rejected(
+        self, input_type: type[ExtractionInput], payload: dict
+    ) -> None:
+        with pytest.raises(ValidationError):
+            input_type.model_validate(payload)
+
+    def test_injection_in_ignored_form_value_still_rejected(self) -> None:
+        # An explicit temp_table_regex wins, but the form value is still a
+        # declared field with the same deny-list, so a subclass that reads it
+        # directly never sees an unsafe string.
+        with pytest.raises(ValidationError):
+            _GeneratedAppInputContract.model_validate(
+                {"temp_table_regex": "^ok$", "exclude_table_regex": "x' OR '1'='1"}
+            )
+
+    def test_legacy_quoted_csv_is_normalised(self) -> None:
+        result = ExtractionInput.model_validate(
+            {"exclude_table_regex": '"TMP_A","TMP_B"'}
+        )
+        assert result.temp_table_regex == "TMP_A|TMP_B"
+
+    def test_incremental_input_inherits_routing(self) -> None:
+        result = IncrementalExtractionInput.model_validate(
+            {"exclude_table_regex": "^tmp_"}
+        )
+        assert result.temp_table_regex == "^tmp_"
+
+    def test_declared_so_not_an_unknown_key(self) -> None:
+        # Declared on the SDK contract, so the unknown-key warning no longer
+        # names it and schema consumers see it as SDK-provided.
+        assert "exclude_table_regex" in ExtractionInput.model_fields
+
+
+class TestTreeSelectionExtractionInput:
+    """TreeSelectionExtractionInput keeps the tree and otherwise matches ExtractionInput."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"default": {"ns.a": {"t1": {}}, "ns.b": {}}},
+            {"a": {"b": {"c": {"d": {"e": {}}}}}},
+            {},
+        ],
+    )
+    def test_tree_keeps_every_level(self, value):
+        result = TreeSelectionExtractionInput.model_validate({"include_filter": value})
+        assert result.include_filter == value
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ('{"cat": {"ns": {"t": {}}}}', {"cat": {"ns": {"t": {}}}}),
+            (' {"default": {}}', {"default": {}}),
+            ("{}", {}),
+        ],
+    )
+    def test_json_object_string_is_decoded_into_the_tree(self, value, expected):
+        result = TreeSelectionExtractionInput.model_validate({"include_filter": value})
+        assert result.include_filter == expected
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, "", "^prod$", '"DB1","DB2"', "{not json", "[1]"],
+    )
+    def test_non_json_object_inputs_match_extraction_input(self, value):
+        expected = ExtractionInput.model_validate({"exclude_filter": value})
+        result = TreeSelectionExtractionInput.model_validate({"exclude_filter": value})
+        assert result.exclude_filter == expected.exclude_filter
+
+    @pytest.mark.parametrize(
+        "value", [{"db": ["schema"]}, ["db"], '{"^db$": ["^sch$"]}']
+    )
+    def test_filter_map_shapes_are_refused(self, value):
+        with pytest.raises(ValidationError):
+            TreeSelectionExtractionInput.model_validate({"include_filter": value})
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"a;drop": {}},
+            {"a": {"b--": {}}},
+            {"a": {"b": {"c": {"d": {"e": {"f": {}}}}}}},
+            '{"a;drop": {}}',
+        ],
+    )
+    def test_sql_injection_check_still_applies(self, value):
+        with pytest.raises(ValidationError):
+            TreeSelectionExtractionInput.model_validate({"include_filter": value})
+
+    def test_defaults_are_empty_strings(self):
+        result = TreeSelectionExtractionInput()
+        assert result.include_filter == ""
+        assert result.exclude_filter == ""
+
+    @pytest.mark.parametrize("builder", ["sql_app", "sql_metadata_extractor"])
+    def test_sql_templates_refuse_tree_selection_input(self, builder):
+        from application_sdk.templates._template_errors import (
+            SqlTreeFilterInputUnsupportedError,
+        )
+        from application_sdk.templates.sql_app import SqlApp
+        from application_sdk.templates.sql_metadata_extractor import _task_input
+
+        # Exclude-only: the error must not point the caller at include_filter.
+        src = TreeSelectionExtractionInput(exclude_filter={"cat": {"ns": {"t": {}}}})
+        with pytest.raises(SqlTreeFilterInputUnsupportedError) as exc_info:
+            if builder == "sql_app":
+                SqlApp.build_task_input(ExtractionTaskInput, src)
+            else:
+                _task_input(ExtractionTaskInput, src, cred_ref=None)
+        assert exc_info.value.field is None
+
+    def test_redeclared_filter_field_gets_no_tree_coercion(self):
+        class Sub(TreeSelectionExtractionInput):
+            include_filter: dict = {}  # pyright: ignore[reportIncompatibleVariableOverride]
+
+        with pytest.raises(ValidationError):
+            Sub.model_validate({"include_filter": '{"cat": {}}'})
+
+    @pytest.mark.asyncio
+    async def test_sql_metadata_extractor_run_raises_the_input_error_unwrapped(self):
+        from application_sdk.templates._template_errors import (
+            SqlTreeFilterInputUnsupportedError,
+        )
+        from application_sdk.templates.sql_metadata_extractor import (
+            SqlMetadataExtractor,
+        )
+
+        with pytest.raises(SqlTreeFilterInputUnsupportedError):
+            await SqlMetadataExtractor.run(None, TreeSelectionExtractionInput())  # type: ignore[arg-type]

@@ -1,9 +1,5 @@
 import pytest
-from conformance.preflight_testing import (
-    assert_extraction_scheduled,
-    assert_preflight_result,
-    assert_probe_lifetime,
-)
+from conformance.preflight_testing import assert_preflight_result, assert_probe_lifetime
 
 from application_sdk.errors import AuthError
 from application_sdk.handler.contracts import (
@@ -68,46 +64,6 @@ def test_secret_in_log_rejected():
 def test_lifetime_violation(elapsed, stopped):
     with pytest.raises(AssertionError):
         assert_probe_lifetime(elapsed=elapsed, budget=1, background_stopped=stopped)
-
-
-def test_unrelated_workflow_failure_rejected():
-    from temporalio.api.common.v1 import ActivityType
-    from temporalio.api.failure.v1 import ApplicationFailureInfo, Failure
-    from temporalio.api.history.v1 import (
-        ActivityTaskScheduledEventAttributes,
-        HistoryEvent,
-        WorkflowExecutionFailedEventAttributes,
-    )
-    from temporalio.client import WorkflowHistory
-
-    history = WorkflowHistory(
-        "synthetic-workflow",
-        [
-            HistoryEvent(
-                activity_task_scheduled_event_attributes=ActivityTaskScheduledEventAttributes(
-                    activity_type=ActivityType(name="example:preflight")
-                )
-            ),
-            HistoryEvent(
-                workflow_execution_failed_event_attributes=WorkflowExecutionFailedEventAttributes(
-                    failure=Failure(
-                        application_failure_info=ApplicationFailureInfo(
-                            type="UnrelatedError"
-                        )
-                    )
-                )
-            ),
-        ],
-    )
-    with pytest.raises(AssertionError, match="unrelated reason"):
-        assert_extraction_scheduled(
-            history,
-            "extract",
-            expected=0,
-            gate_activity_name="example:preflight",
-            expected_terminal="failed",
-            expected_failure_type="PreflightFailedError",
-        )
 
 
 def test_partial_result_with_only_advisory_failures_is_accepted():

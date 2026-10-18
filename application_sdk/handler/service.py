@@ -5,7 +5,8 @@ operations for a single app. Each app runs its own handler service.
 
 Routes:
     POST /workflows/v1/auth - Test authentication
-    POST /workflows/v1/check - Run preflight checks
+    POST /workflows/v1/check - Run preflight checks (optionally only some ``tiers``)
+    POST /workflows/v1/warmup - Probe the source's compute once (stateless)
     POST /workflows/v1/metadata - Fetch metadata
     POST /workflows/v1/start - Start workflow execution
     POST /workflows/v1/stop/{workflow_id}/{run_id:path} - Stop workflow
@@ -56,18 +57,20 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.app._generated_tree import (
+from application_sdk.common._generated_tree import (
     MANIFEST_STEM,
     choose_form_configmap,
     eligible_form_configmaps,
     names_entrypoint,
 )
-from application_sdk.app.build_identity import (
+from application_sdk.common.build_identity import (
     BUILD_IDENTITY_CONFIGMAP_ID,
     build_identity,
 )
-from application_sdk.app.entrypoint import canonical_workflow_type
-from application_sdk.common.dispatch import resolve_dispatch_workflow_id
+from application_sdk.common.dispatch import (
+    canonical_workflow_type,
+    resolve_dispatch_workflow_id,
+)
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
     task_queue_from_env,
@@ -75,12 +78,31 @@ from application_sdk.common.task_queue import (
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
 from application_sdk.credentials.ingress import lift_agent_json
-from application_sdk.errors import AppError, InternalError
+from application_sdk.errors import (
+    AppError,
+    InternalError,
+    PreconditionError,
+    safe_traceback,
+    sanitize_cause_repr,
+)
 from application_sdk.errors.categories import FailureCategory
+from application_sdk.handler._preflight_outcome import (
+    PreflightSurface,
+    emit_preflight_check_outcome,
+    emit_preflight_crash_outcome,
+    rows_outside_tiers,
+)
+from application_sdk.handler._warmup import (
+    bounded_warmup_probe,
+    warmup_ceiling_seconds,
+    warmup_probe_timeout_seconds,
+    warmup_unavailable_error,
+)
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
     AuthInput,
+    CheckTier,
     EventTriggerConfig,
     FileUploadResponse,
     HandlerCredential,
@@ -88,7 +110,11 @@ from application_sdk.handler.contracts import (
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
+    PreflightStatus,
     SubscriptionConfig,
+    WarmupInput,
+    WarmupObservation,
+    WarmupState,
 )
 from application_sdk.handler.contracts import (
     flatten_credentials_to_pairs as _flatten_to_pairs,
@@ -282,6 +308,10 @@ def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     # no duration rather than a negative one.
     if dumped.get("duration_ms", 0) < 0:
         del dumped["duration_ms"]
+    # The default tier stays off the wire, as in PreflightCheck.to_wire, so an
+    # app that never tiers its checks answers exactly as before tiers existed.
+    if check.tier is CheckTier.PREFLIGHT:
+        del dumped["tier"]
     dumped["message"] = check.resolved_message
     if check.resolved_suggested_action:
         dumped["suggested_action"] = check.resolved_suggested_action
@@ -315,7 +345,9 @@ def _preflight_response(
     response = _wrap_response(
         data,
         message=result.message or f"Preflight check {result.status.value}",
-        success=len(result.checks) > 0 if success is None else success,
+        success=(len(result.checks) > 0 or result.status is PreflightStatus.PENDING)
+        if success is None
+        else success,
     )
     response["preflight"] = _preflight_runtime_summary(result)
     return response
@@ -340,6 +372,16 @@ def _preflight_failure_response(
     the verdict is rendered, because after secret redaction it still names the
     caller's hosts and accounts, and the untyped path passes a fixed ``detail``.
     """
+    return JSONResponse(
+        status_code=status_code,
+        content=_preflight_failure_body(exc, app_name, detail),
+    )
+
+
+def _preflight_failure_body(
+    exc: AppError, app_name: str, detail: str | None = None
+) -> dict[str, Any]:
+    """The body :func:`_preflight_failure_response` sends."""
     output = unverifiable_preflight_result(exc, app_name, include_cause=False)
     body = _preflight_response(output, success=False)
     failure = output.checks[0].error
@@ -349,22 +391,70 @@ def _preflight_failure_response(
         if failure is not None
         else None
     )
-    return JSONResponse(status_code=status_code, content=body)
+    return body
 
 
 def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     """Runtime metadata kept outside the SageV2 ``data`` map.
 
-    ``status`` is the gate verdict (``ready`` / ``not_ready`` / ``partial``);
+    ``status`` is the verdict (``ready`` / ``not_ready`` / ``partial``, and
+    ``pending`` on a tiered request whose warmup-tier checks have not run);
     ``not_ready`` means blocked. Per-check ``message``/``suggested_action`` follow
     the precedence rule (typed ``error`` wins). Consumed for display/diagnostics.
     """
-    return {
+    summary: dict[str, Any] = {
         "status": result.status.value,
         "message": result.message,
         "total_duration_ms": result.total_duration_ms,
         "checks": [_summarize_check(check) for check in result.checks],
     }
+    # ``warmup`` is present exactly when it explains the verdict: always on
+    # PENDING (``null`` when warmup was not probed), and whenever an observation
+    # was taken. An untiered request never has one, so its body is unchanged.
+    if result.status is PreflightStatus.PENDING or result.warmup is not None:
+        summary["warmup"] = (
+            _warmup_body(result.warmup) if result.warmup is not None else None
+        )
+    return summary
+
+
+def _warmup_body(observation: WarmupObservation) -> dict[str, Any]:
+    """An observation as the HTTP caller sees it."""
+    return observation.model_dump(mode="json", exclude_none=True)
+
+
+def _with_warmup_verdict(
+    result: PreflightOutput,
+    observation: WarmupObservation | None,
+    app_name: str,
+    *,
+    warmup_pending: bool,
+) -> PreflightOutput:
+    """*result* with the warmup folded into a tiered ``/check`` verdict.
+
+    ``NOT_READY`` always wins. An ``UNAVAILABLE`` observation is a ``NOT_READY``
+    of its own, attributed to the source. Otherwise, when the ``WARMUP``-tier
+    checks did not run (``warmup_pending``), the verdict is ``PENDING`` and
+    carries the observation that explains why, or ``None`` when warmup was not
+    probed. No placeholder rows: the UI shows one line for the source compute.
+    """
+    if result.status is PreflightStatus.NOT_READY:
+        return result.model_copy(update={"warmup": observation})
+    if observation is not None and observation.state is WarmupState.UNAVAILABLE:
+        error = warmup_unavailable_error(observation, app_name)
+        return result.model_copy(
+            update={
+                "status": PreflightStatus.NOT_READY,
+                "message": error.message,
+                "error": error.to_failure_details(),
+                "warmup": observation,
+            }
+        )
+    if warmup_pending:
+        return result.model_copy(
+            update={"status": PreflightStatus.PENDING, "warmup": observation}
+        )
+    return result
 
 
 if TYPE_CHECKING:
@@ -524,8 +614,124 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
+
+def _entrypoint_form(entrypoint: str) -> tuple[Path | None, list[Path]]:
+    """The generated setup form served for *entrypoint*, and the files it was
+    chosen from.
+
+    Searches both generated layouts: multi-entrypoint apps nest each form under
+    ``CONTRACT_GENERATED_DIR/<entrypoint>/``, single-entrypoint apps emit it
+    flat in ``CONTRACT_GENERATED_DIR``. The nested directory wins. Within a
+    directory :func:`choose_form_configmap` decides. ``(None, [])`` when no
+    eligible form exists.
+    """
+    for search_dir in (CONTRACT_GENERATED_DIR / entrypoint, CONTRACT_GENERATED_DIR):
+        candidates = eligible_form_configmaps(search_dir)
+        target = choose_form_configmap(candidates, entrypoint)
+        if target is not None:
+            return target, candidates
+    return None, []
+
+
+def generated_entrypoints() -> list[str]:
+    """The entry points the generated tree serves a setup form for.
+
+    Each subdirectory of ``CONTRACT_GENERATED_DIR`` holding an eligible form is
+    one entry point (the multi-entry-point layout). With none, a flat form makes
+    the app's single entry point, reported as ``""`` (the app-level handler).
+    Read from disk so the handler process never imports the app registry.
+    """
+    if not CONTRACT_GENERATED_DIR.is_dir():
+        return []
+    nested = sorted(
+        d.name
+        for d in CONTRACT_GENERATED_DIR.iterdir()
+        if d.is_dir() and eligible_form_configmaps(d)
+    )
+    if nested:
+        return nested
+    return [""] if eligible_form_configmaps(CONTRACT_GENERATED_DIR) else []
+
+
+SAGE_V2_WIDGET = "sageV2"
+"""The ``ui.widget`` value of the setup form's preflight widget."""
+
+
+def sagev2_warmup_flag(form: dict[str, Any]) -> bool | None:
+    """What a generated setup form declares about the app's warmup.
+
+    Reads the top-level ``config.properties`` (the walk the setup UI makes to
+    find its preflight widget) for a property whose ``ui.widget`` is
+    ``sageV2``. ``None`` when there is none; otherwise whether any such widget
+    sets ``ui.warmup`` to ``true``. A missing ``ui.warmup`` is ``false``.
+    """
+    config = form.get("config", form)
+    properties = config.get("properties") if isinstance(config, dict) else None
+    if not isinstance(properties, dict):
+        return None
+    flags = [
+        prop["ui"].get("warmup") is True
+        for prop in properties.values()
+        if isinstance(prop, dict)
+        and isinstance(prop.get("ui"), dict)
+        and prop["ui"].get("widget") == SAGE_V2_WIDGET
+    ]
+    return any(flags) if flags else None
+
+
+def warn_on_warmup_flag_drift(
+    entrypoints: list[str], has_warmup: Callable[[str], bool]
+) -> list[str]:
+    """Log a WARNING for each entry point whose setup form and handler disagree
+    about the warmup. Returns the entry points it warned about.
+
+    The form's SageV2 ``ui.warmup`` flag tells the setup UI to run the warmup
+    flow; *has_warmup* says whether the entry point's handler actually has one
+    (a module ``warmup`` hook, or an app handler overriding
+    ``Handler.warmup``). The contract is the source of the flag, so nothing is
+    changed here: a mismatch is only reported. An entry point with no served
+    form, or a form with no SageV2 widget, has nothing to compare.
+    """
+    drifted: list[str] = []
+    for entrypoint in entrypoints:
+        target, _ = _entrypoint_form(entrypoint)
+        if target is None:
+            continue
+        with open(target, encoding="utf-8") as f:
+            form = json.load(f)
+        declared = sagev2_warmup_flag(form) if isinstance(form, dict) else None
+        if declared is None:
+            continue
+        actual = has_warmup(entrypoint)
+        if declared == actual:
+            continue
+        drifted.append(entrypoint)
+        if actual:
+            logger.warning(
+                "Entry point %s has a warmup (Handler.warmup is overridden or a "
+                "module warmup hook exists) but its setup form %s does not set "
+                "warmup on the SageV2 widget: the setup check will never run "
+                "the warmup-tier checks, so missing grants on them surface "
+                "only on a real run. Set warmup: true on the SageV2 widget in "
+                "the app's contract.",
+                entrypoint or "<app>",
+                target.name,
+            )
+        else:
+            logger.warning(
+                "Entry point %s sets warmup on the SageV2 widget of its setup "
+                "form %s but has no warmup (Handler.warmup is not overridden "
+                "and there is no module warmup hook): the setup UI makes a "
+                "/warmup round trip that always answers ready. Remove warmup "
+                "from the SageV2 widget, or implement Handler.warmup.",
+                entrypoint or "<app>",
+                target.name,
+            )
+    return drifted
+
+
 # The form-discovery exclusion vocabulary lives in
-# `application_sdk.app._generated_tree`, which is the authority: this endpoint is
+# `application_sdk.common._generated_tree`, which is the authority: this endpoint is
 # what a tenant's /api/service/configmaps/<name> proxies to, and the FND-1667
 # route check compares what this serves against the app's committed contract.
 # A second copy of "which sibling JSON is a form" would let the server serve one
@@ -543,7 +749,7 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 # Per-entry-point hook signatures resolved by the discovery helpers below.
 # ``HandlerFn`` is the per-entry-point handler convention
-# (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata}``); the
+# (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata,warmup}``); the
 # input/output stay ``Any`` because the concrete contract pair is selected by
 # ``fn_name`` at call time. ``_ComputeManifestFn`` is the dynamic-manifest hook
 # (``app.<segment>.core.compute_manifest``) — it must be ``async def`` (the hook
@@ -663,13 +869,14 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
     Convention: ``app.<segment>.handler.<fn_name>`` where ``segment`` is
     :func:`~application_sdk.app.entrypoint.entrypoint_module_segment` of the
     entry-point name and ``fn_name`` is one of ``"test_auth"``,
-    ``"preflight_check"``, ``"fetch_metadata"``. Multi-entrypoint apps that
+    ``"preflight_check"``, ``"fetch_metadata"``, ``"warmup"``. Multi-entrypoint apps that
     need *per-entrypoint* lifecycle hooks drop a ``handler.py`` next to their
     package's hand-written code with::
 
         async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
         async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
         async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
+        async def warmup(input: WarmupInput, ctx: HandlerContext) -> WarmupObservation: ...
 
     The dispatch is best-effort: if the per-entrypoint module / attribute
     is absent, the route falls through to the app-level ``Handler`` instance
@@ -2085,14 +2292,8 @@ def _register_workflow_routes(
                 # pod stderr alike. Hence the warning below — the next
                 # unrecognised sibling shows up in the logs on the first
                 # request, before anyone opens the wizard.
-                for search_dir in (
-                    CONTRACT_GENERATED_DIR / ep.name,
-                    CONTRACT_GENERATED_DIR,
-                ):
-                    candidates = eligible_form_configmaps(search_dir)
-                    target = choose_form_configmap(candidates, ep.name)
-                    if target is None:
-                        continue
+                target, candidates = _entrypoint_form(ep.name)
+                if target is not None:
                     if len(candidates) > 1 and not names_entrypoint(
                         target.stem, ep.name
                     ):
@@ -2109,7 +2310,6 @@ def _register_workflow_routes(
                             target.stem,
                             [c.stem for c in candidates],
                         )
-                    break
 
         if target is not None:
             with open(target, encoding="utf-8") as f:
@@ -2756,9 +2956,21 @@ def create_app_handler_service(
         workflow_max_timeout_hours=workflow_max_timeout_hours,
     )
 
+    from fastapi.telemetry import (  # noqa: PLC0415 — cold path: only at handler service startup
+        TelemetryConfig,
+    )
+
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
         ENABLE_MCP,
     )
+
+    # FastAPI >=0.142 auto-configures OTLP/HTTP exporters on the global
+    # providers when OTEL_EXPORTER_OTLP_ENDPOINT is set. The SDK owns those
+    # providers (observability/*_adaptor.py) and exports gRPC to that endpoint,
+    # so FastAPI's exporters would race ours for the global TracerProvider and
+    # fail against the gRPC collector. Request telemetry stays with
+    # FastAPIInstrumentor below; FastAPI's native middleware defers to it.
+    fastapi_telemetry: TelemetryConfig = {"auto_configure": False}
 
     if ENABLE_MCP and app_name:
         from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
@@ -2776,10 +2988,20 @@ def create_app_handler_service(
             # user isn't sent to reinstall the extra when the fault is elsewhere.
             if e.name != "fastmcp" and not (e.name or "").startswith("fastmcp."):
                 raise
-            raise RuntimeError(
-                "ENABLE_MCP is set but the MCP dependencies are not installed. "
-                "Install the SDK with the 'mcp' extra "
-                "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+            raise PreconditionError(
+                message=(
+                    "ENABLE_MCP is set but the MCP dependencies are not installed. "
+                    "Install the SDK with the 'mcp' extra "
+                    "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+                ),
+                resource="mcp extra",
+                expected_state="installed",
+                actual_state="missing",
+                suggested_action=(
+                    "Install the SDK with the 'mcp' extra "
+                    "(e.g. `uv add 'atlan-application-sdk[mcp]'`) or unset ENABLE_MCP."
+                ),
+                cause=e,
             ) from e
 
         _mcp_server = MCPServer(application_name=app_name)
@@ -2797,9 +3019,15 @@ def create_app_handler_service(
             description=description,
             version=version,
             lifespan=_mcp_lifespan,
+            telemetry=fastapi_telemetry,
         )
     else:
-        app = FastAPI(title=title, description=description, version=version)
+        app = FastAPI(
+            title=title,
+            description=description,
+            version=version,
+            telemetry=fastapi_telemetry,
+        )
 
     from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
         FastAPIInstrumentor,
@@ -2884,6 +3112,47 @@ def create_app_handler_service(
             _secret_store=_secret_store,
         )
 
+    # The warmup tier's two numbers, clamped by the same functions the gate
+    # uses so the route and the gate cannot disagree about them.
+    _warmup_ceiling, _ = warmup_ceiling_seconds(
+        getattr(app_class, "preflight_warmup_ceiling_seconds", None)
+    )
+    _warmup_probe_timeout, _ = warmup_probe_timeout_seconds(
+        getattr(app_class, "preflight_warmup_probe_timeout_seconds", None),
+        _warmup_ceiling,
+    )
+
+    def _has_warmup(entrypoint: str) -> bool:
+        """Whether the entry point has a warmup probe of its own (its module
+        hook, or an app handler that overrides ``Handler.warmup``)."""
+        if entrypoint and _discover_handler_fn(entrypoint, "warmup") is not None:
+            return True
+        return type(handler).warmup is not Handler.warmup
+
+    async def _probe_warmup(
+        entrypoint: str, source: PreflightInput, context: HandlerContext
+    ) -> WarmupObservation:
+        """One ``warmup`` probe for the entry point, bounded by the app's probe
+        timeout. A probe still running at the bound reads as ``WARMING``."""
+        warmup_input = WarmupInput.model_validate(
+            {
+                **{
+                    name: getattr(source, name)
+                    for name in WarmupInput.model_fields
+                    if name in PreflightInput.model_fields
+                },
+                "probe_timeout_seconds": _warmup_probe_timeout,
+            }
+        )
+        ep_fn = _discover_handler_fn(entrypoint, "warmup") if entrypoint else None
+        probe = (
+            ep_fn(warmup_input, context)
+            if ep_fn is not None
+            else handler.warmup(warmup_input)
+        )
+        seen = await bounded_warmup_probe(probe, _warmup_probe_timeout)
+        return seen or WarmupObservation(state=WarmupState.WARMING)
+
     # ------------------------------------------------------------------
     # Auth
     # ------------------------------------------------------------------
@@ -2928,7 +3197,9 @@ def create_app_handler_service(
                 return JSONResponse(
                     status_code=result.status.http_status,
                     content=_wrap_response(
-                        result.model_dump(),
+                        result.model_dump(
+                            mode="json", exclude={"error": {"cause_repr"}}
+                        ),
                         message=result.message
                         or f"Authentication {result.status.value}",
                         success=result.status.is_success,
@@ -2940,25 +3211,25 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Auth test failed for app %s (request %s): %s",
+                    "Auth test failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Auth test failed for app %s (request %s): %s",
+                    "Auth test failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
@@ -2969,13 +3240,13 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Auth test failed unexpectedly for app %s (request %s): %s",
+                    "Auth test failed unexpectedly for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
@@ -2995,11 +3266,6 @@ def create_app_handler_service(
         ]
         context = _create_context(credentials)
         with bind_handler_context(context):
-            from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                PreflightSurface,
-                emit_preflight_check_outcome,
-                emit_preflight_crash_outcome,
-            )
 
             def _crash_row(e: BaseException) -> None:
                 emit_preflight_crash_outcome(
@@ -3023,15 +3289,54 @@ def create_app_handler_service(
                 )
                 # Per-entrypoint dispatch (see test_auth above for rationale).
                 entrypoint = _validated_entrypoint(preflight_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, "preflight_check")
-                    if entrypoint
-                    else None
-                )
-                if ep_fn is not None:
-                    result = await ep_fn(preflight_input, context)
+                # Without ``tiers`` the request is today's: every tier, no
+                # warmup probe. ``tiers`` naming WARMUP probes the warmup first
+                # (the caller asked for compute); ``tiers`` without it never
+                # starts compute (the design's cost policy).
+                requested = preflight_input.tiers
+                tiered = "tiers" in preflight_input.model_fields_set
+                observation: WarmupObservation | None = None
+                run_tiers = requested
+                if tiered and CheckTier.WARMUP in requested:
+                    observation = await _probe_warmup(
+                        entrypoint, preflight_input, context
+                    )
+                    if observation.state is not WarmupState.READY:
+                        run_tiers = requested - {CheckTier.WARMUP}
+                if run_tiers:
+                    call_input = preflight_input.model_copy(update={"tiers": run_tiers})
+                    ep_fn = (
+                        _discover_handler_fn(entrypoint, "preflight_check")
+                        if entrypoint
+                        else None
+                    )
+                    if ep_fn is not None:
+                        result = await ep_fn(call_input, context)
+                    else:
+                        result = await handler.preflight_check(call_input)
                 else:
-                    result = await handler.preflight_check(preflight_input)
+                    result = PreflightOutput(status=PreflightStatus.READY)
+                outside = rows_outside_tiers(result, run_tiers)
+                if outside:
+                    # Post-call tier check: the handler ran a check it was told
+                    # not to, so its verdict is not one about these tiers.
+                    raise InternalError(
+                        message=(
+                            "Preflight handler returned checks outside the "
+                            f"requested tiers: {', '.join(sorted(outside))}"
+                        ),
+                        app_name=app_name,
+                        retryable=False,
+                        component="preflight_handler",
+                    )
+                if tiered:
+                    result = _with_warmup_verdict(
+                        result,
+                        observation,
+                        app_name,
+                        warmup_pending=CheckTier.WARMUP not in run_tiers
+                        and (observation is not None or _has_warmup(entrypoint)),
+                    )
                 emit_preflight_check_outcome(
                     logger,
                     app_name,
@@ -3048,21 +3353,21 @@ def create_app_handler_service(
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
                 logger.error(
-                    "Preflight check failed for app %s (request %s): %s",
+                    "Preflight check failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 _crash_row(e)
                 return _preflight_failure_response(e, app_name, e.http_status)
             except AppError as e:
                 logger.error(
-                    "Preflight check failed for app %s (request %s): %s",
+                    "Preflight check failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 _crash_row(e)
                 return _preflight_failure_response(
@@ -3083,11 +3388,11 @@ def create_app_handler_service(
             except Exception as e:
                 # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info); the response carries a fixed message, never the exception text.
                 logger.error(
-                    "Preflight check failed unexpectedly for app %s (request %s): %s",
+                    "Preflight check failed unexpectedly for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 _crash_row(e)
                 return _preflight_failure_response(
@@ -3103,6 +3408,76 @@ def create_app_handler_service(
                     500,
                     "Internal server error",
                 )
+
+    # ------------------------------------------------------------------
+    # Warmup
+    # ------------------------------------------------------------------
+
+    @app.post("/workflows/v1/warmup")
+    async def warmup(request: Request) -> JSONResponse:
+        """Probe the source's compute once and report what it saw.
+
+        Stateless and idempotent: the UI polls it, sending ``/check``'s body
+        each time, until ``state`` is ``ready``, then calls ``/check`` with
+        ``tiers=["warmup"]``. No request is held longer than one probe timeout.
+        ``ceiling_seconds`` is the app's warmup ceiling, so the UI has a stop
+        condition of its own.
+        """
+        body = _normalize_preflight_request(await request.json())
+        preflight_input = _validate_request(PreflightInput, body)
+        credentials = [
+            HandlerCredential(key=c.key, value=c.value)
+            for c in preflight_input.credentials
+        ]
+        context = _create_context(credentials)
+        with bind_handler_context(context):
+            try:
+                entrypoint = _validated_entrypoint(preflight_input.entrypoint)
+                observation = await _probe_warmup(entrypoint, preflight_input, context)
+                logger.info(
+                    "Warmup probed: app=%s request=%s state=%s",
+                    app_name,
+                    context.request_id_str,
+                    observation.state.value,
+                )
+                return JSONResponse(
+                    content=_wrap_response(
+                        {
+                            **_warmup_body(observation),
+                            "ceiling_seconds": _warmup_ceiling,
+                        },
+                        message=f"Warmup {observation.state.value}",
+                        success=observation.state is not WarmupState.UNAVAILABLE,
+                    ),
+                )
+            except AppError as e:
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                logger.error(
+                    "Warmup failed for app %s (request %s): %s\n%s",
+                    app_name,
+                    context.request_id_str,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
+                )
+                raise HTTPException(
+                    status_code=_app_error_to_http_status(e), detail=e.message
+                ) from None
+            except HTTPException:
+                # Deliberate client-facing responses (e.g. 400 from a
+                # malformed entrypoint name) pass through.
+                raise
+            except Exception as e:
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                logger.error(
+                    "Warmup failed unexpectedly for app %s (request %s): %s\n%s",
+                    app_name,
+                    context.request_id_str,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
+                )
+                raise HTTPException(
+                    status_code=500, detail="Internal server error"
+                ) from None
 
     # ------------------------------------------------------------------
     # Metadata
@@ -3170,25 +3545,25 @@ def create_app_handler_service(
                 # Remove once all connector subclasses raise typed AppError leaves.
                 # Tracked alongside the Handler abstract-method contract migration.
                 # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s",
+                    "Metadata fetch failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(status_code=e.http_status, detail=str(e)) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s",
+                    "Metadata fetch failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=_app_error_to_http_status(e), detail=str(e)
@@ -3199,13 +3574,13 @@ def create_app_handler_service(
                 # through rather than masking them as a generic 500.
                 raise
             except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record.
+                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Metadata fetch failed unexpectedly for app %s (request %s): %s",
+                    "Metadata fetch failed unexpectedly for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
-                    e,
-                    exc_info=True,
+                    sanitize_cause_repr(e),
+                    safe_traceback(e),
                 )
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
@@ -3323,6 +3698,19 @@ def create_app_handler_service(
         logger.warning(
             "Static UI assets not found at %s, skipping static mount",
             static_dir,
+        )
+
+    # FND-3334: the setup form's SageV2 warmup flag and the handler must agree.
+    # Reported once at startup; never allowed to break the service.
+    # Entry points come from the generated tree, not the app registry:
+    # importing the registry loads execution code, which the handler process
+    # must never do (FND-3280).
+    try:
+        warn_on_warmup_flag_drift(generated_entrypoints(), _has_warmup)
+    except Exception:
+        logger.warning(
+            "Could not compare setup forms' warmup flags with the handler",
+            exc_info=True,
         )
 
     return app

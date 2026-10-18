@@ -16,6 +16,7 @@ Canonical API (v3.x+)::
         ObjectStoreReadError, ObjectStoreDownloadError,
         ResourceExhaustedError, DiskFullError,
         DataIntegrityError, CancelledError, InternalError,
+        classify_http_status, classify_http_exception,
     )
 
 Legacy constants (v3.x — deprecated, removed in v4.0)::
@@ -34,6 +35,7 @@ from application_sdk.errors.base import (
     sanitize_cause_repr,
 )
 from application_sdk.errors.categories import Audience, FailureCategory
+from application_sdk.errors.http import classify_http_exception, classify_http_status
 from application_sdk.errors.leaves import (
     WORKER_EVICTED_TYPE,
     AlreadyExistsError,
@@ -48,6 +50,7 @@ from application_sdk.errors.leaves import (
     DiskFullError,
     InternalError,
     InvalidInputError,
+    InvalidInputValueError,
     LocalVolumeUnwritableError,
     NotFoundError,
     ObjectStoreDownloadError,
@@ -56,6 +59,7 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     SourceUnavailableError,
+    SourceWarmupExhaustedError,
     TaskStalledError,
     UnimplementedError,
 )
@@ -103,6 +107,7 @@ STORAGE_INTEGRITY = ErrorCode("STR", 7)
 STORAGE_RELOCATION = ErrorCode("STR", 8)
 STORAGE_HANDOFF_INCOMPLETE = ErrorCode("STR", 9)
 STORAGE_GATEWAY_AUTH = ErrorCode("STR", 10)
+STORAGE_DISK_FULL = ErrorCode("STR", 11)
 
 # CTR - Contract errors
 CONTRACT_VALIDATION = ErrorCode("CTR", 1)
@@ -156,8 +161,10 @@ __all__ = [
     "DiskFullError",
     "LocalVolumeUnwritableError",
     "SourceUnavailableError",
+    "SourceWarmupExhaustedError",
     "InternalError",
     "InvalidInputError",
+    "InvalidInputValueError",
     "NotFoundError",
     "ObjectStoreDownloadError",
     "ObjectStoreReadError",
@@ -167,6 +174,8 @@ __all__ = [
     "TaskStalledError",
     "UnimplementedError",
     "WORKER_EVICTED_TYPE",
+    "classify_http_exception",
+    "classify_http_status",
     # Legacy (deprecated — removed in v4.0)
     "ErrorCode",
     "APP_ERROR",
@@ -185,6 +194,7 @@ __all__ = [
     "STORAGE_INTEGRITY",
     "STORAGE_HANDOFF_INCOMPLETE",
     "STORAGE_GATEWAY_AUTH",
+    "STORAGE_DISK_FULL",
     "CONTRACT_VALIDATION",
     "PAYLOAD_SAFETY",
     "HANDLER_ERROR",

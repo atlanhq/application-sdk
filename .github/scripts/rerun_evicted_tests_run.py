@@ -224,8 +224,14 @@ def newer_runs(
     workflow_id: object,
     self_run_id: int,
     run: RunFn,
+    event: str | None = None,
 ) -> list | None:
     """Runs of the same workflow on ``head_sha`` that outrank ``self_run_id``.
+
+    ``event`` keeps only runs of that trigger. A `/e2e` comment dispatches the
+    same workflow on the same commit (FND-3839), and that run reports under
+    `e2e / …`, not the required `tests / …` contexts, so it is never a sibling
+    whose verdict needs repairing.
 
     "Outrank" is `id` order, because that is what GitHub's required-check
     resolution follows: the newest check suite on the commit owns the context.
@@ -258,6 +264,7 @@ def newer_runs(
         and entry.get("workflow_id") == workflow_id
         and isinstance(entry.get("id"), int)
         and entry["id"] > self_run_id
+        and (event is None or entry.get("event") == event)
     ]
 
 
@@ -280,7 +287,9 @@ def select_candidate(
     """
     deadline = time.monotonic() + max(settle_budget, 0)
     while True:
-        candidates = newer_runs(repo, head_sha, workflow_id, self_run_id, run)
+        candidates = newer_runs(
+            repo, head_sha, workflow_id, self_run_id, run, event="pull_request"
+        )
         if candidates is None:
             _warn(
                 f"could not list the Tests runs on {head_sha[:7]} — leaving the "

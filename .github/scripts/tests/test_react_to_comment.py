@@ -450,13 +450,12 @@ def test_every_caller_can_actually_reach_the_script() -> None:
 # that exists to notice says nothing. Adding a genuinely new caller is
 # supposed to require editing this list.
 EXPECTED_CALLERS = {
-    ("sdk-review.yml", "react-on-skip", "React to skipped trigger"),
-    ("sdk-review.yml", "sdk-review-dispatch", "React to comment"),
-    ("sdk-review.yml", "sdk-review-dispatch", "React to skipped re-trigger"),
-    ("sdk-resolve.yml", "sdk-resolve-dispatch", "Acknowledge with a reaction"),
+    ("sdk-review.yml", "redirect-to-lens", "React to disabled trigger"),
+    ("sdk-resolve.yml", "redirect-to-lens", "React to disabled trigger"),
     ("auto-fix-vulnerabilities.yaml", "auto-fix", "React to comment"),
     ("capability-manifest-regen.yaml", "regen", "React to comment"),
-    ("sdk-loop.yml", "fence", "React to the trigger comment"),
+    ("test-commands.yml", "command", "Acknowledge the comment"),
+    ("test-commands-reusable.yaml", "command", "Acknowledge the comment"),
 }
 
 
@@ -503,11 +502,15 @@ def test_every_caller_workflow_grants_issues_write() -> None:
     and exits 0 instead of failing the step, a permissions trim here would
     silence an ack permanently with nothing red to show for it — which is
     precisely why this is asserted rather than left to be noticed.
+
+    Read from the calling job: a job-level `permissions:` replaces the
+    workflow's outright, so that is what the token actually gets.
     """
-    for path in {WORKFLOW_DIR / name for name, _, _ in EXPECTED_CALLERS}:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-        permissions = doc.get("permissions") or {}
+    for name, job_name, _ in EXPECTED_CALLERS:
+        doc = yaml.safe_load((WORKFLOW_DIR / name).read_text(encoding="utf-8"))
+        job = doc["jobs"][job_name]
+        permissions = job.get("permissions", doc.get("permissions")) or {}
         assert permissions.get("issues") == "write", (
-            f"{path.name} reacts to comments but grants "
+            f"{name}:{job_name} reacts to comments but grants "
             f"issues={permissions.get('issues')!r}"
         )

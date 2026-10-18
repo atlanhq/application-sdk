@@ -11,7 +11,9 @@ from ._config import ConfigMixin
 from ._format import FormatMixin
 from ._helpers import (
     Framework,
+    collect_bounded_loop_caps,
     collect_logging_aliases,
+    collect_path_segment_names,
     collect_redacted_names,
     detect_framework,
     is_adapter_file,
@@ -75,7 +77,10 @@ class Checker(
         self._findings: list[Finding] = []
         # Context stacks — managed by visit_* methods
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
+        self._bounded_loop_caps: dict[ast.For | ast.AsyncFor, int] = {}
         self._except_stack: list[ast.ExceptHandler] = []
+        # Innermost enclosing function's URL path-segment names (L010)
+        self._path_segment_names: frozenset[str] = frozenset()
         # Track __main__ guard depth so L005 can exempt those blocks
         self._in_main_block: int = 0
 
@@ -94,27 +99,31 @@ class Checker(
 
     # ── Context management ────────────────────────────────────────────────────
 
+    def visit_Module(self, node: ast.Module) -> None:
+        self._bounded_loop_caps = collect_bounded_loop_caps(node)
+        self.generic_visit(node)
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
         # Reset loop/except context: handlers in a nested function are not
         # "inside" the outer function's loop or except block.
-        saved_loops = self._loop_stack
-        saved_excepts = self._except_stack
-        self._loop_stack = []
-        self._except_stack = []
-        self.generic_visit(node)
-        self._loop_stack = saved_loops
-        self._except_stack = saved_excepts
+        self._visit_function(node)
 
     def visit_AsyncFunctionDef(  # type: ignore[override]
         self, node: ast.AsyncFunctionDef
     ) -> None:
+        self._visit_function(node)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         saved_loops = self._loop_stack
         saved_excepts = self._except_stack
+        saved_segments = self._path_segment_names
         self._loop_stack = []
         self._except_stack = []
+        self._path_segment_names = collect_path_segment_names(node)
         self.generic_visit(node)
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
+        self._path_segment_names = saved_segments
 
     def visit_For(self, node: ast.For) -> None:
         self._loop_stack.append(node)

@@ -37,9 +37,10 @@ or MCP. It offers:
 * :func:`validate_transformed_dir` — cycle through every transformed-output NDJSON
   record, deserialize it back into its concrete ``pyatlan_v9`` asset (kept as a
   ``msgspec.Struct`` throughout — no intermediate ``dict``), run per-asset
-  validation, and additionally run an SDK-side **referential-integrity** second
-  pass that flags orphan children whose parent ``(typeName, qualifiedName)`` is
-  absent from the same batch.
+  validation plus an SDK-side **connection-prefix** check on every qualifiedName,
+  and additionally run a **referential-integrity** second pass that flags orphan
+  children whose same-connection parent ``(typeName, qualifiedName)`` is absent
+  from the same batch.
 
 The referential-integrity pass is intentionally an SDK concern, not a pyatlan one:
 it is a cross-record check that a single asset's ``.validate()`` cannot make.
@@ -98,11 +99,13 @@ from application_sdk.validation.artifacts import (
 )
 from application_sdk.validation.assets import (
     AssetArtifactReport,
+    AssetBatchScope,
     AssetValidationFailure,
     AssetValidationReport,
     ReferentialFailure,
     asset_validation_event_fields,
     asset_validation_matrix_json,
+    asset_validation_summary_json,
     supports_asset_model,
     validate_asset,
     validate_assets_as_artifact,
@@ -194,11 +197,13 @@ __all__ = [
     "validate_artifacts",
     # Asset validation (BLDX-1555) — the NDJSON x ModelSource cell (FND-690)
     "AssetArtifactReport",
+    "AssetBatchScope",
     "AssetValidationFailure",
     "AssetValidationReport",
     "ReferentialFailure",
     "asset_validation_event_fields",
     "asset_validation_matrix_json",
+    "asset_validation_summary_json",
     "supports_asset_model",
     "validate_asset",
     "validate_assets_as_artifact",

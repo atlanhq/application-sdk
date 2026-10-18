@@ -11,6 +11,7 @@ from application_sdk.errors.leaves import (
     DaprSidecarUnreachableError,
     DependencyUnavailableError,
     NotFoundError,
+    PreconditionError,
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
@@ -80,6 +81,16 @@ async def get_deployment_secret(key: str) -> Any:
 
 
 @dataclass(kw_only=True)
+class SecretStoreNotConfiguredError(PreconditionError):
+    """Secret store required by get_secret / resolve_credential but not configured."""
+
+    code: ClassVar[str] = "PRECONDITION_SECRET_STORE_NOT_CONFIGURED"
+    message: str = "No secret store configured"
+    resource: str | None = "secret_store"
+    expected_state: str | None = "configured"
+
+
+@dataclass(kw_only=True)
 class SecretStoreError(DependencyUnavailableError):
     """Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 
@@ -130,9 +141,9 @@ class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     (connection refused, reset mid-handshake, read/write/close error, timeout)
     or the Dapr secrets-API ``ERR_SECRET_STORES_NOT_CONFIGURED`` response (no
     secret store component registered yet) — as opposed to the store
-    answering and rejecting the request (bad auth / binding / path, *or a
-    genuinely-missing key* — Dapr returns the same 500/``ERR_SECRET_GET``
-    shape for both, which is a plain :class:`SecretStoreError`, not this).
+    answering and rejecting or failing the request (bad auth / binding / path,
+    a throttled or access-denied backend — a plain :class:`SecretStoreError` —
+    or a genuinely-missing key — :class:`SecretNotFoundError`).
 
     Classified at the infrastructure layer (``_dapr/client.py``), where the
     httpx exception family and the Dapr error body are visible, so callers

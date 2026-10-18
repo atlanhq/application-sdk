@@ -13,7 +13,8 @@ description: >
   loop scope (T019), full-DAG e2e CI wiring (T020 bespoke sdr-e2e workflow,
   T021 suites nothing runs, T022 missing two-store posture on an SDR app), and
   the e2e harness scaffold being hand-written rather than generated from
-  contract/app.pkl (T023) or running without a declared RunMode (T024).
+  contract/app.pkl (T023) or running without a declared RunMode (T024), plus
+  e2e harness bases that disagree with the app's declared type (T026).
   Every rule in this series classifies as "judgment" — each fix requires reading
   the test's I/O intent, the app's manifest/contract, or the app's App subclass
   before a fix can be proposed with confidence.  T014/T015 are the most
@@ -93,8 +94,17 @@ _Read by `remediate-finding` when `finding.area == "tests"`._
 Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
-**Judgment rules** (`autofixable = false`, `classification = "judgment"`; route
-to residue):
+**Judgment rules** (`classification = "judgment"`; route to residue).  Every
+T-series rule is classified auto-fixable except T004, T008, T013, T014, T015,
+T023, T025 and T026 (`autofixable = false`).  T004, T008, T013, T014, T015 and
+T023 are suggest-only (migration): their fix needs a decision the lane cannot
+verify, and each one's entry below says what a person checks before applying
+it.  T025 and T026 are covered in their own entries below.  The write
+scope still excludes `tests/` and `.github/`, so until the lane's write scope
+is widened every T-series result is a **fully worked proposal** — the exact
+decorator, marker, file move or config change, mirrored from the test layout
+of the reference app named by `finding.canonical_reference` — routed to
+residue for a human to apply, not an applied edit:
 
 - **T001 UnmarkedIntegrationTest** — a test function or class under
   `tests/integration/` (or any path the runner identifies as an integration
@@ -229,6 +239,15 @@ to residue):
   `ATLAN_APP_MODULE` being set out-of-band even for CI (e.g. some
   utility/CSA apps) — state that reason explicitly.
 
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  `main.py` may still be launched as the production CLI — a workflow or stress
+  test running `python main.py` against external Dapr + Temporal — and an
+  explicit `os.environ.setdefault("ATLAN_APP_MODULE", ...)` before the call
+  already prevents `MissingAppModuleError`.  Mirror `atlan-mysql-app`'s
+  `main.py` → `app.run_dev` only after re-pointing every caller that relied on
+  `main.py` being the production CLI (for example to
+  `python -m application_sdk.main`); otherwise suppress with that reason.
+
   `classification` is always `"judgment"`.
 
 - **T005 AssertionFreeTest** — a collected test's body is non-empty but
@@ -238,6 +257,14 @@ to residue):
   side effect on disk, or a raised exception. Do not add `assert True` or any
   other constant-true placeholder to make the finding go away — that
   converts a T005 into a T007 (`VacuousAssertion`), which is not a fix.
+
+  A direct same-name override of the SDK's `BaseE2ETest.test_full_dag_runs_end_to_end`
+  is already assertion-bearing: the inherited full-DAG scenario grades the run's
+  outcome. Keep that delegation rather than deleting it or adding a redundant
+  assertion. This exception is deliberately limited to that SDK scenario, reached
+  through a base imported from `application_sdk.testing.e2e` or the generated
+  `app/generated/_e2e_base.py`; an app-local intermediate base, or an arbitrary
+  call to a superclass test/helper, still needs an outcome assertion.
 
   If the test's only real purpose is confirming a call doesn't raise (rare —
   most such tests are better expressed by also asserting on the return
@@ -273,6 +300,12 @@ to residue):
   for import references to the old filename (rare, since test modules are
   not usually imported by name) before renaming.
 
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  Rename only real test modules.  A helper or mixin module whose `Test*`
+  classes carry no `test_` methods is not a collectable: renaming it to
+  `test_*.py` makes pytest import it twice and can stop the whole tier from
+  collecting.  Keep the filename and, if needed, rename only the class.
+
   `classification` is always `"judgment"` — even when the new name is
   unambiguous, the fix renames a file under `tests/`, which is outside the
   remediator's write-scope (see `remediate-finding.prose.md`); route to
@@ -297,9 +330,9 @@ to residue):
   Draft an initial unit suite covering the app's helper functions and
   `@task`-decorated activities directly (call them as coroutines — the
   decorator only attaches metadata outside the workflow runtime), following
-  the minimal shape in `atlan-hello-world-app/tests/unit/`: typed
-  `Input`/`Output` contracts, a `pytest.fixture` for the app instance, and
-  real outcome assertions. This is not exemptable — do not propose a
+  the shape in the three reference apps' `tests/unit/` (`atlan-openapi-app`,
+  `atlan-mysql-app`, `atlan-metabase-app`): typed `Input`/`Output` contracts,
+  a `pytest.fixture` for the app instance, and real outcome assertions. This is not exemptable — do not propose a
   suppression or an `exempt_test_tiers` entry for T010.
 
   `classification` is always `"judgment"` — route to residue; a from-scratch
@@ -340,6 +373,12 @@ to residue):
   collection glob (rare), suppress with
   `# conformance: ignore[T013] <reason>` instead of moving it.
 
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  A repo-declared tier such as `tests/parity` (contract / performance parity
+  against a legacy host) needs a decision rather than a move.  When files do
+  move, move their `conftest.py`, fixtures and options with them — never
+  delete a `conftest.py` or a session fixture the moved tests need.
+
   `classification` is always `"judgment"` — even when the correct tier is
   unambiguous from the test's imports/fixtures (e.g. it uses a
   `testcontainers` fixture → integration), the fix moves a file under
@@ -347,21 +386,40 @@ to residue):
   `remediate-finding.prose.md`); route to residue with the suggested
   destination for a human to apply.
 
-- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured but
-  `[tool.coverage.report].fail_under` is absent or `0`. Run the test suite's
-  own coverage report (or read the most recent CI coverage artifact) to find
-  the *current* measured percentage, then set `fail_under` to that value (or
-  the nearest whole number at or below it — never above, or the fix itself
-  would fail the gate it's setting). Do not jump straight to the 90-100%
-  target in one step; that is a follow-up ratchet, not this fix.
+- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured, but the
+  *effective* coverage floor is absent or `0`. First read the current *unit*
+  coverage (the unit job's `coverage.json` artifact, or `coverage report` after
+  `pytest tests/unit`) and take the whole number `<N>` at or below it — never
+  above, or the fix itself fails the gate it sets. Then set `<N>` on the input
+  that gates the unit tier:
 
-  ```toml
-  [tool.coverage.report]
-  fail_under = 60  # current measured percentage; ratchet up in follow-ups
-  ```
+  - **`tests-reusable.yaml` caller** — set `unit-coverage-fail-under: "<N>"`
+    in the `with:` block (the mysql reference uses `"90"`). This input is the unit tier's only gate: the unit
+    job runs `coverage report --fail-under=<input>` (default `0`), so
+    `[tool.coverage.report].fail_under` never applies there. Write a quoted
+    whole number — `bootstrap --resync` reads it back and keeps it; a decimal
+    is not read back and makes `--resync` refuse the file.
+  - **Leave `--cov-fail-under=0` in `pytest-args` alone.** `pytest-args` only
+    reaches the integration tier. Removing the flag applies the TOML
+    `fail_under` to integration coverage — a different measurement that can
+    fail integration runs — and still leaves the unit gate at `0`.
+  - **Direct `connector-unit-tests` user** — set its `fail-under:` input to
+    `<N>`.
+  - **No CI coverage gate** — set `[tool.coverage.report].fail_under = <N>`.
 
-  `classification` is `"judgment"` — the specific number requires knowing
-  the repo's actual current coverage, which isn't in the finding.
+  Keep a positive `fail_under` in `pyproject.toml` as the local-run fallback
+  (mysql keeps `84`), and ratchet the floor up in follow-up PRs; do not jump
+  straight to the 90-100% target.
+
+  `classification` is `"judgment"` — selecting a safe floor requires the
+  repo's actual current unit coverage, which isn't in the finding.
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  The unit coverage floor that gates CI lives under `.github/`, which a person
+  sets: for a `tests-reusable.yaml` caller it is the
+  `unit-coverage-fail-under` input; for a direct `connector-unit-tests` caller
+  it is that job's `fail-under:` input (both described above).  `fail_under`
+  in `pyproject.toml` alone does not gate the unit tier.
+
 
 - **T015 CoverageOmitsProductCode** — `[tool.coverage.run].omit` excludes
   real product code under `app/`, or `source` is configured but excludes the
@@ -375,6 +433,12 @@ to residue):
   `classification` is `"judgment"` — confirming a given module is safe to
   keep omitted (vs. real product code that should count) requires reading
   what the module does, not just its path.
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  Remove an omit only after tests bring coverage at or above the floor — an
+  omit removed without tests fails the unit tier.  Vendored third-party code
+  (for example a `_vendored_*` module) may stay omitted, suppressed with a
+  reason naming it.
+
 
 - **T016 E2EDeploymentNameNotInherited** — an e2e CI docker-compose overlay
   under `.github/` (a YAML file with a top-level `services:` key that mentions
@@ -616,8 +680,8 @@ to residue):
   `tests/e2e/` suites and the `.github/e2e/` config dir (`app.yaml`,
   `make-secrets-e2e-full.py`, `e2e-full-components/`,
   `e2e-full-docker-compose.yaml`) — the reusable points the action at exactly
-  those paths. The trigger changes from a bespoke `sdr-full-dag` label to the
-  reusable's `e2e` label. `atlan-mysql-app/.github/workflows/tests.yaml` is the
+  those paths. The trigger changes from a bespoke `sdr-full-dag` label to a
+  `/e2e` PR comment (bootstrap's `test-commands.yaml`). `atlan-mysql-app/.github/workflows/tests.yaml` is the
   reference; `atlan-application-sdk-conformance bootstrap` regenerates it.
 
   **Route to residue** — the target is under `.github/` (outside write-scope),
@@ -640,8 +704,8 @@ to residue):
 
   Fix: add or repair the caller (see T020's snippet). `enable-e2e` defaults to
   true and should be left alone; `app-image-name` must be the repo's GHCR package
-  name. Wiring it costs nothing per-commit — the e2e job still only runs on the
-  `e2e` label or a `workflow_dispatch` with `run_e2e: true`.
+  name. Wiring it costs nothing per-commit — the e2e job still only runs on a
+  `/e2e` PR comment or a `workflow_dispatch` with `run_e2e: true`.
 
   This most often appears *after* a T020 remediation: the bespoke workflow was
   deleted and the caller never wired, turning "wrong runner" into "no runner".
@@ -704,14 +768,14 @@ to residue):
 
   Fix: import the generated modules and keep only what the contract cannot know —
   the source under test, the asset floors, and the run mode.
-  `atlan-mysql-app/tests/e2e/test_mysql_full_dag.py` is the reference:
+  `atlan-mysql-app/tests/e2e/test_mysql_e2e.py` is the reference:
 
   ```python
   from application_sdk.testing.e2e import RunMode
   from app.generated._e2e_base import MysqlGeneratedE2EBase
   from app.generated._e2e_credential import MysqlAgentCredentialBody
 
-  class TestMySQLFullDAG(MysqlGeneratedE2EBase):
+  class TestMySQLE2E(MysqlGeneratedE2EBase):
       mode = RunMode.AGENT
       include_filter = r"^def\.e2e_main$"
       expected_min_asset_counts = {"Database": 1, "Table": 2}
@@ -733,6 +797,17 @@ to residue):
 
   Suppress with `# conformance: ignore[T023] <reason>` when a genuinely test-only
   model is meant (e.g. a negative-path credential body that must be malformed).
+
+  **Suggest-only (migration; `autofixable = false`).** A person applies this.
+  Re-parent onto the generated e2e classes only when the generated model
+  carries every `{{...}}` token the manifest uses (for example
+  `{{agent-json}}`, `{{extraction-method}}`) with the same defaults the
+  hand-written model had (for example `preflight-check`).  Add a missing token
+  in a small test-side subclass of the generated model rather than editing
+  generated files.  Never change `contract/app.pkl`, `app/generated/**` or
+  `atlan.yaml` published values (source category, UI inputs) to clear a test
+  rule, and never import a generated module the app does not emit (a skipped
+  e2e module is a silent loss).  Run one e2e leg before merging.
 
   `classification` is always `"judgment"`.
 
@@ -770,6 +845,68 @@ to residue):
   Suppress with `# conformance: ignore[T024] <reason>` on the `class` line when
   the mode is set dynamically (e.g. parametrised from an env var) rather than as
   a class attribute.
+
+  `classification` is always `"judgment"`.
+
+- **T025 EntrypointWithoutE2ECoverage** — the app is in **bundle mode**
+  (`app/generated/` holds one `<name>/manifest.json` subdirectory per
+  entrypoint) and at least one of those entrypoints is exercised by no
+  collectable e2e test class.  The finding names the uncovered entrypoint;
+  the others already have suites, so the shape to copy is in this repo.
+
+  Fix: add one suite per uncovered entrypoint under `tests/e2e/`, subclassing
+  that entrypoint's **generated** base — `app/generated/<name>/_e2e_base.py`
+  exposes `<Name>GeneratedE2EBase`, which is why K010 insists the scaffolding
+  exists.  No reference app is in bundle mode, so there is no cross-repo suite
+  to mirror: copy the shape from this repo's already-covered entrypoints (or,
+  if none is covered yet, the `<Ep>GeneratedE2EBase` subclass shown in the
+  rule's full description).  The
+  new class counts as covering its entrypoint by the same resolution the SDK
+  harness uses — the generated base, a class-level `entrypoint`, or a
+  `manifest_path` under `/generated/<ep>/` (`BaseE2ETest.entrypoint` /
+  `manifest_path` and `_derive_entrypoint` in
+  `application_sdk/testing/e2e/base.py`).  Set `mode` explicitly on the new
+  class (T024) — `RunMode.AGENT` for the normal CI-worker run.
+
+  Two things to establish before drafting, because both change the answer:
+  whether the generated base for that entrypoint actually exists (if it does
+  not, this is a **K010** finding first — say so and let the contract
+  regenerate before writing a test against a base that is absent), and
+  whether the entrypoint is genuinely meant to run end to end (a maintenance
+  or teardown entrypoint may legitimately have no full-DAG suite, which is a
+  suppression with that reason, not a fabricated test).
+
+  **Route to residue.** The write scope excludes `tests/`, so the deliverable
+  is a fully worked proposal — the file path, the base class to subclass, the
+  `mode`, and the entrypoint it covers — never an applied edit.  Never draft a
+  suite with no assertions or a stubbed body: that trades T025 for T005/T006
+  and leaves the entrypoint just as unproven.
+
+  `classification` is always `"judgment"`.
+
+- **T026 E2EHarnessTenantPoolMismatch** — `atlan.yaml`'s top-level `type`
+  (compared case-insensitively) disagrees with the base of a collectable e2e
+  test class under `tests/e2e/`: a `system` app whose suite does not reach
+  `SystemAppE2ETest`, or a `connector` whose suite does.  `utility` is never
+  flagged; any other type, or no `atlan.yaml`, is not graded.
+
+  Fix (`system`): make `SystemAppE2ETest` (from `application_sdk.testing.e2e`)
+  the first base.  When the suite subclasses the generated
+  `<Name>GeneratedE2EBase`, the base itself is stale — the toolkit emits a
+  `SystemAppE2ETest` parent for a `type = "system"` contract — so the fix is
+  regeneration (`pkl eval -m . contract/app.pkl`), never a hand edit of
+  `app/generated/`.  Then the repo must be added to the selected repositories
+  of the `E2E_SYSTEM_TENANT_MATRIX_JSON` secret; until it is, CI cannot place
+  the suite on the system-app pool and the harness refuses to run it.  That
+  step is a human onboarding decision, so say so in the residue.
+
+  Fix (`connector`): base the suite on the generated `<Name>GeneratedE2EBase`
+  (or `BaseE2ETest` / `SQLAppE2ETest`).  If the app genuinely is a system app,
+  the declared `type` in `contract/app.pkl` is what is wrong — propose that
+  change instead, and never suppress to keep a connector on the system pool.
+
+  **Route to residue.** The write scope excludes `tests/`, and the `system`
+  fix needs secret onboarding no edit can do.
 
   `classification` is always `"judgment"`.
 

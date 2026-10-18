@@ -1,0 +1,19 @@
+/// Minimal legacy `NativeAppBundle.pkl` bundle with two entrypoints sharing one
+/// `NativeApp.pkl` contract, for the bundle input-class naming test.
+amends "../../src/NativeAppBundle.pkl"
+
+import "native_app_pipeline.pkl" as Pipeline
+
+name = "native-bundle"
+appId = "00000000-0000-0000-0000-000000000000"
+
+entrypoints {
+  new Entrypoint {
+    name = "crawler"
+    contract = Pipeline
+  }
+  new Entrypoint {
+    name = "query-miner"
+    contract = Pipeline
+  }
+}

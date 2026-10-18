@@ -191,6 +191,235 @@ def test_p021_silent_in_task_activity() -> None:
     assert _rule(body, "P021") == []
 
 
+def test_p021_flags_whole_file_pathlib_read_in_run() -> None:
+    src = "from pathlib import Path\n" + _wrap_run(
+        "p = Path('raw/table/records.json')\nfor line in p.read_bytes().splitlines():\n    pass"
+    )
+    assert len(_rule(src, "P021")) == 1
+    assert _rule(src, "P023") == []
+
+
+def test_p021_flags_file_handle_serialization_in_run() -> None:
+    src = "import json\n" + _wrap_run("with fh:\n    data = json.load(fh)")
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_pandas_reader_in_run() -> None:
+    src = "import pandas as pd\n" + _wrap_run("df = pd.read_parquet('x.parquet')")
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_awaited_sdk_storage_download_in_run() -> None:
+    src = "from application_sdk.storage import download_file\n" + _wrap_run(
+        "await download_file('key', '/tmp/x')"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_sdk_storage_call_imported_from_submodule() -> None:
+    src = "from application_sdk.storage.ops import upload_file\n" + _wrap_run(
+        "await upload_file('/tmp/x', 'key')"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_flags_directory_walk_in_run() -> None:
+    src = "import os\n" + _wrap_run(
+        "for root, dirs, files in os.walk('/tmp'):\n    pass"
+    )
+    assert len(_rule(src, "P021")) == 1
+    assert _rule(src, "P023") == []
+
+
+def test_p021_flags_storage_call_from_a_submodule_not_reexported() -> None:
+    src = "from application_sdk.storage.transfer import download\n" + _wrap_run(
+        "await download('key', '/tmp/x')"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_silent_on_awaited_task_named_like_a_writer() -> None:
+    body = (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def to_parquet(self, input):\n"
+        "        return None\n"
+        "    async def run(self, input):\n"
+        "        await self.to_parquet(input)\n"
+    )
+    assert _rule(body, "P021") == []
+
+
+def test_p021_flags_awaited_async_file_read_in_run() -> None:
+    src = "import anyio\n" + _wrap_run(
+        "p = anyio.Path('x')\ndata = await p.read_text()"
+    )
+    assert len(_rule(src, "P021")) == 1
+
+
+def test_p021_silent_on_self_writer_tasks_run_concurrently() -> None:
+    body = (
+        "import asyncio\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def to_parquet(self, input):\n"
+        "        return None\n"
+        "    @task\n"
+        "    async def to_csv(self, input):\n"
+        "        return None\n"
+        "    async def run(self, input):\n"
+        "        await asyncio.gather(self.to_parquet(input), self.to_csv(input))\n"
+        "        asyncio.create_task(self.to_parquet(input))\n"
+    )
+    assert _rule(body, "P021") == []
+
+
+def test_p021_flags_directory_listing_in_run() -> None:
+    src = "import os\nfrom pathlib import Path\n" + _wrap_run(
+        "names = os.listdir('/tmp')\nroot = Path('/tmp')\nentries = list(root.iterdir())"
+    )
+    assert len(_rule(src, "P021")) == 2
+
+
+def test_p021_flags_file_io_on_an_inline_constructor_in_run() -> None:
+    stmts = (
+        "data = await anyio.Path('p').read_text()\n"
+        "entries = list(Path('/tmp').iterdir())\n"
+        "raw = Path('/a').read_bytes()"
+    )
+    header = "import anyio\nfrom pathlib import Path\n"
+    assert len(_rule(header + _wrap_run(stmts), "P021")) == 3
+    assert (
+        len(_rule(header + _wrap_sqlapp_run(stmts), "P021", header=_SQLAPP_HEADER)) == 3
+    )
+
+
+def test_p021_flags_file_io_on_a_self_attribute_in_run() -> None:
+    src = _wrap_run(
+        "self.df.to_parquet('x')\ntext = self.out_path.read_text()\n"
+        "entries = list(self.root.iterdir())"
+    )
+    assert len(_rule(src, "P021")) == 3
+    sql_src = _wrap_sqlapp_run(
+        "self.df.to_parquet('x')\ntext = self.out_path.read_text()\n"
+        "entries = list(self.root.iterdir())"
+    )
+    assert len(_rule(sql_src, "P021", header=_SQLAPP_HEADER)) == 3
+
+
+def test_p021_reports_a_call_on_an_inline_constructor_once() -> None:
+    header = "import requests\nimport subprocess\nimport threading\n"
+    for stmt in (
+        "threading.Thread(target=print).start()",
+        "subprocess.Popen(['ls']).wait()",
+        "requests.Session().get('u')",
+    ):
+        assert len(_rule(header + _wrap_run(stmt), "P021")) == 1, stmt
+        assert (
+            len(_rule(header + _wrap_sqlapp_run(stmt), "P021", header=_SQLAPP_HEADER))
+            == 1
+        ), stmt
+
+
+def test_p021_storage_names_cover_every_public_async_storage_function() -> None:
+    import ast
+    import pathlib
+
+    from conformance.suite.checks.determinism._p021_io import _SDK_STORAGE_IO
+
+    import application_sdk.storage as storage
+
+    module_level = {
+        node.name
+        for path in pathlib.Path(storage.__file__).parent.rglob("*.py")
+        for node in ast.parse(path.read_text()).body
+        if isinstance(node, ast.AsyncFunctionDef) and not node.name.startswith("_")
+    }
+    assert module_level <= _SDK_STORAGE_IO, sorted(module_level - _SDK_STORAGE_IO)
+
+
+def test_p021_silent_on_sdk_storage_error_and_pure_helper() -> None:
+    src = (
+        "from application_sdk.storage import StorageNotFoundError, normalize_key\n"
+        + _wrap_run("k = normalize_key('a/b')\nraise StorageNotFoundError(k)")
+    )
+    assert _rule(src, "P021") == []
+
+
+def test_p021_silent_on_data_scale_io_in_task() -> None:
+    body = (
+        "from pathlib import Path\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def read(self, input):\n"
+        "        p = Path('x')\n"
+        "        return p.read_bytes()\n"
+    )
+    assert _rule(body, "P021") == []
+    assert len(_rule(body, "P023")) == 1
+
+
+# ── App-family discovery ─────────────────────────────────────────────────────
+#
+# ``run`` on a ``SqlApp`` (or any other ``application_sdk.templates`` base) is
+# the same ``@workflow.run`` as on ``App``. Discovery that anchors only on the
+# literal name ``App`` leaves every SQL connector's workflow body unchecked by
+# P020-P022 and misroutes P023 into it with a fix (``run_in_thread``) that
+# raises ``AppContextError`` in workflow context.
+
+_SQLAPP_HEADER = "from application_sdk.templates import SqlApp, task\n"
+
+
+def _wrap_sqlapp_run(stmts: str, *, base: str = "SqlApp") -> str:
+    indented = "\n".join("        " + line for line in stmts.strip("\n").splitlines())
+    return f"class MyApp({base}):\n    async def run(self, input):\n{indented}\n"
+
+
+def test_p021_flags_io_in_sqlapp_run() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert len(_rule(src, "P021", header=_SQLAPP_HEADER)) == 1
+
+
+def test_p020_flags_primitive_in_aliased_template_base_run() -> None:
+    header = "from application_sdk.templates import IncrementalSqlMetadataExtractor as Base\n"
+    src = "import datetime\n" + _wrap_sqlapp_run(
+        "return datetime.datetime.now()", base="Base"
+    )
+    assert len(_rule(src, "P020", header=header)) == 1
+
+
+def test_p021_flags_io_through_module_local_intermediate_base() -> None:
+    src = (
+        "import requests\n"
+        "class ConnectorBase(SqlApp):\n"
+        "    pass\n"
+        + _wrap_sqlapp_run("r = requests.get('http://x')", base="ConnectorBase")
+    )
+    assert len(_rule(src, "P021", header=_SQLAPP_HEADER)) == 1
+
+
+def test_p023_defers_to_workflow_rules_in_sqlapp_run() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert _rule(src, "P023", header=_SQLAPP_HEADER) == []
+
+
+def test_p023_still_flags_sqlapp_task() -> None:
+    src = (
+        "import requests\n"
+        "class MyApp(SqlApp):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return requests.get('http://x')\n"
+    )
+    assert len(_rule(src, "P023", header=_SQLAPP_HEADER)) == 1
+    assert _rule(src, "P021", header=_SQLAPP_HEADER) == []
+
+
+def test_non_sdk_base_named_like_a_template_is_not_anchored() -> None:
+    src = "import requests\n" + _wrap_sqlapp_run("r = requests.get('http://x')")
+    assert _rule(src, "P021", header="from mylib import SqlApp\n") == []
+
+
 # ── P022 UnawaitedCoroutine ──────────────────────────────────────────────────
 
 
@@ -277,6 +506,328 @@ def test_p023_silent_in_sync_def() -> None:
         "        return requests.get('http://x')\n"
     )
     assert _rule(body, "P023") == []
+
+
+def _p023_async_task(header: str, stmt: str) -> str:
+    return (
+        f"{header}\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        f"        {stmt}\n"
+    )
+
+
+def test_p023_silent_on_requests_and_urllib_constructors() -> None:
+    header = (
+        "import requests\nimport urllib.request\n"
+        "from requests.adapters import HTTPAdapter\n"
+        "from requests.auth import HTTPBasicAuth\n"
+    )
+    for stmt in (
+        "s = requests.Session()",
+        "a = requests.adapters.HTTPAdapter()",
+        "a = HTTPAdapter(max_retries=3)",
+        "r = requests.Request('GET', 'http://x').prepare()",
+        "p = requests.PreparedRequest()",
+        "auth = HTTPBasicAuth('u', 'p')",
+        "raise requests.exceptions.HTTPError('x')",
+        "req = urllib.request.Request('http://x')",
+        "o = urllib.request.build_opener()",
+    ):
+        assert _rule(_p023_async_task(header, stmt), "P023") == [], stmt
+
+
+def test_p023_flags_blocking_requests_and_urllib_calls() -> None:
+    header = "import requests\nimport urllib.request\nfrom requests import post\n"
+    for stmt in (
+        "requests.get('http://x')",
+        "requests.post('http://x', json={})",
+        "requests.put('http://x')",
+        "requests.patch('http://x')",
+        "requests.delete('http://x')",
+        "requests.head('http://x')",
+        "requests.options('http://x')",
+        "requests.request('GET', 'http://x')",
+        "post('http://x')",
+        "urllib.request.urlopen('http://x')",
+        "urllib.request.urlretrieve('http://x', 'f')",
+        "requests.Session().get('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmt), "P023")) == 1, stmt
+
+
+def test_p023_flags_sends_on_a_named_session() -> None:
+    header = "import requests\nfrom requests import Session\n"
+    for stmts in (
+        "s = requests.Session()\n        s.get('http://x')",
+        "s: requests.Session = requests.session()\n        s.send(req)",
+        "s = Session()\n        s.request('GET', 'http://x')",
+        "with requests.Session() as s:\n            s.post('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmts), "P023")) == 1, stmts
+
+
+def test_p023_flags_a_send_whose_result_rebinds_the_session_name() -> None:
+    # The value runs before the target binds, so the send is on the session.
+    header = "import requests\n"
+    session = "s = requests.Session()\n        "
+    for stmts in (
+        "s = s.get('http://x')",
+        "s: object = s.get('http://x')",
+        "if (s := s.get('http://x')):\n            pass",
+    ):
+        src = _p023_async_task(header, session + stmts)
+        assert len(_rule(src, "P023")) == 1, stmts
+
+
+def test_p023_silent_on_a_named_session_never_sent() -> None:
+    header = "import requests\n"
+    for stmts in (
+        "s = requests.Session()\n        s.verify = False\n"
+        "        s.mount('https://', a)\n        return s",
+        "with requests.Session() as s:\n            s.headers.update({})",
+        "s = requests.Session()\n        s = other()\n        s.get('http://x')",
+    ):
+        assert _rule(_p023_async_task(header, stmts), "P023") == [], stmts
+
+
+def test_p023_session_names_do_not_leak_across_functions() -> None:
+    body = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        s = requests.Session()\n"
+        "        return s\n"
+        "    @task\n"
+        "    async def fetch(self, s):\n"
+        "        return s.get('http://x')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_flags_sends_on_a_self_attribute_session() -> None:
+    header = "import requests\n"
+    for body in (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "        return self.s.get('http://x')\n",
+        "class MyApp(App):\n"
+        "    def __init__(self):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.post('http://x')\n",
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.send(req)\n",
+    ):
+        assert len(_rule(header + body, "P023")) == 1, body
+
+
+def test_p023_silent_on_a_self_attribute_session_never_sent() -> None:
+    body = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "        self.s.verify = False\n"
+        "        self.s.mount('https://', a)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_self_attribute_sessions_do_not_leak_across_classes() -> None:
+    body = (
+        "import requests\n"
+        "class Builder:\n"
+        "    def __init__(self):\n"
+        "        self.s = requests.Session()\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.get('http://x')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_flags_opens_on_a_urllib_opener() -> None:
+    header = "import urllib.request\n"
+    for stmts in (
+        "o = urllib.request.build_opener()\n        o.open('http://x')",
+        "o = urllib.request.OpenerDirector()\n        o.open('http://x')",
+        "urllib.request.build_opener().open('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmts), "P023")) == 1, stmts
+
+
+def test_p023_silent_on_a_urllib_opener_never_opened() -> None:
+    stmts = "o = urllib.request.build_opener()\n        o.addheaders = []"
+    assert _rule(_p023_async_task("import urllib.request\n", stmts), "P023") == []
+
+
+def test_p023_flags_inline_session_send() -> None:
+    src = _p023_async_task("import requests\n", "requests.Session().send(prep)")
+    assert len(_rule(src, "P023")) == 1
+
+
+def test_p023_nested_async_def_sees_the_enclosing_session() -> None:
+    header = "import requests\n"
+    sent = (
+        "s = requests.Session()\n"
+        "        async def inner():\n"
+        "            s.get('http://x')"
+    )
+    shadowed = (
+        "s = requests.Session()\n"
+        "        async def inner():\n"
+        "            s = {}\n"
+        "            s.get('k')"
+    )
+    assert len(_rule(_p023_async_task(header, sent), "P023")) == 1
+    assert _rule(_p023_async_task(header, shadowed), "P023") == []
+
+
+def test_p023_self_attribute_session_ignores_nested_classes_and_rebinds() -> None:
+    nested_class = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    def build(self):\n"
+        "        class Inner:\n"
+        "            def __init__(self):\n"
+        "                self.s = requests.Session()\n"
+        "        self.s = {}\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.get('k')\n"
+    )
+    local_rebind = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    def __init__(self):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        self.s = {}\n"
+        "        return self.s.get('k')\n"
+    )
+    lazy_init = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    def __init__(self):\n"
+        "        self.s = None\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.get('http://x')\n"
+    )
+    assert _rule(nested_class, "P023") == []
+    assert _rule(local_rebind, "P023") == []
+    assert len(_rule(lazy_init, "P023")) == 1
+
+
+def test_p023_local_bindings_shadow_an_enclosing_session() -> None:
+    header = "import requests\n"
+    session = "s = requests.Session()\n        "
+    for stmts in (
+        "async def inner(s):\n            s.get('x')",
+        "async def inner(*, s):\n            s.get('x')",
+        "for s in items:\n            s.get('x')",
+        "for k, s in items:\n            s.get('x')",
+        "r = [s.get('x') for s in items]",
+        "try:\n            pass\n        except E as s:\n            s.get('x')",
+        "with ctx() as (a, s):\n            s.get('x')",
+    ):
+        assert _rule(_p023_async_task(header, session + stmts), "P023") == [], stmts
+
+
+def test_p023_class_body_names_have_their_own_scope() -> None:
+    shadow_stays_in_class = (
+        "s = requests.Session()\n"
+        "        class C:\n"
+        "            s = 1\n"
+        "        s.get('x')"
+    )
+    method_cannot_see_class_body = (
+        "class C:\n"
+        "            s = requests.Session()\n"
+        "            async def g(self):\n"
+        "                s.get('x')"
+    )
+    header = "import requests\n"
+    assert len(_rule(_p023_async_task(header, shadow_stays_in_class), "P023")) == 1
+    assert _rule(_p023_async_task(header, method_cannot_see_class_body), "P023") == []
+
+
+def test_p023_comprehension_names_do_not_leak() -> None:
+    stmts = "s = requests.Session()\n        r = [s for s in items]\n        s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_flags_a_walrus_bound_session() -> None:
+    stmts = "if (s := requests.Session()):\n            s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_walrus_in_a_comprehension_binds_the_enclosing_function() -> None:
+    stmts = "[(s := requests.Session()) for _ in (0,)]\n        s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_loop_iterable_resolves_before_the_target() -> None:
+    header = "import requests\n"
+    for_loop = "s = requests.Session()\n        for s in s.get('x'):\n            pass"
+    comprehension = "s = requests.Session()\n        r = [s for s in s.get('x')]"
+    nested_generator = (
+        "s = requests.Session()\n        r = [t for _ in (0,) for s in s.get('x')]"
+    )
+    assert len(_rule(_p023_async_task(header, for_loop), "P023")) == 1
+    assert len(_rule(_p023_async_task(header, comprehension), "P023")) == 1
+    assert len(_rule(_p023_async_task(header, nested_generator), "P023")) == 1
+
+
+def test_p023_flags_sends_through_a_dotted_submodule_import() -> None:
+    header = "import requests.api\n"
+    for call in ("requests.api.get('x')", "requests.get('x')"):
+        assert len(_rule(_p023_async_task(header, call), "P023")) == 1, call
+
+
+def test_p023_dotted_import_does_not_erase_a_later_rebinding() -> None:
+    header = "import requests.api\nfrom mylib import requests\n"
+    src = _p023_async_task(header, "requests.get('x')")
+    assert _rule(src, "P023") == []
+
+
+def test_p023_self_lookup_stops_at_a_nested_class() -> None:
+    def nested(receiver: str, bind: str) -> str:
+        return (
+            "import requests\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input):\n"
+            f"        {bind} = requests.Session()\n"
+            "        class Inner:\n"
+            "            async def g(self):\n"
+            f"                {receiver}.get('k')\n"
+        )
+
+    assert _rule(nested("self.s", "self.s"), "P023") == []
+    assert len(_rule(nested("s", "s"), "P023")) == 1
+
+
+def test_p023_silent_on_requests_codes_lookup() -> None:
+    src = _p023_async_task("import requests\n", "requests.codes.get('ok')")
+    assert _rule(src, "P023") == []
 
 
 def test_p023_dedup_workflow_sleep_is_p020_not_p023() -> None:
@@ -930,11 +1481,111 @@ def test_p036_suppression() -> None:
     assert len(findings) == 1 and findings[0].suppressed
 
 
+# ── P054 ScopedExecutorJoinedOnCancel ────────────────────────────────────────
+
+
+def test_p054_flags_with_scoped_executor_used_by_run_in_executor() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        await loop.run_in_executor(pool, g)\n"
+    )
+    assert len(_rule(body, "P054", header="")) == 1
+
+
+def test_p054_flags_dotted_construction_with_executor_keyword() -> None:
+    body = (
+        "import concurrent.futures\n"
+        "async def f(loop):\n"
+        "    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:\n"
+        "        await loop.run_in_executor(executor=ex, func=g)\n"
+    )
+    assert len(_rule(body, "P054", header="")) == 1
+
+
+def test_p054_one_finding_per_with_node() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        await loop.run_in_executor(pool, g)\n"
+        "        await loop.run_in_executor(pool, h)\n"
+    )
+    assert len(_rule(body, "P054", header="")) == 1
+
+
+def test_p054_silent_in_sync_def() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        return loop.run_in_executor(pool, g)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_on_unjoined_dedicated_executor() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        '    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="x-")\n'
+        "    try:\n"
+        "        return await loop.run_in_executor(executor, g)\n"
+        "    finally:\n"
+        "        executor.shutdown(wait=False)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_when_with_body_only_submits() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f():\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        pool.submit(g)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_on_default_executor_arg() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        return await loop.run_in_executor(None, g)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_when_offload_is_in_nested_def() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        def inner():\n"
+        "            return loop.run_in_executor(pool, g)\n"
+        "        inner()\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_suppression() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:  # conformance: ignore[P054] reviewed\n"
+        "        await loop.run_in_executor(pool, g)\n"
+    )
+    findings = _rule(body, "P054", header="")
+    assert len(findings) == 1 and findings[0].suppressed
+
+
 # ── catalog meta-tests ───────────────────────────────────────────────────────
 
 
 def test_new_rules_present_and_scoped_both() -> None:
-    for rid in ("P020", "P021", "P022", "P023", "P024", "P031", "P036"):
+    for rid in ("P020", "P021", "P022", "P023", "P024", "P031", "P036", "P054"):
         assert rid in CATALOG, f"{rid} missing from catalog"
         assert CATALOG[rid].scope is RuleScope.BOTH
         assert CATALOG[rid].rationale.strip(), f"{rid} needs a non-empty rationale"

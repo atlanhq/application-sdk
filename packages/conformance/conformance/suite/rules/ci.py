@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -14,9 +18,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="C001",
         canonical_reference=(
-            "atlan-metabase-app .github/workflows/checks.yml — third-party actions are "
-            "pinned to a full 40-character commit SHA with the human-readable version in a "
-            "trailing comment. Only atlanhq/application-sdk's own reusable refs use @main."
+            "atlan-metabase-app .github/workflows/checks.yml — a thin caller whose one "
+            "`uses:` is `atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`; "
+            "its header says the third-party action pins live in that SDK reusable, not in "
+            "the app. Every `uses:` in the three reference apps is an atlanhq/ ref (exempt) "
+            "or a local ./ action, so no mutable third-party pin is left to drift."
         ),
         fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
@@ -47,6 +53,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "`./` composite-action refs are exempt (no version to pin)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
     RuleDefinition(
         id="C002",
@@ -82,13 +92,26 @@ RULES: tuple[RuleDefinition, ...] = (
             "Re-run `bootstrap` to re-sync (the same bare re-run removes a retired "
             "file); structural drift is flagged while intentional per-repo value "
             "choices (e.g. `unit_tests_workflow_file`) are preserved. "
+            "`conformance-upload-sarif.yaml` is opt-in, for public repos only: "
+            "absent is clean, since a private repo cannot accept the upload "
+            "without GitHub Advanced Security. A copy without the "
+            "`bootstrap --sarif-upload true` marker is reported for removal, which "
+            "a bare re-run does. "
             "The exceptions are `tests.yaml` and `renovate.json`, write-if-absent "
             "scaffolds a bare re-run never rewrites — pass `--resync` to pull their "
             "structure forward, which likewise preserves each file's recognized "
             "per-repo values (tests.yaml's app-name, app-image-name, enable-e2e, "
-            "services-script, unit-coverage-fail-under, force-external-runtime "
-            "and any explicit `secrets:` mapping; renovate.json's "
-            "auto-merge mode).\n\n"
+            "services-script, unit-coverage-fail-under, force-external-runtime, "
+            "dataforge-hermetic-fallback, dataforge-lifecycle and any explicit `secrets:` mapping; "
+            "renovate.json's auto-merge mode).\n\n"
+            "A caveat `--resync` cannot express: the canonical template has no slot "
+            "for per-repo *rationale*. Values survive, the comments explaining them "
+            "do not. That matters where the comment is the only thing protecting a "
+            "deliberate choice — a repo pinning `dataforge-hermetic-fallback: "
+            '"false"` because it has no seedable source loses the note saying the '
+            "reusable's `true` default would fall back to a source that does not "
+            "exist and report the e2e leg green. The setting survives; the reason a "
+            "reviewer would need before changing it does not (FND-2542).\n\n"
             "`--resync` refuses rather than downgrading. A re-render replaces the "
             "whole file, so anything the canonical template has no place for would "
             "be deleted; when a `tests.yaml` declares such a thing (an extra job "
@@ -120,13 +143,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "`--use-ghcr-base false` to remove it."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.COMMAND,
+            target="atlan-application-sdk-conformance bootstrap --json",
+            note=(
+                "run with no other flags; `--resync` is a human-only remedy for "
+                "drifted `tests.yaml` / `renovate.json` (FND-2542)"
+            ),
+        ),
     ),
     RuleDefinition(
         id="C003",
         canonical_reference=(
-            "atlan-hello-world-app .gitignore — carries the standard entries this rule "
-            "checks for, including `.venv/` and `.claude/worktrees/`. A missing entry is "
-            "usually the newest one, added centrally after the repo was scaffolded."
+            "atlan-openapi-app .gitignore — carries every entry this rule requires, "
+            "including `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`, "
+            "plus the `.mothership/.cache/` line the bootstrap appends. A missing "
+            "entry is usually the newest one, added centrally after the repo was "
+            "scaffolded."
         ),
         fix_locus=FixLocus.CI,
         scope=RuleScope.BOTH,
@@ -142,7 +175,7 @@ RULES: tuple[RuleDefinition, ...] = (
         # support for "some findings under this ID are, some aren't"), so
         # it's set to the conservative/majority-case value rather than a
         # value that would overstate what most C003 findings actually get.
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="skip",
         since="0.4.0",
         rationale=(
@@ -167,13 +200,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "autofixed, which is why this rule's `autofixable` is false overall."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
     RuleDefinition(
         id="C004",
         canonical_reference=(
-            "atlan-openapi-app .github/workflows/checks.yml — tooling arrives through "
-            "`atlanhq/application-sdk/.github/actions/setup-deps`, which owns the retry, "
-            "instead of each workflow curling a binary of its own. No reference app "
+            "atlan-openapi-app .github/workflows/checks.yml — a thin caller of "
+            "`atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`, whose "
+            "`setup-deps` step owns the retry, instead of the workflow curling a binary "
+            "of its own. No workflow or composite action in the three reference apps "
             "downloads a tool inline."
         ),
         fix_locus=FixLocus.CI,
@@ -186,7 +224,7 @@ RULES: tuple[RuleDefinition, ...] = (
         # with-retry.sh, add curl/wget retry flags, or (best) stop downloading
         # and take the tool from the runner cache. Picking between those is a
         # judgment call, so findings route to residue rather than a mechanical fix.
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="skip",
         since="0.18.0",
         rationale=(
@@ -223,5 +261,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "`atlanhq/application-sdk/.github/actions/setup-deps@main`."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
 )

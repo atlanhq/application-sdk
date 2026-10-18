@@ -22,6 +22,7 @@ import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
+    AtlanApiTimeoutError,
     DAGProgressStalledError,
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
@@ -29,6 +30,7 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
     ProgressWatchdogUnreachableError,
+    RequestDelivery,
     WorkerNotHealthyError,
 )
 from application_sdk.testing.e2e.base import (
@@ -76,6 +78,11 @@ class _FakeAE:
 
     async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
         self.submits.append((payload, kwargs))
+        # The real client reports the id through this sink the instant it knows
+        # it, which is how a run gets tracked for teardown.
+        on_run_id = kwargs.get("on_run_id")
+        if on_run_id is not None:
+            on_run_id("run-1")
         return "run-1"
 
     async def poll_native_status(self, run_id: str, **kwargs: Any) -> Any:
@@ -1120,6 +1127,9 @@ class TestSubmitRetryKwargs:
         with pytest.raises(RuntimeError, match="stop after submit"):
             harness.run_full_dag()
         _, kwargs = harness._ae.submits[0]
+        # on_run_id is the teardown-tracking sink the submit always carries; the
+        # budget is the rest.
+        assert kwargs.pop("on_run_id") == harness._track_unsettled_run
         assert kwargs == {
             "slug": "slug",
             "retries": 60,
@@ -1866,7 +1876,7 @@ class TestTeardownFallsBackToTheHarnessPurge:
         # A run that got as far as submitting its DAG, so the connection it
         # minted may exist — which is what teardown gates the reclaim on since
         # FND-1873.
-        harness._dag_submitted = True
+        harness._submitted_connection_qns = [self._QN]
         monkeypatch.setattr(
             "application_sdk.testing.e2e.base.purge_connection", _record
         )
@@ -1901,7 +1911,7 @@ class TestTeardownFallsBackToTheHarnessPurge:
         """
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = self._QN
-        harness._dag_submitted = True
+        harness._submitted_connection_qns = [self._QN]
 
         def _unreachable(self: object) -> Any:
             raise RuntimeError("no tenant configured")
@@ -2088,3 +2098,251 @@ class TestResolvedConnectorConfigName:
 
         body = payload["payload"][0]["body"]
         assert body["connectorConfigName"] == "atlan-connectors-legacy"
+
+
+# ---------------------------------------------------------------------------
+# Teardown stops the AE run the harness stopped watching
+# ---------------------------------------------------------------------------
+
+
+class _TerminatingFakeAE(_FakeAE):
+    """``_FakeAE`` that also records ``terminate_run`` calls.
+
+    ``order`` is shared with the teardown stubs so a test can assert the
+    terminate happens *before* the connection delete.
+    """
+
+    def __init__(
+        self,
+        *,
+        poll: object = None,
+        order: list[str] | None = None,
+        terminate_raises: BaseException | None = None,
+    ) -> None:
+        super().__init__(poll=poll)
+        self.terminated: list[str] = []
+        self.order = order if order is not None else []
+        self._terminate_raises = terminate_raises
+
+    async def terminate_run(self, run_id: str) -> bool | None:
+        self.order.append(f"terminate:{run_id}")
+        if self._terminate_raises is not None:
+            raise self._terminate_raises
+        self.terminated.append(run_id)
+        return True
+
+
+class _AmbiguousSubmitFakeAE(_TerminatingFakeAE):
+    """Submit fires ``on_run_id`` (the run was created) and *then* raises.
+
+    Models the ambiguous submit: AE accepted the run and started it, but the
+    response was lost or the call timed out, so ``submit_workflow`` raises after
+    the id is already known. The real client fires ``on_run_id`` from both the
+    normal 2xx path and the reconcile-recovery path for exactly this reason —
+    the id must be tracked for teardown even though the submit itself raised and
+    the caller never got a return value to record.
+    """
+
+    def __init__(self, *, error: BaseException, order: list[str] | None = None) -> None:
+        super().__init__(order=order)
+        self._submit_error = error
+
+    async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
+        self.submits.append((payload, kwargs))
+        on_run_id = kwargs.get("on_run_id")
+        if on_run_id is not None:
+            on_run_id("run-1")
+        raise self._submit_error
+
+
+def _stub_teardown_io(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> None:
+    """Replace the tenant-bound teardown steps with order-recording no-ops."""
+
+    async def _delete_connections(self: object) -> None:
+        order.append("delete_connections")
+
+    async def _noop(self: object) -> None:
+        return None
+
+    monkeypatch.setattr(_ConcreteE2ETest, "_delete_connections", _delete_connections)
+    monkeypatch.setattr(_ConcreteE2ETest, "_close_clients", _noop)
+
+
+def _stub_post_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Let a poll that *returns* reach the end of run_full_dag hermetically."""
+
+    async def _noop(self: object, *args: object, **kwargs: object) -> None:
+        return None
+
+    async def _read_atlas(self: object, ae_result: DAGRunResult) -> DAGRunResult:
+        return ae_result
+
+    monkeypatch.setattr(_ConcreteE2ETest, "_assert_deployed_manifest_matches", _noop)
+    monkeypatch.setattr(_ConcreteE2ETest, "_capture_stop_point_pollers", _noop)
+    monkeypatch.setattr(_ConcreteE2ETest, "_read_atlas", _read_atlas)
+
+
+class TestTeardownTerminatesUnsettledRuns:
+    """A run the harness stopped watching must not outlive the CI job.
+
+    The extract node of a CI e2e run is dispatched to a task queue served only
+    by the worker the CI job itself started. When the harness stops watching a
+    run that is still going — the progress watchdog, the poll ceiling, a
+    no-worker verdict, or the child's own workflow-level retry after a failed
+    first attempt — nothing stops it, the CI job exits, the worker goes with it,
+    and the child sits on an unpolled queue until its workflow execution
+    timeout (hours to days) closes it as "Timed out". Teardown is the one hook
+    that runs on every outcome, so it is where the run is stopped.
+    """
+
+    def _harness(self, ae: _FakeAE) -> _ConcreteE2ETest:
+        harness = _ConcreteE2ETest()
+        harness.connection_qualified_name = "default/test/1234567890"
+        harness._ae = ae
+        return harness
+
+    def test_a_stalled_run_is_terminated_before_the_connection_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ae = _TerminatingFakeAE(poll=RuntimeError("watchdog stop"), order=order)
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(RuntimeError, match="watchdog stop"):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-1"]
+        # Stopped first: a still-running extract must not race the delete.
+        assert order == ["terminate:run-1", "delete_connections"]
+
+    def test_a_run_left_running_at_the_poll_ceiling_is_terminated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ceiling = _timed_out_result([_node("extract", DAGNodeStatus.RUNNING)])
+        ae = _TerminatingFakeAE(poll=ceiling, order=order)
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_post_poll(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-1"]
+
+    def test_a_settled_run_is_left_alone(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        order: list[str] = []
+        settled = DAGRunResult(
+            run_id="run-1",
+            workflow_slug="slug",
+            status=DAGRunStatus.SUCCEEDED,
+            nodes=[_node("extract", DAGNodeStatus.SUCCEEDED)],
+        )
+        ae = _TerminatingFakeAE(poll=settled, order=order)
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_post_poll(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == []
+        assert order == ["delete_connections"]
+
+    def test_an_ambiguous_submit_that_started_a_run_is_terminated_at_teardown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The orphan gap: a submit that starts a run and then raises/times out.
+
+        AE submit is non-idempotent, so a lost response can still have started a
+        run. The id is recorded via the ``on_run_id`` sink the instant it is
+        known — from inside the submit, not from the caller's post-return append
+        — so it is tracked for teardown even though ``run_full_dag`` raised
+        before it could record anything itself.
+        """
+        order: list[str] = []
+        ae = _AmbiguousSubmitFakeAE(
+            error=AtlanApiTimeoutError(
+                message=(
+                    "submit_workflow timed out after 1 attempt(s) "
+                    "[delivery=ambiguous]"
+                ),
+                operation="/submit",
+                delivery=RequestDelivery.AMBIGUOUS,
+            ),
+            order=order,
+        )
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(AtlanApiTimeoutError):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-1"]
+        # Stopped first, before the delete — the orphan must not race it.
+        assert order == ["terminate:run-1", "delete_connections"]
+
+    def test_a_run_from_an_overridden_submit_without_the_sink_is_terminated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A subclass ``_submit`` that never fires ``on_run_id`` still has its
+        returned id tracked: run_full_dag records it on return as an idempotent
+        fallback, so a stalled run from such a suite is not an orphan."""
+        order: list[str] = []
+        ae = _TerminatingFakeAE(poll=RuntimeError("watchdog stop"), order=order)
+
+        class _OwnSubmit(_ConcreteE2ETest):
+            async def _submit(self, payload: dict[str, Any], *, slug: str) -> str:
+                return "run-own"
+
+        harness = _OwnSubmit()
+        harness.connection_qualified_name = "default/test/1234567890"
+        harness._ae = ae
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(RuntimeError, match="watchdog stop"):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-own"]
+        assert order == ["terminate:run-own", "delete_connections"]
+
+    def test_a_run_that_never_submitted_terminates_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ae = _TerminatingFakeAE(order=order)
+        harness = self._harness(ae)
+        _stub_teardown_io(monkeypatch, order)
+
+        harness.teardown_method(None)
+
+        assert ae.terminated == []
+
+    def test_a_failed_terminate_never_masks_the_verdict_or_skips_the_delete(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        ae = _TerminatingFakeAE(
+            poll=RuntimeError("watchdog stop"),
+            order=order,
+            terminate_raises=RuntimeError("AE unreachable"),
+        )
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(RuntimeError, match="watchdog stop"):
+            harness.run_full_dag()
+        # Must not raise.
+        harness.teardown_method(None)
+
+        assert order == ["terminate:run-1", "delete_connections"]

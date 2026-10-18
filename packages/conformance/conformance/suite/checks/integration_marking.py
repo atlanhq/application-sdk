@@ -8,11 +8,14 @@ select with ``-m integration`` / ``-m s3_integration`` / ….  A test under
 is therefore run in the *unit* job (where an embedded Temporal/Dapr boot can
 exceed the tight unit timeout) instead of the integration job built for it.
 
-So the real invariant is not "marked ``integration``" but **"carries a marker
-that keeps it out of the unit job."**  The accepted set is derived per-repo from
-the ``-m`` deselection expression in the app's own ``pyproject.toml`` ``addopts``
-(so an app with its own ``kafka_integration`` marker self-calibrates); it falls
-back to ``{"integration"}`` when no such expression is found.
+So the invariant is **"carries a marker that keeps it out of the unit job."**
+The accepted set is the ``-m`` deselection expression in the app's own
+``pyproject.toml`` ``addopts`` (so an app with its own ``kafka_integration``
+marker self-calibrates) **plus** ``integration``, the canonical tier marker the
+reference apps use.  ``integration`` is always accepted because the shared
+integration job runs ``pytest tests/integration/`` with the same ``addopts``: an
+app that deselects only ``e2e`` would otherwise be told to mark its integration
+tests ``e2e``, which hides them from its integration job too.
 
 This checker mirrors pytest's collection + marker hierarchy: a test is considered
 marked when the **module** declares ``pytestmark`` containing an accepted marker
@@ -135,9 +138,9 @@ def accepted_markers_for_repo(root: Path) -> frozenset[str]:
     """Derive the set of markers that keep a test out of the unit job.
 
     Reads ``[tool.pytest.ini_options].addopts`` from ``root/pyproject.toml`` and
-    extracts the ``-m 'not …'`` deselection set.  Falls back to
-    ``{"integration"}`` when the file is missing/unparseable or declares no such
-    expression.
+    extracts the ``-m 'not …'`` deselection set, always adding ``integration``
+    (see the module docstring for why).  Just ``{"integration"}`` when the file
+    is missing/unparseable or declares no such expression.
     """
     pyproject = root / "pyproject.toml"
     try:
@@ -149,8 +152,7 @@ def accepted_markers_for_repo(root: Path) -> frozenset[str]:
         if isinstance(data, dict)
         else None
     )
-    markers = _deselected_markers(addopts)
-    return markers or _DEFAULT_ACCEPTED_MARKERS
+    return _deselected_markers(addopts) | _DEFAULT_ACCEPTED_MARKERS
 
 
 # ---------------------------------------------------------------------------

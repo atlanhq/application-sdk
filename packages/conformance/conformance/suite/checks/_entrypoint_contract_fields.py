@@ -6,9 +6,16 @@ generator; the K-series (contract-toolkit) is expected to need the same
 entrypoint-contract and field-resolution primitives, which is why this lives
 at ``suite/checks/`` top level rather than inside ``deprecation/``.
 
-The check uses the same cross-file class-registry machinery as P013/P014:
-``collect_classes`` + ``resolve_ancestor`` for App-subclass detection, and
-``is_entrypoint_decorator`` / ``is_task_decorator`` for decorator provenance.
+Both entrypoint discovery and base-class resolution read the class registry by
+bare name, so a caller that seeds that registry with module-level rebindings
+(:func:`_ast_common.register_alias_records`) gets both for free: an entrypoint
+annotated as ``OpenAPIConnectorInput`` where ``OpenAPIConnectorInput =
+AppInputContract`` resolves to the generated class it names, and a contract
+inheriting from an aliased base resolves that base's fields.
+
+Entrypoint detection is ``prescriptions._boundary_methods.classify_boundary_method``,
+the one detector P013/P014, the K-series and the preflight checks share, over the
+cross-file ``collect_classes`` registry.
 
 Field extraction resolves the full inheritance hierarchy (``resolve_contract_fields``):
 in-repo base classes are resolved from their own AST body via ``by_name``; SDK-provided
@@ -27,26 +34,40 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import Counter
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeGuard
 
+from conformance.suite.checks._ast_common import (
+    collect_module_alias_targets,
+    merge_alias_targets,
+    qualified_class_key,
+    qualified_rebound_imports,
+    register_alias_records,
+)
+from conformance.suite.checks._ast_common._imports import _module_of
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+    SDK_TEMPLATE_CONTRACT_BASES,
     SDK_TEMPLATE_CONTRACT_FIELDS,
+)
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
 )
 from conformance.suite.checks.prescriptions._contract_common import _unwrap_annotated
 from conformance.suite.checks.prescriptions._decorator_provenance import (
-    ImportProvenance,
     collect_import_provenance,
-    is_entrypoint_decorator,
-    is_task_decorator,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     _is_classvar_annotation,
+    collect_classes,
     collect_import_aliases,
-    resolve_ancestor,
+    field_call_names,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -224,6 +245,74 @@ class _FieldInfo(NamedTuple):
     #: Trailing with a default so every existing positional construction of this
     #: tuple keeps working.
     model_declared: bool = False
+    #: Whether a payload must carry this field: Pydantic v2 requires a field
+    #: with no default, ``Optional`` or not. ``None`` means unknown — a field
+    #: mirrored from an SDK registry, whose defaults are not recorded there.
+    required: bool | None = None
+
+
+#: The names that call ``Field`` when a file imports it under no alias.
+_FIELD_CALL_NAMES = frozenset({"Field"})
+
+
+def _is_field_call(
+    node: ast.expr | None, field_names: frozenset[str]
+) -> TypeGuard[ast.Call]:
+    """Whether *node* calls ``Field`` — by any of *field_names*, or ``x.Field``."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id in field_names) or (
+        isinstance(func, ast.Attribute) and func.attr == "Field"
+    )
+
+
+def _field_call_has_default(call: ast.Call) -> bool:
+    """Whether a ``Field(...)`` call supplies a default.
+
+    ``Field()`` and ``Field(...)`` (an Ellipsis default) leave the field
+    required; any other positional default, ``default=`` (other than
+    Ellipsis) or ``default_factory=`` supplies one.
+    """
+    if call.args:
+        first = call.args[0]
+        return not (isinstance(first, ast.Constant) and first.value is Ellipsis)
+    for kw in call.keywords:
+        if kw.arg == "default_factory":
+            return True
+        if kw.arg == "default":
+            return not (
+                isinstance(kw.value, ast.Constant) and kw.value.value is Ellipsis
+            )
+    return False
+
+
+def _field_required(ann_node: ast.AnnAssign, field_names: frozenset[str]) -> bool:
+    """Whether Pydantic v2 requires this field in every payload.
+
+    A field is required when nothing supplies a default: no value, a
+    ``Field(...)`` value without one, or no value with an ``Annotated``
+    ``Field(...)`` that supplies none. ``Optional[X]`` does not make a field
+    optional in Pydantic v2 — only a default does. *field_names* are the local
+    names the defining file binds to ``Field``, so ``F(...)`` after
+    ``from pydantic import Field as F`` reads as the call it is.
+    """
+    value = ann_node.value
+    if value is None:
+        annotation = ann_node.annotation
+        if isinstance(annotation, ast.Subscript) and _is_named(
+            annotation.value, "Annotated"
+        ):
+            sl = annotation.slice
+            metadata = sl.elts[1:] if isinstance(sl, ast.Tuple) else []
+            return not any(
+                _is_field_call(m, field_names) and _field_call_has_default(m)
+                for m in metadata
+            )
+        return True
+    if _is_field_call(value, field_names):
+        return not _field_call_has_default(value)
+    return False
 
 
 def _field_status(ann_node: ast.AnnAssign) -> str:
@@ -273,11 +362,14 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
     return "active"
 
 
-def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
+def _iter_fields(
+    classdef: ast.ClassDef, field_names: frozenset[str] = _FIELD_CALL_NAMES
+) -> list[_FieldInfo]:
     """Return annotated field info declared directly on *classdef*'s own body.
 
     Does not resolve fields inherited from a base class or mixin — use
-    :func:`resolve_contract_fields` for that.
+    :func:`resolve_contract_fields` for that. *field_names* are the local names
+    *classdef*'s file binds to ``Field``.
     """
     result = []
     for stmt in classdef.body:
@@ -297,6 +389,7 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
                 status=_field_status(stmt),
                 node=stmt,
                 model_declared=_annotation_declares_model(stmt.annotation),
+                required=_field_required(stmt, field_names),
             )
         )
     return result
@@ -400,7 +493,7 @@ def resolve_contract_fields(
                 # overwrite below.
                 for base_name in reversed(rec.bases):
                     merge_ancestor(base_name, visiting)
-                for fi in _iter_fields(rec.node):
+                for fi in _iter_fields(rec.node, rec.field_call_names):
                     fields_by_name[fi.name] = _keep_model_declared(
                         fi._replace(node=None), fields_by_name.get(fi.name)
                     )
@@ -437,60 +530,136 @@ def resolve_contract_fields(
 
     # Fields declared directly on classdef always win over inherited ones —
     # except for the marker, which is sticky (see `_keep_model_declared`).
-    for fi in _iter_fields(classdef):
+    for fi in _iter_fields(classdef, field_call_names(aliases)):
         fields_by_name[fi.name] = _keep_model_declared(fi, fields_by_name.get(fi.name))
 
     return list(fields_by_name.values())
 
 
+def sdk_contract_ancestors(
+    classdef: ast.ClassDef,
+    aliases: dict[str, str],
+    by_name: dict[str, ClassRecord],
+    *,
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
+) -> frozenset[str]:
+    """SDK contract names *classdef* inherits from, directly or via in-repo bases.
+
+    Walks the same base chain as :func:`resolve_contract_fields` and returns the
+    ancestors it resolves from the static SDK registries rather than from repo
+    source. A name declared in the scanned repo is never included, so an SDK
+    self-scan (where the templates are in-repo) yields an empty set, and
+    neither is a base its defining module imports from a non-SDK module.
+
+    A base imported from a third-party package (one whose top-level package no
+    scanned file lives under) is not resolved through a same-named in-repo
+    class either: the name match would be a coincidence, and following it
+    would credit the importing contract with an unrelated class's SDK
+    ancestors.
+    """
+    found: set[str] = set()
+    seen: set[str] = {classdef.name}
+    records = (
+        [r for recs in by_name_all.values() for r in recs]
+        if by_name_all
+        else list(by_name.values())
+    )
+    repo_packages = {
+        part for rec in records for part in Path(rec.file).with_suffix("").parts
+    }
+
+    def walk(name: str, foreign: Mapping[str, str | None]) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        if name in foreign and foreign[name] not in (None, *repo_packages):
+            return
+        recs = (by_name_all or {}).get(name)
+        if not recs:
+            rec_one = by_name.get(name)
+            recs = [rec_one] if rec_one is not None else []
+        if recs:
+            for rec in recs:
+                for base_name in rec.bases:
+                    walk(base_name, rec.non_sdk_bases)
+        elif name in foreign:
+            return
+        elif name in SDK_CONTRACT_BASE_FIELDS or name in SDK_TEMPLATE_CONTRACT_FIELDS:
+            found.add(name)
+            found.update(SDK_TEMPLATE_CONTRACT_BASES.get(name, ()))
+
+    candidates = (by_name_all or {}).get(classdef.name) or [by_name.get(classdef.name)]
+    own_foreign: Mapping[str, str | None] = next(
+        (r.non_sdk_bases for r in candidates if r is not None and r.node is classdef),
+        {},
+    )
+    for base in classdef.bases:
+        bname = _base_name(base)
+        if bname is not None:
+            walk(aliases.get(bname, bname), own_foreign)
+    return frozenset(found)
+
+
 # ── Entrypoint contract discovery ─────────────────────────────────────────────
 
 
-def collect_entrypoint_contract_names(
+def _declared_contract_name(
+    name: str, aliases: dict[str, str], by_name: dict[str, ClassRecord]
+) -> str:
+    """Resolve an annotated contract name to the class that actually declares it.
+
+    Two rebindings sit between the name an entrypoint annotates and the
+    ``ClassDef`` a scan can read fields from: a renamed import (*aliases*), and
+    a module-level rebinding registered into *by_name* by
+    ``register_alias_records``.  The second is the shape a pkl-generated
+    contract takes — ``OpenAPIConnectorInput = AppInputContract`` — and until
+    it was resolved here, the returned name matched no ``ClassDef`` in the
+    scan, so B005/B006 silently checked nothing at all for that contract: the
+    guarantee the ledger exists to provide was simply absent (FND-2605).
+
+    Returning the *declaring* class's name (rather than the local one) is what
+    makes the ledger key stable: an app that later renames or drops the
+    rebinding does not change the contract's ledger identity, and one that
+    moves from a rebinding to a subclass gets the churn exactly once, for the
+    new class, rather than every time the local name changes.
+
+    A no-op for a name that is already a class in the scan, and for one the
+    registry cannot resolve at all.
+    """
+    resolved = aliases.get(name, name)
+    record = by_name.get(resolved)
+    return record.name if record is not None else resolved
+
+
+def iter_entrypoint_contract_annotations(
     file_trees: dict[Path, ast.AST],
     by_name: dict[str, ClassRecord],
-) -> frozenset[str]:
-    """Return the class names of all entrypoint Input/Output contracts.
+) -> Iterator[tuple[Path, str]]:
+    """Yield ``(file, name)`` for each entrypoint Input/Output annotation.
 
-    Mirrors P013 boundary detection — collects contract class names instead of
-    emitting findings.  ``@task`` contract names are excluded.
+    *name* is the annotation's terminal name as written in *file*, before any
+    alias is resolved. Shares P013's boundary detection
+    (``classify_boundary_method``); ``@task`` contracts are excluded.
     """
-    entrypoint_contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
 
     for path, tree in file_trees.items():
-        prov: ImportProvenance = collect_import_provenance(tree)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        scope = BoundaryScope.for_module(
+            tree,
+            prov=collect_import_provenance(tree),
+            aliases=aliases,
+            by_name=by_name,
+            app_cache=app_cache,
+        )
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
 
             for func in _iter_class_body_methods(class_node):
-                is_ep = False
-
-                if any(
-                    is_entrypoint_decorator(dec, prov) for dec in func.decorator_list
-                ):
-                    is_ep = True
-                elif any(is_task_decorator(dec, prov) for dec in func.decorator_list):
-                    continue  # @task — skip entirely
-
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    for base in class_node.bases:
-                        bname = _base_name(base)
-                        if bname is None:
-                            continue
-                        bname = aliases.get(bname, bname)
-                        if (
-                            bname == "App"
-                            or resolve_ancestor(bname, "App", by_name, app_cache, set())
-                            is True
-                        ):
-                            is_ep = True
-                            break
-
-                if not is_ep:
+                boundary = classify_boundary_method(class_node, func, scope)
+                if boundary is None or boundary.kind == "task":
                     continue
 
                 non_self = _get_non_self_params(func)
@@ -499,11 +668,213 @@ def collect_entrypoint_contract_names(
                     if ann is not None:
                         name = _annotation_terminal_name(ann)
                         if name:
-                            entrypoint_contracts.add(aliases.get(name, name))
+                            yield path, name
 
                 if func.returns is not None:
                     name = _annotation_terminal_name(func.returns)
                     if name:
-                        entrypoint_contracts.add(aliases.get(name, name))
+                        yield path, name
 
+
+def collect_entrypoint_contract_names(
+    file_trees: dict[Path, ast.AST],
+    by_name: dict[str, ClassRecord],
+) -> frozenset[str]:
+    """Return the class names of all entrypoint Input/Output contracts.
+
+    Shares P013's boundary detection (``classify_boundary_method``) — collects
+    contract class names instead of emitting findings.  ``@task`` contract names are excluded.
+
+    Names are reported as the class that *declares* the contract.  When the
+    caller has seeded *by_name* with module-level rebindings (see
+    ``register_alias_records``), a contract annotated under an alias therefore
+    comes back under the aliased class's own name, which is the name the
+    ``ClassDef`` carries and the name the ledger keys on.
+    """
+    file_aliases: dict[Path, dict[str, str]] = {}
+    entrypoint_contracts: set[str] = set()
+    for path, name in iter_entrypoint_contract_annotations(file_trees, by_name):
+        if path not in file_aliases:
+            tree = file_trees[path]
+            file_aliases[path] = (
+                collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+            )
+        entrypoint_contracts.add(
+            _declared_contract_name(name, file_aliases[path], by_name)
+        )
     return frozenset(entrypoint_contracts)
+
+
+#: Where the SDK declares :data:`SDK_CONTRACT_BASE_FIELDS`' classes.
+SDK_CONTRACT_BASE_MODULE = "application_sdk/contracts/base.py"
+
+
+def sdk_base_contract_names(by_name: dict[str, ClassRecord]) -> frozenset[str]:
+    """The SDK contract bases (``Input``, ``Output``, ``PublishInputMixin``) declared in this scan.
+
+    They are no entrypoint's contract, but every app contract inherits from
+    one, so the SDK records them in its own ledger alongside its template
+    contracts. A 'sunset' there is what lets B005 in a consumer app recognise
+    a base field the SDK retired (FND-3107/FND-3108). Only the SDK's own scan
+    declares them, in :data:`SDK_CONTRACT_BASE_MODULE`; anywhere else the set
+    is empty.
+    """
+    return frozenset(
+        name
+        for name in SDK_CONTRACT_BASE_FIELDS
+        if (rec := by_name.get(name)) is not None
+        and Path(rec.file).as_posix() == SDK_CONTRACT_BASE_MODULE
+    )
+
+
+# ── Shared class registry ─────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ContractRegistry:
+    """The cross-file class registry the ledger generator and B005 both read.
+
+    One builder, so the two cannot disagree about which class a name means.
+    """
+
+    aliases: dict[Path, dict[str, str]]
+    """Per file, the import aliases every lookup in that file goes through,
+    including names resolved to a module's own class (see
+    :func:`_ast_common.qualified_rebound_imports`)."""
+
+    by_name: dict[str, ClassRecord]
+    """Entrypoint discovery's registry: a bare name keeps its first
+    declaration, as it always has, so a duplicated ``App`` subclass is still
+    found. Each declaration of a duplicated name is also registered under its
+    :func:`_ast_common.qualified_class_key`."""
+
+    resolvable: dict[str, ClassRecord]
+    """Field resolution's registry: :attr:`by_name` without the duplicated bare
+    names, or any rebinding that only reaches one. A base that reaches a
+    duplicated class by bare name is unresolved here, never the first one
+    parsed."""
+
+    by_name_all: dict[str, list[ClassRecord]]
+    """Every declaration per bare name."""
+
+    ambiguous: frozenset[str]
+    """Bare names with no single meaning: a class several modules declare, a
+    name several modules rebind to different classes, and a rebinding that
+    reaches either."""
+
+
+def build_contract_registry(
+    file_trees: dict[Path, ast.AST], rels: dict[Path, str]
+) -> ContractRegistry:
+    """Build the :class:`ContractRegistry` for *file_trees* (keyed by path, with
+    *rels* giving each one's repo-relative path)."""
+    duplicated = frozenset(
+        name
+        for name, count in Counter(
+            node.name
+            for tree in file_trees.values()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+        ).items()
+        if count > 1
+    )
+    # An import names the module it reads from, so it means *that* module's
+    # class: never whichever same-named class or rebinding registered first.
+    rebound = qualified_rebound_imports(
+        {rels[p]: t for p, t in file_trees.items()}, duplicated
+    )
+    aliases_by_path: dict[Path, dict[str, str]] = {}
+    by_name: dict[str, ClassRecord] = {}
+    by_name_all: dict[str, list[ClassRecord]] = {}
+    module_targets: list[dict[str, str]] = []
+    for path, tree in file_trees.items():
+        rel = rels[path]
+        aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        aliases.update(rebound.get(rel, {}))
+        aliases_by_path[path] = aliases
+        top_level = {
+            id(stmt) for stmt in (tree.body if isinstance(tree, ast.Module) else [])
+        }
+        for rec in collect_classes(tree, rel, aliases):
+            by_name.setdefault(rec.name, rec)
+            by_name_all.setdefault(rec.name, []).append(rec)
+            if rec.name in duplicated and id(rec.node) in top_level:
+                by_name.setdefault(qualified_class_key(_module_of(rel), rec.name), rec)
+        module_targets.append(collect_module_alias_targets(tree, aliases))
+    # A name several modules rebind to different classes is left unresolved,
+    # as is a duplicated class: a guess is what put one entrypoint's fields
+    # under another's contract name.
+    alias_targets, ambiguous_rebinds = merge_alias_targets(module_targets)
+    resolvable = {k: v for k, v in by_name.items() if k not in duplicated}
+    # Module-level rebindings resolve to the class they name, so a contract
+    # exposed as ``OpenAPIConnectorInput = AppInputContract`` is recorded under
+    # the generated class's own name. Only ``by_name`` is seeded, never
+    # ``by_name_all``: an alias is another name for a declaration, not a second
+    # one, and adding it there would make every aliased contract ambiguous.
+    register_alias_records(by_name, alias_targets)
+    register_alias_records(resolvable, alias_targets)
+
+    ambiguous = set(duplicated | ambiguous_rebinds)
+    for name, target in alias_targets.items():
+        seen = {name}
+        while (
+            target not in resolvable and target in alias_targets and target not in seen
+        ):
+            seen.add(target)
+            target = alias_targets[target]
+        if name not in resolvable and target in ambiguous:
+            ambiguous.add(name)
+    return ContractRegistry(
+        aliases=aliases_by_path,
+        by_name=by_name,
+        resolvable=resolvable,
+        by_name_all=by_name_all,
+        ambiguous=frozenset(ambiguous),
+    )
+
+
+@dataclass(frozen=True)
+class EntrypointContracts:
+    """The declarations entrypoint contracts are, as the ledger records them."""
+
+    records: tuple[ClassRecord, ...]
+    """Each declaration an entrypoint annotates, resolved through the annotating
+    file's imports, plus the SDK contract bases an SDK scan declares. A
+    same-named class elsewhere in the repo (a generated base the contract
+    subclasses under its own name, a stale copy, an unrelated model) is not
+    one of them."""
+
+    ambiguous: tuple[tuple[Path, str, str], ...]
+    """``(file, annotation, declared_name)`` for each annotation that only
+    reaches a name several modules declare or bind differently, so no single
+    declaration can be picked. *declared_name* is the bare name first-wins
+    resolution reports it under."""
+
+
+def resolve_entrypoint_contracts(
+    file_trees: dict[Path, ast.AST], registry: ContractRegistry
+) -> EntrypointContracts:
+    """Resolve every entrypoint annotation in *file_trees* to its declaration."""
+    records: dict[int, ClassRecord] = {}
+    ambiguous: list[tuple[Path, str, str]] = []
+    for path, name in iter_entrypoint_contract_annotations(
+        file_trees, registry.by_name
+    ):
+        target = registry.aliases[path].get(name, name)
+        rec = registry.resolvable.get(target)
+        if rec is not None:
+            records[id(rec.node)] = rec
+        elif target in registry.ambiguous:
+            tree = file_trees[path]
+            aliases = (
+                collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+            )
+            ambiguous.append(
+                (path, name, _declared_contract_name(name, aliases, registry.by_name))
+            )
+    for name in sdk_base_contract_names(registry.by_name):
+        rec = registry.by_name[name]
+        records[id(rec.node)] = rec
+    return EntrypointContracts(
+        records=tuple(records.values()), ambiguous=tuple(ambiguous)
+    )

@@ -1,10 +1,22 @@
 """Unit tests for application_sdk.contracts.base."""
 
-from typing import Annotated, Any, ClassVar
+import typing
+from collections import deque
+from collections.abc import (
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSequence,
+    MutableSet,
+    Sequence,
+)
+from collections.abc import Set as AbstractSet
+from typing import Annotated, Any, ClassVar, List, Literal, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
+from typing_extensions import TypeAliasType
 
 from application_sdk.contracts.base import (
     ContractMetadata,
@@ -21,7 +33,31 @@ from application_sdk.contracts.base import (
     is_backwards_compatible,
     validate_payload_safety,
 )
-from application_sdk.contracts.types import FileReference, MaxItems
+from application_sdk.contracts.types import FileReference, MaxItems, TreeSelection
+
+# Module-level: pydantic resolves a recursive alias's string self-reference
+# through the defining module's namespace.
+_AnyMap = TypeAliasType("_AnyMap", Annotated[dict[str, Any], MaxItems(10)])
+_UnboundedAnyMap = TypeAliasType("_UnboundedAnyMap", dict[str, Any])
+_UnboundedTree = TypeAliasType("_UnboundedTree", dict[str, "_UnboundedTree"])
+_BoundedTree = TypeAliasType(
+    "_BoundedTree", Annotated[dict[str, "_BoundedTree"], MaxItems(10)]
+)
+# Quoted references to an unsafe alias, in both spellings Python produces:
+# list["X"] keeps a plain str, typing.List["X"] a ForwardRef.
+_UnsafeMap = TypeAliasType("_UnsafeMap", dict[str, Any])
+_QuotedStrOuter = TypeAliasType(
+    "_QuotedStrOuter", Annotated[list["_UnsafeMap"], MaxItems(10)]
+)
+_QuotedFwdOuter = TypeAliasType(
+    "_QuotedFwdOuter",
+    Annotated[List["_UnsafeMap"], MaxItems(10)],  # noqa: UP006
+)
+_SafeMap = TypeAliasType("_SafeMap", Annotated[dict[str, str], MaxItems(10)])
+_QuotedSafeOuter = TypeAliasType(
+    "_QuotedSafeOuter", Annotated[list["_SafeMap"], MaxItems(10)]
+)
+_LiteralAlias = TypeAliasType("_LiteralAlias", Literal["_UnsafeMap", "other"])
 
 # =============================================================================
 # Input / Output subclassing
@@ -242,6 +278,213 @@ class TestPayloadSafetyValidation:
 
         obj = FlexOutput(data=42)
         assert obj.data == 42
+
+
+# =============================================================================
+# Every variable-size collection needs MaxItems, not only list and dict
+# =============================================================================
+
+# Before, the check matched only list and dict by origin, so retyping a
+# list[str] as set[str] or Sequence[str] passed with no bound at all.
+_UNBOUNDED_COLLECTIONS: list[tuple[Any, str]] = [
+    (set[str], "set"),
+    (frozenset[str], "frozenset"),
+    (AbstractSet[str], "Set"),
+    (MutableSet[str], "MutableSet"),
+    (tuple[str, ...], "tuple"),
+    (Tuple[str, ...], "tuple"),  # noqa: UP006
+    (Sequence[str], "Sequence"),
+    (MutableSequence[str], "MutableSequence"),
+    (Mapping[str, str], "Mapping"),
+    (MutableMapping[str, str], "MutableMapping"),
+    (deque[str], "deque"),
+    (Iterable[str], "Iterable"),
+]
+
+
+def _contract(field_type: Any, base: type = Input) -> type:
+    """Define a contract with one field typed *field_type*."""
+    return type(
+        "OneFieldContract",
+        (base,),
+        {"__annotations__": {"field": field_type}, "__module__": __name__},
+    )
+
+
+class TestPayloadSafetyOtherCollections:
+    @pytest.mark.parametrize(("field_type", "kind"), _UNBOUNDED_COLLECTIONS)
+    @pytest.mark.parametrize("base", [Input, Output])
+    def test_unbounded_is_refused(self, field_type: Any, kind: str, base: type) -> None:
+        with pytest.raises(PayloadSafetyError) as exc_info:
+            _contract(field_type, base)
+
+        assert exc_info.value.field_name == "field"
+        assert exc_info.value.reason == f"Unbounded {kind} may exceed payload limits"
+
+    @pytest.mark.parametrize(("field_type", "kind"), _UNBOUNDED_COLLECTIONS)
+    def test_unbounded_inside_optional_is_refused(
+        self, field_type: Any, kind: str
+    ) -> None:
+        with pytest.raises(PayloadSafetyError):
+            _contract(field_type | None)
+        with pytest.raises(PayloadSafetyError):
+            _contract(Optional[field_type])  # noqa: UP045
+
+    @pytest.mark.parametrize(("field_type", "kind"), _UNBOUNDED_COLLECTIONS)
+    def test_max_items_bounds_it(self, field_type: Any, kind: str) -> None:
+        _contract(Annotated[field_type, MaxItems(5)])
+        _contract(Annotated[field_type, MaxItems(5)] | None)
+
+    @pytest.mark.parametrize(
+        "field_type",
+        [tuple[str, int], Tuple[str, int], tuple[()], tuple[str]],  # noqa: UP006
+    )
+    def test_fixed_arity_tuple_is_bounded_by_its_shape(self, field_type: Any) -> None:
+        _contract(field_type)
+
+    @pytest.mark.parametrize(
+        "field_type",
+        [
+            # MaxItems bounds the collection, never its elements.
+            Annotated[set[bytes], MaxItems(5)],
+            Annotated[frozenset[Any], MaxItems(5)],
+            Annotated[tuple[Any, ...], MaxItems(5)],
+            Annotated[Sequence[dict[str, str]], MaxItems(5)],
+            Annotated[Mapping[str, list[str]], MaxItems(5)],
+            Annotated[list[set[str]], MaxItems(5)],
+            Annotated[tuple[set[str], ...], MaxItems(5)],
+            # A fixed-arity tuple is bounded, its members are still checked.
+            tuple[str, Any],
+            tuple[str, list[str]],
+            tuple[str, Sequence[str]],
+        ],
+    )
+    def test_element_types_are_still_checked(self, field_type: Any) -> None:
+        with pytest.raises(PayloadSafetyError):
+            _contract(field_type)
+
+    @pytest.mark.parametrize(
+        ("field_type", "kind"),
+        [
+            (set, "set"),
+            (frozenset, "frozenset"),
+            (tuple, "tuple"),
+            (Tuple, "tuple"),  # noqa: UP006
+            (deque, "deque"),
+            (Sequence, "Sequence"),
+            (Mapping, "Mapping"),
+            (AbstractSet, "Set"),
+            (typing.Set, "set"),  # noqa: UP006
+            (typing.Sequence, "Sequence"),  # noqa: UP006
+            (typing.Dict, "dict"),  # noqa: UP006
+            (typing.List, "list"),  # noqa: UP006
+            (Annotated[list[set], MaxItems(5)], "set"),
+        ],
+    )
+    def test_bare_collection_is_refused(self, field_type: Any, kind: str) -> None:
+        # No origin, so the parameterised check used to skip it: a bare set is a set of anything.
+        with pytest.raises(PayloadSafetyError) as exc_info:
+            _contract(field_type)
+
+        assert exc_info.value.reason == f"Unbounded {kind} may exceed payload limits"
+
+    @pytest.mark.parametrize("field_type", [set, tuple, deque, Sequence, typing.Set])  # noqa: UP006
+    def test_bare_collection_with_max_items_passes(self, field_type: Any) -> None:
+        _contract(Annotated[field_type, MaxItems(5)])
+
+    @pytest.mark.parametrize(
+        "field_type", [dict, list, Annotated[list[dict], MaxItems(5)]]
+    )
+    def test_bare_dict_and_list_stay_accepted(self, field_type: Any) -> None:
+        # Fleet contracts still declare these; refusing them is a separate, staged change.
+        _contract(field_type)
+
+    def test_nested_bounded_collections_pass(self) -> None:
+        _contract(
+            Annotated[list[Annotated[set[str], MaxItems(3)]], MaxItems(5)],
+        )
+        _contract(tuple[str, Annotated[frozenset[int], MaxItems(3)]])
+
+    def test_strings_are_not_collections(self) -> None:
+        # str is iterable, but it is a scalar to payload safety.
+        _contract(str)
+        _contract(Annotated[str, Field(max_length=10)])
+
+
+# =============================================================================
+# Type aliases are checked through, not skipped
+# =============================================================================
+
+
+class TestPayloadSafetyThroughTypeAliases:
+    # A TypeAliasType has no origin and is not a class, so the checker used to
+    # skip it entirely: an alias over Any or an unbounded dict passed.
+
+    def test_alias_over_any_raises(self) -> None:
+        with pytest.raises(PayloadSafetyError) as exc_info:
+
+            class BadInput(Input):
+                mapping: _AnyMap
+
+        assert "mapping" in str(exc_info.value)
+
+    def test_unbounded_recursive_alias_raises(self) -> None:
+        with pytest.raises(PayloadSafetyError):
+
+            class BadInput(Input):
+                tree: _UnboundedTree
+
+    def test_alias_nested_in_a_bounded_collection_is_checked(self) -> None:
+        with pytest.raises(PayloadSafetyError):
+
+            class BadInput(Input):
+                maps: Annotated[list[_UnboundedAnyMap], MaxItems(10)]
+
+    def test_bounded_recursive_alias_passes(self) -> None:
+        # Recursion terminates: the self-reference is checked once.
+
+        class OkInput(Input):
+            tree: _BoundedTree = Field(default_factory=dict)
+
+        assert OkInput(tree={"a": {"b": {}}}).tree == {"a": {"b": {}}}
+
+    def test_tree_selection_passes(self) -> None:
+        class OkInput(Input):
+            selection: TreeSelection = Field(default_factory=dict)
+
+        assert OkInput(selection={"SAP": {}}).selection == {"SAP": {}}
+
+    @pytest.mark.parametrize("outer", [_QuotedStrOuter, _QuotedFwdOuter])
+    def test_quoted_reference_to_an_unsafe_alias_raises(self, outer: Any) -> None:
+        # The quoted name is resolved against the alias's module, not skipped.
+        with pytest.raises(PayloadSafetyError):
+            type("BadInput", (Input,), {"__annotations__": {"maps": outer}})
+
+    def test_quoted_reference_to_a_safe_alias_passes(self) -> None:
+        class OkInput(Input):
+            maps: _QuotedSafeOuter = Field(default_factory=list)
+
+        assert OkInput(maps=[{"a": "b"}]).maps == [{"a": "b"}]
+
+    def test_literal_strings_are_values_not_references(self) -> None:
+        # "_UnsafeMap" here is a literal value; it must not be resolved.
+        class OkInput(Input):
+            mode: _LiteralAlias = "other"
+
+        assert OkInput().mode == "other"
+
+    def test_tree_selection_is_exported_from_the_package(self) -> None:
+        # The documented import path, and the package's public surface.
+        import application_sdk.contracts as contracts
+        from application_sdk.contracts import TreeSelection as PackageTreeSelection
+
+        assert PackageTreeSelection is TreeSelection
+        assert "TreeSelection" in contracts.__all__
+
+        class OkInput(Input):
+            selection: PackageTreeSelection = Field(default_factory=dict)
+
+        assert OkInput(selection={"SAP": {}}).selection == {"SAP": {}}
 
 
 # =============================================================================

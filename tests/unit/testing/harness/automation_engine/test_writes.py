@@ -505,6 +505,42 @@ class TestSubmitPublishedVersion:
         ):
             assert await client.submit_published_version("s") == "run-adopted"
 
+    async def test_a_normal_submit_reports_its_guid_to_on_run_id(self) -> None:
+        """The teardown-tracking sink fires before the id is returned, so a
+        caller's tracking never hinges on its own post-return bookkeeping."""
+        client = _client()
+        seen: list[str] = []
+        with patch.object(
+            client, "_request", return_value=(200, {"data": {"guid": "run-9"}})
+        ):
+            got = await client.submit_published_version("s", on_run_id=seen.append)
+        assert got == "run-9"
+        assert seen == ["run-9"]
+
+    async def test_the_recovery_path_reports_the_adopted_guid_to_on_run_id(
+        self,
+    ) -> None:
+        """A lost response has still started a run; the adopted id reaches the
+        sink from inside recovery, and again via the 2xx return — hence the
+        idempotency requirement."""
+        client = _client()
+        seen: list[str] = []
+        timeout = AtlanApiTimeoutError(
+            message="lost", operation="submit", delivery=RequestDelivery.AMBIGUOUS
+        )
+        with (
+            patch.object(client, "_request", side_effect=timeout),
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id="run-adopted", conclusive=True),
+            ),
+            patch(_SLEEP),
+        ):
+            got = await client.submit_published_version("s", on_run_id=seen.append)
+        assert got == "run-adopted"
+        assert set(seen) == {"run-adopted"}
+
 
 class TestForeignPublishedDag:
     """Which graph AE will run, read back by node name rather than by version."""
@@ -555,3 +591,40 @@ class TestForeignPublishedDag:
             client, "get_published_version", side_effect=RuntimeError("boom")
         ):
             assert await client.foreign_published_dag("s", expected=("x",)) == ""
+
+
+class TestTerminateRun:
+    """``terminate_run`` — the teardown's stop for a run it stopped watching.
+
+    Teardown calls it on every outcome, so it must answer rather than raise:
+    a cleanup failure must never replace the test's own verdict.
+    """
+
+    async def test_it_posts_to_aes_terminate_route(self) -> None:
+        client = _client()
+        with patch.object(
+            client, "_request", return_value=(200, {"status": "success"})
+        ) as request:
+            assert await client.terminate_run("run/1") is True
+        request.assert_awaited_once_with(
+            "POST", "/automation/api/v1/runs/run%2F1/terminate"
+        )
+
+    @pytest.mark.parametrize("status", [404, 409, 500, 503])
+    async def test_a_non_2xx_is_reported_not_raised(self, status: int) -> None:
+        client = _client()
+        with patch.object(client, "_request", return_value=(status, {"err": "x"})):
+            assert await client.terminate_run("run-1") is False
+
+    async def test_an_unreachable_ae_is_reported_not_raised(self) -> None:
+        client = _client()
+        with patch.object(
+            client,
+            "_request",
+            side_effect=AtlanApiTimeoutError(
+                message="down",
+                operation="/automation/api/v1/runs/run-1/terminate",
+                delivery=RequestDelivery.AMBIGUOUS,
+            ),
+        ):
+            assert await client.terminate_run("run-1") is None

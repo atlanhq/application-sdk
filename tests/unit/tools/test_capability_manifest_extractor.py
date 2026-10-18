@@ -1,7 +1,7 @@
 """Tests for the symbol-discovery and alias-resolution paths in
 .claude/skills/capability-manifest/references/extractor.py.
 
-Two things are pinned here, both otherwise checked only by eyeballing the
+Three things are pinned here, all otherwise checked only by eyeballing the
 regenerated docs/agents/sdk-capabilities.md:
 
 - The external-alias runtime-introspection fallback. Griffe only loads the
@@ -11,6 +11,8 @@ regenerated docs/agents/sdk-capabilities.md:
 - Which modules the manifest indexes. Every public module declaring __all__ is
   discovered by walking the tree, submodules included; a hand-maintained list of
   subpackages is what made `run_in_thread` invisible in the manifest (FND-439).
+- A contract's fields include the ones it inherits, in Pydantic's order; a
+  shared private base otherwise hid `PreflightInput`'s credential fields.
 
 extractor.py is a standalone script, not a package member, so it is loaded by
 file path (same pattern used for .github/scripts/*.py in
@@ -23,6 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict
+
+import pytest
 
 _EXTRACTOR_DIR = (
     Path(__file__).resolve().parents[3]
@@ -584,3 +588,71 @@ def test_extract_all_from_init_reads_utf8_regardless_of_ambient_encoding(
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "['thing']"
+
+
+# ---------------------------------------------------------------------------
+# _contract_members -- a contract's fields include the ones it inherits
+# ---------------------------------------------------------------------------
+
+
+_INHERITED_CONTRACTS = """
+from pydantic import BaseModel
+
+
+class _SharedInput(BaseModel):
+    credentials: list[str] = []
+    entrypoint: str = ""
+    timeout_seconds: int = 60
+
+
+class CheckInput(_SharedInput):
+    tiers: list[str] = []
+    timeout_seconds: int = 30
+
+
+class ProbeInput(_SharedInput):
+    probe_timeout_seconds: int = 10
+"""
+
+
+def _member_defaults(contract: str) -> list[tuple[str, str]]:
+    """``(name, default)`` for each member :func:`extractor._contract_members`
+    returns for *contract*, walked by real griffe over :data:`_INHERITED_CONTRACTS`."""
+    griffe = pytest.importorskip("griffe")
+    with griffe.temporary_visited_package(
+        "sample_contracts", {"__init__.py": _INHERITED_CONTRACTS}
+    ) as package:
+        return [
+            (name, str(member.value))
+            for name, member in extractor._contract_members(package[contract])
+        ]
+
+
+def test_contract_members_include_inherited_fields_base_first() -> None:
+    assert _member_defaults("ProbeInput") == [
+        ("credentials", "[]"),
+        ("entrypoint", "''"),
+        ("timeout_seconds", "60"),
+        ("probe_timeout_seconds", "10"),
+    ]
+
+
+def test_contract_members_override_keeps_the_base_position() -> None:
+    # Pydantic's field order: a redefined field stays where the base declared
+    # it, carrying the subclass's default.
+    assert _member_defaults("CheckInput") == [
+        ("credentials", "[]"),
+        ("entrypoint", "''"),
+        ("timeout_seconds", "30"),
+        ("tiers", "[]"),
+    ]
+
+
+def test_contract_members_fall_back_to_own_members_without_an_mro() -> None:
+    class _NoMro:
+        members = {"own": "member"}
+
+        def mro(self) -> list[Any]:
+            raise ValueError("cannot compute the MRO")
+
+    assert extractor._contract_members(_NoMro()) == [("own", "member")]

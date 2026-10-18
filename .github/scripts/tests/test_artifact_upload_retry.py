@@ -83,9 +83,10 @@ EXEMPT = {
         "security-scan-raw-results",
     ): "scheduled scan; nothing gates on it and there is no merge queue to eject",
     (
-        "workflows/v3-readiness-check.yaml",
-        "v3-readiness-report",
-    ): "manually dispatched report; not on a PR or merge_group path",
+        "workflows/actions-cost-report.yaml",
+        "actions-cost-report",
+    ): "weekly scheduled report; nothing gates on it, and the alert and "
+    "Kryptonite publish do not read the artifact",
 }
 
 # Files that are not valid YAML, so their steps cannot be inspected. Empty, and
@@ -254,8 +255,14 @@ def test_the_guard_actually_finds_uploads_and_retries():
         first_attempts, retries = _classify(steps)
         total_first += len(first_attempts)
         total_retries += sum(len(v) for v in retries.values())
-    assert total_first >= 10, f"only {total_first} first-attempt uploads found"
-    assert total_retries >= 10, f"only {total_retries} retry uploads found"
+    # Floor was 10 until FND-2871 removed @sdk-loop, whose phase workflow
+    # carried three first-attempt uploads.
+    assert total_first >= 8, f"only {total_first} first-attempt uploads found"
+    # Floor was 10 until FND-2661 retired the three per-series conformance
+    # reusables (conformance-ci / -error-handling / -logging), which carried a
+    # retry upload each. Any floor above zero proves the classifier is live;
+    # this one keeps headroom so a real regression still trips it.
+    assert total_retries >= 5, f"only {total_retries} retry uploads found"
 
 
 def test_every_gating_upload_has_a_matching_retry_upload():
@@ -323,8 +330,8 @@ def test_first_attempts_overwrite_so_only_one_artifact_is_ever_live():
     409s there, hands the upload to the retry, and leaves BOTH `<name>` (from
     the earlier attempt) and `<name>-retry` live. Consumers glob `<name>*`, so
     a `merge-multiple` download then flattens two files of the same inner name
-    in undefined order — for `docker-image` that means Trivy scanning the
-    previous attempt's image. Overwrite here is what keeps at most one live
+    in undefined order — for `trivy-results` that means the Security Gate
+    judging the previous attempt's scan. Overwrite here is what keeps at most one live
     artifact per name, which is the invariant those globs rest on.
     """
     bad = [
@@ -379,6 +386,75 @@ def test_no_retry_reuses_its_first_attempts_artifact_name():
         "A retry must upload under its own name "
         f"(`<first name>{RETRY_SUFFIX}`):\n  " + "\n  ".join(bad)
     )
+
+
+# Longest retention any upload here may ask for. Codeql's 30 days is the current
+# high-water mark; nothing in this repo reads an artifact a month later.
+MAX_RETENTION_DAYS = 30
+
+
+def test_every_upload_sets_an_explicit_bounded_retention():
+    """No upload may fall back to the repo default (FND-3313).
+
+    Without `retention-days` an artifact lives for the repo/org default, which
+    is 90 days. The conformance SARIF uploads shipped that way: 12 per run, every
+    one of them held for three months in each connector repo. Exempt uploads are
+    checked too; the retry exemption is about gating, not storage.
+    """
+    problems = []
+    for rel, scope, steps in _scopes():
+        for step in (s for s in steps if _is_upload(s)):
+            days = _with(step).get("retention-days")
+            # bool is an int subclass, so `retention-days: true` would pass as 1.
+            if (
+                isinstance(days, bool)
+                or not isinstance(days, int)
+                or not 1 <= days <= MAX_RETENTION_DAYS
+            ):
+                problems.append(f"{_label(rel, scope, step)}: retention-days={days!r}")
+    assert not problems, (
+        f"Every `{UPLOAD_ACTION}` step must set an integer `retention-days` "
+        f"between 1 and {MAX_RETENTION_DAYS}:\n  " + "\n  ".join(problems)
+    )
+
+
+def test_a_retry_keeps_its_first_attempts_retention():
+    """A retry is the same artifact under another name; it must not outlive it."""
+    problems = []
+    for rel, scope, steps in _scopes():
+        first_attempts, retries = _classify(steps)
+        for first in first_attempts:
+            for companion in retries.get(first.get("id"), []):
+                want = _with(first).get("retention-days")
+                got = _with(companion).get("retention-days")
+                if got != want:
+                    problems.append(
+                        f"{_label(rel, scope, companion)}: retention-days={got!r}, "
+                        f"first attempt has {want!r}"
+                    )
+    assert not problems, "\n  ".join(problems)
+
+
+def test_no_workflow_uploads_an_image_tarball():
+    """`docker-image` was ~97% of each connector repo's live artifact bytes.
+
+    Measured over three connector repos (FND-3313): 50-76 tarballs of
+    ~0.55-0.65 GB each live under the old 7-day retention, 27-49 GB per repo.
+    Its only readers were the Trivy and Endor jobs of the same run, so
+    build-and-scan.yaml now builds and scans in one job and the tarball never
+    leaves the runner (FND-3319). Any image tarball upload is a regression.
+    """
+    found = [
+        _label(rel, scope, step)
+        for rel, scope, steps in _scopes()
+        for step in steps
+        if _is_upload(step)
+        and (
+            _artifact_path(step).endswith(".tar")
+            or str(_with(step).get("name", "")).startswith("docker-image")
+        )
+    ]
+    assert not found, "image tarball uploads:\n  " + "\n  ".join(found)
 
 
 def _guards_on(step: dict, step_id: str) -> bool:

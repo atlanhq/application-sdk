@@ -62,6 +62,8 @@ from dataclasses import dataclass
 # Decorator / call names we recognise.
 _DEPRECATED_DECORATORS: frozenset[str] = frozenset({"deprecated"})
 _WARN_INIT_METHODS: frozenset[str] = frozenset({"__init__", "__init_subclass__"})
+# Decorators that turn a class-body def into an attribute read, not a call.
+_PROPERTY_DECORATORS: frozenset[str] = frozenset({"property", "cached_property"})
 
 # Class-body mapping that marks individual enum members as deprecated.
 _DEPRECATED_MEMBERS_ATTR = "__deprecated_members__"
@@ -133,7 +135,13 @@ class DeprecationSite:
     form is exactly the attribute access a consumer writes."""
 
     kind: str
-    """``"function"`` | ``"method"`` | ``"class"`` | ``"enum_member"`` | ``"constant"``."""
+    """``"function"`` | ``"method"`` | ``"property"`` | ``"class"`` |
+    ``"enum_member"`` | ``"constant"``.
+
+    ``"property"`` is a ``@property`` / ``@cached_property`` def inside a class.
+    It is kept apart from ``"method"`` because a consumer *reads* a property
+    (``self.client``) rather than calling it, so B001 must never match it as a
+    call (FND-2711)."""
 
     marker_via: str | None
     """``"decorator"`` | ``"warn"`` | ``"enum-member"`` | ``"module-getattr"``
@@ -500,6 +508,24 @@ def extract_sites(tree: ast.Module) -> list[DeprecationSite]:
     """
     sites: list[DeprecationSite] = []
 
+    def _is_property(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        """Whether *node* is decorated ``@property`` / ``@cached_property``.
+
+        Matches the bare and the qualified spelling (``@functools.cached_property``)
+        by the decorator's final name.
+        """
+        for dec in node.decorator_list:
+            name = (
+                dec.id
+                if isinstance(dec, ast.Name)
+                else dec.attr
+                if isinstance(dec, ast.Attribute)
+                else None
+            )
+            if name in _PROPERTY_DECORATORS:
+                return True
+        return False
+
     def _visit_def(node: ast.FunctionDef | ast.AsyncFunctionDef, kind: str) -> None:
         dec_message = _deprecated_decorator_message(node)
         if dec_message is not None:
@@ -572,7 +598,7 @@ def extract_sites(tree: ast.Module) -> list[DeprecationSite]:
             _visit_class(node)
             for item in node.body:
                 if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
-                    _visit_def(item, "method")
+                    _visit_def(item, "property" if _is_property(item) else "method")
 
     # Constants served by a PEP 562 ``__getattr__`` shim. Emitted last because
     # they are synthesised from a mapping rather than found at a def site, so

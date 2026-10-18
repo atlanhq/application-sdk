@@ -281,6 +281,103 @@ def test_install_scopes_the_registration_to_the_one_tenant(
     assert "commit_sha" not in body
 
 
+def test_install_opts_only_its_own_tenant_in_to_store_assertions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FND-3571: the registration carries env_overrides.<tenant> setting
+    ATLAN_STORE_ASSERT_ENABLED, keyed by the same tenant it is scoped to."""
+    yaml = pytest.importorskip("yaml")
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"version": "older"})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(deploy_config="replicas: 2\n"))
+
+    config = yaml.safe_load(transport.body_for("/marketplace/publish")["config"])
+    assert config == {
+        "replicas": 2,
+        "env_overrides": {"example-tenant": {"ATLAN_STORE_ASSERT_ENABLED": "true"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("deploy_config", "expected"),
+    [
+        pytest.param(
+            "",
+            {"env_overrides": {"t1": {"ATLAN_STORE_ASSERT_ENABLED": "true"}}},
+            id="empty",
+        ),
+        pytest.param(
+            "env_overrides:\n  t1: {A: '1'}\n  t2: {B: '2'}\nreplicas: 1\n",
+            {
+                "env_overrides": {
+                    "t1": {"A": "1", "ATLAN_STORE_ASSERT_ENABLED": "true"},
+                    "t2": {"B": "2"},
+                },
+                "replicas": 1,
+            },
+            id="merges-existing-overrides",
+        ),
+        pytest.param(
+            "env_overrides:\n  t1: {ATLAN_STORE_ASSERT_ENABLED: 'false'}\n",
+            {"env_overrides": {"t1": {"ATLAN_STORE_ASSERT_ENABLED": "true"}}},
+            id="wins-over-an-app-opt-out",
+        ),
+    ],
+)
+def test_store_assert_override_merges_into_the_deploy_config(
+    deploy_config: str, expected: dict[str, object]
+) -> None:
+    yaml = pytest.importorskip("yaml")
+    merged = app.with_store_assert_override(deploy_config, "t1")
+    assert yaml.safe_load(merged) == expected
+
+
+def test_store_assert_override_on_an_empty_config_needs_no_yaml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-leg venv may lack PyYAML; the common empty case must not need it."""
+    real_import = builtins.__import__
+
+    def _no_yaml(name: str, *args: object, **kwargs: object) -> object:
+        if name == "yaml":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_yaml)
+    assert app.with_store_assert_override("", "t1") == (
+        'env_overrides:\n  "t1":\n    ATLAN_STORE_ASSERT_ENABLED: "true"\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "deploy_config",
+    [
+        pytest.param("- a\n- b\n", id="not-a-mapping"),
+        pytest.param("env_overrides: [t1]\n", id="overrides-not-a-mapping"),
+        pytest.param("env_overrides:\n  t1: on\n", id="tenant-entry-not-a-mapping"),
+    ],
+)
+def test_store_assert_override_refuses_a_malformed_deploy_config(
+    deploy_config: str,
+) -> None:
+    pytest.importorskip("yaml")
+    with pytest.raises(app.TenantAppError):
+        app.with_store_assert_override(deploy_config, "t1")
+
+
 def test_install_forwards_commit_sha_when_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1047,7 +1144,7 @@ def test_build_identity_ids_agree() -> None:
     this whole change removes, so it gets a test rather than a comment.
     """
     root = Path(__file__).resolve().parents[3]
-    sdk = (root / "application_sdk" / "app" / "build_identity.py").read_text()
+    sdk = (root / "application_sdk" / "common" / "build_identity.py").read_text()
     assert f'BUILD_IDENTITY_CONFIGMAP_ID = "{app.BUILD_IDENTITY_CONFIGMAP_ID}"' in sdk
     assert f'BUILD_ID_ENV = "{stamp_build_identity.BUILD_ID_ARG}"' in sdk
 
@@ -1544,6 +1641,55 @@ def test_retry_budget_is_respected_and_the_error_explains_the_lag(
     assert "snapshot" in str(excinfo.value) and "--install-retry-seconds" in str(
         excinfo.value
     )
+
+
+def test_install_retries_a_transient_5xx_from_the_marketplace_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LM failing to answer is not LM saying no; the budget covers both shapes.
+
+    Both shapes appear here: a bare 502 from Heracles (no envelope, so the HTTP
+    status is all there is) and LM's own 500 inside an HTTP 200 envelope. That
+    envelope is what an e2e leg actually died on while the tenant's control
+    plane was rolling — one attempt, no retry (FND-2429).
+    """
+    transport = _wire(
+        monkeypatch,
+        _publish_then(
+            Response(status=502, body={}),
+            _install_reply("error", 500, "Internal server error"),
+            _ok({"deployment_id": "d1"}),
+        ),
+    )
+    outcome = app.install(_install_args(install_retry_seconds=600))
+    assert outcome.deployment_id == "d1"
+    assert len([p for p in transport.paths("POST") if "/install" in p]) == 3
+
+
+def test_a_spent_budget_on_a_transient_5xx_names_the_shared_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The hint decides where an operator looks next, and for this shape that is
+    # the marketplace service, not the app under test.
+    _wire(monkeypatch, _publish_then(_install_reply("error", 500, "Internal error")))
+    with pytest.raises(app.TenantAppError) as excinfo:
+        app.install(_install_args(install_retry_seconds=0))
+    message = str(excinfo.value)
+    assert "shared across the whole e2e fan-out" in message
+    assert "not an app change to fix" in message
+
+
+def test_an_install_credential_rejection_stays_fatal_on_the_first_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A credential does not come good on a retry, so spending 600s on it only
+    # buries the one error worth reading — the same split _publish draws.
+    transport = _wire(
+        monkeypatch, _publish_then(_install_reply("error", 401, "Unauthorized"))
+    )
+    with pytest.raises(app.TenantAppError, match="401"):
+        app.install(_install_args(install_retry_seconds=600))
+    assert len([p for p in transport.paths("POST") if "/install" in p]) == 1
 
 
 def test_already_installed_is_a_no_op_not_a_failure(

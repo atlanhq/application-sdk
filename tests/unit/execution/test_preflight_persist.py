@@ -21,6 +21,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     _config_from_snapshot,
 )
 from application_sdk.handler.contracts import (
+    CheckTier,
     PreflightCheck,
     PreflightOutput,
     PreflightStatus,
@@ -515,25 +516,32 @@ class TestTheWriteIsOffTheCallersPath:
 
         asyncio.run(scenario())
 
+    # A caller that waited on the held write would deadlock the loop thread,
+    # where no asyncio timeout can fire. pytest-timeout turns that hang into a
+    # failure.
+    @pytest.mark.timeout(30)
     def test_a_slow_write_costs_the_caller_nothing(self):
-        async def _slow(row, *, endpoint, timeout):
-            await asyncio.sleep(0.2)
+        # The write cannot finish until the test releases it, and the test only
+        # releases it after the caller has returned. A caller that waited on the
+        # write in any way could not return here. An elapsed-time ceiling
+        # measured runner load instead and failed at random (FND-4018).
+        release = asyncio.Event()
+
+        async def _held(row, *, endpoint, timeout):
+            await release.wait()
 
         async def scenario():
-            with mock.patch.object(persist, "post_check_result", _slow):
-                loop = asyncio.get_running_loop()
-                started = loop.time()
+            with mock.patch.object(persist, "post_check_result", _held):
                 task = persist.persist_check_result(
                     _gate(workflow_slug=SLUG),
                     _verdict(),
                     endpoint="http://store/x/check-results",
                     timeout=30,
                 )
-                elapsed = loop.time() - started
                 assert task is not None
-                await task
-            # Two orders of magnitude under the write it scheduled.
-            assert elapsed < 0.02, f"scheduling cost {elapsed:.4f}s"
+                assert not task.done(), "the caller waited for the write"
+                release.set()
+                await asyncio.wait_for(task, timeout=10)
 
         asyncio.run(scenario())
 
@@ -564,6 +572,37 @@ class TestThePreflightResultsRouteContract:
             "app_id",
             "app_version",
         }
+
+    def test_a_warmup_check_carries_its_tier_and_a_preflight_one_does_not(self):
+        """FND-3041: per-check ``tier`` tells a warmup run's two rows apart, and
+        an app that never tiers its checks (every row ``PREFLIGHT``, the
+        default) sends exactly what it did before."""
+        result = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(name="scan", passed=True, tier=CheckTier.WARMUP),
+                PreflightCheck(name="grants", passed=True),
+                PreflightCheck(name="reach", passed=True, tier=CheckTier.PREFLIGHT),
+            ],
+        )
+        warmup, default, explicit = persist.verdict_payload(result)["preflight"][
+            "checks"
+        ]
+        assert warmup["tier"] == "warmup"
+        assert "tier" not in default
+        assert "tier" not in explicit
+
+    def test_no_warmup_phase_field_crosses(self):
+        """The warmup's own outcome and timing stay on the log row."""
+        assert not {
+            "warmup_outcome",
+            "warmup_duration_ms",
+            "warmup_transitions",
+        } & (
+            persist._VERDICT_WIRE_FIELDS
+            | persist._CHECK_WIRE_FIELDS
+            | persist._ERROR_WIRE_FIELDS
+        )
 
     def test_the_closed_vocabularies_match_the_receivers(self):
         """A value the route's enums reject is a 422 and a dropped row."""

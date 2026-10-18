@@ -1,6 +1,6 @@
 """Guard for the FND-110 apt-packages remediation in the conformance pipeline.
 
-The D-series leg is the FOURTH runner-sync site in the fleet.  #3060 wired
+The D series is the FOURTH runner-sync site in the fleet.  #3060 wired
 ``apt-packages`` into tests-reusable.yaml for the three tests jobs (unit,
 integration, e2e); its guard in test_apt_packages_and_summary_parse.py pinned
 RUNNER_SYNC_JOBS to exactly those three and the conformance D leg was missed
@@ -24,27 +24,39 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _conformance_series import load_workflow, series, suite_job  # noqa: E402
+from _gha_expr import evaluate  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CONFORMANCE = REPO_ROOT / ".github" / "workflows" / "conformance-reusable.yaml"
 TESTS_REUSABLE = REPO_ROOT / ".github" / "workflows" / "tests-reusable.yaml"
 
 APT_STEP_NAME = "Install system packages (apt-packages)"
-RUN_SERIES_STEP_NAME = "Run ${{ matrix.series }}-series checks"
 
 
 @pytest.fixture(scope="module")
 def workflow() -> dict:  # type: ignore[type-arg]
-    return yaml.safe_load(CONFORMANCE.read_text())
+    return load_workflow()
 
 
 @pytest.fixture(scope="module")
 def suite(workflow: dict) -> dict:  # type: ignore[type-arg]
-    return workflow["jobs"]["suite"]
+    return suite_job(workflow)
+
+
+@pytest.fixture(scope="module")
+def d_detect(suite: dict) -> dict:  # type: ignore[type-arg]
+    """The one detect step that syncs the caller's environment."""
+    synced = [entry for entry in series(suite) if entry.needs_env]
+    assert len(synced) == 1, f"expected one env-syncing series, got {synced}"
+    return synced[0].detect
 
 
 @pytest.fixture(scope="module")
@@ -73,62 +85,97 @@ def test_apt_step_exists_in_the_suite_job(suite: dict) -> None:  # type: ignore[
     assert APT_STEP_NAME in [s.get("name") for s in suite["steps"]]
 
 
-def test_apt_step_precedes_the_run_series_checks_step(suite: dict) -> None:  # type: ignore[type-arg]
+def test_apt_step_precedes_the_d_series_detect_step(
+    suite: dict, d_detect: dict
+) -> None:  # type: ignore[type-arg]
     """A post-detect install would be dead code for the failure it fixes: the
-    D leg's `uv sync` (and its native-sdist build) happens inside the detect
+    D series' `uv sync` (and its native-sdist build) happens inside the detect
     action, so the packages must be on the runner before that step fires."""
-    names = [s.get("name") or s.get("uses", "") for s in suite["steps"]]
-    apt_idx = names.index(APT_STEP_NAME)
-    run_idx = names.index(RUN_SERIES_STEP_NAME)
-    assert apt_idx < run_idx, "apt step must run before the detect action"
+    steps = suite["steps"]
+    apt_idx = steps.index(_apt_step(suite))
+    run_idx = steps.index(d_detect)
+    assert apt_idx < run_idx, "apt step must run before the D-series detect step"
 
+    names = [s.get("name") for s in steps]
     assert "Set up uv" in names[:apt_idx], (
         "apt step must sit after 'Set up uv' so the ordering requirement the "
         "task pins is explicit"
     )
 
 
-def test_apt_step_is_gated_on_input_and_matrix(suite: dict) -> None:  # type: ignore[type-arg]
-    """The guards must live in `if:`, never in the shell
-    (docs/standards/ci.md).  The `matrix.needs_env == 'true'` clause keeps
-    the 10 isolated legs from running a pointless apt-get update + install;
-    the relevance disjunction keeps the D leg from installing packages on a
-    PR that does not touch its `**/pyproject.toml` filter (when it would then
-    no-op)."""
-    step = _apt_step(suite)
-    cond = step.get("if", "")
-    assert (
-        "inputs.apt-packages != ''" in cond
-    ), "apt step must self-skip when the input is empty"
-    assert (
-        "matrix.needs_env == 'true'" in cond
-    ), "apt step must be a no-op on the isolated (non-D) legs"
-    for clause in (
-        "steps.changes.outputs.relevant == 'true'",
-        "inputs.event_name == 'push'",
-        "inputs.force-all",
-    ):
-        assert (
-            clause in cond
-        ), f"apt step must self-skip when the leg is not relevant ({clause})"
+def _contexts(
+    *, apt: str, event: str, force_all: bool, dependency: str, apt_outcome: str
+) -> dict:  # type: ignore[type-arg]
+    return {
+        "inputs": {
+            "apt-packages": apt,
+            "event_name": event,
+            "force-all": force_all,
+        },
+        "steps": {
+            "changes": {"outputs": {"dependency": dependency}},
+            "apt-packages": {"outcome": apt_outcome},
+        },
+    }
 
 
-def test_apt_step_shares_the_run_series_relevance_gate(suite: dict) -> None:  # type: ignore[type-arg]
-    """The apt step fires under exactly the legs the detect step fires under,
-    so its relevance condition is derived from — and must contain — the one on
-    `Run ${{ matrix.series }}-series checks`.  A hardcoded copy would keep
-    passing while the two drifted, so this normalises whitespace and asserts
-    containment instead."""
-    run_step = next(s for s in suite["steps"] if s.get("name") == RUN_SERIES_STEP_NAME)
+_SCENARIOS = [
+    (event, force_all, dependency)
+    for event in ("pull_request", "merge_group", "push")
+    for force_all in (False, True)
+    for dependency in ("true", "false", "")
+]
 
-    def _normalise(cond: str) -> str:
-        return " ".join(cond.split())
 
-    run_cond = _normalise(run_step.get("if", ""))
-    assert run_cond in _normalise(_apt_step(suite).get("if", "")), (
-        "apt step's relevance gate must contain the detect step's condition — "
-        "the install would otherwise fire for legs that then no-op"
+@pytest.mark.parametrize("event,force_all,dependency", _SCENARIOS)
+def test_apt_step_fires_exactly_when_the_d_series_does(
+    suite: dict,
+    d_detect: dict,
+    event: str,
+    force_all: bool,
+    dependency: str,  # type: ignore[type-arg]
+) -> None:
+    """The guards live in `if:`, never in the shell (docs/standards/ci.md), and
+    the install fires under exactly the conditions the D-series detect fires
+    under — evaluated, not string-matched, so a reworded gate that still means
+    the same thing passes and one that drifted does not.  An empty input is a
+    no-op whatever else is true."""
+    apt_if = _apt_step(suite)["if"]
+    d_if = d_detect["if"]
+
+    with_input = _contexts(
+        apt="libkrb5-dev",
+        event=event,
+        force_all=force_all,
+        dependency=dependency,
+        apt_outcome="success",
     )
+    assert evaluate(apt_if, with_input) == evaluate(d_if, with_input), (
+        "apt step and D-series detect disagree on whether D is relevant — the "
+        "install would fire for a series that then no-ops, or be missing for "
+        "one that syncs"
+    )
+
+    without_input = _contexts(
+        apt="",
+        event=event,
+        force_all=force_all,
+        dependency=dependency,
+        apt_outcome="skipped",
+    )
+    assert not evaluate(apt_if, without_input), "empty apt-packages must self-skip"
+
+
+def test_d_series_does_not_run_after_a_failed_install(d_detect: dict) -> None:  # type: ignore[type-arg]
+    """A failed install means `uv sync` fails too, further from the cause."""
+    contexts = _contexts(
+        apt="libkrb5-dev",
+        event="push",
+        force_all=False,
+        dependency="",
+        apt_outcome="failure",
+    )
+    assert not evaluate(d_detect["if"], contexts)
 
 
 def test_apt_step_routes_the_value_through_env(suite: dict) -> None:  # type: ignore[type-arg]
@@ -141,17 +188,13 @@ def test_apt_step_routes_the_value_through_env(suite: dict) -> None:  # type: ig
     ), "apt step interpolates an expression into the shell script"
 
 
-def test_only_the_d_leg_materialises_the_environment(suite: dict) -> None:  # type: ignore[type-arg]
-    """The matrix condition is only meaningful if exactly one leg syncs.  The
-    other ten legs run detect from an isolated `uvx` env."""
-    needs_env_legs = [
-        m["series"]
-        for m in suite["strategy"]["matrix"]["include"]
-        if m.get("needs_env") == "true"
-    ]
-    assert needs_env_legs == [
+def test_only_the_d_series_materialises_the_environment(suite: dict) -> None:  # type: ignore[type-arg]
+    """The apt gate is only meaningful if exactly one series syncs.  The
+    others run detect from an isolated `uvx` env."""
+    needs_env = [entry.letter for entry in series(suite) if entry.needs_env]
+    assert needs_env == [
         "D"
-    ], f"expected only the D leg to set needs_env, got {needs_env_legs}"
+    ], f"expected only the D series to set needs-env, got {needs_env}"
 
 
 # ---------------------------------------------------------------------------

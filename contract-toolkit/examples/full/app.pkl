@@ -251,6 +251,15 @@ uiConfig = new UIConfig {
           multiSelect = true
           width = 4
         }
+        ["tag_keys"] = new TagsInput {
+          title = "Tag keys"
+          helpText = "Source tag keys to sync; leave empty to sync none."
+          placeholderText = "OwningTeam"
+          tokenSeparators { ", "; "," }
+          allowClear = true
+          maxTagCount = "responsive"
+          width = 4
+        }
         ["lineage_depth"] = new NumericInput {
           title = "Lineage depth"
           helpText = "How many hops of upstream lineage to resolve (required when lineage is on)."
@@ -311,6 +320,13 @@ uiConfig = new UIConfig {
           sqlQuery = "show atlan schemas"
           credentialType = "atlan-connectors-full-featured"
           excludePatterns = List("information_schema")
+        }
+        // Preflight checks; keep the SageV2 widget last in the final step.
+        // warmup = true declares that the app's handler overrides
+        // Handler.warmup, so the setup UI runs the warmup flow first.
+        ["preflight-check"] = new SageV2 {
+          title = ""
+          warmup = true
         }
       }
     }

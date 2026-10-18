@@ -40,4 +40,6 @@ jobs:
       unit_tests_workflow_file: "<< unit_tests_workflow >>"
 <% if use_ghcr_base == 'true' %>      use_ghcr_base: true
 <% endif %><% if build_publish_lfs %>      lfs: << build_publish_lfs >>
+<% endif %><% if build_publish_private_git_auth %>      # certify's `uv sync` re-resolves this repo's private atlanhq dep.
+      private_git_auth: << build_publish_private_git_auth >>
 <% endif %>    secrets: inherit

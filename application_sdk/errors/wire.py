@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from application_sdk.errors.base import redact_secrets
 from application_sdk.errors.categories import Audience, FailureCategory
 
 # Keys that may carry secrets — rejected at envelope construction.
@@ -95,6 +96,22 @@ class FailureDetails(BaseModel):
     app_name: str | None = None
     run_id: str | None = None
     cause_repr: str | None = None
+
+    @field_validator("message", "suggested_action")
+    @classmethod
+    def _redact_free_text(cls, v: str | None) -> str | None:
+        """Scrub credentials out of the handler-authored strings, once, here.
+
+        These two fields are the only free text on the envelope and both are
+        written by the app, so a driver's connection string or a presigned URL
+        lands in them routinely. This model is what reaches Temporal history,
+        the Automation Engine and every log row, so redacting where it is built
+        covers every consumer at once — including the ones not written yet.
+        Idempotent, so an envelope replayed off the wire is unchanged.
+        ``evidence`` is handled below by key name instead: it is structured,
+        and a secret-named key is a producer bug worth rejecting, not masking.
+        """
+        return v if v is None else redact_secrets(v)
 
     @field_validator("evidence")
     @classmethod

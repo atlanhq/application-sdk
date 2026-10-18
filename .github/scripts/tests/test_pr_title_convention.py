@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import bound_lock_branch
 import pr_title_convention as ptc
 
 # ---------------------------------------------------------------------------
@@ -110,6 +111,52 @@ class TestClassifyFiles:
             ["packages/conformance/pyproject.toml", "packages/conformance/foo.py"]
         ) == ("cf-core")
         assert ptc.classify_files(["pyproject.toml", "entrypoint.sh"]) == "docker-img"
+
+    def test_lock_derived_file_beside_lock_is_deps(self):
+        # The lock refresh regenerates relationship_directions.json when it moves
+        # pyatlan; that rides along as part of the dependency update.
+        assert (
+            ptc.classify_files(
+                [
+                    "uv.lock",
+                    "packages/conformance/uv.lock",
+                    "packages/conformance/conformance/data/relationship_directions.json",
+                ]
+            )
+            == "deps"
+        )
+
+    def test_lock_derived_file_alone_keeps_its_zone(self):
+        # Without a lock beside it, a change to the generated file is a
+        # conformance change like any other.
+        assert (
+            ptc.classify_files(
+                ["packages/conformance/conformance/data/relationship_directions.json"]
+            )
+            == "cf-core"
+        )
+
+    def test_lock_derived_file_plus_source_is_not_deps(self):
+        assert (
+            ptc.classify_files(
+                [
+                    "packages/conformance/uv.lock",
+                    "packages/conformance/conformance/data/relationship_directions.json",
+                    "packages/conformance/conformance/foo.py",
+                ]
+            )
+            == "cf-core"
+        )
+
+    def test_lock_derived_paths_cover_what_the_lock_lane_generates(self):
+        # Drift guard: every non-lock file the refresh lane may commit must be
+        # recognised here, or its PRs fail this check again.
+        generated = {
+            p
+            for p in bound_lock_branch.OUTPUT_PATHS
+            if not ptc.is_dependency_manifest(p)
+        }
+        assert generated <= ptc.LOCK_DERIVED_PATHS
 
     def test_docs_only_is_other(self):
         assert ptc.classify_files(["docs/foo.md"]) == "other"

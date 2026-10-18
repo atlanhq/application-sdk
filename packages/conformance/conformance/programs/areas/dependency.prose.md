@@ -242,6 +242,12 @@ fix.  The re-detection gate is authoritative for this area — see
   Preserve the task's existing name; only its body changes. This is BLOCK-tier
   and has no suppress path in default mode, same as D001.
 
+  Verify the new body by running it directly — `uv run --frozen python -c`
+  with the same three lines — not through `uv run poe download-components`:
+  poe re-launches the task through its own `uv run` without `--frozen`, and
+  on a laptop with a machine-wide default index that re-resolves `uv.lock`
+  onto the package firewall (D013) in a repo D012 has not fixed yet.
+
 - **D012 UnpinnedPackageIndex** (`classification = "mechanical"`) — the root
   `pyproject.toml` does not pin PyPI as uv's default index, so the repo
   inherits whatever default index the machine supplies.  Two branches; read the
@@ -269,8 +275,8 @@ fix.  The re-detection gate is authoritative for this area — see
 
   - **Write it into `pyproject.toml`, never into a project-level `uv.toml`.**
     A `uv.toml` does override the user-level config, but it also suppresses
-    `[tool.uv]` in `pyproject.toml` entirely — silently dropping any
-    `constraint-dependencies` CVE floors declared there.  uv warns about this,
+    `[tool.uv]` in `pyproject.toml` entirely — silently dropping every setting
+    declared there (`sources`, `constraint-dependencies`, …).  uv warns about this,
     but names only `constraint-dependencies`, so the rest goes unremarked.
   - **Do not regenerate `uv.lock` as part of this fix.**  Adding the index does
     not change resolution — same versions, same hashes — so the lock must come
@@ -292,8 +298,9 @@ fix.  The re-detection gate is authoritative for this area — see
   `# conformance: ignore[D012] <reason>` on the finding's line and name the
   mandate in the justification.
 
-**Advisory rules** (`autofixable = false`, `classification = "judgment"`;
-WARN-tier — route to residue for human decision):
+**Advisory rules** (`autofixable = true` — the lane applies the prescription;
+`classification = "judgment"` — WARN-tier, every result is routed to residue
+for human confirmation):
 
 - **D003 UnusedDependency** — a package declared in `[project.dependencies]`
   (or a `[project.optional-dependencies.*]` / `[dependency-groups.*]` array) is
@@ -311,6 +318,27 @@ WARN-tier — route to residue for human decision):
   3. **Suppress**: if the package is intentionally runtime-loaded (plugin,
      optional backend, server process), propose a `# conformance: ignore[D003]
      <reason>` comment on the entry line and explain the load mechanism.
+
+  4. **Retain a documented app-specific minimum**: if a core dependency
+     intentionally enforces a documented app-specific minimum version for an
+     SDK-managed transitive package, compare it with the SDK's declared range.
+     If the SDK's declared range does not guarantee the required minimum, retain
+     the app-local requirement with a reasoned D003 exception.  Name the exact
+     app requirement and the SDK range gap in the reason.  This exception also
+     applies to a `[tool.uv] constraint-dependencies` entry.  Do not use it for
+     a generic transitive floor.  A currently resolved lockfile version alone
+     is not a future guarantee; remove the app-local requirement and exception
+     only after the SDK range guarantees the floor.
+
+  **A `[tool.uv] constraint-dependencies` entry in an app is also D003.**
+  Every entry is surfaced for review.  Generic transitive floors belong in
+  `atlan-application-sdk`'s dependency ranges, not in an app's direct
+  dependencies or constraints; remove a generic app-local floor and move any
+  generally required floor upstream.  Do not move a floor from
+  `[project.dependencies]` into `constraint-dependencies` merely to clear
+  D003, since that only relocates it.  Keep only the narrow, documented
+  app-specific exception in item 4 when the SDK's declared range does not
+  guarantee that minimum.  The SDK's own pyproject is exempt.
 
   Never auto-delete without reading the codebase context — dynamic imports,
   `__import__`, `importlib.import_module`, entry-point declarations in
@@ -393,6 +421,23 @@ WARN-tier — route to residue for human decision):
   never exercise (fleet SDR sweep).  The finding is anchored at the SDK
   dependency line in `pyproject.toml`.
 
+  **First check that the import site is live.**  The check matches the
+  import anywhere in the source and does not test reachability.  Search for
+  importers of the module the finding message names, outside that module;
+  read its docstring and the repo's `CLAUDE.md`/`AGENTS.md`, which often mark
+  superseded code as unused.  If nothing imports it, it is dead code: the
+  `migration_brief` is to delete that module (and the templates only it
+  reads), with no dependency change — adding `[sql]` would ship an unused
+  `duckdb` to production.  If the repo keeps that code on purpose (frozen
+  reference code for an in-progress port), the brief is a trailing
+  `# conformance: ignore[D010] <reason>` on the finding's anchor line in
+  `pyproject.toml` (the SDK dependency line in `[project] dependencies`, or
+  line 1 when no SDK dependency is declared there), naming the dead import
+  path and the owner — even on a `[daft]` pin, where the SDK bump below
+  would ship an unused `duckdb`.  Only that file's suppressions are read, so
+  a directive on the Python import line has no effect.  Only for a live
+  import, continue below.
+
   **Check the extra on that line before proposing anything.**  If the app pins
   `atlan-application-sdk[daft]`, the defect is the SDK's, not the app's: that
   extra resolved to nothing over SDK 3.22–3.27 and aliases `[sql]` again from
@@ -408,9 +453,14 @@ WARN-tier — route to residue for human decision):
   SDK's range by hand.  Either way note that `uv lock` must be re-run; the
   relock touches the resolved environment, so route to residue rather than
   auto-applying (the D-series loop does not `uv sync` between edit and gates).
+  D010 is `autofixable = false` — a **migration** rule: return
+  `not_remediable = true` with a `migration_brief` naming the extra to adopt
+  and the relock step, and apply nothing (see `remediate-finding`'s
+  *Reference apps, impact analysis and verification*).
 
-**Judgment rules** (`autofixable = false`, `classification = "judgment"`; route
-to residue):
+**Judgment rules** (`autofixable = true` — the lane applies the prescription;
+`classification = "judgment"` — every result is routed to residue for human
+confirmation):
 
 - **D005 UnknownSdkExtra** — the `atlan-application-sdk[<extra>]` reference
   names an extra the SDK does not publish.  Propose the closest published extra

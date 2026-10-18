@@ -38,8 +38,10 @@ def test_c003_tier_is_warn() -> None:
     assert get_rule("C003").tier == EnforcementTier.WARN
 
 
-def test_c003_is_not_autofixable() -> None:
-    assert get_rule("C003").autofixable is False
+def test_c003_is_autofixable() -> None:
+    # Classified auto-fixable (FND-2477): the absent-file case is `bootstrap`,
+    # the missing-entry case is a prescribed edit; both are applied and residued.
+    assert get_rule("C003").autofixable is True
 
 
 def test_c003_orthogonal_gate_is_skip() -> None:
