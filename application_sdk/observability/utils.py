@@ -124,13 +124,14 @@ def in_temporal_workflow() -> bool:
     ``in_workflow()`` reads Temporal's own ContextVar, so it is correct in
     both cases and returns False outside Temporal entirely.
 
-    The module is looked up in ``sys.modules`` rather than imported. This
-    predicate now runs on every buffered record, including records logged while
-    the worker is still importing temporalio on another thread; importing it
-    here raced that import and crashed the boot on a partially initialised
-    module. A process that has not loaded ``temporalio.workflow`` cannot be
-    inside a workflow, so the answer is False without touching the import
-    system.
+    Looked up in ``sys.modules``, not imported: it runs on every buffered
+    record, and an import while temporalio is still being imported can return
+    a partially initialised module. A process that has not loaded
+    ``temporalio.workflow`` cannot be inside a workflow, so the answer is False.
+    The lookup is still a deliberate coupling to Temporal (the P006 exception
+    the import used to carry): relocating it behind ``execution/_temporal/``
+    would make observability import execution, which already imports
+    observability.
 
     Returns:
         bool: True inside workflow code; False in activities, the API server,
