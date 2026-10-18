@@ -46,7 +46,7 @@ import tempfile
 import time
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, BinaryIO, TypedDict
 
 import obstore
 import orjson
@@ -960,6 +960,18 @@ async def _finalize_upload_integrity(
         await integrity.write_digest_sidecar(store, key, digest)
 
 
+def _read_part(fh: BinaryIO, size: int, h: hashlib._Hash | None) -> bytes:
+    """Read one upload part and feed it to *h*.
+
+    Runs off the event loop: a part read from a slow disk, or hashed, can take
+    long enough on the loop to starve the auto-heartbeat and the health probe.
+    """
+    chunk = fh.read(size)
+    if chunk and h is not None:
+        h.update(chunk)
+    return chunk
+
+
 async def upload_file(
     key: str,
     local_path: str | Path,
@@ -1105,11 +1117,9 @@ async def upload_file(
         ) as writer:
             with path.open("rb") as fh:
                 while True:
-                    chunk = fh.read(effective_chunk)
+                    chunk = await run_in_thread(_read_part, fh, effective_chunk, h)
                     if not chunk:
                         break
-                    if h is not None:
-                        h.update(chunk)
                     await writer.write(chunk)
                     bytes_sent += len(chunk)
                     # One multipart part on its way to the store is one

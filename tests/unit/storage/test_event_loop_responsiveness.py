@@ -18,7 +18,9 @@ measured runner CPU rather than offloading and failed at random (FND-4018).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import orjson
@@ -27,8 +29,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.json import JsonFileReader, JsonFileWriter
 from application_sdk.storage.formats.parquet import ParquetFileReader
+from application_sdk.storage.ops import upload_file
 from application_sdk.storage.rolling import RollingFileWriter
 from tests.unit.loop_probe import LoopProbe
 
@@ -270,3 +274,37 @@ class TestRollingWriterResponsiveness:
 
         assert completed == [0]
         probe.assert_loop_stayed_free("RollingFileWriter sync on_chunk_complete")
+
+
+class TestUploadFileResponsiveness:
+    async def test_upload_part_read_and_hash_do_not_block_the_loop(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        probe = LoopProbe()
+        source = tmp_path / "part.bin"
+        source.write_bytes(b"synthetic upload payload")
+
+        class _SlowHash:
+            """Charges the cost of hashing a full-size part, then hashes."""
+
+            def __init__(self) -> None:
+                self._real = hashlib.sha256()
+
+            def update(self, data: bytes) -> None:
+                probe.block()
+                self._real.update(data)
+
+            def hexdigest(self) -> str:
+                return self._real.hexdigest()
+
+        # Scoped to ops' own reference so the digest check below hashes normally.
+        monkeypatch.setattr(
+            "application_sdk.storage.ops.hashlib", SimpleNamespace(sha256=_SlowHash)
+        )
+
+        digest = await probe.run(
+            lambda: upload_file("synthetic/part.bin", source, create_memory_store())
+        )
+
+        probe.assert_loop_stayed_free("upload_file part read and hash")
+        assert digest == hashlib.sha256(b"synthetic upload payload").hexdigest()
