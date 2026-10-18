@@ -117,11 +117,16 @@ async def get_deployment_secret(key: str, *, raise_on_error: bool | None = None)
 async def _fetch_deployment_secret(key: str) -> Any:
     """One attempt at *key*: the multi-key bundle, then a single-key lookup.
 
+    An empty value counts as absent at either step: the ``local.env`` store
+    (``components/deployment-secrets.yaml``) answers an unset variable with
+    ``""`` rather than an error, and an empty credential is never usable.
+
     Raises:
         SecretNotFoundError: *key* is in neither the bundle nor the store.
         SecretStoreError: The store failed or was unreachable (the
             :class:`SecretStoreUnavailableError` subtype for the latter, so
-            the cold-start retry picks it up).
+            the cold-start retry picks it up), or the Dapr client could not
+            be constructed (non-retryable: a configuration fault).
     """
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on secret resolution
         DEPLOYMENT_SECRET_PATH,
@@ -134,7 +139,16 @@ async def _fetch_deployment_secret(key: str) -> Any:
         AsyncDaprClient,
     )
 
-    client = AsyncDaprClient()
+    try:
+        client = AsyncDaprClient()
+    # conformance: ignore[E004] re-raised as a typed SecretStoreError; cause chain preserved
+    except Exception as exc:
+        raise SecretStoreError(
+            f"Could not create the Dapr client for the deployment secret store: {exc}",
+            secret_name=key,
+            cause=exc,
+            retryable=False,
+        ) from exc
     try:
         try:
             result = await client.get_secret(
@@ -147,7 +161,7 @@ async def _fetch_deployment_secret(key: str) -> Any:
                 raise error from exc
         else:
             secret_data = process_secret_data(result)
-            if key in secret_data:
+            if _is_present(secret_data.get(key)):
                 return secret_data[key]
 
         logger.debug("Multi-key bundle lookup missed; trying single-key: %s", key)
@@ -159,18 +173,25 @@ async def _fetch_deployment_secret(key: str) -> Any:
 
         single_data = process_secret_data(result)
         if key in single_data:
-            return single_data[key]
+            if _is_present(single_data[key]):
+                return single_data[key]
+            raise SecretNotFoundError(key)
         # A secret stored under *key* whose one entry has another name (a
         # Kubernetes secret's sole data key) is still the value of *key*.
         # Read that from the raw response: process_secret_data unwraps a
         # single JSON-document entry into its fields, and the sole field of
         # that document is not the secret named *key*.
         raw = dict(result)
-        if len(raw) == 1:
-            return next(iter(raw.values()))
+        if len(raw) == 1 and _is_present(sole := next(iter(raw.values()))):
+            return sole
         raise SecretNotFoundError(key)
     finally:
         await client.close()
+
+
+def _is_present(value: Any) -> bool:
+    """Whether a store answered with a usable value (``None`` and ``""`` are absent)."""
+    return value is not None and value != ""
 
 
 @dataclass(kw_only=True)

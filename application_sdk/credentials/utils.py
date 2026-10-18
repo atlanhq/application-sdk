@@ -135,7 +135,7 @@ async def resolve_credential_file(
     filename: str,
     dest_dir: str = ...,
     *,
-    raise_on_error: Literal[False] | None = ...,
+    raise_on_error: bool | None = ...,
 ) -> str | None: ...
 
 
@@ -200,7 +200,8 @@ async def resolve_credential_file(
     Args:
         value:    Raw credential field value — JSON object-store reference,
                   an ``objectstore://`` prefixed key, or a raw base64-encoded
-                  string. Empty means the field was not supplied.
+                  string. Empty or whitespace-only means the field was
+                  not supplied.
         filename: Destination filename used for the base64 and ``objectstore://``
                   branches (e.g. ``"keytab.keytab"``, ``"krb5.conf"``,
                   ``"ca_cert.pem"``). Ignored for the Atlan upload branch —
@@ -221,7 +222,8 @@ async def resolve_credential_file(
         empty or resolution fails, unless ``raise_on_error`` is ``True``.
 
     Raises:
-        CredentialNotFoundError: ``raise_on_error`` and ``value`` is empty.
+        CredentialNotFoundError: ``raise_on_error`` and ``value`` is empty or
+            whitespace only.
         CredentialParseError: ``raise_on_error`` and ``value`` is an invalid
             ``objectstore://`` key or not valid base64.
         Exception: Failures downloading an Atlan upload reference propagate
@@ -240,7 +242,7 @@ async def resolve_credential_file(
             stacklevel=2,
         )
 
-    if not value:
+    if not value or not value.strip():
         if raise_on_error:
             from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
                 CredentialNotFoundError,

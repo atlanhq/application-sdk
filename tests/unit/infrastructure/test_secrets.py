@@ -666,3 +666,54 @@ class TestGetDeploymentSecretDeprecatedDefault:
 
         assert result is None
         assert client.get_secret.await_count == 1
+
+
+@pytest.mark.usefixtures("_deployed")
+class TestGetDeploymentSecretEmptyValueIsAbsent:
+    """The local.env store answers an unset variable with "" instead of an error."""
+
+    async def test_empty_single_key_value_raises_not_found(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"DB_PASSWORD": ""})
+        with _patch_client(client), pytest.raises(SecretNotFoundError):
+            await get_deployment_secret("DB_PASSWORD", raise_on_error=True)
+
+    async def test_empty_bundle_value_falls_through_to_single_key(self) -> None:
+        client = _client(
+            {"ATLAN_DEPLOYMENT_SECRETS": json.dumps({"DB_PASSWORD": ""})},
+            {"DB_PASSWORD": "pw"},
+        )
+        with _patch_client(client):
+            result = await get_deployment_secret("DB_PASSWORD", raise_on_error=True)
+
+        assert result == "pw"
+
+    async def test_empty_sole_entry_raises_not_found(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"password": ""})
+        with _patch_client(client), pytest.raises(SecretNotFoundError):
+            await get_deployment_secret("DB_PASSWORD", raise_on_error=True)
+
+    async def test_legacy_mode_returns_none_for_empty_value(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"DB_PASSWORD": ""})
+        with _patch_client(client):
+            result = await get_deployment_secret("DB_PASSWORD", raise_on_error=False)
+
+        assert result is None
+
+
+@pytest.mark.usefixtures("_deployed")
+class TestGetDeploymentSecretClientConstruction:
+    async def test_construction_failure_raises_non_retryable_store_error(
+        self,
+    ) -> None:
+        failure = httpx.InvalidURL("Invalid port: 'abc'")
+        with (
+            patch(
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                side_effect=failure,
+            ),
+            pytest.raises(SecretStoreError) as ei,
+        ):
+            await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+        assert ei.value.cause is failure
+        assert ei.value.effective_retryable is False

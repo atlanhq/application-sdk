@@ -452,3 +452,29 @@ class TestResolveCredentialFileDeprecatedDefault:
                 "", "ca_cert.pem", str(tmp_path), raise_on_error=False
             )
         assert result is None
+
+
+class TestResolveCredentialFileWhitespaceValue:
+    @pytest.mark.parametrize("value", ["   ", "\n\t "])
+    async def test_whitespace_only_raises_not_found(self, value, tmp_path):
+        with pytest.raises(CredentialNotFoundError):
+            await resolve_credential_file(
+                value, "ca_cert.pem", str(tmp_path), raise_on_error=True
+            )
+        assert not os.path.exists(tmp_path / "ca_cert.pem")
+
+    async def test_whitespace_only_is_none_in_legacy_mode(self, tmp_path):
+        result = await resolve_credential_file(
+            "   ", "ca_cert.pem", str(tmp_path), raise_on_error=False
+        )
+        assert result is None
+        assert not os.path.exists(tmp_path / "ca_cert.pem")
+
+    async def test_accepts_a_non_literal_bool(self, tmp_path):
+        # A runtime-chosen ``bool`` behaves like the literal it holds. (The
+        # overload side is not checked here: pyright excludes tests/.)
+        strict: bool = bool(os.environ.get("_UNSET_FOR_THIS_TEST"))
+        result: str | None = await resolve_credential_file(
+            "", "ca_cert.pem", str(tmp_path), raise_on_error=strict
+        )
+        assert result is None
