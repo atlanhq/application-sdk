@@ -49,10 +49,16 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, TypeAlias, TypeVar, Union
 
+from application_sdk.errors.leaves import InvalidInputValueError
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
 from application_sdk.testing.harness.budgets import Budget
-from application_sdk.testing.harness.expectations import AssetAttributes, AssetRef
+from application_sdk.testing.harness.expectations import (
+    AssetAttributes,
+    AssetRef,
+    LineageEdge,
+    LineageEdgeCounts,
+)
 from application_sdk.testing.harness.outcome import (
     Indeterminate,
     NeverStarted,
@@ -90,12 +96,14 @@ __all__ = [
     # should not need a second import to type its result.
     "AssetAttributes",
     "AssetRef",
+    "LineageEdgeCounts",
     "Reading",
     "admin_identity",
     "atlas_client",
     "connection_exists",
     "count_assets",
     "count_lineage",
+    "count_lineage_edges",
     "count_total_assets",
     "create_connection",
     "poll_for_connection",
@@ -401,6 +409,145 @@ async def count_lineage(
         type_names,
         has_lineage_only=True,
         label=f"lineage coverage under {connection_qualified_name}",
+    )
+
+
+#: Lineage process types matched by name. Anything else whose super types
+#: include ``Process`` (a tool-specific process subtype) is matched as well, so
+#: this list only has to name the types a connector publishes directly.
+_LINEAGE_PROCESS_TYPES: tuple[str, ...] = ("Process", "ColumnProcess", "BIProcess")
+
+#: Most lineage processes :func:`count_lineage_edges` reads before it stops.
+#: Bounds the cost of a connection with a very large lineage graph; when the
+#: cap is hit the result says so, and an edge that has not reached its floor by
+#: then is ungraded rather than failed.
+_LINEAGE_EDGE_SCAN_CAP = 5000
+
+#: Page size for the lineage-edge scan. Each hit carries its input and output
+#: references, so pages are kept smaller than a GUID-only listing's.
+_LINEAGE_EDGE_PAGE_SIZE = 500
+
+
+async def count_lineage_edges(
+    client: AsyncAtlanClient,
+    connection_qualified_name: str,
+    pairs: Sequence[LineageEdge],
+    *,
+    scan_cap: int = _LINEAGE_EDGE_SCAN_CAP,
+) -> Reading[LineageEdgeCounts]:
+    """Count lineage processes linking each (source type, target type) pair.
+
+    :func:`count_lineage` answers "do assets under this connection have
+    lineage", which stays true when a connector publishes its coarse processes
+    and silently stops producing a finer kind — field-level links between two
+    BI types, say — with asset counts unchanged. This reader names the link:
+    a process counts toward ``(source, target)`` when at least one of its inputs
+    is an asset of type ``source`` and at least one of its outputs is an asset
+    of type ``target``.
+
+    Only the reference's ``typeName`` is consulted. A process's inputs and
+    outputs may live under other connections (a warehouse column feeding a BI
+    field), so the endpoints are deliberately not filtered by this connection;
+    the *process* is what has to sit under it.
+
+    Args:
+        client: An open client from :func:`atlas_client`.
+        connection_qualified_name: Connection prefix the processes sit under.
+        pairs: The (source type, target type) pairs to count. Pairs not listed
+            are not counted.
+        scan_cap: Most processes to read before stopping. Must be at least 1.
+
+    Returns:
+        :class:`~application_sdk.testing.harness.outcome.Settled` carrying a
+        count for every requested pair, zeros included, plus whether the scan
+        stopped at *scan_cap* with processes unread; or
+        :class:`~application_sdk.testing.harness.outcome.Indeterminate` when the
+        search could not be read, so a failed search is never a zero.
+
+    Raises:
+        InvalidInputValueError: *scan_cap* is below 1. A zero-size page reads
+            no processes, which would report every edge as settled at zero
+            rather than as unscanned.
+    """
+    if scan_cap < 1:
+        raise InvalidInputValueError(
+            message=f"count_lineage_edges scan_cap is {scan_cap}; it must be >= 1.",
+            field="scan_cap",
+            constraint=">= 1",
+        )
+    from pyatlan.model.assets import Asset  # noqa: PLC0415
+    from pyatlan.model.fluent_search import FluentSearch  # noqa: PLC0415
+
+    label = f"lineage edges under {connection_qualified_name}"
+    started = time.monotonic()
+    requested = tuple(dict.fromkeys(LineageEdge(*pair) for pair in pairs))
+    if not requested:
+        name, attempts, elapsed = _one_shot(label, started)
+        return Settled(
+            label=name, attempts=attempts, elapsed=elapsed, value=LineageEdgeCounts()
+        )
+    prefix = f"{connection_qualified_name}/"
+    counts = dict.fromkeys(requested, 0)
+    scanned = 0
+    truncated = False
+    try:
+        request = (
+            FluentSearch()
+            .where(FluentSearch.active_assets())
+            .where(Asset.QUALIFIED_NAME.startswith(prefix))
+            .where_some(Asset.TYPE_NAME.within(list(_LINEAGE_PROCESS_TYPES)))
+            .where_some(Asset.SUPER_TYPE_NAMES.eq("Process"))
+            .min_somes(1)
+            .include_on_results(Asset.QUALIFIED_NAME)
+            .include_on_results("inputs")
+            .include_on_results("outputs")
+        ).to_request()
+        request.dsl.size = min(_LINEAGE_EDGE_PAGE_SIZE, scan_cap)
+        results = await client.asset.search(request)
+        async for process in results:
+            if scanned >= scan_cap:
+                truncated = True
+                break
+            scanned += 1
+            input_types = _ref_types(getattr(process, "inputs", None))
+            output_types = _ref_types(getattr(process, "outputs", None))
+            for source, target in requested:
+                if source in input_types and target in output_types:
+                    counts[LineageEdge(source, target)] += 1
+    except Exception as error:
+        return _unreadable(label, started, error)
+    name, attempts, elapsed = _one_shot(label, started)
+    logger.info(
+        "%s: scanned %d process(es)%s in %.1fs",
+        name,
+        scanned,
+        f", stopped at the cap of {scan_cap}" if truncated else "",
+        elapsed.total_seconds(),
+    )
+    return Settled(
+        label=name,
+        attempts=attempts,
+        elapsed=elapsed,
+        value=LineageEdgeCounts(counts=counts, scanned=scanned, truncated=truncated),
+    )
+
+
+def _ref_types(refs: object) -> frozenset[str]:
+    """The ``typeName`` of every asset reference in a process's inputs/outputs.
+
+    Args:
+        refs: The ``inputs`` or ``outputs`` value off a search hit — a list of
+            asset references, or ``None`` when the process carries none.
+
+    Returns:
+        The distinct type names, empty when there are no references.
+    """
+    if not isinstance(refs, Sequence):
+        return frozenset()
+    return frozenset(
+        type_name
+        for ref in refs
+        if isinstance(type_name := getattr(ref, "type_name", None), str)
     )
 
 

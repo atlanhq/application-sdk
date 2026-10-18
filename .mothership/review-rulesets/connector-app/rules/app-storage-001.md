@@ -17,10 +17,15 @@ semantics:
   activities land on different pods, and a pod that also ran the producer
   holds a partial slice on disk.
 - MUST delete local files after successful upload — retained shards fill
-  the pod filesystem and poison later local reads.
+  the pod filesystem and poison later local reads. A file the task returns
+  as a FileReference is the exception: the SDK uploads it after the task
+  returns and deletes tracked local paths at the end of the run, so the task
+  MUST NOT delete it.
 - Producers MUST clear their declared outputs before each attempt —
   platform retries write to the same prefix, and a dead attempt's shards
   otherwise get declared by the next one.
 - A persisted progress marker (watermark) has exactly one owner; two
   loops sharing one marker with separate freeze flags silently lose data.
-- MUST NOT write outside the task's `output_path`.
+- MUST write under a directory the task owns (its own scratch directory),
+  not under a path another task passes in through a contract field; the data
+  leaves the task as a FileReference.

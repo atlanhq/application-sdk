@@ -2868,13 +2868,13 @@ class QueryIntelligenceNode extends DAGNode {
   @Deprecated timestampKey: String = "START_TIME"
   mineOutputType: "parquet"|"json" = "json"
   @Deprecated parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
-  extraFilter: String?
+  @Deprecated extraFilter: String?
   indirectLineage: Boolean|String? = null
   ignoreOrphans: Boolean|String? = null
   @Deprecated columnsToPreserve: String?
   relatedAssetsOutputPrefix: String?
   @Deprecated parserArtifactsKey: String?
-  connectionCacheKey: String?
+  @Deprecated connectionCacheKey: String?
   currentStatePrefix: String?
   @Deprecated instanceName: String?
 }
@@ -2895,6 +2895,8 @@ per-workflow args. Configure storage at the QI app deployment, not on this node.
 | `columnsToPreserve` | All columns/fields are preserved in JSON mode (now the default). |
 | `parserArtifactsKey` | No longer consumed by QI. |
 | `instanceName` | Instance name is read from QI app environment variables, not workflow args. |
+| `extraFilter` | QI no longer filters input records; the arg is dropped by its input model. |
+| `connectionCacheKey` | QI resolves the connection cache internally, not from a per-workflow key. |
 
 These fields still emit their corresponding args into `manifest.json` when set,
 but the QI app discards them. New contracts should not set them.
@@ -3950,6 +3952,16 @@ from application_sdk.contracts.types import TreeSelection
 - On a `ConditionalInput`, evaluation fails unless `baseWidgetType = "apitree"`.
 - **Minimum SDK: the first release after 3.43.0.** The generated `_input.py` imports `application_sdk.contracts.types.TreeSelection`, which 3.43.0 and earlier do not have, so an app pinned to `atlan-application-sdk<=3.43.0` generates the file and then fails to import it. Raise the app's SDK floor (e.g. `atlan-application-sdk>3.43.0`) in the same change that sets `treeSelection = true`. The toolkit's own SDK-import check runs against SDK HEAD, so it does not catch an older pin.
 - For flat database/schema filters use the SDK's `FilterMap`, which `ExtractionInput`'s `include_filter` already uses.
+- **`include-filter` / `exclude-filter` on an extraction app.** `ExtractionInput` declares `include_filter` / `exclude_filter` as `FilterMap | str` and collapses a tree selection to two levels, so these widgets generate no field. With `treeSelection = true` on them, the generated class extends the SDK's `TreeSelectionExtractionInput` instead:
+
+  ```python
+  from application_sdk.templates.contracts import TreeSelectionExtractionInput
+
+  class AppInputContract(TreeSelectionExtractionInput):
+  ```
+
+  Its filters are `TreeSelection | str` and keep every level of the tree. A JSON-object string, the form the Automation Engine sends, is decoded into the tree, so `'{"cat": {"ns": {"t": {}}}}'` arrives as a dict. `None`, regex strings and legacy quoted-CSV strings are handled as in `ExtractionInput`. The SQL-injection check still applies, including its nesting-depth limit (trees deeper than 5 levels are refused). A `FilterMap`-shaped value (`{"db": ["schema"]}`, its JSON string, or a list) is refused: its values are regex patterns, not selected nodes. In this mode every filter widget must be a tree widget that sets `treeSelection`, or a `TextInput` (a regex fills the `str` arm); any other filter widget fails evaluation. The class is for apps that read the filters themselves: `SqlMetadataExtractor` and `SqlApp` refuse it with `SqlTreeFilterInputUnsupportedError`, because their task inputs keep two levels. Setting the flag on these widgets was ignored before, so a contract that already sets it changes base class on upgrade. See [`examples/tree-filters/`](../examples/tree-filters/).
+- **Minimum versions for the filter case:** the first contract-toolkit release after 0.33.0 (on 0.33.0 and earlier the flag is ignored on these two widgets, with no error), and the first SDK release that includes `TreeSelectionExtractionInput` (3.47.0 and earlier do not; on those the generated `_input.py` fails at import with `ImportError`). Raise the SDK floor to that release in the same change that sets the flag.
 
 ---
 

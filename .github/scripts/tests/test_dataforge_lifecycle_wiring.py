@@ -11,10 +11,15 @@ runner, so these are deliberately YAML-shape assertions.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _bump_skip import without_bump_skip  # noqa: E402
 
 _WORKFLOW = (
     Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
@@ -51,7 +56,7 @@ def test_off_by_default(inputs: dict) -> None:
 
 
 def _job_if(jobs: dict, name: str) -> str:
-    return " ".join(str(jobs[name]["if"]).split())
+    return " ".join(without_bump_skip(jobs[name]["if"]).split())
 
 
 def test_both_jobs_gated_on_opt_in_and_resource_mode(jobs: dict) -> None:

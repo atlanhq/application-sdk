@@ -14,6 +14,7 @@ from pathlib import Path
 
 from conformance.suite.checks.test_structure import discover, scan_all
 from conformance.suite.rules import get_rule
+from conformance.suite.schema.catalog import RemediationKind
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 _ONE_TEST = "def test_a():\n    assert 1 == 1\n"
@@ -62,6 +63,10 @@ def test_t013_rule_metadata() -> None:
     rule = get_rule("T013")
     assert rule.name == "TestFileOutsideTierDir"
     assert rule.scope == RuleScope.BOTH
+    # Suggest-only (migration): restoring autofixable=True brings back unsafe lane edits.
+    assert rule.autofixable is False
+    assert rule.remediation_reference is not None
+    assert rule.remediation_reference.kind is RemediationKind.GUIDE
 
 
 # ── T010/T011/T012: missing tier suites ──────────────────────────────────────

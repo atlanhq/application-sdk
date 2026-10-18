@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import require_renovate_artifacts as gate
+from _bump_skip import without_bump_skip  # noqa: E402
 from _gha_expr import evaluate
 
 REPO = "atlanhq/atlan-example-app"
@@ -215,7 +216,7 @@ def _tests_jobs() -> dict:
 
 
 def _job_runs(head_ref: str) -> bool:
-    gate_if = str(_tests_jobs()["renovate-artifacts"]["if"])
+    gate_if = without_bump_skip(_tests_jobs()["renovate-artifacts"]["if"])
     return evaluate(gate_if, {"github": {"head_ref": head_ref}})
 
 

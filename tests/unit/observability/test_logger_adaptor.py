@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 from loguru import logger
 
 from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
+from application_sdk.observability.console_sink import flush_console_logs
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -79,7 +80,12 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
         },
     ):
-        yield AtlanLoggerAdapter("test_logger")
+        try:
+            yield AtlanLoggerAdapter("test_logger")
+        finally:
+            # Console lines are written by a background thread. Wait for them
+            # so tests that read capsys after the block see every line.
+            flush_console_logs()
 
 
 @pytest.fixture
@@ -650,7 +656,7 @@ class TestLogSinkFanOut:
                     True,
                 ),
             ):
-                await adapter._log_sink(test_message)
+                adapter._log_sink(test_message)
 
         mock_add_record.assert_called_once()
         mock_send_otel.assert_called_once()
@@ -686,10 +692,119 @@ class TestLogSinkFanOut:
                     True,
                 ),
             ):
-                await adapter._log_sink(test_message)
+                adapter._log_sink(test_message)
 
         mock_add_record.assert_called_once()
         mock_send_otel.assert_not_called()
+
+    def test_log_sink_receives_lines_from_threads_without_a_loop(self):
+        """A line logged on a thread with no event loop still reaches the store.
+
+        Sync activities run in the worker's thread pool. loguru skips a
+        coroutine sink when the emitting thread has no running loop, so an
+        async ``_log_sink`` lost every such line. Exercised through a real
+        loguru handler, since loguru's dispatch is the behaviour under test.
+        """
+        import threading
+
+        with create_logger_adapter() as adapter:
+            adapter.logger_provider = None
+            with (
+                mock.patch.object(adapter, "add_record") as mock_add_record,
+                mock.patch(
+                    "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+                    True,
+                ),
+            ):
+                handler_id = logger.add(
+                    adapter._log_sink,
+                    filter=lambda r: r["extra"].get("thread_sink_test") is True,
+                )
+                try:
+                    worker = threading.Thread(
+                        target=lambda: logger.bind(thread_sink_test=True).info(
+                            "from a thread-pool activity"
+                        )
+                    )
+                    worker.start()
+                    worker.join()
+                finally:
+                    logger.remove(handler_id)
+
+        messages = [c.args[0]["message"] for c in mock_add_record.call_args_list]
+        assert messages == ["from a thread-pool activity"]
+
+
+@contextmanager
+def _store_sink_adapters() -> (
+    Generator[tuple[AtlanLoggerAdapter, AtlanLoggerAdapter], None, None]
+):
+    """Yield ``(sink_owner, other)`` with the real loguru store sink registered.
+
+    ``sink_owner`` is constructed first, so loguru's ``_log_sink`` is bound to
+    it, as ``default_logger`` is in production. ``other`` is any later
+    ``get_logger(name)`` adapter. The periodic flush is stubbed out, so the
+    owner's buffer holds exactly what the sink appended.
+    """
+    with (
+        mock.patch(
+            "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+            True,
+        ),
+        mock.patch.object(AtlanLoggerAdapter, "_spawn_flush_thread"),
+        mock.patch.object(
+            AtlanLoggerAdapter, "_periodic_flush", new_callable=mock.AsyncMock
+        ),
+        create_logger_adapter() as owner,
+    ):
+        owner.logger_provider = None
+        other = get_logger("app.module")
+        try:
+            yield owner, other
+        finally:
+            logger.remove()
+            AtlanLoggerAdapter._reset_for_testing()
+
+
+class TestOffloadedLogsReachSinkOwner:
+    """Lines logged from offloaded code reach the store buffer, and ``error()``
+    on any adapter flushes it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_in_thread_log_lands_in_sink_owner_buffer(self):
+        """A line logged inside ``run_in_thread`` is buffered for upload.
+
+        ``run_in_thread`` targets run on a pool thread with no event loop, the
+        case where loguru skipped the old coroutine sink.
+        """
+        from application_sdk._runtime.offload import run_in_thread
+
+        with _store_sink_adapters() as (owner, other):
+            await run_in_thread(other.warning, "offloaded line")
+
+            messages = [r["message"] for r in owner._buffer]
+
+        assert messages == ["offloaded line"]
+
+    def test_error_on_other_adapter_flushes_sink_owner_buffer(self):
+        """``error()`` drains the buffer records actually land in.
+
+        Called from a thread with no running loop so ``_sync_flush`` runs the
+        flush to completion before returning.
+        """
+        with _store_sink_adapters() as (owner, other):
+            with mock.patch.object(
+                owner, "_flush_records", new_callable=mock.AsyncMock
+            ) as flush:
+                other.info("context line")
+                other.error("failure line")
+
+            flushed = [r["message"] for c in flush.await_args_list for r in c.args[0]]
+            remaining = list(owner._buffer)
+
+        assert flushed == ["context line", "failure line"]
+        assert remaining == []
 
 
 class TestCorrelationContext:

@@ -57,6 +57,8 @@ from application_sdk.testing.harness.expectations import (
     AttributeSampleRead,
     CountRead,
     Finding,
+    LineageEdgeCounts,
+    LineageEdgeRead,
     SampleRead,
     Unreadable,
 )
@@ -72,6 +74,7 @@ __all__ = [
     "as_attribute_samples",
     "as_count",
     "as_counts",
+    "as_lineage_edges",
     "as_samples",
     "assert_settled",
     "grade",
@@ -458,6 +461,23 @@ def as_attribute_samples(
         return {key: list(value) for key, value in reading.value.items()}
     unreadable = Unreadable(cause=_cause_of(reading))
     return dict.fromkeys(keys, unreadable)
+
+
+def as_lineage_edges(reading: Outcome[LineageEdgeCounts]) -> LineageEdgeRead:
+    """Project a lineage-edge read into the evaluator's vocabulary.
+
+    Args:
+        reading: What the reader answered.
+
+    Returns:
+        The counts, or an
+        :class:`~application_sdk.testing.harness.expectations.Unreadable`
+        carrying the cause — never an empty count, which would grade a failed
+        search as every declared edge missing.
+    """
+    if isinstance(reading, Settled):
+        return reading.value
+    return Unreadable(cause=_cause_of(reading))
 
 
 def _cause_of(reading: Outcome[Any]) -> BaseException:

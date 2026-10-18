@@ -16,10 +16,12 @@ string method name spelled out at the call site.
 
 The seam also owns **framework-injected attributes** — values the SDK holds
 that the mapper is never handed, so an asset-returning mapper cannot set them
-correctly on its own. Today that is ``connectionName`` (FND-2056) and the
-three ``lastSync*`` attributes (FND-2097). Both are injected here rather than
-copied into every connector, because a copy in every connector is how they
-ended up wrong or missing in the first place. It also owns the one
+correctly on its own. Today that is ``connectionName`` (FND-2056), the
+three ``lastSync*`` attributes (FND-2097), and a default top-level
+``status: ACTIVE`` (FND-3928) — the one value Atlas needs to restore a
+soft-deleted entity on upsert. All are injected here rather than copied into
+every connector, because a copy in every connector is how they ended up wrong
+or missing in the first place. It also owns the one
 framework-*removed* value: the placeholder ``guid`` pyatlan creators put on
 every asset (FND-2720), for the same reason.
 
@@ -195,6 +197,54 @@ def _set_connection_name(asset: object, connection_name: str) -> None:
         # Losing connectionName is worse than failing the run only if the
         # asset genuinely needs it, and every asset type that does exposes a
         # settable field. Swallow rather than fail the whole transform.
+        return
+
+
+#: The Atlas entity status a mapper that says nothing is taken to mean. The
+#: wire value of pyatlan's ``EntityStatus.ACTIVE``, spelled as a plain string
+#: so this module stays free of a pyatlan import: a ``pyatlan_v9`` asset types
+#: the field as ``str``, and a dict mapper writes JSON values.
+_DEFAULT_STATUS = "ACTIVE"
+
+
+def _set_default_status(asset: object) -> None:
+    """Default the entity's top-level ``status`` to ``ACTIVE`` when unset.
+
+    Atlas restores a soft-deleted entity on upsert only when the payload
+    carries ``status: ACTIVE`` at the entity root. Without it, an entity a
+    narrower crawl soft-deleted is updated in place when it reappears but
+    stays DELETED — and nothing reports it. The legacy Atlas transformer
+    always set it; a mapper building pyatlan assets has to remember to, and
+    the ones that forgot are how this kept recurring.
+
+    Set on the asset before the dispatch, for the same reason as
+    ``connectionName``: ``to_nested_bytes`` never produces a dict to patch.
+
+    An existing value always wins — a mapper that emits ``DELETED`` is
+    deliberately retiring the entity.
+    """
+    if isinstance(asset, dict):
+        # Root key, not under ``attributes``: that is where Atlas reads it.
+        # ``setdefault``, so an explicit null is left as the mapper wrote it.
+        asset.setdefault("status", _DEFAULT_STATUS)
+        return
+
+    # ``pyatlan_v9`` leaves an unset status as msgspec ``UNSET``, a pydantic
+    # model as ``None`` — both falsy, the same single test
+    # ``_set_connection_name`` relies on.
+    try:
+        current = getattr(asset, "status")
+    except Exception:  # noqa: BLE001 - a property that raises is not ours to fix
+        return
+    if current:
+        return
+    try:
+        asset.status = _DEFAULT_STATUS  # type: ignore[attr-defined]
+    except (AttributeError, TypeError, ValueError):
+        # Frozen asset: same trade-off as connectionName — skip the default
+        # rather than fail the whole transform. ``ValueError`` because a
+        # frozen pydantic model refuses with ``ValidationError``, which
+        # subclasses it; caught by base so this module needs no pydantic.
         return
 
 
@@ -444,7 +494,8 @@ def entity_bytes(
     """Serialise a mapper's return value to one Atlas wire-shape JSON line.
 
     A placeholder ``guid`` from a pyatlan creator (a negative-integer string)
-    is removed on every path; a real guid is kept.
+    is removed on every path; a real guid is kept. A top-level ``status`` the
+    mapper left unset is defaulted to ``ACTIVE``; an explicit one is kept.
 
     Args:
         asset: Whatever ``map_<entity>()`` returned — a ``pyatlan_v9`` asset, a
@@ -485,6 +536,7 @@ def entity_bytes(
             spanning more than one line.
     """
     _clear_placeholder_guid(asset)
+    _set_default_status(asset)
     if connection_name:
         _set_connection_name(asset, connection_name)
     if last_sync is not None:

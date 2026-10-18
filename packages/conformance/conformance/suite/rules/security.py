@@ -45,7 +45,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="credential-storage",
-        autofixable=True,
+        autofixable=False,
         since="0.4.0",
         rationale=(
             "A credential baked into source is committed to version control in plaintext, "
@@ -62,15 +62,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "``access_key``, ``client_secret``, ``token``, …).  Hardcoded credentials\n"
             "are committed in plaintext and cannot be rotated or scoped per deployment.\n"
             "\n"
-            "Before choosing a fix, check whether the literal is an actual credential or a\n"
-            'non-secret absence sentinel (for example, ``"None"``). If you confirm every\n'
-            "reader of the value treats the sentinel and its replacement as the same absent\n"
-            "state, use Python ``None`` or the field's declared empty default; preserve that\n"
-            "behavior and do not resolve a secret that does not exist. For an actual\n"
-            "credential, resolve it at runtime via ``context.resolve_credential(ref)`` /\n"
-            "a ``CredentialRef``\n"
-            "(``application_sdk.credentials``) or the ``SecretStore`` protocol\n"
-            "(``application_sdk.infrastructure.secrets``).\n"
+            "Before choosing a fix, check whether the literal is an actual credential. A\n"
+            'non-secret value — an absence sentinel (``"None"``) or a mode/scheme marker\n'
+            "that tells other code which auth path is active — is not a credential: keep the\n"
+            "value and suppress the finding with a reason naming what the literal is.\n"
+            "Changing it changes what auth code sees at runtime. For an actual credential,\n"
+            "resolve it at runtime via ``context.resolve_credential(ref)`` / a\n"
+            "``CredentialRef`` (``application_sdk.credentials``) or the ``SecretStore``\n"
+            "protocol (``application_sdk.infrastructure.secrets``).\n"
+            "\n"
+            "Not auto-applied: either fix changes where a credential comes from or what an\n"
+            "auth value holds, and no gate proves the replacement still authenticates. The\n"
+            "remediation lane routes S001 findings to a person (``security.prose.md``).\n"
             "\n"
             "The check is deliberately conservative: empty strings, ``Field(default=…)``\n"
             'declarations, format/URL templates (``"...{password}..."``), values that are\n'
@@ -91,7 +94,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "conformance/docs/rules/security.md#s001"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/security.prose.md",
         ),
     ),
@@ -116,7 +119,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "end state for one kind of read: platform / transport self-auth the SDK "
             "exposes no secret-store seam for — an `ATLAN_*` token the app uses to call "
             "Atlan itself at process startup, injected into the pod environment before "
-            "any credential context exists. Naming 'platform self-auth' is not "
+            "any credential context exists — or a deployment secret the platform injects "
+            "into the pod environment (an ``atlan.yaml`` secret mapping or a chart-mounted "
+            "secret) that no SecretStore the app uses is populated with. Naming 'platform self-auth' is not "
             "sufficient on its own: the reason must name the specific value and the "
             "specific SDK function or seam that cannot supply it, so the suppression "
             "can be retired when that seam ships (BLDX-1419). A read that could go "
@@ -128,7 +133,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="credential-resolution",
-        autofixable=True,
+        autofixable=False,
         since="0.4.0",
         rationale=(
             "Reading a credential straight from os.environ bypasses the SDK's secret-store "
@@ -151,16 +156,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "``EnvironmentSecretStore`` legitimately reads ``os.environ`` — so it never\n"
             "fires on the SDK.  Environment *writes* (``os.environ[x] = v``), endpoint URLs\n"
             "(``..._TOKEN_URL``), public identifiers (``..._ACCESS_KEY_ID``), store-name\n"
-            "reads (``SECRET_STORE_NAME``), and dev harnesses (``run_dev*.py``, ``scripts/``)\n"
-            "are not flagged.  A reviewed exception — e.g. platform self-auth with no SDK\n"
-            "seam — is suppressed inline: ``# conformance: ignore[S002] <reason>`` (BLDX-1419).\n"
+            "reads (``SECRET_STORE_NAME``), dev harnesses (``run_dev*.py``, ``scripts/``) and\n"
+            "standalone utility scripts (a repo-root module other than ``main.py`` with its\n"
+            'own ``if __name__ == "__main__":`` block — images never ship them) are not\n'
+            "flagged.  A reviewed exception — e.g. platform self-auth, or a deployment secret\n"
+            "the platform injects into the pod environment, with no SDK seam — is suppressed\n"
+            "inline: ``# conformance: ignore[S002] <reason>`` (BLDX-1419).\n"
+            "\n"
+            "Not auto-applied: moving a read onto the seam changes where a production\n"
+            "secret comes from, and no gate proves the store holds it under that name. The\n"
+            "remediation lane routes S002 findings to a person (``security.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/"
             "conformance/docs/rules/security.md#s002"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/security.prose.md",
         ),
     ),

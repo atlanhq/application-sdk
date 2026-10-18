@@ -189,6 +189,14 @@ dispatched run finishes: `gate_check_verdict.py`, on `workflow_run`, sets
 `gate-check` to `success` only if all of them passed and re-runs Release Gate,
 which passes only on that `success`.
 
+**A dispatched run never satisfies a PR's required checks.** GitHub counts only
+the PR's own `pull_request` runs toward them. So on a bump PR the connector
+shims run their reusable anyway, with `skip-on-bump-pr: true`, which skips
+every job in it. The skipped jobs file each required `<caller> / <job>` check
+as `skipped` at no cost, and Release Gate is the one blocker (FND-3947; see
+[release-flow.md](release-flow.md)). Skipping the caller job instead files no
+required name at all, so the PR waits at "Expected" forever.
+
 **Concurrency.** Pushes are handled by the existing per-ref groups on the unit
 and integration jobs: a new commit cancels the old commit's run, and since there
 is one run per commit, a cancel can only land on a commit that is no longer the

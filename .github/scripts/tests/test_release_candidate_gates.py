@@ -25,6 +25,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _bump_skip import without_bump_skip  # noqa: E402
 from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -96,7 +97,7 @@ def test_scan_skips_only_on_scope_false(job_id: str, answer: str) -> None:
             "queue-diff": {"outputs": {"image_changed": ""}},
         }
     }
-    assert evaluate(job["if"], contexts) is (answer != "false")
+    assert evaluate(without_bump_skip(job["if"]), contexts) is (answer != "false")
 
 
 def test_queue_diff_waits_on_scope_and_skips_with_it() -> None:
@@ -206,16 +207,17 @@ def test_template_builds_a_candidate_only_on_a_gate_check_dispatch(
         (_gh("pull_request", "feat/x", action="opened"), True),
         (_gh("pull_request", "feat/x"), True),
         (_gh("merge_group", ""), True),
-        # Bump PR: skipped as a CALLER on its own run, so no context is
-        # created there, whatever it carries…
-        (_gh("pull_request", "bump-version-main"), False),
-        (_gh("pull_request", "bump-version-main", labels=("gate-check",)), False),
-        # …and run on the `/gate-check` dispatch, where it scans the candidate.
+        # Bump PR: the caller runs on its own run too, so every required
+        # `scan / …` context reports; build-and-scan skips its jobs there
+        # (`skip-on-bump-pr`, FND-3947)…
+        (_gh("pull_request", "bump-version-main"), True),
+        (_gh("pull_request", "bump-version-main", labels=("gate-check",)), True),
+        # …and the `/gate-check` dispatch scans the candidate.
         (_gate_check("bump-version-main"), True),
         (_gh("pull_request", "feat/x", actor="dependabot[bot]"), False),
     ],
 )
-def test_template_scan_runs_except_on_a_bump_prs_own_run(
+def test_template_scan_caller_runs_except_for_dependabot(
     ctx: dict[str, Any], runs: bool
 ) -> None:
     job = _template_jobs()["scan"]

@@ -1,5 +1,81 @@
 # Changelog
 
+## v3.49.2 (October 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.1...v3.49.2
+
+### Bug Fixes
+
+- a 401/403 listing a bucket raises a non-retryable permission error (#4424) (by @connectivity-ai[bot] in [411ffa8](https://github.com/atlanhq/application-sdk/commit/411ffa8))
+
+### Chores
+
+- lock file maintenance (#4405) (by @renovate[bot] in [b6af691](https://github.com/atlanhq/application-sdk/commit/b6af691))
+- FND-4018 make one-off timing flakes in the unit suite deterministic (#4407) (by @cmgrote in [4e631ab](https://github.com/atlanhq/application-sdk/commit/4e631ab))
+- update atlanhq/application-sdk action to v3.49.1 (#4409) (by @renovate[bot] in [2f82429](https://github.com/atlanhq/application-sdk/commit/2f82429))
+- lock file maintenance (#4410) (by @renovate[bot] in [21029ee](https://github.com/atlanhq/application-sdk/commit/21029ee))
+- lock file maintenance (#4411) (by @renovate[bot] in [5902096](https://github.com/atlanhq/application-sdk/commit/5902096))
+- lock file maintenance (#4425) (by @renovate[bot] in [21b1e6b](https://github.com/atlanhq/application-sdk/commit/21b1e6b))
+
+
+## v3.49.1 (October 15, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.0...v3.49.1
+
+### Bug Fixes
+
+- FND-3938 resolve the bucket region for an S3 CloudStore with no region (#4390) (by @sachi-atlan in [663b217](https://github.com/atlanhq/application-sdk/commit/663b217))
+- FND-3981 require MaxItems on set, tuple, Sequence and every other collection field (#4400) (by @cmgrote in [4fdac1f](https://github.com/atlanhq/application-sdk/commit/4fdac1f))
+
+### Chores
+
+- lock file maintenance (#4383) (by @renovate[bot] in [7516ed4](https://github.com/atlanhq/application-sdk/commit/7516ed4))
+- update atlanhq/application-sdk action to v3.49.0 (#4387) (by @renovate[bot] in [7b22973](https://github.com/atlanhq/application-sdk/commit/7b22973))
+- lock file maintenance (#4392) (by @renovate[bot] in [a5e0e1b](https://github.com/atlanhq/application-sdk/commit/a5e0e1b))
+- lock file maintenance (#4397) (by @renovate[bot] in [5018717](https://github.com/atlanhq/application-sdk/commit/5018717))
+- update github/codeql-action digest to 6f2ac81 (#4401) (by @renovate[bot] in [516927f](https://github.com/atlanhq/application-sdk/commit/516927f))
+- lock file maintenance (#4399) (by @renovate[bot] in [4192ec5](https://github.com/atlanhq/application-sdk/commit/4192ec5))
+
+
+## v3.49.0 (October 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.48.0...v3.49.0
+
+### Features
+
+- assert which asset types lineage connects (expected_lineage_edges) (#4380) (by @connectivity-ai[bot] in [54bee54](https://github.com/atlanhq/application-sdk/commit/54bee54))
+
+### Chores
+
+- lock file maintenance (#4377) (by @renovate[bot] in [59e6b1f](https://github.com/atlanhq/application-sdk/commit/59e6b1f))
+- sync daprd pin to 1.18.7 (#4378) (by @atlan-app-fleet[bot] in [71f6686](https://github.com/atlanhq/application-sdk/commit/71f6686))
+- update atlanhq/application-sdk action to v3.48.0 (#4382) (by @renovate[bot] in [3edd859](https://github.com/atlanhq/application-sdk/commit/3edd859))
+
+
+## v3.48.0 (October 14, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.47.0...v3.48.0
+
+### Features
+
+- FND-3733 TreeSelectionExtractionInput for tree-picker filters (#4349) (by @sachi-atlan in [a678fce](https://github.com/atlanhq/application-sdk/commit/a678fce))
+
+### Bug Fixes
+
+- default root status to ACTIVE in entity_bytes [FND-3928] (#4372) (by @cmgrote in [8fccef5](https://github.com/atlanhq/application-sdk/commit/8fccef5))
+- retry idempotent binding reads after the sidecar is warm, and name an empty cause (#4368) (by @connectivity-ai[bot] in [49f3677](https://github.com/atlanhq/application-sdk/commit/49f3677))
+- ship log lines emitted from threads without an event loop [FND-3940] (#4136) (by @Lalit3716-atlan in [2fbe173](https://github.com/atlanhq/application-sdk/commit/2fbe173))
+- FND-3938 drop childless S3 folder markers from object-store listings (#4374) (by @sachi-atlan in [a37f74f](https://github.com/atlanhq/application-sdk/commit/a37f74f))
+
+### Chores
+
+- lock file maintenance (#4360) (by @renovate[bot] in [bf21a13](https://github.com/atlanhq/application-sdk/commit/bf21a13))
+- lock file maintenance (#4364) (by @renovate[bot] in [5f0f92d](https://github.com/atlanhq/application-sdk/commit/5f0f92d))
+- lock file maintenance (#4365) (by @renovate[bot] in [693d1a5](https://github.com/atlanhq/application-sdk/commit/693d1a5))
+- update github-actions (#4363) (by @renovate[bot] in [b02ce8d](https://github.com/atlanhq/application-sdk/commit/b02ce8d))
+- lock file maintenance (#4367) (by @renovate[bot] in [80c542c](https://github.com/atlanhq/application-sdk/commit/80c542c))
+
+
 ## v3.47.0 (October 13, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.46.0...v3.47.0

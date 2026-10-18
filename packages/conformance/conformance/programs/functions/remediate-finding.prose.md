@@ -394,6 +394,13 @@ sanctioned channel, silently disabling the gate is not.
   `remediation_reference` unchanged.  The brief is the deliverable; the loop
   carries it into residue, and `/remediate` runs the named skill after the
   loop (interactive sessions only).
+  **A guide that is the finding's own area file** (`kind = guide`, `target`
+  `programs/areas/<area>.prose.md`, as for S001/S002): the rule is migration
+  only so the loop never applies it unattended; the person still gets that
+  area's suggest-only proposal.  Follow the area's Fix Prescription for the
+  rule and put its concrete proposal in the `migration_brief` — the exact
+  draft edit, or the full suppression directive with its reason — still
+  applying nothing.
 
 ### Dispatch by area
 

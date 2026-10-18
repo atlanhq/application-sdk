@@ -497,6 +497,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P055",
         "P056",
         "P057",
+        "P058",
+        "P059",
         "C002",
         "D001",
         "D002",
@@ -845,6 +847,8 @@ def test_catalog_p_series_present() -> None:
         "P055",
         "P056",
         "P057",
+        "P058",
+        "P059",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

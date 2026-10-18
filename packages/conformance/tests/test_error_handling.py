@@ -2201,6 +2201,191 @@ def inspect():
     _none(src)
 
 
+def test_p007_no_finding_when_module_helper_uses_dynamic_logger_alias() -> None:
+    src = """\
+def _report_problem(operation, problem, level="warning", **metadata):
+    extra = {"detail": str(problem)}
+    for key in ("status", "reason"):
+        extra[key] = metadata.get(key)
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem, level="debug", item="sample")
+        return None
+"""
+    _none(src)
+
+
+def test_p007_still_flags_when_only_a_conditional_exc_info_carries_the_exception() -> (
+    None
+):
+    # exc_info=False on the ExpectedFailure branch records neither the traceback
+    # nor the exception value, so the fallback return is still silent there.
+    src = """\
+def _report_problem(operation, problem):
+    audit.warning(
+        "%s failed",
+        operation,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_entry_for_the_exception_is_overwritten() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra["detail"] = None
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_mapping_is_mutated_by_a_call() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra.pop("detail")
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_uses_an_unresolved_callable_alias() -> (
+    None
+):
+    src = """\
+def _report_problem(problem):
+    log_fn = choose_sink()
+    log_fn("lookup failed", exc_info=problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_a_kwargs_helper_does_not_log() -> None:
+    src = """\
+def _record_problem(problem, **metadata):
+    metadata["detail"] = problem
+    return metadata
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _record_problem(problem, item="sample")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_selector_is_not_a_log_level() -> None:
+    src = """\
+def _report_problem(problem, level):
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn("lookup failed", exc_info=problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, level="isEnabledFor")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_helper_logs_unrelated_data() -> None:
+    src = """\
+def _report_problem(problem, detail):
+    log_fn = getattr(audit, "warning", audit.warning)
+    log_fn("lookup failed: %s", detail)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, "unrelated")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_helper_can_skip_its_log() -> None:
+    src = """\
+def _report_problem(problem, enabled):
+    log_fn = getattr(audit, "warning", audit.warning)
+    if enabled:
+        log_fn("lookup failed: %s", problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_unlogged_empty_parse_fallback() -> None:
+    src = """\
+def parse_payload(body):
+    try:
+        return decode_payload(body)
+    except (ValueError, TypeError):
+        return {}
+"""
+    _single(src, "E007")
+
+
 def test_p007_no_finding_when_same_class_helper_has_setup_before_log() -> None:
     src = """\
 class Probe:
@@ -3867,6 +4052,209 @@ try:
     connect()
 except ValueError:
     raise InternalError(message="connect failed")
+"""
+    )
+
+
+_E016_CLASSIFIER_HELPER = """\
+from application_sdk.errors import AppError, InternalError
+
+
+def classify_problem(problem: Exception, *, operation: str) -> AppError:
+    if isinstance(problem, AppError):
+        return problem
+    return InternalError(message=operation, cause=problem)
+"""
+
+_E016_CLASSIFIER_CALLER = """\
+from sample.errors import classify_problem
+
+
+def perform_operation():
+    try:
+        do_work()
+    except Exception as problem:
+        raise classify_problem(problem, operation="work")
+"""
+
+
+def test_e016_accepts_resolved_sdk_cause_classifier(tmp_path) -> None:
+    """A resolved helper that carries the caught exception into an SDK error preserves its wire cause."""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": _E016_CLASSIFIER_CALLER,
+    }
+    assert "E016" not in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "returned_error",
+    [
+        "InternalError(message=operation)",
+        "InternalError(message=operation, cause=str(problem))",
+        "LocalFailure(message=operation, cause=problem)",
+    ],
+    ids=["no-cause", "stringified-cause", "non-sdk-cause"],
+)
+def test_e016_still_flags_classifier_without_proven_sdk_cause(
+    tmp_path, returned_error: str
+) -> None:
+    helper = f"""\
+from application_sdk.errors import AppError, InternalError
+
+
+class LocalFailure(Exception):
+    pass
+
+
+def classify_problem(problem: Exception, *, operation: str) -> AppError:
+    if isinstance(problem, AppError):
+        return problem
+    return {returned_error}
+"""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": helper,
+        "sample/handler.py": _E016_CLASSIFIER_CALLER,
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+def test_e016_accepts_direct_sdk_error_cause_without_python_chain() -> None:
+    """An SDK-visible cause is sufficient even if the raise omits ``from``."""
+    assert "E016" not in _findings(
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem)
+"""
+    )
+
+
+def test_e016_still_flags_direct_sdk_error_without_cause() -> None:
+    """A fresh SDK error without a cause or Python chain still drops the caught failure."""
+    assert "E016" in _findings(
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed")
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "unrelated_binding",
+    [
+        "def describe(classify_problem):\n    return classify_problem\n",
+        "def describe():\n    classify_problem = None\n    return classify_problem\n",
+        "class Wrapper:\n    classify_problem = None\n",
+    ],
+    ids=["other-function-parameter", "other-function-local", "class-attribute"],
+)
+def test_e016_imported_classifier_survives_unrelated_local_binding(
+    tmp_path, unrelated_binding: str
+) -> None:
+    """A binding in another scope does not shadow the imported helper at the raise."""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": f"{_E016_CLASSIFIER_CALLER}\n\n{unrelated_binding}",
+    }
+    assert "E016" not in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        "classify_problem = str\n",
+        "def refresh():\n    global classify_problem\n",
+    ],
+    ids=["module-rebinding", "global-declaration"],
+)
+def test_e016_still_flags_rebound_imported_classifier(tmp_path, shadow: str) -> None:
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": f"{_E016_CLASSIFIER_CALLER}\n\n{shadow}",
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+def test_e016_still_flags_classifier_shadowed_at_the_raise(tmp_path) -> None:
+    caller = _E016_CLASSIFIER_CALLER.replace(
+        "def perform_operation():", "def perform_operation(classify_problem=str):"
+    )
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": caller,
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """\
+from application_sdk.errors import InternalError
+
+InternalError = RuntimeError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+
+def run(InternalError=RuntimeError):
+    try:
+        do_work()
+    except Exception as problem:
+        raise InternalError(message="operation failed", cause=problem)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem, **extra)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(*details, cause=problem)
+""",
+    ],
+    ids=["module-rebound", "parameter-shadow", "unpacked-keywords", "unpacked-args"],
+)
+def test_e016_still_flags_unproven_direct_sdk_cause(source: str) -> None:
+    """``cause=`` only counts when the call really builds the proven SDK error."""
+    assert "E016" in _findings(source)
+
+
+def test_e016_accepts_sdk_cause_through_module_alias() -> None:
+    assert "E016" not in _findings(
+        """\
+from application_sdk import errors
+
+try:
+    do_work()
+except Exception as problem:
+    raise errors.InternalError(message="operation failed", cause=problem)
 """
     )
 

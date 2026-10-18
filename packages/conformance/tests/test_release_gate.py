@@ -31,6 +31,7 @@ _TEMPLATE = (
 )
 
 _BUMP = "bump-version-main"
+_BOT = "github-actions[bot]"
 
 
 @pytest.fixture(scope="module")
@@ -50,11 +51,17 @@ def _run(
     *,
     head_ref: str = _BUMP,
     labels: list[str] | None = None,
+    creator: str = _BOT,
+    raw: str | None = None,
 ) -> int:
-    """Run ``main`` with a state file holding ``state`` (None: no file)."""
+    """Run ``main`` with a state file holding one ``state`` status posted by
+    ``creator`` (None: no file; ``""``: an empty file). ``raw`` is written
+    verbatim instead."""
     state_file = tmp_path / "gate-check-state.txt"
-    if state is not None:
-        state_file.write_text(state)
+    if raw is not None:
+        state_file.write_text(raw)
+    elif state is not None:
+        state_file.write_text(f"{state} {creator}\n" if state else "")
     return gate.main(
         [
             "--head-ref",
@@ -150,8 +157,43 @@ def test_the_newest_state_line_wins(
     gate: types.ModuleType,
     tmp_path: pathlib.Path,
 ) -> None:
-    """Trailing blank lines from `--jq` do not hide the state."""
-    assert _run(gate, tmp_path, "failure\nsuccess\n\n") == 0
+    """The statuses list is newest first, so the first bot line is the verdict.
+    Blank lines from `--jq` do not hide it."""
+    raw = f"\nsuccess {_BOT}\nfailure {_BOT}\npending {_BOT}\n\n"
+    assert _run(gate, tmp_path, None, raw=raw) == 0
+    raw = f"failure {_BOT}\nsuccess {_BOT}\n"
+    assert _run(gate, tmp_path, None, raw=raw) == 1
+
+
+@pytest.mark.parametrize(
+    "creator", ["a-maintainer", "renovate[bot]", "github-actions", "atlan-ci"]
+)
+def test_a_verdict_from_anyone_else_is_not_a_verdict(
+    gate: types.ModuleType, tmp_path: pathlib.Path, creator: str
+) -> None:
+    """FND-3947: on a bump PR this gate is the only blocker, because the gated
+    reusables skip their jobs there. Anyone with write access can post a
+    `gate-check: success` through the API, so only the identity
+    test-commands posts with may pass it."""
+    assert _run(gate, tmp_path, "success", creator=creator) == 1
+
+
+def test_a_forged_newer_success_does_not_mask_the_real_verdict(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    raw = f"success a-maintainer\nfailure {_BOT}\n"
+    assert _run(gate, tmp_path, None, raw=raw) == 1
+    raw = f"failure a-maintainer\nsuccess {_BOT}\n"
+    assert _run(gate, tmp_path, None, raw=raw) == 0
+
+
+@pytest.mark.parametrize("raw", ["success\n", f"success {_BOT} extra\n"])
+def test_a_line_in_any_other_shape_is_ignored(
+    gate: types.ModuleType, tmp_path: pathlib.Path, raw: str
+) -> None:
+    """A bare state (the pre-FND-3947 combined-status format) names no creator,
+    so it cannot pass."""
+    assert _run(gate, tmp_path, None, raw=raw) == 1
 
 
 def test_unparseable_labels_read_as_none(gate: types.ModuleType) -> None:
@@ -199,6 +241,30 @@ def test_status_lookup_reads_the_head_commit_and_fails_soft() -> None:
     assert fetch["continue-on-error"] is True
     assert fetch["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
     assert 'select(.context == "gate-check")' in fetch["run"]
+
+
+def test_status_lookup_reads_each_status_creator() -> None:
+    """Only the per-commit statuses list carries `creator`; the combined
+    `/status` endpoint does not, so the creator check would see nothing."""
+    run = _fetch_step()["run"]
+    assert "/commits/${HEAD_SHA}/statuses?" in run
+    assert '"\\(.state) \\(.creator.login)"' in run
+
+
+def test_the_trusted_creator_is_the_token_test_commands_posts_with() -> None:
+    """`github.token` posts as github-actions[bot]. If test-commands ever
+    switches to an App token, every release PR blocks here until this moves."""
+    reusable = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / ".github/workflows/test-commands-reusable.yaml"
+    )
+    steps = [
+        step
+        for job in yaml.safe_load(reusable.read_text())["jobs"].values()
+        for step in job.get("steps", [])
+        if "gate_check_verdict.py" in step.get("run", "")
+    ]
+    assert steps and all(s["env"]["GH_TOKEN"] == "${{ github.token }}" for s in steps)
 
 
 def test_status_lookup_walks_every_page() -> None:

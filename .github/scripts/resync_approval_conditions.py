@@ -507,14 +507,86 @@ def _unquote_yaml_scalar(value: str) -> str:
     return inner
 
 
-def _normalise_for(path: str, line: str) -> str:
+def _strip_yaml_comment(value: str) -> str:
+    """``value`` without a trailing ``# ...`` comment.
+
+    As in YAML, a comment starts at a ``#`` preceded by whitespace, outside a
+    quoted scalar. A quote opens a scalar only where one can start: at the
+    beginning of ``value`` or after a flow indicator (``[{,:``). Anything this
+    cannot read as a closed quote is left as is, so a misread only ever keeps
+    a comment (a false hold), never drops a value.
+    """
+    quote = ""
+    prev = ""  # last non-blank character outside a quote
+    i = 0
+    while i < len(value):
+        c = value[i]
+        if quote == "'":
+            if c == "'":
+                if value[i + 1 : i + 2] == "'":
+                    i += 2
+                    continue
+                quote = ""
+        elif quote == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                quote = ""
+        elif c in "\"'" and prev in ("", "[", "{", ",", ":"):
+            quote = c
+        elif c == "#" and (i == 0 or value[i - 1] in " \t"):
+            return value[:i].rstrip()
+        if not c.isspace():
+            prev = c
+        i += 1
+    return value
+
+
+def _normalise_for(path: str, line: str, literal: bool = False) -> str:
+    """``line`` as :func:`lost_setting_lines` compares it. ``literal`` marks a
+    line of a YAML block scalar's body, where ``#`` is text, not a comment."""
     norm = _normalise(line)
     if not path.endswith(_YAML_SUFFIXES):
         return norm
     match = _YAML_KEY_VALUE.match(norm)
     if not match:
         return norm
-    return f"{match.group(1)} {_unquote_yaml_scalar(match.group(2))}"
+    # A trailing comment is not part of the setting: the re-render drops it
+    # (FND-3945), and an unchanged value must still match.
+    value = match.group(2) if literal else _strip_yaml_comment(match.group(2))
+    if not value:
+        return match.group(1)
+    return f"{match.group(1)} {_unquote_yaml_scalar(value)}"
+
+
+def _block_scalar_lines(path: str, text: str) -> set[int]:
+    """Indexes of the body lines of every YAML block scalar (``key: |``,
+    ``key: >-``, ...) in ``text``. A body line is literal text: a ``#`` in a
+    ``run: |`` script is part of the value, so it is never read as a comment."""
+    if not path.endswith(_YAML_SUFFIXES):
+        return set()
+    body: set[int] = set()
+    block_indent: int | None = None
+    for i, line in enumerate(text.splitlines()):
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None and (not line.strip() or indent > block_indent):
+            body.add(i)
+            continue
+        block_indent = None
+        norm = _normalise(line)
+        match = _YAML_KEY_VALUE.match(norm)
+        # `key: |` or a bare list item `- |`.
+        header = (
+            match.group(2) if match else norm[1:].strip() if norm[:2] == "- " else ""
+        )
+        if _YAML_BLOCK_SCALAR.match(header):
+            # The body sits deeper than the node that owns it: the key's
+            # column for `- key: |`, the dash's for `- |`.
+            stripped = line.lstrip()
+            dash = len(stripped) - len(stripped.lstrip("- "))
+            block_indent = indent + dash if match else indent
+    return body
 
 
 def _description_lines(path: str, text: str) -> set[int]:
@@ -581,6 +653,12 @@ ACCEPTED_LINE_DROPS: dict[str, tuple[str, ...]] = {
         "(github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || "
         "(contains(github.event.pull_request.labels.*.name, 'e2e') && "
         "(github.event.action != 'labeled' || github.event.label.name == 'e2e'))",
+        # FND-3947: the bump-version skip moved inside the reusable
+        # (`skip-on-bump-pr`), so the `tests` job has no `if:` at all. Either
+        # condition above goes with its `if: >-` header. Mirrors
+        # RETIRED_TESTS_JOB_CONDITIONS in conformance.bootstrap.extract.
+        "if: >-",
+        "!startsWith(github.head_ref, 'bump-version')",
     ),
 }
 
@@ -626,17 +704,19 @@ def lost_setting_lines(backup_text: str, new_text: str, path: str = "") -> list[
     descriptions are not compared, and in YAML a value that only gained or
     lost its quotes still matches. The lane imports this function."""
     new_skip = _description_lines(path, new_text)
+    new_literal = _block_scalar_lines(path, new_text)
     remaining = Counter(
-        _normalise_for(path, x)
+        _normalise_for(path, x, i in new_literal)
         for i, x in enumerate(new_text.splitlines())
         if i not in new_skip
     )
     skip = _description_lines(path, backup_text)
+    literal = _block_scalar_lines(path, backup_text)
     lost: list[str] = []
     for i, line in enumerate(backup_text.splitlines()):
         if i in skip:
             continue
-        norm = _normalise_for(path, line)
+        norm = _normalise_for(path, line, i in literal)
         if not norm or norm.startswith("#") or norm.startswith("//"):
             continue
         if norm in {"{", "}", "[", "]", "},", "],"}:

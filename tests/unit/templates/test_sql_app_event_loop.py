@@ -9,29 +9,18 @@ was making progress throughout (ADR-0010, ADR-0018 *Problem 2*).
 entity (JSON parse, the connector's ``map_*`` function, serialise, write) with
 no await anywhere in the loop, so its hold scales with the source table.
 
-Both tests drive the real method while a ticker coroutine counts how often the
-loop got to run something else, so they assert the property that matters rather
-than which callable was handed to ``run_in_thread``.
-
-The tick count on its own measures how much CPU the loop thread got, not
-whether the body offloaded: a *correctly* offloaded block scores 27 ticks on an
-idle machine and 4 with a handful of unrelated GIL-holding threads in the
-process, with wall-clock elapsed unchanged either way. An absolute threshold
-therefore fails on a loaded shared runner with nothing wrong (FND-360). Each
-test instead measures a known-good offload of the same length on the same
-runner, moments away, and requires the subject to reach ``MIN_TICK_RATIO`` of
-it — runner noise moves both numbers together, while a body that blocks the
-loop scores ~0 against whatever the control scored.
+Both tests drive the real method with the blocking cost routed through a
+:class:`~tests.unit.loop_probe.LoopProbe`, which proves the loop ran while the
+cost was being paid. That asserts the property that matters rather than which
+callable was handed to ``run_in_thread``. An earlier version counted ticker
+ticks against a control offload; that measured how much CPU the loop thread got
+on the runner and still failed one matrix cell at random (FND-360, FND-4018).
 """
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import time
-from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar
 
 import orjson
 import pytest
@@ -43,23 +32,9 @@ from application_sdk.templates.contracts.sql_metadata import (
     TransformInput,
 )
 from application_sdk.templates.sql_app import SqlApp
+from tests.unit.loop_probe import LoopProbe
 
 pytestmark = pytest.mark.asyncio
-
-T = TypeVar("T")
-
-BLOCK_SECONDS = 0.3
-TICK_SECONDS = 0.01
-
-#: Share of the control's ticks a non-blocking body must reach. Half leaves room
-#: for the runner's load to drift between the two measurements while staying far
-#: above what a body that holds the loop can score.
-MIN_TICK_RATIO = 0.5
-
-#: Below this the control itself could not schedule enough ticks to tell a
-#: healthy body from a blocking one, so the run says so rather than passing
-#: vacuously or failing on the runner's behalf.
-MIN_CONTROL_TICKS = 4
 
 
 class _FakeSqlClient(BaseSQLClient):
@@ -94,6 +69,7 @@ class _SlowMapperApp(SqlApp):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.mapped = 0
+        self.probe = LoopProbe()
 
     def map_database(
         self, record: dict[str, Any], connection_qn: str
@@ -101,7 +77,7 @@ class _SlowMapperApp(SqlApp):
         # Charge the cost once — a real mapper's per-record cost times a large
         # table is what produces the multi-second holds seen in production.
         if self.mapped == 0:
-            time.sleep(BLOCK_SECONDS)
+            self.probe.block()
         self.mapped += 1
         return {
             "typeName": "Database",
@@ -110,58 +86,6 @@ class _SlowMapperApp(SqlApp):
                 "qualifiedName": f"{connection_qn}/{record['database_name']}",
             },
         }
-
-
-async def count_ticks_during(work: Callable[[], Awaitable[T]]) -> tuple[T, int]:
-    """Run *work*, returning its result and how many times the loop ticked."""
-    ticks = 0
-
-    async def _ticker() -> None:
-        nonlocal ticks
-        while True:
-            await asyncio.sleep(TICK_SECONDS)
-            ticks += 1
-
-    ticker = asyncio.create_task(_ticker())
-    try:
-        result = await work()
-    finally:
-        ticker.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await ticker
-    return result, ticks
-
-
-async def control_ticks() -> int:
-    """Ticks a correctly-offloaded block of the same length gets on this runner.
-
-    Deliberately stdlib — ``asyncio.to_thread``, never the SDK's
-    ``run_in_thread`` — so that a regression *inside* the SDK's own offload path
-    collapses the subject's ticks without also collapsing the baseline it is
-    measured against.
-    """
-    _, ticks = await count_ticks_during(
-        lambda: asyncio.to_thread(time.sleep, BLOCK_SECONDS)
-    )
-    return ticks
-
-
-def assert_loop_stayed_live(*, method: str, ticks: int, control: int) -> None:
-    """Fail if *method* left the loop less responsive than a known-good offload."""
-    if control < MIN_CONTROL_TICKS:
-        pytest.skip(
-            f"runner too starved to measure: a stdlib offload of "
-            f"{BLOCK_SECONDS}s scored only {control} ticks, so no threshold "
-            "distinguishes a healthy body from a blocking one"
-        )
-
-    floor = control * MIN_TICK_RATIO
-    assert ticks >= floor, (
-        f"{method} stalled the event loop: {ticks} ticks against {control} for "
-        f"an offload of the same length on this runner (floor {floor:.1f}) — a "
-        "starved loop cannot run the auto-heartbeat, which is what gets healthy "
-        "activities killed on heartbeat_timeout"
-    )
 
 
 def _extract_input(tmp_path: Path) -> ExtractionTaskInput:
@@ -208,8 +132,7 @@ async def test_transform_entity_does_not_block_the_loop(
             f.write(orjson.dumps({"database_name": name}))
             f.write(b"\n")
 
-    control = await control_ticks()
-    result, ticks = await count_ticks_during(
+    result = await app.probe.run(
         lambda: app._transform_entity(
             entity_type="database",
             mapper_fn=app.map_database,
@@ -219,7 +142,7 @@ async def test_transform_entity_does_not_block_the_loop(
 
     assert result.total_record_count == 2
     assert app.mapped == 2, "the mapper never ran"
-    assert_loop_stayed_live(method="_transform_entity", ticks=ticks, control=control)
+    app.probe.assert_loop_stayed_free("_transform_entity")
 
 
 async def test_extract_entity_does_not_block_the_loop(
@@ -232,16 +155,12 @@ async def test_extract_entity_does_not_block_the_loop(
         # Charge the cost once, standing in for a full 10k-row batch.
         if not slowed["done"]:
             slowed["done"] = True
-            time.sleep(BLOCK_SECONDS)
+            app.probe.block()
         return real_dumps(*args, **kwargs)
 
     monkeypatch.setattr("application_sdk.templates.sql_app.orjson.dumps", _slow_dumps)
 
-    # Measured after the patch and immediately before the subject: the control
-    # never serialises, so it cannot spend the one-shot cost above, and the two
-    # measurements sit close enough together to see the same runner load.
-    control = await control_ticks()
-    result, ticks = await count_ticks_during(
+    result = await app.probe.run(
         lambda: app._extract_entity(
             entity_type="database",
             sql_template=_SlowMapperApp.fetch_database_sql,
@@ -251,7 +170,7 @@ async def test_extract_entity_does_not_block_the_loop(
 
     assert result.total_record_count == 2
     assert slowed["done"], "the serialise path never ran"
-    assert_loop_stayed_live(method="_extract_entity", ticks=ticks, control=control)
+    app.probe.assert_loop_stayed_free("_extract_entity")
 
 
 async def test_extract_entity_never_hands_the_file_handle_to_a_thread(

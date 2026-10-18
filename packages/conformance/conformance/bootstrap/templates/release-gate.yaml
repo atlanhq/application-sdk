@@ -3,8 +3,12 @@ name: Release Gate
 # Blocks release PRs (bump-version branches, labelled `release` by the SDK
 # release-version-bump workflow) from merging until their full release gate —
 # tests with e2e, pre-commit, conformance and the vulnerability scan — has run
-# AND passed on the head commit. CI does not run on a release PR at all until a
-# reviewer comments `/gate-check` (FND-3748, FND-3839).
+# AND passed on the head commit. No CI runs on a release PR until a reviewer
+# comments `/gate-check` (FND-3748, FND-3839). The PR's own run skips every job
+# inside the gated reusables (`skip-on-bump-pr`, FND-3947), so their required
+# `<caller> / <job>` checks resolve as `skipped`, which reads as a pass. This
+# check is therefore the only thing holding a release PR, and it must stay
+# fail-closed.
 #
 # The verdict is the head commit's `gate-check` status. `/gate-check` posts it
 # as `pending` and dispatches the gated workflows (test-commands.yaml); when the
@@ -85,11 +89,13 @@ jobs:
       # A failed lookup leaves the file empty, which the gate reads as "no
       # verdict" and fails on - see release_gate.py.
       #
-      # The endpoint pages its `statuses` list, so on a commit with many
-      # contexts `gate-check` can sit past the first page; `--paginate` walks
-      # them all. `--jq` runs once per page, and the script takes the last
-      # non-blank line. Not `--slurp`: gh rejects it alongside `--jq`, and
-      # that error would leave the file empty on every run.
+      # The per-commit statuses list, not the combined status: only the list
+      # carries each status's `creator`, and the script trusts a verdict only
+      # from github-actions[bot] (FND-3947). The list is newest first and
+      # paged; `--paginate` walks every page, and `--jq` prints one
+      # `<state> <creator>` line per gate-check status. Not `--slurp`: gh
+      # rejects it alongside `--jq`, and that error would leave the file empty
+      # on every run.
       - name: Fetch the head commit's gate-check status
         continue-on-error: true
         env:
@@ -98,9 +104,9 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=100" \
+          gh api "repos/${REPO}/commits/${HEAD_SHA}/statuses?per_page=100" \
             --paginate \
-            --jq '.statuses[] | select(.context == "gate-check") | .state' > gate-check-state.txt
+            --jq '.[] | select(.context == "gate-check") | "\(.state) \(.creator.login)"' > gate-check-state.txt
 
       - name: Verify release readiness
         env:

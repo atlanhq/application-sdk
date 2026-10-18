@@ -96,6 +96,19 @@ name: "Conformance (reusable)"
 on:
   workflow_call:
     inputs:
+      skip-on-bump-pr:
+        description: >-
+          Skip every job on a bump-version PR's own `pull_request` run (FND-3947).
+          Each job still files its check run, as `skipped`, under its full
+          `<caller job> / <job name>` context, so the PR's required checks
+          resolve without billing a runner. Release Gate stays the blocker: it
+          fails until a `/gate-check` verdict passes on the head commit, and
+          `/gate-check` dispatches the caller, which this does not skip. Only
+          a caller whose Release Gate reads that verdict may set it: a caller
+          whose Release Gate passes on a label would let a skipped run through.
+        type: boolean
+        required: false
+        default: false
       conformance-ref:
         description: >
           Git ref of atlanhq/application-sdk to source the conformance suite from.
@@ -303,7 +316,9 @@ jobs:
   # re-runs") has the classification this is one row of.
   queue-diff:
     name: "Queue tree diff"
-    if: github.event_name == 'merge_group' && inputs.event_name == 'merge_group' && !inputs.force-all
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (github.event_name == 'merge_group' && inputs.event_name == 'merge_group' && !inputs.force-all)
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -359,7 +374,9 @@ jobs:
   suite:
     name: "Conformance Gate"
     needs: [queue-diff]
-    if: ${{ !cancelled() && needs.queue-diff.outputs.identical != 'true' }}
+    if: >-
+      ${{ !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (!cancelled() && needs.queue-diff.outputs.identical != 'true') }}
     runs-on: ubuntu-latest
     env:
       # Surfaced as env because a step-level `if:` cannot read the secrets
@@ -459,7 +476,7 @@ jobs:
       - name: "Set up uv"
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.0"
+          version: "0.13.1"
 
       # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
       # would redirect every atlanhq URL — including a git-ref conformance

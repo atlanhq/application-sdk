@@ -1,9 +1,7 @@
-import asyncio
 import contextlib
 import os
 import shutil
 import threading
-import time
 from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -27,6 +25,7 @@ from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.formats.parquet import ParquetFileReader, ParquetFileWriter
 from application_sdk.storage.formats.utils import path_gen
 from application_sdk.storage.reference import persist_file_reference
+from tests.unit.loop_probe import LoopProbe
 
 
 def _published_name(where: object) -> str:
@@ -1280,37 +1279,25 @@ class TestWriteChunkNullColumns:
         write_thread: list[str] = []
         real_write_table = pq.write_table
 
+        probe = LoopProbe()
+
         def _slow_write_table(*args, **kwargs):
             write_thread.append(threading.current_thread().name)
             # Stand in for a large chunk's write cost, so a regression that
-            # puts this back on the loop actually stalls the ticker below.
-            time.sleep(0.3)
+            # puts this back on the loop holds the loop for the probe to see.
+            probe.block()
             return real_write_table(*args, **kwargs)
 
-        ticks = 0
-
-        async def _ticker() -> None:
-            nonlocal ticks
-            while True:
-                await asyncio.sleep(0.01)
-                ticks += 1
-
         with patch("pyarrow.parquet.write_table", side_effect=_slow_write_table):
-            ticker = asyncio.create_task(_ticker())
-            try:
-                await writer._write_chunk(df, file_name)
-            finally:
-                ticker.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await ticker
+            await probe.run(lambda: writer._write_chunk(df, file_name))
 
         assert write_thread, "pq.write_table was never called"
         assert write_thread[0] != loop_thread, "the write ran on the event loop"
         assert write_thread[0].startswith(
             "sdk-blocking-"
         ), f"the write ran on {write_thread[0]}, not the SDK blocking pool"
-        # The loop kept running coroutines for the whole write — which is what
-        # lets the enclosing @task's auto-heartbeat keep beating.
-        assert ticks >= 5, f"event loop stalled during the write ({ticks} ticks)"
+        # The loop kept running callbacks while the write was in progress, which
+        # is what lets the enclosing @task's auto-heartbeat keep beating.
+        probe.assert_loop_stayed_free("ParquetFileWriter._write_chunk")
         table = pq.read_table(file_name)
         assert table.num_rows == 3

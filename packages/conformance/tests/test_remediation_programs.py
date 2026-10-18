@@ -347,11 +347,15 @@ def test_o001_prose_names_the_three_dropped_tolerances() -> None:
     assert "64 bits" in text
 
 
-def test_d003_prose_removes_constraint_floors_rather_than_relocating() -> None:
-    """Moving a floor into constraint-dependencies only relocates D003."""
+def test_d003_prose_distinguishes_generic_and_app_specific_floors() -> None:
+    """Generic floors move upstream; documented app-specific floors may remain."""
     text = " ".join(_read("areas/dependency.prose.md").split())
     assert "constraint-dependencies` entry in an app is also D003" in text
-    assert "do not move a floor" in text
+    assert "do not move a floor" in text.lower()
+    assert "documented app-specific minimum" in text
+    assert "the SDK's declared range does not guarantee the required minimum" in text
+    assert "reasoned D003 exception" in text
+    assert "lockfile version alone is not a future guarantee" in text
 
 
 def test_p001_prose_says_the_opt_out_does_not_govern_unknown_keys() -> None:
@@ -825,3 +829,27 @@ def test_o001_prose_writes_the_exact_bytes_directive_only_in_strict_mode() -> No
         "A directive already in place is the terminal state in any mode",
     ):
         assert needle in bullet, f"O001's prescription does not say {needle!r}"
+
+
+def test_a_suggest_only_guide_rule_still_gets_its_area_proposal() -> None:
+    """S001/S002 are migration rules so the loop never applies them, but their
+    guide is their own suggest-only area file: the person must still receive
+    the concrete proposal, not a bare pointer (lens F-3c544e on #4369)."""
+    from conformance.suite.rules import get_rule
+
+    for rule_id in ("S001", "S002"):
+        rule = get_rule(rule_id)
+        ref = rule.remediation_reference
+        assert rule.autofixable is False
+        assert ref is not None
+        assert ref.kind.value == "guide"
+        assert ref.target == "programs/areas/security.prose.md"
+    text = _read("functions/remediate-finding.prose.md")
+    migration = text.split("**Auto-fixable vs migration.**")[1].split(
+        "### Dispatch by area"
+    )[0]
+    assert "own area file" in migration and "concrete proposal" in migration
+    template = (
+        files("conformance").joinpath("bootstrap/templates/remediate.md").read_text()
+    )
+    assert "finding's own area" in template and "migration_brief" in template

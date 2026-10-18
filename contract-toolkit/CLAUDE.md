@@ -56,6 +56,8 @@ Examples serve as toolkit unit tests — no source-specific examples. Each
 demonstrates distinct feature surface, verified by `tests/*.pkl`.
 
 - `minimal`: smallest possible contract; uses all defaults. Start here.
+- `tree-filters`: include/exclude filter tree pickers with `treeSelection = true`;
+  the input class extends `TreeSelectionExtractionInput`.
 - `full`: shows every overridable feature: JDBC URL auth, all pipeline steps,
   diverse widgets, UIRules, extraNodes.
 - `bundle`: multi-entrypoint app (crawler + miner); shared credential configmap;
