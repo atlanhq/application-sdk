@@ -2391,11 +2391,11 @@ wheels = [
 
 [[package]]
 name = "inversion"
-version = "1.0.0"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8a/56/4b7237fac01882ba3e984c8ac2e62baf81ffb20d2b2ccf933873b9781f0e/inversion-1.0.0.tar.gz", hash = "sha256:a7c9e912d18d68927453b0d654e2ef6f2b9a523818b033383cec9d93e1042edf", size = 27547, upload-time = "2026-10-12T19:08:45.646Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cd/b5/e2d34bdeb088e3d28f5466c7c687126bba8337dcc0997c6c0ae40d4c4add/inversion-1.0.1.tar.gz", hash = "sha256:39b0d99da7924bcb21fc3e96ef2ac85dc83346461f74dd6a758ecaff3c75bb8e", size = 27028, upload-time = "2026-10-15T16:02:08.716Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/57/cdb060baae3fcc84347df0f1364beb0b68b4943e2fd736a246dd3eebbdf2/inversion-1.0.0-py3-none-any.whl", hash = "sha256:25c45999ce09aff55effbfa43e83e20b25ef97c99e881925f4eb8d7f7836a179", size = 46241, upload-time = "2026-10-12T19:08:44.404Z" },
+    { url = "https://files.pythonhosted.org/packages/16/78/d1caf51e136f98eef9f45fd417a21f2389bf8042e8d8f3f1ed7832a500ca/inversion-1.0.1-py3-none-any.whl", hash = "sha256:a8b7b7bb1bef85318179421ef11e5222bd492f477373f0dcb80f323f8b0595d2", size = 19846, upload-time = "2026-10-15T16:02:07.701Z" },
 ]
 
 [[package]]
@@ -5960,14 +5960,14 @@ wheels = [
 
 [[package]]
 name = "verspec"
-version = "0.2.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "inversion" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/f2/b54333307517b3eb592fe7406a792cffe582cf4444037498c554a18babb8/verspec-0.2.0.tar.gz", hash = "sha256:350c3715601a9cecf78d980c27c87af81124ac74877eba2480dcd7645aaccfe8", size = 2052, upload-time = "2026-10-12T20:45:59.517Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/7f/e3/cf3dcb426ca8dcc1421478e75582e1fea1d37e11522e31670c4e1b26701e/verspec-0.2.1.tar.gz", hash = "sha256:2046ea165be01b3ff4a8c2319d0ced57b1d7673fb05b38a75367531acde3b534", size = 1893, upload-time = "2026-10-15T15:33:24.979Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/3b/46291770a715b512f65c7b56ff549e718f354b84f3150ae9faff410f3062/verspec-0.2.0-py3-none-any.whl", hash = "sha256:962fed8f88fc7abaffb75c591c699435ea428910153f0efbc96efba1ed484615", size = 5138, upload-time = "2026-10-12T20:45:58.518Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/9d/b0f5248cdaae8c34a779db8cb282b6ebab760cfa349f05f5d0bb2530e508/verspec-0.2.1-py3-none-any.whl", hash = "sha256:bc192db9f51ba0c14cd3874167656f84aca1736bef002385299dab675b07377d", size = 2632, upload-time = "2026-10-15T15:33:24.111Z" },
 ]
 
 [[package]]
