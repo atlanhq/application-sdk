@@ -25,6 +25,10 @@ from application_sdk._runtime.offload import (
     submit_in_thread,
 )
 from application_sdk.clients._interface import ClientInterface
+from application_sdk.clients._sql_failure_classifier import (
+    SqlFailureKind,
+    classify_sql_exception,
+)
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_errors import (
     EngineNotInitializedError,
@@ -34,6 +38,9 @@ from application_sdk.clients.sql_errors import (
     SqlBindParameterError,
     SqlClientAuthFailedError,
     SqlClientConfigError,
+    SqlClientConnectTimeoutError,
+    SqlClientConnectUnclassifiedError,
+    SqlClientSourceUnavailableError,
     SqlCredentialsParseError,
     SqlPandasResultError,
     UnsupportedSqlCursorError,
@@ -220,6 +227,27 @@ def _invalidate_if_cancelled(connection: "Connection", handle: CancelHandle) -> 
         connection.invalidate()
 
 
+def _load_failure(exc: Exception) -> AppError:
+    """Type a failed ``load()`` by its root cause instead of calling it auth.
+
+    Classified by the same reader ``SqlApp.prime_sql_auth`` uses. An
+    unrecognised failure is reported as pending classification, not as a
+    rejected password.
+
+    No message carries driver text: SQLAlchemy embeds the connection string,
+    password included. The driver error rides ``cause``, which serialises
+    sanitised.
+    """
+    kind = classify_sql_exception(exc)
+    if kind is SqlFailureKind.AUTH:
+        return SqlClientAuthFailedError(cause=exc)
+    if kind is SqlFailureKind.TIMEOUT:
+        return SqlClientConnectTimeoutError(cause=exc)
+    if kind is SqlFailureKind.SOURCE_UNAVAILABLE:
+        return SqlClientSourceUnavailableError(cause=exc)
+    return SqlClientConnectUnclassifiedError(cause=exc)
+
+
 class BaseSQLClient(ClientInterface):
     """SQL client for database operations.
 
@@ -271,7 +299,14 @@ class BaseSQLClient(ClientInterface):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            SqlClientAuthFailedError: If credentials are invalid or engine creation fails.
+            SqlClientAuthFailedError: If the source rejected the credentials.
+            SqlClientSourceUnavailableError: If the source could not be reached
+                (DNS, refused or filtered connection, TLS).
+            SqlClientConnectTimeoutError: If the connect or login timed out.
+            SqlClientConnectUnclassifiedError: If the failure matched none of
+                the above.
+            AppError: Any typed error raised while connecting, unchanged — e.g.
+                ``MissingSqlParamError`` or ``SqlCredentialsParseError``.
         """
         if not self.DB_CONFIG:
             raise SqlClientConfigError()
@@ -327,7 +362,11 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise SqlClientAuthFailedError(cause=e) from e
+            # Already typed (a MissingSqlParamError from building the
+            # connection string, a connector's own leaf): keep its verdict.
+            if isinstance(e, AppError):
+                raise
+            raise _load_failure(e) from e
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -871,7 +910,14 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
         Raises:
             SqlClientConfigError: If DB_CONFIG is not set.
-            SqlClientAuthFailedError: If credentials are invalid or engine creation fails.
+            SqlClientAuthFailedError: If the source rejected the credentials.
+            SqlClientSourceUnavailableError: If the source could not be reached
+                (DNS, refused or filtered connection, TLS).
+            SqlClientConnectTimeoutError: If the connect or login timed out.
+            SqlClientConnectUnclassifiedError: If the failure matched none of
+                the above.
+            AppError: Any typed error raised while connecting, unchanged — e.g.
+                ``MissingSqlParamError`` or ``SqlCredentialsParseError``.
         """
         self.credentials = credentials
         if not self.DB_CONFIG:
@@ -911,7 +957,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise SqlClientAuthFailedError(cause=e) from e
+            # Already typed (a MissingSqlParamError from building the
+            # connection string, a connector's own leaf): keep its verdict.
+            if isinstance(e, AppError):
+                raise
+            raise _load_failure(e) from e
 
     async def close(self) -> None:
         """Close the async database connection and dispose of the engine."""
