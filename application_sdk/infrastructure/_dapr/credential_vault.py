@@ -57,11 +57,13 @@ _MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
 #: Dapr binding error messages that mean the requested key is absent.
 #: Azure Blob's binding answers a GET for a missing blob with HTTP 500 and
-#: "blob not found" (or the storage error code ``BlobNotFound``); S3-backed
-#: bindings surface ``NoSuchKey``. A 5xx alone cannot tell these apart from a
-#: sidecar that is still starting, so the body decides.
+#: "blob not found" (or the storage error code ``BlobNotFound``); the AWS S3
+#: binding maps ``NoSuchKey`` to "object not found", and other S3-backed
+#: bindings pass ``NoSuchKey`` through. A 5xx alone cannot tell these apart
+#: from a sidecar that is still starting, so the body decides.
 _MISSING_OBJECT_RE = re.compile(
-    r"blob not found|BlobNotFound|NoSuchKey|specified (?:blob|key) does not exist",
+    r"blob not found|object not found|BlobNotFound|NoSuchKey"
+    r"|specified (?:blob|key) does not exist",
     re.IGNORECASE,
 )
 
@@ -248,9 +250,9 @@ class DaprCredentialVault:
         collapsed into a non-retryable ``CredentialNotFoundError``.
 
         A binding 5xx whose Dapr error body says the key does not exist (Azure
-        Blob's "blob not found", S3's ``NoSuchKey``) is the missing-config
-        answer, not an outage, and fails at once with "No credential config
-        found" instead of being retried.
+        Blob's "blob not found", S3's "object not found" or ``NoSuchKey``) is
+        the missing-config answer, not an outage, and fails at once with "No
+        credential config found" instead of being retried.
 
         Raises:
             CredentialVaultError: If the GUID contains unsafe characters or no

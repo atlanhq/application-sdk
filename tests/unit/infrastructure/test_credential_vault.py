@@ -978,6 +978,9 @@ class TestDaprCredentialVaultMissingConfigBlob:
             "BlobNotFound: The specified blob does not exist.",
             "error invoking output binding upstream-objectstore: "
             "NoSuchKey: The specified key does not exist.",
+            # The AWS S3 binding maps NoSuchKey to this text before it
+            # reaches the sidecar's error body.
+            "error invoking output binding upstream-objectstore: object not found",
         ],
     )
     async def test_missing_credential_config_blob_is_not_retried(
