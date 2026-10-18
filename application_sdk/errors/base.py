@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import re
 import traceback
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -232,7 +233,12 @@ def sanitize_cause_repr(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {redact_and_cap(text)}"
 
 
-def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN) -> str:
+def safe_traceback(
+    exc: BaseException | None,
+    max_len: int = _TRACEBACK_MAX_LEN,
+    *,
+    replace: Mapping[str, str] | None = None,
+) -> str:
     """Return a secret-redacted, length-capped full-frame traceback.
 
     For logging a traceback whose frames are worth keeping but whose driver
@@ -240,10 +246,20 @@ def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN)
     known secret params, then caps the total length with an ellipsis marker.
     Returns ``""`` for ``None``; an exception never raised (no ``__traceback__``)
     yields just its formatted type/message line.
+
+    ``replace`` maps exact substrings to their substitutes, applied longest
+    first and before redaction. Use it when the caller knows a value the
+    secret-param patterns cannot recognise, such as a request URL whose query
+    may carry any parameter name.
     """
     if exc is None:
         return ""
-    text = redact_secrets("".join(traceback.format_exception(exc)))
+    text = "".join(traceback.format_exception(exc))
+    subs = replace or {}
+    for old in sorted(subs, key=len, reverse=True):
+        if old:
+            text = text.replace(old, subs[old])
+    text = redact_secrets(text)
     if len(text) > max_len:
         text = text[:max_len] + "…"
     return text

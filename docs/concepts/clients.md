@@ -137,7 +137,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 3.  **HTTP Request Methods:**
     *   **`execute_http_get_request()`:** Performs HTTP GET requests with configurable headers, parameters, and authentication.
     *   **`execute_http_post_request()`:** Performs HTTP POST requests with support for various data formats (JSON, form data, files, etc.).
-    *   Pass `raise_on_error=True`. A request that gets no response (connect, timeout, TLS or read error) then raises `SourceUnavailableError` with the httpx error as `cause`, and the return type is `httpx.Response` rather than `httpx.Response | None`. Without it, the helpers log the error and return `None`, and emit a `DeprecationWarning`; the default becomes `True` in v4.0. Either way, any HTTP response, 4xx and 5xx included, is returned for you to check.
+    *   Pass `raise_on_error=True`. A request the source did not answer (network failure, timeout, dropped connection) then raises `SourceUnavailableError` with the httpx error as `cause`; other errors, such as `httpx.PoolTimeout` (the client's own pool running dry) or an unsupported URL scheme, propagate unchanged, and the return type is `httpx.Response` rather than `httpx.Response | None`. Without it, the helpers log the error and return `None`, and emit a `DeprecationWarning`; the default becomes `True` in v4.0. Either way, any HTTP response, 4xx and 5xx included, is returned for you to check.
 
 4.  **Closing (`close` method):**
     *   All requests on one client share `http_retry_transport` and its connection pool, so concurrent requests (for example under `asyncio.gather`) do not close each other's connections.

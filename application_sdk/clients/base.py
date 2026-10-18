@@ -20,6 +20,8 @@ from application_sdk.constants import (
     _HTTP_POOL_LIMITS,
     _HTTP_POOL_TIMEOUT_SECONDS,
 )
+from application_sdk.errors.base import safe_traceback
+from application_sdk.errors.http import classify_http_exception
 from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -287,9 +289,10 @@ class BaseClient(ClientInterface):
             params (Optional[QueryParamTypes]): Query parameters to include in the request. Supports dict, list of tuples, or string.
             auth (Optional[AuthTypes]): Authentication to use for the request. Supports BasicAuth, DigestAuth, custom auth classes, or tuples for basic auth.
             timeout (int): Request timeout in seconds. Defaults to 10.
-            raise_on_error (Optional[bool]): When True, a request that gets no
-                response (connect, timeout, TLS or read error) raises
-                SourceUnavailableError, and any other exception propagates.
+            raise_on_error (Optional[bool]): When True, a request the source
+                did not answer (network failure, timeout, dropped connection)
+                raises SourceUnavailableError, and any other exception,
+                including httpx.PoolTimeout, propagates unchanged.
                 When False, every exception is logged and None is returned.
                 Leaving it unset behaves like False and emits a
                 DeprecationWarning: the default becomes True in v4.0.
@@ -426,9 +429,10 @@ class BaseClient(ClientInterface):
             auth (Optional[AuthTypes]): Authentication to use for the request. Supports BasicAuth, DigestAuth, custom auth classes, or tuples for basic auth.
             follow_redirects (bool): Whether to follow HTTP redirects. Defaults to True.
             timeout (int): Request timeout in seconds. Defaults to 30.
-            raise_on_error (Optional[bool]): When True, a request that gets no
-                response (connect, timeout, TLS or read error) raises
-                SourceUnavailableError, and any other exception propagates.
+            raise_on_error (Optional[bool]): When True, a request the source
+                did not answer (network failure, timeout, dropped connection)
+                raises SourceUnavailableError, and any other exception,
+                including httpx.PoolTimeout, propagates unchanged.
                 When False, every exception is logged and None is returned.
                 Leaving it unset behaves like False and emits a
                 DeprecationWarning: the default becomes True in v4.0.
@@ -520,13 +524,22 @@ def _request_failed(
 ) -> None:
     """Handle an exception from an HTTP helper request.
 
-    With ``raise_on_error``, a request that got no response becomes
-    :class:`SourceUnavailableError` and anything else is re-raised. Without
-    it, the exception is logged and the helper returns ``None``.
+    With ``raise_on_error``, a failure that :func:`classify_http_exception`
+    attributes to the source (a network failure, a timeout, a dropped
+    connection) becomes :class:`SourceUnavailableError`; anything else,
+    including ``httpx.PoolTimeout``, an unsupported scheme and a redirect
+    loop, is re-raised unchanged. Without it, the exception is logged and the
+    helper returns ``None``.
+
+    The log line carries a :func:`safe_traceback` with the request URL
+    swapped for ``endpoint``, not ``exc_info``. A transport's error message
+    can quote the full request URL, userinfo and query included, and the
+    query may carry a secret under a name the redaction patterns do not
+    know; ``exc_info`` would export it as is.
     """
     endpoint = _endpoint(url)
     if raise_on_error:
-        if isinstance(exc, httpx.RequestError):
+        if classify_http_exception(exc) is SourceUnavailableError:
             network_error = type(exc).__name__
             raise SourceUnavailableError(
                 message=f"HTTP {method} {endpoint} failed: {network_error}",
@@ -535,5 +548,29 @@ def _request_failed(
                 cause=exc,
             ) from exc
         raise exc
-    logger.error("Request failed for %s %s", method, endpoint, exc_info=True)
+    logger.error(
+        "Request failed for %s %s: %s",
+        method,
+        endpoint,
+        safe_traceback(exc, replace=dict.fromkeys(_request_urls(url, exc), endpoint)),
+    )
     return None
+
+
+def _request_urls(url: str, exc: Exception) -> set[str]:
+    """Every spelling of the request URL an exception message may quote.
+
+    The caller's string, httpx's normalised form of it, and the sent
+    request's URL, which also carries the merged ``params``.
+    """
+    urls = {url}
+    try:
+        urls.add(str(httpx.URL(url)))
+    except httpx.InvalidURL:
+        pass
+    if isinstance(exc, httpx.RequestError):
+        try:
+            urls.add(str(exc.request.url))
+        except RuntimeError:  # raised by httpx when no request was attached
+            pass
+    return urls

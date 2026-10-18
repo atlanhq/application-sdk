@@ -527,6 +527,20 @@ def test_safe_traceback_redacts_userinfo_and_secret_params() -> None:
     assert "api_key=***" in out
 
 
+def test_safe_traceback_replace_runs_longest_first_before_redaction() -> None:
+    from application_sdk.errors import safe_traceback
+
+    url = "https://u:pw@h.test/a?token=t0k"
+    try:
+        raise ValueError(f"failed: {url}&page=2 and {url}")
+    except ValueError as exc:
+        out = safe_traceback(
+            exc, replace={url: "https://h.test/a", f"{url}&page=2": "<full>"}
+        )
+    assert "t0k" not in out and "pw" not in out
+    assert "failed: <full> and https://h.test/a" in out
+
+
 def test_safe_traceback_caps_length_with_ellipsis() -> None:
     from application_sdk.errors import safe_traceback
 

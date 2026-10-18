@@ -192,3 +192,89 @@ async def test_http_retry_transport_set_in_load_is_used() -> None:
 
     assert got.text == "custom" and posted.text == "custom"
     assert seen == ["GET", "POST"]
+
+
+def _raising(exc_factory: Any) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise exc_factory(request)
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc_type", [httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError]
+)
+async def test_source_transport_failures_raise_source_unavailable(
+    exc_type: type[httpx.RequestError],
+) -> None:
+    client = _LoadedClient()
+    client.http_retry_transport = _raising(lambda r: exc_type("boom", request=r))
+    try:
+        with pytest.raises(SourceUnavailableError) as raised:
+            await client.execute_http_get_request(_URL, raise_on_error=True)
+    finally:
+        await client.close()
+
+    assert isinstance(raised.value.cause, exc_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc_type",
+    [httpx.PoolTimeout, httpx.UnsupportedProtocol, httpx.TooManyRedirects],
+    ids=["own-pool-exhausted", "bad-scheme", "redirect-loop"],
+)
+async def test_non_source_httpx_errors_propagate_unchanged(
+    exc_type: type[httpx.RequestError],
+) -> None:
+    """Not the source's fault, so not a retryable SourceUnavailableError."""
+    client = _LoadedClient()
+    client.http_retry_transport = _raising(lambda r: exc_type("boom", request=r))
+    try:
+        with pytest.raises(exc_type):
+            await client.execute_http_get_request(_URL, raise_on_error=True)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_unsupported_scheme_on_default_transport_propagates_unchanged() -> None:
+    client = _LoadedClient()
+    try:
+        with pytest.raises(httpx.UnsupportedProtocol):
+            await client.execute_http_get_request(
+                "ftp://source.example.test/x", raise_on_error=True
+            )
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_failure_log_does_not_leak_the_request_url(
+    loguru_capture: list[dict[str, Any]],
+) -> None:
+    """A transport error quoting the full URL is logged with the URL stripped.
+
+    ``token`` and ``apikey`` are names the generic secret-param redaction does
+    not know, so only swapping the request URL for its endpoint hides them.
+    """
+    client = _LoadedClient()
+    client.http_retry_transport = _raising(
+        lambda r: httpx.ConnectError(f"cannot reach {r.url}", request=r)
+    )
+    try:
+        result = await client.execute_http_get_request(
+            _URL, params={"apikey": "p4ram"}, raise_on_error=False
+        )
+    finally:
+        await client.close()
+
+    assert result is None
+    (record,) = [r for r in loguru_capture if "Request failed" in str(r["message"])]
+    logged = str(record["message"])
+    assert record["exception"] is None, "a raw exc_info traceback is not redacted"
+    assert f"cannot reach {_ENDPOINT}" in logged
+    assert "ConnectError" in logged and "Traceback" in logged
+    for secret in ("secret", "p4ram", "pw@", "user:"):
+        assert secret not in logged
