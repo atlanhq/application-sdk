@@ -530,9 +530,9 @@ def _storage_error_for(
 ) -> Exception:
     """Build the typed storage error for a failed write.
 
-    Only three conditions reclassify: a missing Azure container, a blobstorage
-    gateway that could not reach its identity provider, and a bucket
-    mid-relocation. Everything else — including a bare ``PreconditionFailed``
+    Only four conditions reclassify: a missing Azure container, a blobstorage
+    gateway that could not reach its identity provider, a gateway instance whose
+    routes have not synced, and a bucket mid-relocation. Everything else — including a bare ``PreconditionFailed``
     — is a retryable ``StorageError``. The parsed ``http_status`` and
     ``provider_code`` are otherwise *evidence, not routing*: they ride on the
     envelope so a consumer holding context the SDK lacks can branch on them,
@@ -556,6 +556,7 @@ def _storage_error_for(
         StorageConfigError,
         StorageError,
         StorageGatewayAuthUnavailableError,
+        StorageGatewayNoRouteError,
     )
 
     http_status, provider_code = _obstore_http_evidence(exc)
@@ -602,6 +603,28 @@ def _storage_error_for(
                 "run; if the condition persists beyond a few minutes, the "
                 "tenant's blobstorage gateway cannot reach Keycloak and the "
                 "fix is platform-side."
+            ),
+            **evidence,
+        )
+
+    # Checked before the relocation branch and the generic fallthrough for the
+    # same reason as the gateway-auth branch: the match is exact (a 404 AND the
+    # gateway's own "no Route matched" text), so a broader rule reaching it first
+    # can only lose information. A plain 404 never matches, which keeps a real
+    # missing bucket or container out of this leaf. Retryable either way; what
+    # changes is the code and the hint, so an operator is not sent looking for a
+    # missing key or bucket when the gateway merely has not loaded its routes.
+    if _is_gateway_no_route(exc):
+        return StorageGatewayNoRouteError(
+            f"{message}: the object-store gateway answered 404 because the "
+            "serving instance has not loaded its routes yet — the object and "
+            "bucket are not missing",
+            suggested_action=(
+                "Wait and retry: a gateway instance that just joined the load "
+                "balancer loads its routes within seconds. Nothing in the app "
+                "or its credentials needs to change; if it persists beyond a "
+                "few minutes, the gateway's route sync is failing and the fix "
+                "is platform-side."
             ),
             **evidence,
         )

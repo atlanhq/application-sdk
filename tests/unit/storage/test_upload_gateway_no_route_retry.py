@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.storage import ops
-from application_sdk.storage.errors import StorageError
+from application_sdk.storage.errors import StorageError, StorageGatewayNoRouteError
 from application_sdk.storage.ops import upload_file
 
 # The shape object_store renders a backend HTTP failure in, with the gateway's
@@ -129,6 +129,7 @@ async def test_persistent_gateway_no_route_raises_after_retry_budget(
 
     assert opener.call_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
     assert sleeps == list(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS)
+    assert isinstance(excinfo.value, StorageGatewayNoRouteError)
     assert excinfo.value.http_status == 404
     assert len(_failure_events(storage_events)) == 1
 
@@ -147,3 +148,18 @@ async def test_retry_delays_are_scaled_by_jitter(src, monkeypatch, factor) -> No
         await upload_file("k", src, MagicMock(), normalize=False, verify=False)
 
     assert recorded == [5.0 * factor, 10.0 * factor]
+
+
+def test_storage_error_for_classifies_gateway_no_route() -> None:
+    err = ops._storage_error_for(RuntimeError(_GATEWAY_NO_ROUTE), "k", "Failed")
+
+    assert isinstance(err, StorageGatewayNoRouteError)
+    assert err.code == "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE"
+    assert err.http_status == 404
+    assert err.suggested_action
+
+
+def test_storage_error_for_leaves_plain_404_generic() -> None:
+    err = ops._storage_error_for(RuntimeError(_PLAIN_NOT_FOUND), "k", "Failed")
+
+    assert type(err) is StorageError

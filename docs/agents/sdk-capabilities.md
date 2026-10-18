@@ -2084,6 +2084,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_GATEWAY_NO_ROUTE`
+
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_NO_ROUTE`
+- **Signature:** `STORAGE_GATEWAY_NO_ROUTE`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_HANDOFF_INCOMPLETE`
 
 - **Import:** `from application_sdk.errors import STORAGE_HANDOFF_INCOMPLETE`
@@ -3369,6 +3376,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageGatewayAuthUnavailableError`
 - **Signature:** `class StorageGatewayAuthUnavailableError(message: str, ...)`
 - **Summary:** A request was rejected by the object-store gateway's own auth backend.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageGatewayNoRouteError`
+
+- **Import:** `from application_sdk.storage import StorageGatewayNoRouteError`
+- **Signature:** `class StorageGatewayNoRouteError(message: str, ...)`
+- **Summary:** The object-store gateway answered 404 because its route table is not loaded yet.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageIntegrityError`

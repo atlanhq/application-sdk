@@ -131,6 +131,23 @@ passed, is the gateway being unavailable, and no credential change fixes it. Its
 `suggested_action` says so explicitly, because the generic wording ("lacked valid authentication
 credentials") sends an operator to rotate credentials that are working.
 
+### StorageGatewayNoRouteError — a 404 that does not mean the key is missing
+
+`StorageGatewayNoRouteError(StorageError)` carries
+`DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE` / `AAF-STR-012`. A blobstorage gateway
+instance that joins the load balancer before its route table has synced answers every request with
+`404 {"message":"no Route matched with those values"}` for a few seconds. The object, the bucket
+and the credentials are fine; the next gateway instance would have accepted the request.
+
+The leaf matches on the 404 **and** the gateway's own text, so a plain 404 (a real missing bucket
+or container) still falls through. It is retryable, and its `suggested_action` says to wait and
+retry rather than to look for a missing key.
+
+`upload_file` retries this answer itself, with jittered backoff, and raises the typed error only
+once those retries are spent. Of the other operations only `put` reaches the classifier with it.
+`download_file`, `exists`, `get_file_meta`, `_get_bytes` and `delete` treat any 404 as a missing key
+before classification, so they never raise this error.
+
 ### ColdStartRaceError — the cross-domain transient marker
 
 `ColdStartRaceError(DependencyUnavailableError)` is not a domain umbrella itself — it's a
