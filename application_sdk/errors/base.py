@@ -90,13 +90,42 @@ def _sub_userinfo(m: re.Match[str]) -> str:
 # left the usable half in the string. ``sig`` carries a lookbehind because it is
 # short enough to appear as the tail of a longer word; the other tokens are
 # distinctive enough not to need one.
+_SECRET_PARAM_KEYS = r"(?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?:(?<![a-z0-9_])|(?<=%[0-9a-f]{2}))sig)"
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])sig)=)(?:\{[^}]*\}|[^\s&,;#]+)",
+    rf"(?i)({_SECRET_PARAM_KEYS}=)(?:\{{[^}}]*\}}|[^\s&,;#]+)",
+)
+
+# The same keys URL-encoded (``sig%3D…``), as in an encoded Authorization
+# value; ``sig`` may follow a percent escape such as ``%26``. The value runs to
+# the next ``%26`` or delimiter and may itself hold percent escapes; the two
+# branches are disjoint, so matching stays linear.
+_SECRET_PARAM_PCT_RE = re.compile(
+    rf"(?i)({_SECRET_PARAM_KEYS}%3d)(?:[^\s&,;#%\"']|%(?!26)[0-9a-f]{{2}})+",
+)
+
+# ``Authorization: <scheme> <credential>`` (and ``Proxy-Authorization``), in
+# header, ``key=value`` or rendered-dict form. The scheme stays so an on-call
+# can tell Bearer from Basic; any scheme is accepted because the header name
+# alone marks the value as a credential.
+_AUTH_HEADER_RE = re.compile(
+    r"(?i)((?:proxy-)?authorization[\"']?\s*[:=]\s*[\"']?[a-z][a-z0-9_-]*\s+)[^\s\"',;]+",
+)
+
+# A bare ``Bearer <token>`` outside a header. The value must be token-shaped
+# (RFC 6750 token68, 8+ chars, with a digit or punctuation) so prose such as
+# "bearer of bad news" or "Bearer token expired" is left alone.
+_BEARER_TOKEN_RE = re.compile(
+    r"(?i)(?<![a-z0-9_-])(bearer\s+)(?=[a-z0-9._~+/-]*[0-9._~+/-])[a-z0-9._~+/-]{8,}=*",
 )
 
 
 def redact_secrets(text: str) -> str:
-    """Redact URL userinfo and known secret query-params from a string.
+    """Redact URL userinfo, known secret params and Authorization credentials.
+
+    Covers URL userinfo, ``key=value`` secret params (plain and
+    percent-encoded as ``key%3Dvalue``), the credential of an
+    ``Authorization`` / ``Proxy-Authorization`` header (``Bearer ***``,
+    ``Basic ***``, any scheme) and a bare token-shaped ``Bearer <token>``.
 
     Use this when logging strings that may embed credentials but are not a
     single cause exception — e.g. a formatted traceback whose frames are worth
@@ -107,7 +136,10 @@ def redact_secrets(text: str) -> str:
     for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
     """
     text = _URL_USERINFO_RE.sub(_sub_userinfo, text)
+    text = _AUTH_HEADER_RE.sub(r"\1***", text)
+    text = _BEARER_TOKEN_RE.sub(r"\1***", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
+    text = _SECRET_PARAM_PCT_RE.sub(r"\1***", text)
     return text
 
 
