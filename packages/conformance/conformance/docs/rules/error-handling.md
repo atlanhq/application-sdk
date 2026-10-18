@@ -316,13 +316,15 @@ unrelated, making the original failure invisible.
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError from urlsplit,
   logs it, and only then returns its '<unparseable url>' sentinel; the sentinel is the
-  function's contract. It needs no suppression because the catch is narrow and the value
-  is a non-empty placeholder, not because it logs first: under a broad catch (`except
-  Exception`), logging before an empty return (None, [], {}) does not clear E007
-  (FND-4080, which deliberately supersedes the log-then-sentinel reading in #4428). It
-  is the credential-boundary form of the fix: the log is `logger.debug` through
-  sanitize_cause_repr with no exc_info, because the url it guards may be a pre-signed
-  secret held in that frame. Outside such a boundary, log with exc_info=True.
+  function's contract. It needs no suppression for two reasons, and both are required:
+  the log before the return clears E007's no-log arm, and because the catch is narrow
+  and the value is a non-empty placeholder, the logged-sentinel arm does not apply.
+  Logging alone is not enough: under a broad catch (`except Exception`), logging before
+  an empty return (None, [], {}) still fires E007 (FND-4080, which deliberately
+  supersedes the log-then-sentinel reading in #4428). It is the credential-boundary form
+  of the fix: the log is `logger.debug` through sanitize_cause_repr with no exc_info,
+  because the url it guards may be a pre-signed secret held in that frame. Outside such
+  a boundary, log with exc_info=True.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 - **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
   (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the

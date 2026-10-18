@@ -2257,6 +2257,20 @@ def flush() -> None:
     )
 
 
+def test_p007_logged_empty_container_in_a_procedure_is_still_flagged() -> None:
+    # Only ``return None`` is a procedure's early exit; the annotation does not
+    # make ``[]`` one.
+    src = """\
+def flush() -> None:
+    try:
+        send()
+    except Exception:
+        logger.warning("flush failed", exc_info=True)
+        return []
+"""
+    _single(src, "E007")
+
+
 def test_p007_logged_bare_return_is_not_flagged() -> None:
     _none(
         """\

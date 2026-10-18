@@ -1101,9 +1101,16 @@ class SilentSwallowMixin:
             broad = _get_name(handler.type) in _BROAD_EXCEPT_TYPES
         if not broad:
             return False
+        # Only `return None` is a procedure's early exit; `return []` from a
+        # `-> None` function still hands the caller a plausible empty value.
         function = self._function_stack[-1] if self._function_stack else None
         returns = function.returns if function is not None else None
-        return not (isinstance(returns, ast.Constant) and returns.value is None)
+        return not (
+            isinstance(returns, ast.Constant)
+            and returns.value is None
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value is None
+        )
 
     # ── E008 ─────────────────────────────────────────────────────────────────
 
