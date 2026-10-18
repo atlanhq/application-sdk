@@ -325,7 +325,15 @@ def _is_not_found(exc: BaseException) -> bool:
 
     Class-based detection runs first so we don't misclassify a generic
     ``GenericError("HTTP 503: 404 not in title")`` style flake.
+
+    The gateway's transient ``404 "no Route matched"`` is excluded before the
+    substring fallback: the key is not missing, the gateway instance has not
+    loaded its routes, so callers fall through to ``_storage_error_for`` and
+    raise the retryable ``StorageGatewayNoRouteError`` instead of reporting
+    the key absent.
     """
+    if _is_gateway_no_route(exc):
+        return False
     if isinstance(exc, FileNotFoundError):
         return True
     if _ObstoreNotFoundError is not None and isinstance(exc, _ObstoreNotFoundError):

@@ -163,3 +163,29 @@ def test_storage_error_for_leaves_plain_404_generic() -> None:
     err = ops._storage_error_for(RuntimeError(_PLAIN_NOT_FOUND), "k", "Failed")
 
     assert type(err) is StorageError
+
+
+def test_gateway_no_route_is_not_a_missing_key() -> None:
+    assert ops._is_not_found(RuntimeError(_GATEWAY_NO_ROUTE)) is False
+    assert ops._is_not_found(RuntimeError(_PLAIN_NOT_FOUND)) is True
+
+
+@pytest.mark.parametrize(
+    ("call", "target"),
+    [
+        (lambda: ops.exists("k", MagicMock(), normalize=False), "head_async"),
+        (lambda: ops.get_file_meta("k", MagicMock(), normalize=False), "head_async"),
+        (lambda: ops._get_bytes("k", MagicMock(), normalize=False), "get_async"),
+        (lambda: ops.delete("k", MagicMock(), normalize=False), "delete_async"),
+    ],
+    ids=["exists", "get_file_meta", "_get_bytes", "delete"],
+)
+async def test_read_path_raises_gateway_no_route_instead_of_absent(
+    call, target
+) -> None:
+    failing = AsyncMock(side_effect=RuntimeError(_GATEWAY_NO_ROUTE))
+    with (
+        patch(f"application_sdk.storage.ops.obstore.{target}", failing),
+        pytest.raises(StorageGatewayNoRouteError),
+    ):
+        await call()

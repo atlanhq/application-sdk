@@ -243,12 +243,10 @@ class StorageGatewayNoRouteError(StorageError):
     is retryable like every other ``StorageError``.
 
     It exists so an operator is not told a key or bucket is absent, which is
-    what a bare 404 reads as. Only operations that classify their failure
-    through ``ops._storage_error_for`` raise it, and only for a failure that
-    reaches it: ``upload_file`` (after its own retries are spent) and ``put``.
-    The read path (``download_file``, ``exists``, ``get_file_meta``,
-    ``_get_bytes``, ``delete``) treats any 404 as a missing key before
-    classification, so it never produces this error.
+    what a bare 404 reads as. ``ops._is_not_found`` excludes this answer, so
+    the read path (``download_file``, ``exists``, ``get_file_meta``,
+    ``_get_bytes``, ``delete``) raises it rather than reporting the key
+    missing, and ``upload_file`` raises it once its own retries are spent.
     """
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_NO_ROUTE

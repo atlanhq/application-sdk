@@ -144,9 +144,9 @@ or container) still falls through. It is retryable, and its `suggested_action` s
 retry rather than to look for a missing key.
 
 `upload_file` retries this answer itself, with jittered backoff, and raises the typed error only
-once those retries are spent. Of the other operations only `put` reaches the classifier with it.
-`download_file`, `exists`, `get_file_meta`, `_get_bytes` and `delete` treat any 404 as a missing key
-before classification, so they never raise this error.
+once those retries are spent. The read path (`download_file`, `exists`, `get_file_meta`,
+`_get_bytes`, `delete`) does not treat this 404 as a missing key: it raises the typed error, which is
+retryable, instead of returning "absent" or raising the non-retryable `StorageNotFoundError`.
 
 ### ColdStartRaceError — the cross-domain transient marker
 
