@@ -876,16 +876,16 @@ def _compute_part_size(
     Args:
         file_size: Total file size in bytes.
         chunk_size: Desired chunk size in bytes.
-        max_parts: When set, grow the part (rounded up to 1 MiB, capped at S3's
-            5 GiB per-part maximum) so the file uploads in at most this many
-            parts.
+        max_parts: When the file would need more than this many parts at
+            *chunk_size*, grow the part (rounded up to 1 MiB, capped at S3's
+            5 GiB per-part maximum) so it uploads in at most this many parts.
 
     Returns:
         Effective part size — at least *chunk_size* but never so small that
         more than 9,900 parts would be needed (safety margin below 10,000).
     """
     mib = 1024 * 1024
-    if max_parts:
+    if max_parts and file_size > chunk_size * max_parts:
         bounded = -(-math.ceil(file_size / max_parts) // mib) * mib
         chunk_size = max(chunk_size, min(bounded, 5 * 1024 * mib))
     return max(chunk_size, math.ceil(file_size / 9900))

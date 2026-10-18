@@ -2282,6 +2282,11 @@ class TestUploadPartCountBounded:
 
         assert part == 8 * self._MIB
 
+    def test_small_explicit_chunk_is_not_rounded_up(self) -> None:
+        from application_sdk.storage.ops import _compute_part_size
+
+        assert _compute_part_size(4096, 1024, max_parts=128) == 1024
+
     def test_part_size_never_exceeds_s3_per_part_maximum(self) -> None:
         from application_sdk.storage.ops import _compute_part_size
 
