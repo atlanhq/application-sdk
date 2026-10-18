@@ -1,5 +1,4 @@
 import asyncio
-import traceback
 import warnings
 from typing import Any, Literal, overload
 
@@ -14,6 +13,7 @@ from httpx._types import (
 )
 
 from application_sdk.clients._interface import ClientInterface
+from application_sdk.clients.http_errors import HttpClientSourceUnavailableError
 from application_sdk.clients.sql_errors import AbstractClientLoadError
 from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.constants import (
@@ -291,7 +291,7 @@ class BaseClient(ClientInterface):
             timeout (int): Request timeout in seconds. Defaults to 10.
             raise_on_error (Optional[bool]): When True, a request the source
                 did not answer (network failure, timeout, dropped connection)
-                raises SourceUnavailableError, and any other exception,
+                raises HttpClientSourceUnavailableError, and any other exception,
                 including httpx.PoolTimeout, propagates unchanged.
                 When False, every exception is logged and None is returned.
                 Leaving it unset behaves like False and emits a
@@ -302,8 +302,9 @@ class BaseClient(ClientInterface):
             failed and raise_on_error is not True.
 
         Raises:
-            SourceUnavailableError: If raise_on_error is True and the request
-                got no response. The httpx error is carried as ``cause``.
+            HttpClientSourceUnavailableError: A SourceUnavailableError, if
+                raise_on_error is True and the source did not answer. The
+                httpx error is carried as ``cause``.
 
         Example:
             >>> # Using Basic Authentication
@@ -351,8 +352,10 @@ class BaseClient(ClientInterface):
                     auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT,
                 )
                 return response
-            except Exception as exc:
-                return _request_failed("GET", url, exc, raise_on_error)
+            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+                return _request_failed(
+                    "GET", url, exc, raise_on_error
+                )  # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
 
     @overload
     async def execute_http_post_request(
@@ -431,7 +434,7 @@ class BaseClient(ClientInterface):
             timeout (int): Request timeout in seconds. Defaults to 30.
             raise_on_error (Optional[bool]): When True, a request the source
                 did not answer (network failure, timeout, dropped connection)
-                raises SourceUnavailableError, and any other exception,
+                raises HttpClientSourceUnavailableError, and any other exception,
                 including httpx.PoolTimeout, propagates unchanged.
                 When False, every exception is logged and None is returned.
                 Leaving it unset behaves like False and emits a
@@ -442,8 +445,9 @@ class BaseClient(ClientInterface):
             failed and raise_on_error is not True.
 
         Raises:
-            SourceUnavailableError: If raise_on_error is True and the request
-                got no response. The httpx error is carried as ``cause``.
+            HttpClientSourceUnavailableError: A SourceUnavailableError, if
+                raise_on_error is True and the source did not answer. The
+                httpx error is carried as ``cause``.
 
         Example:
             >>> # Basic JSON POST request with authentication
@@ -492,8 +496,10 @@ class BaseClient(ClientInterface):
                     follow_redirects=follow_redirects,
                 )
                 return response
-            except Exception as exc:
-                return _request_failed("POST", url, exc, raise_on_error)
+            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+                return _request_failed(
+                    "POST", url, exc, raise_on_error
+                )  # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
 
 
 def _warn_if_raise_on_error_unset(
@@ -516,6 +522,8 @@ def _endpoint(url: str) -> str:
     try:
         return str(httpx.URL(url).copy_with(userinfo=b"", query=None, fragment=None))
     except httpx.InvalidURL:
+        # No exc_info and no URL: the unparsed URL may hold a credential.
+        logger.debug("Request URL could not be parsed; logged as <invalid url>")
         return "<invalid url>"
 
 
@@ -526,48 +534,25 @@ def _request_failed(
 
     With ``raise_on_error``, a failure that :func:`classify_http_exception`
     attributes to the source (a network failure, a timeout, a dropped
-    connection) becomes :class:`SourceUnavailableError`; anything else,
+    connection) becomes :class:`HttpClientSourceUnavailableError`; anything else,
     including ``httpx.PoolTimeout``, an unsupported scheme and a redirect
     loop, is re-raised unchanged. Without it, the exception is logged and the
     helper returns ``None``.
 
-    The log line is built only from parts the SDK controls (see
-    :func:`_failure_trace`), never from exception message text. A
-    transport's error message is free text that can quote the sent URL,
-    query and fragment included, so scrubbing it means guessing every shape
-    a secret can take; leaving it out cannot miss one.
+    The log carries the full traceback through ``exc_info``. The logger
+    redacts URL userinfo, query and fragment values in it, in the message,
+    the chained causes and the source lines, before anything leaves.
     """
     endpoint = _endpoint(url)
     if raise_on_error:
         if classify_http_exception(exc) is SourceUnavailableError:
             network_error = type(exc).__name__
-            raise SourceUnavailableError(
+            raise HttpClientSourceUnavailableError(
                 message=f"HTTP {method} {endpoint} failed: {network_error}",
                 endpoint=endpoint,
                 network_error=network_error,
                 cause=exc,
             ) from exc
         raise exc
-    logger.error("Request failed for %s %s: %s", method, endpoint, _failure_trace(exc))
+    logger.error("Request failed for %s %s", method, endpoint, exc_info=exc)
     return None
-
-
-def _failure_trace(exc: BaseException) -> str:
-    """Exception types along the cause chain, then each one's stack frames.
-
-    Carries type names, file names, line numbers, function names and source
-    lines: code, never runtime values. Exception messages are left out.
-    """
-    chain: list[BaseException] = []
-    current: BaseException | None = exc
-    while current is not None and all(current is not seen for seen in chain):
-        chain.append(current)
-        current = current.__cause__ or current.__context__
-    lines = [" <- ".join(type(e).__name__ for e in chain)]
-    for e in chain:
-        lines.append(f"{type(e).__name__} raised at:")
-        lines.extend(
-            frame.rstrip("\n")
-            for frame in traceback.format_list(traceback.extract_tb(e.__traceback__))
-        )
-    return "\n".join(lines)

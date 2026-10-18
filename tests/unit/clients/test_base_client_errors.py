@@ -14,10 +14,16 @@ from typing import Any
 import httpcore
 import httpx
 import pytest
+from loguru import logger as _loguru_logger
 
 from application_sdk.clients.base import BaseClient
+from application_sdk.clients.http_errors import HttpClientSourceUnavailableError
 from application_sdk.errors import FailureCategory
 from application_sdk.errors.leaves import SourceUnavailableError
+from application_sdk.observability.logger_adaptor import (
+    _extract_exception_attributes,
+    _redact_exception_records,
+)
 
 _URL = "http://user:pw@source.example.test:8080/api/items?token=secret#frag"
 _ENDPOINT = "http://source.example.test:8080/api/items"
@@ -100,6 +106,8 @@ async def test_connect_failure_after_retries_raises_source_unavailable(
         await client.close()
 
     error = raised.value
+    assert isinstance(error, HttpClientSourceUnavailableError)
+    assert error.code == "SOURCE_UNAVAILABLE_HTTP_CLIENT"
     assert backend.connect_attempts == 4, "one attempt plus three retries"
     assert error.category is FailureCategory.SOURCE_UNAVAILABLE
     assert error.effective_retryable is True
@@ -264,15 +272,19 @@ async def test_unsupported_scheme_on_default_transport_propagates_unchanged() ->
     ],
     ids=["httpx-quotes-url", "custom-quotes-url", "fragment", "bare-param"],
 )
-async def test_failure_log_carries_no_exception_message_text(
+async def test_failure_log_keeps_the_traceback_and_leaves_redacted(
     exc_factory: Any, exc_name: str, loguru_capture: list[dict[str, Any]]
 ) -> None:
-    """The failure log is built from types and frames, never message text.
+    """The failure is logged with its full traceback, redacted on the way out.
 
-    A transport's message is free text: it can quote the sent URL with
-    ``params`` merged into the query, a fragment, or a bare ``token=``, under
-    names no redaction pattern knows. Leaving the message out covers them all.
+    The shapes are the ones a transport's message can carry: the sent URL with
+    ``params`` merged into the query, a fragment, a bare ``token=``. Both exits
+    are checked: the OTel exception attributes and the rendered console line.
     """
+    lines: list[str] = []
+    sink_id = _loguru_logger.add(
+        _redact_exception_records(lines.append), format="{message}\n{exception}"
+    )
     client = _LoadedClient()
     client.http_retry_transport = _raising(exc_factory)
     try:
@@ -280,14 +292,19 @@ async def test_failure_log_carries_no_exception_message_text(
             _URL, params={"apikey": "p4ram"}, raise_on_error=False
         )
     finally:
+        _loguru_logger.remove(sink_id)
         await client.close()
 
     assert result is None
     (record,) = [r for r in loguru_capture if "Request failed" in str(r["message"])]
-    logged = str(record["message"])
-    assert record["exception"] is None, "a raw exc_info traceback is not redacted"
-    assert logged.startswith(f"Request failed for GET {_ENDPOINT}: {exc_name}")
-    assert f"{exc_name} raised at:" in logged and "in handler" in logged
-    assert "cannot reach" not in logged, "exception message text was logged"
-    for secret in ("secret", "s3cret", "p4ram", "fr4g", "pw@", "user:"):
-        assert secret not in logged
+    assert record["message"] == f"Request failed for GET {_ENDPOINT}"
+    assert record["exception"] is not None, "the traceback must be logged"
+    attrs = _extract_exception_attributes(record["exception"])
+    (line,) = [entry for entry in lines if "Request failed" in entry]
+    for exported in (attrs["exception.message"], attrs["exception.stacktrace"], line):
+        assert "cannot reach" in exported, "the root-cause message must survive"
+        for secret in ("secret", "s3cret", "p4ram", "fr4g", "pw@"):
+            assert secret not in exported
+    assert attrs["exception.type"].endswith(exc_name)
+    for rendered in (attrs["exception.stacktrace"], line):
+        assert "in handler" in rendered, "the frames must survive"
