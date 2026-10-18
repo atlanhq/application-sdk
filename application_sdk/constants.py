@@ -884,6 +884,11 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 #: worker's stderr. Frames themselves are always kept — ``backtrace`` is
 #: untouched — so only the value annotation is gated.
 #:
+#: A console line carrying an exception goes through ``redact_secrets``, which
+#: masks URL userinfo/query/fragment and known ``key=value`` names in the
+#: annotated values too. It does not mask a repr such as ``{'password': 'x'}``,
+#: so turning this on still exposes credentials held in locals.
+#:
 #: Deliberately its own variable rather than a function of ``LOG_LEVEL``: raising
 #: a tenant's log verbosity to DEBUG must not silently re-enable value rendering.
 #: Set to True for local debugging, where the annotation is genuinely useful.
