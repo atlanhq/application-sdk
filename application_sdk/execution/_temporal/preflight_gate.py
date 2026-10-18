@@ -121,6 +121,12 @@ with workflow.unsafe.imports_passed_through():
         FAILURE_SUGGESTED_ACTION_KEY as FAILURE_SUGGESTED_ACTION_KEY,
     )
     from application_sdk.handler._preflight_outcome import (
+        GATE_BLOCKING_CATEGORIES as GATE_BLOCKING_CATEGORIES,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        GATE_RETRIED_CATEGORIES as GATE_RETRIED_CATEGORIES,
+    )
+    from application_sdk.handler._preflight_outcome import (
         INTERACTIVE_RAISE_OUTCOMES as INTERACTIVE_RAISE_OUTCOMES,
     )
     from application_sdk.handler._preflight_outcome import (
@@ -341,10 +347,11 @@ def _gate_failure_evidence(
     """The typed evidence a gate attempt left in the failure chain, if any.
 
     A non-final attempt that could not reach a verdict raises the
-    ``PreflightNoVerdict`` marker carrying the same payload as a block. Today
-    its only producer is the storage-probe deferral: a failed store check
-    downgrades the verdict to ``NOT_READY``, and the gate defers the block to
-    the next attempt rather than fail a hard run on one flaky probe. When
+    ``PreflightNoVerdict`` marker carrying the same payload as a block. Two
+    producers: the storage-probe deferral (a failed store check downgrades the
+    verdict to ``NOT_READY``, and the gate defers it to the next attempt rather
+    than fail a hard run on one flaky probe), and a hard gate's deferral of a
+    ``SOURCE_UNAVAILABLE`` failure (:func:`_defers_to_retry`). When
     Temporal kills that retry, the marker is the last attempt's failure in the
     chain and its ``details[0]`` is the fault the gate had already classified.
     ``None`` when no attempt got that far, and ``None`` for a ``details[0]``
@@ -927,40 +934,40 @@ GATE_LIVENESS_CLOCK_GRACE_SECONDS = 2
 # would carry. The set itself is policy, not a shim (FND-3040): every member is
 # in GATE_NEVER_BLOCKING_CATEGORIES, so after the removal version the raise is
 # reported as an unverifiable source and still never blocks a hard gate.
+# RATE_LIMITED left the set in FND-3774: a 429 is the source's answer, raised
+# like SOURCE_UNAVAILABLE and blocking like it on the final attempt.
 DEPRECATED_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
     {
         FailureCategory.DEPENDENCY_UNAVAILABLE,
-        FailureCategory.RATE_LIMITED,
         FailureCategory.RESOURCE_EXHAUSTED,
         FailureCategory.CANCELLED,
     }
 )
 DEPRECATED_FAIL_OPEN_REMOVED_IN = "3.40.0"
 
-# What a hard gate blocks on (FND-3040): failures that are deterministic and that
-# the customer can act on. Waiting will not fix a wrong password or a missing
-# grant, and the customer is the one who can. An allowlist, so a category added
-# to FailureCategory later proceeds until someone decides it should block.
-GATE_BLOCKING_CATEGORIES: frozenset[FailureCategory] = frozenset(
-    {
-        FailureCategory.AUTH,
-        FailureCategory.PERMISSION,
-        FailureCategory.INVALID_INPUT,
-        FailureCategory.PRECONDITION,
-        FailureCategory.NOT_FOUND,
-    }
+# The set as 3.35 shipped it, for the deprecated aliases that promise to split
+# errors exactly where 3.35 did (``_GATE_BROKEN_CATEGORIES``,
+# :func:`_is_gate_broken`). Not policy: the gate itself reads only
+# DEPRECATED_FAIL_OPEN_CATEGORIES.
+_V3_35_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = (
+    DEPRECATED_FAIL_OPEN_CATEGORIES | {FailureCategory.RATE_LIMITED}
 )
 
+# What a hard gate blocks on: GATE_BLOCKING_CATEGORIES, defined beside
+# _primary_failure (handler/_preflight_outcome.py) and re-exported above. Of
+# those, GATE_RETRIED_CATEGORIES (an unreachable source, a rate limit) block only on the
+# gate's final attempt; see _defers_to_retry.
+
 # What a hard gate never blocks on, whoever reports it: transient or Atlan-side
-# failures a retry, not the customer, resolves. A subset of everything outside
-# GATE_BLOCKING_CATEGORIES, published so the guarantee is a value a test pins
-# rather than a consequence of the allowlist. A warmup the source reports
-# UNAVAILABLE, or that outlives its ceiling, is SOURCE_UNAVAILABLE too, but the
-# warmup posture (App.preflight_warmup_mode) decides those, so they never reach
-# gate_blocks.
+# failures a retry, not the customer, resolves, and an overrun that says nothing
+# about the source. A subset of everything outside GATE_BLOCKING_CATEGORIES,
+# published so the guarantee is a value a test pins rather than a consequence of
+# the allowlist. SOURCE_UNAVAILABLE left this set in FND-3774: a source that is
+# cold rather than unreachable says so through Handler.warmup, whose UNAVAILABLE
+# and ceiling outcomes the warmup posture (App.preflight_warmup_mode) decides,
+# so they never reach gate_blocks.
 GATE_NEVER_BLOCKING_CATEGORIES: frozenset[FailureCategory] = (
-    DEPRECATED_FAIL_OPEN_CATEGORIES
-    | {FailureCategory.TIMEOUT, FailureCategory.SOURCE_UNAVAILABLE}
+    DEPRECATED_FAIL_OPEN_CATEGORIES | {FailureCategory.TIMEOUT}
 )
 
 
@@ -1626,8 +1633,10 @@ def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
     message = (
         f"{app_name}: preflight_check raised {leaf} ({code}). Raising this category "
         "is deprecated until application-sdk "
-        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; return READY with the failed check as "
-        f"an advisory row instead. From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
+        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; raise a retryable SourceUnavailableError "
+        "leaf instead, which the gate reports as an unverifiable source and a "
+        "hard gate retries, blocking only if it persists to the final attempt. "
+        f"From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
         "is reported as an unverifiable source; it never blocks a hard gate."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=2)
@@ -1667,15 +1676,34 @@ def _current_attempt() -> int:
 def _is_final_attempt(attempts: int) -> bool:
     """Whether this is the gate activity's last retry attempt.
 
-    Consulted only by the storage probes: one flaky probe must not block a
-    hard-mode run on its first attempt, so a failed probe becomes a verdict once
-    the app's attempts are exhausted. The handler path never defers; a source
-    fault is a verdict on the attempt it happens. Outside an activity context
-    (direct calls, unit tests) the answer is ``True``, so enforcement is never
-    skipped because the attempt is unknown.
+    Consulted by the storage probes and by :func:`_defers_to_retry`: one flaky
+    probe, or one unreachable moment, must not block a hard-mode run on its
+    first attempt, so either becomes a verdict once the app's attempts are
+    exhausted. Every other source fault is a verdict on the attempt it happens.
+    Outside an activity context (direct calls, unit tests) the answer is
+    ``True``, so enforcement is never skipped because the attempt is unknown.
     """
     attempt = getattr(_activity_info(), "attempt", None)
     return True if attempt is None else attempt >= max(1, attempts)
+
+
+def _defers_to_retry(
+    mode: PreflightGateMode, category: FailureCategory, attempts: int
+) -> bool:
+    """Whether this attempt hands a would-be block to the next attempt (FND-3774).
+
+    Hard mode only, on a failure in :data:`GATE_RETRIED_CATEGORIES`, on any
+    attempt but the final one. The caller raises the retryable
+    ``PreflightNoVerdict`` marker instead of the block, so a source that was
+    unreachable, or rate-limited, for a moment gets the next attempt to answer
+    READY. Soft mode
+    never defers: it never blocks, so a retry would only cost time.
+    """
+    return (
+        mode.enforces
+        and category in GATE_RETRIED_CATEGORIES
+        and not _is_final_attempt(attempts)
+    )
 
 
 # Floor below which the gate skips the storage probes rather than starting a
@@ -2103,8 +2131,9 @@ def build_preflight_gate_activity(
     as ``outcome="would_block"`` so connector-pulse can rank apps whose checks
     would have blocked real runs. Hard is the per-app opt-in: it raises and
     aborts the run, but only on a failure in :data:`GATE_BLOCKING_CATEGORIES`
-    (see :func:`gate_blocks`); anything else is a ``would_block`` row there
-    too. The handler is never consulted about posture — verdict and
+    (see :func:`gate_blocks`), and on :data:`GATE_RETRIED_CATEGORIES` only on
+    the final attempt (see :func:`_defers_to_retry`); anything else is a
+    ``would_block`` row there too. The handler is never consulted about posture — verdict and
     enforcement are deliberately separate concerns.
 
     ``budget_seconds`` is the handler's check budget, already clamped by
@@ -2288,6 +2317,12 @@ def build_preflight_gate_activity(
                 )
                 return unverifiable
             block_error = _build_block_error(unverifiable, app_name, _current_attempt())
+            if _defers_to_retry(mode, block_error.details[0].category, attempts):
+                # No row: the retried attempt emits the one that counts, the
+                # same as the storage-probe deferral.
+                raise _build_no_verdict_error(
+                    unverifiable, app_name, _current_attempt()
+                )
             blocks = gate_blocks(mode, block_error.details[0].category)
             _emit_outcome(
                 PreflightRowOutcome.BLOCKED
@@ -2527,6 +2562,10 @@ def build_preflight_gate_activity(
             # attempt-1 + attempt-2 pair, which is CONNECT-1170 gap 1.
             if result.status is PreflightStatus.NOT_READY:
                 block_error = _build_block_error(result, app_name, _current_attempt())
+                if _defers_to_retry(mode, block_error.details[0].category, attempts):
+                    # An unreachable source blocks only once the retry has had
+                    # its turn; no row here, the retried attempt emits it.
+                    raise _build_no_verdict_error(result, app_name, _current_attempt())
                 # Decided on details[0], the failure the row's reason names, so
                 # the row and the decision cannot point at different checks.
                 blocks = gate_blocks(mode, block_error.details[0].category)
@@ -2896,10 +2935,11 @@ def _is_gate_broken(exc: BaseException) -> bool:
         :attr:`GateFailure.classification`. Will be removed in v3.40.0.
 
     Preserved exactly: the old predicate tested the raised leaf's
-    ``FailureCategory`` against the four-member set now published as
-    :data:`DEPRECATED_FAIL_OPEN_CATEGORIES`.
+    ``FailureCategory`` against the four-member set 3.35 shipped, kept as
+    ``_V3_35_FAIL_OPEN_CATEGORIES`` now that ``RATE_LIMITED`` has left
+    :data:`DEPRECATED_FAIL_OPEN_CATEGORIES` (FND-3774).
     """
-    return _deprecated_fail_open_leaf(exc) is not None
+    return isinstance(exc, AppError) and exc.category in _V3_35_FAIL_OPEN_CATEGORIES
 
 
 #: The log twin of the notice below, with the callable and the value the caller
@@ -2975,7 +3015,7 @@ def _mode_from_deprecated_enforce(
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "_GATE_BROKEN_CATEGORIES": (
         "DEPRECATED_FAIL_OPEN_CATEGORIES",
-        "the identical frozenset under its honest name",
+        "the gate's fail-open set (RATE_LIMITED, which this alias still holds, left it in FND-3774)",
     ),
     "CLASSIFICATION_VERDICT": (
         "PreflightClassification.VERDICT",
@@ -3003,7 +3043,7 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 def _deprecated_constant_value(name: str) -> object:
     """The live value behind a deprecated constant alias."""
     if name == "_GATE_BROKEN_CATEGORIES":
-        return DEPRECATED_FAIL_OPEN_CATEGORIES
+        return _V3_35_FAIL_OPEN_CATEGORIES
     if name == "CLASSIFICATION_VERDICT":
         return PreflightClassification.VERDICT.value
     if name == "CLASSIFICATION_GATE_BROKEN":

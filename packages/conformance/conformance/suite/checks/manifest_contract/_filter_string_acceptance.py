@@ -89,9 +89,10 @@ _FILTER_PREFIXES = ("include_", "exclude_")
 
 # Type-alias names that stand in for a dict and so are still string-rejecting
 # without a ``| str`` arm. ``FilterMap`` is the SDK's own
-# ``dict[str, list[str]]`` alias — an app annotating a field ``FilterMap``
-# (no union) rejects the AE string exactly as a bare ``dict`` would.
-_DICT_ALIAS_NAMES = frozenset({"FilterMap"})
+# ``dict[str, list[str]]`` alias and ``TreeSelection`` its nested-dict tree
+# alias — an app annotating a field with either (no union) rejects the AE string
+# exactly as a bare ``dict`` would.
+_DICT_ALIAS_NAMES = frozenset({"FilterMap", "TreeSelection"})
 
 
 def _is_filter_field_name(name: str) -> bool:
@@ -349,9 +350,11 @@ def _make_finding(
                 f"rejects the payload and the workflow crashes at validation "
                 "(CONNECT-1333 / CONNECT-1389). Make the field accept the string in any "
                 "one of these ways: (1) union the annotation with str — "
-                f"'{field_name}: FilterMap | str' (or 'dict[str, list[str]] | str'); "
+                f"'{field_name}: FilterMap | str' (or 'dict[str, list[str]] | str', or "
+                "'TreeSelection | str' for a tree picker); "
                 "(2) mix in "
-                "'application_sdk.templates.contracts.sql_metadata.ExtractionInput' "
+                "'application_sdk.templates.contracts.sql_metadata.ExtractionInput', or "
+                "'TreeSelectionExtractionInput' when the filters are tree selections, "
                 "*without* redeclaring a strict dict — a type override drops the SDK "
                 "json_schema_extra the coercer keys on, so the inherited "
                 "'_coerce_filter' does not run; or (3) add a "

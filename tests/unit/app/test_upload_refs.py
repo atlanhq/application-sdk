@@ -344,12 +344,19 @@ class TestUploadRefsFeedsTheStallWatchdog(_ResetsRegistries):
         """``upload_refs`` adds no hook of its own because the transfer layer
         already emits one per file. Pin that premise rather than the hook: if
         ``transfer.upload`` stopped marking, this task would go quiet and
-        nothing here would notice."""
+        nothing here would notice.
+
+        Since FND-3796 ``transfer.upload`` moves each local file through the
+        persist engine's per-file step, ``reference._persist_file``, so that
+        is where the mark lives now.
+        """
         import inspect
 
-        from application_sdk.storage import transfer
+        from application_sdk.storage import reference
 
-        assert 'mark_progress("storage.upload_file")' in inspect.getsource(transfer)
+        assert 'mark_progress("storage.upload_file")' in inspect.getsource(
+            reference._persist_file
+        )
 
 
 class TestDeliveredDirectoryRefsStayVerifiable(_ResetsRegistries):

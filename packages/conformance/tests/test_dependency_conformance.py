@@ -3750,7 +3750,10 @@ def test_d003_flags_each_app_constraint_floor(tmp_path: Path) -> None:
     for f in findings:
         name = f.message.split("'")[1]
         assert name in lines[f.line - 1]
-        assert "remove the entry" in f.message
+        assert "generic transitive floors belong in atlan-application-sdk" in f.message
+        assert "documented app-specific minimum" in f.message
+        assert "reasoned D003 exception" in f.message
+        assert "lockfile version alone is not a future guarantee" in f.message
 
 
 def test_d003_constraint_floor_single_line_array(tmp_path: Path) -> None:

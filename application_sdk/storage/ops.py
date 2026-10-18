@@ -36,7 +36,6 @@ to target a specific store instead.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import hashlib
 import logging
@@ -45,6 +44,7 @@ import os
 import re
 import tempfile
 import time
+from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, TypedDict
 
@@ -421,7 +421,11 @@ def _is_precondition(exc: BaseException) -> bool:
 # attribute. Matches ``safe_traceback``'s ceiling.
 _LOG_CAUSE_MAX_LEN = 8000
 
-_OBSTORE_HTTP_STATUS_RE = re.compile(r"status code:\s*(\d{3})")
+# Two shapes reach here: the backend-response form above ("non-2xx status
+# code: 403 ...") and the retry layer's "Client error with status 403
+# Forbidden: ...", which is how GCS client errors arrive. Matching only the
+# first left ``http_status`` empty on every GCS 4xx.
+_OBSTORE_HTTP_STATUS_RE = re.compile(r"status(?: code:)?\s*(\d{3})\b")
 _PROVIDER_CODE_RE = re.compile(r"<Code>([^<>]{1,64})</Code>")
 # Not every store behind an S3 API answers in S3's XML dialect. Atlan's
 # ``/api/blobstorage`` proxy is a Kong plugin that rejects before the request
@@ -643,28 +647,6 @@ def _storage_error_for(
     return StorageError(message, **evidence)
 
 
-# A Kong gateway instance that joins the load balancer before its route table
-# has synced answers every request with ``404 {"message":"no Route matched with
-# those values"}`` for a few seconds. object_store's Rust client retries only
-# 5xx/429/408, so without this the first such answer fails the whole upload even
-# though the next gateway instance would have accepted it. Matched on the 404
-# *and* the gateway's own text so a real missing bucket or container still fails
-# on the first attempt. This is a status the Rust layer never retries, so the
-# loop adds a retry where there was none rather than multiplying an existing one.
-_GATEWAY_NO_ROUTE_TEXT = "no route matched"
-_GATEWAY_NO_ROUTE_RETRY_DELAYS: tuple[float, ...] = (5.0, 10.0, 20.0)
-# Indirection so tests can record the backoff without sleeping through it.
-_retry_sleep = asyncio.sleep
-
-
-def _is_gateway_no_route(exc: BaseException) -> bool:
-    """True for the gateway's transient "no Route matched" 404, and only that."""
-    if not isinstance(exc, Exception):
-        return False
-    http_status, _ = _obstore_http_evidence(exc)
-    return http_status == 404 and _GATEWAY_NO_ROUTE_TEXT in str(exc).lower()
-
-
 def _log_storage_event(
     level: int,
     op: str,
@@ -732,6 +714,7 @@ async def _list_items(
     prefix: str | None,
     *,
     include_markers: bool = False,
+    suffixes: Iterable[str] = (),
 ) -> list[tuple[str, int, str | None]]:
     """Collect listing results under *prefix*, optionally filtering GCS directory markers.
 
@@ -743,6 +726,10 @@ async def _list_items(
 
     A zero-byte object is excluded when its path is a strict path-prefix of at least
     one other listed key — i.e. it acts as a parent directory for real files.
+    Before that filter, each zero-byte object is probed with a HEAD; one that is
+    not found and lists under its own path is an S3 ``folder/`` marker listed
+    without its trailing slash and is dropped, so it is neither returned nor
+    counted as a parent.
 
     Args:
         store: An obstore-compatible store instance.
@@ -751,6 +738,8 @@ async def _list_items(
             every object including zero-byte markers.  Use this when the caller must
             operate on *all* objects (e.g. ``delete_prefix``) so that no orphan
             objects are left behind on any store backend.
+        suffixes: Case-insensitive key suffixes the caller keeps. When given,
+            only zero-byte objects ending in one of them are probed.
 
     Returns:
         ``(path, size, e_tag)`` tuples in listing order (``e_tag`` may be
@@ -766,7 +755,104 @@ async def _list_items(
         return all_items
     # Offloaded: two passes over the whole listing with no await in between,
     # which at 100k keys holds the event loop (and the activity heartbeat).
-    return await run_in_thread(_drop_directory_markers, all_items)
+    phantoms = await _childless_marker_paths(store, all_items, suffixes)
+    return await run_in_thread(_drop_markers, all_items, phantoms)
+
+
+def _drop_markers(
+    all_items: list[tuple[str, int, str | None]],
+    phantoms: set[str],
+) -> list[tuple[str, int, str | None]]:
+    """Drop *phantoms*, then the directory markers among the remaining items."""
+    if phantoms:
+        all_items = [item for item in all_items if item[0] not in phantoms]
+    return _drop_directory_markers(all_items)
+
+
+async def _childless_marker_paths(
+    store: ObjectStore,
+    items: list[tuple[str, int, str | None]],
+    suffixes: Iterable[str],
+) -> set[str]:
+    """Return zero-byte listed paths that are S3 ``folder/`` markers.
+
+    An S3 ``folder/`` marker lists without its trailing slash, so a HEAD of its
+    listed path finds nothing. A real zero-byte key deleted after the listing
+    finds nothing too, so a not-found HEAD is confirmed by listing under the
+    path: the marker lists there as itself, the vanished key lists nothing and
+    is kept, so its download reports it. Only the error class decides
+    not-found: obstore error text carries the key, so a substring match would
+    misread a key like ``dt=20240404/_SUCCESS`` on a 403 or 503.
+
+    A fixed pool of workers drains the candidates, so a listing with 100k
+    zero-byte keys holds only that many tasks, not one per key.
+    """
+    candidates = await run_in_thread(
+        _zero_byte_paths, items, tuple(suffix.lower() for suffix in suffixes)
+    )
+    if not candidates:
+        return set()
+    from application_sdk.constants import (  # noqa: PLC0415
+        MAX_CONCURRENT_STORAGE_TRANSFERS,
+    )
+    from application_sdk.storage._concurrency import _run_bounded  # noqa: PLC0415
+
+    markers: set[str] = set()
+    pending = iter(candidates)
+
+    async def _worker() -> None:
+        # One shared iterator: each worker takes the next path when it is free.
+        for path in pending:
+            if await _head_not_found(store, path) and await _lists_under_itself(
+                store, path
+            ):
+                markers.add(path)
+
+    workers = min(max(MAX_CONCURRENT_STORAGE_TRANSFERS, 1), len(candidates))
+    await _run_bounded([_worker() for _ in range(workers)], None)
+    return markers
+
+
+async def _head_not_found(store: ObjectStore, path: str) -> bool:
+    """True only when a HEAD of *path* fails with a not-found error class."""
+    try:
+        await obstore.head_async(store, path)
+    except FileNotFoundError:
+        return True
+    # conformance: ignore[E004] probe only; any other error keeps the key and the download reports it
+    except Exception as exc:
+        return _ObstoreNotFoundError is not None and isinstance(
+            exc, _ObstoreNotFoundError
+        )
+    return False
+
+
+async def _lists_under_itself(store: ObjectStore, path: str) -> bool:
+    """True when listing under *path* returns anything.
+
+    obstore lists *path* as the prefix ``path/``, which holds an S3
+    ``path/`` marker (listed as *path*) but never a plain key named *path*.
+    """
+    try:
+        async for batch in obstore.list(store, prefix=path, chunk_size=1):
+            if batch:
+                return True
+    # conformance: ignore[E004] probe only; any error keeps the key and the download reports it
+    except Exception:
+        return False
+    return False
+
+
+def _zero_byte_paths(
+    items: list[tuple[str, int, str | None]],
+    lsuffixes: tuple[str, ...],
+) -> list[str]:
+    """Zero-byte listed paths, limited to *lsuffixes* (lowercase) when given."""
+    return [
+        path
+        for path, size, _ in items
+        if size == 0 and (not lsuffixes or path.lower().endswith(lsuffixes))
+    ]
 
 
 def _drop_directory_markers(
@@ -1001,94 +1087,77 @@ async def upload_file(
             key,
         )
 
+    h = hashlib.sha256() if compute_hash else None
+    started = time.monotonic()
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
     )
 
-    # Each pass re-reads the file from the start, so the hash and byte count
-    # restart with it; only the gateway's transient no-route 404 loops.
-    retry_delays = iter(_GATEWAY_NO_ROUTE_RETRY_DELAYS)
-    while True:
-        h = hashlib.sha256() if compute_hash else None
-        started = time.monotonic()
-        last_progress = started
-        bytes_sent = 0
-        try:
-            async with obstore.open_writer_async(
-                resolved,
-                key,
-                buffer_size=effective_chunk,
-                max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
-                attributes=put_attributes,
-            ) as writer:
-                with path.open("rb") as fh:
-                    while True:
-                        chunk = fh.read(effective_chunk)
-                        if not chunk:
-                            break
-                        if h is not None:
-                            h.update(chunk)
-                        await writer.write(chunk)
-                        bytes_sent += len(chunk)
-                        # One multipart part on its way to the store is one
-                        # observable unit (ADR-0018). Marking per part rather than
-                        # per file is what keeps a single multi-GB upload — the
-                        # common shape for a large connector's parquet output —
-                        # from looking like one long quiet window to the stall
-                        # watchdog. Unconditional, unlike the progress *log* below:
-                        # a mark is two stores under an uncontended lock, so it
-                        # needs no interval gate.
-                        current_progress_tracker().mark_progress("storage.upload_part")
-                        if _progress_interval > 0:
-                            now = time.monotonic()
-                            if now - last_progress >= _progress_interval:
-                                _log_transfer_progress(
-                                    "upload",
-                                    key,
-                                    bytes_so_far=bytes_sent,
-                                    elapsed_ms=(now - started) * 1000.0,
-                                    total_bytes=file_size,
-                                )
-                                last_progress = now
-        # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-        except BaseException as exc:
-            # BaseException is the umbrella for Exception and its siblings
-            # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
-            # ensures cancellation mid-writer-close is logged rather than silently
-            # discarding the buffer and leaving no object in the store.
-            elapsed_ms = (time.monotonic() - started) * 1000.0
-            from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
-                redact_secrets,
-            )
+    last_progress = started
+    bytes_sent = 0
+    try:
+        async with obstore.open_writer_async(
+            resolved,
+            key,
+            buffer_size=effective_chunk,
+            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+            attributes=put_attributes,
+        ) as writer:
+            with path.open("rb") as fh:
+                while True:
+                    chunk = fh.read(effective_chunk)
+                    if not chunk:
+                        break
+                    if h is not None:
+                        h.update(chunk)
+                    await writer.write(chunk)
+                    bytes_sent += len(chunk)
+                    # One multipart part on its way to the store is one
+                    # observable unit (ADR-0018). Marking per part rather than
+                    # per file is what keeps a single multi-GB upload — the
+                    # common shape for a large connector's parquet output —
+                    # from looking like one long quiet window to the stall
+                    # watchdog. Unconditional, unlike the progress *log* below:
+                    # a mark is two stores under an uncontended lock, so it
+                    # needs no interval gate.
+                    current_progress_tracker().mark_progress("storage.upload_part")
+                    if _progress_interval > 0:
+                        now = time.monotonic()
+                        if now - last_progress >= _progress_interval:
+                            _log_transfer_progress(
+                                "upload",
+                                key,
+                                bytes_so_far=bytes_sent,
+                                elapsed_ms=(now - started) * 1000.0,
+                                total_bytes=file_size,
+                            )
+                            last_progress = now
+    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+    except BaseException as exc:
+        # BaseException is the umbrella for Exception and its siblings
+        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
+        # ensures cancellation mid-writer-close is logged rather than silently
+        # discarding the buffer and leaving no object in the store.
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
+            redact_secrets,
+        )
 
-            _log_storage_event(
-                logging.WARNING,
-                "upload",
-                key,
-                outcome="failure",
-                elapsed_ms=elapsed_ms,
-                size_bytes=file_size,
-                error_class=_exc_class_name(exc),
-                error_message=redact_secrets(str(exc)),
-            )
-            if isinstance(exc, Exception):
-                delay = next(retry_delays, None) if _is_gateway_no_route(exc) else None
-                if delay is not None:
-                    logger.warning(
-                        "Retrying upload to key '%s' in %.0fs: the object-store "
-                        "gateway answered 'no Route matched' (a gateway instance "
-                        "whose routes have not synced yet)",
-                        key,
-                        delay,
-                    )
-                    await _retry_sleep(delay)
-                    continue
-                raise _storage_error_for(
-                    exc, key, f"Failed to upload file to key '{key}'", resolved
-                ) from exc
-            raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
-
-        break
+        _log_storage_event(
+            logging.WARNING,
+            "upload",
+            key,
+            outcome="failure",
+            elapsed_ms=elapsed_ms,
+            size_bytes=file_size,
+            error_class=_exc_class_name(exc),
+            error_message=redact_secrets(str(exc)),
+        )
+        if isinstance(exc, Exception):
+            raise _storage_error_for(
+                exc, key, f"Failed to upload file to key '{key}'", resolved
+            ) from exc
+        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(

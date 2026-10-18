@@ -290,14 +290,20 @@ report that site the same way.
   `"Datetime %r did not match format %r", dt_str, fmt`.  Keep `exc_info`,
   `stack_info` and `stacklevel`; those are not context kwargs.
 
-- **L006 InfoInTightLoop** — a `logger.info()` sits inside a loop, so the run
-  emits one record per item and the lifecycle milestones drown.  Drop the
-  per-item call to `logger.debug(...)` and, when the loop's outcome is worth
-  an INFO, add **one** summary line after the loop
-  (`logger.info("processed %d assets, %d skipped", total, skipped)`).  Mirror
-  `atlan-metabase-app app/extracts/process.py`, where the per-dashboard skip
-  inside `process_assets` logs at DEBUG.  Do not simply delete the call: the
-  per-item record is still wanted at DEBUG.
+- **L006 InfoInTightLoop** — per-item `logger.info()` in a large loop emits
+  one record per item and drowns lifecycle milestones.  Change per-item calls
+  to `logger.debug(...)` and, when the outcome is worth an INFO, keep or add
+  one summary after the loop (`logger.info("processed %d assets, %d skipped", total, skipped)`).
+  A standalone INFO immediately followed by an unconditional `break` from the
+  loop is already an at-most-once terminal summary; keep it there rather than
+  moving or demoting it.  An INFO at the end of a conditional branch immediately
+  followed by an unconditional `return` from the same function is also terminal;
+  this does not apply when a `finally: continue` overrides the return.  A break
+  summary can repeat in an unbounded enclosing loop, while a return exits the
+  function.  Mirror `atlan-metabase-app
+  app/extracts/process.py`, where the per-dashboard skip inside `process_assets`
+  logs at DEBUG.  Do not simply delete a per-item call: the record is still
+  wanted at DEBUG.
 
 - **L008 UnguardedExpensiveDebug** — an argument to `logger.debug()` is
   computed before the call, so it runs at every level.  Prefer making the

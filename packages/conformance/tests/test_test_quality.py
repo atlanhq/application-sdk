@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from conformance.suite.checks.test_quality import scan_text
 from conformance.suite.rules import get_rule
+from conformance.suite.schema.catalog import RemediationKind
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
 # ── Rule metadata ────────────────────────────────────────────────────────────
@@ -45,6 +46,10 @@ def test_t008_rule_metadata() -> None:
     rule = get_rule("T008")
     assert rule.name == "UncollectableTestFile"
     assert rule.category == "test-collection"
+    # Suggest-only (migration): restoring autofixable=True brings back unsafe lane edits.
+    assert rule.autofixable is False
+    assert rule.remediation_reference is not None
+    assert rule.remediation_reference.kind is RemediationKind.GUIDE
 
 
 def test_t009_rule_metadata() -> None:
@@ -72,6 +77,83 @@ def test_t005_fires_on_class_method_with_no_assertion() -> None:
     )
     assert [f.rule_id for f in findings] == ["T005"]
     assert "TestFoo.test_bar" in findings[0].message
+
+
+def test_t005_silent_on_pytest_opted_out_class_with_abstract_test_methods() -> None:
+    findings = scan_text(
+        "from abc import abstractmethod\n"
+        "class TestAdapter:\n"
+        "    __test__ = False\n"
+        "    @abstractmethod\n"
+        "    def test_connect(self):\n"
+        "        raise NotImplementedError\n"
+        "    @abstractmethod\n"
+        "    def test_disconnect(self):\n"
+        "        raise NotImplementedError\n",
+        "tests/e2e/test_adapter.py",
+    )
+    assert findings == []
+
+
+def test_t005_still_fires_on_workflow_method_without_opt_out() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    __test__ = True\n"
+        "    def test_run_pipeline(self):\n"
+        "        super().run_pipeline()\n"
+        "        print('completed')\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+    assert "TestPipeline.test_run_pipeline" in findings[0].message
+
+
+def test_t005_silent_on_tuple_unpacked_opt_out() -> None:
+    findings = scan_text(
+        "class TestAdapter:\n"
+        "    __test__, marker = (False, None)\n"
+        "    def test_connect(self):\n"
+        "        run()\n",
+        "tests/e2e/test_adapter.py",
+    )
+    assert findings == []
+
+
+def test_t005_fires_when_opt_out_is_conditionally_rebound() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    __test__ = False\n"
+        "    if True:\n"
+        "        __test__ = True\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+    assert "TestPipeline.test_run_pipeline" in findings[0].message
+
+
+def test_t005_fires_when_opt_out_is_starred_unpacked() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    *__test__, marker = (False, None)\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_ignores_opt_out_assigned_inside_a_method() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    def helper(self):\n"
+        "        __test__ = False\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
 
 
 def test_t005_silent_on_bare_assert() -> None:

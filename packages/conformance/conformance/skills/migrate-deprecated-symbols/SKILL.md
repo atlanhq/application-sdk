@@ -26,7 +26,7 @@ optional_triggers:
   - "remove private SDK imports"
   - "fix deprecation warnings from application_sdk"
 owner: connector-platform-team
-last_updated: "2026-10-06"
+last_updated: "2026-10-15"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -158,7 +158,8 @@ use), because each use changes with the migration.
   - `ParquetFileReader`, `ParquetFileWriter`, `JsonFileReader`,
     `JsonFileWriter`, other storage-format readers and writers, and private storage helpers such as
     `_download_files` → `migrate-storage` (`RollingFileWriter`, or a
-    FileReference field on the typed Input read with `pandas.read_parquet`).
+    FileReference field on the typed Input read with `pandas.read_parquet`
+    through `run_in_thread`).
   - `QueryBasedTransformer`, `TransformerInterface` (→ the asset-mapper
     pattern) and `BaseMetadataExtractor`, `SqlMetadataExtractor`
     (→ `templates.SqlApp`) are structural v3 migrations no packaged skill

@@ -14,6 +14,7 @@ from conformance.suite.rules.app_name_alignment import (
 )
 from conformance.suite.rules.atomic_publish import RULES as _ATOMIC_PUBLISH_RULES
 from conformance.suite.rules.ci import RULES as _CI_RULES
+from conformance.suite.rules.client_lifecycle import RULES as _CLIENT_LIFECYCLE_RULES
 from conformance.suite.rules.client_seam import RULES as _CLIENT_SEAM_RULES
 from conformance.suite.rules.contract_toolkit import RULES as _CONTRACT_TOOLKIT_RULES
 from conformance.suite.rules.credential_seam import RULES as _CREDENTIAL_SEAM_RULES
@@ -68,6 +69,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _ENTRYPOINT_RULES,
     _STORAGE_RULES,
     _CLIENT_SEAM_RULES,
+    _CLIENT_LIFECYCLE_RULES,
     _PERSISTENCE_SEAM_RULES,
     _CREDENTIAL_SEAM_RULES,
     _EP_ALIGNMENT_RULES,

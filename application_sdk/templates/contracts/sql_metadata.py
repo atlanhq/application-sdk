@@ -22,6 +22,7 @@ from application_sdk.contracts.types import (
     ConnectionRef,
     FileReference,
     MaxItems,
+    TreeSelection,
 )
 from application_sdk.credentials.ingress import (
     declared_agent_spec_type,
@@ -30,6 +31,9 @@ from application_sdk.credentials.ingress import (
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.observability.logger_adaptor import get_logger
+
+_logger = get_logger(__name__)
 
 # Type alias for SQL filter maps: database-regex → list of schema-regexes.
 # Example: {"^prod$": ["^analytics$", "^reporting$"]}
@@ -107,14 +111,16 @@ def _coerce_filter_value(v: Any) -> Any:
     return v
 
 
-def _is_sdk_sql_filter_field(cls: type, field_name: str | None) -> bool:
-    """Return True when a subclass still uses the SDK-owned SQL filter field."""
+def _is_sdk_sql_filter_field(
+    cls: type,
+    field_name: str | None,
+    marker: dict[str, JsonValue] = _FILTER_FIELD_JSON_SCHEMA_EXTRA,
+) -> bool:
+    """Return True when a subclass still uses the SDK-owned filter field."""
     if field_name is None:
         return False
     field = cls.model_fields.get(field_name)
-    return (
-        field is not None and field.json_schema_extra == _FILTER_FIELD_JSON_SCHEMA_EXTRA
-    )
+    return field is not None and field.json_schema_extra == marker
 
 
 class ExtractionInput(Input):
@@ -348,6 +354,72 @@ class ExtractionInput(Input):
     def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
         validate_filter_no_sql_injection(v)
         return v
+
+
+_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA: dict[str, JsonValue] = {
+    "x-accepted-before-validation": ["APITree-style nested dict", "str", "None"]
+}
+
+
+def _coerce_tree_filter_value(v: Any) -> Any:
+    """Coerce filter input to ``TreeSelection | str`` without collapsing the tree.
+
+    ``None`` becomes ``""`` and a legacy quoted-CSV string is normalised, as in
+    :func:`_coerce_filter_value`. A JSON-object string, the shape the Automation
+    Engine sends, is decoded so the tree is validated as ``TreeSelection``; any
+    other string stays a string. A dict keeps every level. A list, or a dict with
+    list values, is a ``FilterMap`` of regex patterns rather than a selection of
+    named nodes, so it is passed through for ``TreeSelection`` to refuse instead
+    of being mapped onto tree keys.
+    """
+    if v is None:
+        return ""
+    if not isinstance(v, str):
+        return v
+    normalized = normalize_legacy_filter_value(v)
+    if not normalized.lstrip().startswith("{"):
+        return normalized
+    try:
+        parsed = orjson.loads(normalized)
+    except orjson.JSONDecodeError:
+        _logger.debug("Tree filter string is not valid JSON; keeping it as a string")
+        return normalized
+    return parsed if isinstance(parsed, dict) else normalized
+
+
+class TreeSelectionExtractionInput(ExtractionInput):
+    """``ExtractionInput`` whose include/exclude filters are tree-widget selections.
+
+    ``ExtractionInput`` types the filters as ``FilterMap | str`` and collapses an
+    APITree selection to two levels. Apps whose picker emits a deeper tree
+    (``{catalog: {namespace: {table: {}}}}``) and that read the filter themselves
+    extend this class instead: the filters are ``TreeSelection | str`` and keep
+    every level. A JSON-object string is decoded into the tree; ``None`` and other
+    strings are handled as in ``ExtractionInput``. The SQL-injection check still
+    applies (it refuses nesting deeper than its depth limit). This class is for
+    apps that read the filters directly: the SQL extraction templates refuse it,
+    because their task inputs keep two levels. The contract toolkit selects it when the
+    ``include-filter`` / ``exclude-filter`` widgets set ``treeSelection = true``.
+    """
+
+    exclude_filter: TreeSelection | str = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
+        default="", json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
+    """Selection to exclude: an APITree-style nested dict, or a string."""
+
+    include_filter: TreeSelection | str = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
+        default="", json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
+    """Selection to include: an APITree-style nested dict, or a string."""
+
+    @field_validator("include_filter", "exclude_filter", mode="before")
+    @classmethod
+    def _coerce_filter(cls, v: Any, info: ValidationInfo) -> Any:
+        if not _is_sdk_sql_filter_field(
+            cls, info.field_name, _TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA
+        ):
+            return v
+        return _coerce_tree_filter_value(v)
 
 
 class ExtractionOutput(Output, PublishInputMixin):

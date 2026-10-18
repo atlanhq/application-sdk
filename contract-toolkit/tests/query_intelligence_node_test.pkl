@@ -4,9 +4,15 @@ amends "pkl:test"
 
 import "fixtures/qi_node_placeholders.pkl" as qiNodeFixture
 import "../src/App.pkl" as App
+import "../src/NativeApp.pkl" as NativeApp
 
 local qiNodeManifestJson: String = qiNodeFixture.output.files["app/generated/manifest.json"].text
 local defaultQueryIntelligenceNode = new App.QueryIntelligenceNode {
+  vendorName = "athena"
+  sqlKey = "QUERY_TEXT"
+}
+
+local nativeDefaultQueryIntelligenceNode = new NativeApp.QueryIntelligenceNode {
   vendorName = "athena"
   sqlKey = "QUERY_TEXT"
 }
@@ -22,6 +28,8 @@ local deprecatedOverrideNode = new App.QueryIntelligenceNode {
   columnsToPreserve = "FOO,BAR"
   parserArtifactsKey = "artifacts/parser.tar.gz"
   instanceName = "primary"
+  extraFilter = "SOURCE = 'X'"
+  connectionCacheKey = "artifacts/connection-cache.json"
 }
 
 // Boolean-literal form — typed Boolean still accepted (back-compat).
@@ -46,6 +54,13 @@ local templatedNode = new App.QueryIntelligenceNode {
 }
 
 facts {
+  // Drift guard — the two modules carry separate copies of this node, so an
+  // arg added or renamed in one must land in the other. Values are not
+  // compared: NativeApp.pkl is frozen, so its mineOutputType stays "parquet".
+  ["NativeApp.QueryIntelligenceNode emits the same arg keys as App.QueryIntelligenceNode"] {
+    nativeDefaultQueryIntelligenceNode.args.keys == defaultQueryIntelligenceNode.args.keys
+  }
+
   // Class-level default: precise per-type assertion without manifest noise.
   // Regression guard — QueryIntelligenceNode must route to the query-intelligence
   // app, not DAGNode's "automation-engine" default.
@@ -74,6 +89,8 @@ facts {
     deprecatedOverrideNode.args["columns_to_preserve"] == "FOO,BAR"
     deprecatedOverrideNode.args["parser_artifacts_key"] == "artifacts/parser.tar.gz"
     deprecatedOverrideNode.args["instance_name"] == "primary"
+    deprecatedOverrideNode.args["extra_filter"] == "SOURCE = 'X'"
+    deprecatedOverrideNode.args["connection_cache_key"] == "artifacts/connection-cache.json"
   }
 
   ["QueryIntelligenceNode omits deployment-owned and deprecated args"] {
@@ -84,6 +101,8 @@ facts {
     !defaultQueryIntelligenceNode.args.containsKey("start_time")
     !defaultQueryIntelligenceNode.args.containsKey("end_time")
     !defaultQueryIntelligenceNode.args.containsKey("processing_time_limit_ms")
+    !defaultQueryIntelligenceNode.args.containsKey("extra_filter")
+    !defaultQueryIntelligenceNode.args.containsKey("connection_cache_key")
   }
 
   ["Generated QI manifest omits deployment-owned and deprecated args"] {
@@ -94,6 +113,8 @@ facts {
     !qiNodeManifestJson.contains("\"start_time\"")
     !qiNodeManifestJson.contains("\"end_time\"")
     !qiNodeManifestJson.contains("\"processing_time_limit_ms\"")
+    !qiNodeManifestJson.contains("\"extra_filter\"")
+    !qiNodeManifestJson.contains("\"connection_cache_key\"")
   }
 
   // Default (omit) — back-compat: ignore_orphans / indirect_lineage are

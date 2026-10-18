@@ -8,15 +8,50 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    types: [opened, synchronize, labeled, reopened]
+    # No `labeled` (FND-3839): the bump-PR opt-in is a `/gate-check` comment.
+    types: [opened, synchronize, reopened]
     branches: [ "main" ]
   merge_group:
   schedule:
     - cron: '45 12 * * 0'
 
 jobs:
+  # Bump-version PR CI is opt-in (FND-3748). The `/gate-check` comment posts a
+  # `gate-check` status and re-runs this run, so the opt-in is read live from
+  # the commit here — a re-run replays the event payload, which cannot carry
+  # it. Only bump PRs pay for this job; everywhere else it is skipped and the
+  # jobs below run (FND-3839).
+  opt-in:
+    name: Bump-PR opt-in
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
+    outputs:
+      opted_in: ${{ steps.opt-in.outputs.opted_in }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Check the bump-PR CI opt-in
+        id: opt-in
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --sha "$HEAD_SHA"
+
   analyze:
-    if: github.event_name != 'merge_group'
+    needs: opt-in
+    # `always()` because opt-in is skipped off bump PRs, and a skipped need
+    # would otherwise skip this job. SDK Gate and Connector Tests Gate fail
+    # closed on an un-opted bump PR.
+    if: >-
+      always() && github.event_name != 'merge_group' &&
+      (!startsWith(github.head_ref, 'bump-version') || needs.opt-in.outputs.opted_in == 'true')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -31,22 +66,22 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         with:
           languages: ${{ matrix.language }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        uses: github/codeql-action/autobuild@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         with:
           category: "/language:${{matrix.language}}"
           upload: never
           output: codeql-results
 
       - name: Upload to Security tab
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         continue-on-error: true
         with:
           sarif_file: codeql-results/python.sarif
@@ -149,6 +184,11 @@ jobs:
   # Code Quality Checks
   lint:
     name: Pre-commit Checks
+    needs: opt-in
+    # Same opt-in as analyze above.
+    if: >-
+      always() &&
+      (!startsWith(github.head_ref, 'bump-version') || needs.opt-in.outputs.opted_in == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

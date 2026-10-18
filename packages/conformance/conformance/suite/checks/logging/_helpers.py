@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import PurePosixPath
-from typing import Literal
+from typing import Literal, TypeGuard
 
 from .._ast_common._exc_info import has_exc_info_traceback
 from ._constants import ADAPTER_MARKERS, LOG_METHODS, LOGGER_NAMES
@@ -203,26 +203,297 @@ def is_adapter_file(tree: ast.Module) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def loop_is_bounded(loop_node: ast.For | ast.AsyncFor) -> bool:
-    """True if the loop is clearly bounded to ≤ 10 iterations.
+# Builtins whose call semantics the cap analysis relies on.
+_CAP_BUILTINS: frozenset[str] = frozenset({"range", "zip"})
 
-    Covers:
-    * ``for x in range(n)`` — literal *n* ≤ 10
-    * ``for x in [a, b, …]`` / ``(a, b, …)`` — literal collection ≤ 10 items
+
+def _shadowed_builtins(tree: ast.Module) -> frozenset[str]:
+    """Return the cap-relevant builtins rebound anywhere in the module.
+
+    Over-approximates on purpose: a binding of ``range``/``zip`` in any scope
+    (assignment, parameter, import, def/class, global, except/match capture)
+    or a star import means a call spelled that way may not be the builtin, so
+    loops over it get no cap.
     """
-    iter_ = loop_node.iter
-    # range(n) with a single literal int argument
-    if isinstance(iter_, ast.Call):
-        func = iter_.func
-        func_name = func.id if isinstance(func, ast.Name) else None
-        if func_name == "range" and len(iter_.args) == 1:
-            arg = iter_.args[0]
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            bound.add(node.id)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name == "*":
+                    return _CAP_BUILTINS
+                bound.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            bound.update(node.names)
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+            if node.name:
+                bound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            bound.add(node.rest)
+    return _CAP_BUILTINS & frozenset(bound)
+
+
+def _is_builtin_call(
+    expression: ast.AST | None, name: str, shadowed: frozenset[str]
+) -> TypeGuard[ast.Call]:
+    return (
+        isinstance(expression, ast.Call)
+        and isinstance(expression.func, ast.Name)
+        and expression.func.id == name
+        and name not in shadowed
+    )
+
+
+def _literal_iterable_cap(
+    iterable: ast.expr, shadowed: frozenset[str] = frozenset()
+) -> int | None:
+    """Return a proven upper bound for a directly literal iterable."""
+    if _is_builtin_call(iterable, "range", shadowed):
+        if len(iterable.args) == 1 and not iterable.keywords:
+            arg = iterable.args[0]
             if isinstance(arg, ast.Constant) and isinstance(arg.value, int):
-                return arg.value <= 10
-    # Literal sequence with a known small number of elements
-    if isinstance(iter_, (ast.List, ast.Tuple, ast.Set)):
-        return len(iter_.elts) <= 10
+                return max(int(arg.value), 0)
+    if isinstance(iterable, (ast.List, ast.Tuple, ast.Set)):
+        if any(isinstance(element, ast.Starred) for element in iterable.elts):
+            return None
+        return len(iterable.elts)
+    return None
+
+
+def _function_scope_nodes(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[ast.AST]:
+    """Yield nodes in one function body, excluding nested scopes/comprehensions."""
+    nested_scopes = (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.Lambda,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+    )
+    pending = list(reversed(function.body))
+    nodes: list[ast.AST] = []
+    while pending:
+        node = pending.pop()
+        if isinstance(node, nested_scopes):
+            continue
+        nodes.append(node)
+        pending.extend(reversed(list(ast.iter_child_nodes(node))))
+    return nodes
+
+
+def _function_store_counts(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for node in _function_scope_nodes(function):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            counts[node.id] = counts.get(node.id, 0) + 1
+    return counts
+
+
+def _direct_assignment_values(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[tuple[ast.expr, ast.expr, ast.stmt]]:
+    """Return simple assignments written directly in a function body."""
+    assignments: list[tuple[ast.expr, ast.expr, ast.stmt]] = []
+    for statement in function.body:
+        if isinstance(statement, ast.Assign):
+            assignments.extend(
+                (target, statement.value, statement) for target in statement.targets
+            )
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            assignments.append((statement.target, statement.value, statement))
+    return assignments
+
+
+def _is_literal_binding_store(
+    node: ast.Name, parents: dict[ast.AST, ast.AST], shadowed: frozenset[str]
+) -> bool:
+    statement = parents.get(node)
+    if isinstance(statement, ast.Assign):
+        return (
+            len(statement.targets) == 1
+            and statement.targets[0] is node
+            and _literal_iterable_cap(statement.value, shadowed) is not None
+        )
+    if isinstance(statement, ast.AnnAssign):
+        return (
+            statement.target is node
+            and _literal_iterable_cap(statement.value, shadowed) is not None
+        )
     return False
+
+
+def _is_loop_source_reference(
+    node: ast.Name, parents: dict[ast.AST, ast.AST], shadowed: frozenset[str]
+) -> bool:
+    parent = parents.get(node)
+    if isinstance(parent, (ast.For, ast.AsyncFor)) and parent.iter is node:
+        return True
+    if _is_builtin_call(parent, "zip", shadowed):
+        if node not in parent.args:
+            return False
+        loop = parents.get(parent)
+        return isinstance(loop, (ast.For, ast.AsyncFor)) and loop.iter is parent
+    return False
+
+
+def _local_literal_bindings(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    parents: dict[ast.AST, ast.AST],
+    shadowed: frozenset[str],
+) -> dict[str, tuple[int, int]]:
+    """Map unambiguous, unmutated local literal iterables to their caps."""
+    store_counts = _function_store_counts(function)
+    bindings: dict[str, tuple[int, int]] = {}
+    for target, value, statement in _direct_assignment_values(function):
+        if not isinstance(target, ast.Name) or store_counts.get(target.id) != 1:
+            continue
+        references = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Name) and node.id == target.id
+        ]
+        if any(
+            _enclosing_function(node, parents) is not function
+            or not (
+                _is_literal_binding_store(node, parents, shadowed)
+                if isinstance(node.ctx, ast.Store)
+                else _is_loop_source_reference(node, parents, shadowed)
+                if isinstance(node.ctx, ast.Load)
+                else False
+            )
+            for node in references
+        ):
+            continue
+        cap = _literal_iterable_cap(value, shadowed)
+        if cap is not None:
+            bindings[target.id] = (cap, statement.lineno)
+    return bindings
+
+
+def _iterable_cap(
+    iterable: ast.expr, local_caps: dict[str, int], shadowed: frozenset[str]
+) -> int | None:
+    cap = _literal_iterable_cap(iterable, shadowed)
+    if cap is not None:
+        return cap
+    if isinstance(iterable, ast.Name):
+        return local_caps.get(iterable.id)
+    if _is_builtin_call(iterable, "zip", shadowed):
+        if not iterable.args:
+            return 0
+        known_caps = [
+            arg_cap
+            for arg in iterable.args
+            if (arg_cap := _iterable_cap(arg, local_caps, shadowed)) is not None
+        ]
+        return min(known_caps) if known_caps else None
+    return None
+
+
+def _caps_before(bindings: dict[str, tuple[int, int]], line: int) -> dict[str, int]:
+    return {
+        name: cap
+        for name, (cap, assignment_line) in bindings.items()
+        if assignment_line < line
+    }
+
+
+def _function_loop_caps(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    local_bindings: dict[str, tuple[int, int]],
+    shadowed: frozenset[str],
+) -> dict[ast.For | ast.AsyncFor, int]:
+    loop_caps: dict[ast.For | ast.AsyncFor, int] = {}
+    for node in _function_scope_nodes(function):
+        if not isinstance(node, (ast.For, ast.AsyncFor)):
+            continue
+        cap = _iterable_cap(
+            node.iter, _caps_before(local_bindings, node.lineno), shadowed
+        )
+        if cap is not None:
+            loop_caps[node] = cap
+    return loop_caps
+
+
+def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    return {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+
+def _enclosing_function(
+    node: ast.AST, parents: dict[ast.AST, ast.AST]
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    nested_scopes = (
+        ast.Lambda,
+        ast.ListComp,
+        ast.SetComp,
+        ast.DictComp,
+        ast.GeneratorExp,
+        ast.ClassDef,
+    )
+    current = parents.get(node)
+    while current is not None:
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return current
+        if isinstance(current, nested_scopes):
+            return None
+        current = parents.get(current)
+    return None
+
+
+def collect_bounded_loop_caps(tree: ast.Module) -> dict[ast.For | ast.AsyncFor, int]:
+    """Prove loop caps for every ``for`` loop in the module before the checker runs.
+
+    Beyond literal loop expressions, recognize an unambiguous local name
+    assigned a small literal collection and only ever read as a loop (or
+    builtin ``zip``) source in the same function. Caps never cross a function
+    boundary: a method's return value can be rebuilt by its constructor or
+    replaced by a subclass override, so it is not a proof. Calls spelled
+    ``range``/``zip`` count only when the module never rebinds those names.
+    """
+    parents = _parent_map(tree)
+    shadowed = _shadowed_builtins(tree)
+    all_loop_caps: dict[ast.For | ast.AsyncFor, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bindings = _local_literal_bindings(node, parents, shadowed)
+            all_loop_caps.update(_function_loop_caps(node, bindings, shadowed))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.For, ast.AsyncFor)) and node not in all_loop_caps:
+            cap = _literal_iterable_cap(node.iter, shadowed)
+            if cap is not None:
+                all_loop_caps[node] = cap
+    return all_loop_caps
+
+
+def loop_is_bounded(
+    loop_node: ast.For | ast.AsyncFor,
+    known_loop_caps: dict[ast.For | ast.AsyncFor, int] | None = None,
+) -> bool:
+    """True if the loop has a proven upper bound of at most 10 iterations.
+
+    *known_loop_caps* (from :func:`collect_bounded_loop_caps`) is authoritative
+    when given; without it only a literal ``range``/collection iterable counts.
+    """
+    if known_loop_caps is not None:
+        cap = known_loop_caps.get(loop_node)
+    else:
+        cap = _literal_iterable_cap(loop_node.iter)
+    return cap is not None and cap <= 10
 
 
 # ---------------------------------------------------------------------------

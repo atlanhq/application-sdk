@@ -122,10 +122,21 @@ above.  `classification` is always `"judgment"` for both S-rules.  Read the full
 function/class context around `finding.line` before drafting.
 
 - **S001 HardcodedCredential** — a string literal is stored as a credential-named
-  variable, keyword argument, or dict value.  Draft, in order of preference:
+  variable, keyword argument, or dict value.  Trace every reader of the value and
+  identify what the literal means before choosing a fix:
 
-  1. **The real fix (preferred)** — remove the literal and resolve the secret at
-     runtime through the SDK seam:
+  1. **Not a credential** — an absence sentinel (for example, `"None"`) or a
+     mode/scheme marker that tells other code which auth path is active (for
+     example, a fixed label returned in place of a bearer token when another
+     header carries the auth).  The finding is a false positive: draft an inline
+     `# conformance: ignore[S001] <reason>` naming what the literal is and which
+     code reads it.  **Do not change the value** — replacing it with `None` or `""`
+     changes what every reader sees (truthiness checks, header building, equality
+     against the marker), in auth code no gate here exercises.  Return
+     `outcome = "suppress"`.
+
+  2. **Actual credential** — remove the literal and resolve the secret at runtime
+     through the SDK seam:
      - inside an `App` subclass with a credential context →
        `cred = await self.context.resolve_credential(ref)` where `ref` is a
        `CredentialRef` (`from application_sdk.credentials import CredentialRef`
@@ -135,11 +146,10 @@ function/class context around `finding.line` before drafting.
        (`from application_sdk.infrastructure.secrets import SecretStore`).
      Name the secret key you assumed in the proposal.  Return `outcome = "fix"`.
 
-  2. **Fallback** — if the literal is a genuinely non-secret sample confined to a
-     local-only path the discover walk did not exclude (rare), draft an inline
-     `# conformance: ignore[S001] <reason>` on the assignment line, where the
-     justification explains *why* the value is not a real credential.  Return
-     `outcome = "suppress"`.
+  3. **Fallback** — a genuinely non-secret sample confined to a local-only path the
+     discover walk did not exclude (rare) is handled as route 1: an inline
+     `# conformance: ignore[S001] <reason>` explaining *why* the value is not a real
+     credential.  Return `outcome = "suppress"`.
 
 - **S002 RawEnvCredentialAccess** — a credential-named environment variable is read
   directly via `os.getenv` / `os.environ`.  Draft, in order of preference:
@@ -167,10 +177,18 @@ function/class context around `finding.line` before drafting.
 
      Check first that the read really has no seam.  The fallback is for values
      the app needs *before* it can resolve anything — process-startup auth
-     against Atlan itself.  A source credential the workflow already receives as
-     a `CredentialRef` has a seam whatever its env-var name looks like, so it
-     takes route 1.
+     against Atlan itself — and for **deployment secrets the platform injects
+     into the pod environment** (an `atlan.yaml` secret mapping, a chart-mounted
+     secret such as an object-store HMAC pair) that no `SecretStore` the app uses
+     is populated with.  Rewiring those reads to `context.get_secret(...)` /
+     `secret_store.get(...)` resolves a name the store does not hold, so the value
+     comes back empty in every tenant.  Name the injected value and where the
+     platform injects it in the suppression reason.  A source credential the
+     workflow already receives as a `CredentialRef` has a seam whatever its
+     env-var name looks like, so it takes route 1.
 
-  Never migrate a dev harness onto the seam: `run_dev*.py` and `scripts/` are
-  excluded from detection by design, so an S002 finding there should not occur —
-  if one does, treat it as a discover-scope bug, not a remediation target.
+  Never migrate a dev harness onto the seam: `run_dev*.py`, `scripts/` and
+  standalone utility scripts (a repo-root module other than `main.py` with its own
+  `__main__` block) are excluded from S002 by design, so a finding there should
+  not occur — if one does, treat it as a detector-scope bug, not a remediation
+  target.

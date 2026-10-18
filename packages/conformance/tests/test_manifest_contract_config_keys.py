@@ -787,6 +787,23 @@ def test_k018_fires_without_entrypoint_decorator(tmp_path: Path) -> None:
     }, "include_filter comes from ExtractionInput — must not be flagged"
 
 
+def test_k018_fallback_also_anchors_on_tree_selection_extraction_input(
+    tmp_path: Path,
+) -> None:
+    src = _INHERITED_ENTRYPOINT_APP.format(body="    pass\n").replace(
+        "ExtractionInput", "TreeSelectionExtractionInput"
+    )
+    paths = _write_py(tmp_path, {"app.py": src})
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
+    )
+    assert _flagged(_unsuppressed(scan_all(paths, tmp_path), "K018"), "K018") == {
+        "fetch_partitions",
+        "advanced_config",
+    }
+
+
 def test_k018_fires_on_inherited_entrypoint_with_folding_validator(
     tmp_path: Path,
 ) -> None:
@@ -1044,6 +1061,29 @@ def test_k018_pairs_inherited_template_run_with_the_template_input(
     findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
     assert _flagged(findings, "K018") == {"fetch_partitions"}
     assert all(f.file == "app/app.py" for f in findings)
+
+
+def test_k018_inherited_template_run_names_an_unwired_tree_selection_declarer(
+    tmp_path: Path,
+) -> None:
+    """SqlApp's Input is ExtractionInput, so a TreeSelectionExtractionInput
+    contract is reached only through the extraction-input anchors."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base="SqlApp"),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ).replace("ExtractionInput", "TreeSelectionExtractionInput"),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"fetch_partitions"}
+    assert "'AppInputContract' declares it" in findings[0].message
 
 
 def test_k018_inherited_sql_query_extractor_run_pairs_with_query_input(

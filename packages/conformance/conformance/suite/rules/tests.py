@@ -103,9 +103,10 @@ a tier that doesn't exist where expected silently contributes zero coverage:
 signal if the gate that produces it can actually fail and actually measures
 the code that ships:
 
-* ``T014`` — CoverageGateDisabled: ``[tool.coverage]`` is configured but
-  ``[tool.coverage.report].fail_under`` is absent or ``0`` — coverage is
-  measured but never enforced.
+* ``T014`` — CoverageGateDisabled: ``[tool.coverage]`` is configured but the
+  effective unit-tier floor is absent or ``0``. For a ``tests-reusable.yaml``
+  caller that floor is its ``unit-coverage-fail-under`` input (default ``0``),
+  which overrides ``pyproject.toml``.
 * ``T015`` — CoverageOmitsProductCode: ``[tool.coverage.run].omit`` (or a
   narrowed ``source``) excludes real product code under ``app/`` — inflating
   the reported percentage by hiding uncovered code from the denominator.
@@ -484,7 +485,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dev-entrypoint",
-        autofixable=True,
+        autofixable=False,
         since="0.10.0",
         rationale=(
             "application_sdk.main.main() is the production, "
@@ -540,13 +541,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "call's line when the app genuinely has no local dev-mode boot\n"
             "path and relies on ``ATLAN_APP_MODULE`` being set out-of-band\n"
             "even for CI (e.g. some utility/CSA apps).\n"
+            "\n"
+            "Not auto-applied: whether ``main.py`` may stop being the production CLI is a\n"
+            "judgment call (a workflow or stress test may launch it, or an explicit\n"
+            "``ATLAN_APP_MODULE`` default may already make it safe). The remediation lane\n"
+            "routes T004 findings to a person (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t004"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -766,7 +772,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-collection",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
             "pytest only collects files matching its python_files convention "
@@ -803,13 +809,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "of the file only when the repo has a non-default ``python_files``\n"
             "override in ``pyproject.toml`` that legitimately collects this name (the\n"
             "check does not read that override — see the module docstring).\n"
+            "\n"
+            "Not auto-applied: a helper or mixin module with no ``test_`` functions is not\n"
+            "a collectable, and renaming it makes pytest import it twice. A person decides\n"
+            "which files are real test modules (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t008"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1082,7 +1092,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
             "CI's composite actions locate each tier by directory convention — "
@@ -1120,13 +1130,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n**Fixing it well**\n\n"
             "* A test that subclasses the deprecated SDR harness (``BaseSDRIntegrationTest``) is not moved: T003 retires it, and moving it only carries the T003 finding to the new path.\n\n"
             "* Otherwise move the file into the tier the reference apps use (``tests/unit``, ``tests/integration``, ``tests/e2e``, ``tests/ui``) and update anything that imports it.\n\n"
+            "\n"
+            "Not auto-applied: a repo-declared tier such as ``tests/parity`` needs a\n"
+            "decision, and moving files must keep their ``conftest.py`` and fixtures. The\n"
+            "remediation lane routes T013 findings to a person (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t013"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1145,66 +1159,88 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
-            "A coverage percentage that cannot fail a build is decorative: it is "
-            "reported in every PR comment and dashboard, creating the appearance of "
-            "an enforced quality bar, while [tool.coverage.report].fail_under absent "
-            "or 0 means no percentage — however low — actually blocks anything. This "
-            "is the config-level counterpart to T005-T007: those catch tests that run "
-            "without asserting; this catches a coverage number that exists without "
-            "enforcing. The unified test-framework onboarding path deliberately "
-            "starts new adopters at --cov-fail-under=0 and ramps up over time (Athena "
-            "at 20%, mssql at 60%), so WARN (not BLOCK) matches the agreed rollout "
-            "reality — this rule's value is making the '0 is temporary, not the "
-            "final state' expectation visible and trackable, not blocking the "
-            "initial adoption PR."
+            "A reported coverage percentage is decorative unless the effective "
+            "floor used by the coverage run can fail it. A CI floor passed on "
+            "the command line takes precedence over "
+            "``[tool.coverage.report].fail_under``: a ``tests-reusable.yaml`` "
+            "caller's unit tier is gated only by its ``unit-coverage-fail-under`` "
+            "input (default ``0``), so a positive TOML value alone does not "
+            "enforce coverage there. This is the config-level "
+            "counterpart to T005-T007: those catch tests that run without "
+            "asserting; this catches a coverage number that exists without an "
+            "effective floor. The unified test-framework onboarding path "
+            "deliberately starts new adopters at ``--cov-fail-under=0`` and "
+            "ramps up over time (Athena at 20%, mssql at 60%), so WARN (not "
+            "BLOCK) matches the agreed rollout reality — this rule's value is "
+            "making the '0 is temporary, not the final state' expectation "
+            "visible and trackable, not blocking the initial adoption PR."
         ),
         short_description=(
-            "Coverage is configured but fail_under is absent or 0 — the number is "
-            "measured but never enforced"
+            "Coverage is configured but its effective floor is absent or 0 — "
+            "the number is measured but never enforced"
         ),
         full_description=(
-            "``[tool.coverage.report]`` exists in ``pyproject.toml`` — the repo has\n"
-            "opted into coverage measurement — but ``fail_under`` is either absent\n"
-            "(defaults to 0) or explicitly set to ``0``, *and* no CI workflow\n"
-            "declares an overriding floor. Coverage is measured and reported (e.g.\n"
-            "as a PR comment via the ``connector-unit-tests`` composite action) but\n"
-            "can never cause a run to fail, regardless of how low it drops.\n"
+            "``[tool.coverage]`` exists in ``pyproject.toml`` — the repo has\n"
+            "opted into coverage measurement. T014 fires when the effective\n"
+            "coverage floor is absent or ``0``, so a run can report coverage\n"
+            "without failing.\n"
             "\n"
-            "coverage.py's CLI flag always overrides ``pyproject.toml``, so this\n"
-            "rule also checks the repo's own ``.github/workflows/*.yml`` for a\n"
+            "The floor comes from ``[tool.coverage.report].fail_under`` unless\n"
+            "CI passes one on the command line, which always wins. The rule\n"
+            "reads the unit tier's floor from the repo's own\n"
+            "``.github/workflows/*.yml``: for a ``tests-reusable.yaml`` caller,\n"
+            "its ``unit-coverage-fail-under`` input, or the reusable's default\n"
+            "``0`` when omitted (its ``pytest-args`` feed only the integration\n"
+            "tier and are not read); for any other workflow, a\n"
             "``connector-unit-tests`` ``fail-under:`` input or a\n"
-            "``--cov-fail-under=N`` flag embedded in a ``tests-reusable.yaml``\n"
-            "``pytest-args`` override. Either one, if non-zero, is treated as the\n"
-            "effective floor — the finding only fires when neither source enforces\n"
-            "anything.\n"
+            "``--cov-fail-under=N`` flag. A positive CI value is the effective\n"
+            "floor; a CI value of ``0`` overrides TOML but enforces nothing.\n"
             "\n"
-            "**Remediation:** set a real, ratcheting floor:\n"
+            "**Remediation:** set the floor on the input that gates the unit\n"
+            "tier. First read the current *unit* coverage (the unit job's\n"
+            "``coverage.json`` artifact, or ``coverage report`` after\n"
+            "``pytest tests/unit``) and take the whole number at or below it.\n"
             "\n"
-            ".. code-block:: toml\n"
+            "*tests-reusable.yaml caller:* set\n"
+            '``unit-coverage-fail-under: "<N>"`` in the ``with:`` block (the\n'
+            'mysql reference uses ``"90"``). This input is the unit tier\'s only\n'
+            "gate: the unit job runs ``coverage report --fail-under=<input>``,\n"
+            "so ``pyproject.toml`` never applies there. Write a quoted whole\n"
+            "number — ``bootstrap --resync`` reads it back and keeps it; a\n"
+            "decimal is not read back and makes ``--resync`` refuse the file.\n"
             "\n"
-            "    [tool.coverage.report]\n"
-            "    fail_under = 60\n"
+            "Leave ``--cov-fail-under=0`` in ``pytest-args`` alone.\n"
+            "``pytest-args`` only reaches the integration tier; removing the\n"
+            "flag applies the TOML ``fail_under`` to integration coverage — a\n"
+            "different measurement — and leaves the unit gate at ``0``.\n"
             "\n"
-            "Per the unified test-framework's own onboarding guidance, start at the\n"
-            "repo's *current* measured percentage (never below what's already true)\n"
-            "and raise it in follow-up PRs as coverage improves — the agreed target\n"
-            "for unit tests is 90-100%, but a repo mid-adoption is not expected to\n"
-            "jump there in one step.\n"
+            "*Direct connector-unit-tests user:* set its ``fail-under:`` input\n"
+            "to ``<N>``. *No CI coverage gate at all:* set\n"
+            "``[tool.coverage.report].fail_under = <N>``.\n"
+            "\n"
+            "Keep a positive ``fail_under`` in ``pyproject.toml`` as the\n"
+            "fallback for local runs (mysql keeps ``84``). Never set a floor\n"
+            "above current coverage, and ratchet it up in follow-up PRs toward\n"
+            "the 90-100% unit-test goal rather than jumping there in one step.\n"
             "\n"
             "Suppress with ``# conformance: ignore[T014] <reason>`` on the\n"
             "``[tool.coverage.report]`` line only during the initial adoption PR\n"
-            "itself, explicitly naming the follow-up tracking issue that will set a\n"
-            "real floor.\n"
+            "itself, explicitly naming the follow-up tracking issue that will set\n"
+            "a real floor.\n"
+            "\n"
+            "Not auto-applied: the unit coverage floor lives in the ``tests-reusable``\n"
+            "caller under ``.github/`` (``unit-coverage-fail-under``), which a person sets;\n"
+            "``fail_under`` in ``pyproject.toml`` alone does not gate CI (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t014"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1222,7 +1258,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="coverage-config",
-        autofixable=True,
+        autofixable=False,
         since="0.12.0",
         rationale=(
             "[tool.coverage.run].omit (or a narrowed source) controls the "
@@ -1268,13 +1304,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``source`` line naming the specific module and why it's legitimately\n"
             "excluded (e.g. a vendored third-party shim with no branch logic worth\n"
             "covering).\n"
+            "\n"
+            "Not auto-applied: removing an omit without tests drops coverage below the\n"
+            "floor and fails the unit tier, and vendored third-party code may stay omitted\n"
+            "with a reason. A person applies it (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t015"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
@@ -1691,7 +1731,7 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.18.0",
         rationale=(
             "The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns "
-            "the e2e label gate, the discover-e2e-suites matrix (one leg per "
+            "the e2e request gate, the discover-e2e-suites matrix (one leg per "
             "tests/e2e/test_*.py), the per-leg ATLAN_DEPLOYMENT_NAME derivation that "
             "keeps worker and harness on one Temporal queue, the GHCR image build, "
             "the sdr-e2e invocation with the full-DAG config-dir/secrets-script/"
@@ -1947,7 +1987,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="e2e-ci",
-        autofixable=True,
+        autofixable=False,
         since="0.18.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -2014,13 +2054,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T023] <reason>`` on the flagged\n"
             "line when a genuinely test-only model is meant (e.g. a negative-path\n"
             "credential body that must be malformed on purpose).\n"
+            "\n"
+            "Not auto-applied: the generated e2e models must carry every token the manifest\n"
+            "uses with the same defaults, and a test rule must never change published\n"
+            "contract values. A person applies it and runs one e2e leg (``tests.prose.md``).\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t023"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),

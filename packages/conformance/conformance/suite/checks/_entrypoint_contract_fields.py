@@ -34,10 +34,20 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Mapping
+from collections import Counter
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, TypeGuard
 
+from conformance.suite.checks._ast_common import (
+    collect_module_alias_targets,
+    merge_alias_targets,
+    qualified_class_key,
+    qualified_rebound_imports,
+    register_alias_records,
+)
+from conformance.suite.checks._ast_common._imports import _module_of
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
@@ -55,6 +65,7 @@ from conformance.suite.checks.prescriptions._decorator_provenance import (
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     _is_classvar_annotation,
+    collect_classes,
     collect_import_aliases,
     field_call_names,
 )
@@ -620,25 +631,19 @@ def _declared_contract_name(
     return record.name if record is not None else resolved
 
 
-def collect_entrypoint_contract_names(
+def iter_entrypoint_contract_annotations(
     file_trees: dict[Path, ast.AST],
     by_name: dict[str, ClassRecord],
-) -> frozenset[str]:
-    """Return the class names of all entrypoint Input/Output contracts.
+) -> Iterator[tuple[Path, str]]:
+    """Yield ``(file, name)`` for each entrypoint Input/Output annotation.
 
-    Shares P013's boundary detection (``classify_boundary_method``) — collects
-    contract class names instead of emitting findings.  ``@task`` contract names are excluded.
-
-    Names are reported as the class that *declares* the contract.  When the
-    caller has seeded *by_name* with module-level rebindings (see
-    ``register_alias_records``), a contract annotated under an alias therefore
-    comes back under the aliased class's own name, which is the name the
-    ``ClassDef`` carries and the name the ledger keys on.
+    *name* is the annotation's terminal name as written in *file*, before any
+    alias is resolved. Shares P013's boundary detection
+    (``classify_boundary_method``); ``@task`` contracts are excluded.
     """
-    entrypoint_contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
 
-    for tree in file_trees.values():
+    for path, tree in file_trees.items():
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         scope = BoundaryScope.for_module(
             tree,
@@ -663,17 +668,40 @@ def collect_entrypoint_contract_names(
                     if ann is not None:
                         name = _annotation_terminal_name(ann)
                         if name:
-                            entrypoint_contracts.add(
-                                _declared_contract_name(name, aliases, by_name)
-                            )
+                            yield path, name
 
                 if func.returns is not None:
                     name = _annotation_terminal_name(func.returns)
                     if name:
-                        entrypoint_contracts.add(
-                            _declared_contract_name(name, aliases, by_name)
-                        )
+                        yield path, name
 
+
+def collect_entrypoint_contract_names(
+    file_trees: dict[Path, ast.AST],
+    by_name: dict[str, ClassRecord],
+) -> frozenset[str]:
+    """Return the class names of all entrypoint Input/Output contracts.
+
+    Shares P013's boundary detection (``classify_boundary_method``) — collects
+    contract class names instead of emitting findings.  ``@task`` contract names are excluded.
+
+    Names are reported as the class that *declares* the contract.  When the
+    caller has seeded *by_name* with module-level rebindings (see
+    ``register_alias_records``), a contract annotated under an alias therefore
+    comes back under the aliased class's own name, which is the name the
+    ``ClassDef`` carries and the name the ledger keys on.
+    """
+    file_aliases: dict[Path, dict[str, str]] = {}
+    entrypoint_contracts: set[str] = set()
+    for path, name in iter_entrypoint_contract_annotations(file_trees, by_name):
+        if path not in file_aliases:
+            tree = file_trees[path]
+            file_aliases[path] = (
+                collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+            )
+        entrypoint_contracts.add(
+            _declared_contract_name(name, file_aliases[path], by_name)
+        )
     return frozenset(entrypoint_contracts)
 
 
@@ -696,4 +724,157 @@ def sdk_base_contract_names(by_name: dict[str, ClassRecord]) -> frozenset[str]:
         for name in SDK_CONTRACT_BASE_FIELDS
         if (rec := by_name.get(name)) is not None
         and Path(rec.file).as_posix() == SDK_CONTRACT_BASE_MODULE
+    )
+
+
+# ── Shared class registry ─────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ContractRegistry:
+    """The cross-file class registry the ledger generator and B005 both read.
+
+    One builder, so the two cannot disagree about which class a name means.
+    """
+
+    aliases: dict[Path, dict[str, str]]
+    """Per file, the import aliases every lookup in that file goes through,
+    including names resolved to a module's own class (see
+    :func:`_ast_common.qualified_rebound_imports`)."""
+
+    by_name: dict[str, ClassRecord]
+    """Entrypoint discovery's registry: a bare name keeps its first
+    declaration, as it always has, so a duplicated ``App`` subclass is still
+    found. Each declaration of a duplicated name is also registered under its
+    :func:`_ast_common.qualified_class_key`."""
+
+    resolvable: dict[str, ClassRecord]
+    """Field resolution's registry: :attr:`by_name` without the duplicated bare
+    names, or any rebinding that only reaches one. A base that reaches a
+    duplicated class by bare name is unresolved here, never the first one
+    parsed."""
+
+    by_name_all: dict[str, list[ClassRecord]]
+    """Every declaration per bare name."""
+
+    ambiguous: frozenset[str]
+    """Bare names with no single meaning: a class several modules declare, a
+    name several modules rebind to different classes, and a rebinding that
+    reaches either."""
+
+
+def build_contract_registry(
+    file_trees: dict[Path, ast.AST], rels: dict[Path, str]
+) -> ContractRegistry:
+    """Build the :class:`ContractRegistry` for *file_trees* (keyed by path, with
+    *rels* giving each one's repo-relative path)."""
+    duplicated = frozenset(
+        name
+        for name, count in Counter(
+            node.name
+            for tree in file_trees.values()
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+        ).items()
+        if count > 1
+    )
+    # An import names the module it reads from, so it means *that* module's
+    # class: never whichever same-named class or rebinding registered first.
+    rebound = qualified_rebound_imports(
+        {rels[p]: t for p, t in file_trees.items()}, duplicated
+    )
+    aliases_by_path: dict[Path, dict[str, str]] = {}
+    by_name: dict[str, ClassRecord] = {}
+    by_name_all: dict[str, list[ClassRecord]] = {}
+    module_targets: list[dict[str, str]] = []
+    for path, tree in file_trees.items():
+        rel = rels[path]
+        aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        aliases.update(rebound.get(rel, {}))
+        aliases_by_path[path] = aliases
+        top_level = {
+            id(stmt) for stmt in (tree.body if isinstance(tree, ast.Module) else [])
+        }
+        for rec in collect_classes(tree, rel, aliases):
+            by_name.setdefault(rec.name, rec)
+            by_name_all.setdefault(rec.name, []).append(rec)
+            if rec.name in duplicated and id(rec.node) in top_level:
+                by_name.setdefault(qualified_class_key(_module_of(rel), rec.name), rec)
+        module_targets.append(collect_module_alias_targets(tree, aliases))
+    # A name several modules rebind to different classes is left unresolved,
+    # as is a duplicated class: a guess is what put one entrypoint's fields
+    # under another's contract name.
+    alias_targets, ambiguous_rebinds = merge_alias_targets(module_targets)
+    resolvable = {k: v for k, v in by_name.items() if k not in duplicated}
+    # Module-level rebindings resolve to the class they name, so a contract
+    # exposed as ``OpenAPIConnectorInput = AppInputContract`` is recorded under
+    # the generated class's own name. Only ``by_name`` is seeded, never
+    # ``by_name_all``: an alias is another name for a declaration, not a second
+    # one, and adding it there would make every aliased contract ambiguous.
+    register_alias_records(by_name, alias_targets)
+    register_alias_records(resolvable, alias_targets)
+
+    ambiguous = set(duplicated | ambiguous_rebinds)
+    for name, target in alias_targets.items():
+        seen = {name}
+        while (
+            target not in resolvable and target in alias_targets and target not in seen
+        ):
+            seen.add(target)
+            target = alias_targets[target]
+        if name not in resolvable and target in ambiguous:
+            ambiguous.add(name)
+    return ContractRegistry(
+        aliases=aliases_by_path,
+        by_name=by_name,
+        resolvable=resolvable,
+        by_name_all=by_name_all,
+        ambiguous=frozenset(ambiguous),
+    )
+
+
+@dataclass(frozen=True)
+class EntrypointContracts:
+    """The declarations entrypoint contracts are, as the ledger records them."""
+
+    records: tuple[ClassRecord, ...]
+    """Each declaration an entrypoint annotates, resolved through the annotating
+    file's imports, plus the SDK contract bases an SDK scan declares. A
+    same-named class elsewhere in the repo (a generated base the contract
+    subclasses under its own name, a stale copy, an unrelated model) is not
+    one of them."""
+
+    ambiguous: tuple[tuple[Path, str, str], ...]
+    """``(file, annotation, declared_name)`` for each annotation that only
+    reaches a name several modules declare or bind differently, so no single
+    declaration can be picked. *declared_name* is the bare name first-wins
+    resolution reports it under."""
+
+
+def resolve_entrypoint_contracts(
+    file_trees: dict[Path, ast.AST], registry: ContractRegistry
+) -> EntrypointContracts:
+    """Resolve every entrypoint annotation in *file_trees* to its declaration."""
+    records: dict[int, ClassRecord] = {}
+    ambiguous: list[tuple[Path, str, str]] = []
+    for path, name in iter_entrypoint_contract_annotations(
+        file_trees, registry.by_name
+    ):
+        target = registry.aliases[path].get(name, name)
+        rec = registry.resolvable.get(target)
+        if rec is not None:
+            records[id(rec.node)] = rec
+        elif target in registry.ambiguous:
+            tree = file_trees[path]
+            aliases = (
+                collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+            )
+            ambiguous.append(
+                (path, name, _declared_contract_name(name, aliases, registry.by_name))
+            )
+    for name in sdk_base_contract_names(registry.by_name):
+        rec = registry.by_name[name]
+        records[id(rec.node)] = rec
+    return EntrypointContracts(
+        records=tuple(records.values()), ambiguous=tuple(ambiguous)
     )

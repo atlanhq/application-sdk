@@ -787,17 +787,20 @@ async def test_app_upload_ref_only_key_preserving_satisfies_deployment_leg(
     assert not warnings, f"deployment leg logged a spurious WARNING: {warnings}"
     assert not errors, f"deployment leg logged an ERROR: {errors}"
 
-    # The upstream leg did the real work, key-preserving.
+    # The upstream leg did the real work, key-preserving. Since FND-3796 a
+    # directory upload also writes its manifest, outside the data keys.
+    all_upstream = await list_keys("", store=upstream_store)
     upstream_keys = {
         k
-        for k in await list_keys("", store=upstream_store)
-        if not k.endswith(".sha256")
+        for k in all_upstream
+        if not k.endswith(".sha256") and not k.endswith(".sdk-manifest")
     }
     assert upstream_keys == {
         f"{src_prefix}/table/entities.json",
         f"{src_prefix}/column/entities.json",
     }
     assert result.ref.file_count == 2
+    assert result.ref.manifest_path in all_upstream
 
 
 @pytest.mark.integration
@@ -841,9 +844,13 @@ async def test_app_upload_ref_only_lands_identical_keys_in_both_stores(
     )
 
     def _data_keys(keys):
-        return {k for k in keys if not k.endswith(".sha256")}
+        # Since FND-3796 each leg also writes a directory manifest; it is not
+        # data, and it is named per leg, so it never shares a key.
+        return {k for k in keys if not k.endswith((".sha256", ".sdk-manifest"))}
 
-    upstream_keys = _data_keys(await list_keys("", store=upstream_store))
+    all_upstream = await list_keys("", store=upstream_store)
+    assert result.ref.manifest_path in all_upstream
+    upstream_keys = _data_keys(all_upstream)
     deployment_keys = _data_keys(await list_keys("", store=deployment_store))
 
     expected = f"{target_prefix}/table/entities.json"

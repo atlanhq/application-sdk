@@ -145,6 +145,7 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/entrypoint_alignment.py, "
             "conformance/suite/rules/entrypoint.py, "
             "conformance/suite/rules/client_seam.py, "
+            "conformance/suite/rules/client_lifecycle.py, "
             "conformance/suite/rules/credential_seam.py, "
             "conformance/suite/rules/error_seam.py, "
             "conformance/suite/rules/determinism.py, "
@@ -155,7 +156,7 @@ _SERIES_META: list[SeriesMeta] = [
         ),
         output_filename="prescriptions.md",
         checker=(
-            "`suite.checks.prescriptions` (P001–P003, P008–P015), "
+            "`suite.checks.prescriptions` (P001–P003, P008–P015, P059), "
             "`suite.checks.orchestration` (P004–P007, scans test files too), "
             "`suite.checks.entrypoint_alignment` (P016), "
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
@@ -167,7 +168,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.transform_templates` (P040, scans template YAML), "
             "`suite.checks.text_io_encoding` (P046), "
             "`suite.checks.atomic_publish` (P050), "
-            "`suite.checks.credential_seam` (P053, gated on the app's locked SDK) "
+            "`suite.checks.credential_seam` (P053, gated on the app's locked SDK), "
+            "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",

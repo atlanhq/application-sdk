@@ -5,7 +5,7 @@
 
 # Error-Handling Rules (E-series)
 
-**20 rules** · Checker: `suite.checks.error_handling` (AST-based)
+**21 rules** · Checker: `suite.checks.error_handling` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -44,6 +44,7 @@ They are documented alongside the orchestration, storage and client seam rules i
 | [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | yes | 0.2.0 |
 | [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | yes | 0.9.0 |
 | [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | yes | 0.9.0 |
+| [E021](#e021) | `DependencyUnavailableOverriddenToUser` | `warn` | `both` | `failure-category` | yes | 0.47.0 |
 
 ---
 
@@ -178,11 +179,19 @@ fire.
 
 Exempt: handlers whose warning/error/critical log call formats the exception through a
 recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged
-at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify.
+at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify. A
+direct call to an undecorated same-module helper also counts when it receives the caught
+binding as a parameter and every control-flow path through the helper passes that
+parameter through a recognized sanitizer among the warning/error/critical call
+arguments. The helper call must be on a straight-line handler path; a prior branch that
+can bypass it does not prove the failure was logged.
 
 Also exempt: `raise X(...) from None` whose raised error carries the caught exception
-through such a helper (directly, or via a local assigned from one).  Severing the chain
-is how a frame holding a resolved credential avoids emitting a raw traceback;
+through such a helper (directly, or via a local assigned from one), or hands it as
+`cause=exc` to an SDK error — a class imported from `application_sdk.errors`, or an app
+class whose base chain reaches one — which the SDK renders on the wire through
+`sanitize_cause_repr`. An app class merely taking a `cause` proves nothing.  Severing
+the chain is how a frame holding a resolved credential avoids emitting a raw traceback;
 severed-and-redacted preserves the cause, severed-and-dropped does not.  Without this
 the only way to clear E004 at such a site is a warning/error log, which is exactly what
 L009 forbids before a raise.
@@ -207,6 +216,15 @@ that the return hands back, or passes it only into class-like   constructors or 
 containers; a lowercase wrapper   (`discard(helper(exc))`) keeps it opaque; - the name
 still resolves to that helper: not rebound in any enclosing   function, not declared
 `nonlocal` or `global`, and not reassigned   at module level.
+
+A helper that branches — a classifier walking the cause chain — is proven from its
+signature instead: its return annotation names an error class (`-> AppError`, `->
+AppError | None`, `-> Optional[AppError]`) and the binding is passed to an
+exception-annotated parameter, it never falls off its end, and every `return` in it
+builds a class-like constructor from that parameter or a local still carrying it there
+(a local rebound to anything else stops carrying it).  When `None` is a possible result,
+the call must be assigned to a name that the very next statement exits on when it is
+`None`.
 
 `except Exception:` with no `as` binding still fires.
 
@@ -517,16 +535,19 @@ outright crash — callers may act on the wrong result for a long time.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/lineage/qi_reader.py — `iter_qi_records` skips an unparseable
-  line only after logging it with exc_info=True. A bare `continue` in an except block
-  turns a shrinking result set into a mystery.
+- **Compliant example:** atlan-metabase-app app/utils.py — the expected ValueError for a candidate date-format
+  mismatch is logged at DEBUG without exc_info before continuing. For an unparseable QI
+  line, app/lineage/qi_reader.py's `iter_qi_records` logs at WARNING with exc_info=True
+  before continuing. Reserve tracebacks for genuine unexpected failures, not routine
+  format probes.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 An `except` block inside a loop whose body is only `continue`, `break`, or `pass` — with
 no logging call — silently swallows the exception and resumes or exits the iteration.
-This is the loop-body twin of P001/P002 (ruff S112 family).  At minimum log at DEBUG
-before the loop control statement; if the exception signals a genuine error, re-raise or
-log at WARNING/ERROR with `exc_info=True`.
+This is the loop-body twin of P001/P002 (ruff S112 family).  Explain a tolerated skip
+before the loop control statement.  For an expected format/probe mismatch, use a concise
+DEBUG diagnostic without `exc_info=True`.  If the exception signals a genuine unexpected
+error, re-raise or log at WARNING/ERROR with `exc_info=True`.
 
 ---
 
@@ -563,13 +584,13 @@ summary.
 
 **Tier:** `warn` · **Scope:** `both` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 0.2.0
 
-> raise inside except block missing 'from exc' cause — breaks exception chain
+> raise inside except block missing an explicit or SDK-visible cause — breaks exception chaining
 
 **Rationale:** When the Automation Engine rebuilds the typed wire envelope it walks the
-.cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does not
-follow __context__. Without explicit chaining the original exception — attached only as
-__context__ — is visible at the interpreter level but dropped from the wire envelope and
-every downstream system that reads it.
+.cause/__cause__ chain, not __context__. A replacing raise that neither explicitly
+chains the caught exception nor carries it as the SDK error's cause leaves the original
+attached only as __context__; it is visible at the interpreter level but dropped from
+the wire envelope and every downstream system that reads it.
 
 ### What correct looks like
 
@@ -578,14 +599,21 @@ every downstream system that reads it.
   the Python chain.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
-A non-bare `raise` inside an `except … as e:` block that does not include `from e` (or
-`from None`).  Without explicit chaining, Python attaches the original as `__context__`
-with `__suppress_context__=False` — the chain is preserved at the interpreter level but
-AE's wire serialiser only follows the `__cause__` chain, so the original exception is
-lost in dashboards.  Fix: `raise NewError(...) from e`.  Use `from None` only when
-intentionally hiding the original (requires a comment explaining why). Acceptable
-patterns: bare `raise` (re-raise), `raise X() from e` (already chained), `raise X() from
-None` (intentional suppression).
+A non-bare `raise` inside an `except … as e:` block that neither includes `from e` (or
+`from None`) nor carries `e` as a proven SDK error's cause.  Without either, Python
+attaches the original only as `__context__` — preserved at the interpreter level, but
+AE's wire serialiser follows the `__cause__`/`.cause` chain, so the original exception
+is lost in dashboards.  Fix: `raise NewError(...) from e`, and for an SDK `AppError`
+also pass `cause=e`.  Use `from None` only when intentionally hiding the original
+(requires a comment explaining why). Acceptable patterns: bare `raise` (re-raise);
+`raise X() from e` (already chained); `raise X() from None` (intentional suppression);
+`raise SdkError(..., cause=e)` where `SdkError` is proven to come from
+`application_sdk.errors`, is not rebound or shadowed, and the call has no
+`*args`/`**kwargs` unpacking; `raise classify(e)` where `classify` is an unshadowed
+top-level function in this module or imported from the scanned repo whose every return
+either passes through `e` already proven to be an SDK error or builds an SDK error with
+`cause=e`.  A cause the rule cannot prove (`cause=str(e)`, an app-defined class, an
+opaque helper) still needs `from e`.
 
 ---
 
@@ -747,5 +775,51 @@ typed error in the tolerating function.  The handler logs with `exc_info=True`, 
 a residual and returns the empty sentinel, and the run declares the gap as
 `PARTIAL_SUCCESS`.  Anchored on HTTP-response markers and a failure-shaped test to avoid
 flagging ordinary `if x is None: return None` guards.
+
+---
+
+## E021 — `DependencyUnavailableOverriddenToUser` {#e021}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `failure-category` · **Autofixable:** yes · **Since:** 0.47.0
+
+> DependencyUnavailableError subclass overrides audience to USER — a customer-owned system that is down is SourceUnavailableError
+
+**Rationale:** DEPENDENCY_UNAVAILABLE means an Atlan platform service (Dapr, Temporal, object store) is
+down, so a hard preflight gate never blocks on it. Overriding its audience to USER says
+the customer's own system is down, which is SOURCE_UNAVAILABLE, and SOURCE_UNAVAILABLE
+blocks a hard gate on its final attempt. Customer impact: with the wrong category, a
+hard gate lets a run start against an unreachable source, and the run then fails on the
+same fault after consuming its slot. The failure also routes inconsistently: the
+category says PLATFORM while the audience says USER.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/failures.py — `SourceRestartingError` and
+  `PreflightProbeTimeoutError` subclass `SourceUnavailableError` with
+  SOURCE_UNAVAILABLE_* codes and no audience override: an unreachable customer source is
+  SOURCE_UNAVAILABLE / USER by inheritance.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+
+A class whose category is DEPENDENCY_UNAVAILABLE assigns `audience = Audience.USER` in
+its own body.  The category is read the way Python's MRO reads it: from the first base,
+in declaration order, that resolves to an SDK error, unless the class assigns `category`
+itself.  So `class X(NotFoundError, StorageError)` is NOT_FOUND and is not flagged, even
+though `StorageError` is a DEPENDENCY_UNAVAILABLE leaf.  SDK subclasses outside
+`application_sdk.errors` (e.g. `StorageError`, `AzureConnectionError`) count.  An
+app-defined intermediate is followed when it is defined in the same module or imported
+by name (`from app.base import AppDependencyError`, absolute or relative); a base
+reached through a module alias (`import app.base as base` then
+`base.AppDependencyError`) is not followed, and the class is not flagged.
+
+Fix: re-base the class on `SourceUnavailableError` (or an app subclass of it), rename
+its code to `SOURCE_UNAVAILABLE_*`, and delete the audience override, which
+`SourceUnavailableError` already sets. This is a behaviour change for an app running a
+hard preflight gate: the failure now blocks on the gate's final attempt.  Say so in the
+PR.
+
+Only the class that assigns the override is flagged; subclasses that inherit it are
+fixed by the same edit.  A DEPENDENCY_UNAVAILABLE leaf raised for a customer source
+*without* an override is not detected: the rule matches the structural pattern and does
+not infer intent from names.
 
 ---

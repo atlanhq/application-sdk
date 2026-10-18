@@ -209,6 +209,225 @@ def test_l006_fires_in_while_loop() -> None:
     assert "L006" in _ids(src)
 
 
+def test_l006_silent_for_mutually_exclusive_terminal_break_summaries() -> None:
+    src = """
+from loguru import logger
+
+def read_batches():
+    while True:
+        batch = next_batch()
+        if not batch:
+            logger.info("read complete")
+            break
+        for record in batch:
+            consume(record)
+        if len(batch) < page_limit:
+            logger.info("read complete")
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_per_item_info_before_conditional_break() -> None:
+    src = """
+from loguru import logger
+
+for item in items:
+    logger.info("processing %s", item)
+    if is_last(item):
+        break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_silent_for_terminal_recovery_log_before_return() -> None:
+    src = """
+from loguru import logger
+
+def fetch_with_retries():
+    for attempt in attempts:
+        try:
+            response = fetch()
+            if attempt > 0:
+                logger.info("request recovered on attempt %d", attempt)
+            return response
+        except TransientError:
+            continue
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_page_progress_logs_in_unbounded_loop() -> None:
+    src = """
+from loguru import logger
+
+def read_pages():
+    cursor = None
+    while True:
+        logger.info("fetching page for cursor %s", cursor)
+        page = fetch_page(cursor)
+        cursor = page.next_cursor
+        logger.info("fetched page with %d records", len(page.records))
+        if not cursor:
+            break
+"""
+    findings = scan_text(src, "x.py")
+    assert sum(f.rule_id == "L006" for f in findings) == 2
+
+
+def test_l006_fires_for_per_item_info_before_conditional_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        logger.info("processing item")
+        if is_final(item):
+            return
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def poll():
+    while True:
+        try:
+            if should_log():
+                logger.info("still processing")
+            return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_break_overrides_return_in_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        while True:
+            try:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+            finally:
+                break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_silent_when_finally_break_exits_outermost_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            if should_log(item):
+                logger.info("processed item")
+            return
+        finally:
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_when_outer_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            for attempt in attempts:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_return_is_in_nested_function() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        if should_log(item):
+            logger.info("processing item")
+        def finish_item():
+            return
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_terminal_summary_repeated_by_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+for group in groups:
+    while True:
+        batch = next_batch(group)
+        if not batch:
+            logger.info("group complete")
+            break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_continue_overrides_break() -> None:
+    src = """
+from loguru import logger
+
+while True:
+    try:
+        logger.info("done")
+        break
+    finally:
+        continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_silent_when_finally_only_cleans_up() -> None:
+    src = """
+from loguru import logger
+
+while True:
+    try:
+        fetch()
+        logger.info("done")
+        break
+    finally:
+        for conn in conns:
+            if conn.idle:
+                continue
+            conn.close()
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_silent_for_terminal_summary_in_bounded_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+for attempt in range(3):
+    while True:
+        batch = next_batch(attempt)
+        if not batch:
+            logger.info("attempt complete")
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
 def test_l006_silent_in_bounded_range() -> None:
     src = "from loguru import logger\nfor i in range(5):\n    logger.info('item')\n"
     assert "L006" not in _ids(src)
@@ -217,6 +436,217 @@ def test_l006_silent_in_bounded_range() -> None:
 def test_l006_silent_for_debug_in_loop() -> None:
     src = "from loguru import logger\nfor item in items:\n    logger.debug('processing')\n"
     assert "L006" not in _ids(src)
+
+
+def test_l006_silent_for_name_bound_to_small_literal_sequence() -> None:
+    src = """
+from loguru import logger
+
+def write_assets():
+    asset_pairs = [
+        ("payload_a", "kind_a"),
+        ("payload_b", "kind_b"),
+        ("payload_c", "kind_c"),
+        ("payload_d", "kind_d"),
+        ("payload_e", "kind_e"),
+        ("payload_f", "kind_f"),
+    ]
+    for payload, kind in asset_pairs:
+        logger.info("wrote %s", kind)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_silent_for_zip_with_small_local_literal() -> None:
+    src = """
+from loguru import logger
+
+def transform(rows):
+    kinds = ["a", "b", "c"]
+    for kind, row in zip(kinds, rows):
+        logger.info("transformed %s", kind)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_zip_shadowed_by_parameter() -> None:
+    # A callee spelled ``zip`` that is not the builtin (e.g. zip_longest
+    # injected as a parameter) can yield for every unknown row.
+    src = """
+from loguru import logger
+
+def transform(rows, zip):
+    kinds = ["a", "b", "c"]
+    for kind, row in zip(kinds, rows):
+        logger.info("transformed %s", kind)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_zip_shadowed_by_import_alias() -> None:
+    src = """
+from itertools import zip_longest as zip
+from loguru import logger
+
+def transform(rows):
+    for kind, row in zip(["a", "b", "c"], rows):
+        logger.info("transformed %s", kind)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_range_shadowed_in_module() -> None:
+    src = """
+from loguru import logger
+
+def range(n):
+    return load_all_rows()
+
+def process():
+    for row in range(3):
+        logger.info("row %s", row)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_returned_constructor_field_across_methods() -> None:
+    # ``Batch`` may rebuild ``names`` from an unbounded source, so the
+    # producer's bounded loop proves nothing about ``result.names``.
+    src = """
+from loguru import logger
+
+class Runner:
+    def produce(self):
+        pairs = [("a", 1), ("b", 2), ("c", 3)]
+        names = []
+        files = []
+        for name, file in pairs:
+            names.append(name)
+            files.append(file)
+        return Batch(names=names, files=files)
+
+    def transform(self):
+        result = self.produce()
+        for name, file in zip(result.names, result.files, strict=True):
+            logger.info("transformed %s", name)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_self_method_a_subclass_overrides() -> None:
+    # ``self.produce()`` dispatches to ``Child.produce`` at runtime; the
+    # enclosing class's small literal is not a bound on the inherited loop.
+    src = """
+from loguru import logger
+
+class Base:
+    def produce(self):
+        return ["a", "b", "c"]
+
+    def transform(self):
+        for name in self.produce():
+            logger.info("transformed %s", name)
+
+class Child(Base):
+    def produce(self):
+        return load_all_rows()
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_lists_built_from_unknown_input() -> None:
+    src = """
+from loguru import logger
+
+class Runner:
+    def produce(self, records):
+        names = []
+        files = []
+        for record in records:
+            names.append(record.name)
+            files.append(record.file)
+        return Batch(names=names, files=files)
+
+    def transform(self, records):
+        result = self.produce(records)
+        for name, file in zip(result.names, result.files, strict=True):
+            logger.info("transformed %s", name)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_returned_list_is_mutated_before_zip() -> None:
+    src = """
+from loguru import logger
+
+class Runner:
+    def produce(self):
+        pairs = [("a", 1), ("b", 2), ("c", 3)]
+        names = []
+        files = []
+        for name, file in pairs:
+            names.append(name)
+            files.append(file)
+        return Batch(names=names, files=files)
+
+    def transform(self, extra_names):
+        result = self.produce()
+        result.names.extend(extra_names)
+        for name, file in zip(result.names, result.files, strict=True):
+            logger.info("transformed %s", name)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_two_per_item_logs_over_unknown_records() -> None:
+    src = """
+from loguru import logger
+
+def process_records(records):
+    for record in records:
+        if record.get("kind") == "statement":
+            logger.info("missing value for item %s", record)
+        else:
+            logger.info("skipping item %s", record)
+"""
+    assert _ids_unsorted(src).count("L006") == 2
+
+
+def test_l006_fires_for_zip_with_only_unknown_inputs() -> None:
+    src = """
+from loguru import logger
+
+def transform(names, files):
+    for name, file in zip(names, files, strict=True):
+        logger.info("transformed %s", name)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_name_bound_to_more_than_ten_items() -> None:
+    items = ", ".join(str(index) for index in range(11))
+    src = f"""
+from loguru import logger
+
+def process_items():
+    items = [{items}]
+    for item in items:
+        logger.info("item %s", item)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mutated_local_literal_collection() -> None:
+    src = """
+from loguru import logger
+
+def process_items(extra_items):
+    items = ["first", "second"]
+    items.extend(extra_items)
+    for item in items:
+        logger.info("item %s", item)
+"""
+    assert "L006" in _ids(src)
 
 
 # ---------------------------------------------------------------------------

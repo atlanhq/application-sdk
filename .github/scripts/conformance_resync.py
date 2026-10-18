@@ -58,7 +58,6 @@ Runner = Callable[..., subprocess.CompletedProcess]
 DEFAULT_OWNER = "atlanhq"
 EXCLUDE_REPOS = {"atlanhq/application-sdk"}
 BASE_BRANCH = "main"
-RESYNC_LABEL = "conformance-resync"
 _REPO_RE = re.compile(r"^atlanhq/[A-Za-z0-9._-]+$")
 
 
@@ -772,19 +771,9 @@ def process_repo(
         )
         action = "pr_opened"
     pr = pr if isinstance(pr, dict) else {}
-    if pr.get("number") is not None:
-        _run(
-            [
-                "gh",
-                "api",
-                f"repos/{repo}/issues/{pr['number']}/labels",
-                "-X",
-                "POST",
-                "-f",
-                f"labels[]={RESYNC_LABEL}",
-            ],
-            runner,
-        )
+    # Never label the lane PR: a label add is a ``labeled`` event, which starts
+    # a second Tests run that can cancel the first and strand a failed required
+    # check (FND-3832). Lane PRs are identified by branch + author instead.
     result.update(
         action=action,
         pr=pr.get("html_url"),

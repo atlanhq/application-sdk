@@ -194,6 +194,13 @@ class TestStorageLockWaitProgressSeconds:
 
         registry = PathLockRegistry("test.lock_wait")
         tracker = MagicMock()
+        marked_twice = asyncio.Event()
+
+        def _count_mark(*_args: object) -> None:
+            if tracker.mark_progress.call_count >= 2:
+                marked_twice.set()
+
+        tracker.mark_progress.side_effect = _count_mark
 
         with (
             patch.object(constants, "STORAGE_LOCK_WAIT_PROGRESS_SECONDS", 0.01),
@@ -206,12 +213,20 @@ class TestStorageLockWaitProgressSeconds:
                 waiter = asyncio.create_task(
                     self._hold_briefly(registry, "/tmp/contended")
                 )
-                await asyncio.sleep(0.1)
-                assert tracker.mark_progress.call_count >= 2, (
-                    "a queued waiter marked progress "
-                    f"{tracker.mark_progress.call_count} times in ~10 intervals — "
-                    "the stall watchdog would kill it"
-                )
+                # Wait for the marks, not for a fixed sleep. A starved runner
+                # can fire fewer than two 10ms intervals in any fixed window
+                # (FND-4018). A waiter that never marks still fails, at the
+                # timeout. The interval stays 0.01s, so passing still proves
+                # the guard reads the patched constant: the 30s default would
+                # not mark twice before the timeout.
+                try:
+                    await asyncio.wait_for(marked_twice.wait(), timeout=10)
+                except TimeoutError:
+                    pytest.fail(
+                        "a queued waiter marked progress "
+                        f"{tracker.mark_progress.call_count} times in 10s at a "
+                        "0.01s interval — the stall watchdog would kill it"
+                    )
                 assert tracker.mark_progress.call_args[0][0] == "test.lock_wait"
             await waiter
 

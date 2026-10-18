@@ -56,10 +56,7 @@ Retry config (passed via ``S3Store(retry_config=…)``):
 
 We deliberately do **not** add a Python-level retry loop on top — the Rust
 layer already retries with backoff and we'd just multiply the failure time
-without changing the outcome (see BLDX-1155 review thread). The one exception
-is ``ops.upload_file``'s retry of the blobstorage gateway's transient
-``404 "no Route matched"``: the Rust layer never retries a 404, so that loop
-adds a retry where there was none rather than multiplying one.
+without changing the outcome (see BLDX-1155 review thread).
 """
 
 from __future__ import annotations

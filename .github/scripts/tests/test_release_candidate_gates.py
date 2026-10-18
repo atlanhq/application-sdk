@@ -6,8 +6,9 @@ bootstrap template, in both directions:
 * build-and-scan: `scope` runs only on a PR / queue entry building the caller's
   own tree, and `build` / `security-gate` skip ONLY on its literal 'false' —
   skipped, so the required contexts still report;
-* the template: the candidate builds only on a bump-version PR, and the scan
-  job runs on every PR whatever the candidate did;
+* the template: the candidate builds only on the `/gate-check` dispatch of a
+  bump-version branch (FND-3748, FND-3839), and the scan job runs on every PR
+  and on that dispatch whatever the candidate did;
 * build-and-publish-app: candidate mode stops after merge with no Docker Hub,
   scan, deploy or publish; a release with a scanned candidate skips the build
   and still reaches merge.
@@ -24,6 +25,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from _bump_skip import without_bump_skip  # noqa: E402
 from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -95,7 +97,7 @@ def test_scan_skips_only_on_scope_false(job_id: str, answer: str) -> None:
             "queue-diff": {"outputs": {"image_changed": ""}},
         }
     }
-    assert evaluate(job["if"], contexts) is (answer != "false")
+    assert evaluate(without_bump_skip(job["if"]), contexts) is (answer != "false")
 
 
 def test_queue_diff_waits_on_scope_and_skips_with_it() -> None:
@@ -132,33 +134,99 @@ def test_candidate_is_marked_only_behind_a_blocking_gate(
 # ── vulnerability-scan.yml template ───────────────────────────────────────────
 
 
+def _gh(
+    event: str,
+    head_ref: str,
+    *,
+    action: str = "synchronize",
+    labels: tuple[str, ...] = (),
+    ref_name: str = "",
+    actor: str = "someone",
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "action": action,
+        "pull_request": {"labels": [{"name": n} for n in labels]},
+    }
+    return {
+        "github": {
+            "event_name": event,
+            "head_ref": head_ref,
+            "ref_name": ref_name,
+            "actor": actor,
+            "event": payload,
+        }
+    }
+
+
+def _gate_check(branch: str, actor: str = "someone") -> dict[str, Any]:
+    """The `/gate-check` dispatch: on the branch itself, so no `head_ref`."""
+    return {
+        "github": {
+            "event_name": "workflow_dispatch",
+            "head_ref": "",
+            "ref_name": branch,
+            "actor": actor,
+            "event": {},
+        }
+    }
+
+
 @pytest.mark.parametrize(
-    ("event", "head_ref", "runs"),
+    ("ctx", "runs"),
     [
-        ("pull_request", "bump-version-main", True),
-        ("pull_request", "renovate/foo", False),
-        ("merge_group", "", False),
+        # Bump PR: only on the `/gate-check` dispatch (FND-3748, FND-3839)…
+        (_gate_check("bump-version-main"), True),
+        (_gate_check("bump-version-conformance"), True),
+        # …never on the bump PR's own run, whatever labels it carries: a
+        # label no longer opts in.
+        (_gh("pull_request", "bump-version-main"), False),
+        (_gh("pull_request", "bump-version-main", labels=("gate-check",)), False),
+        (_gh("pull_request", "bump-version-main", labels=("e2e",)), False),
+        # A dispatch of any other branch is a manual run, not a release gate.
+        (_gate_check("main"), False),
+        (_gate_check("renovate/foo"), False),
+        (_gh("pull_request", "renovate/foo", labels=("gate-check",)), False),
+        (_gh("merge_group", ""), False),
+        (_gate_check("bump-version-main", actor="dependabot[bot]"), False),
     ],
 )
-def test_template_builds_a_candidate_only_on_the_bump_pr(
-    event: str, head_ref: str, runs: bool
+def test_template_builds_a_candidate_only_on_a_gate_check_dispatch(
+    ctx: dict[str, Any], runs: bool
 ) -> None:
     job = _template_jobs()["candidate"]
-    contexts = {
-        "github": {"event_name": event, "head_ref": head_ref, "actor": "someone"}
-    }
-    assert evaluate(job["if"], contexts) is runs
+    assert evaluate(job["if"], ctx) is runs
     assert job["with"]["candidate"] is True
     # Every job of the candidate build must build the same commit.
     assert job["with"]["ref"] == "${{ github.sha }}"
 
 
-def test_template_scan_always_reports_and_scans_the_pinned_candidate() -> None:
+@pytest.mark.parametrize(
+    ("ctx", "runs"),
+    [
+        # Ordinary PRs and queue entries: always, so the required checks report.
+        (_gh("pull_request", "feat/x", action="opened"), True),
+        (_gh("pull_request", "feat/x"), True),
+        (_gh("merge_group", ""), True),
+        # Bump PR: the caller runs on its own run too, so every required
+        # `scan / …` context reports; build-and-scan skips its jobs there
+        # (`skip-on-bump-pr`, FND-3947)…
+        (_gh("pull_request", "bump-version-main"), True),
+        (_gh("pull_request", "bump-version-main", labels=("gate-check",)), True),
+        # …and the `/gate-check` dispatch scans the candidate.
+        (_gate_check("bump-version-main"), True),
+        (_gh("pull_request", "feat/x", actor="dependabot[bot]"), False),
+    ],
+)
+def test_template_scan_caller_runs_except_for_dependabot(
+    ctx: dict[str, Any], runs: bool
+) -> None:
+    job = _template_jobs()["scan"]
+    assert evaluate(_strip(job["if"]), ctx) is runs
+
+
+def test_template_scan_scans_the_pinned_candidate() -> None:
     job = _template_jobs()["scan"]
     assert job["needs"] == "candidate"
-    # Runs when the candidate is skipped (ordinary PR) or failed (falls back to
-    # the scan's own build), so the required contexts always report.
-    assert evaluate(job["if"], {"github": {"actor": "someone"}}) is True
     assert job["with"]["image"] == "${{ needs.candidate.outputs.candidate_image }}"
     for image, mark in (("", False), ("ghcr.io/atlanhq/x:candidate-a@sha256:b", True)):
         contexts = {"needs": {"candidate": {"outputs": {"candidate_image": image}}}}
@@ -294,7 +362,7 @@ def test_candidate_is_never_copied_to_docker_hub_or_deployed(
 
 def test_candidate_cannot_publish_or_dispatch() -> None:
     # Both terminal jobs need inputs.publish / a main ref, which a bump PR's
-    # candidate run (pull_request, publish false) never has.
+    # candidate run (a dispatch on the bump branch, publish false) never has.
     jobs = _jobs("build-and-publish-app.yaml")
     assert "inputs.publish" in jobs["publish"]["if"]
     assert "github.ref == 'refs/heads/main'" in jobs["app-deployment-dispatcher"]["if"]

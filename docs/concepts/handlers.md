@@ -80,7 +80,7 @@ class PreflightOutput(BaseModel):
 
 `PreflightOutput.error` is additive (`None` by default). Handlers that only set `message` keep working. When `error` is set, `resolved_message` prefers it over `message` — the same precedence `PreflightCheck.error` already uses. Pass a `FailureDetails` (or a bare `AppError`, which is coerced).
 
-**Return the verdict; do not raise it.** On the gate path, anything that escapes `preflight_check` is treated as a statement about the source (typed) or an app fault (untyped), and a hard-mode app blocks on it. On the HTTP `/workflows/v1/check` path a raise keeps its HTTP status and `detail` string, and the body additionally carries the same verdict shape a returned `NOT_READY` would: `preflight.status` is `not_ready` and one `preflightVerdict` check carries the raise as typed `FailureDetails`, the leaf's own for a typed raise or `InternalError` with `classification_pending` for a crash, so the caller always has per-check data and a classification. A transient the extraction can cope with — a 429, a database still resuming — is a failed check on a `PARTIAL` output, with `error=RateLimitedError(...).to_failure_details()` (retryable): the run proceeds in both modes, the outcome row names the check's code, and the other checks survive. Bound every probe to `input.timeout_seconds` so the handler returns its own typed verdict before the gate's cancel; a probe the gate has to end leaves no check evidence.
+**Return the verdict; do not raise it.** On the gate path, anything that escapes `preflight_check` is treated as a statement about the source (typed) or an app fault (untyped), and a hard-mode app blocks on it only when its category is in `GATE_BLOCKING_CATEGORIES` (`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`, and `SOURCE_UNAVAILABLE` and `RATE_LIMITED` once they persist to the gate's final attempt). On the HTTP `/workflows/v1/check` path a raise keeps its HTTP status and `detail` string, and the body additionally carries the same verdict shape a returned `NOT_READY` would: `preflight.status` is `not_ready` and one `preflightVerdict` check carries the raise as typed `FailureDetails`, the leaf's own for a typed raise or `InternalError` with `classification_pending` for a crash, so the caller always has per-check data and a classification. A transient the extraction can cope with — a 429, a database still resuming — is a failed check on a `PARTIAL` output, with `error=RateLimitedError(...).to_failure_details()` (retryable): the run proceeds in both modes, the outcome row names the check's code, and the other checks survive. Bound every probe to `input.timeout_seconds` so the handler returns its own typed verdict before the gate's cancel; a probe the gate has to end leaves no check evidence.
 
 #### Multi-credential preflight
 
@@ -124,35 +124,39 @@ routing.
 #### Single-key secret resolution
 
 When a credential arrives as a flat dict of fields rather than a named ref, the
-SDK probes each string value to see whether it is a key in the secret store
-(`application_sdk/credentials/agent.py`). These probes are independent point
-lookups, so they run **concurrently**, bounded by a small fan-out cap
-(`_MAX_CONCURRENT_SINGLE_KEY_PROBES = 8`) so a wide credential does not pay one
-full store retry ladder per field. Results are merged in candidate order, so
-resolution is byte-identical to the previous serial behavior.
+SDK probes each string value to see whether it is a key in the secret store.
+Both resolvers — agent-shape payloads (`application_sdk/credentials/agent.py`)
+and GUID credential configs (`application_sdk/infrastructure/_dapr/credential_vault.py`)
+— share one implementation, `application_sdk/infrastructure/_single_key_probe.py`.
+These probes are independent point lookups, so they run **concurrently**,
+bounded by a small fan-out cap (`MAX_CONCURRENT_SINGLE_KEY_PROBES = 8`) so a wide
+credential does not pay one full store retry ladder per field. Results are
+merged in candidate order, so resolution is byte-identical to serial probing.
 
-What the logs tell you, and what they cannot:
+Each probe has one of three outcomes:
+
+- **Resolved** — the field's value is replaced with the secret.
+- **Absent** — the store definitively has no such key, so the field keeps its
+  literal value (a host, a database name, an inline credential). "Absent" means
+  Dapr's `500`/`ERR_SECRET_GET` with a not-found message (`secret … not found`,
+  `ResourceNotFoundException`, `SecretNotFound`, …).
+- **Store error** — anything else: a throttled vault, an IAM or KMS denial, a
+  `403` `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an
+  outage. Resolution **stops** with a `SecretStoreError` (hash-labelled,
+  keeping its `retryable` hint) instead of skipping the field. Skipping it used
+  to send the ref-key itself to the source as the password: an auth failure
+  blamed on the user, plus a burned lockout attempt.
+
+What the logs tell you:
 
 - **Some fields resolved** logs INFO with the counts ("resolved N of M probed
   fields"). Ref-key names are never logged — they encode secret-store topology —
   so probes are identified by a `sha256:` prefix.
 - **Nothing resolved** also logs INFO ("resolved 0 of N probed fields"). This is
-  *not* treated as an error: a credential that carries literal usernames and
-  passwords inline rather than ref-keys legitimately resolves nothing, and those
-  workflows work. It is deliberately not a WARNING, because for such a
-  credential it is the expected steady state on every run.
-- **A probe hit a store-level error** logs a WARNING for that probe. Note that a
-  scope-restricted store answers a non-allowlisted key with `403`
-  (`ERR_PERMISSION_DENIED`) rather than an "absent" `500`, so an inline-literal
-  credential against such a store produces one of these per field while still
-  being a working configuration.
-
-The limitation worth knowing: Dapr's secrets API returns `500`/`ERR_SECRET_GET`
-for *any* backend error, and models "not found" nowhere — so a genuinely missing
-key, a throttled vault, and an expired vault credential are indistinguishable to
-the SDK. That is why nothing here can be raised on: "resolved nothing" cannot be
-told apart from "nothing to resolve". Tracked in
-[#2995](https://github.com/atlanhq/application-sdk/issues/2995).
+  *not* an error: a credential that carries literal usernames and passwords
+  inline rather than ref-keys legitimately resolves nothing.
+- **A probe hit a store error** logs a WARNING with a redacted traceback, then
+  the run fails with that error.
 
 #### Check tiers and warmup
 
@@ -222,7 +226,20 @@ Two rules follow from this:
 
 Raise a typed `AuthError`, `AppPermissionDeniedError` or `NotFoundError` for a failure no amount of waiting fixes. Return `unavailable` for a source that will not come back, such as a dropped or disabled warehouse. Never use privileges beyond what the app's checks already verify.
 
+**"Not ready yet" is a `WarmupObservation`, never a raise.** Report compute that is not up yet as `cold`, `warming` or `queued` from `warmup`. Do not raise `SourceUnavailableError` or return a `SOURCE_UNAVAILABLE` check for it, from `warmup` or from `preflight_check`. A hard gate treats `SOURCE_UNAVAILABLE` as "the source is not there" (and `RATE_LIMITED` as "the source refused us"): it retries through its final attempt (`App.preflight_gate_max_attempts`, default 2) and blocks the run if the failure persists. A `warmup` that gives up reports `unavailable`, and `App.preflight_warmup_mode` decides that outcome, whatever the gate's own posture. A cold-sensitive probe left in the `PREFLIGHT` tier that overruns its budget is a `TIMEOUT`, which never blocks. Leaving it there only hides the problem; mark it `WARMUP` instead.
+
 The other fields are for the user and the poll cadence; nothing branches on them. `source_state` is the source's own label (`RESUMING`): the gate puts it on the run's health line and in the exhausted-ceiling error, so it is what the user reads while they wait. `queued_queries` is how many statements are waiting for a slot, a count rather than a duration. `next_poll_seconds` is the source's own suggestion for when to ask again; the gate honours it with a 5s floor and never polls past the ceiling, and without it backs off from 5s, doubling to 30s.
+
+#### Network source probes (experimental)
+
+`application_sdk.handler.source_probes.probe_source_network(endpoints)` checks DNS and TCP for each `SourceEndpoint`, then TLS only for `TlsMode.DIRECT`: `NEGOTIATED` lists the TLS probe as `unsupported`, and `NONE` produces no TLS result. It returns a `SourceProbeReport`. Each probe runs only if the previous applicable probe passed, and is bounded by its own timeout (5s / 5s / 10s by default). The report's `checks` are ordinary `PreflightCheck` rows with typed errors under canonical names (`sourceDns`, `sourceTcp`, `sourceTls`). A probe that did not run is listed in `skipped`, never reported as a failed row.
+
+* Rows carry no host name, resolved address or raw socket text.
+* The TLS probe always verifies certificates against the SDK trust store; there is no option to skip verification.
+* A host that resolves only to loopback, link-local or other non-routable addresses is refused before any connection is made.
+* Declare `tls=TlsMode.NEGOTIATED` for protocols that upgrade to TLS inside their own wire protocol (PostgreSQL, MySQL, SQL Server). A raw handshake proves nothing for those, so the TLS probe is listed as `unsupported`.
+
+Nothing in the SDK merges these rows into a verdict yet. [ADR-0021](../adr/0021-source-validation.md) describes the design and the path to wiring them into the gate.
 
 **Tell the setup UI.** An app with a warmup also sets `warmup: true` on the SageV2 widget in its contract, so the setup form runs the warmup flow (poll `/warmup`, then `/check` with `tiers=["warmup"]`). The handler service checks the two agree at startup: for each entry point, it compares the served form's SageV2 `ui.warmup` with whether that entry point has a warmup (a module `warmup` hook, or an app handler overriding `Handler.warmup`), and logs a WARNING naming the entry point on a mismatch. The flag is never added at serve time; the contract is its source. A form with no SageV2 widget is not compared.
 

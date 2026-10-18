@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -191,7 +194,7 @@ def test_imported_failure_inherits_missing_action(tmp_path: Path):
 def test_imported_classifier_raise_is_detected(tmp_path: Path):
     helper = tmp_path / "failures.py"
     helper.write_text(
-        'from application_sdk.errors import RateLimitedError\ndef classify():\n    raise RateLimitedError(message="Try later")\n'
+        'from application_sdk.errors import DependencyUnavailableError\ndef classify():\n    raise DependencyUnavailableError(message="Try later")\n'
     )
     handler = tmp_path / "handler.py"
     handler.write_text(
@@ -553,3 +556,150 @@ def test_f007_reports_each_failed_error_on_one_line(tmp_path):
     assert len(messages) == 2
     assert any("RateLimitedError" in m for m in messages)
     assert any("InternalError" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# F008: a retryable, non-deprecated transient may be raised
+# ---------------------------------------------------------------------------
+
+# The gate's no-verdict path records a raise as an unverifiable source and never
+# blocks on SOURCE_UNAVAILABLE or TIMEOUT, so the run proceeds. A retryable leaf
+# in one of those is "could not ask this time", not an expected failure escaping. The fail-open categories
+# the gate deprecated (DEPENDENCY_UNAVAILABLE, RATE_LIMITED, RESOURCE_EXHAUSTED,
+# CANCELLED) stay flagged, as does any raise whose category or retryability the
+# detector cannot read.
+_TRANSIENT_IMPORTS = (
+    "from typing import ClassVar\n"
+    "from application_sdk.errors import (\n"
+    "    AppError, AppTimeoutError, CancelledError, DependencyUnavailableError,\n"
+    "    FailureCategory, RateLimitedError, ResourceExhaustedError,\n"
+    "    SourceUnavailableError,\n"
+    ")\n"
+)
+
+
+@pytest.mark.parametrize(
+    "extra, raised",
+    [
+        ("", 'SourceUnavailableError(message="Server restarting")'),
+        ("", 'AppTimeoutError(message="Probe outran its budget")'),
+        ("", 'RateLimitedError(message="429 Too Many Requests")'),
+        (
+            "class SourceRestartingError(SourceUnavailableError):\n"
+            '    code: ClassVar[str] = "SOURCE_UNAVAILABLE_EXAMPLE_RESTART"\n',
+            "SourceRestartingError()",
+        ),
+        ("", 'SourceUnavailableError(message="Server restarting", retryable=True)'),
+    ],
+    ids=[
+        "sdk-source-unavailable",
+        "sdk-timeout",
+        "sdk-rate-limited",
+        "app-leaf",
+        "explicit-retryable",
+    ],
+)
+def test_retryable_transient_raise_is_not_f008(
+    tmp_path: Path, extra: str, raised: str
+) -> None:
+    assert "F008" not in check(tmp_path, f"raise {raised}", _TRANSIENT_IMPORTS + extra)
+
+
+@pytest.mark.parametrize(
+    "leaf",
+    [
+        "DependencyUnavailableError",
+        "ResourceExhaustedError",
+        "CancelledError",
+    ],
+)
+def test_deprecated_fail_open_category_raise_is_f008(tmp_path: Path, leaf: str) -> None:
+    assert "F008" in check(
+        tmp_path, f'raise {leaf}(message="Blip")', _TRANSIENT_IMPORTS
+    )
+
+
+@pytest.mark.parametrize(
+    "extra, raised",
+    [
+        ("", 'SourceUnavailableError(message="Down", retryable=False)'),
+        (
+            "class DefinitiveOutageError(SourceUnavailableError):\n"
+            "    default_retryable: ClassVar[bool] = False\n",
+            "DefinitiveOutageError()",
+        ),
+        (
+            "class StoreBlipError(SourceUnavailableError):\n"
+            "    category: ClassVar[FailureCategory] = FailureCategory.DEPENDENCY_UNAVAILABLE\n",
+            "StoreBlipError()",
+        ),
+        (
+            "class UnknownCategoryError(AppError):\n"
+            "    category: ClassVar[FailureCategory] = pick_category()\n",
+            "UnknownCategoryError()",
+        ),
+        ("", 'SourceUnavailableError(message="Down", retryable=flag)'),
+    ],
+    ids=[
+        "explicit-not-retryable",
+        "class-not-retryable",
+        "category-overridden-to-deprecated",
+        "unknown-category",
+        "unknown-retryable",
+    ],
+)
+def test_transient_raise_the_detector_cannot_clear_is_f008(
+    tmp_path: Path, extra: str, raised: str
+) -> None:
+    assert "F008" in check(tmp_path, f"raise {raised}", _TRANSIENT_IMPORTS + extra)
+
+
+def test_sdk_error_category_matches_runtime():
+    from conformance.suite.checks.preflight._contracts import sdk_error_category
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, sdk_errors.AppError)):
+            continue
+        assert sdk_error_category(f"application_sdk.errors.{name}") == (
+            cls.category.name,
+            cls.default_retryable,
+        ), name
+
+
+_MONOREPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Reads the gate policy from the monorepo's SDK source, not the installed
+# package: this venv pins a published SDK that can predate the policy the
+# mirror tracks, and the mirror must match the SDK it ships beside.
+_GATE_POLICY_PROBE = """
+from application_sdk.execution._temporal.preflight_gate import (
+    DEPRECATED_FAIL_OPEN_CATEGORIES,
+    GATE_NEVER_BLOCKING_CATEGORIES,
+    GATE_RETRIED_CATEGORIES,
+)
+print(",".join(sorted(
+    c.name
+    for c in GATE_RETRIED_CATEGORIES
+    | (GATE_NEVER_BLOCKING_CATEGORIES - DEPRECATED_FAIL_OPEN_CATEGORIES)
+)))
+"""
+
+
+def test_raisable_transient_categories_match_the_gate():
+    from conformance.suite.checks.preflight._contracts import (
+        RAISABLE_TRANSIENT_CATEGORIES,
+    )
+
+    env = {**os.environ, "PYTHONPATH": str(_MONOREPO_ROOT)}
+    probe = subprocess.run(
+        [sys.executable, "-c", _GATE_POLICY_PROBE],
+        cwd=_MONOREPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert RAISABLE_TRANSIENT_CATEGORIES == set(probe.stdout.strip().split(","))

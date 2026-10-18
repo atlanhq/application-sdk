@@ -379,6 +379,7 @@ def test_checks_system_deps_structural_drift_flagged(tmp_path: pathlib.Path) -> 
             "      group: pre-commit-${{ github.ref }}",
         )
     )
+    assert wf.read_text() != canonical, "the edit no longer matches the template"
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     assert "drifted" in findings[0].message

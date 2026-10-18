@@ -18,18 +18,18 @@ Suppress a finding on the violating line or the line directly above it:
 | [T001](#t001) | `UnmarkedIntegrationTest` | `warn` | `both` | `test-marking` | yes | 0.4.0 |
 | [T002](#t002) | `MissingSdrTestClass` | `warn` | `app` | `sdr-test-coverage` | yes | 0.9.0 |
 | [T003](#t003) | `DeprecatedSdrHarness` | `warn` | `app` | `sdr-test-coverage` | yes | 0.9.0 |
-| [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | yes | 0.10.0 |
+| [T004](#t004) | `DevEntrypointRequiresAppModule` | `warn` | `app` | `dev-entrypoint` | — | 0.10.0 |
 | [T005](#t005) | `AssertionFreeTest` | `warn` | `both` | `test-assertion-quality` | yes | 0.12.0 |
 | [T006](#t006) | `EmptyTestBody` | `warn` | `both` | `test-assertion-quality` | yes | 0.12.0 |
 | [T007](#t007) | `VacuousAssertion` | `warn` | `both` | `test-assertion-quality` | yes | 0.12.0 |
-| [T008](#t008) | `UncollectableTestFile` | `warn` | `both` | `test-collection` | yes | 0.12.0 |
+| [T008](#t008) | `UncollectableTestFile` | `warn` | `both` | `test-collection` | — | 0.12.0 |
 | [T009](#t009) | `UnconditionalModuleSkip` | `warn` | `both` | `test-collection` | yes | 0.12.0 |
 | [T010](#t010) | `MissingUnitTestSuite` | `warn` | `app` | `test-tier-coverage` | yes | 0.12.0 |
 | [T011](#t011) | `MissingIntegrationTestSuite` | `warn` | `app` | `test-tier-coverage` | yes | 0.12.0 |
 | [T012](#t012) | `MissingE2ETestSuite` | `warn` | `app` | `test-tier-coverage` | yes | 0.12.0 |
-| [T013](#t013) | `TestFileOutsideTierDir` | `warn` | `both` | `test-tier-coverage` | yes | 0.12.0 |
-| [T014](#t014) | `CoverageGateDisabled` | `warn` | `app` | `coverage-config` | yes | 0.12.0 |
-| [T015](#t015) | `CoverageOmitsProductCode` | `warn` | `app` | `coverage-config` | yes | 0.12.0 |
+| [T013](#t013) | `TestFileOutsideTierDir` | `warn` | `both` | `test-tier-coverage` | — | 0.12.0 |
+| [T014](#t014) | `CoverageGateDisabled` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
+| [T015](#t015) | `CoverageOmitsProductCode` | `warn` | `app` | `coverage-config` | — | 0.12.0 |
 | [T016](#t016) | `E2EDeploymentNameNotInherited` | `warn` | `app` | `e2e-ci` | yes | 0.13.0 |
 | [T017](#t017) | `E2EAgentSpecPinsQueue` | `warn` | `app` | `e2e-ci` | yes | 0.13.0 |
 | [T018](#t018) | `IntegrationTierDeselectedByAddopts` | `warn` | `app` | `test-collection` | yes | 0.16.0 |
@@ -37,7 +37,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T020](#t020) | `BespokeFullDagE2EWorkflow` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
 | [T021](#t021) | `E2ESuiteUnreachableInCI` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
 | [T022](#t022) | `E2ETwoStorePostureDisabled` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
-| [T023](#t023) | `E2EHarnessScaffoldHandWritten` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
+| [T023](#t023) | `E2EHarnessScaffoldHandWritten` | `warn` | `app` | `e2e-ci` | — | 0.18.0 |
 | [T024](#t024) | `E2ERunModeUnset` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
 | [T025](#t025) | `EntrypointWithoutE2ECoverage` | `warn` | `app` | `test-tier-coverage` | — | 0.22.0 |
 | [T026](#t026) | `E2EHarnessTenantPoolMismatch` | `warn` | `app` | `e2e-tenant-pool` | — | 0.46.0 |
@@ -238,7 +238,7 @@ credential resolution to the handler unit tests; the full DAG to the generated E
 
 ## T004 — `DevEntrypointRequiresAppModule` {#t004}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `dev-entrypoint` · **Autofixable:** yes · **Since:** 0.10.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `dev-entrypoint` · **Autofixable:** — · **Since:** 0.10.0
 
 > Root main.py calls application_sdk.main.main() directly, which requires ATLAN_APP_MODULE and breaks CI's dev-mode boot
 
@@ -259,7 +259,7 @@ with MissingAppModuleError / 'App server failed to start within 60s' (BLDX-1520)
   run_dev_combined. The image never runs main.py (the Dockerfile boots via
   ATLAN_APP_MODULE). Calling application_sdk.main.main() from main.py instead requires
   ATLAN_APP_MODULE, which CI's dev-mode boot does not set.
-- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 Root `main.py` must not call `application_sdk.main.main()` directly (whether via `from
 application_sdk.main import main`, an aliased module import, or a bare dotted call).
@@ -290,6 +290,11 @@ if __name__ == '__main__':
 Suppress with `# conformance: ignore[T004] <reason>` on the call's line when the app
 genuinely has no local dev-mode boot path and relies on `ATLAN_APP_MODULE` being set
 out-of-band even for CI (e.g. some utility/CSA apps).
+
+Not auto-applied: whether `main.py` may stop being the production CLI is a judgment call
+(a workflow or stress test may launch it, or an explicit `ATLAN_APP_MODULE` default may
+already make it safe). The remediation lane routes T004 findings to a person
+(`tests.prose.md`).
 
 ---
 
@@ -454,7 +459,7 @@ contains real assertions elsewhere (in which case T007 shouldn't fire in the fir
 
 ## T008 — `UncollectableTestFile` {#t008}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-collection` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-collection` · **Autofixable:** — · **Since:** 0.12.0
 
 > File defines test*/Test* collectables but its filename doesn't match pytest's collection glob — never collected
 
@@ -471,7 +476,7 @@ error, no skip, nothing — the tests simply never exist as far as CI is concern
 - **Compliant example:** atlan-metabase-app tests/unit/ — every collectable module is named test_*.py. A helper
   that is not meant to be collected goes in conftest.py, as atlan-metabase-app
   tests/unit/conftest.py does.
-- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A `.py` file under a test-tier directory (`tests/unit`, `tests/integration`,
 `tests/e2e`, `tests/ui`) defines at least one `def test*` function or `class Test*`, but
@@ -495,6 +500,10 @@ Suppress with `# conformance: ignore[T008] <reason>` on the first line of the fi
 when the repo has a non-default `python_files` override in `pyproject.toml` that
 legitimately collects this name (the check does not read that override — see the module
 docstring).
+
+Not auto-applied: a helper or mixin module with no `test_` functions is not a
+collectable, and renaming it makes pytest import it twice. A person decides which files
+are real test modules (`tests.prose.md`).
 
 ---
 
@@ -683,7 +692,7 @@ State the reason in a comment above the table. Suppress a single instance instea
 
 ## T013 — `TestFileOutsideTierDir` {#t013}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.12.0
 
 > Collectable test file lives outside the four canonical tier directories (tests/unit, tests/integration, tests/e2e, tests/ui)
 
@@ -701,7 +710,7 @@ the file layout alone. Enforcing the placement convention removes that ambiguity
 - **Compliant example:** atlan-metabase-app tests/ — everything collectable sits under unit/, integration/ or
   e2e/. None of the three reference apps has a tests/sdr/ or a tests/full_dag/; the tier
   a test belongs to is a directory, not a naming convention.
-- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A file matching pytest's collection glob (`test_*.py` / `*_test.py`) and defining at
 least one collectable test lives under `tests/` but outside all four canonical tier
@@ -725,24 +734,29 @@ moved: T003 retires it, and moving it only carries the T003 finding to the new p
 * Otherwise move the file into the tier the reference apps use (`tests/unit`,
 `tests/integration`, `tests/e2e`, `tests/ui`) and update anything that imports it.
 
+Not auto-applied: a repo-declared tier such as `tests/parity` needs a decision, and
+moving files must keep their `conftest.py` and fixtures. The remediation lane routes
+T013 findings to a person (`tests.prose.md`).
+
 ---
 
 ## T014 — `CoverageGateDisabled` {#t014}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `coverage-config` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
 
-> Coverage is configured but fail_under is absent or 0 — the number is measured but never enforced
+> Coverage is configured but its effective floor is absent or 0 — the number is measured but never enforced
 
-**Rationale:** A coverage percentage that cannot fail a build is decorative: it is reported in every PR
-comment and dashboard, creating the appearance of an enforced quality bar, while
-[tool.coverage.report].fail_under absent or 0 means no percentage — however low —
-actually blocks anything. This is the config-level counterpart to T005-T007: those catch
-tests that run without asserting; this catches a coverage number that exists without
-enforcing. The unified test-framework onboarding path deliberately starts new adopters
-at --cov-fail-under=0 and ramps up over time (Athena at 20%, mssql at 60%), so WARN (not
-BLOCK) matches the agreed rollout reality — this rule's value is making the '0 is
-temporary, not the final state' expectation visible and trackable, not blocking the
-initial adoption PR.
+**Rationale:** A reported coverage percentage is decorative unless the effective floor used by the
+coverage run can fail it. A CI floor passed on the command line takes precedence over
+`[tool.coverage.report].fail_under`: a `tests-reusable.yaml` caller's unit tier is gated
+only by its `unit-coverage-fail-under` input (default `0`), so a positive TOML value
+alone does not enforce coverage there. This is the config-level counterpart to
+T005-T007: those catch tests that run without asserting; this catches a coverage number
+that exists without an effective floor. The unified test-framework onboarding path
+deliberately starts new adopters at `--cov-fail-under=0` and ramps up over time (Athena
+at 20%, mssql at 60%), so WARN (not BLOCK) matches the agreed rollout reality — this
+rule's value is making the '0 is temporary, not the final state' expectation visible and
+trackable, not blocking the initial adoption PR.
 
 ### What correct looks like
 
@@ -751,41 +765,54 @@ initial adoption PR.
   pyproject.toml keeps `fail_under = 84` under [tool.coverage.report] as the fallback
   for local runs. A measured number with no floor in either place is a report nobody's
   build ever reads.
-- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
-`[tool.coverage.report]` exists in `pyproject.toml` — the repo has opted into coverage
-measurement — but `fail_under` is either absent (defaults to 0) or explicitly set to
-`0`, *and* no CI workflow declares an overriding floor. Coverage is measured and
-reported (e.g. as a PR comment via the `connector-unit-tests` composite action) but can
-never cause a run to fail, regardless of how low it drops.
+`[tool.coverage]` exists in `pyproject.toml` — the repo has opted into coverage
+measurement. T014 fires when the effective coverage floor is absent or `0`, so a run can
+report coverage without failing.
 
-coverage.py's CLI flag always overrides `pyproject.toml`, so this rule also checks the
-repo's own `.github/workflows/*.yml` for a `connector-unit-tests` `fail-under:` input or
-a `--cov-fail-under=N` flag embedded in a `tests-reusable.yaml` `pytest-args` override.
-Either one, if non-zero, is treated as the effective floor — the finding only fires when
-neither source enforces anything.
+The floor comes from `[tool.coverage.report].fail_under` unless CI passes one on the
+command line, which always wins. The rule reads the unit tier's floor from the repo's
+own `.github/workflows/*.yml`: for a `tests-reusable.yaml` caller, its
+`unit-coverage-fail-under` input, or the reusable's default `0` when omitted (its
+`pytest-args` feed only the integration tier and are not read); for any other workflow,
+a `connector-unit-tests` `fail-under:` input or a `--cov-fail-under=N` flag. A positive
+CI value is the effective floor; a CI value of `0` overrides TOML but enforces nothing.
 
-**Remediation:** set a real, ratcheting floor:
+**Remediation:** set the floor on the input that gates the unit tier. First read the
+current *unit* coverage (the unit job's `coverage.json` artifact, or `coverage report`
+after `pytest tests/unit`) and take the whole number at or below it.
 
-```toml
-[tool.coverage.report]
-fail_under = 60
-```
+*tests-reusable.yaml caller:* set `unit-coverage-fail-under: "<N>"` in the `with:` block
+(the mysql reference uses `"90"`). This input is the unit tier's only gate: the unit job
+runs `coverage report --fail-under=<input>`, so `pyproject.toml` never applies there.
+Write a quoted whole number — `bootstrap --resync` reads it back and keeps it; a decimal
+is not read back and makes `--resync` refuse the file.
 
-Per the unified test-framework's own onboarding guidance, start at the repo's *current*
-measured percentage (never below what's already true) and raise it in follow-up PRs as
-coverage improves — the agreed target for unit tests is 90-100%, but a repo mid-adoption
-is not expected to jump there in one step.
+Leave `--cov-fail-under=0` in `pytest-args` alone. `pytest-args` only reaches the
+integration tier; removing the flag applies the TOML `fail_under` to integration
+coverage — a different measurement — and leaves the unit gate at `0`.
+
+*Direct connector-unit-tests user:* set its `fail-under:` input to `<N>`. *No CI
+coverage gate at all:* set `[tool.coverage.report].fail_under = <N>`.
+
+Keep a positive `fail_under` in `pyproject.toml` as the fallback for local runs (mysql
+keeps `84`). Never set a floor above current coverage, and ratchet it up in follow-up
+PRs toward the 90-100% unit-test goal rather than jumping there in one step.
 
 Suppress with `# conformance: ignore[T014] <reason>` on the `[tool.coverage.report]`
 line only during the initial adoption PR itself, explicitly naming the follow-up
 tracking issue that will set a real floor.
 
+Not auto-applied: the unit coverage floor lives in the `tests-reusable` caller under
+`.github/` (`unit-coverage-fail-under`), which a person sets; `fail_under` in
+`pyproject.toml` alone does not gate CI (`tests.prose.md`).
+
 ---
 
 ## T015 — `CoverageOmitsProductCode` {#t015}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `coverage-config` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `coverage-config` · **Autofixable:** — · **Since:** 0.12.0
 
 > coverage omit/source excludes real product code under app/, inflating the reported percentage
 
@@ -803,7 +830,7 @@ reaches into ordinary app/ submodules is the signal this rule targets.
   `app/generated/**`, the latter with a comment saying it is regenerated from
   contract/app.pkl on every contract change. Omitting anything under app/ that a human
   wrote inflates the number instead of measuring it.
-- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 `[tool.coverage.run].omit` contains a pattern matching source under `app/` that is not
 one of the recognised legitimate exclusions (`app/generated/**` — generated contract
@@ -830,6 +857,10 @@ omit = ["app/generated/*"]
 Suppress with `# conformance: ignore[T015] <reason>` on the `omit`/ `source` line naming
 the specific module and why it's legitimately excluded (e.g. a vendored third-party shim
 with no branch logic worth covering).
+
+Not auto-applied: removing an omit without tests drops coverage below the floor and
+fails the unit tier, and vendored third-party code may stay omitted with a reason. A
+person applies it (`tests.prose.md`).
 
 ---
 
@@ -1139,8 +1170,8 @@ state that reason.
 
 > Workflow calls the SDK's sdr-e2e action directly instead of delegating to tests-reusable.yaml
 
-**Rationale:** The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns the e2e label gate,
-the discover-e2e-suites matrix (one leg per tests/e2e/test_*.py), the per-leg
+**Rationale:** The full-DAG e2e is wired once, in the SDK: tests-reusable.yaml owns the e2e request
+gate, the discover-e2e-suites matrix (one leg per tests/e2e/test_*.py), the per-leg
 ATLAN_DEPLOYMENT_NAME derivation that keeps worker and harness on one Temporal queue,
 the GHCR image build, the sdr-e2e invocation with the full-DAG
 config-dir/secrets-script/components-dir/compose-overlay set, the two-store posture, and
@@ -1329,7 +1360,7 @@ for an app whose extract genuinely produces no artifacts to bridge.
 
 ## T023 — `E2EHarnessScaffoldHandWritten` {#t023}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** yes · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-ci` · **Autofixable:** — · **Since:** 0.18.0
 
 > Test module hand-declares e2e scaffold (identity attrs, CredentialBody, MustacheSubstitutions) the toolkit generates from contract/app.pkl
 
@@ -1356,7 +1387,7 @@ it touched, which is what this rule exists to stop recurring.
   `MetabaseMustacheSubstitutions` (_e2e_substitutions.py); the test imports them instead
   of subclassing CredentialBody or MustacheSubstitutions. Hand-declaring them in the
   test freezes a copy of what the contract will regenerate.
-- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A module under `tests/` declares scaffolding the contract toolkit generates. Three
 shapes are flagged:
@@ -1396,6 +1427,10 @@ needs, fix it at the pkl source.
 Suppress with `# conformance: ignore[T023] <reason>` on the flagged line when a
 genuinely test-only model is meant (e.g. a negative-path credential body that must be
 malformed on purpose).
+
+Not auto-applied: the generated e2e models must carry every token the manifest uses with
+the same defaults, and a test rule must never change published contract values. A person
+applies it and runs one e2e leg (`tests.prose.md`).
 
 ---
 

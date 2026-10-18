@@ -45,6 +45,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     PrimeAuthOutput,
     TransformInput,
     TransformOutput,
+    TreeSelectionExtractionInput,
 )
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput,
@@ -77,6 +78,7 @@ __all__ = [
     "FetchViewsInput",
     "FetchViewsOutput",
     "FilterMap",
+    "TreeSelectionExtractionInput",
     "PrimeAuthOutput",
     "TransformInput",
     "TransformOutput",

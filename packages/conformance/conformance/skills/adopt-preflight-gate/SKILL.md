@@ -10,10 +10,14 @@ description: >
   source — a NOT_READY verdict, anything the handler raises, a probe
   overrunning the enforced budget, a running attempt Temporal had to kill, a
   provably absent credential — but blocks only when the attributed failure's
-  category is AUTH, PERMISSION, INVALID_INPUT, PRECONDITION or NOT_FOUND, and
-  never on TIMEOUT or SOURCE_UNAVAILABLE; failures of the gate's own plumbing (its credential
-  resolution, no worker) always fail open; a transient is returned as READY
-  with a typed retryable advisory check, never raised. Classifies the app's
+  category is AUTH, PERMISSION, INVALID_INPUT, PRECONDITION or NOT_FOUND, or
+  SOURCE_UNAVAILABLE or RATE_LIMITED still present on the gate's final attempt, and never on
+  TIMEOUT; failures of the gate's own plumbing (its credential resolution, no
+  worker) always fail open; an unreachable source is raised as a retryable
+  SOURCE_UNAVAILABLE leaf (a 429 as RATE_LIMITED), which a hard gate retries and
+  then blocks on; compute
+  that is cold, warming or queued is reported from Handler.warmup, never raised;
+  and the deprecated fail-open categories are never raised. Classifies the app's
   rollout bucket, sizes the check budget
   (preflight_gate_timeout_seconds, default 150s, ceiling 300s) and retry attempts
   (preflight_gate_max_attempts) against what the handler actually costs, sizing
@@ -80,10 +84,12 @@ status. Read its `app/handler.py` before proposing changes.
   `{app}:preflight_warmup`, one `Handler.warmup` probe (the default answers
   `READY` at once, so an app without a warmup notices nothing), then
   `{app}:preflight`, which calls the app's one `Handler.preflight_check`.
-- `PreflightOutput.status` is the gate verdict: `NOT_READY` is always reported
+- `PreflightOutput.status` is the gate verdict: `NOT_READY` is reported
   (as `outcome="would_block"`), and **aborts the run** only when the app has
   opted into hard mode (`preflight_gate_mode = "hard"`, typed `PreflightFailed`,
-  red activity); `READY` and `PARTIAL` proceed. `PARTIAL` is display-only — use
+  red activity). A hard gate defers a `NOT_READY` whose primary failure is
+  `SOURCE_UNAVAILABLE` or `RATE_LIMITED` to its next attempt with no row, and
+  reports and blocks on it only at the final attempt; `READY` and `PARTIAL` proceed. `PARTIAL` is display-only — use
   it for "advisory check failed, run anyway".
 - There is no per-check `blocking` flag. Importance is expressed by **control
   flow**: required checks short-circuit (return `NOT_READY` early), advisory
@@ -94,15 +100,28 @@ status. Read its `app/handler.py` before proposing changes.
   that escapes `preflight_check` is the handler's statement about the source if
   typed, or an app fault if untyped, and hard mode decides on the attempt it
   happens: it **blocks** when the category is `AUTH`, `PERMISSION`,
-  `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`, and reports `would_block`
-  otherwise. Only the gate's own frames (credential resolution, the store
+  `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`, retries `SOURCE_UNAVAILABLE`
+  and blocks on it at the final attempt, and reports `would_block` otherwise. Only the gate's own frames (credential resolution, the store
   probes) are plumbing that fails open. So an uncaught probe exception
   (`INTERNAL`) is a reported failure that loses every other check, never a
-  block. A transient the extraction can cope with — a 429, a database still
-  resuming — is a failed advisory check on a `READY` output carrying the typed
-  retryable leaf (`PARTIAL` is deprecated and proceeds exactly like `READY`):
-  the run proceeds in both modes, the row names the check's
-  code as `reason`, and the other checks survive.
+  block. A transient — a server restarting, a probe that did not answer, a
+  429 — means the source could not be asked this time, and is the one thing to
+  raise: a retryable leaf of `SourceUnavailableError` (`RateLimitedError` for a
+  429, `AppTimeoutError` for an overrun). The gate's no-verdict path records the raise as an unverifiable
+  source (`unverifiable_preflight_result`'s `NOT_READY` output, row classified
+  `source_unverifiable`). `TIMEOUT` never blocks. `SOURCE_UNAVAILABLE` and
+  `RATE_LIMITED` in hard mode are retried: a non-final attempt hands it to the next attempt
+  (`preflight_gate_max_attempts`, default 2), and only the final attempt blocks,
+  so a blip clears on the retry while a source that is really down stops the run
+  before extraction fails on it. Soft mode reports `would_block` on the first
+  attempt and proceeds. Every other source fault is a verdict on the attempt it
+  happens. A source whose compute is cold, warming or queued is **not**
+  unavailable: report that from `Handler.warmup` (`COLD` / `WARMING` /
+  `QUEUED`) and mark the checks that need compute `WARMUP`; raising
+  `SourceUnavailableError` for it blocks a hard-gated run.
+  Classify it in one helper and re-raise only what it returns (atlan-mysql-app
+  `app/failures.py` `transient_failure`, asserted by its `recoverable_transient`
+  scenario). The raise loses that attempt's other check rows.
 - A failed check should carry `error=<SDK leaf>(...).to_failure_details()` —
   category/code/audience/suggested_action flow to the Automation Engine and
   dashboards. Untyped failures fall back to the `PREFLIGHT_CHECK_FAILED`
@@ -134,7 +153,8 @@ returns the honest verdict; the gate decides what to do with `NOT_READY`:
 - **hard**: raise `PreflightFailed`, run aborts on `NOT_READY` when the
   primary failure is customer-actionable (`AUTH`, `PERMISSION`,
   `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`; an untyped verdict counts as
-  `PRECONDITION`). The opt-in for every app whose checks are trusted to gate
+  `PRECONDITION`), or is `SOURCE_UNAVAILABLE` / `RATE_LIMITED` still failing
+  at the final attempt (earlier attempts retry). The opt-in for every app whose checks are trusted to gate
   real runs.
 
 Opting in is deliberately explicit and deliberately small:
@@ -229,16 +249,22 @@ Rules the skill enforces during adoption:
   failure that should block hides the truth from every surface; posture
   belongs on the App class, verdicts belong in the handler.
 - **Never return `NOT_READY` for a transient.** A 429 or a dependency outage is
-  "ask me later", not "the source is not ready" — collapsing them makes hard mode
-  fail *closed* on a blip. Never raise them either: until application-sdk
-  3.40.0 a raised `RateLimitedError` / `DependencyUnavailableError` still fails
-  open with a `DeprecationWarning` and a `deprecated_fail_open` row, and from
-  3.40.0 it is reported as an unverifiable source — still never blocking — and
-  discards the other checks. Return `READY` with
-  the failed advisory check carrying `RateLimitedError(...).to_failure_details()`
-  (retryable); wait for a `Retry-After` only when it fits inside
-  `input.timeout_seconds` with margin, and leave the checks that could not run
-  out of the list rather than seeding them as failures.
+  "ask me later", not "the source is not ready". An untyped `NOT_READY` is
+  attributed to `PRECONDITION`, so hard mode fails *closed* on a blip with no
+  retry; a typed `SOURCE_UNAVAILABLE` / `RATE_LIMITED` one is retried like a
+  raise but drops the other checks' context. Never return it as a failed row on `READY` either:
+  a failed mandatory row on `READY` is a green light nothing verified, and
+  `assert_preflight_result` rejects it. Raise a retryable `SourceUnavailableError`
+  leaf when the source did not answer, a `RateLimitedError` when it answered 429,
+  and an `AppTimeoutError` for an overrun: the gate reports an unverifiable
+  source; a hard gate retries the first two and blocks if they persist to the
+  final attempt, each under its own reason (an outage sends the customer to the
+  source's operator, an exhausted limit to whoever is spending it), and the
+  overrun proceeds. Never raise a `DependencyUnavailableError`,
+  `ResourceExhaustedError` or `CancelledError` leaf for this: that is the
+  deprecated fail-open idiom — it logs a `DeprecationWarning` and a
+  `deprecated_fail_open` row, and F008 flags it. Wait for a `Retry-After` only when it
+  fits inside `input.timeout_seconds` with margin.
 - Soft is the default landing state with two exit conditions, both required
   before adding `preflight_gate_mode = "hard"`:
   1. the app's `would_block` rows track real workflow failures (the checks are

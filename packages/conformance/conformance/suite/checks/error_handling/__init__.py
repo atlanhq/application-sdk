@@ -1,7 +1,7 @@
 """E-series error-handling checks — AST-based.
 
 Scans Python source files for error-handling anti-patterns defined in the
-E001–E019 rule catalog.  Every check is purely deterministic: the same
+E001–E021 rule catalog.  Every check is purely deterministic: the same
 source text always produces the same set of findings.
 
 Inline suppression
@@ -24,6 +24,7 @@ Rule implementations are split by category:
 * ``untyped_raise``      — E012, E013, E018 (untyped or legacy raise sites)
 * ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)
+* ``dependency_audience`` — E021 (DEPENDENCY_UNAVAILABLE overridden to USER)
 
 ``_checker.py`` assembles these into a single ``Checker`` visitor.
 ``__init__.py`` (this file) exposes the public scan + CLI API.
@@ -57,7 +58,10 @@ from ._constants import (
     LEGACY_ATLAN_ERRORS,
     SERIES,
 )
+from ._dependency_category import dependency_unavailable_classes
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
+from ._sdk_errors import sdk_error_names
+from .exception_chaining import exception_helpers
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -84,8 +88,15 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan Python source *text* and return all E-series findings."""
+def scan_text(
+    text: str, file: str, *, path: Path | None = None, root: Path | None = None
+) -> list[Finding]:
+    """Scan Python source *text* and return all E-series findings.
+
+    *path* and *root* let E004 and E021 follow the scanned repo's own imports
+    when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
+    and :mod:`._dependency_category`).
+    """
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -97,12 +108,19 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
     directives = _parse_directives(text)
     local_helpers = module_helpers(tree)
+    sdk_errors = sdk_error_names(tree, path=path, root=root)
+    raised_error_helpers = exception_helpers(
+        tree, path=path, root=root, sdk_errors=sdk_errors
+    )
     checker = Checker(
         filename=file,
         directives=directives,
         atlan_ioerror_imported=atlan_ioerror,
         legacy_aliases=legacy_aliases,
         local_helpers=local_helpers,
+        sdk_errors=sdk_errors,
+        raised_error_helpers=raised_error_helpers,
+        dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
     )
     checker.visit(tree)
     return checker._findings
@@ -118,11 +136,18 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         rel = path.relative_to(root)
     except ValueError:
         rel = path
-    return scan_text(text, str(rel))
+    return scan_text(text, str(rel), path=path, root=root)
+
+
+def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
+    # scan_path, not scan_text: E004 and E021 follow the repo's own imports,
+    # which needs each file's path and the repo root.
+    return [finding for path in paths for finding in scan_path(path, root)]
 
 
 main = make_cli_main(
-    scan_text,
+    scan_all=_scan_all,
+    discover=discover,
     description="E-series: scan Python files for error-handling anti-patterns.",
 )
 """CLI entry point for E-series error-handling checks."""

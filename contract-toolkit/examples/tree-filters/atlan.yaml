@@ -1,0 +1,17 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: tree-filters
+display_name: Tree Filters Example
+type: connector
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
+entrypoints:
+- name: tree-filters
+  display_name: Tree Filters Example
+  icon_url: https://assets.atlan.com/assets/fullscreen-exit.svg
+  type: connector
+  package_id: '@atlan/tree-filters'
+  marketplace_card: true

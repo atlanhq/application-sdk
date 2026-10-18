@@ -90,6 +90,11 @@ from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.app.task import task
+from application_sdk.clients._sql_failure_classifier import (
+    SqlFailureKind,
+    classify_sql_failure,
+    root_cause,
+)
 from application_sdk.common.asset_serialization import entity_bytes
 from application_sdk.common.asset_serialization import orjson_default as _orjson_default
 from application_sdk.common.entity_envelope import (
@@ -128,6 +133,9 @@ from application_sdk.errors.wire import secret_named_evidence_keys
 from application_sdk.execution import build_output_path, get_object_store_prefix
 from application_sdk.infrastructure.context import get_infrastructure
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.templates._template_errors import (
+    SqlTreeFilterInputUnsupportedError,
+)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -136,6 +144,7 @@ from application_sdk.templates.contracts.sql_metadata import (
     PrimeAuthOutput,
     TransformInput,
     TransformOutput,
+    TreeSelectionExtractionInput,
 )
 from application_sdk.templates.sql_app_errors import (
     SqlProbeTimeoutError,
@@ -255,19 +264,9 @@ class _EnvelopeError(AppError):
         )
 
 
-def _root_cause(exc: BaseException) -> BaseException:
-    """Walk ``__cause__`` to the innermost exception.
-
-    The SDK's SQL client rewraps driver exceptions, so the outermost
-    exception describes the wrapper and the innermost describes what
-    actually happened. Cycle-guarded — a hand-built ``__cause__`` loop
-    would otherwise hang the worker.
-    """
-    seen = {id(exc)}
-    while exc.__cause__ is not None and id(exc.__cause__) not in seen:
-        exc = exc.__cause__
-        seen.add(id(exc))
-    return exc
+# Re-exported under its historical private name; the one implementation lives
+# with the shared SQL failure classifier.
+_root_cause = root_cause
 
 
 def _redact_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -556,6 +555,8 @@ class SqlApp(App):
         Returns:
             An instance of *input_cls* populated from *src*.
         """
+        if isinstance(src, TreeSelectionExtractionInput):
+            raise SqlTreeFilterInputUnsupportedError()
         return input_cls(
             workflow_id=src.workflow_id,
             connection=src.connection,
@@ -853,20 +854,8 @@ class SqlApp(App):
         ``error_message`` must already be secret-redacted — it is copied
         verbatim into the returned error's evidence fields.
         """
-        msg_lower = error_message.lower()
-
-        # ODBC renders SQLSTATE HYT00 as "Login timeout expired" — no "timeout"
-        # in the class name and no "timed out" in the message, so a generic
-        # substring check misses the production CNCT-197 shape. Match the
-        # driver phrasings explicitly.
-        is_timeout = (
-            "timeout" in error_type.lower()
-            or "timed out" in msg_lower
-            or "login timeout" in msg_lower
-            or "timeout expired" in msg_lower
-            or "hyt00" in msg_lower
-        )
-        if is_timeout:
+        kind = classify_sql_failure(error_type, error_message)
+        if kind is SqlFailureKind.TIMEOUT:
             return SqlProbeTimeoutError(
                 message=(
                     "SQL auth-cache prime probe timed out before parallel "
@@ -882,26 +871,7 @@ class SqlApp(App):
                 ),
             )
 
-        # Auth-class indicators: explicit class name OR driver-specific
-        # message tokens (MySQL "Access denied" / code 1045, generic
-        # "authentication failed"). Driver error_type for MySQL
-        # ``Access denied`` is ``OperationalError`` — that class is
-        # overloaded across both auth and network failures, so message
-        # content has to be the tiebreaker.
-        auth_class_hints = ("authentication", "accessdenied", "authfail")
-        auth_msg_hints = (
-            "access denied",
-            "1045",
-            "authentication failed",
-            "authentication error",
-            "login failed",
-            "password authentication failed",
-            "invalid credentials",
-        )
-        is_auth = any(h in error_type.lower() for h in auth_class_hints) or any(
-            h in msg_lower for h in auth_msg_hints
-        )
-        if is_auth:
+        if kind is SqlFailureKind.AUTH:
             return AuthError(
                 message=(
                     "SQL auth-cache prime rejected by source before parallel "
@@ -922,27 +892,9 @@ class SqlApp(App):
                 ),
             )
 
-        # Network / DNS / TLS / connection-refused / generic
-        # OperationalError without an auth-keyword message. Classify as
-        # SourceUnavailableError (audience=USER) — the customer owns the
-        # source system, and the actionable guidance is "fix the network
-        # path, the source itself may be fine."
-        network_class_hints = (
-            "connectionerror",
-            "connectionrefused",
-            "gaierror",
-            "sslerror",
-            "oserror",
-            "operationalerror",
-            "interfaceerror",
-            # Match wrapped SDK error classnames surfaced as error_type.
-            # "dependencyunavailable" is retained for legacy wrappers that
-            # predate the SourceUnavailableError migration.
-            "sourceunavailable",
-            "dependencyunavailable",
-            "socketerror",
-        )
-        if any(h in error_type.lower() for h in network_class_hints):
+        # The customer owns the source system, and the actionable guidance is
+        # "fix the network path, the source itself may be fine."
+        if kind is SqlFailureKind.SOURCE_UNAVAILABLE:
             return SourceUnavailableError(
                 message=(
                     "SQL auth-cache prime could not reach the source before "

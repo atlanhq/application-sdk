@@ -54,6 +54,7 @@ __all__ = [
     "DAGProgressStalledError",
     "DeployedManifestMismatchError",
     "HarnessMethodNotImplementedError",
+    "InvalidLineageEdgeDeclarationError",
     "ManifestDagMissingError",
     "ManifestFileNotFoundError",
     "MissingHarnessClassAttrError",
@@ -163,6 +164,24 @@ class AmbiguousDAGRunError(InvalidInputError):
     """
 
     code: ClassVar[str] = "INVALID_INPUT_AMBIGUOUS_DAG_RUN"
+
+
+@dataclass(kw_only=True)
+class InvalidLineageEdgeDeclarationError(InvalidInputError):
+    """An ``expected_lineage_edges`` entry cannot be graded as written.
+
+    Each key names a source and a target type as ``"Source -> Target"`` and each
+    value is a floor of at least one. A key that does not parse, or a floor
+    below one, would otherwise be graded against a type pair no process can
+    carry — every run would fail, or (for a floor of zero) every run would pass,
+    and neither says anything about the connector.
+
+    Raised when the run is resolved, so a typo surfaces at setup rather than as
+    a confusing lineage finding after a full DAG run.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_LINEAGE_EDGE_DECLARATION"
+    field: str | None = "expected_lineage_edges"
 
 
 @dataclass(kw_only=True)

@@ -28,6 +28,7 @@ Forbid unbounded types at class definition time and provide safe alternatives:
 - `bytes` / `bytearray` — binary data can be arbitrarily large
 - Bare `list[T]` without `MaxItems` annotation
 - Bare `dict[K, V]` without `MaxItems` annotation
+- Any other variable-size collection without `MaxItems`: `set`, `frozenset`, variadic `tuple[T, ...]`, `Sequence`, `Mapping`, `deque` and the like (a fixed-arity `tuple[A, B]` is bounded by its shape)
 
 **Safe alternatives:**
 ```python

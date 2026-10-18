@@ -84,6 +84,14 @@ of which pyatlan surface to use — or whether to suppress when no equivalent ex
 auto-applies.  (This rule is backed by a separate `suite.checks.client_seam` check
 — see its module docs.)
 
+The client-lifecycle rules (P056/P057, FND-3778) are also P-series and
+suggest-only.  P057's fix is one line (add `await super().close()` to the
+override), but P056's depends on where the client's use ends and whether the
+function really owns it, which only the developer can confirm.  Both draft a
+proposal for human review.  (These rules are backed by a separate
+`suite.checks.client_lifecycle` check, which is silent unless the app's `uv.lock`
+resolves `atlan-application-sdk` >= 3.46.0 — see its module docs.)
+
 The determinism / async-correctness rules (P020–P024) are also P-series
 and suggest-only.  P020 (non-deterministic primitive in workflow context) has a
 concrete mechanical proposal for time/uuid/sleep — swap to the SDK seam — but its
@@ -150,6 +158,17 @@ model cannot hold, decode what `entity_bytes` produced and decorate that (the
 output is not an entity line at all (a `ConnectionRef` built from
 `to_atlas_format`) gets an inline `# conformance: ignore[P052] <reason>`
 instead.
+
+P058 (an Atlas entity built as a raw `{"typeName": ..., "attributes": ...}`
+dict and emitted — appended, extended, inserted, yielded, passed to
+`entity_bytes` or returned from a `map_<entity>` mapper) is not auto-fixable.
+The fix rebuilds the entity with the `pyatlan_v9.model.assets` creator for its
+type and serializes it through `entity_bytes`, a semantic rewrite performed by
+the `migrate-asset-modeling` skill (its `remediation_reference`).  It drafts a
+proposal for human review and never auto-applies.  A type `pyatlan_v9` does not
+model keeps its dict, which must carry top-level `"status": "ACTIVE"` on a
+non-delete upsert, with an inline `# conformance: ignore[P058] <reason>` naming
+the type.
 
 ### Requires
 
@@ -309,7 +328,9 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      `FilterMap | str`, is how most `Any` arrives.  Deleting the override
      inherits the safe type, keeps the wire shape, and is compatible under
      B005 by construction.  The SDK's `FilterMap` coercion accepts a list, a
-     legacy string, and a one-level `APITree` tree.
+     legacy string, and a one-level `APITree` tree.  It keeps two levels, so
+     a tree the app reads deeper loses those levels: set
+     `treeSelection = true` on the widget instead (step 3).
 
   3. **Use the SDK's own types, in the same outer shape.**
      | Field carries | Type it as |
@@ -318,7 +339,9 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      | credentials | `credential_guid` / `CredentialRef`: by reference, never inline across tasks |
      | `agent_json` | `AgentCredentialSpec` |
      | wizard metadata | a `BaseMetadataConfig` subclass, or a bounded `dict[str, str]` |
-     | filters | `FilterMap` (`application_sdk.templates.contracts`) |
+     | flat filters | `FilterMap` (`application_sdk.templates.contracts`) |
+     | a tree-widget selection (`APITree` and similar) read below its second level | `TreeSelection` (`application_sdk.contracts.types`); generated contracts get it from `treeSelection = true` on the widget |
+     | an extraction app's include/exclude filters as a tree | extend `TreeSelectionExtractionInput` (`application_sdk.templates.contracts`), whose filters are `TreeSelection \| str`; generated contracts get it from `treeSelection = true` on both filter widgets |
      | a dict with known keys | a small `BaseModel` with those fields |
 
      Absorb legacy wire shapes with a `@field_validator(..., mode="before")`
@@ -354,19 +377,26 @@ above.  `classification` is always `"judgment"` for all P-series rules.
 
   7. **Generated contract with `Any`: fix the source, never the file.**  The
      `contract/*.pkl` widget decides the shape, and the toolkit emits
-     `dict[str, Any]` for widgets such as `APITree`.  Change the widget, or
+     `dict[str, Any]` for widgets such as `APITree`.  For a tree widget, set
+     `treeSelection = true`: the field generates as `TreeSelection`, and on an
+     extraction app's `include-filter` / `exclude-filter` the class extends
+     `TreeSelectionExtractionInput`.  Change the widget, or
      fix the toolkit's emission, and regenerate.  Do not hand-edit
      `app/generated/`, and do not keep a `post-generate` hook that re-inserts
      the opt-out.  When only the toolkit can fix it, say so in the proposal:
      the app cannot.
 
   **Not fixes, whatever the gate says.**  `object`, `JsonValue`, a bare
-  `dict` / `list`, a recursive `TypeAliasType`, and a nested
+  `dict` / `list`, a recursive `TypeAliasType` with no bound
+  (`TreeSelection` bounds every level), and a nested
   `BaseModel(extra="allow")` all pass `validate_payload_safety` while
   bounding nothing.  Propose one only as an owner's decision, named as such.
   A hand-rolled JSON union capped at a fixed nesting depth rejects any deeper
   live payload; prefer a JSON `str` the consumer parses when the shape is
-  genuinely open.
+  genuinely open.  Changing a `dict` the wire sends to a `str` (a
+  `mode="before"` validator that JSON-encodes it) is not that case: it hides
+  the shape from the check and bounds nothing.  A tree-widget selection has a
+  known shape; type it `TreeSelection`.
 
   **Verify before proposing:** import the module; for an `@entrypoint` field
   run the `gen-contract-ledger` / `ledger-guard` commands shown under step 8;
@@ -613,7 +643,7 @@ around `finding.line` before drafting any proposal.
   prefix call to a different module — the finding is about the level of the
   abstraction, not its location.
 
-**Typed-boundary / contract-modeling rules (P013–P015)** — migration rules
+**Typed-boundary / contract-modeling rules (P013–P015, P059)** — migration rules
 (`autofixable = false`), scope=app; `classification` is always `"judgment"`.
 The lane applies nothing: return `not_remediable = true` with a
 `migration_brief`.  Backed by `suite.checks.prescriptions`.
@@ -641,14 +671,19 @@ The lane applies nothing: return `not_remediable = true` with a
   and pointers as P013.
 
 - **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
-  `Output` contract is a container of primitives or `Any`, bare or bounded
+  `Output` contract is a dict of primitives or a container of `Any` (a bare
+  `list` / `set` / `dict` counts as `Any`), bare or bounded
   (`Annotated[dict[str, str], MaxItems(N)]`).  For a container of payload-safe
   primitives, the bound satisfies payload safety without an opt-out, but the
   keys and values still have no schema.  A bound never makes `Any` safe:
   `Annotated[dict[str, Any], MaxItems(N)]` still raises `PayloadSafetyError`
   without the opt-out and is still a P001 finding — replace the `Any` first
   (see P001 above).  Containers of a typed class
-  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Lists and sets
+  of a scalar primitive (`str`, `int`, `float`, `bool`, `bytes`) or a
+  `Literal`, optional items included, such
+  as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
+  are exempt too: they have no keys to model.  Target shape, from
   `atlan-metabase-app` `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
   where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
@@ -658,6 +693,21 @@ The lane applies nothing: return `not_remediable = true` with a
   When the key set is genuinely open, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).
+
+- **P059 JsonEncodedContractField** (WARN) — a `str` or `list[str]` field on
+  an `Input` / `Output` contract holds JSON text: app code writes it with
+  `json.dumps` / `model_dump_json` or reads it back with `json.loads` /
+  `model_validate_json`.  The finding names the first evidence site.  Payload
+  safety and P015 grade only the declared `str`, so the shape and size of the
+  value pass unchecked; packing a dict into a string is also how an app gets a
+  `dict[str, Any]` past P001.  The brief reads the decoded shape off the
+  encoder (the dict or model that goes into `json.dumps`) and every decoder,
+  proposes a `BaseModel` for it (`list[Model]` for a list of records, bounded
+  with `MaxItems`), and lists every writer and reader to rewrite.  A value that
+  grows with the source goes in a `FileReference` instead.  On a field in the
+  contract ledger, add the typed field under a new name and retire the old one.
+  Propose `# conformance: ignore[P059] <reason>` only when a system outside the
+  app needs the value as JSON text.
 
 **Typed-boundary read rule (P026)** — suggest-only, scope=app, WARN-tier;
 `classification` is always `"judgment"`.  Backed by
@@ -768,6 +818,46 @@ around `finding.line` before drafting any proposal — the proposal is a
   `# conformance: ignore[P019] <reason>` instead, where the justification names
   the missing surface.  Either way the proposal is recorded for the developer to
   apply or reject; this area never mutates the working tree.
+
+**Client-lifecycle rules (P056/P057)** — suggest-only, scope=app, WARN-tier;
+`classification` is always `"judgment"`.  `BaseClient` keeps one shared
+`httpx.AsyncClient` and its connection pool open until `close()`.  Read the
+whole enclosing function (P056) or class (P057) before drafting.  For the human
+reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this
+package): `docs/concepts/clients.md`.
+
+- **P056 UnclosedBaseClient** — a function binds a `BaseClient` subclass to a
+  local name and neither enters it with `async with` nor calls
+  `await <name>.close()` in a `finally`, in a recognised shape: the
+  `async with` or `try` is the next statement after the binding (only
+  call-free assignments may sit between), or the `try` encloses the binding.
+  The check matches shapes, not paths, so a call, `return` or branch between
+  the binding and the cleanup fires, and so does cleanup nested under an
+  `if`, a loop or an `except`, even when every path closes.  The message says
+  which case fired: never closed, or closed in a shape that can be skipped.
+  Draft, in order of preference:
+  1. **`async with`** when the client's whole use fits in one block:
+     `async with Client(...) as client:` and move the uses inside.
+     `__aenter__` returns the client and does not call `load()`, so keep the
+     `await client.load(...)` call inside the block.
+  2. **`try` / `finally`** when the use spans code that cannot move into a
+     block: start the `try` on the line after the binding, put
+     `await client.close()` in the `finally`, and remove a happy-path
+     `close()` it replaces.
+  If the function hands the client to a longer-lived owner in a way the check
+  could not see, do not move the close.  Propose an inline
+  `# conformance: ignore[P056] <reason>` that names the owner that closes it.
+
+- **P057 CloseOverrideSkipsSuper** — a `BaseClient` subclass overrides
+  `close()` and does not await `super().close()` as a statement directly in
+  its body or directly in the `finally` of a `try` in its body (a call under
+  an `if` / loop / `except`, even in every arm, fires; so does one with a
+  call or `await` before it in its block).  Draft: keep the subclass's own
+  cleanup.  If that cleanup only assigns (`self.session_token = None`), add
+  `await super().close()` as the last statement; if it calls or awaits
+  anything, wrap it in `try` / `finally` with the super call in the
+  `finally`.  There is no case
+  where skipping the base close is correct, so do not propose a suppression.
 
 **Determinism / async-correctness rules (P020–P024)** — all suggest-only,
 scope=both, WARN-tier; `classification` is always `"judgment"`.  Read the enclosing

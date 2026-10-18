@@ -287,6 +287,12 @@ DAPR_COLD_START_MAX_WAIT_SECONDS: float = float(
 DAPR_COLD_START_BASE_DELAY_SECONDS: float = 2.0
 DAPR_COLD_START_MAX_DELAY_SECONDS: float = 10.0
 
+#: Backoff before each extra attempt a call gets once its component's gate is
+#: armed (so ``len`` extra tries, ~4s total). A warm sidecar can still drop one
+#: connection; this absorbs that without masking a real outage for the full
+#: cold-start deadline.
+DAPR_WARM_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 3.0)
+
 
 async def retry_past_dapr_cold_start(
     call: Callable[[], Awaitable[_T]],
@@ -325,9 +331,11 @@ async def retry_past_dapr_cold_start(
     must pass the same identifier to share that gate; a different component
     answering says nothing about this one's readiness, so it does not
     short-circuit it. A later outage on an already-confirmed component is
-    then a steady-state failure, left to surface via the backend's own
-    (shorter) retry budget instead of being masked for the full deadline on
-    every subsequent call.
+    then a steady-state failure: ``call`` gets only the short
+    :data:`DAPR_WARM_RETRY_DELAYS_SECONDS` ladder on a transient failure,
+    not the full deadline, so a real outage is not masked on every call.
+    Every caller wraps a read, so the retry is safe; writes never go through
+    here.
 
     Args:
         call: Zero-arg async callable to retry, e.g. ``lambda:
@@ -349,6 +357,18 @@ async def retry_past_dapr_cold_start(
     global _dapr_sidecar_confirmed_ready
 
     if _dapr_sidecar_confirmed_ready or component in _dapr_component_confirmed_ready:
+        for delay in DAPR_WARM_RETRY_DELAYS_SECONDS:
+            try:
+                return await call()
+            except ColdStartRaceError as exc:
+                # conformance: ignore[L004,E005] type only, same reason as the cold-start retry log below
+                logger.warning(
+                    "%s failed (%s) on a warm sidecar — retrying in %.1fs",
+                    description,
+                    type(exc).__name__,
+                    delay,
+                )
+                await asyncio.sleep(delay)
         return await call()
 
     deadline = time.monotonic() + DAPR_COLD_START_MAX_WAIT_SECONDS
@@ -454,16 +474,15 @@ class AsyncDaprClient:
                 # Pin the retried transport errors to httpx-retries' own default
                 # set, stated explicitly so it can't silently narrow/widen if the
                 # library changes its default. These three base classes cover
-                # connect/read/WRITE/close/pool + protocol errors alike, so
-                # POST/DELETE calls (save_state/publish_event/invoke_binding/
-                # delete_state) keep the exact retry coverage they had before —
-                # listing leaf classes like ConnectError/ReadError would have
-                # narrowed it and dropped WriteError/WriteTimeout/CloseError.
-                # NOTE: these errors were already retried by default; what the
-                # original fix changed was the *budget* above (raising
-                # backoff_factor to 1.0) to bridge a daprd cold start. See
-                # _DEFAULT_RETRY_TOTAL for the ladder arithmetic and why the
-                # accompanying total=5 was later cut back to 3.
+                # connect/read/WRITE/close/pool + protocol errors alike; listing
+                # leaf classes like ConnectError/ReadError would have narrowed it
+                # and dropped WriteError/WriteTimeout/CloseError.
+                # httpx-retries' default ``allowed_methods`` excludes POST, so
+                # only GET/PUT/DELETE-style calls are replayed here. POST calls
+                # (save_state/publish_event/invoke_binding) are NOT retried by
+                # the transport; idempotent reads that need a retry get it from
+                # retry_past_dapr_cold_start instead. See _DEFAULT_RETRY_TOTAL
+                # for the ladder arithmetic.
                 retry_on_exceptions=[
                     httpx.TimeoutException,
                     httpx.NetworkError,

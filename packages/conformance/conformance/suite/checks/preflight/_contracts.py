@@ -71,6 +71,46 @@ _VOICE = {
     "PLATFORM": "write an operator hint for platform on-call",
 }
 _BUILTIN_ERROR_BASES = frozenset({"ValueError", "Exception", "BaseException"})
+#: Each SDK leaf's ``(category, default_retryable)``. Tabled like the ancestry
+#: above, because the suite runs without SDK source; pinned to the runtime
+#: ClassVars by a drift test.
+_SDK_CATEGORY: dict[str, tuple[str, bool]] = {
+    "AppError": ("INTERNAL", False),
+    "CancelledError": ("CANCELLED", False),
+    "AppTimeoutError": ("TIMEOUT", True),
+    "TaskStalledError": ("TIMEOUT", True),
+    "RateLimitedError": ("RATE_LIMITED", True),
+    "AuthError": ("AUTH", False),
+    "AppPermissionDeniedError": ("PERMISSION", False),
+    "NotFoundError": ("NOT_FOUND", False),
+    "AlreadyExistsError": ("ALREADY_EXISTS", False),
+    "InvalidInputError": ("INVALID_INPUT", False),
+    "InvalidInputValueError": ("INVALID_INPUT", False),
+    "PreconditionError": ("PRECONDITION", False),
+    "DependencyUnavailableError": ("DEPENDENCY_UNAVAILABLE", True),
+    "ColdStartRaceError": ("DEPENDENCY_UNAVAILABLE", True),
+    "DaprSidecarUnreachableError": ("DEPENDENCY_UNAVAILABLE", True),
+    "ObjectStoreReadError": ("DEPENDENCY_UNAVAILABLE", True),
+    "ObjectStoreDownloadError": ("DEPENDENCY_UNAVAILABLE", True),
+    "SourceUnavailableError": ("SOURCE_UNAVAILABLE", True),
+    "SourceWarmupExhaustedError": ("SOURCE_UNAVAILABLE", True),
+    "ResourceExhaustedError": ("RESOURCE_EXHAUSTED", True),
+    "DiskFullError": ("RESOURCE_EXHAUSTED", True),
+    "LocalVolumeUnwritableError": ("RESOURCE_EXHAUSTED", True),
+    "DataIntegrityError": ("DATA_INTEGRITY", False),
+    "InternalError": ("INTERNAL", False),
+    "UnimplementedError": ("UNIMPLEMENTED", False),
+}
+#: Categories a handler may raise for a source it could not ask this time: the
+#: gate's no-verdict path records the raise as an unverifiable source. A hard
+#: gate retries SOURCE_UNAVAILABLE and RATE_LIMITED and blocks only if they
+#: persist to its final attempt; it never blocks on TIMEOUT. They are the gate's
+#: retried categories plus its never-blocking ones minus the fail-open ones it
+#: deprecated (DEPENDENCY_UNAVAILABLE, RESOURCE_EXHAUSTED, CANCELLED), whose
+#: raise is the idiom F008 exists to retire. Pinned to the gate by a drift test.
+RAISABLE_TRANSIENT_CATEGORIES = frozenset(
+    {"SOURCE_UNAVAILABLE", "RATE_LIMITED", "TIMEOUT"}
+)
 
 
 def _sdk_error_leaf(name: str) -> str | None:
@@ -83,6 +123,11 @@ def _sdk_error_leaf(name: str) -> str | None:
 def _canonical_error(name: str) -> str:
     leaf = _sdk_error_leaf(name)
     return _SDK_ERRORS + leaf if leaf is not None else name
+
+
+def sdk_error_category(name: str) -> tuple[str, bool] | None:
+    """Return the ``(category, default_retryable)`` an SDK error class declares."""
+    return _SDK_CATEGORY.get(name.rsplit(".", 1)[-1])
 
 
 def sdk_error_audience(name: str) -> str | None:
@@ -174,6 +219,28 @@ def _audience_value(node: ast.AST | None) -> str | None:
         return node.attr
     if isinstance(node, ast.Constant) and node.value in _VOICE:
         return node.value
+    return None
+
+
+def _category_value(node: ast.AST | None) -> object:
+    """A ``FailureCategory`` member's name, or ``_UNKNOWN`` for anything else."""
+    if isinstance(node, ast.Attribute) and _get_leaf(node.value) == "FailureCategory":
+        return node.attr
+    return _UNKNOWN
+
+
+def _retryable_value(node: ast.AST | None) -> object:
+    """A literal bool, or ``_UNKNOWN`` for anything the checker cannot read."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, bool):
+        return node.value
+    return _UNKNOWN
+
+
+def _get_leaf(node: ast.AST | None) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
     return None
 
 
@@ -278,6 +345,62 @@ class _Checker:
 
     def typed_error(self, src: Source, node: ast.AST) -> bool:
         return bool(self.error_names(src, node))
+
+    def class_attr(
+        self, src: Source, node: ast.AST, attr: str, visited=frozenset()
+    ) -> object:
+        """The ``category`` or ``default_retryable`` an error class resolves to.
+
+        The nearest class that assigns *attr* decides, the SDK leaves from their
+        table. ``_UNKNOWN`` when the assignment is not a literal the checker can
+        read, or when no class in reach declares it.
+        """
+        name = _qualified(src, node)
+        if _sdk_error_leaf(name) is not None:
+            declared = sdk_error_category(name)
+            if declared is None:
+                return _UNKNOWN
+            return declared[0] if attr == "category" else declared[1]
+        resolved = self.symbol(src, node)
+        if resolved is None:
+            return _UNKNOWN
+        owner, cls = resolved
+        if not isinstance(cls, ast.ClassDef) or id(cls) in visited:
+            return _UNKNOWN
+        parse = _category_value if attr == "category" else _retryable_value
+        for stmt in cls.body:
+            target: ast.expr | None = None
+            value: ast.expr | None = None
+            if isinstance(stmt, ast.AnnAssign):
+                target, value = stmt.target, stmt.value
+            elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                target, value = stmt.targets[0], stmt.value
+            if isinstance(target, ast.Name) and target.id == attr:
+                return parse(value)
+        for base in cls.bases:
+            found = self.class_attr(owner, base, attr, visited | {id(cls)})
+            if found is not _UNKNOWN:
+                return found
+        return _UNKNOWN
+
+    def raisable_transient(self, src: Source, call: ast.Call) -> bool:
+        """Whether ``raise <call>`` is a retryable leaf in a raisable category.
+
+        Conservative: an unreadable category, or a ``retryable=`` the checker
+        cannot read, keeps the raise flagged.
+        """
+        if self.class_attr(src, call.func, "category") not in (
+            RAISABLE_TRANSIENT_CATEGORIES
+        ):
+            return False
+        explicit = next(
+            (kw.value for kw in call.keywords if kw.arg == "retryable"), None
+        )
+        if explicit is not None and not (
+            isinstance(explicit, ast.Constant) and explicit.value is None
+        ):
+            return _retryable_value(explicit) is True
+        return self.class_attr(src, call.func, "default_retryable") is True
 
     def defaults(
         self, src: Source, node: ast.AST, visited=frozenset()
@@ -609,6 +732,7 @@ class _Checker:
                     isinstance(expr, ast.Call)
                     and self.typed_error(src, expr.func)
                     and not self.error_names(src, expr.func).intersection(caught)
+                    and not self.raisable_transient(src, expr)
                     or (
                         expr is None
                         or isinstance(expr, ast.Name)
@@ -621,7 +745,7 @@ class _Checker:
                         src,
                         node,
                         "F008",
-                        "Expected typed preflight failure escapes the handler. Return a typed PreflightOutput verdict; the strict gate does not preserve the legacy raised-error fail-open behavior.",
+                        "Expected typed preflight failure escapes the handler. Return it as a failed check on the verdict; raise only a retryable SOURCE_UNAVAILABLE or TIMEOUT leaf, never a deprecated fail-open category.",
                     )
             if isinstance(node, ast.Call):
                 self.result(src, func, node)

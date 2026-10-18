@@ -11,10 +11,15 @@ runner, so these are deliberately YAML-shape assertions.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _bump_skip import without_bump_skip  # noqa: E402
 
 _WORKFLOW = (
     Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
@@ -51,7 +56,7 @@ def test_off_by_default(inputs: dict) -> None:
 
 
 def _job_if(jobs: dict, name: str) -> str:
-    return " ".join(str(jobs[name]["if"]).split())
+    return " ".join(without_bump_skip(jobs[name]["if"]).split())
 
 
 def test_both_jobs_gated_on_opt_in_and_resource_mode(jobs: dict) -> None:
@@ -103,6 +108,7 @@ def _wake_context(**overrides: object) -> dict[str, object]:
         "needs.detect-integration.outputs.count": "3",
         "needs.discover-e2e.result": "success",
         "needs.discover-e2e.outputs.count": "2",
+        "inputs.run-e2e": "",
     }
     return base | overrides
 
@@ -149,6 +155,39 @@ def test_wake_only_when_a_source_is_consumed(jobs: dict) -> None:
     assert not _evaluate(cond, _wake_context(**{"inputs.dataforge-lifecycle": False}))
     assert not _evaluate(cond, _wake_context(**{"inputs.dataforge-mode": "managed"}))
     assert not _evaluate(cond, _wake_context(**{"inputs.dataforge-datasource": ""}))
+
+
+def test_an_e2e_only_run_wakes_for_its_legs_alone(jobs: dict) -> None:
+    """FND-3839: a `/e2e` comment runs e2e only, so detect-integration is
+    SKIPPED on purpose. The wake must still happen for the e2e legs — and a
+    skipped detection's empty count must not count as integration suites."""
+    cond = _job_if(jobs, "wake-dataforge-source")
+    e2e_only = {
+        "inputs.run-e2e": "only",
+        "needs.detect-integration.result": "skipped",
+        "needs.detect-integration.outputs.count": "",
+    }
+    assert _evaluate(cond, _wake_context(**e2e_only)), "e2e legs need the source"
+    assert not _evaluate(
+        cond,
+        _wake_context(
+            **e2e_only,
+            **{
+                "needs.discover-e2e.result": "skipped",
+                "needs.discover-e2e.outputs.count": "",
+            },
+        ),
+    ), "a stood-down e2e-only run reads the source nowhere"
+    # A skipped detection outside e2e-only still means "do not wake".
+    assert not _evaluate(
+        cond,
+        _wake_context(
+            **{
+                "needs.detect-integration.result": "skipped",
+                "needs.detect-integration.outputs.count": "",
+            }
+        ),
+    )
 
 
 def test_evaluator_would_catch_the_unguarded_count(jobs: dict) -> None:

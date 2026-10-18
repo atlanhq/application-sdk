@@ -11,6 +11,16 @@ Batch upload/download
 * ``delete_prefix(prefix)``                — delete all objects under prefix
 * ``list_keys(prefix)``                    — list object keys under prefix
 
+These two are deliberately not on the ``FileReference`` engines that
+``persist`` / ``transfer.upload`` and ``materialize`` / ``transfer.download``
+share (FND-3796). They mirror state directories (RocksDB, DuckDB, parquet
+datasets) for readers that glob the tree, so they must not leave local
+``.sha256`` markers or write a manifest, and ``download_prefix`` keeps its own
+etag sync index, strip/full layouts and suffix filter. The engines' value —
+markers, manifest digests, the per-path materialize lock — is what a mirror
+must not have. Both already share the transfer primitives (``upload_file`` /
+``download_file_chunked``) and the sidecar verification.
+
 Param order convention: source first, destination second.
 ``upload_prefix(local_dir, prefix)`` and ``download_prefix(prefix, local_dir)``
 both follow this — the data source is always the first positional argument.
@@ -121,17 +131,19 @@ async def list_keys(
             Pass ``False`` to use *prefix* exactly as supplied.
         include_markers: When ``False`` (default), zero-byte objects that act
             as GCS-style directory markers (i.e. they have at least one child
-            key under them) are excluded from results.  Pass ``True`` to
+            key under them) and S3 ``folder/`` markers with no children are
+            excluded from results.  Pass ``True`` to
             bypass this filter and receive every object including markers —
             useful when the caller needs to operate on all objects regardless
             of size (e.g. ``delete_prefix``).
 
     Returns:
         Sorted list of matching object keys.  By default, zero-byte objects
-        that act as GCS-style directory markers are excluded; zero-byte files
-        with no children are returned normally.  Marker detection is
-        single-pass: a zero-byte object is only identified as a marker if its
-        children appear in the same listing call (i.e. they share the
+        that act as GCS-style directory markers are excluded, and so are S3
+        ``folder/`` markers with no children (a zero-byte key whose HEAD is
+        not found and that lists under its own path); other zero-byte files
+        with no children are returned normally.  A zero-byte object is only identified as a GCS-style
+        marker if its children appear in the same listing call (i.e. they share the
         requested *prefix*).
 
     Raises:
@@ -143,7 +155,10 @@ async def list_keys(
 
     try:
         items = await _list_items(
-            resolved, prefix or None, include_markers=include_markers
+            resolved,
+            prefix or None,
+            include_markers=include_markers,
+            suffixes=(suffix,) if suffix else (),
         )
         return await run_in_thread(_sorted_keys, items, suffix)
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
@@ -178,7 +193,9 @@ async def list_keys_with_meta(
     prefix = _normalize_listing_prefix(prefix, normalize)
 
     try:
-        items = await _list_items(resolved, prefix or None)
+        items = await _list_items(
+            resolved, prefix or None, suffixes=(suffix,) if suffix else ()
+        )
         return await run_in_thread(_sorted_items, items, suffix)
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:

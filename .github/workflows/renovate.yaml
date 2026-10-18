@@ -113,7 +113,7 @@ jobs:
     steps:
       - name: Mint fleet App token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -159,7 +159,7 @@ jobs:
         id: app-token
         # Owner-scoped (not per-repo): each matrix job mints its own token, so
         # API budgets stay isolated.
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
@@ -218,7 +218,7 @@ jobs:
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.13.0"
+          version: "0.13.1"
 
       # Version omitted deliberately — as it now is at every call site: the
       # action resolves the single pin in application_sdk/pkl_version.py, so no

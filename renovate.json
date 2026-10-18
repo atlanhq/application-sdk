@@ -63,6 +63,16 @@
       "groupName": "conformance action templates",
       "semanticCommitType": "fix",
       "semanticCommitScope": "conformance"
+    },
+    {
+      "description": "Hold the Python runtime (actions/setup-python python-version) below 3.15 for now. The github-actions manager extracts the `python-version` input as dep `python` (depType `uses-with`), and Renovate classifies 3.14 → 3.15 as a minor, which the fleet preset's github-actions rule would otherwise group and automerge alongside routine action bumps (see application-sdk PR 4329). An allowedVersions cap rather than a custom versioning regex: actions/python-versions tags carry a build suffix (e.g. `3.13.0-11228421917`), and a regex that misses that format would silently stop tracking Python. Matched by depName with no matchFileNames, so it applies to .github/workflows, .github/workflow-templates and the conformance bootstrap templates alike, and every other github-actions update keeps its group and automerge. Raise or remove this cap when we deliberately move to 3.15 (consider dependencyDashboardApproval at that point).",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchDepNames": [
+        "python"
+      ],
+      "allowedVersions": "<3.15"
     }
   ],
   "ignorePaths": [

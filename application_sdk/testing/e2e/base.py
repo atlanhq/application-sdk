@@ -77,6 +77,7 @@ failure of the thing under test.
 from __future__ import annotations
 
 import os
+import re
 import warnings
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
@@ -106,6 +107,7 @@ from application_sdk.testing.e2e._errors import (
     DAGProgressStalledError,
     DeployedManifestMismatchError,
     HarnessMethodNotImplementedError,
+    InvalidLineageEdgeDeclarationError,
     ManifestDagMissingError,
     ManifestFileNotFoundError,
     MissingHarnessClassAttrError,
@@ -157,11 +159,14 @@ from application_sdk.testing.harness.expectations import (
     AttributeSampleRead,
     CountRead,
     Finding,
+    LineageEdge,
+    LineageEdgeRead,
     SampleRead,
     Unreadable,
     evaluate_attributes,
     evaluate_attributes_at,
     evaluate_counts,
+    evaluate_lineage_edges,
     evaluate_locations,
     normalise_attribute_expectations,
     normalise_attribute_expectations_at,
@@ -178,6 +183,7 @@ from application_sdk.testing.harness.outcome import (
     as_attribute_samples,
     as_count,
     as_counts,
+    as_lineage_edges,
     as_samples,
 )
 from application_sdk.testing.harness.preconditions import (
@@ -309,10 +315,79 @@ _FINDING_TEMPLATES = {
     "depth": "  - {subject} {detail}",
     "nesting": "  - {subject} {detail}",
     "attribute": "  - {subject} {detail}",
+    "lineage_edge": "  - {subject}: {detail}",
     "missing": "  - {subject}: {detail}",
     "ambiguous": "  - {subject}: {detail}",
     UNREADABLE: "  - {subject}: {detail}",
 }
+
+
+#: A lineage-edge type name: what Atlas accepts as a typeName.
+_EDGE_TYPE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+
+
+def _parse_lineage_edge(key: str) -> LineageEdge:
+    """Split one ``expected_lineage_edges`` key into (source, target) types.
+
+    Args:
+        key: ``"SourceType -> TargetType"``; whitespace around ``->`` is
+            ignored.
+
+    Returns:
+        The two type names.
+
+    Raises:
+        InvalidLineageEdgeDeclarationError: The key is not exactly two valid
+            type names joined by one ``->``.
+    """
+    parts = [part.strip() for part in key.split("->")]
+    if len(parts) != 2 or not all(_EDGE_TYPE_NAME.match(part) for part in parts):
+        raise InvalidLineageEdgeDeclarationError(
+            message=(
+                f"expected_lineage_edges key {key!r} is not of the form "
+                "'SourceType -> TargetType' (two Atlan type names, letters, "
+                "digits and underscores, joined by '->')."
+            ),
+            constraint="'SourceType -> TargetType'",
+        )
+    return LineageEdge(parts[0], parts[1])
+
+
+def _normalise_lineage_edges(declared: Mapping[str, int]) -> dict[LineageEdge, int]:
+    """Validate a lineage-edge declaration and parse its keys.
+
+    Args:
+        declared: ``"Source -> Target"`` -> minimum process count, as a suite
+            writes it.
+
+    Returns:
+        The same floors keyed by the parsed edge.
+
+    Raises:
+        InvalidLineageEdgeDeclarationError: A key is malformed, two keys name
+            the same edge, or a floor is not an integer >= 1.
+    """
+    normalised: dict[LineageEdge, int] = {}
+    for key, floor in declared.items():
+        edge = _parse_lineage_edge(key)
+        if edge in normalised:
+            raise InvalidLineageEdgeDeclarationError(
+                message=(
+                    f"expected_lineage_edges names the edge '{edge}' twice; "
+                    "declare each edge once."
+                ),
+            )
+        if isinstance(floor, bool) or not isinstance(floor, int) or floor < 1:
+            raise InvalidLineageEdgeDeclarationError(
+                message=(
+                    f"expected_lineage_edges[{key!r}] is {floor!r}; the floor must "
+                    "be an integer >= 1. A floor of zero asserts nothing — drop "
+                    "the entry instead."
+                ),
+                constraint=">= 1",
+            )
+        normalised[edge] = floor
+    return normalised
 
 
 def _render_finding(finding: Finding) -> str:
@@ -612,6 +687,16 @@ class FullDAGOutcome:
     """The object-store assertion node's verdict, the fact that it could not be
     read, or ``None`` when the run declared no store expectations. Set only by
     :class:`~application_sdk.testing.e2e.system_app.SystemAppE2ETest`."""
+    lineage_edge_reads: LineageEdgeRead | None = None
+    """Lineage processes per declared ``"Source -> Target"`` edge, as read, or
+    the fact that they could not be; ``None`` when the suite declared no
+    ``expected_lineage_edges``. What the ladder grades — a read that stopped at
+    its scan cap carries that here, so an unreached floor is ungraded rather
+    than failed."""
+    lineage_edge_counts: dict[str, int] = field(default_factory=dict)
+    """Settled projection of :attr:`lineage_edge_reads`, keyed by the declared
+    edge as ``"Source -> Target"``. Empty when the read was not taken or could
+    not be read — never zeros standing in for a failed search."""
 
     @property
     def succeeded(self) -> bool:
@@ -690,6 +775,9 @@ class DAGSpec:
             the AE workflow name, so N runs in one leg stay N distinguishable
             AE workflows. Defaults to the resolved entrypoint, else
             ``"default"``.
+        expected_lineage_edges: Per-edge floors on lineage processes, keyed by
+            ``"Source -> Target"`` type names. Last, so the fields before it
+            keep their positional slots.
     """
 
     entrypoint: str | None = None
@@ -709,6 +797,7 @@ class DAGSpec:
     ) = None
     connection_qualified_name: str | None = None
     label: str = ""
+    expected_lineage_edges: Mapping[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -740,6 +829,9 @@ class ResolvedDAG:
         str, Mapping[str, Mapping[str, AttributeExpectationValue]]
     ] = field(default_factory=dict)
     connection_qualified_name: str = ""
+    expected_lineage_edges: Mapping[LineageEdge, int] = field(default_factory=dict)
+    """Validated and parsed once at resolution, so ``"A->B"`` and ``"A -> B"``
+    resolve to the same edge."""
 
 
 class BaseE2ETest:
@@ -1310,6 +1402,40 @@ class BaseE2ETest:
         dict[str, dict[str, dict[str, AttributeExpectationValue]]]
     ] = {}
 
+    # Opt-in: assert WHICH TYPES lineage connects, not only that some lineage
+    # exists. Maps "SourceType -> TargetType" -> the minimum number of lineage
+    # processes (Process / ColumnProcess / BIProcess, or any other Process
+    # subtype) under the connection that take an asset of SourceType as an input
+    # and produce an asset of TargetType as an output::
+    #
+    #     expected_lineage_edges = {
+    #         "SigmaDataElementField -> SigmaDataModelColumn": 1,
+    #         "Column -> SigmaDataElementField": 1,
+    #     }
+    #
+    # Why it exists: ``expect_lineage`` passes as soon as any asset has lineage,
+    # and the counts above cannot see processes at all. A connector that keeps
+    # publishing its coarse lineage but stops producing one finer kind — every
+    # field-level link, say — lands asset counts identical to a good run and
+    # stays green. Naming the edge is what makes that drop a failure.
+    #
+    # Scope + contract:
+    #   * Endpoints are matched by typeName only. A process's inputs or outputs
+    #     may be assets of another connection (a warehouse column feeding a BI
+    #     field); the PROCESS is what has to sit under this connection.
+    #   * Every floor must be >= 1, and a key must be two type names joined by
+    #     "->". Anything else is rejected when the run is resolved.
+    #   * Read once, after the count poll. A connection with more lineage
+    #     processes than the reader's scan cap leaves an unreached floor
+    #     ungraded (an Atlas-read error, not a failure) rather than failing on a
+    #     partial count.
+    #   * Independent of ``expect_lineage``, which only relaxes the DAG gate and
+    #     the presence check. A BI connector's transform publishes its
+    #     processes even with the lineage nodes skipped.
+    #
+    # Empty = skip (no extra Atlas call).
+    expected_lineage_edges: ClassVar[dict[str, int]] = {}
+
     # How many assets to sample per type for the attribute check. Separate from
     # the location sampler's fixed 3 because the tradeoff is different: the
     # location check is a systematic-drift detector where three assets prove as
@@ -1380,6 +1506,10 @@ class BaseE2ETest:
         self._connection_create_attempted = False
         self._submitted_connection_qns: list[str] = []
         self._payload_substitutions: MustacheSubstitutions | None = None
+        self._dag_submitted = False
+        # AE run ids submitted but not yet seen terminal. Teardown terminates
+        # whatever is left — see :meth:`_terminate_unsettled_runs`.
+        self._unsettled_run_ids: list[str] = []
         self._seeded_connection_qns: list[str] = []
         # Each seed's object-store root, keyed to the connection it was seeded
         # under — the QN whose connection-delete run is what reclaims it.
@@ -1800,9 +1930,45 @@ class BaseE2ETest:
                 signature.
         """
         try:
+            # First: a run still extracting must not race the delete of the
+            # connection it is writing into.
+            await self._terminate_unsettled_runs()
             await self._delete_connections()
         finally:
             await self._close_clients()
+
+    async def _terminate_unsettled_runs(self) -> None:
+        """Terminate every AE run this test submitted and never saw finish.
+
+        The harness stops watching a run on several exits that leave it going —
+        the progress watchdog, the poll ceiling, a no-worker verdict, or an
+        extract child that AE is retrying after a failed first attempt. The
+        extract node of a CI e2e run is dispatched to a task queue served only
+        by the worker the CI job started, so once the job exits nothing can
+        progress it, and the child waits on that queue until its workflow
+        execution timeout (up to days) closes it as "Timed out". Those orphans
+        are what a fleet-wide "Timed out" pattern on CI tenants is made of.
+
+        Terminating the AE root closes the child with it (children are started
+        with terminate-on-parent-close). Nothing here raises: an unstoppable run
+        is logged, and the connection delete still runs.
+        """
+        run_ids = tuple(getattr(self, "_unsettled_run_ids", ()))
+        ae = getattr(self, "_ae", None)
+        if not run_ids or ae is None:
+            return
+        for run_id in run_ids:
+            try:
+                await ae.terminate_run(run_id)
+            # conformance: ignore[E004] teardown boundary — a cleanup failure must never replace the run's verdict, and one unstoppable run must not skip the rest of teardown
+            except Exception:
+                logger.warning(
+                    "e2e cleanup: could not terminate AE run %s; it may keep "
+                    "running until its workflow execution timeout",
+                    run_id,
+                    exc_info=True,
+                )
+        self._unsettled_run_ids = []
 
     async def _delete_connections(self) -> None:
         """Delete every ephemeral connection this run touched, if there are any.
@@ -3279,6 +3445,11 @@ class BaseE2ETest:
                     else spec.expected_asset_attributes_at
                 ).items()
             },
+            expected_lineage_edges=_normalise_lineage_edges(
+                self.expected_lineage_edges
+                if spec.expected_lineage_edges is None
+                else spec.expected_lineage_edges
+            ),
             # ``getattr`` rather than the attribute: ``_validate_dag_runs``
             # resolves every declared run inside ``setup_method``, *before* the
             # minter has named this run's connection. Both sides of the
@@ -4068,9 +4239,9 @@ class BaseE2ETest:
 
         outcome = await poll_until(
             _read,
-            settled=lambda read: read is not None
-            and bool(read.dag)
-            and _supersedes(read.version, seed),
+            settled=lambda read: (
+                read is not None and bool(read.dag) and _supersedes(read.version, seed)
+            ),
             budget=self._deployed_manifest_budget(),
             label=f"the DAG AE published for slug {slug}",
         )
@@ -4241,8 +4412,21 @@ class BaseE2ETest:
                 *getattr(self, "_submitted_connection_qns", ()),
                 self.connection_qualified_name,
             ]
+        self._dag_submitted = True
+        # The run id is recorded via _track_unsettled_run the instant _submit
+        # knows it — on a normal submit AND on the ambiguous-submit recovery
+        # path, from inside _submit rather than here. AE submit is
+        # non-idempotent: a submit that starts a run but then raises/times out
+        # must not leave an untracked orphan, so tracking cannot wait for this
+        # call to return. Cleared only once AE reports the run terminal; every
+        # exit in between — the watchdog, the ceiling, a no-worker verdict, a
+        # failed manifest check — leaves a run that teardown has to stop.
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
+        # Idempotent fallback for an overridden _submit that does not wire the
+        # sink: the returned id is tracked either way.
+        self._track_unsettled_run(run_id)
+        unsettled = self._unsettled_run_ids
 
         # Before the poll: submit is what makes Heracles fetch the tenant pod's
         # manifest and publish it over our seed, so this is the earliest point
@@ -4251,6 +4435,8 @@ class BaseE2ETest:
         await self._assert_deployed_manifest_matches(slug)
 
         ae_result = await self._poll_dag(run_id)
+        if ae_result.status.is_terminal and run_id in unsettled:
+            unsettled.remove(run_id)
 
         # Log-only, outcome-neutral. Placed after the poll so Elasticsearch
         # indexing lag cannot masquerade as an absence. See
@@ -4258,6 +4444,25 @@ class BaseE2ETest:
         await self._ae.probe_run_is_listed(slug, run_id)
 
         return await self._read_atlas(ae_result)
+
+    def _track_unsettled_run(self, run_id: str) -> None:
+        """Record an AE run id teardown must terminate if it never settles.
+
+        Called the instant a run id becomes known — on a normal submit AND on
+        the ambiguous-submit recovery path, which is why it is a sink
+        :meth:`_submit` hands to ``submit_workflow`` rather than an append the
+        caller does once the submit returns: AE submit is non-idempotent, so a
+        submit that starts a run and then raises/times out must still leave the
+        id tracked. Idempotent — the recovery hook and the normal 2xx return can
+        both fire for one submit.
+
+        Only :meth:`run_full_dag` submissions are tracked. The connection-delete
+        and seed-publish DAGs are tenant-served quick runs that settle on their
+        own, so they are intentionally not recorded here.
+        """
+        unsettled = self.__dict__.setdefault("_unsettled_run_ids", [])
+        if run_id not in unsettled:
+            unsettled.append(run_id)
 
     async def _submit(self, payload: dict[str, Any], *, slug: str) -> str:
         """POST the run to AE, with the tenant-app cold-start budget applied.
@@ -4273,12 +4478,15 @@ class BaseE2ETest:
         """
         retry = self._submit_retry()
         if retry is None:
-            return await self._ae.submit_workflow(payload, slug=slug)
+            return await self._ae.submit_workflow(
+                payload, slug=slug, on_run_id=self._track_unsettled_run
+            )
         return await self._ae.submit_workflow(
             payload,
             slug=slug,
             retries=retry.retries,
             retry_sleep_seconds=retry.sleep_seconds,
+            on_run_id=self._track_unsettled_run,
         )
 
     async def _poll_dag(self, run_id: str) -> DAGRunResult:
@@ -4699,6 +4907,24 @@ class BaseE2ETest:
                 {str(ref): value for ref, value in addressed_reads.items()},
             )
 
+        # Count the declared lineage edges (opt-in). Separate from the lineage
+        # presence read above: that one asks whether assets have lineage at
+        # all, and stays true when one kind of link silently stops landing.
+        edge_read: LineageEdgeRead | None = None
+        if dag.expected_lineage_edges:
+            edge_read = as_lineage_edges(
+                await atlas.count_lineage_edges(
+                    client,
+                    self.connection_qualified_name,
+                    list(dag.expected_lineage_edges),
+                )
+            )
+            logger.info(
+                "Lineage edges under %s: %s",
+                self.connection_qualified_name,
+                edge_read,
+            )
+
         return self._outcome(
             ae_result,
             connection_in_atlas=True,
@@ -4709,6 +4935,7 @@ class BaseE2ETest:
             sample_reads=sample_reads,
             attribute_reads=attribute_reads,
             addressed_reads=addressed_reads,
+            edge_read=edge_read,
         )
 
     async def _poll_asset_counts(
@@ -4779,6 +5006,7 @@ class BaseE2ETest:
         sample_reads: Mapping[str, SampleRead] | None = None,
         attribute_reads: Mapping[str, AttributeSampleRead] | None = None,
         addressed_reads: Mapping[AssetRef, AttributeSampleRead] | None = None,
+        edge_read: LineageEdgeRead | None = None,
     ) -> FullDAGOutcome:
         """Assemble the outcome, projecting each reading into its settled half.
 
@@ -4793,6 +5021,8 @@ class BaseE2ETest:
             sample_reads: Sampled qualified names as read.
             attribute_reads: Sampled attribute values as read.
             addressed_reads: Addressed assets' attribute values as read.
+            edge_read: Lineage processes per declared edge as read, when the
+                suite declared any.
 
         Returns:
             The outcome. Every reading is carried in both shapes: the settled
@@ -4828,6 +5058,12 @@ class BaseE2ETest:
             asset_qn_reads=samples,
             asset_attribute_reads=attributes,
             addressed_attribute_reads=dict(addressed_reads or {}),
+            lineage_edge_reads=edge_read,
+            lineage_edge_counts=(
+                {str(edge): count for edge, count in edge_read.counts.items()}
+                if edge_read is not None and not isinstance(edge_read, Unreadable)
+                else {}
+            ),
             connection_expected=self._dag.expect_connection,
         )
 
@@ -4863,6 +5099,7 @@ class BaseE2ETest:
             # which is exactly what "there is no connection to measure depth
             # from" should do.
             connection_qualified_name=getattr(self, "connection_qualified_name", ""),
+            lineage_edges=dict(dag.expected_lineage_edges),
         )
 
     def _asset_findings(
@@ -4973,6 +5210,30 @@ class BaseE2ETest:
             _render_finding(finding)
             for finding in self._asset_findings(asset_counts, total_assets=total_assets)
         ]
+
+    def _evaluate_lineage_edges(self, edge_reads: LineageEdgeRead | None) -> list[str]:
+        """Evaluate ``expected_lineage_edges`` against the observed edge counts.
+
+        For suites that crawl once in a fixture and assert piecemeal, which
+        never reach the full assertion ladder. Pass the outcome's
+        ``lineage_edge_reads``.
+
+        Args:
+            edge_reads: What the edge read answered, or ``None`` when none was
+                taken (graded as zero processes).
+
+        Returns:
+            One failure line per declared edge below its floor; empty when every
+            edge met it or none is declared.
+
+        Raises:
+            AtlasReadIndeterminateError: An edge could not be graded, because the
+                read failed or the scan stopped at its cap below the floor. Never
+                reported as a count of zero.
+        """
+        findings = evaluate_lineage_edges(edge_reads, self._asset_expectations())
+        self._raise_if_ungraded(findings)
+        return [_render_finding(finding) for finding in findings]
 
     def _validate_asset_locations(
         self, asset_qn_samples: Mapping[str, SampleRead]
@@ -5197,6 +5458,8 @@ class BaseE2ETest:
              landed or where.
           6. At least one Process/ColumnProcess exists (unless ``expect_lineage``
              is False).
+          7. Each edge declared in ``expected_lineage_edges`` (opt-in) is linked
+             by at least its floor of lineage processes.
 
         Assertions 2-6 are all about published inventory, so ``expect_connection
         = False`` drops them and leaves assertion 1 as the verdict. That is the
@@ -5368,8 +5631,11 @@ class BaseE2ETest:
         # as one is what sent an Atlas outage to the connector team as "the
         # floors were not met". It is raised first, and as a leaf that is not an
         # AssertionError, so pytest marks the leg an error rather than a failure.
+        edge_findings = evaluate_lineage_edges(
+            outcome.lineage_edge_reads, self._asset_expectations()
+        )
         self._raise_if_ungraded(
-            [*count_findings, *location_findings, *attribute_findings]
+            [*count_findings, *location_findings, *attribute_findings, *edge_findings]
         )
 
         asset_failures = [_render_finding(finding) for finding in count_findings]
@@ -5411,6 +5677,16 @@ class BaseE2ETest:
                 f"{outcome.connection_qualified_name}. The DAG's qi + "
                 "lineage-app + lineage-publish nodes reported success but "
                 "no lineage rows reached Atlas."
+            )
+
+        edge_failures = [_render_finding(finding) for finding in edge_findings]
+        if edge_failures:
+            raise AssertionError(
+                "Declared lineage edges are missing under "
+                f"{outcome.connection_qualified_name} (lineage may exist, but "
+                "not between these types):\n"
+                + "\n".join(edge_failures)
+                + f"\nObserved per edge: {outcome.lineage_edge_counts}"
             )
 
     def _unreadable_probe_findings(self, outcome: FullDAGOutcome) -> Sequence[Finding]:
@@ -5622,6 +5898,7 @@ class BaseE2ETest:
                     "asset_counts": dict(outcome.asset_counts),
                     "total_assets": outcome.total_assets,
                     "lineage_present": outcome.lineage_present,
+                    "lineage_edge_counts": dict(outcome.lineage_edge_counts),
                 }
             )
         artifacts = {"traceback.txt": safe_traceback(failure)}

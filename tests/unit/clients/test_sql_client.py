@@ -703,13 +703,15 @@ async def test_load_raises_when_db_config_missing():
 async def test_load_wraps_engine_failure_as_client_error(
     mock_create_engine: Any, sql_client: BaseSQLClient
 ):
-    """A sqlalchemy create_engine failure must be wrapped as SqlClientAuthFailedError and
-    the (partially constructed) engine disposed so connections do not leak."""
+    """A rejected login must be wrapped as SqlClientAuthFailedError and the
+    (partially constructed) engine disposed so connections do not leak."""
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
 
     # Force the connect-test inside run_in_thread to fail
-    actual_async_mock = AsyncMock(side_effect=RuntimeError("auth handshake failed"))
+    actual_async_mock = AsyncMock(
+        side_effect=RuntimeError("password authentication failed for user")
+    )
     with patch("application_sdk.clients.sql.run_in_thread", actual_async_mock):
         with pytest.raises(SqlClientAuthFailedError) as exc_info:
             await sql_client.load({"username": "u", "password": "p"})
@@ -1253,7 +1255,7 @@ async def test_async_load_disposes_engine_on_failure(
 
     class _FailingCtx:
         async def __aenter__(self_inner):
-            raise RuntimeError("auth failed")
+            raise RuntimeError("password authentication failed for user")
 
         async def __aexit__(self_inner, exc_type, exc, tb):
             return None
