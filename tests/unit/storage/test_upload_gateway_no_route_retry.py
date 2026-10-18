@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.errors import STORAGE_GATEWAY_NO_ROUTE
 from application_sdk.storage import ops
 from application_sdk.storage.errors import StorageError, StorageGatewayNoRouteError
 from application_sdk.storage.ops import upload_file
@@ -155,6 +156,9 @@ def test_storage_error_for_classifies_gateway_no_route() -> None:
 
     assert isinstance(err, StorageGatewayNoRouteError)
     assert err.code == "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE"
+    assert err.error_code is STORAGE_GATEWAY_NO_ROUTE
+    assert STORAGE_GATEWAY_NO_ROUTE.code == "AAF-STR-012"
+    assert str(err).startswith("[AAF-STR-012] ")
     assert err.http_status == 404
     assert err.suggested_action
 
