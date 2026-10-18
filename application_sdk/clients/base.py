@@ -353,9 +353,8 @@ class BaseClient(ClientInterface):
                 )
                 return response
             except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
-                return _request_failed(
-                    "GET", url, exc, raise_on_error
-                )  # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
+                # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
+                return _request_failed("GET", url, exc, raise_on_error)
 
     @overload
     async def execute_http_post_request(
@@ -497,9 +496,8 @@ class BaseClient(ClientInterface):
                 )
                 return response
             except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
-                return _request_failed(
-                    "POST", url, exc, raise_on_error
-                )  # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
+                # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
+                return _request_failed("POST", url, exc, raise_on_error)
 
 
 def _warn_if_raise_on_error_unset(
