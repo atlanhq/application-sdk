@@ -20,6 +20,7 @@ from ._helpers import (
     _handler_rebinds_exception,
     _has_exc_info,
     _inherits_logging_filter,
+    _is_empty_sentinel,
     _is_gather_call,
     _is_log_call_stmt,
     _iter_shallow,
@@ -1056,18 +1057,53 @@ class SilentSwallowMixin:
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
-            if _any_logging_in(node.body[:i]) or self._helper_logs_caught_exception(
-                node, node.body[:i]
-            ):
-                continue
             if scope is not None and _return_carries_typed_failure(stmt, scope):
                 continue
-            self._add(
-                "E007",
-                stmt,
-                "except block returns a value without logging — the error is hidden. "
-                "Log before returning or raise a domain-specific exception.",
+            if not (
+                _any_logging_in(node.body[:i])
+                or self._helper_logs_caught_exception(node, node.body[:i])
+            ):
+                self._add(
+                    "E007",
+                    stmt,
+                    "except block returns a value without logging — the error is hidden. "
+                    "Log before returning or raise a domain-specific exception.",
+                )
+            elif self._is_logged_sentinel_return(node, stmt):
+                self._add(
+                    "E007",
+                    stmt,
+                    "broad except block logs and then returns an empty sentinel — the "
+                    "log line is the only trace, and the caller sees a plausible empty "
+                    "result with no error code. Raise a domain-specific exception, or "
+                    "return the failure as typed data.",
+                )
+
+    def _is_logged_sentinel_return(
+        self, handler: ast.ExceptHandler, stmt: ast.Return
+    ) -> bool:
+        # Logging does not make a broad catch's empty return safe: the caller
+        # still cannot tell the failure from a genuine empty result. Narrow
+        # catches stay out — `except KeyError: ...; return None` is usually the
+        # lookup's contract. So do procedures (`-> None`), where `return None`
+        # is a plain early exit, and wholesale-deprecated modules, which are
+        # being removed rather than fixed.
+        if self._deprecated_module or not _is_empty_sentinel(stmt.value):
+            return False
+        if handler.type is None:
+            broad = True
+        elif isinstance(handler.type, ast.Tuple):
+            broad = any(
+                _get_name(element) in _BROAD_EXCEPT_TYPES
+                for element in handler.type.elts
             )
+        else:
+            broad = _get_name(handler.type) in _BROAD_EXCEPT_TYPES
+        if not broad:
+            return False
+        function = self._function_stack[-1] if self._function_stack else None
+        returns = function.returns if function is not None else None
+        return not (isinstance(returns, ast.Constant) and returns.value is None)
 
     # ── E008 ─────────────────────────────────────────────────────────────────
 
