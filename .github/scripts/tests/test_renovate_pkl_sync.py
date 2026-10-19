@@ -424,6 +424,35 @@ def test_prefixed_swap_clears_orphans(repo, monkeypatch):
     assert not (repo / "app" / "generated" / "removed-entrypoint.json").exists()
 
 
+def _tracked(repo: Path, path: str) -> bool:
+    return bool(
+        subprocess.run(
+            ["git", "ls-files", "--", path], cwd=repo, capture_output=True, text=True
+        ).stdout.strip()
+    )
+
+
+def test_sync_commits_a_dropped_caller_node_but_not_app_owned_files(repo, monkeypatch):
+    """FND-3563: a contract that stops emitting its only caller node leaves no
+    `contract/generated/` dir, so the deletion must still be staged. An app-owned
+    file beside the nodes is never staged, even when it has changed."""
+    callers = repo / "contract" / "generated"
+    (callers / "keifu").mkdir(parents=True)
+    (callers / "keifu" / "input.pkl").write_text("stale\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "caller node")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, layout="prefixed"))
+    # Uncommitted app work in progress beside the node.
+    (callers / "notes.md").write_text("app-owned\n")
+
+    assert mod.main(["--regenerate", "true"]) == 0
+
+    assert not (callers / "keifu").exists()
+    assert not _tracked(repo, "contract/generated/keifu/input.pkl")
+    assert not _tracked(repo, "contract/generated/notes.md")
+    assert (callers / "notes.md").read_text() == "app-owned\n"
+
+
 def test_post_generate_script_runs_after_swap(repo, monkeypatch):
     """An app whose generate task installs a hand-maintained artifact over the
     toolkit output ships contract/post-generate.sh; without it the swap reverts
