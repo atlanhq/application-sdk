@@ -1,6 +1,6 @@
 import asyncio
 import warnings
-from typing import Any
+from typing import Any, Literal, overload
 
 import httpx
 from httpx import Headers
@@ -13,9 +13,16 @@ from httpx._types import (
 )
 
 from application_sdk.clients._interface import ClientInterface
+from application_sdk.clients.http_errors import HttpClientSourceUnavailableError
 from application_sdk.clients.sql_errors import AbstractClientLoadError
 from application_sdk.clients.ssl_utils import get_ssl_context
-from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
+from application_sdk.constants import (
+    _HTTP_CONNECT_RETRIES,
+    _HTTP_POOL_LIMITS,
+    _HTTP_POOL_TIMEOUT_SECONDS,
+)
+from application_sdk.errors.http import classify_http_exception
+from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -60,11 +67,12 @@ class BaseClient(ClientInterface):
     Attributes:
         credentials (Dict[str, Any]): Client credentials for authentication.
         http_headers (HeaderTypes): HTTP headers for all http requests made by this client. Supports dict, Headers object, or list of tuples.
-        http_retry_transporter (httpx.AsyncBaseTransport): HTTP transport for requests. Uses httpx default transport by default.
-            Can be overridden in load() method for custom retry behavior.
+        http_retry_transport (httpx.AsyncBaseTransport): HTTP transport for requests. Defaults to an
+            httpx transport that retries connection setup up to 3 times. Can be overridden in load()
+            for custom retry behavior.
 
     Extending the Client:
-        To customize retry behavior, subclasses can override the http_retry_transporter
+        To customize retry behavior, subclasses can override the http_retry_transport
         in the load() method, similar to how http_headers is set:
 
         Example:
@@ -81,7 +89,7 @@ class BaseClient(ClientInterface):
             ...         # For advanced retry logic with status code handling, use httpx-retries:
             ...         # from httpx_retries import Retry, RetryTransport
             ...         # retry = Retry(total=5, backoff_factor=20)
-            ...         # self.http_retry_transporter = RetryTransport(retry=retry) #replace transport with custom transport if needed
+            ...         # self.http_retry_transport = RetryTransport(retry=retry) #replace transport with custom transport if needed
 
         Advanced Retry Configuration:
             For applications requiring advanced retry logic (e.g., status code-based retries,
@@ -101,7 +109,7 @@ class BaseClient(ClientInterface):
             ...             backoff_factor=10,
             ...             status_forcelist=[429, 500, 502, 503, 504]
             ...         )
-            ...         self.http_retry_transporter = RetryTransport(retry=retry)
+            ...         self.http_retry_transport = RetryTransport(retry=retry)
 
         Header Management:
             The client supports a two-level header system using httpx Headers for merging headers:
@@ -133,10 +141,13 @@ class BaseClient(ClientInterface):
         self.credentials = credentials
         self.http_headers = http_headers
 
-        # Use httpx default transport with pool limits to prevent CLOSE_WAIT
-        # zombie socket accumulation (see BLDX-1153).
+        # Pool limits prevent CLOSE_WAIT zombie socket accumulation (see
+        # BLDX-1153). httpcore retries only connection setup (ConnectError,
+        # ConnectTimeout), before any request bytes are sent, so the retries
+        # are safe for POST.
         self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
             limits=_HTTP_POOL_LIMITS,
+            retries=_HTTP_CONNECT_RETRIES,
         )
         # The transport entered by the first request and not yet exited by
         # close(). While set, its connection pool may hold sockets.
@@ -228,6 +239,7 @@ class BaseClient(ClientInterface):
         if entered is not self.http_retry_transport:
             await self.http_retry_transport.aclose()
 
+    @overload
     async def execute_http_get_request(
         self,
         url: str,
@@ -235,13 +247,41 @@ class BaseClient(ClientInterface):
         params: QueryParamTypes | None = None,
         auth: AuthTypes | None = None,
         timeout: int = 10,
+        *,
+        raise_on_error: Literal[True],
+    ) -> httpx.Response: ...
+
+    @overload
+    async def execute_http_get_request(
+        self,
+        url: str,
+        headers: HeaderTypes | None = None,
+        params: QueryParamTypes | None = None,
+        auth: AuthTypes | None = None,
+        timeout: int = 10,
+        *,
+        raise_on_error: bool | None = None,
+    ) -> httpx.Response | None: ...
+
+    async def execute_http_get_request(
+        self,
+        url: str,
+        headers: HeaderTypes | None = None,
+        params: QueryParamTypes | None = None,
+        auth: AuthTypes | None = None,
+        timeout: int = 10,
+        *,
+        raise_on_error: bool | None = None,
     ) -> httpx.Response | None:
         """
         Perform an HTTP GET request using the configured transport.
 
-        This method uses httpx default transport which only retries on network-level errors
-        (connection failures, timeouts). For status code-based retries (429, 500, etc.),
-        consider overriding http_retry_transport in the load() method using httpx-retries library.
+        The default transport retries connection setup (connect errors and
+        connect timeouts) up to 3 times. It does not retry read errors, read
+        timeouts or HTTP status codes, and any response, including 4xx and
+        5xx, is returned as is. For status code-based retries (429, 500,
+        etc.), override http_retry_transport in load(), for example with the
+        httpx-retries library.
 
         Args:
             url (str): The URL to make the GET request to
@@ -249,9 +289,22 @@ class BaseClient(ClientInterface):
             params (Optional[QueryParamTypes]): Query parameters to include in the request. Supports dict, list of tuples, or string.
             auth (Optional[AuthTypes]): Authentication to use for the request. Supports BasicAuth, DigestAuth, custom auth classes, or tuples for basic auth.
             timeout (int): Request timeout in seconds. Defaults to 10.
+            raise_on_error (Optional[bool]): When True, a request the source
+                did not answer (network failure, timeout, dropped connection)
+                raises HttpClientSourceUnavailableError, and any other exception,
+                including httpx.PoolTimeout, propagates unchanged.
+                When False, every exception is logged and None is returned.
+                Leaving it unset behaves like False and emits a
+                DeprecationWarning: the default becomes True in v4.0.
 
         Returns:
-            Optional[httpx.Response]: The HTTP response if successful, None if failed
+            Optional[httpx.Response]: The HTTP response. None if the request
+            failed and raise_on_error is not True.
+
+        Raises:
+            HttpClientSourceUnavailableError: A SourceUnavailableError, if
+                raise_on_error is True and the source did not answer. The
+                httpx error is carried as ``cause``.
 
         Example:
             >>> # Using Basic Authentication
@@ -259,23 +312,27 @@ class BaseClient(ClientInterface):
             >>> response = await client.execute_http_get_request(
             ...     url="https://api.example.com/data",
             ...     auth=BasicAuth("username", "password"),
-            ...     params={"limit": 100}
+            ...     params={"limit": 100},
+            ...     raise_on_error=True,
             ... )
             >>>
             >>> # Using tuple for basic auth (username, password)
             >>> response = await client.execute_http_get_request(
             ...     url="https://api.example.com/data",
             ...     auth=("username", "password"),
-            ...     params={"limit": 100}
+            ...     params={"limit": 100},
+            ...     raise_on_error=True,
             ... )
             >>>
             >>> # Using custom headers for Bearer token
             >>> response = await client.execute_http_get_request(
             ...     url="https://api.example.com/data",
             ...     headers={"Authorization": "Bearer token"},
-            ...     params={"limit": 100}
+            ...     params={"limit": 100},
+            ...     raise_on_error=True,
             ... )
         """
+        _warn_if_raise_on_error_unset("execute_http_get_request", raise_on_error)
         ssl_context = get_ssl_context()
         transport = await self._borrow_transport()
         async with httpx.AsyncClient(
@@ -295,14 +352,45 @@ class BaseClient(ClientInterface):
                     auth=auth if auth is not None else httpx.USE_CLIENT_DEFAULT,
                 )
                 return response
-            except httpx.HTTPStatusError as e:
-                logger.error(
-                    "HTTP error for %s: %s", url, e.response.status_code, exc_info=True
-                )
-                return None
-            except Exception:
-                logger.error("Request failed for %s", url, exc_info=True)
-                return None
+            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+                # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
+                return _request_failed("GET", url, exc, raise_on_error)
+
+    @overload
+    async def execute_http_post_request(
+        self,
+        url: str,
+        data: RequestData | None = None,
+        json_data: Any | None = None,
+        content: bytes | None = None,
+        files: RequestFiles | None = None,
+        headers: HeaderTypes | None = None,
+        params: QueryParamTypes | None = None,
+        cookies: dict[str, str] | None = None,
+        auth: AuthTypes | None = None,
+        follow_redirects: bool = True,
+        timeout: int = 30,
+        *,
+        raise_on_error: Literal[True],
+    ) -> httpx.Response: ...
+
+    @overload
+    async def execute_http_post_request(
+        self,
+        url: str,
+        data: RequestData | None = None,
+        json_data: Any | None = None,
+        content: bytes | None = None,
+        files: RequestFiles | None = None,
+        headers: HeaderTypes | None = None,
+        params: QueryParamTypes | None = None,
+        cookies: dict[str, str] | None = None,
+        auth: AuthTypes | None = None,
+        follow_redirects: bool = True,
+        timeout: int = 30,
+        *,
+        raise_on_error: bool | None = None,
+    ) -> httpx.Response | None: ...
 
     async def execute_http_post_request(
         self,
@@ -317,13 +405,19 @@ class BaseClient(ClientInterface):
         auth: AuthTypes | None = None,
         follow_redirects: bool = True,
         timeout: int = 30,
+        *,
+        raise_on_error: bool | None = None,
     ) -> httpx.Response | None:
         """
         Perform an HTTP POST request using the configured transport.
 
-        This method uses httpx default transport which only retries on network-level errors
-        (connection failures, timeouts). For status code-based retries (429, 500, etc.),
-        consider overriding http_retry_transport in the load() method using httpx-retries library.
+        The default transport retries connection setup (connect errors and
+        connect timeouts) up to 3 times; no request bytes have been sent at
+        that point, so the retry is safe for POST. It does not retry read
+        errors, read timeouts or HTTP status codes, and any response,
+        including 4xx and 5xx, is returned as is. For status code-based
+        retries (429, 500, etc.), override http_retry_transport in load(),
+        for example with the httpx-retries library.
 
         Args:
             url (str): The URL to make the POST request to
@@ -337,9 +431,22 @@ class BaseClient(ClientInterface):
             auth (Optional[AuthTypes]): Authentication to use for the request. Supports BasicAuth, DigestAuth, custom auth classes, or tuples for basic auth.
             follow_redirects (bool): Whether to follow HTTP redirects. Defaults to True.
             timeout (int): Request timeout in seconds. Defaults to 30.
+            raise_on_error (Optional[bool]): When True, a request the source
+                did not answer (network failure, timeout, dropped connection)
+                raises HttpClientSourceUnavailableError, and any other exception,
+                including httpx.PoolTimeout, propagates unchanged.
+                When False, every exception is logged and None is returned.
+                Leaving it unset behaves like False and emits a
+                DeprecationWarning: the default becomes True in v4.0.
 
         Returns:
-            Optional[httpx.Response]: The HTTP response if successful, None if failed
+            Optional[httpx.Response]: The HTTP response. None if the request
+            failed and raise_on_error is not True.
+
+        Raises:
+            HttpClientSourceUnavailableError: A SourceUnavailableError, if
+                raise_on_error is True and the source did not answer. The
+                httpx error is carried as ``cause``.
 
         Example:
             >>> # Basic JSON POST request with authentication
@@ -348,7 +455,8 @@ class BaseClient(ClientInterface):
             ...     url="https://api.example.com/data",
             ...     json_data={"name": "test", "value": 123},
             ...     headers={"Content-Type": "application/json"},
-            ...     auth=BasicAuth("username", "password")
+            ...     auth=BasicAuth("username", "password"),
+            ...     raise_on_error=True,
             ... )
             >>>
             >>> # File upload with basic auth tuple
@@ -357,9 +465,11 @@ class BaseClient(ClientInterface):
             ...         url="https://api.example.com/upload",
             ...         data={"description": "My file"},
             ...         files={"file": ("file.txt", f.read(), "text/plain")},
-            ...         auth=("username", "password")
+            ...         auth=("username", "password"),
+            ...         raise_on_error=True,
             ... )
         """
+        _warn_if_raise_on_error_unset("execute_http_post_request", raise_on_error)
         ssl_context = get_ssl_context()
         transport = await self._borrow_transport()
         async with httpx.AsyncClient(
@@ -385,11 +495,71 @@ class BaseClient(ClientInterface):
                     follow_redirects=follow_redirects,
                 )
                 return response
-            except httpx.HTTPStatusError as e:
-                logger.error(
-                    "HTTP error for %s: %s", url, e.response.status_code, exc_info=True
-                )
-                return None
-            except Exception:
-                logger.error("Request failed for %s", url, exc_info=True)
-                return None
+            except Exception as exc:  # conformance: ignore[E004] _request_failed logs with exc_info or raises typed
+                # conformance: ignore[E007] deprecated None-on-failure contract until v4.0
+                return _request_failed("POST", url, exc, raise_on_error)
+
+
+def _warn_if_raise_on_error_unset(
+    method_name: str, raise_on_error: bool | None
+) -> None:
+    """Warn a caller still relying on the deprecated ``None``-on-failure default."""
+    if raise_on_error is None:
+        warnings.warn(
+            f"BaseClient.{method_name} returns None when a request fails unless "
+            "raise_on_error=True is passed, which raises SourceUnavailableError "
+            "instead. The default becomes raise_on_error=True in v4.0; pass "
+            "raise_on_error=True (or False to keep None) explicitly.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+
+
+def _endpoint(url: str) -> str:
+    """The request URL's scheme, host and port only.
+
+    Userinfo, query and fragment can carry secrets, and so can a path segment
+    (``/keys/<token>/``), which no redaction pattern recognises. Every failure
+    this names got no response from the source, so the host is what locates
+    it; the caller's own frames say which call it was.
+    """
+    try:
+        parsed = httpx.URL(url)
+        if not parsed.host:
+            return "<invalid url>"
+        return str(httpx.URL(scheme=parsed.scheme, host=parsed.host, port=parsed.port))
+    except httpx.InvalidURL:
+        # No exc_info and no URL: the unparsed URL may hold a credential.
+        logger.debug("Request URL could not be parsed; logged as <invalid url>")
+        return "<invalid url>"
+
+
+def _request_failed(
+    method: str, url: str, exc: Exception, raise_on_error: bool | None
+) -> None:
+    """Handle an exception from an HTTP helper request.
+
+    With ``raise_on_error``, a failure that :func:`classify_http_exception`
+    attributes to the source (a network failure, a timeout, a dropped
+    connection) becomes :class:`HttpClientSourceUnavailableError`; anything else,
+    including ``httpx.PoolTimeout``, an unsupported scheme and a redirect
+    loop, is re-raised unchanged. Without it, the exception is logged and the
+    helper returns ``None``.
+
+    The log carries the full traceback through ``exc_info``. The logger
+    redacts URL userinfo, query and fragment values in it, in the message,
+    the chained causes and the source lines, before anything leaves.
+    """
+    endpoint = _endpoint(url)
+    if raise_on_error:
+        if classify_http_exception(exc) is SourceUnavailableError:
+            network_error = type(exc).__name__
+            raise HttpClientSourceUnavailableError(
+                message=f"HTTP {method} {endpoint} failed: {network_error}",
+                endpoint=endpoint,
+                network_error=network_error,
+                cause=exc,
+            ) from exc
+        raise exc
+    logger.error("Request failed for %s %s", method, endpoint, exc_info=exc)
+    return None

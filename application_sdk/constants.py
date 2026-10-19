@@ -737,6 +737,9 @@ _HTTP_POOL_LIMITS = httpx.Limits(
     keepalive_expiry=30.0,
 )
 _HTTP_POOL_TIMEOUT_SECONDS = 30.0
+# BaseClient's default transport retries a failed connection setup this many
+# times (httpcore backoff: 0s, 0.5s, 1s) before the request fails.
+_HTTP_CONNECT_RETRIES = 3
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
