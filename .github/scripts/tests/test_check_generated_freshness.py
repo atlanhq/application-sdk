@@ -144,6 +144,20 @@ def test_drift_when_caller_node_is_stale(repo, monkeypatch):
     assert caller.read_text() == "fresh\n"
 
 
+def test_drift_when_a_caller_node_is_no_longer_emitted(repo, monkeypatch):
+    """A committed caller node for an entrypoint the contract dropped is stale.
+    The fresh eval does not emit it, so regeneration removes it: drift."""
+    caller = repo / "contract" / "generated" / "keifu" / "input.pkl"
+    caller.parent.mkdir(parents=True)
+    caller.write_text("stale\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "caller node")
+    monkeypatch.setattr(sync, "run", _fake_run())
+
+    assert mod.main([]) == 1
+    assert not caller.exists()
+
+
 def test_opt_out_skips_check(repo, monkeypatch):
     called = {"pkl": False}
 

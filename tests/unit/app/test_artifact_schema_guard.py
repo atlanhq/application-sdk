@@ -287,6 +287,36 @@ class TestGeneratedLayouts:
         unknown = _declared_artifact_schema_keys("mine-queries", layout="multi")
         assert unknown.path == Path("app/generated/mine-queries/artifact_schemas.json")
 
+    def test_pure_system_bundle_names_the_snake_case_dir(self, tmp_path: Path) -> None:
+        """FND-3563: a pure system bundle writes no manifest.json, so its layout
+        is unknown, but its entry point's generated dir says where the file goes."""
+        generated = tmp_path / "app" / "generated"
+        (generated / "usage_analysis").mkdir(parents=True)
+        (generated / "usage_analysis" / "_input.py").write_text("")
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class PureSystemBundleApp(App):
+                name = "pure-system-bundle-app"
+
+                @entrypoint
+                async def usage_analysis(self, input: DeclaredInput) -> PlainOutput:
+                    return PlainOutput()
+
+                @entrypoint
+                async def digest(self, input: PlainInput) -> PlainOutput:
+                    return PlainOutput()
+
+        messages = _boundary_warnings(recorded)
+        assert len(messages) == 1, messages
+        assert (
+            "so it lands in app/generated/usage_analysis/artifact_schemas.json"
+            in messages[0]
+        )
+        # No generated dir for this entry point: still names nothing.
+        assert _declared_artifact_schema_keys("digest", layout="unknown").path is None
+
     def test_nested_declaration_does_not_answer_for_a_sibling(
         self, tmp_path: Path
     ) -> None:
