@@ -1638,6 +1638,7 @@ def test_resync_keeps_an_explicit_secrets_mapping(
     assert _EXPLICIT_SECRETS_BLOCK in after
     # Line-exact: the block's own comment mentions `secrets: inherit` by name.
     assert "    secrets: inherit\n" not in after
+    assert "      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}\n" in after
 
 
 def test_resync_keeps_force_external_runtime(

@@ -8,6 +8,7 @@ without creating a cycle -- see bootstrap/extract.py's module docstring.
 from __future__ import annotations
 
 import pytest
+import yaml
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
@@ -29,6 +30,7 @@ from conformance.bootstrap.extract import (
     unpreservable_secrets_form,
     unpreserved_declarations,
     unpreserved_tests_yaml_declarations,
+    with_required_secrets,
 )
 from conformance.bootstrap.render import render
 
@@ -667,9 +669,17 @@ def test_extract_secrets_block_captures_the_mapping_and_its_comments() -> None:
 def test_extract_secrets_block_round_trips_through_render() -> None:
     """The property --resync depends on: rendering an extracted block reads back
     as the same block, so a resynced file resyncs again unchanged."""
-    once = render("tests.yaml", app_name="widget", secrets_block=_EXPLICIT_SECRETS)
-    assert extract_secrets_block(once) == _EXPLICIT_SECRETS
+    resynced = with_required_secrets(_EXPLICIT_SECRETS)
+    once = render("tests.yaml", app_name="widget", secrets_block=resynced)
+    assert extract_secrets_block(once) == resynced
     assert render("tests.yaml", **extract_tests_yaml_params(once)) == once
+
+
+def test_a_mapping_without_a_required_secret_is_not_a_fixed_point() -> None:
+    before = render("tests.yaml", app_name="widget", secrets_block=_EXPLICIT_SECRETS)
+    after = render("tests.yaml", **extract_tests_yaml_params(before))
+    assert after != before
+    assert render("tests.yaml", **extract_tests_yaml_params(after)) == after
 
 
 def test_extract_secrets_block_empty_for_inherit() -> None:
@@ -738,7 +748,90 @@ def test_extract_tests_yaml_params_carries_both_fnd604_values() -> None:
     )
     params = extract_tests_yaml_params(text)
     assert params["force_external_runtime"] == "true"
-    assert params["secrets_block"] == _EXPLICIT_SECRETS
+    assert params["secrets_block"] == with_required_secrets(_EXPLICIT_SECRETS)
+    assert params["secrets_block"].startswith(_EXPLICIT_SECRETS)
+
+
+def test_with_required_secrets_appends_a_missing_passthrough() -> None:
+    block = with_required_secrets(_EXPLICIT_SECRETS)
+    assert block.endswith(
+        "\n      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}"
+    )
+    rendered = render("tests.yaml", app_name="widget", secrets_block=block)
+    job = next(
+        j
+        for j in yaml.safe_load(rendered)["jobs"].values()
+        if "tests-reusable" in str(j.get("uses", ""))
+    )
+    original = yaml.safe_load(
+        render("tests.yaml", app_name="widget", secrets_block=_EXPLICIT_SECRETS)
+    )
+    original_job = next(
+        j
+        for j in original["jobs"].values()
+        if "tests-reusable" in str(j.get("uses", ""))
+    )
+    assert job["secrets"] == {
+        **original_job["secrets"],
+        "TWINGATE_SHARED_KEY": "${{ secrets.TWINGATE_SHARED_KEY }}",
+    }
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}",
+        '"TWINGATE_SHARED_KEY": ${{ secrets.SOMETHING_ELSE }}',
+    ],
+)
+def test_with_required_secrets_leaves_a_declared_name_alone(declared: str) -> None:
+    block = f"    secrets:\n      A: ${{{{ secrets.A }}}}\n      {declared}"
+    assert with_required_secrets(block) == block
+
+
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "twingate_shared_key: ${{ secrets.TWINGATE_SHARED_KEY }}",
+        "'TWINGATE_SHARED_KEY': ${{ secrets.TWINGATE_SHARED_KEY }}",
+        "TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}  # org secret",
+    ],
+)
+def test_with_required_secrets_reads_other_spellings_as_declared(
+    declared: str,
+) -> None:
+    block = f"    secrets:\n      A: ${{{{ secrets.A }}}}\n      {declared}"
+    assert with_required_secrets(block) == block
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "    secrets:\n      A: x\n      TWINGATE_SHARED_KEY : ${{ secrets.T }}",
+        "    secrets:",
+        "    with:\n      a: b",
+        "    secrets:\n\tA: x",
+        "",
+    ],
+)
+def test_with_required_secrets_leaves_an_unreadable_mapping_alone(block: str) -> None:
+    assert with_required_secrets(block) == block
+
+
+def test_with_required_secrets_appends_after_a_trailing_comment() -> None:
+    block = "    secrets:\n      A: ${{ secrets.A }}\n      # last note"
+    assert with_required_secrets(block) == (
+        block + "\n      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}"
+    )
+
+
+def test_with_required_secrets_is_idempotent() -> None:
+    once = with_required_secrets(_EXPLICIT_SECRETS)
+    assert with_required_secrets(once) == once
+
+
+def test_inherit_gets_no_secrets_block() -> None:
+    assert "secrets_block" not in extract_tests_yaml_params(render("tests.yaml"))
 
 
 @pytest.mark.parametrize(

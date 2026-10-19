@@ -8,6 +8,7 @@ from pathlib import Path
 import obstore
 import pytest
 
+from application_sdk.storage import transfer
 from application_sdk.storage.batch import download_prefix, upload_prefix
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes
@@ -65,6 +66,48 @@ async def test_rewritten_artifact_ignores_stale_local_marker(
     )
     assert marker.read_text() == stale_digest
     assert artifact.exists() is retain_local_copy
+
+
+async def test_upload_prefix_after_transfer_upload_keeps_sidecar_honest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The incident's composition, with the marker the SDK itself writes.
+
+    ``transfer.upload`` (what ``App.upload`` runs) stamps a fingerprinted local
+    marker beside each file; a later ``upload_prefix`` over the same rewritten
+    tree must not ship it. ``max_concurrency=1`` makes the marker land after
+    the data's sidecar every time, so the pre-fix bug fails here
+    deterministically instead of on whichever concurrent write finishes last.
+    """
+    monkeypatch.setattr("application_sdk.constants.TEMPORARY_PATH", str(tmp_path))
+    store = create_memory_store()
+    source = tmp_path / "raw"
+    source.mkdir()
+    artifact = source / "result-0.json"
+    original = b'{"items": [1, 2]}'
+    artifact.write_bytes(original)
+    await transfer.upload(str(source), "remote", store=store)
+
+    # Precondition: transfer.upload stamped a local marker for these bytes.
+    marker = artifact.with_name(artifact.name + ".sha256")
+    assert marker.read_text().split()[0] == hashlib.sha256(original).hexdigest()
+
+    rewritten = b'{"items": [1]}'
+    artifact.write_bytes(rewritten)
+    uploaded = await upload_prefix(
+        source, "remote", store, normalize=False, max_concurrency=1
+    )
+
+    key = "remote/result-0.json"
+    assert uploaded == [key]
+    assert await _get_bytes(key + ".sha256", store, normalize=False) == (
+        hashlib.sha256(rewritten).hexdigest().encode()
+    )
+    destination = tmp_path / "download"
+    await download_prefix(
+        "remote/", destination, store, normalize=False, strip_prefix=True
+    )
+    assert (destination / "result-0.json").read_bytes() == rewritten
 
 
 async def test_marker_only_directory_uploads_no_objects(tmp_path: Path) -> None:

@@ -39,7 +39,7 @@ entirely.
 
 from __future__ import annotations
 
-import asyncio
+import itertools
 import os
 import tempfile
 import time
@@ -561,7 +561,7 @@ async def _persist_directory(
         prefix: Target prefix, with or without a trailing ``/``.
     """
     from application_sdk.storage._concurrency import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _gather_with_semaphore,
+        _run_bounded,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _put,
@@ -619,9 +619,11 @@ async def _persist_directory(
         )
         return entry, transferred
 
-    sem = asyncio.Semaphore(max_concurrency)
-    results = await _gather_with_semaphore(
-        [*(_one_local(fp) for fp in files), *(_one_copy(c) for c in copies)], sem
+    results = await _run_bounded(
+        itertools.chain(
+            (_one_local(fp) for fp in files), (_one_copy(c) for c in copies)
+        ),
+        max_concurrency,
     )
     transferred = sum(1 for _, moved in results if moved)
 
@@ -1609,13 +1611,11 @@ async def _materialize_directory(
         from application_sdk.constants import (  # noqa: PLC0415
             MAX_CONCURRENT_STORAGE_TRANSFERS,
         )
-        from application_sdk.storage._concurrency import (  # noqa: PLC0415
-            _gather_with_semaphore,
-        )
+        from application_sdk.storage._concurrency import _run_bounded  # noqa: PLC0415
 
-        sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
-        results = await _gather_with_semaphore(
-            [_download_one(obj, digest) for obj, digest in items], sem
+        results = await _run_bounded(
+            (_download_one(obj, digest) for obj, digest in items),
+            MAX_CONCURRENT_STORAGE_TRANSFERS,
         )
         skipped = sum(results)
     except Exception as exc:
