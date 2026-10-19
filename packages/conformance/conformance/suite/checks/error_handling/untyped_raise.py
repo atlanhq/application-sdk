@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 
 from ._constants import (
     ACTIVITY_DECORATORS,
@@ -13,6 +14,58 @@ from ._constants import (
     LEGACY_ATLAN_ERRORS,
 )
 from ._helpers import _get_decorator_names, _raise_exc_name
+from ._sdk_errors import names_sdk_error
+
+
+def _qualified_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _qualified_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else None
+    return None
+
+
+def _raised_type_name(raise_node: ast.Raise) -> str | None:
+    if raise_node.exc is None:
+        return None
+    raised_type = (
+        raise_node.exc.func if isinstance(raise_node.exc, ast.Call) else raise_node.exc
+    )
+    return _qualified_name(raised_type)
+
+
+def _builtin_type(node: ast.expr) -> type[BaseException] | None:
+    if isinstance(node, ast.Name):
+        name = node.id
+    elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        if node.value.id != "builtins":
+            return None
+        name = node.attr
+    else:
+        return None
+    exception_type = getattr(builtins, name, None)
+    if not isinstance(exception_type, type) or not issubclass(
+        exception_type, BaseException
+    ):
+        return None
+    return exception_type
+
+
+def _handler_catches_builtin(handler: ast.ExceptHandler, raised_name: str) -> bool:
+    raised_type = getattr(builtins, raised_name, None)
+    if not isinstance(raised_type, type) or not issubclass(raised_type, BaseException):
+        return False
+    if handler.type is None:
+        return True
+    caught_nodes = (
+        handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+    )
+    return any(
+        (caught_type := _builtin_type(caught_node)) is not None
+        and issubclass(raised_type, caught_type)
+        for caught_node in caught_nodes
+    )
 
 
 class UntypedRaiseMixin:
@@ -36,13 +89,39 @@ class UntypedRaiseMixin:
 
     # ── E012 ─────────────────────────────────────────────────────────────────
 
+    def _handler_translates_to_typed_error(self, handler: ast.ExceptHandler) -> bool:
+        statements = [
+            stmt
+            for stmt in handler.body
+            if not (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and isinstance(stmt.value.value, str)
+            )
+        ]
+        if len(statements) != 1 or not isinstance(statements[0], ast.Raise):
+            return False
+        translated = statements[0]
+        return translated.exc is not None and names_sdk_error(
+            self._sdk_errors, _raised_type_name(translated)
+        )
+
+    def _has_typed_translation_boundary(self, node: ast.Raise, exc_name: str) -> bool:
+        for try_node in reversed(self._try_stack):
+            for handler in try_node.handlers:
+                if _handler_catches_builtin(handler, exc_name):
+                    return self._handler_translates_to_typed_error(handler)
+        return False
+
     def _check_p012(self, node: ast.Raise) -> None:
         if node.exc is None:
             return
         exc_name = _raise_exc_name(node.exc)
         if exc_name not in BUILTIN_RAISES:
             return
-        if self._in_interop_context():
+        if self._in_interop_context() or self._has_typed_translation_boundary(
+            node, exc_name
+        ):
             return
         activity_note = (
             " (NOTE: inside activity/task — AE receives an opaque string, no typed envelope)"

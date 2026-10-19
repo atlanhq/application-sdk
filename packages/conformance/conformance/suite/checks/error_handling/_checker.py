@@ -98,6 +98,7 @@ class Checker(
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._module: ast.Module | None = None
         self._except_stack: list[ast.ExceptHandler] = []
+        self._try_stack: list[ast.Try] = []
         self._class_stack: list[ast.ClassDef] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         # Set True while generic_visit walks the children of a Raise node so
@@ -128,30 +129,36 @@ class Checker(
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
-        # Reset loop/except context: handlers in a nested function are not
-        # "inside" the outer function's loop or except block.
+        # Reset loop/except/try context: a nested function body executes later
+        # and is not protected by the surrounding function's handlers.
         saved_loops = self._loop_stack
         saved_excepts = self._except_stack
+        saved_tries = self._try_stack
         self._loop_stack = []
         self._except_stack = []
+        self._try_stack = []
         self._function_stack.append(node)
         self._check_p010_in_function(node)
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
+        self._try_stack = saved_tries
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # type: ignore[override]
         saved_loops = self._loop_stack
         saved_excepts = self._except_stack
+        saved_tries = self._try_stack
         self._loop_stack = []
         self._except_stack = []
+        self._try_stack = []
         self._function_stack.append(node)  # type: ignore[arg-type]
         self._check_p010_in_function(node)  # type: ignore[arg-type]
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
+        self._try_stack = saved_tries
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._check_p011(node)
@@ -175,6 +182,21 @@ class Checker(
         self._loop_stack.append(node)  # type: ignore[arg-type]
         self.generic_visit(node)
         self._loop_stack.pop()
+
+    def visit_Try(self, node: ast.Try) -> None:
+        # Except clauses catch failures from the try body only, not from their
+        # handlers, else suite, or finally suite. Preserve that distinction for
+        # E012's internal-sentinel translation check.
+        self._try_stack.append(node)
+        for stmt in node.body:
+            self.visit(stmt)
+        self._try_stack.pop()
+        for handler in node.handlers:
+            self.visit(handler)
+        for stmt in node.orelse:
+            self.visit(stmt)
+        for stmt in node.finalbody:
+            self.visit(stmt)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         self._except_stack.append(node)

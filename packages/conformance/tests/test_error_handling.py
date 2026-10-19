@@ -3888,6 +3888,108 @@ async def run():
     assert "inside activity/task" in findings[0].message
 
 
+def test_p012_no_finding_for_sentinel_translated_to_typed_error() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        if not isinstance(payload, dict):
+            raise TypeError
+        label = payload["label"]
+        if not isinstance(label, str):
+            raise ValueError
+        return label
+    except (TypeError, KeyError, ValueError):
+        raise MalformedPayloadError(message="Malformed payload") from None
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        not findings
+    ), f"translated parser sentinels should not raise E012: {findings!r}"
+
+
+def test_p012_still_flags_direct_writer_invariant_raise() -> None:
+    _single(
+        """\
+def write_payload(output_file):
+    if output_file is None:
+        raise RuntimeError("output file was not opened")
+""",
+        "E012",
+    )
+
+
+def test_p012_still_flags_when_handler_raises_an_untyped_error() -> None:
+    src = """\
+def parse_payload(payload):
+    try:
+        if not isinstance(payload, str):
+            raise TypeError("payload must be text")
+    except TypeError:
+        raise RuntimeError("invalid payload")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 2
+    ), f"both untyped raises should remain flagged: {findings!r}"
+
+
+def test_p012_still_flags_conditional_or_reraised_sentinels() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def conditional_translation(payload):
+    try:
+        if not isinstance(payload, str):
+            raise TypeError
+    except TypeError:
+        if payload is None:
+            raise MalformedPayloadError(message="Missing payload")
+        return None
+
+def untyped_reraise(payload):
+    try:
+        if not isinstance(payload, str):
+            raise ValueError
+    except ValueError:
+        raise
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 2
+    ), f"conditional and raw re-raises should remain flagged: {findings!r}"
+
+
+def test_p012_does_not_apply_translation_from_try_else_or_nested_function() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        def deferred_parse():
+            raise ValueError
+        consume(payload)
+    except ValueError:
+        raise MalformedPayloadError(message="Malformed payload")
+    else:
+        raise TypeError
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 2
+    ), f"deferred and try-else raises should remain flagged: {findings!r}"
+
+
 # ── P013 — LegacyAtlanErrorRaise ─────────────────────────────────────────────
 
 
