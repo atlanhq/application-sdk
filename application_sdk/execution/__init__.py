@@ -15,6 +15,7 @@ from temporalio.client import WorkflowFailureError as TemporalWorkflowFailureErr
 # raise/catch `application_sdk.errors.AppError` leaves (`CancelledError`, `AppTimeoutError`,
 # etc.) instead.
 from temporalio.exceptions import ActivityError as TemporalActivityError
+from temporalio.exceptions import ApplicationError as TemporalApplicationError
 from temporalio.exceptions import CancelledError as TemporalCancelledError
 from temporalio.exceptions import ChildWorkflowError as TemporalChildWorkflowError
 from temporalio.exceptions import TerminatedError as TemporalTerminatedError
@@ -53,6 +54,7 @@ __all__ = [
     "ApplicationError",
     "RetryPolicy",
     "TemporalActivityError",
+    "TemporalApplicationError",
     "TemporalAuthConfig",
     "TemporalAuthManager",
     "TemporalCancelledError",

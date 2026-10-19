@@ -96,7 +96,7 @@ imports and other non-orchestration privates (`constants._HTTP_POOL_LIMITS`,
 | retry policy | `RetryPolicy(max_attempts=3, initial_interval=1s, max_interval=5m, backoff_coefficient=2.0, non_retryable_errors=())`; the `@task` keyword defaults differ: `retry_max_attempts=3`, `retry_initial_interval_seconds=1`, `retry_max_interval_seconds=30` | `application_sdk.app` | 3.0.0 |
 | sandbox passthrough | `passthrough_modules: ClassVar[set[str]]` on the App class | App | — |
 | workflow-type rename alias | `legacy_workflow_types` on the App class | App | 3.29.0 |
-| client type, failure types | `TemporalClient`; `TemporalWorkflowFailureError`, `TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, `TemporalTimeoutError` | `application_sdk.execution` | 3.20.0 / 3.21.0 |
+| client type, failure types | `TemporalClient`; `TemporalWorkflowFailureError`, `TemporalActivityError`, `TemporalApplicationError` (the raw activity failure; `ApplicationError` from the same module is a subclass for raising, so `isinstance` on a failure chain needs this one), `TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, `TemporalTimeoutError` | `application_sdk.execution` | 3.20.0 / 3.21.0; `TemporalApplicationError`: first release after 3.49.2 |
 | converters, backend | `create_data_converter_for_app`, `TemporalExecutorBackend` | `application_sdk.execution` | 3.20.0 |
 | dev boot | `run_dev_combined(app_class, *, credential_stores=, example_input=, task_queue=, ...)` | `application_sdk.main` | 3.0.0 |
 | integration tests | `from application_sdk.testing.integration.fixtures import *` (the kit owns worker and client) | `application_sdk.testing.integration.fixtures` | — |
