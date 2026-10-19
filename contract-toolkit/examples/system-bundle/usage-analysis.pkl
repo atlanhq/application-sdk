@@ -1,0 +1,27 @@
+/// `usage-analysis` entrypoint of the system-bundle example: a UI-less system
+/// sub-contract whose `inputs` render its `_input.py` and caller node.
+amends "../../src/App.pkl"
+
+name = "usage-analysis"
+displayName = "Usage Analysis"
+icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
+type = "system"
+workflowType = "UsageAnalysisWorkflow"
+
+inputs {
+  ["connection_qualified_name"] = new StringField {
+    required = true
+    doc = "Qualified name of the connection to analyse."
+  }
+  ["window_days"] = new IntField {
+    default = 30
+    min = 1
+    doc = "Look-back window, in days."
+  }
+  ["dry_run"] = new BoolField { default = false }
+}
+
+// The toolkit's tests evaluate the generated caller node in place, at
+// `contract/generated/usage-analysis/input.pkl`. A real app leaves the
+// `../App.pkl` default, which resolves from the synced toolkit home.
+inputContractToolkitImport = "../../../../../src/App.pkl"

@@ -116,6 +116,63 @@ def test_drift_when_regeneration_adds_untracked_file(repo, monkeypatch):
     assert mod.main([]) == 1
 
 
+def test_drift_when_caller_node_is_stale(repo, monkeypatch):
+    """A system app's caller node (`contract/generated/**`, FND-3563) is
+    generated output too: a fresh eval that changes it is drift."""
+    caller = repo / "contract" / "generated" / "keifu" / "input.pkl"
+    caller.parent.mkdir(parents=True)
+    caller.write_text("stale\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "caller node")
+    real = _fake_run()
+
+    def fake_run(cmd, *, check=False):
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            out_dir = Path(cmd[cmd.index("-m") + 1])
+            gen = out_dir / "app" / "generated"
+            gen.mkdir(parents=True, exist_ok=True)
+            (gen / "manifest.json").write_text(COMMITTED_MANIFEST)
+            (out_dir / "atlan.yaml").write_text(COMMITTED_ATLAN)
+            fresh = out_dir / "contract" / "generated" / "keifu" / "input.pkl"
+            fresh.parent.mkdir(parents=True)
+            fresh.write_text("fresh\n")
+            return types.SimpleNamespace(returncode=0)
+        return real(cmd, check=check)
+
+    monkeypatch.setattr(sync, "run", fake_run)
+    assert mod.main([]) == 1
+    assert caller.read_text() == "fresh\n"
+
+
+def test_drift_when_a_caller_node_is_no_longer_emitted(repo, monkeypatch):
+    """A committed caller node for an entrypoint the contract dropped is stale.
+    The fresh eval does not emit it, so regeneration removes it: drift."""
+    caller = repo / "contract" / "generated" / "keifu" / "input.pkl"
+    caller.parent.mkdir(parents=True)
+    caller.write_text("stale\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "caller node")
+    monkeypatch.setattr(sync, "run", _fake_run())
+
+    assert mod.main([]) == 1
+    assert not caller.exists()
+
+
+def test_app_owned_files_beside_caller_nodes_are_not_drift(repo, monkeypatch):
+    """Only caller nodes under `contract/generated/` are generated. An app-owned
+    file there, edited or newly added, must not fail the gate."""
+    callers = repo / "contract" / "generated"
+    callers.mkdir(parents=True)
+    (callers / "notes.md").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "app notes")
+    (callers / "notes.md").write_text("v2\n")
+    (callers / "helper.pkl").write_text("new\n")
+    monkeypatch.setattr(sync, "run", _fake_run())
+
+    assert mod.main([]) == 0
+
+
 def test_opt_out_skips_check(repo, monkeypatch):
     called = {"pkl": False}
 

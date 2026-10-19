@@ -165,11 +165,19 @@ USES_LINE_RE = re.compile(r"[ \t]*(-[ \t]+)?uses:[ \t]*(?P<ref>\S+)[ \t]*(#.*)?"
 #: gate. That covers everything a Renovate app-contract-toolkit bump touches: the
 #: Pkl pin + lock (contract/PklProject, contract/PklProject.deps.json).
 #:
-#: The regenerated artifacts (app/generated/**, atlan.yaml, app.yaml) are matched
-#: ROOT-ONLY, with no ``(.*/)?`` prefix. renovate-pkl-sync only ever writes them
-#: at the repo root, so an unrelated app.yaml/atlan.yaml elsewhere in a consumer
-#: tree must NOT ride this gate. They are otherwise a deterministic function of
-#: the contract and the (already auto-merged) toolkit version.
+#: The regenerated artifacts (app/generated/**, contract/generated/**/input.pkl,
+#: atlan.yaml, app.yaml) are matched ROOT-ONLY, with no ``(.*/)?`` prefix. renovate-pkl-sync
+#: only ever writes them at the repo root, so an unrelated app.yaml/atlan.yaml
+#: elsewhere in a consumer tree must NOT ride this gate. They are otherwise a
+#: deterministic function of the contract and the (already auto-merged) toolkit
+#: version.
+#:
+#: contract/generated/**/input.pkl is a system app's caller node (one per
+#: entrypoint in a system bundle — FND-3563), emitted by the same eval and placed
+#: and freshness-checked through the same ``OUTPUT_PATHS``. Only that file name
+#: matches (``pkl_contract_layout.CALLER_NODE_FILENAME``): anything else under
+#: contract/generated/ is app-owned, and the rest of contract/ is hand-written
+#: source. Both stay off this gate.
 #:
 #: contract_schema.lock.json is here on that same argument, and is ROOT-ONLY for
 #: the same reason: renovate-contract-ledger resolves it as ``repo / NAME`` and
@@ -190,6 +198,7 @@ DEP_FILE_RE = (
     r"|(.*/)?contract/PklProject"
     r"|(.*/)?contract/PklProject\.deps\.json"
     r"|app/generated/.*"
+    r"|contract/generated/(.*/)?input\.pkl"
     r"|atlan\.yaml"
     r"|app\.yaml"
     r"|contract_schema\.lock\.json"

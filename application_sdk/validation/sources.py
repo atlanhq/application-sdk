@@ -46,6 +46,7 @@ from typing import ClassVar, Final, Mapping
 
 import orjson
 
+from application_sdk.common._generated_tree import entrypoint_dirs
 from application_sdk.constants import CONTRACT_GENERATED_DIR
 from application_sdk.errors.leaves import DataIntegrityError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -129,7 +130,9 @@ def artifact_schema_paths(
     A multi-entrypoint app's file is re-exported to
     ``{generated}/{entrypoint}/artifact_schemas.json`` by the standard
     per-entrypoint re-export; a single-entrypoint app's lands flat at
-    ``{generated}/artifact_schemas.json``. An entrypoint name is known in both
+    ``{generated}/artifact_schemas.json``. A UI-less system entrypoint's
+    directory is snake_case, so that spelling is tried next (FND-3563). An
+    entrypoint name is known in both
     cases, so the per-entrypoint path is tried first and the flat path second —
     the same order ``handler/service.py`` already resolves ``manifest.json`` in.
 
@@ -148,13 +151,16 @@ def artifact_schema_paths(
             time so a relocated directory is honoured.
 
     Returns:
-        One or two paths, most specific first.
+        One to three paths, most specific first.
     """
     root = generated_dir if generated_dir is not None else Path(CONTRACT_GENERATED_DIR)
     flat = root / ARTIFACT_SCHEMAS_FILENAME
     if not entrypoint:
         return (flat,)
-    return (root / entrypoint / ARTIFACT_SCHEMAS_FILENAME, flat)
+    nested = tuple(
+        d / ARTIFACT_SCHEMAS_FILENAME for d in entrypoint_dirs(root, entrypoint)
+    )
+    return (*nested, flat)
 
 
 def declared_artifact_fields(
