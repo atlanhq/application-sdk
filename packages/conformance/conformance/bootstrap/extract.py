@@ -404,8 +404,39 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
         params["force_external_runtime"] = force_external
     secrets_block = extract_secrets_block(text)
     if secrets_block:
-        params["secrets_block"] = secrets_block
+        params["secrets_block"] = with_required_secrets(secrets_block)
     return params
+
+
+REQUIRED_PASSTHROUGH_SECRETS: tuple[str, ...] = ("TWINGATE_SHARED_KEY",)
+
+
+def with_required_secrets(block: str) -> str:
+    """Return *block* with each ``REQUIRED_PASSTHROUGH_SECRETS`` entry present.
+
+    *block* is an explicit ``secrets:`` mapping as ``extract_secrets_block``
+    returns it. A missing name is appended as a same-name pass-through at the
+    mapping's own child indent; a name the mapping already declares, in any
+    form, is left exactly as written.
+    """
+    lines = block.split("\n")
+    head = next(i for i, line in enumerate(lines) if _SECRETS_MAPPING_RE.match(line))
+    children = [
+        line
+        for line in lines[head + 1 :]
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    indent = min(len(line) - len(line.lstrip()) for line in children)
+    declared = {
+        line.strip().split(":", 1)[0].strip("'\"")
+        for line in children
+        if len(line) - len(line.lstrip()) == indent
+    }
+    pad = " " * indent
+    for name in REQUIRED_PASSTHROUGH_SECRETS:
+        if name not in declared:
+            lines.append(f"{pad}{name}: ${{{{ secrets.{name} }}}}")
+    return "\n".join(lines)
 
 
 def structural_lines(text: str) -> list[str]:
