@@ -260,7 +260,9 @@ each use to the inventory.
   must become `upload_refs` in the same change that retires those writers.
   A delete of that local folder in `run()` after the upload (P021) goes in
   the same change: the default `on_complete` cleanup removes the files of the
-  refs (an app that overrides `on_complete` must call `super()`).
+  refs on the worker that tracked them (an app that overrides `on_complete`
+  must call `super()`). It does not reach files written on another worker:
+  that case is owner decision 8 in `migrate-orchestration`.
   A copy that runs only when `ENABLE_ATLAN_UPLOAD` is set worked because the
   files already sat at their canonical keys (a pinned `storage_path`, or a
   legacy writer's mirrored key). A ref from `FileReference.from_local` lands

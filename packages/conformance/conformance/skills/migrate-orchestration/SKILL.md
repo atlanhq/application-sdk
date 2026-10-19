@@ -237,7 +237,8 @@ One row per **use**, not per finding, `tests/` included: one import of
   suite already runs the workflow end to end, or the test only exercises its
   own mocks, recommend removal at Stop 1; otherwise rewrite it on the kit.
   Before you recommend removal, name the reason: the kit test that runs the
-  same workflow end to end, or the fact that the file imports no app module.
+  same workflow end to end, the fact that the file imports no app module, or
+  the fact that it asserts only on its own mocks.
   Remove a file only after the developer confirms.
 - **no public equivalent** — see the list above.
 - **routed** — a private SDK name that is not orchestration (see Routing).
