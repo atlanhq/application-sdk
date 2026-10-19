@@ -17,7 +17,7 @@ import ast
 from functools import lru_cache
 from pathlib import Path
 
-from ..deprecation._extractor import _is_deprecation_warn_call
+from .._deprecation_warn import _is_deprecation_warn_call
 
 
 def _emits_module_deprecation(tree: ast.Module) -> bool:
