@@ -184,6 +184,198 @@ def test_signature_redaction_does_not_eat_pagination_cursors() -> None:
         assert redact_secrets(diagnostic) == diagnostic
 
 
+# --- FND-4153: HTTP header and dict/keyword-repr secret forms ---
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "send failed\nAuthorization: Bearer FAKEJWT.abc-def\nAccept: */*",
+            "send failed\nAuthorization: Bearer ***\nAccept: */*",
+        ),
+        ("authorization: Basic RkFLRTpGQUtF", "authorization: Basic ***"),
+        ("Proxy-Authorization: FAKEPROXY", "Proxy-Authorization: ***"),
+        ("Cookie: session=FAKESESS; theme=dark", "Cookie: ***"),
+        ("set-cookie: sid=FAKESID; Path=/", "set-cookie: ***"),
+        ("X-Api-Key: FAKEXKEY", "X-Api-Key: ***"),
+        ("Api-Key:FAKEKEY", "Api-Key:***"),
+        ("X-Auth-Token: FAKEXTOK", "X-Auth-Token: ***"),
+        # A repr()'d message: the escaped newline must not hide the name.
+        (
+            "ConnectionError('retry\\nCookie: sid=FAKESID')",
+            "ConnectionError('retry\\nCookie: ***",
+        ),
+    ],
+)
+def test_redacts_raw_header_lines(text: str, expected: str) -> None:
+    """A header line's value runs to the end of the line: a cookie's value has
+    spaces and ``;`` in it, so the whole rest of the line is the secret. The
+    header name and the ``Authorization`` scheme stay."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "headers={'Authorization': 'Bearer FAKEJWT', 'Accept': '*/*'}",
+            "headers={'Authorization': 'Bearer ***', 'Accept': '*/*'}",
+        ),
+        ('{"cookie": "a=FAKEA; b=FAKEB"}', '{"cookie": "***"}'),
+        (
+            "[(b'x-api-key', b'FAKEXKEY'), (b'accept', b'*/*')]",
+            "[(b'x-api-key', b'***'), (b'accept', b'*/*')]",
+        ),
+        (
+            "{'Proxy-Authorization': 'Token FAKEPT'}",
+            "{'Proxy-Authorization': 'Token ***'}",
+        ),
+    ],
+)
+def test_redacts_header_entries_in_reprs(text: str, expected: str) -> None:
+    """A headers mapping rendered as a dict, a JSON object or httpx's raw
+    ``(name, value)`` pairs: the value is masked up to its closing quote, so the
+    entries after it survive."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+def test_redacts_a_bare_bearer_token() -> None:
+    """Exception text often quotes the credential without the header name."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("401 for Bearer FAKEJWT.eyJ-x_y+z/w== at /api")
+        == "401 for Bearer *** at /api"
+    )
+    # Prose about the token is not a token, and stays readable.
+    assert redact_secrets("invalid bearer token") == "invalid bearer token"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("{'password': 'FAKEPW'}", "{'password': '***'}"),
+        ('{"api_key": "FAKE KEY, with spaces"}', '{"api_key": "***"}'),
+        (
+            "{'db_password': 'FAKE\\'PW', 'host': 'h'}",
+            "{'db_password': '***', 'host': 'h'}",
+        ),
+        (
+            '{"client_secret":"FAKECS","scope":"read"}',
+            '{"client_secret":"***","scope":"read"}',
+        ),
+        ("{'token': 'FAKETOK'}", "{'token': '***'}"),
+    ],
+)
+def test_redacts_dict_repr_entries(text: str, expected: str) -> None:
+    """Known secret names as quoted keys: the value is masked to its closing
+    quote, so a value with spaces, commas or an escaped quote cannot leak a
+    tail, and the key stays."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Conn(host='h', password='FAKE PW,1', port=5432)",
+            "Conn(host='h', password='***', port=5432)",
+        ),
+        ('Cfg(api_key="FAKE;KEY")', 'Cfg(api_key="***")'),
+    ],
+)
+def test_redacts_keyword_repr_entries(text: str, expected: str) -> None:
+    """A dataclass/keyword repr quotes the value. The bare ``key=value`` pass
+    stops at the first space, comma or ``;``, which leaked the rest of it."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "api_key",
+        "apikey",
+        "api-key",
+        "access_token",
+        "auth_token",
+        "refresh_token",
+        "id_token",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "credential",
+        "private_key",
+        "signature",
+        "sharedaccesskey",
+        "accountkey",
+        "sig",
+        "token",
+        "auth",
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Set-Cookie",
+        "X-Api-Key",
+        "X-Auth-Token",
+    ],
+)
+def test_every_secret_name_passes_the_first_letter_gate(name: str) -> None:
+    """``_SECRET_NAME_START`` is a speed-up that must never drop a name: every
+    name in the lists is masked as a quoted key."""
+    import re
+
+    from application_sdk.errors import redact_secrets
+    from application_sdk.errors.base import _SECRET_HEADER_NAMES, _SECRET_NAMES
+
+    listed = re.findall(r"[a-z_-]{3,}", _SECRET_NAMES + _SECRET_HEADER_NAMES)
+    assert name.lower() in listed or any(name.lower().endswith(n) for n in listed)
+    assert redact_secrets(f"{{'{name}': 'FAKEV'}}") == f"{{'{name}': '***'}}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Authorization: Bearer FAKEJWT",
+        "Authorization: FAKERAW",
+        "Cookie:  a=FAKEA",
+        "{'Authorization': 'Bearer FAKEJWT'}",
+        "password='FAKE PW'",
+        "Bearer FAKEJWT",
+        "https://u:FAKEP@h/p?token=FAKET",
+    ],
+)
+def test_redaction_is_idempotent(text: str) -> None:
+    """The test harness's ``redact_text`` masks before calling ``redact_secrets``,
+    so an already-masked value must come back unchanged, spacing included."""
+    from application_sdk.errors import redact_secrets
+
+    once = redact_secrets(text)
+    assert "FAKE" not in once
+    assert redact_secrets(once) == once
+
+
+def test_quoted_pass_keeps_pagination_cursors() -> None:
+    """``token`` as a quoted key keeps the same boundary as the bare pass."""
+    from application_sdk.errors import redact_secrets
+
+    for diagnostic in (
+        "{'next_token': 'abc123', 'page_token': 'xyz'}",
+        "Page(continuation_token='deadbeef')",
+        "{'token_type': 'Bearer', 'expires_in': 3600}",
+    ):
+        assert redact_secrets(diagnostic) == diagnostic
+
+
 def test_logged_cause_of_a_signed_url_error_carries_no_signature() -> None:
     """The log copy of a driver error is uncapped-ish (8000) and indexed.
 
