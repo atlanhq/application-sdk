@@ -18,6 +18,7 @@ from application_sdk.errors import (
     STORAGE_DISK_FULL,
     STORAGE_EMPTY_UPLOAD,
     STORAGE_GATEWAY_AUTH,
+    STORAGE_GATEWAY_NO_ROUTE,
     STORAGE_HANDOFF_INCOMPLETE,
     STORAGE_INTEGRITY,
     STORAGE_NOT_FOUND,
@@ -206,6 +207,50 @@ class StorageGatewayAuthUnavailableError(StorageError):
 
     DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_AUTH
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_AUTH"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        suggested_action: str | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        StorageError.__init__(
+            self,
+            message,
+            key=key,
+            cause=cause,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+        )
+        self.suggested_action = suggested_action
+
+
+@dataclass(kw_only=True)
+class StorageGatewayNoRouteError(StorageError):
+    """The object-store gateway answered 404 because its route table is not loaded yet.
+
+    A gateway instance that joins the load balancer before its routes have
+    synced answers every request with ``404 {"message":"no Route matched with
+    those values"}`` for a few seconds. Nothing is missing: the object, the
+    bucket and the credentials are all fine, and the next gateway instance
+    would have accepted the same request. The condition is transient, so this
+    is retryable like every other ``StorageError``.
+
+    It exists so an operator is not told a key or bucket is absent, which is
+    what a bare 404 reads as. ``ops._is_not_found`` excludes this answer, so
+    the read path (``download_file``, ``exists``, ``get_file_meta``,
+    ``_get_bytes``, ``delete``) raises it rather than reporting the key
+    missing, and ``upload_file`` raises it once its own retries are spent.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_GATEWAY_NO_ROUTE
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE"
 
     def __init__(
         self,

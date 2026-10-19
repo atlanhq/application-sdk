@@ -19,17 +19,18 @@ from application_sdk.clients.redis_errors import (
     RedisConnectionError,
     RedisProtocolError,
 )
-from application_sdk.clients.sql_errors import SqlClientAuthFailedError
+from application_sdk.clients.sql_errors import SqlClientConnectUnclassifiedError
 
 # ---------------------------------------------------------------------------
-# BLDX-1180 — async SQL load() raises SqlClientAuthFailedError, not ValueError
+# BLDX-1180 — async SQL load() raises a typed AppError, not ValueError
 # ---------------------------------------------------------------------------
 
 
 class TestAsyncSqlLoadErrorContract:
-    """``AsyncBaseSQLClient.load()`` must raise ``SqlClientAuthFailedError`` on
-    auth / connection failure, mirroring sync ``BaseSQLClient.load()``. Before
-    BLDX-1180 it raised generic ``ValueError(str(e))``.
+    """``AsyncBaseSQLClient.load()`` must raise a typed ``AppError`` on a
+    connection failure, mirroring sync ``BaseSQLClient.load()``. Before
+    BLDX-1180 it raised generic ``ValueError(str(e))``. Since FND-3889 an
+    unrecognised failure is typed as pending classification, not as auth.
     """
 
     @pytest.mark.asyncio
@@ -55,11 +56,12 @@ class TestAsyncSqlLoadErrorContract:
                 "sqlalchemy.ext.asyncio.create_async_engine",
                 side_effect=RuntimeError("boom"),
             ),
-            pytest.raises(SqlClientAuthFailedError) as exc_info,
+            pytest.raises(SqlClientConnectUnclassifiedError) as exc_info,
         ):
             await client.load({"username": "u", "password": "p"})
 
-        assert exc_info.value.code == "AUTH_SQL_CLIENT_FAILED"
+        assert not isinstance(exc_info.value, ValueError)
+        assert exc_info.value.code == "INTERNAL_SQL_CLIENT_CONNECT"
 
 
 # ---------------------------------------------------------------------------

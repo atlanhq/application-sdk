@@ -124,7 +124,10 @@ def test_stalled_stdout_does_not_block_the_event_loop(
         AtlanLoggerAdapter._reset_for_testing()
         AtlanLoggerAdapter("test_logger")
         assert finished, "event loop blocked writing to a stalled stdout"
-    assert max(gaps) < 1.0, f"heartbeat stalled for {max(gaps):.2f}s"
+    # A blocked write stalls the loop until draining starts, after the 5s wait
+    # above. GIL contention with the writer thread alone reaches ~2s on slow
+    # CI runners, so the bound sits between the two.
+    assert max(gaps) < 3.0, f"heartbeat stalled for {max(gaps):.2f}s"
 
 
 def test_full_queue_drops_oldest_and_counts() -> None:
