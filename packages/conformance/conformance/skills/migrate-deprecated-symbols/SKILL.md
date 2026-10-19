@@ -176,7 +176,8 @@ use), because each use changes with the migration.
   the same question the code asks. Example: a test of how an error maps to an
   HTTP status calls the real test-auth route (`POST /workflows/v1/auth`, no
   Temporal needed) on `create_app_handler_service(handler)` with a test
-  client, not
+  client and a handler that raises that `AppError` (a `HandlerError` or a
+  failed result skips the mapping), not
   `_app_error_to_http_status`. If none exists: a private name the SDK or
   library does not expose publicly (for example SDK constants such as `_HTTP_POOL_LIMITS`, or
   a patched private method of a third-party library). Two
