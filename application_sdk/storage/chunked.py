@@ -45,6 +45,7 @@ from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage._locks import PathLockRegistry
 from application_sdk.storage._telemetry import _log_transfer_progress
 
@@ -358,7 +359,10 @@ async def _fetch_chunk(
             plausible-looking file of exactly the right length.
     """
     length = min(chunk_size_bytes, size - offset)
-    async with sem:
+    # *sem* caps this file's range GETs; the shared budget caps the bytes all
+    # transfers in the process hold, which is what the container's memory
+    # limit sees (FND-4082). Held until the range is on disk.
+    async with sem, transfer_budget().reserve(length):
         if etag is not None:
             # Version-pinned range GET: 412 (PreconditionError) if the
             # object was rewritten — never mixes two generations.
@@ -370,11 +374,11 @@ async def _fetch_chunk(
                     "if_match": etag,
                 },
             )
-            raw = bytes(await result.bytes_async())
+            # No bytes() copy: os.write takes the buffer as it is, and a
+            # copy would hold the range in memory twice.
+            raw = await result.bytes_async()
         else:
-            raw = bytes(
-                await obstore.get_range_async(store, key, start=offset, length=length)
-            )
+            raw = await obstore.get_range_async(store, key, start=offset, length=length)
         if len(raw) != length:
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                 StorageError,

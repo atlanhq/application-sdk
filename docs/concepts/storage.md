@@ -129,6 +129,17 @@ The wait lasts only while that I/O is making progress:
 This limit is enforced whatever `ATLAN_PROGRESS_WATCHDOG` is set to, because
 the alternative is an unwind that never finishes.
 
+### Memory: one transfer budget per process
+
+The concurrency limits nest: refs in a task, files in a directory ref, range
+GETs in a file. Their product is what a worker holds in memory, so one byte
+budget bounds it. Every range GET, streaming GET and multipart upload reserves
+the buffer bytes it will hold before it holds them. A transfer that does not
+fit waits, and keeps marking progress while it waits, so the stall watchdog
+does not kill it. A single transfer larger than the whole budget runs on its
+own. The budget defaults to a quarter of the container memory limit; set
+`ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` to change it.
+
 Both prefix transfers can mirror instead of adding:
 
 ```python
@@ -263,6 +274,7 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
 | `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
 | `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
+| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the whole process may hold at once (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
 

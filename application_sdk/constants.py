@@ -444,6 +444,16 @@ STORAGE_UPLOAD_MAX_CONCURRENCY = int(
     os.getenv("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", "12")
 )
 
+#: Bytes of transfer buffers every object-store transfer in the process may
+#: hold at once: range GETs, streaming GETs and multipart part buffers all
+#: reserve from it (FND-4082). The per-call concurrency limits above multiply
+#: with each other; this is the one bound on their product. ``0`` (default)
+#: takes a quarter of the container memory limit, never under 128 MiB, and
+#: 1 GiB when no limit is known.
+STORAGE_TRANSFER_MEMORY_BUDGET_BYTES = int(
+    os.getenv("ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", "0")
+)
+
 #: Kill-switch for resumable chunked downloads (BLDX-1523). When enabled
 #: (default), an interrupted chunked download leaves its partial file plus a
 #: ``.transfer-state`` sidecar on disk, and a retry fetches only the missing

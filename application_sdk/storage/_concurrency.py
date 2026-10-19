@@ -34,7 +34,9 @@ async def _run_bounded(
     """Run *coros* concurrently, at most *max_concurrency* at a time.
 
     ``None`` applies no bound of its own, for callers that already hold one.
-    Results are returned in input order.
+    Results are returned in input order. With a bound, *coros* is consumed
+    lazily by a fixed pool of workers, so pass a generator to keep a large
+    fan-out from building every coroutine up front.
 
     Raises:
         StorageError: The first failure, when every failure is a
@@ -55,23 +57,40 @@ async def _run_bounded(
         StorageError,
     )
 
-    sem = asyncio.Semaphore(max_concurrency) if max_concurrency is not None else None
-
-    async def _run(coro: Coroutine[Any, Any, T]) -> T:
-        if sem is None:
-            return await coro
-        async with sem:
-            return await coro
-
     # A TaskGroup (vs gather) gives cancel-and-await semantics for the *tasks*:
     # on the first failure, or when the caller is cancelled, it cancels the rest
     # and does not return until they have unwound. That is not enough on its
     # own — a task awaiting run_in_thread unwinds the moment it is cancelled,
     # while its thread runs on — so the offloads are tracked and drained too.
+    #
+    # With a bound, a fixed pool of workers pulls from one shared iterator, so
+    # a 100k-key fan-out holds *max_concurrency* tasks rather than one per key
+    # (FND-4082). A coroutine the pool never reached is closed, not left to
+    # warn that it was never awaited.
+    results: dict[int, T] = {}
+    pending_coros = enumerate(coros)
+
+    async def _worker() -> None:
+        for index, coro in pending_coros:
+            # Its own task, as when every coroutine got one up front: each
+            # runs in a copy of the context, so none leaks a contextvar into
+            # the next on this worker. Cancelling the worker cancels it and
+            # waits for it to unwind. Only the running ones are alive at once.
+            results[index] = await asyncio.ensure_future(coro)
+
     with tracking_offloads() as pending:
         try:
-            async with asyncio.TaskGroup() as tg:
-                tasks = [tg.create_task(_run(c)) for c in coros]
+            try:
+                async with asyncio.TaskGroup() as tg:
+                    if max_concurrency is None:
+                        for index, coro in pending_coros:
+                            tg.create_task(_store(results, index, coro))
+                    else:
+                        for _ in range(max(max_concurrency, 1)):
+                            tg.create_task(_worker())
+            finally:
+                for _, unstarted in pending_coros:
+                    unstarted.close()
         except BaseExceptionGroup as group:
             await drain_offloads(pending)
             if all(isinstance(leaf, StorageError) for leaf in group.exceptions):
@@ -85,7 +104,13 @@ async def _run_bounded(
         except BaseException:
             await drain_offloads(pending)
             raise
-    return [t.result() for t in tasks]
+    return [results[index] for index in range(len(results))]
+
+
+async def _store(
+    results: dict[int, T], index: int, coro: Coroutine[Any, Any, T]
+) -> None:
+    results[index] = await coro
 
 
 async def _gather_with_semaphore(
