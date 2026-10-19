@@ -789,6 +789,42 @@ def test_with_required_secrets_leaves_a_declared_name_alone(declared: str) -> No
     assert with_required_secrets(block) == block
 
 
+@pytest.mark.parametrize(
+    "declared",
+    [
+        "twingate_shared_key: ${{ secrets.TWINGATE_SHARED_KEY }}",
+        "'TWINGATE_SHARED_KEY': ${{ secrets.TWINGATE_SHARED_KEY }}",
+        "TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}  # org secret",
+    ],
+)
+def test_with_required_secrets_reads_other_spellings_as_declared(
+    declared: str,
+) -> None:
+    block = f"    secrets:\n      A: ${{{{ secrets.A }}}}\n      {declared}"
+    assert with_required_secrets(block) == block
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "    secrets:\n      A: x\n      TWINGATE_SHARED_KEY : ${{ secrets.T }}",
+        "    secrets:",
+        "    with:\n      a: b",
+        "    secrets:\n\tA: x",
+        "",
+    ],
+)
+def test_with_required_secrets_leaves_an_unreadable_mapping_alone(block: str) -> None:
+    assert with_required_secrets(block) == block
+
+
+def test_with_required_secrets_appends_after_a_trailing_comment() -> None:
+    block = "    secrets:\n      A: ${{ secrets.A }}\n      # last note"
+    assert with_required_secrets(block) == (
+        block + "\n      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}"
+    )
+
+
 def test_with_required_secrets_is_idempotent() -> None:
     once = with_required_secrets(_EXPLICIT_SECRETS)
     assert with_required_secrets(once) == once

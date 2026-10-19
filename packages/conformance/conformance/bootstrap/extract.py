@@ -416,25 +416,39 @@ def with_required_secrets(block: str) -> str:
 
     *block* is an explicit ``secrets:`` mapping as ``extract_secrets_block``
     returns it. A missing name is appended as a same-name pass-through at the
-    mapping's own child indent; a name the mapping already declares, in any
-    form, is left exactly as written.
+    mapping's own child indent. Names compare case-insensitively, as GitHub
+    secret names do, and a name already declared is left exactly as written.
+
+    Keys are read through ``structural_lines`` and ``_KEY_LINE_RE`` like every
+    other reader here. When a direct child cannot be read as a key (a
+    ``KEY :`` spelling, a tab indent, no children at all) the block is returned
+    unchanged: appending to a mapping whose keys are not all known could add a
+    duplicate, which GitHub rejects outright.
     """
     lines = block.split("\n")
-    head = next(i for i, line in enumerate(lines) if _SECRETS_MAPPING_RE.match(line))
-    children = [
-        line
-        for line in lines[head + 1 :]
-        if line.strip() and not line.strip().startswith("#")
-    ]
-    indent = min(len(line) - len(line.lstrip()) for line in children)
-    declared = {
-        line.strip().split(":", 1)[0].strip("'\"")
-        for line in children
-        if len(line) - len(line.lstrip()) == indent
-    }
-    pad = " " * indent
+    structural = structural_lines(block)
+    head = next(
+        (i for i, line in enumerate(structural) if _SECRETS_MAPPING_RE.match(line)),
+        None,
+    )
+    if head is None:
+        return block
+    children = [line for line in structural[head + 1 :] if line.strip()]
+    if not children:
+        return block
+    pad = min((line[: len(line) - len(line.lstrip())] for line in children), key=len)
+    if not pad or "\t" in pad:
+        return block
+    declared: set[str] = set()
+    for line in children:
+        if not line.startswith(pad) or line[len(pad)] in " \t":
+            continue
+        m = _KEY_LINE_RE.match(line)
+        if m is None or m.group("indent") != pad:
+            return block
+        declared.add(_yaml_key(m.group("key")).casefold())
     for name in REQUIRED_PASSTHROUGH_SECRETS:
-        if name not in declared:
+        if name.casefold() not in declared:
             lines.append(f"{pad}{name}: ${{{{ secrets.{name} }}}}")
     return "\n".join(lines)
 

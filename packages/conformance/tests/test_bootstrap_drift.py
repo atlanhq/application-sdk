@@ -747,6 +747,8 @@ def test_tests_yaml_explicit_mapping_missing_a_required_secret_is_drift(
     wf.write_text(render("tests.yaml", app_name="mysql", secrets_block=block))
     findings = scan_path(wf, tmp_path)
     assert [f.rule_id for f in findings] == ["C002"]
+    assert "TWINGATE_SHARED_KEY" in findings[0].message
+    assert "structural changes" not in findings[0].message
 
 
 def test_tests_yaml_unpreservable_declaration_explained_in_the_finding(

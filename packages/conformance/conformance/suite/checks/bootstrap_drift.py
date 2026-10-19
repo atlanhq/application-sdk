@@ -74,6 +74,7 @@ from pathlib import Path
 from conformance.bootstrap import extract as bootstrap_extract
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,
+    REQUIRED_PASSTHROUGH_SECRETS,
     extract_apt_packages,
     extract_build_publish_lfs,
     extract_build_publish_private_git_auth,
@@ -83,6 +84,7 @@ from conformance.bootstrap.extract import (
     extract_release_private_git_auth,
     extract_renovate_automerge,
     extract_sarif_upload,
+    extract_secrets_block,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
     extract_vulnerability_scan_lfs,
@@ -90,6 +92,7 @@ from conformance.bootstrap.extract import (
     resolve_renovate_fallback_exit_zero,
     strip_action_pins,
     unpreserved_tests_yaml_declarations,
+    with_required_secrets,
 )
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
@@ -502,6 +505,29 @@ def _scan_tests_yaml(path: Path, root: Path) -> list[Finding]:
 
     if strip_action_pins(on_disk) == strip_action_pins(canonical):
         return []
+
+    as_written = extract_secrets_block(on_disk)
+    if as_written and with_required_secrets(as_written) != as_written:
+        as_is = render(_TESTS_WORKFLOW, **{**params, "secrets_block": as_written})
+        if strip_action_pins(on_disk) == strip_action_pins(as_is):
+            return [
+                Finding(
+                    rule_id=RULE_ID,
+                    file=rel,
+                    line=1,
+                    column=1,
+                    message=(
+                        "tests.yaml's explicit `secrets:` mapping does not pass "
+                        "the org secret(s) tests-reusable reads ("
+                        + ", ".join(
+                            f"`{name}`" for name in REQUIRED_PASSTHROUGH_SECRETS
+                        )
+                        + "); `secrets: inherit` would pass them automatically. "
+                        f"Run `{_CLI_CMD} --resync` to add the missing line(s); "
+                        "nothing else in the file changes. " + _warn_only
+                    ),
+                )
+            ]
 
     return [
         Finding(
