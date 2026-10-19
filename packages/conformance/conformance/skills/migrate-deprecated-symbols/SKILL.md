@@ -26,7 +26,7 @@ optional_triggers:
   - "remove private SDK imports"
   - "fix deprecation warnings from application_sdk"
 owner: connector-platform-team
-last_updated: "2026-10-15"
+last_updated: "2026-10-19"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -172,8 +172,14 @@ use), because each use changes with the migration.
     performs: hand them to the developer with
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
     (in the `atlanhq/application-sdk` repo, not shipped with this package).
-- **no public equivalent** — a private name the SDK or library does not
-  expose publicly (for example SDK constants such as `_HTTP_POOL_LIMITS`, or
+- **no public equivalent** — first look for a public surface that answers
+  the same question the code asks. Example: a test of how an error maps to an
+  HTTP status calls the real test-auth route (`POST /workflows/v1/auth`, no
+  Temporal needed) on `create_app_handler_service(handler)` with a test
+  client and a handler that raises that `AppError` (a `HandlerError` or a
+  failed result skips the mapping), not
+  `_app_error_to_http_status`. If none exists: a private name the SDK or
+  library does not expose publicly (for example SDK constants such as `_HTTP_POOL_LIMITS`, or
   a patched private method of a third-party library). Two
   options for the developer: for a plain value (a constant), copy it into
   the app under its own name; otherwise ignore it:
