@@ -582,7 +582,9 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app app/failures.py — every leaf subclasses an SDK category "
             "(e.g. `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns "
-            "a `code`. Raise one of these, never a bare ValueError or RuntimeError."
+            "a `code`. Use one of these for failures that leave the error boundary; a "
+            "builtin used only as a sentinel inside a matching typed-translation handler "
+            "does not escape as the outward failure."
         ),
         scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
@@ -600,12 +602,16 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description="raise ValueError/RuntimeError/... where a typed AppError applies",
         full_description=(
-            "SDK code raises a bare Python builtin.  The Automation Engine receives an\n"
+            "SDK code that lets a bare Python builtin reach the Automation Engine sends an\n"
             "opaque string — no category, code, audience, or retryable field.\n"
             "Dashboards are blind; on-call routing is impossible.  Use the typed error\n"
-            "leaf from ``application_sdk.errors``.  Acceptable only inside dataclass\n"
-            "``__post_init__`` / stdlib validator methods where Python semantics require\n"
-            "``TypeError``/``ValueError`` for stdlib interoperability.\n"
+            "leaf from ``application_sdk.errors``.  A builtin used as an internal\n"
+            "validation sentinel is acceptable only when a matching ``except`` handler\n"
+            "unconditionally translates it into a typed ``AppError`` before it leaves\n"
+            "that boundary; swallowing, conditional handling, and re-raising do not qualify.\n"
+            "Builtin raises are also acceptable inside dataclass ``__post_init__`` /\n"
+            "stdlib validator methods where Python semantics require ``TypeError`` or\n"
+            "``ValueError`` for stdlib interoperability.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
         remediation_reference=RemediationReference(

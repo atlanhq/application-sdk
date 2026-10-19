@@ -12,7 +12,7 @@ from .exception_chaining import ExceptionChainingMixin, ExceptionHelper
 from .http_failure import HttpFailureMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
-from .untyped_raise import UntypedRaiseMixin
+from .untyped_raise import UntypedRaiseMixin, module_bindings
 
 
 def import_bindings(tree: ast.Module) -> dict[str, str]:
@@ -98,6 +98,11 @@ class Checker(
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._module: ast.Module | None = None
         self._except_stack: list[ast.ExceptHandler] = []
+        self._try_stack: list[ast.Try | ast.TryStar] = []
+        # Every name the module binds, and the subset bound by anything other
+        # than an import or a module-level class (see module_bindings).
+        self._bound_names: frozenset[str] = frozenset()
+        self._rebound_names: frozenset[str] = frozenset()
         self._class_stack: list[ast.ClassDef] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         # Set True while generic_visit walks the children of a Raise node so
@@ -125,33 +130,40 @@ class Checker(
     def visit_Module(self, node: ast.Module) -> None:
         self._module = node
         self._import_origins = import_bindings(node)
+        self._bound_names, self._rebound_names = module_bindings(node)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
-        # Reset loop/except context: handlers in a nested function are not
-        # "inside" the outer function's loop or except block.
+        # Reset loop/except/try context: a nested function body executes later
+        # and is not protected by the surrounding function's handlers.
         saved_loops = self._loop_stack
         saved_excepts = self._except_stack
+        saved_tries = self._try_stack
         self._loop_stack = []
         self._except_stack = []
+        self._try_stack = []
         self._function_stack.append(node)
         self._check_p010_in_function(node)
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
+        self._try_stack = saved_tries
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # type: ignore[override]
         saved_loops = self._loop_stack
         saved_excepts = self._except_stack
+        saved_tries = self._try_stack
         self._loop_stack = []
         self._except_stack = []
+        self._try_stack = []
         self._function_stack.append(node)  # type: ignore[arg-type]
         self._check_p010_in_function(node)  # type: ignore[arg-type]
         self.generic_visit(node)
         self._function_stack.pop()
         self._loop_stack = saved_loops
         self._except_stack = saved_excepts
+        self._try_stack = saved_tries
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._check_p011(node)
@@ -175,6 +187,25 @@ class Checker(
         self._loop_stack.append(node)  # type: ignore[arg-type]
         self.generic_visit(node)
         self._loop_stack.pop()
+
+    def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
+        # Except clauses catch failures from the try body only, not from their
+        # handlers, else suite, or finally suite. Preserve that distinction for
+        # E012's internal-sentinel translation check. ``except*`` scopes are
+        # tracked too, so an inner except* handler is not skipped in favour of
+        # an outer try's handler.
+        self._try_stack.append(node)
+        for stmt in node.body:
+            self.visit(stmt)
+        self._try_stack.pop()
+        for handler in node.handlers:
+            self.visit(handler)
+        for stmt in node.orelse:
+            self.visit(stmt)
+        for stmt in node.finalbody:
+            self.visit(stmt)
+
+    visit_TryStar = visit_Try
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         self._except_stack.append(node)
