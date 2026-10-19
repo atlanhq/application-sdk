@@ -295,6 +295,35 @@ class TestAWSUtils:
         assert sts_kwargs.get("aws_secret_access_key") == "caller_secret"
         assert sts_kwargs.get("aws_session_token") == "caller_session"
 
+    @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_bounds_sts_calls(self, mock_client):
+        """The STS client carries explicit timeouts and a retry cap.
+
+        botocore's defaults (60 s connect, 60 s read, retried) let one
+        unreachable STS endpoint hold a SQL client's load() for minutes.
+        """
+        mock_sts = MagicMock()
+        mock_client.side_effect = [mock_sts, MagicMock()]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "assumed_key",
+                "SecretAccessKey": "assumed_secret",
+                "SessionToken": "assumed_token",
+            }
+        }
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+        )
+
+        assert mock_client.call_args_list[0].args == ("sts",)
+        config = mock_client.call_args_list[0].kwargs["config"]
+        assert config.connect_timeout == 5
+        assert config.read_timeout == 15
+        assert config.retries == {"total_max_attempts": 2, "mode": "standard"}
+
     def test_generate_aws_rds_token_with_iam_role_raises_when_partial(self):
         """A half-supplied pair must fail closed, not fall through to the default chain.
 

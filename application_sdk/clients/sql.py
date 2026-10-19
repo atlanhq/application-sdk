@@ -5,12 +5,14 @@ This module provides SQL client classes for both synchronous and asynchronous
 database operations, supporting batch processing and server-side cursors.
 """
 
+import asyncio
 import concurrent.futures
 import contextlib
 import contextvars
 import datetime
 import functools
 import hashlib
+import math
 import re
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
@@ -50,7 +52,11 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
-from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
+from application_sdk.constants import (
+    AWS_SESSION_NAME,
+    SQL_CLIENT_CONNECT_TIMEOUT_SECONDS,
+    USE_SERVER_SIDE_CURSOR,
+)
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
@@ -227,6 +233,66 @@ def _invalidate_if_cancelled(connection: "Connection", handle: CancelHandle) -> 
         connection.invalidate()
 
 
+#: The connect-timeout keyword of each driver that has no connect timeout by
+#: default, so a black-holed host holds the connect (and its worker thread)
+#: until the OS gives up. Drivers that already bound their connect (pymysql,
+#: asyncpg, snowflake, pymssql, oracledb) are left alone so their bound is never
+#: loosened, and so are drivers whose ``timeout`` bounds every socket read
+#: (pg8000, redshift_connector): that would cut long queries short too.
+_DRIVER_CONNECT_TIMEOUT_ARG: dict[str, str] = {
+    "psycopg2": "connect_timeout",
+    "psycopg": "connect_timeout",
+    "mysqldb": "connect_timeout",
+}
+
+#: SQLAlchemy's default driver for a URL that names only the dialect.
+_DIALECT_DEFAULT_DRIVER: dict[str, str] = {
+    "postgresql": "psycopg2",
+    "mysql": "mysqldb",
+    "mariadb": "mysqldb",
+}
+
+
+def _with_connect_timeout(
+    connection_string: object, connect_args: dict[str, Any], seconds: float
+) -> dict[str, Any]:
+    """``connect_args`` plus the driver's connect timeout, when it has none.
+
+    Never overrides a value already set in ``connect_args`` or in the URL's
+    query string. A URL that does not parse, or names a driver not in
+    ``_DRIVER_CONNECT_TIMEOUT_ARG``, gets ``connect_args`` unchanged.
+    """
+    from sqlalchemy.engine import make_url  # noqa: PLC0415 — optional dep: sqlalchemy
+    from sqlalchemy.exc import ArgumentError  # noqa: PLC0415 — optional dep: sqlalchemy
+
+    try:
+        url = make_url(cast(Any, connection_string))
+    except (ArgumentError, ValueError):
+        return connect_args
+    # Read from the URL rather than ``get_driver_name()``, which imports the
+    # dialect (and fails for one that is not installed).
+    dialect, _, driver = url.drivername.lower().partition("+")
+    driver = driver or _DIALECT_DEFAULT_DRIVER.get(dialect, "")
+    arg = _DRIVER_CONNECT_TIMEOUT_ARG.get(driver)
+    if arg is None or arg in connect_args or arg in url.query:
+        return connect_args
+    return {**connect_args, arg: max(1, math.ceil(seconds))}
+
+
+def _load_budget_expired() -> SqlClientConnectTimeoutError:
+    """The error for a ``load()`` that outran ``SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``.
+
+    Raised in place of the bare ``TimeoutError`` the expired budget leaves
+    behind, which says nothing about what ran out of time.
+    """
+    return SqlClientConnectTimeoutError(
+        message=(
+            "SQL client did not connect to the source within "
+            f"{SQL_CLIENT_CONNECT_TIMEOUT_SECONDS:g}s"
+        )
+    )
+
+
 def _load_failure(exc: Exception) -> AppError:
     """Type a failed ``load()`` by its root cause instead of calling it auth.
 
@@ -302,7 +368,8 @@ class BaseSQLClient(ClientInterface):
             SqlClientAuthFailedError: If the source rejected the credentials.
             SqlClientSourceUnavailableError: If the source could not be reached
                 (DNS, refused or filtered connection, TLS).
-            SqlClientConnectTimeoutError: If the connect or login timed out.
+            SqlClientConnectTimeoutError: If the connect or login timed out, or
+                ``load()`` as a whole outran ``ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``.
             SqlClientConnectUnclassifiedError: If the failure matched none of
                 the above.
             AppError: Any typed error raised while connecting, unchanged — e.g.
@@ -312,41 +379,53 @@ class BaseSQLClient(ClientInterface):
             raise SqlClientConfigError()
 
         self.credentials = credentials  # Update the instance credentials
+        budget = asyncio.timeout(SQL_CLIENT_CONNECT_TIMEOUT_SECONDS)
         try:
             from sqlalchemy import (  # noqa: PLC0415 — optional dep: sqlalchemy
                 create_engine,
             )
 
-            # Create engine but no persistent connection
-            self.engine = create_engine(
-                self.get_sqlalchemy_connection_string(),
-                connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
-            )
+            async with budget:
+                # Offloaded: for IAM-role auth this runs an STS AssumeRole,
+                # a network round trip that would otherwise block the loop.
+                connection_string = await run_in_thread(
+                    self.get_sqlalchemy_connection_string
+                )
 
-            # Install a tolerant UTF-8 text decoder for psycopg2/psycopg3 so
-            # query-history rows containing non-UTF-8 bytes (e.g. 0x96 from
-            # Windows-1252 paste) yield a logged U+FFFD instead of raising
-            # UnicodeDecodeError. psycopg3 is wired per connection; psycopg2 has
-            # to be remapped once per process, before any connection is opened —
-            # see sql_typecasters for why. Tracking: WARE-970, CONAT-767.
-            install_tolerant_text_decoder_hook(self.engine)
+                # Create engine but no persistent connection
+                self.engine = create_engine(
+                    connection_string,
+                    connect_args=_with_connect_timeout(
+                        connection_string,
+                        self.DB_CONFIG.connect_args,
+                        SQL_CLIENT_CONNECT_TIMEOUT_SECONDS,
+                    ),
+                    pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
+                )
 
-            # Test connection briefly to validate credentials.
-            # Wrapped in run_in_thread because SQLAlchemy's synchronous
-            # engine.connect() blocks the event loop — critical for Temporal
-            # activities where blocking starves the auto-heartbeat. run_in_thread
-            # dispatches onto the SDK's dedicated pool rather than asyncio's
-            # shared default executor, which Temporal's own scheduling also uses.
-            # Capture engine in a local variable so the closure doesn't need to
-            # re-read self.engine (which is typed Optional) and pyright can narrow it.
-            _engine = self.engine
+                # Install a tolerant UTF-8 text decoder for psycopg2/psycopg3 so
+                # query-history rows containing non-UTF-8 bytes (e.g. 0x96 from
+                # Windows-1252 paste) yield a logged U+FFFD instead of raising
+                # UnicodeDecodeError. psycopg3 is wired per connection; psycopg2 has
+                # to be remapped once per process, before any connection is opened —
+                # see sql_typecasters for why. Tracking: WARE-970, CONAT-767.
+                install_tolerant_text_decoder_hook(self.engine)
 
-            def _ping() -> None:
-                with _engine.connect() as _:
-                    pass  # Connection test successful
+                # Test connection briefly to validate credentials.
+                # Wrapped in run_in_thread because SQLAlchemy's synchronous
+                # engine.connect() blocks the event loop — critical for Temporal
+                # activities where blocking starves the auto-heartbeat. run_in_thread
+                # dispatches onto the SDK's dedicated pool rather than asyncio's
+                # shared default executor, which Temporal's own scheduling also uses.
+                # Capture engine in a local variable so the closure doesn't need to
+                # re-read self.engine (which is typed Optional) and pyright can narrow it.
+                _engine = self.engine
 
-            await run_in_thread(_ping)
+                def _ping() -> None:
+                    with _engine.connect() as _:
+                        pass  # Connection test successful
+
+                await run_in_thread(_ping)
 
             # Don't store persistent connection
             self.connection = None
@@ -362,6 +441,8 @@ class BaseSQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
+            if budget.expired():
+                raise _load_budget_expired() from e
             # Already typed (a MissingSqlParamError from building the
             # connection string, a connector's own leaf): keep its verdict.
             if isinstance(e, AppError):
@@ -913,7 +994,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
             SqlClientAuthFailedError: If the source rejected the credentials.
             SqlClientSourceUnavailableError: If the source could not be reached
                 (DNS, refused or filtered connection, TLS).
-            SqlClientConnectTimeoutError: If the connect or login timed out.
+            SqlClientConnectTimeoutError: If the connect or login timed out, or
+                ``load()`` as a whole outran ``ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``.
             SqlClientConnectUnclassifiedError: If the failure matched none of
                 the above.
             AppError: Any typed error raised while connecting, unchanged — e.g.
@@ -923,25 +1005,37 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.DB_CONFIG:
             raise SqlClientConfigError()
 
+        budget = asyncio.timeout(SQL_CLIENT_CONNECT_TIMEOUT_SECONDS)
         try:
             from sqlalchemy.ext.asyncio import (  # noqa: PLC0415 — optional dep: sqlalchemy
                 create_async_engine,
             )
 
-            # Create async engine but no persistent connection
-            self.engine = create_async_engine(
-                self.get_sqlalchemy_connection_string(),
-                connect_args=self.DB_CONFIG.connect_args,
-                pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
-            )
+            async with budget:
+                # Offloaded: for IAM-role auth this runs an STS AssumeRole,
+                # a network round trip that would otherwise block the loop.
+                connection_string = await run_in_thread(
+                    self.get_sqlalchemy_connection_string
+                )
 
-            # Same WARE-970 tolerant-decoder hook as the sync client. Async
-            # engines surface DBAPI events on the underlying sync_engine.
-            install_tolerant_text_decoder_hook(self.engine.sync_engine)
+                # Create async engine but no persistent connection
+                self.engine = create_async_engine(
+                    connection_string,
+                    connect_args=_with_connect_timeout(
+                        connection_string,
+                        self.DB_CONFIG.connect_args,
+                        SQL_CLIENT_CONNECT_TIMEOUT_SECONDS,
+                    ),
+                    pool_pre_ping=self.DB_CONFIG.pool_pre_ping,
+                )
 
-            # Test connection briefly to validate credentials
-            async with self.engine.connect() as _:
-                pass  # Connection test successful
+                # Same WARE-970 tolerant-decoder hook as the sync client. Async
+                # engines surface DBAPI events on the underlying sync_engine.
+                install_tolerant_text_decoder_hook(self.engine.sync_engine)
+
+                # Test connection briefly to validate credentials
+                async with self.engine.connect() as _:
+                    pass  # Connection test successful
 
             # Don't store persistent connection
             self.connection = None
@@ -957,6 +1051,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
+            if budget.expired():
+                raise _load_budget_expired() from e
             # Already typed (a MissingSqlParamError from building the
             # connection string, a connector's own leaf): keep its verdict.
             if isinstance(e, AppError):

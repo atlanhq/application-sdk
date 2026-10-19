@@ -55,6 +55,14 @@ before changing either value.
 
 ---
 
+## SQL clients
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS` | `60` | Bound on a SQL client's `load()`: building the connection string (including the STS `AssumeRole` for IAM-role auth) plus the first connect. Expiry raises `SqlClientConnectTimeoutError`. Also passed as `connect_timeout` to psycopg2, psycopg and MySQLdb, which have no connect timeout of their own, unless `DB_CONFIG.connect_args` or the URL already sets one. |
+
+---
+
 ## Temporal / Workflow
 
 | Variable | Default | Description |

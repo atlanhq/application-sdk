@@ -22,6 +22,14 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+#: Timeouts for the STS client behind ``AssumeRole``. botocore's defaults (60 s
+#: connect, 60 s read, retried) let one unreachable STS endpoint hold a SQL
+#: client's ``load()`` for minutes; bounded, the worst case (two attempts plus
+#: backoff) stays inside ``SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``.
+_STS_CONNECT_TIMEOUT_SECONDS = 5
+_STS_READ_TIMEOUT_SECONDS = 15
+_STS_MAX_ATTEMPTS = 2
+
 
 def _normalize_external_id(external_id: str | None) -> str | None:
     """Return the STS ``ExternalId`` to send, or ``None`` to omit it.
@@ -112,6 +120,7 @@ def generate_aws_rds_token_with_iam_role(
     ):
         raise AwsPartialCredentialsError()
 
+    from botocore.config import Config  # noqa: PLC0415 — optional dep: botocore
     from botocore.exceptions import (  # noqa: PLC0415 — optional dep: botocore
         ClientError,
     )
@@ -127,7 +136,14 @@ def generate_aws_rds_token_with_iam_role(
         # os.environ is process-global, so concurrent callers race: one can
         # observe another's staged value as the "original" and restore a live
         # credential into the ambient environment instead of clearing it.
-        sts_kwargs: dict[str, Any] = {"region_name": resolved_region}
+        sts_kwargs: dict[str, Any] = {
+            "region_name": resolved_region,
+            "config": Config(
+                connect_timeout=_STS_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=_STS_READ_TIMEOUT_SECONDS,
+                retries={"total_max_attempts": _STS_MAX_ATTEMPTS, "mode": "standard"},
+            ),
+        }
         if has_access_key and has_secret_key:
             sts_kwargs["aws_access_key_id"] = aws_access_key_id
             sts_kwargs["aws_secret_access_key"] = aws_secret_access_key
