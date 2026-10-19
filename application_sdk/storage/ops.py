@@ -84,6 +84,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 # storage-sibling imports — it reaches back into ``ops`` lazily — so this
 # top-level import is acyclic regardless of module load order.
 from application_sdk.storage import integrity
+from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage._telemetry import (
     _log_transfer_progress,
     _record_transfer_metric,
@@ -1049,42 +1050,50 @@ async def _upload_once(
 
     last_progress = started
     bytes_sent = 0
-    async with obstore.open_writer_async(
-        resolved,
-        key,
-        buffer_size=effective_chunk,
-        max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
-        attributes=put_attributes,
-    ) as writer:
-        with path.open("rb") as fh:
-            while True:
-                chunk = fh.read(effective_chunk)
-                if not chunk:
-                    break
-                if h is not None:
-                    h.update(chunk)
-                await writer.write(chunk)
-                bytes_sent += len(chunk)
-                # One multipart part on its way to the store is one
-                # observable unit (ADR-0018). Marking per part rather than
-                # per file is what keeps a single multi-GB upload — the
-                # common shape for a large connector's parquet output —
-                # from looking like one long quiet window to the stall
-                # watchdog. Unconditional, unlike the progress *log* below:
-                # a mark is two stores under an uncontended lock, so it
-                # needs no interval gate.
-                current_progress_tracker().mark_progress("storage.upload_part")
-                if _progress_interval > 0:
-                    now = time.monotonic()
-                    if now - last_progress >= _progress_interval:
-                        _log_transfer_progress(
-                            "upload",
-                            key,
-                            bytes_so_far=bytes_sent,
-                            elapsed_ms=(now - started) * 1000.0,
-                            total_bytes=file_size,
-                        )
-                        last_progress = now
+    # The writer's parts upload inside obstore, where their completion is not
+    # observable, so the reservation covers the writer's whole life: up to
+    # max_concurrency parts in flight, the part being filled, and the chunk
+    # read here — or twice the file, when it fits in one buffer (FND-4082).
+    buffered_bytes = min(
+        2 * file_size, effective_chunk * (STORAGE_UPLOAD_MAX_CONCURRENCY + 2)
+    )
+    async with transfer_budget().reserve(buffered_bytes):
+        async with obstore.open_writer_async(
+            resolved,
+            key,
+            buffer_size=effective_chunk,
+            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+            attributes=put_attributes,
+        ) as writer:
+            with path.open("rb") as fh:
+                while True:
+                    chunk = fh.read(effective_chunk)
+                    if not chunk:
+                        break
+                    if h is not None:
+                        h.update(chunk)
+                    await writer.write(chunk)
+                    bytes_sent += len(chunk)
+                    # One multipart part on its way to the store is one
+                    # observable unit (ADR-0018). Marking per part rather than
+                    # per file is what keeps a single multi-GB upload — the
+                    # common shape for a large connector's parquet output —
+                    # from looking like one long quiet window to the stall
+                    # watchdog. Unconditional, unlike the progress *log* below:
+                    # a mark is two stores under an uncontended lock, so it
+                    # needs no interval gate.
+                    current_progress_tracker().mark_progress("storage.upload_part")
+                    if _progress_interval > 0:
+                        now = time.monotonic()
+                        if now - last_progress >= _progress_interval:
+                            _log_transfer_progress(
+                                "upload",
+                                key,
+                                bytes_so_far=bytes_sent,
+                                elapsed_ms=(now - started) * 1000.0,
+                                total_bytes=file_size,
+                            )
+                            last_progress = now
     return h, bytes_sent
 
 
@@ -1476,28 +1485,34 @@ async def download_file(
                 )
 
                 last_progress = started
+                # The stream holds up to one min_chunk_size buffer on the Rust
+                # side and its copy as Python bytes; the budget bounds that
+                # across every concurrent transfer (FND-4082).
+                stream_bytes = 2 * min(declared, min_chunk_size)
                 with os.fdopen(fd, "wb") as fh:
-                    async for chunk in result.stream(min_chunk_size=min_chunk_size):
-                        raw = bytes(chunk)
-                        fh.write(raw)
-                        bytes_written += len(raw)
-                        if h is not None:
-                            h.update(raw)
-                        # One streamed chunk landed on disk — see the matching mark in
-                        # upload_file for why this is per chunk and ungated.
-                        current_progress_tracker().mark_progress(
-                            "storage.download_chunk"
-                        )
-                        if _progress_interval > 0:
-                            now = time.monotonic()
-                            if now - last_progress >= _progress_interval:
-                                _log_transfer_progress(
-                                    "download",
-                                    key,
-                                    bytes_so_far=bytes_written,
-                                    elapsed_ms=(now - started) * 1000.0,
-                                )
-                                last_progress = now
+                    async with transfer_budget().reserve(stream_bytes):
+                        async for chunk in result.stream(min_chunk_size=min_chunk_size):
+                            raw = bytes(chunk)
+                            fh.write(raw)
+                            bytes_written += len(raw)
+                            if h is not None:
+                                h.update(raw)
+                            # One streamed chunk landed on disk — see the
+                            # matching mark in upload_file for why this is per
+                            # chunk and ungated.
+                            current_progress_tracker().mark_progress(
+                                "storage.download_chunk"
+                            )
+                            if _progress_interval > 0:
+                                now = time.monotonic()
+                                if now - last_progress >= _progress_interval:
+                                    _log_transfer_progress(
+                                        "download",
+                                        key,
+                                        bytes_so_far=bytes_written,
+                                        elapsed_ms=(now - started) * 1000.0,
+                                    )
+                                    last_progress = now
                     # fsync before the publish: on a delayed-allocation filesystem
                     # ENOSPC can surface only at writeback, and without this a
                     # short file would be published as complete (the FND-318
