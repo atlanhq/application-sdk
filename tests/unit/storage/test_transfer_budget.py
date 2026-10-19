@@ -30,6 +30,7 @@ from application_sdk.storage.file_ref_sync import (
     materialize_file_refs,
     persist_file_refs,
 )
+from application_sdk.storage.ops import download_file
 
 _KIB = 1024
 _MIB = 1024 * _KIB
@@ -57,6 +58,11 @@ async def _settle() -> None:
 
 
 class TestByteBudget:
+    @pytest.mark.parametrize("capacity", [0, -1])
+    def test_rejects_a_non_positive_capacity(self, capacity: int) -> None:
+        with pytest.raises(ValueError, match="positive"):
+            ByteBudget(capacity)
+
     async def test_grants_up_to_capacity_then_queues(self) -> None:
         budget = ByteBudget(100)
         async with budget.reserve(60):
@@ -265,6 +271,66 @@ def small_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("application_sdk.constants.FILE_REF_CHUNK_SIZE_BYTES", _CHUNK)
 
 
+class TestStreamedDownloads:
+    """``download_file``'s streaming GET reserves its buffer for the stream."""
+
+    async def test_concurrent_streams_wait_on_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        size = 64 * _KIB
+        store = create_memory_store()
+        for i in range(8):
+            await obstore.put_async(store, f"small/{i}.bin", bytes([i]) * size)
+        # Each stream reserves twice its object (the Rust buffer and its
+        # Python copy), so this budget admits two streams at a time.
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_TRANSFER_MEMORY_BUDGET_BYTES",
+            2 * (2 * size),
+        )
+        streaming = 0
+        peak_streaming = 0
+        real_get = obstore.get_async
+
+        async def _counting_get(store_: Any, key: str, **kwargs: Any) -> Any:
+            result = await real_get(store_, key, **kwargs)
+
+            class _Counted:
+                meta = result.meta
+
+                async def stream(self, **stream_kwargs: Any) -> Any:
+                    nonlocal streaming, peak_streaming
+                    streaming += 1
+                    peak_streaming = max(peak_streaming, streaming)
+                    try:
+                        async for chunk in result.stream(**stream_kwargs):
+                            await asyncio.sleep(0.005)
+                            yield chunk
+                    finally:
+                        streaming -= 1
+
+            return _Counted()
+
+        monkeypatch.setattr(obstore, "get_async", _counting_get)
+        await asyncio.wait_for(
+            asyncio.gather(
+                *(
+                    download_file(
+                        f"small/{i}.bin",
+                        tmp_path / f"{i}.bin",
+                        store,
+                        normalize=False,
+                        verify=False,
+                    )
+                    for i in range(8)
+                )
+            ),
+            _TIMEOUT,
+        )
+        assert peak_streaming == 2
+        assert transfer_budget().peak == 4 * size
+        assert all((tmp_path / f"{i}.bin").stat().st_size == size for i in range(8))
+
+
 class TestFourDirectoryRefs:
     async def _materialize_peak(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, budget: int
@@ -388,6 +454,38 @@ class TestFlatFanOut:
         with pytest.raises(StorageError):
             await _run_bounded([_fail(), *rest], 1)
         assert all(coro.cr_frame is None for coro in rest)  # closed
+
+    @pytest.mark.parametrize("bound", [1, 2, None])
+    async def test_an_item_that_cancels_itself_is_not_dropped(
+        self, bound: int | None
+    ) -> None:
+        """Its result is missing, so the call raises — after the rest ran."""
+        ran: list[int] = []
+
+        async def _cancels_itself() -> int:
+            raise asyncio.CancelledError
+
+        async def _item(i: int) -> int:
+            ran.append(i)
+            return i
+
+        with pytest.raises(asyncio.CancelledError):
+            await _run_bounded([_cancels_itself(), _item(1), _item(2)], bound)
+        assert ran == [1, 2]
+
+    async def test_the_caller_can_still_cancel(self) -> None:
+        started = asyncio.Event()
+
+        async def _slow() -> None:
+            started.set()
+            await asyncio.sleep(_TIMEOUT)
+
+        task = asyncio.ensure_future(_run_bounded([_slow() for _ in range(5)], 2))
+        await asyncio.wait_for(started.wait(), _TIMEOUT)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert task.cancelled()
 
     async def test_each_coroutine_runs_in_its_own_context(self) -> None:
         var: contextvars.ContextVar[int | None] = contextvars.ContextVar(

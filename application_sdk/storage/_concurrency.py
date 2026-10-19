@@ -67,16 +67,33 @@ async def _run_bounded(
     # a 100k-key fan-out holds *max_concurrency* tasks rather than one per key
     # (FND-4082). A coroutine the pool never reached is closed, not left to
     # warn that it was never awaited.
+    #
+    # A coroutine that raises CancelledError of its own accord is not a
+    # failure to a TaskGroup: it drops the task without cancelling the rest.
+    # Its result is then missing, so once the others finish the call raises
+    # CancelledError, as reading that task's result always did. Returning
+    # the results that did arrive would pass off an incomplete fan-out as a
+    # complete one.
     results: dict[int, T] = {}
+    started = 0
     pending_coros = enumerate(coros)
 
     async def _worker() -> None:
+        nonlocal started
         for index, coro in pending_coros:
+            started += 1
             # Its own task, as when every coroutine got one up front: each
             # runs in a copy of the context, so none leaks a contextvar into
             # the next on this worker. Cancelling the worker cancels it and
             # waits for it to unwind. Only the running ones are alive at once.
-            results[index] = await asyncio.ensure_future(coro)
+            task = asyncio.ensure_future(coro)
+            try:
+                results[index] = await task
+            except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if not task.cancelled() or (current and current.cancelling()):
+                    raise
+                # The item cancelled itself; the worker moves on to the next.
 
     with tracking_offloads() as pending:
         try:
@@ -84,6 +101,7 @@ async def _run_bounded(
                 async with asyncio.TaskGroup() as tg:
                     if max_concurrency is None:
                         for index, coro in pending_coros:
+                            started += 1
                             tg.create_task(_store(results, index, coro))
                     else:
                         for _ in range(max(max_concurrency, 1)):
@@ -104,7 +122,9 @@ async def _run_bounded(
         except BaseException:
             await drain_offloads(pending)
             raise
-    return [results[index] for index in range(len(results))]
+    if len(results) < started:
+        raise asyncio.CancelledError
+    return [results[index] for index in range(started)]
 
 
 async def _store(

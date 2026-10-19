@@ -1,4 +1,4 @@
-"""One in-flight byte budget shared by every object-store transfer.
+"""One in-flight byte budget shared by the SDK's file transfers.
 
 The storage layer's concurrency limits nest: refs × files per ref × range GETs
 per file, each holding a whole chunk in memory. None of them knows about the
@@ -16,6 +16,10 @@ reserves the bytes it will hold in memory before it holds them:
   streams;
 * a multipart upload in ``ops._upload_once``, for its part buffers, while its
   writer is open.
+
+Whole-object byte reads and writes do not reserve — ``CloudStore``, including
+``CloudStore.get_bytes``, and the small-object ``_get_bytes`` / ``_put``
+helpers hold what they move outside the budget.
 
 No holder ever asks for a second reservation, so the budget cannot deadlock
 against itself. A request larger than the whole budget is clamped to it: it

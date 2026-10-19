@@ -444,9 +444,11 @@ STORAGE_UPLOAD_MAX_CONCURRENCY = int(
     os.getenv("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", "12")
 )
 
-#: Bytes of transfer buffers every object-store transfer in the process may
-#: hold at once: range GETs, streaming GETs and multipart part buffers all
-#: reserve from it (FND-4082). The per-call concurrency limits above multiply
+#: Bytes of transfer buffers the SDK's file transfers in the process may hold
+#: at once: the range GETs, streaming downloads and multipart uploads behind
+#: ``download_file`` / ``upload_file`` / the prefix operations / FileReference
+#: hand-offs all reserve from it (FND-4082). Whole-object byte reads and
+#: writes — ``CloudStore`` among them — do not. The per-call concurrency limits above multiply
 #: with each other; this is the one bound on their product. ``0`` (default)
 #: takes a quarter of the container memory limit, never under 128 MiB, and
 #: 1 GiB when no limit is known.
