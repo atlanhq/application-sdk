@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.35.0] - 2026-10-19
+
+### Features
+
+- support multi-entrypoint system apps (system bundles), with CI-synced caller nodes (#4472) ([feca6f5](https://github.com/atlanhq/application-sdk/commit/feca6f5))
+
 ## [0.34.0] - 2026-10-14
 
 ### Features
