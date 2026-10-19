@@ -271,12 +271,20 @@ def test_both_jobs_try_twingate_before_globalprotect(
         assert tg < gp, job
 
         twingate, globalprotect = steps[tg], steps[gp]
-        assert twingate["continue-on-error"] is True, job
-        assert "env.TWINGATE_SHARED_KEY != ''" in twingate["if"], job
-        assert twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        key_check = next(s for s in steps if s.get("id") == "twingate-key")
+        pin_gate = "env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''"
+        for step in (key_check, twingate, globalprotect):
+            assert step["if"].startswith(pin_gate), (job, step["name"])
+        assert "steps.twingate-key.outputs.present == 'true'" in twingate["if"], job
         assert (
             f"steps.{twingate['id']}.outputs.connected != 'true'" in globalprotect["if"]
         ), job
+
+        assert twingate["continue-on-error"] is True, job
+        assert twingate["with"]["service-key"] == "${{ secrets.TWINGATE_SHARED_KEY }}"
+        assert twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        assert "TWINGATE_SHARED_KEY" not in (jobs[job].get("env") or {}), job
+        assert twingate["timeout-minutes"] < jobs[job]["timeout-minutes"], job
 
         checkout = next(s for s in steps if "actions/checkout" in s.get("uses", ""))
         assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]

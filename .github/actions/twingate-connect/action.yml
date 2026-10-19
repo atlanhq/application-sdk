@@ -61,7 +61,7 @@ runs:
         MOTHERSHIP_URL="${MOTHERSHIP_URL:-https://mothership.atlan.dev}"
 
         if [ -z "${TWINGATE_SERVICE_KEY}" ]; then
-          echo "::error::service-key resolved empty. Add TWINGATE_SERVICE_KEY to this repo's Actions secrets (Settings -> Secrets and variables -> Actions)."
+          echo "::error::service-key resolved empty. Check that the secret the caller passes (e.g. TWINGATE_SERVICE_KEY or TWINGATE_SHARED_KEY) is set and visible to this repo."
           exit 1
         fi
 
@@ -70,7 +70,7 @@ runs:
         # Linux docs use; the trusted=yes form in their CI snippet disables
         # signature verification for a package that then runs as root and
         # creates network interfaces on the runner.
-        curl -fsSL https://packages.twingate.com/apt/gpg.key \
+        curl -fsSL --max-time 30 https://packages.twingate.com/apt/gpg.key \
           | sudo gpg --dearmor -o /usr/share/keyrings/twingate-client-keyring.gpg || {
             echo "::error::could not fetch the Twingate signing key."; exit 1; }
         echo "deb [signed-by=/usr/share/keyrings/twingate-client-keyring.gpg] https://packages.twingate.com/apt/ * *" \
@@ -78,12 +78,12 @@ runs:
         # Refresh only the Twingate list. A full `apt-get update` pulls every
         # repo the runner image ships and fails the step if any one of them is
         # having a bad day - unrelated to us.
-        sudo apt-get update -yq \
+        sudo timeout 60 apt-get update -yq \
           -o Dir::Etc::sourcelist="sources.list.d/twingate.list" \
           -o Dir::Etc::sourceparts="-" \
           -o APT::Get::List-Cleanup="0" || {
             echo "::error::apt-get update failed for the Twingate repo."; exit 1; }
-        sudo apt-get install -yq twingate || {
+        sudo timeout 90 apt-get install -yq twingate || {
             echo "::error::twingate package failed to install."; exit 1; }
         echo "::endgroup::"
 
@@ -109,9 +109,9 @@ runs:
         # unchecked failure here would fall through to the probe and be reported
         # as "reachability failed" - the wrong diagnosis, which is the exact
         # class of bug #2577 fixed for globalprotect-connect.
-        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo twingate setup --headless=- || {
+        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo timeout 30 twingate setup --headless=- || {
             echo "::error::twingate setup failed - the service key was rejected."; teardown; exit 1; }
-        sudo twingate start || {
+        sudo timeout 30 twingate start || {
             echo "::error::twingate start failed."; teardown; exit 1; }
 
         # glibc's resolver sends parallel A/AAAA queries and stalls for 5s when

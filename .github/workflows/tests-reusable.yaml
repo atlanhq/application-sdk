@@ -1567,7 +1567,7 @@ jobs:
       ((needs.detect-integration.result == 'success' && needs.detect-integration.outputs.count != '0') ||
        (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0')))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: write # create the per-run holder ref
       actions: read # parity with pause (holder-liveness reaping lives there)
@@ -1575,7 +1575,6 @@ jobs:
     env:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}
     steps:
       # api.dataforge.atlan.dev admits only the VPN egress IPs, so — exactly like
       # the integration / e2e fetch steps — the job sparse-checks-out this
@@ -1598,13 +1597,18 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      - name: Check for a Twingate key
+        id: twingate-key
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        run: echo "present=${{ secrets.TWINGATE_SHARED_KEY != '' }}" >> "$GITHUB_OUTPUT"
       - name: Connect to Twingate (dataforge path)
         id: twingate
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && env.TWINGATE_SHARED_KEY != ''
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate-key.outputs.present == 'true'
         continue-on-error: true
+        timeout-minutes: 6
         uses: ./application-sdk-scripts/.github/actions/twingate-connect
         with:
-          service-key: ${{ env.TWINGATE_SHARED_KEY }}
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
           mothership-url: https://api.dataforge.atlan.dev
       - name: Connect to GlobalProtect VPN (dataforge path)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
@@ -2865,7 +2869,7 @@ jobs:
       inputs.dataforge-mode == 'resource' &&
       needs.wake-dataforge-source.result != 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: write # delete holder refs (this run's + reaped abandoned ones)
       actions: read # tell a live holder from a dead one
@@ -2873,7 +2877,6 @@ jobs:
     env:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
-      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}
     steps:
       # Same VPN precondition as wake — pause hits the same private API host.
       - name: Fetch SDK CI scripts + VPN actions
@@ -2889,13 +2892,18 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      - name: Check for a Twingate key
+        id: twingate-key
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        run: echo "present=${{ secrets.TWINGATE_SHARED_KEY != '' }}" >> "$GITHUB_OUTPUT"
       - name: Connect to Twingate (dataforge path)
         id: twingate
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && env.TWINGATE_SHARED_KEY != ''
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate-key.outputs.present == 'true'
         continue-on-error: true
+        timeout-minutes: 6
         uses: ./application-sdk-scripts/.github/actions/twingate-connect
         with:
-          service-key: ${{ env.TWINGATE_SHARED_KEY }}
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
           mothership-url: https://api.dataforge.atlan.dev
       - name: Connect to GlobalProtect VPN (dataforge path)
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
