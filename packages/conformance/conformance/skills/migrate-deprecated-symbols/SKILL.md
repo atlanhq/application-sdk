@@ -26,7 +26,7 @@ optional_triggers:
   - "remove private SDK imports"
   - "fix deprecation warnings from application_sdk"
 owner: connector-platform-team
-last_updated: "2026-10-15"
+last_updated: "2026-10-19"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -179,7 +179,11 @@ use), because each use changes with the migration.
   the app under its own name; otherwise ignore it:
   `# conformance: ignore[B008] no public equivalent — tracked in <ticket id>`.
   For an SDK name, the ticket is an issue on `atlanhq/application-sdk` asking
-  for a public API; never invent an id.
+  for a public API; never invent an id. Before you choose this class, look
+  for a public surface that answers the same question the code asks. Example:
+  a test of how an error maps to an HTTP status calls the real route on
+  `create_app_handler_service(handler)` with a test client, not
+  `_app_error_to_http_status`.
 - **false positive** — a B001 method-name match on an object that is not
   the SDK's. Ignore it with that reason.
 
