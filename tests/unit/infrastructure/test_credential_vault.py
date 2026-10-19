@@ -149,7 +149,10 @@ class TestDaprCredentialVaultGetCredentials:
             config_bytes=None,
             secret_data={},
         )
-        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(_VAULT_SLEEP, new_callable=AsyncMock),
+        ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError):
                 await vault.get_credentials("ghost-guid")
@@ -998,6 +1001,9 @@ def test_outage_types_stay_importable_from_this_module() -> None:
     assert credential_vault.SecretStoreUnreachableError is SecretStoreUnreachableError
 
 
+_VAULT_SLEEP = "application_sdk.infrastructure._dapr.credential_vault.asyncio.sleep"
+
+
 def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
     """A Dapr binding GET answered with HTTP 500 and Dapr's JSON error body."""
     req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/upstream")
@@ -1011,9 +1017,10 @@ def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
 class TestDaprCredentialVaultMissingConfigBlob:
     """Some object-store bindings (Azure Blob among them) answer a GET for a
     key that does not exist with HTTP 500 and a "not found" Dapr error body,
-    not a 200 with empty data. That is a missing credential config, and must
-    fail at once with the real cause rather than be retried for the whole
-    cold-start budget and then reported as an unreachable sidecar."""
+    not a 200 with empty data. That is a missing credential config. It gets
+    a short re-read ladder of its own (a not-found can be transient) and then
+    fails with the real cause, rather than being retried for the whole
+    cold-start budget and reported as an unreachable sidecar."""
 
     def _make_vault(self, mock_client: MagicMock) -> DaprCredentialVault:
         return DaprCredentialVault(
@@ -1035,19 +1042,69 @@ class TestDaprCredentialVaultMissingConfigBlob:
             "error invoking output binding upstream-objectstore: object not found",
         ],
     )
-    async def test_missing_credential_config_blob_is_not_retried(
+    async def test_missing_credential_config_blob_is_not_retried_as_cold_start(
         self, deterministic_dapr_cold_start_deadline, dapr_message: str
     ) -> None:
         mock_client = MagicMock()
         mock_client.invoke_binding = AsyncMock(side_effect=_binding_500(dapr_message))
 
-        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(_VAULT_SLEEP, new_callable=AsyncMock) as sleep,
+        ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError) as exc_info:
                 await vault.get_credentials("example-credential")
 
         assert "No credential config found" in str(exc_info.value)
-        assert mock_client.invoke_binding.await_count == 1
+        # One read per ladder step, each answered at once: no cold-start retry.
+        assert mock_client.invoke_binding.await_count == 4
+        assert [c.args[0] for c in sleep.await_args_list] == [2.0, 5.0, 10.0]
+
+    async def test_missing_config_that_appears_within_the_ladder_resolves(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=[
+                _binding_500("error invoking output binding: object not found"),
+                _binding_500("error invoking output binding: object not found"),
+                BindingResult(data=json.dumps(config).encode(), metadata={}),
+            ]
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(_VAULT_SLEEP, new_callable=AsyncMock),
+        ):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("example-credential")
+
+        assert result["host"] == "db.example.com"
+        assert mock_client.invoke_binding.await_count == 3
+
+    async def test_missing_config_for_the_whole_ladder_reports_attempts(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=_binding_500("error invoking output binding: object not found")
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(_VAULT_SLEEP, new_callable=AsyncMock),
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        message = str(exc_info.value)
+        assert "No credential config found for GUID example-credential" in message
+        assert "not-found on 4 attempts over 17s" in message
 
     async def test_binding_500_without_not_found_is_still_retried(
         self, deterministic_dapr_cold_start_deadline

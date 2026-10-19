@@ -4,6 +4,7 @@ Fetches credential config from S3 via Dapr binding, then resolves secret
 references via the Dapr secret store.
 """
 
+import asyncio
 import copy
 import re
 from enum import Enum
@@ -57,6 +58,13 @@ _MISSING_OBJECT_RE = re.compile(
     r"|specified (?:blob|key) does not exist",
     re.IGNORECASE,
 )
+
+
+#: Backoff before each re-read of a credential config the object store said
+#: was absent (so ``len`` extra reads, ~17s total). A not-found can be
+#: transient, e.g. a gateway pod answering 404 before its routes load, so it
+#: gets a short ladder of its own instead of the cold-start budget.
+_MISSING_CONFIG_RETRY_DELAYS_SECONDS: tuple[float, ...] = (2.0, 5.0, 10.0)
 
 
 def _is_missing_object_error(exc: BaseException) -> bool:
@@ -242,8 +250,11 @@ class DaprCredentialVault:
 
         A binding 5xx whose Dapr error body says the key does not exist (Azure
         Blob's "blob not found", S3's "object not found" or ``NoSuchKey``) is
-        the missing-config answer, not an outage, and fails at once with "No
-        credential config found" instead of being retried.
+        the missing-config answer, not an outage. That answer, like an empty
+        response, is re-read on the short
+        :data:`_MISSING_CONFIG_RETRY_DELAYS_SECONDS` ladder and then fails
+        with "No credential config found" and the attempt count, instead of
+        being retried for the cold-start budget.
 
         Raises:
             CredentialVaultError: If the GUID contains unsafe characters or no
@@ -296,9 +307,9 @@ class DaprCredentialVault:
             try:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
             except BindingError as exc:
-                # Treated as the "no config" answer below, not a cold start:
-                # retrying a key that does not exist only delays the failure
-                # and relabels it as an unreachable sidecar.
+                # The "no config" answer, re-read on the short ladder below
+                # rather than the cold-start budget, which would delay the
+                # failure and relabel it as an unreachable sidecar.
                 if exc.cause is not None and _is_missing_object_error(exc.cause):
                     return BindingResponse(data=None, metadata={})
                 if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
@@ -313,20 +324,27 @@ class DaprCredentialVault:
                     ) from exc
                 raise
 
-        response = await retry_past_dapr_cold_start(
-            _fetch,
-            description=f"Credential-vault config fetch for '{credential_guid}'",
-            component=DAPR_UPSTREAM_BINDING_COMPONENT,
-        )
-
-        if response.data is None:
-            raise CredentialVaultError(
-                "No credential config found for GUID %s in upstream store"
-                % credential_guid,
-                credential_guid=credential_guid,
+        attempts = 0
+        for delay in (*_MISSING_CONFIG_RETRY_DELAYS_SECONDS, None):
+            # A transport error or any other 5xx raises out of this loop on
+            # the cold-start path; only the not-found answer is re-read here.
+            response = await retry_past_dapr_cold_start(
+                _fetch,
+                description=f"Credential-vault config fetch for '{credential_guid}'",
+                component=DAPR_UPSTREAM_BINDING_COMPONENT,
             )
+            attempts += 1
+            if response.data is not None:
+                return orjson.loads(response.data)
+            if delay is not None:
+                await asyncio.sleep(delay)
 
-        return orjson.loads(response.data)
+        raise CredentialVaultError(
+            "No credential config found for GUID %s in upstream store "
+            "(object store answered not-found on %d attempts over %.0fs)"
+            % (credential_guid, attempts, sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS)),
+            credential_guid=credential_guid,
+        )
 
     async def _get_secret(
         self,
