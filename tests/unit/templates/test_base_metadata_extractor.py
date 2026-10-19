@@ -106,7 +106,9 @@ class TestUploadToAtlanRedirect:
 
 
 class TestSubclassDeprecationNotice:
-    def test_notice_names_app_and_sql_app(self) -> None:
+    def test_notice_names_app_and_sql_app(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always", DeprecationWarning)
 

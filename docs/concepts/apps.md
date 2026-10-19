@@ -198,7 +198,7 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 
 ### BaseMetadataExtractor
 
-Base class for all metadata-extraction Apps. Provides upload, cleanup, and lifecycle plumbing without committing to a SQL-specific task layout. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
+Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp` for a SQL source. It is `App` plus the deprecated `upload_to_atlan` task. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
 
 ## Offloading Blocking Work (`run_in_thread` and auto-holds)
 

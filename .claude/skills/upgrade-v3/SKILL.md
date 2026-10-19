@@ -139,7 +139,7 @@ After identifying the connector type, determine the transformation strategy:
 
 **SQL connectors** (v2 `SqlMetadataExtractor`, `SqlQueryExtractor`, `IncrementalSqlMetadataExtractor`):
 
-> **The SQL template base class is now `SqlApp`.** `application_sdk.templates.SqlMetadataExtractor`, `SqlQueryExtractor`, `BaseMetadataExtractor` and `IncrementalSqlMetadataExtractor` are all **deprecated** (removal in v4.0.0) and are flagged by conformance `B001 DeprecatedSdkSymbolUsage`. Subclass `application_sdk.templates.SqlApp` instead (a non-SQL connector on `BaseMetadataExtractor` subclasses plain `App`, see **REST/API connectors** below):
+> **The SQL template base class is now `SqlApp`.** `application_sdk.templates.SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are all **deprecated** (removal in v4.0.0) and are flagged by conformance `B001 DeprecatedSdkSymbolUsage`. Subclass `application_sdk.templates.SqlApp` instead:
 > ```python
 > from application_sdk.templates import SqlApp
 > ```

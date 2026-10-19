@@ -46,7 +46,7 @@ Does the connector extract SQL database metadata?
 ├── Does the connector extract SQL query logs?
 │   └── YES → §2b  SqlQueryExtractor
 ├── Does the connector call a REST/HTTP API (BI tool, SaaS platform)?
-│   └── YES → §2d  REST/HTTP Metadata Extractor (BaseMetadataExtractor)
+│   └── YES → §2d  REST/HTTP Metadata Extractor (App)
 └── Custom connector (none of the above)?
     └── YES → §3   Custom App
 ```
@@ -251,8 +251,7 @@ class ModeActivities(ActivitiesInterface):
 ### After (v3)
 
 ```python
-from application_sdk.templates import BaseMetadataExtractor
-from application_sdk.app import task
+from application_sdk.app import App, task
 from application_sdk.contracts.base import Input, Output
 
 class MyExtractionInput(Input, allow_unbounded_fields=True):
@@ -267,7 +266,7 @@ class MyExtractionOutput(Output):
     transformed_data_prefix: str = ""
     connection_qualified_name: str = ""
 
-class ModeExtractor(BaseMetadataExtractor):
+class ModeExtractor(App):
     @task(timeout_seconds=3600)
     async def preflight_check(self, input: PreflightTaskInput) -> PreflightTaskOutput:
         client = await self._get_or_create_client(input)
@@ -336,7 +335,7 @@ class ModeExtractor(BaseMetadataExtractor):
 ### Checklist
 
 - [ ] Delete the `@workflow.defn` class and `activities_cls = …` line.
-- [ ] Merge Workflow + Activities into one `MyExtractor(BaseMetadataExtractor)`.
+- [ ] Merge Workflow + Activities into one `MyExtractor(App)`.
 - [ ] Define typed `Input`/`Output` for each `@task` method.
 - [ ] Define top-level `MyExtractionInput(Input, allow_unbounded_fields=True)` for `run()`.
 - [ ] Define `MyExtractionOutput(Output)` with fields AE needs (`transformed_data_prefix`, etc.).
