@@ -703,6 +703,50 @@ def transform_entities(extra_folders):
     assert "L006" in _ids(src)
 
 
+def test_l006_fires_for_global_literal_mapping_rebound_elsewhere() -> None:
+    entries = ", ".join(f'"ENTITY_{index}": "processed/{index}"' for index in range(11))
+    src = f"""
+from loguru import logger
+
+folders = {{}}
+
+def widen():
+    global folders
+    folders = {{{entries}}}
+
+def run():
+    global folders
+    folders = {{"ENTITY_A": "processed/a"}}
+    widen()
+    for entity_type, folder in folders.items():
+        logger.info("Transformed %s entities", entity_type)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_nonlocal_literal_list_rebound_elsewhere() -> None:
+    src = """
+from loguru import logger
+
+def outer(extra):
+    items = []
+
+    def run():
+        nonlocal items
+        items = ["a"]
+        widen()
+        for item in items:
+            logger.info("Processed %s", item)
+
+    def widen():
+        nonlocal items
+        items = extra
+
+    run()
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_producer_progress_in_unbounded_async_for() -> None:
     src = """
 from loguru import logger

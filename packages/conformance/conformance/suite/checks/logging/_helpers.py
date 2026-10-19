@@ -384,9 +384,21 @@ def _local_literal_bindings(
 ) -> dict[str, tuple[int, int]]:
     """Map unambiguous, unmutated local literal iterables to their caps."""
     store_counts = _function_store_counts(function)
+    # global/nonlocal names can be rebound by other scopes between the
+    # assignment and the loop, so their literal cap proves nothing.
+    non_local = {
+        name
+        for node in _function_scope_nodes(function)
+        if isinstance(node, (ast.Global, ast.Nonlocal))
+        for name in node.names
+    }
     bindings: dict[str, tuple[int, int]] = {}
     for target, value, statement in _direct_assignment_values(function):
-        if not isinstance(target, ast.Name) or store_counts.get(target.id) != 1:
+        if (
+            not isinstance(target, ast.Name)
+            or store_counts.get(target.id) != 1
+            or target.id in non_local
+        ):
             continue
         references = [
             node
