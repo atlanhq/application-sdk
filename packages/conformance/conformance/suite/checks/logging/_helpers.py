@@ -249,6 +249,19 @@ def _is_builtin_call(
     )
 
 
+def _mapping_items_receiver(iterable: ast.expr) -> ast.expr | None:
+    """Return the receiver of a no-argument ``mapping.items()`` call."""
+    if (
+        isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Attribute)
+        and iterable.func.attr == "items"
+        and not iterable.args
+        and not iterable.keywords
+    ):
+        return iterable.func.value
+    return None
+
+
 def _literal_iterable_cap(
     iterable: ast.expr, shadowed: frozenset[str] = frozenset()
 ) -> int | None:
@@ -262,6 +275,13 @@ def _literal_iterable_cap(
         if any(isinstance(element, ast.Starred) for element in iterable.elts):
             return None
         return len(iterable.elts)
+    if isinstance(iterable, ast.Dict):
+        if any(key is None for key in iterable.keys):
+            return None
+        return len(iterable.keys)
+    mapping = _mapping_items_receiver(iterable)
+    if isinstance(mapping, ast.Dict):
+        return _literal_iterable_cap(mapping, shadowed)
     return None
 
 
@@ -339,6 +359,16 @@ def _is_loop_source_reference(
     parent = parents.get(node)
     if isinstance(parent, (ast.For, ast.AsyncFor)) and parent.iter is node:
         return True
+    if isinstance(parent, ast.Attribute) and parent.value is node:
+        call = parents.get(parent)
+        if (
+            isinstance(call, ast.Call)
+            and call.func is parent
+            and parent.attr == "items"
+            and _mapping_items_receiver(call) is node
+        ):
+            loop = parents.get(call)
+            return isinstance(loop, (ast.For, ast.AsyncFor)) and loop.iter is call
     if _is_builtin_call(parent, "zip", shadowed):
         if node not in parent.args:
             return False
@@ -389,6 +419,9 @@ def _iterable_cap(
         return cap
     if isinstance(iterable, ast.Name):
         return local_caps.get(iterable.id)
+    mapping = _mapping_items_receiver(iterable)
+    if isinstance(mapping, ast.Name):
+        return local_caps.get(mapping.id)
     if _is_builtin_call(iterable, "zip", shadowed):
         if not iterable.args:
             return 0
