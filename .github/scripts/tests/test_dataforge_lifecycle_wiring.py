@@ -285,6 +285,7 @@ def test_both_jobs_try_twingate_before_globalprotect(
         assert "steps.twingate.outcome == 'failure'" in cleanup["if"], job
         assert "steps.twingate.outcome == 'cancelled'" in cleanup["if"], job
         assert "twingate stop" in cleanup["run"], job
+        assert cleanup["continue-on-error"] is True, job
         assert "/etc/resolv.conf" in cleanup["run"], job
         assert "twingate.list" in cleanup["run"], job
         assert (

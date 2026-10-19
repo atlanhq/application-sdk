@@ -105,12 +105,12 @@ runs:
         # clean, not merely non-zero - otherwise the "cannot make things worse
         # than main" property this PR claims is not actually true.
         echo "::group::Start headless client"
-        # Checked explicitly: the script deliberately does not `set -e`, so an
-        # unchecked failure here would fall through to the probe and be reported
-        # as "reachability failed" - the wrong diagnosis, which is the exact
-        # class of bug #2577 fixed for globalprotect-connect.
-        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo timeout -k 10 30 twingate setup --headless=-
-        rc=$?
+        # Checked explicitly: `shell: bash` runs with -e, so an unchecked failure
+        # here would exit without teardown, and a failure that reached the probe
+        # would be reported as "reachability failed" - the wrong diagnosis, which
+        # is the exact class of bug #2577 fixed for globalprotect-connect.
+        rc=0
+        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo timeout -k 10 30 twingate setup --headless=- || rc=$?
         if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
           echo "::error::twingate setup timed out."; teardown; exit 1
         elif [ "${rc}" -ne 0 ]; then

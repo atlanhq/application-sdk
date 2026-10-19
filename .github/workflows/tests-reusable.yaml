@@ -1609,6 +1609,7 @@ jobs:
           mothership-url: https://api.dataforge.atlan.dev
       - name: Clean up after a stopped Twingate step
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
         run: |
           sudo timeout -k 5 15 twingate stop || true
           if [ -f /tmp/resolv.conf.pre-twingate ]; then sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf; fi
@@ -2908,6 +2909,7 @@ jobs:
           mothership-url: https://api.dataforge.atlan.dev
       - name: Clean up after a stopped Twingate step
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
         run: |
           sudo timeout -k 5 15 twingate stop || true
           if [ -f /tmp/resolv.conf.pre-twingate ]; then sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf; fi
