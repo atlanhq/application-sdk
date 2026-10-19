@@ -101,9 +101,82 @@ def _sub_userinfo(m: re.Match[str]) -> str:
 # The leading ``\*\*\*`` alternative leaves a value the URL pass already
 # redacted alone, so the quote that closes ``'https://h/p?token=***'`` survives;
 # it only applies when ``***`` is the whole value, so it can never stop short
-# of a real secret.
+# of a real secret. The negative lookahead after ``=`` likewise leaves a quoted
+# value :data:`_QUOTED_SECRET_RE` already masked (``password='***'``) intact.
+_SECRET_NAMES = r"(?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])(?:sig|token|auth))"
+# A credential-bearing HTTP header. Matched as a suffix like the names above, so
+# ``proxy-authorization``, ``set-cookie``, ``x-api-key`` and ``x-auth-token``
+# are covered by ``authorization``, ``cookie``, ``api-key`` and ``auth-token``.
+_SECRET_HEADER_NAMES = r"(?:authorization|cookie|api-key|auth-token)"
+# The first letters of every name in the two lists above. ``re`` cannot
+# prefilter an alternation that holds a lookbehind, so without this it tries
+# every name at every offset; the lookahead rejects most offsets in one step,
+# which made the quoted pass ~6x faster on a 20 KB traceback. A name added to
+# either list must start with one of these letters
+# (``test_every_secret_name_passes_the_first_letter_gate`` checks).
+_SECRET_NAME_START = r"(?=[aiprsct])"
 _SECRET_PARAM_RE = re.compile(
-    r"(?i)((?:api_key|apikey|api-key|access_token|auth_token|refresh_token|id_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])(?:sig|token|auth))=)(?:\*\*\*(?=['\"<>]?(?:[\s&,;#]|$))|\{[^}]*\}|[^\s&,;#]+)",
+    r"(?i)(" + _SECRET_NAME_START + _SECRET_NAMES + r"=)(?!(['\"])\*\*\*\2)"
+    r"(?:\*\*\*(?=['\"<>]?(?:[\s&,;#]|$))|\{[^}]*\}|[^\s&,;#]+)",
+)
+# An ``Authorization`` scheme, kept in front of the masked credential so the
+# line still says how the request authenticated.
+_AUTH_SCHEME = r"(?:(?:bearer|basic|token)\s+)?"
+# Where a header name or ``Bearer`` may start: a token boundary, or just after
+# an escaped ``\n`` / ``\r`` / ``\t``. A message rendered through ``repr()``
+# (loguru's ``diagnose`` annotations, an exception repr) puts each header on
+# the same physical line after a literal ``\n``, whose ``n`` would otherwise
+# fail the boundary.
+_TOKEN_START = r"(?:(?<![a-z0-9_-])|(?<=\\[nrt]))"
+# A quoted value under a secret name: a dict or JSON entry (``'password': 'x'``,
+# ``"api_key":"x"``), httpx's raw header pairs (``(b'cookie', b'x')``) or a
+# keyword repr (``password='x'``). The value is masked up to its closing quote,
+# so a value holding a space, ``,`` or ``;`` — where the bare pass would stop —
+# cannot leak a tail, and the entries after it survive. Escapes are honoured
+# (``'it\'s'``); an unterminated value is masked to the end of the line. A
+# quoted key has its closing quote right after the name, so ``'next_token'``
+# and ``'token_type'`` keep the same boundaries as the bare pass. An unquoted
+# key needs ``=``: ``secret: 'x'`` is as likely prose naming a secret as a
+# secret, and a header line with an unquoted name is
+# :data:`_SECRET_HEADER_LINE_RE`'s.
+_QUOTED_SECRET_RE = re.compile(
+    r"(?im)("
+    + _SECRET_NAME_START
+    + "(?:"
+    + _SECRET_NAMES
+    + "|"
+    + _SECRET_HEADER_NAMES
+    + r")"
+    r"(?:['\"]\s*[:,]|=)\s*b?(['\"])" + _AUTH_SCHEME + r")"
+    r"(?:\\.|(?!\2)[^\\\n])*(\2|$)",
+)
+# A raw ``Name: value`` header line. A header value runs to the end of the line,
+# and a cookie's has spaces and ``;`` in it, so everything after the name (and
+# any ``Authorization`` scheme) is masked; in a ``repr()``'d message that is
+# the rest of the repr, which over-masks rather than leaks. The lookahead
+# straight after ``:`` leaves an already-masked value alone; placed after the
+# optional spaces and scheme instead, the engine would backtrack them to empty
+# and re-mask ``Authorization: ***`` as ``Authorization:***``. Only a value
+# that is exactly ``***`` to the end of the line counts as masked: a value that
+# merely starts with it (``X-Api-Key: ***FAKEKEY``) is masked again.
+_SECRET_HEADER_LINE_RE = re.compile(
+    r"(?im)("
+    + _TOKEN_START
+    + r"(?:proxy-authorization|authorization|set-cookie|cookie|x-api-key|api-key|x-auth-token)"
+    r"[ \t]*:(?![ \t]*"
+    + _AUTH_SCHEME
+    + r"\*\*\*[ \t]*\r?$)[ \t]*"
+    + _AUTH_SCHEME
+    + r")[^\r\n]+",
+)
+# A ``Bearer <token68>`` with no header name around it, as exception text
+# quotes it. The word ``token`` on its own is skipped so ``invalid bearer
+# token`` stays readable, but ``token-…`` and ``token.…`` are token68 and are
+# masked. ``*`` is in the value class and ``***`` is exempt only when nothing
+# token-like follows it, so ``Bearer ***FAKE`` cannot pass as already masked.
+_BEARER_TOKEN_RE = re.compile(
+    r"(?i)(" + _TOKEN_START + r"bearer\s+)"
+    r"(?!(?:\*\*\*|token)(?![a-z0-9._~+/*=-]))[a-z0-9._~+/*-]+=*",
 )
 # An absolute URL's query and/or fragment: everything from the first ``?`` or
 # ``#`` up to the end of the URL. The URL ends at whitespace, a quote or an angle
@@ -160,7 +233,7 @@ def _sub_query_fragment(m: re.Match[str]) -> str:
 def redact_secrets(text: str) -> str:
     """Redact credentials from a string bound for a log or the wire.
 
-    ANSI colour escapes are stripped first, then three passes:
+    ANSI colour escapes are stripped first, then these passes, in order:
 
     * URL userinfo (``scheme://user:pass@``) → ``scheme://***@``, except Azure
       blob ``container@account`` addressing.
@@ -169,6 +242,13 @@ def redact_secrets(text: str) -> str:
       :data:`_SAFE_QUERY_PARAMS` (pagination, Azure SAS scope and expiry).
       Param names stay so the line is still diagnosable. The URL ends at
       whitespace, a quote or ``<``/``>``.
+    * Quoted values under a credential name or header in a dict, JSON or
+      keyword repr → ``{'password': '***'}``, ``password='***'``,
+      ``{'Authorization': 'Bearer ***'}``, masked up to the closing quote.
+    * Raw credential header lines (``Authorization``, ``Proxy-Authorization``,
+      ``Cookie``, ``Set-Cookie``, ``X-Api-Key``, ``Api-Key``, ``X-Auth-Token``)
+      → ``Authorization: Bearer ***``, masked to the end of the line.
+    * A bare ``Bearer <token>`` → ``Bearer ***``.
     * Bare ``key=value`` pairs outside a URL whose key is a known credential
       name (``password``, ``token``, ``apikey``, ``pwd``, ``sig``, …).
 
@@ -182,7 +262,13 @@ def redact_secrets(text: str) -> str:
     Known limits: a secret in a URL *path* (``/keys/<token>/…``) is not
     redacted, nor is a URL with no ``scheme://`` (``host/p?token=x``) or one
     escaped inside JSON (``https:\\/\\/…``); bare pairs under an unlisted key
-    name survive. Use it as a backstop, not a licence to log raw payloads.
+    name survive, as does a non-string value (``'auth': ('u', 'pw')``), a JSON
+    object escaped inside a string (``{\\"password\\": …}``) and a secret in
+    free text with no recognisable key. Redaction is a denylist of shapes:
+    defence in depth, not a guarantee. Use it as a backstop, not a licence to
+    log raw payloads. loguru's ``diagnose`` stays off by default for the same
+    reason: with it on, every local is rendered and only these shapes are
+    masked.
 
     Use this when logging strings that may embed credentials but are not a
     single cause exception — e.g. a formatted traceback whose frames are worth
@@ -196,6 +282,9 @@ def redact_secrets(text: str) -> str:
         text = _ANSI_ESCAPE_RE.sub("", text)
     text = _URL_USERINFO_RE.sub(_sub_userinfo, text)
     text = _URL_QUERY_FRAGMENT_RE.sub(_sub_query_fragment, text)
+    text = _QUOTED_SECRET_RE.sub(r"\1***\3", text)
+    text = _SECRET_HEADER_LINE_RE.sub(r"\1***", text)
+    text = _BEARER_TOKEN_RE.sub(r"\1***", text)
     text = _SECRET_PARAM_RE.sub(r"\1***", text)
     return text
 

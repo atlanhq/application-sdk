@@ -14,6 +14,7 @@ from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
+from temporalio.exceptions import FailureError
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -462,7 +463,9 @@ def _extract_exception_attributes(exception: Any) -> dict[str, str]:
     type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
 
     attrs: dict[str, str] = {"exception.type": type_name}
-    if exc_value is not None:
+    if isinstance(exc_value, FailureError) and exc_value.message:
+        attrs["exception.message"] = redact_secrets(exc_value.message)
+    elif exc_value is not None:
         attrs["exception.message"] = redact_secrets(str(exc_value))
 
     stacktrace = _format_exception_stacktrace(exception)
