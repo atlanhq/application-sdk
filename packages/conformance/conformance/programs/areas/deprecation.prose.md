@@ -190,9 +190,9 @@ human audit):
   - `class X(BaseMetadataExtractor)` → subclass `application_sdk.app.App` for a
     non-SQL source (as atlan-openapi-app and atlan-metabase-app do), or
     `application_sdk.templates.SqlApp` for a SQL source (as atlan-mysql-app does).
-    `App` drops only the deprecated `upload_to_atlan` task: check that nothing
-    calls it first. A `SqlApp` port is a structural change — draft it and let the
-    test gate decide.
+    `App` drops only the deprecated `upload_to_atlan` task: move every call to
+    it to `App.upload` first (the `upload_to_atlan` bullet above). A `SqlApp`
+    port is a structural change — draft it and let the test gate decide.
   - **SDR test → split by concern**: a finding naming `BaseSDRIntegrationTest`
     (import / subclass from `application_sdk.testing.sdr`) means the app's
     `tests/sdr/test_*_sdr.py` (or `tests/integration/test_sdr.py`) still uses the

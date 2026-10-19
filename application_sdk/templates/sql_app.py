@@ -1,7 +1,8 @@
 """SqlApp — consolidated SQL metadata extraction template.
 
 Replaces ``SqlMetadataExtractor``, ``SqlQueryExtractor``, and
-``BaseMetadataExtractor`` with a single App class that provides:
+``BaseMetadataExtractor`` (for SQL sources; a non-SQL connector subclasses
+``application_sdk.app.App``) with a single App class that provides:
 
 * ``extract_*`` ``@task`` methods that **stream SQL rows verbatim into
   raw JSONL** under ``raw/<entity>/records.json`` — one pass, no parquet

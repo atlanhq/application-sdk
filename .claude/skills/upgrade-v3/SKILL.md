@@ -139,7 +139,7 @@ After identifying the connector type, determine the transformation strategy:
 
 **SQL connectors** (v2 `SqlMetadataExtractor`, `SqlQueryExtractor`, `IncrementalSqlMetadataExtractor`):
 
-> **The SQL template base class is now `SqlApp`.** `application_sdk.templates.SqlMetadataExtractor`, `SqlQueryExtractor`, `BaseMetadataExtractor` and `IncrementalSqlMetadataExtractor` are all **deprecated** (removal in v4.0.0) and are flagged by conformance `B001 DeprecatedSdkSymbolUsage`. Subclass `application_sdk.templates.SqlApp` instead:
+> **The SQL template base class is now `SqlApp`.** `application_sdk.templates.SqlMetadataExtractor`, `SqlQueryExtractor`, `BaseMetadataExtractor` and `IncrementalSqlMetadataExtractor` are all **deprecated** (removal in v4.0.0) and are flagged by conformance `B001 DeprecatedSdkSymbolUsage`. Subclass `application_sdk.templates.SqlApp` instead (a non-SQL connector on `BaseMetadataExtractor` subclasses plain `App`, see **REST/API connectors** below):
 > ```python
 > from application_sdk.templates import SqlApp
 > ```
@@ -832,7 +832,7 @@ Read the findings, but check these first — each is something this skill's earl
 
 | Rule | Tier | What the migration did wrong |
 |---|---|---|
-| `B001 DeprecatedSdkSymbolUsage` | warn | Landed on `SqlMetadataExtractor` / `SqlQueryExtractor` / `BaseMetadataExtractor` / `IncrementalSqlMetadataExtractor` instead of `SqlApp`; kept `TransformerInterface` / `AtlasTransformer` / `QueryBasedTransformer`; used `ParquetFileWriter` / `JsonFileWriter`; used the deprecated e2e names from Phase 4b's table; called `upload_to_atlan()`; read `DataframeType.daft`. The finding carries the SDK's own migration guidance — follow that, not a guess. |
+| `B001 DeprecatedSdkSymbolUsage` | warn | Landed on `SqlMetadataExtractor` / `SqlQueryExtractor` / `BaseMetadataExtractor` / `IncrementalSqlMetadataExtractor` instead of `SqlApp` (or plain `App` for a non-SQL connector); kept `TransformerInterface` / `AtlasTransformer` / `QueryBasedTransformer`; used `ParquetFileWriter` / `JsonFileWriter`; used the deprecated e2e names from Phase 4b's table; called `upload_to_atlan()`; read `DataframeType.daft`. The finding carries the SDK's own migration guidance — follow that, not a guess. |
 | `P013` / `P014` | **block** | A `@task` or `@entrypoint` left with a `dict`, `Any`, or a plain pydantic model on its boundary instead of an SDK `Input`/`Output` subclass. The commonest residue of a hand-merged Workflow + Activities class. |
 | `P001 UnboundedContractFields` | **block** | `allow_unbounded_fields=True` used as the escape hatch while typing contracts (Phase 2b). |
 | `F001 ReservedPreflightActivityName` | **block** | The v2 connector had a `preflight` activity and the codemod carried the name over. The SDK now reserves `{app_name}:preflight` for its injected gate; worker boot fails with `WorkerActivityNameCollisionError`. Rename it, or fold it into `Handler.preflight_check` — which the gate already calls. |
