@@ -70,6 +70,28 @@ facts {
     files["contract/generated/digest/input.pkl"].text.contains("open class DigestNode extends App.DAGNode {")
   }
 
+  ["Caller nodes route to the bundle's app and task queue, with their own workflowType"] {
+    // One App class, one worker and one queue serve every entrypoint.
+    for (ep in List("usage-analysis", "digest")) {
+      files["contract/generated/\(ep)/input.pkl"].text.contains("  appName = \"system-bundle\"\n")
+      files["contract/generated/\(ep)/input.pkl"].text
+        .contains("  taskQueue = \"atlan-system-bundle-{deployment_name}\"\n")
+    }
+    files["contract/generated/digest/input.pkl"].text.contains("  workflowType = \"DigestWorkflow\"\n")
+    // The sync identity stays the sub-contract's own.
+    files["contract/generated/digest/input.pkl"].text.contains("as `system/digest.pkl`")
+    // A sub-contract's legacy workflow type passes through verbatim.
+    withEntrypoint((DigestWithUi) { workflowType = "KeifuWorkflow" })
+      .output.files["contract/generated/digest-ui/input.pkl"].text
+      .contains("  workflowType = \"KeifuWorkflow\"\n  appName = \"bundle\"\n  taskQueue = \"atlan-bundle-{deployment_name}\"\n")
+  }
+
+  ["A single-entrypoint system app's caller node keeps its own app and queue"] {
+    systemApp.output.files["contract/generated/input.pkl"].text.contains("  appName = \"system-app\"\n")
+    systemApp.output.files["contract/generated/input.pkl"].text
+      .contains("  taskQueue = \"atlan-system-app-{deployment_name}\"\n")
+  }
+
   ["Caller nodes resolve the toolkit import from their new location"] {
     import("../examples/system-bundle/contract/generated/usage-analysis/input.pkl").output.text != null
     import("../examples/system-bundle/contract/generated/digest/input.pkl").output.text != null

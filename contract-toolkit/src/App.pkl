@@ -544,6 +544,19 @@ inputContractPath: String = "contract/generated/input.pkl"
 /// file in place (as the toolkit's own example does) sets this.
 inputContractToolkitImport: String = "../App.pkl"
 
+/// (Set by a bundle root) The `appName` the caller node defaults to. A
+/// single-entrypoint system app leaves it at `name`. A system bundle sets it
+/// on each system sub-contract to the bundle's `name`: one App class, one
+/// worker and one task queue serve every entrypoint, so a node naming the
+/// sub-contract would route to an app nothing runs. `workflowType` still comes
+/// from the sub-contract.
+hidden inputContractAppName: String = name
+
+/// (Set by a bundle root) The `taskQueue` the caller node defaults to.
+/// `<taskQueuePrefix>-{deployment_name}`; a system bundle sets it to the
+/// bundle's queue. See `inputContractAppName`.
+hidden inputContractTaskQueue: String = "\(taskQueuePrefix)-{deployment_name}"
+
 /// (Derived) Names `_input.py` declares or imports at module level. A nested
 /// object class of one of these names would shadow it: an `Input` class, for
 /// one, would replace the SDK base `AppInputContract` extends.
@@ -5052,6 +5065,18 @@ local function isUiLessSystemEntrypoint(ep: Entrypoint): Boolean =
 local function bundleEntrypointDir(ep: Entrypoint): String =
   if (isUiLessSystemEntrypoint(ep)) ep.name.replaceAll("-", "_") else ep.name
 
+// FND-3563: a system sub-contract's caller node, rendered against the bundle's
+// app and task queue rather than the sub-contract's own: the bundle is one App
+// class served by one worker on one queue (see `inputContractAppName`).
+local function bundleCallerNode(ep: Entrypoint): FileOutput =
+  let (appName = name)
+  let (queue = "\(taskQueuePrefix)-{deployment_name}")
+  let (c = (ep.contract!!) {
+    inputContractAppName = appName
+    inputContractTaskQueue = queue
+  })
+  c.output.files[c.inputContractPath]
+
 // Where a bundle re-exports one entrypoint contract's file. A system
 // sub-contract's caller node (`inputContractPath`), with or without a uiConfig,
 // goes to `contract/generated/<ep>/` instead of under `app/generated/<ep>/`.
@@ -5249,9 +5274,10 @@ output =
             text = InputContractPkg.render(
               inputContractClassName,
               name,
+              inputContractAppName,
               displayName,
               workflowTypeResolved,
-              "\(taskQueuePrefix)-{deployment_name}",
+              inputContractTaskQueue,
               inputs.toMap(),
               inputNestedClasses,
               inputContractToolkitImport
@@ -5298,6 +5324,8 @@ output =
                       && !isCredentialFile(entrypoint, fileName)) {
                   [bundleEntrypointFilePath(entrypoint, fileName)] =
                     if (normalizeContractFileName(fileName) == "_input.py") bundleInputPy(entrypoint.name, fileOutput)
+                    else if (isSystemSubContract(entrypoint) && fileName == entrypoint.contract!!.inputContractPath)
+                      bundleCallerNode(entrypoint)
                     else fileOutput
                 }
               }

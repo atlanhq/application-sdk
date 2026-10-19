@@ -18,8 +18,8 @@ open class UsageAnalysisNode extends App.DAGNode {
 
   displayName = "Usage Analysis"
   workflowType = "UsageAnalysisWorkflow"
-  appName = "usage-analysis"
-  taskQueue = "atlan-usage-analysis-{deployment_name}"
+  appName = "system-bundle"
+  taskQueue = "atlan-system-bundle-{deployment_name}"
   args = inputArgs
 
   /// The args the typed properties render to.

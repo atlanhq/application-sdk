@@ -15,8 +15,8 @@ open class DigestNode extends App.DAGNode {
 
   displayName = "Digest"
   workflowType = "DigestWorkflow"
-  appName = "digest"
-  taskQueue = "atlan-digest-{deployment_name}"
+  appName = "system-bundle"
+  taskQueue = "atlan-system-bundle-{deployment_name}"
   args = inputArgs
 
   /// The args the typed properties render to.
