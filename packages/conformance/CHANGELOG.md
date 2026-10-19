@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.51.1] - 2026-10-19
+
+### Bug fixes
+
+- break the 0.51.0 import cycle and gate releases on an installed-wheel smoke test (#4487) ([dd910c8](https://github.com/atlanhq/application-sdk/commit/dd910c8))
+
 ## [0.51.0] - 2026-10-19
 
 ### Features
