@@ -83,9 +83,16 @@ GENERATED_DIR = "app/generated"
 # Where an ``App.pkl`` system app's caller node lands: ``contract/generated/
 # input.pkl``, or ``contract/generated/<entrypoint>/input.pkl`` per entrypoint of
 # a system bundle (FND-3563). Prefixed family only, keyed repo-root-relative like
-# every other ``App.pkl`` output. Placed overwrite-only, never replaced
-# wholesale: ``contract/`` is the app's hand-written source tree.
+# every other ``App.pkl`` output. Never replaced wholesale: ``contract/`` is the
+# app's hand-written source tree. Only a committed caller node
+# (:data:`CALLER_NODE_FILENAME`) the fresh eval no longer emits is removed, so a
+# dropped entrypoint does not leave a stale node that the freshness check passes.
 CONTRACT_GENERATED_DIR = "contract/generated"
+
+# The caller node's file name, at any depth under :data:`CONTRACT_GENERATED_DIR`.
+# Mirrored by the Renovate auto-approve allowlist in
+# ``renovate_approval_conditions.DEP_FILE_RE``.
+CALLER_NODE_FILENAME = "input.pkl"
 
 # Subdirectory names under the generated dir that NO pkl contract, in any
 # family or toolkit version, ever emits into — so baseline/override detection
@@ -539,6 +546,7 @@ def swap_outputs(
             for dest, content in preserved.items():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
+            _prune_stale_caller_nodes(plan)
         finally:
             # Restore even on a mid-swap failure: the withheld reserved subdirs
             # live in a tempdir, so an exception here would otherwise strand the
@@ -552,6 +560,29 @@ def swap_outputs(
     # orphans. See the module docstring.
     _copy_planned(plan, skip)
     return True
+
+
+def _prune_stale_caller_nodes(plan: dict[Path, Path]) -> None:
+    """Remove committed caller nodes the fresh eval no longer emits.
+
+    A bundle entrypoint that is removed, or stops declaring ``inputs``, stops
+    emitting its ``contract/generated/<entrypoint>/input.pkl``. Overwrite-only
+    placement would leave the old node behind, and the freshness check would
+    find no diff. Only :data:`CALLER_NODE_FILENAME` files are removed: anything
+    else under :data:`CONTRACT_GENERATED_DIR` is the app's. A directory the
+    removal leaves empty is removed too.
+    """
+    root = Path(CONTRACT_GENERATED_DIR)
+    if not root.is_dir():
+        return
+    for node in sorted(root.rglob(CALLER_NODE_FILENAME)):
+        if not node.is_file() or node in plan:
+            continue
+        node.unlink()
+        parent = node.parent
+        while parent != root.parent and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
 
 
 def _copy_planned(plan: dict[Path, Path], skip: set[Path]) -> None:

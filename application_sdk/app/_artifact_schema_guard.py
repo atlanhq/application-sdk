@@ -192,8 +192,8 @@ def _declared_artifact_schema_keys(
     Returns:
         A :class:`_Declarations` whose ``path`` is the file that answered, or —
         when nothing exists — the file this app's toolkit output will actually
-        write, or ``None`` when the layout is ``unknown`` and naming one would
-        be a guess.  ``keys`` is empty and ``readable`` is ``False`` when a file
+        write, or ``None`` when the layout is ``unknown``, no generated dir
+        exists for the entry point, and naming one would be a guess.  ``keys`` is empty and ``readable`` is ``False`` when a file
         exists but could not be understood.
     """
     generated = Path(CONTRACT_GENERATED_DIR)
@@ -236,13 +236,18 @@ def _declared_artifact_schema_keys(
     # single-entry-point (or route/card-split) app emits one flat file. When the
     # layout is unknown, name nothing: a cited path that the toolkit will never
     # write is worse than none, because following it cannot clear the warning.
-    if layout == "multi":
-        # The wire-name dir, or the snake_case one a UI-less system entry point
-        # writes (FND-3563): whichever the toolkit generated for this entry point.
-        written = next((p for p in nested if p.parent.is_dir()), nested[0])
-        return _Declarations(path=written)
     if layout == "single":
         return _Declarations(path=flat)
+    # The wire-name dir, or the snake_case one a UI-less system entry point
+    # writes (FND-3563): whichever the toolkit generated for this entry point.
+    written = next((p for p in nested if p.parent.is_dir()), None)
+    if layout == "multi":
+        return _Declarations(path=written or nested[0])
+    # A pure system bundle writes no manifest.json anywhere, so its layout reads
+    # as unknown. Its entry point's generated dir still exists, and is where the
+    # toolkit writes the declaration — not a guess.
+    if written is not None:
+        return _Declarations(path=written)
     return _Declarations()
 
 
