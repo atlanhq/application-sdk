@@ -53,6 +53,13 @@ from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
+from application_sdk.storage._local_marker import (
+    file_fingerprint,
+    format_marker,
+    marker_path,
+    read_local_marker,
+    trusted_digest,
+)
 from application_sdk.storage._locks import PathLockRegistry
 from application_sdk.storage._manifest import (
     MANIFEST_SUFFIX,
@@ -332,6 +339,12 @@ _materialize_guard = _MATERIALIZE_LOCKS.guard
 def _write_local_sidecar(local_path: str, sha256: str) -> None:
     """Write a local ``.sha256`` sidecar next to *local_path*.
 
+    The marker records *sha256* with the file's ``(size, mtime_ns, inode)``
+    as of now, so a later same-pod materialise can trust it on a stat instead
+    of re-reading the file (FND-4081; format in ``_local_marker``). Call it
+    only once the file holds the bytes *sha256* was computed over. Blocking
+    (stat + fsync): call it through ``run_in_thread``.
+
     Atomic even though the write is best-effort, and *because* it is: a
     truncated digest is not a missing sidecar, it is a wrong one. A later
     ``materialize`` would compare a good local file against a partial digest,
@@ -340,10 +353,11 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
     (FND-318).
     """
     try:
+        marker = format_marker(sha256, file_fingerprint(local_path))
         with atomic_write(
-            local_path + ".sha256", operation="local sidecar write"
+            marker_path(local_path), operation="local sidecar write"
         ) as sidecar:
-            sidecar.write(sha256.encode())
+            sidecar.write(marker.encode())
     except Exception:
         logger.warning(
             "Sidecar write failed (best-effort, continuing without)", exc_info=True
@@ -804,6 +818,7 @@ async def persist_file_reference(
             is_durable=True,
             storage_path=storage_path,
             tier=ref.tier,
+            size_bytes=_file_size,
         )
 
 
@@ -1192,7 +1207,18 @@ async def _materialize_single_file(
         and ref.local_path is not None
         and Path(ref.local_path).is_file()
     ):
-        local_hash = await integrity.sha256_file(Path(ref.local_path))
+        # Under VERIFIED a local marker whose stat fingerprint still matches
+        # stands in for re-reading the file (FND-4081): a concurrent waiter on
+        # the same multi-GB ref then pays a stat, not a full hash. The stored
+        # digest still has to agree. REMOTE_DIGEST (``transfer.download``)
+        # never consults the local marker, so it always hashes.
+        local_hash = (
+            await run_in_thread(trusted_digest, ref.local_path)
+            if reuse is _Reuse.VERIFIED
+            else None
+        )
+        if local_hash is None:
+            local_hash = await integrity.sha256_file(Path(ref.local_path))
         stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 
         if stored_hash is not None and local_hash == stored_hash:
@@ -1360,6 +1386,7 @@ async def _materialize_single_file(
             storage_path=ref.storage_path,
             tier=ref.tier,
             store=ref.store,
+            size_bytes=remote_size,
         ),
         1,
     )
@@ -1434,7 +1461,6 @@ async def _materialize_directory(
         # Reject keys whose resolved path escapes local_directory.
         dest_path = _safe_join_under(local_directory, rel)
         dest = str(dest_path)
-        dest_sidecar = Path(dest + ".sha256")
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Per-file sidecar fast-path: skip re-download when the local
@@ -1459,17 +1485,24 @@ async def _materialize_directory(
                     reference = await integrity.read_expected_digest(
                         store, key, sidecar_present=obj.has_sidecar
                     )
-                elif dest_sidecar.exists():
-                    reference = dest_sidecar.read_text(encoding="utf-8").strip()
                 else:
-                    reference = None
+                    marker = await run_in_thread(read_local_marker, dest)
+                    reference = marker.sha256 if marker is not None else None
+                # Under VERIFIED a marker whose stat fingerprint still matches
+                # is the file's digest without a re-read (FND-4081); it is
+                # then compared to the reference like a fresh hash would be.
                 local_hash = (
-                    await integrity.sha256_file(dest_path)
-                    if reference is not None
+                    await run_in_thread(trusted_digest, dest)
+                    if reference is not None and reuse is _Reuse.VERIFIED
                     else None
                 )
+                hashed = reference is not None and local_hash is None
+                if hashed:
+                    local_hash = await integrity.sha256_file(dest_path)
                 if reference is not None and local_hash == reference:
-                    if reuse is not _Reuse.VERIFIED or expected_sha256 is not None:
+                    # Re-stamp after a full hash, so a digest-only (pre-
+                    # FND-4081) or stale-stat marker is trusted next time.
+                    if hashed:
                         await run_in_thread(_write_local_sidecar, dest, local_hash)
                     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(

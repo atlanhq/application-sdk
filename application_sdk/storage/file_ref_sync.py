@@ -21,7 +21,13 @@ sidecar is checked:
 * **Missing sidecar** — conservative default: assume the file must be
   re-verified.  ``materialize_file_reference`` will fetch the stored sidecar
   and, if the hashes agree, simply stamp the local sidecar without re-downloading.
-* **Sidecar mismatch** — file is corrupt or partially written; re-download.
+* **Stat fingerprint matches** — the sidecar records the file's
+  ``(size, mtime_ns, inode)`` next to its digest; while they still match, the
+  file is reused without being read (FND-4081). This is the same-pod hand-off,
+  and a multi-GB re-hash here used to hold the event loop for seconds.
+* **Stat moved, or a digest-only sidecar** — the file is re-hashed in a worker
+  thread. A match re-stamps the sidecar; a mismatch means the file is corrupt
+  or partially written, so it is re-downloaded.
 
 This ensures that:
 
@@ -40,17 +46,25 @@ This ensures that:
 from __future__ import annotations
 
 import asyncio
-import hashlib
+import os
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.contracts.types import FileReference, Lazy, StoreTarget
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage import integrity
+from application_sdk.storage._local_marker import (
+    file_fingerprint,
+    read_local_marker,
+    trusted_digest,
+)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
@@ -126,35 +140,77 @@ def _find_file_refs(data: Any) -> list[FileReference]:
     return [named.ref for named in iter_named_file_refs(data)]
 
 
-def _local_sidecar_ok(local_path: str) -> bool:
-    """Return True if the local sha256 sidecar exists and matches the file.
+class _LocalCopy(Enum):
+    """What a stat says about a durable ref's local copy, without reading it."""
 
-    Conservative: any I/O error (missing file, missing sidecar, read error)
-    returns False so the caller triggers a fresh materialize.
+    CURRENT = "current"
+    """Nothing to do: not a durable ref, or its marker's stat still matches."""
+    STALE = "stale"
+    """Must materialise: no local file, no marker, a directory, or the size
+    disagrees with the ref's ``size_bytes``."""
+    UNVERIFIED = "unverified"
+    """A file and a marker exist but the marker cannot be trusted on stat —
+    its fingerprint moved, or it predates fingerprints. Only a hash decides."""
 
-    Directories always return False — they always go through the full
-    materialize check (list + download).
+
+def _local_copy(ref: FileReference) -> _LocalCopy:
+    """Classify *ref*'s local copy from a stat and its marker. Never hashes.
+
+    Conservative: any I/O error reads as ``STALE`` so the caller triggers a
+    fresh materialise. Directories are always ``STALE`` — they go through the
+    full materialise check (list + per-file markers).
     """
+    if not ref.is_durable or ref.storage_path is None:
+        return _LocalCopy.CURRENT
+    if ref.local_path is None:
+        return _LocalCopy.STALE
     try:
-        file_path = Path(local_path)
-        if file_path.is_dir():
+        if trusted_digest(ref.local_path, size_bytes=ref.size_bytes) is not None:
+            return _LocalCopy.CURRENT
+        current = file_fingerprint(ref.local_path)
+        if current is None:
+            # Missing, a directory, or not a regular file: only a full
+            # materialise can produce something to hand the task.
+            if not os.path.isfile(ref.local_path):
+                return _LocalCopy.STALE
+        elif ref.size_bytes is not None and current[0] != ref.size_bytes:
+            return _LocalCopy.STALE
+        if read_local_marker(ref.local_path) is None:
+            return _LocalCopy.STALE
+        return _LocalCopy.UNVERIFIED
+    except Exception:
+        logger.warning("Local sidecar check failed", exc_info=True)
+        return _LocalCopy.STALE
+
+
+async def _rehash_matches_marker(local_path: str) -> bool:
+    """Hash *local_path* off the event loop; True if it matches its marker.
+
+    A match re-stamps the marker with the file's current stat, so the next
+    hand-off on this pod trusts it without hashing — this is also how a
+    digest-only marker from an older SDK gets upgraded.
+    """
+    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _write_local_sidecar,
+    )
+
+    try:
+        marker = await run_in_thread(read_local_marker, local_path)
+        if marker is None:
             return False
-        sidecar_path = Path(local_path + ".sha256")
-        if not file_path.exists() or not sidecar_path.exists():
-            return False
-        stored = sidecar_path.read_text(encoding="utf-8").strip()
-        h = hashlib.sha256()
-        with file_path.open("rb") as fh:
-            for chunk in iter(lambda: fh.read(1 << 20), b""):
-                h.update(chunk)
-        actual = h.hexdigest()
-        return stored == actual
+        actual = await integrity.sha256_file(Path(local_path))
     except Exception:
         logger.warning("sha256 verification failed for local sidecar", exc_info=True)
         return False
+    if actual != marker.sha256:
+        return False
+    await run_in_thread(_write_local_sidecar, local_path, actual)
+    return True
 
 
-def _needs_materialize(ref: FileReference) -> bool:
+async def _needs_materialize(
+    ref: FileReference, rehashes: dict[str, asyncio.Task[bool]] | None = None
+) -> bool:
     """Return True if the durable ref needs to be downloaded (or re-verified).
 
     A durable ref needs materializing when any of the following is true:
@@ -165,15 +221,25 @@ def _needs_materialize(ref: FileReference) -> bool:
     * The local ``.sha256`` sidecar is missing — conservative default;
       ``materialize_file_reference`` will validate against the stored sidecar
       before deciding whether to skip the actual download.
-    * The local sidecar exists but does not match the file's current sha256 —
-      the file is corrupt or was only partially written.
+    * The file's size differs from the ref's ``size_bytes``.
+    * The sidecar's stat fingerprint no longer matches and the file's sha256,
+      computed in a worker thread, does not match the sidecar either — the
+      file is corrupt or was only partially written.
+
+    Args:
+        rehashes: Shared across the refs of one tree so refs naming the same
+            ``local_path`` hash it once between them.
     """
-    if not ref.is_durable or ref.storage_path is None:
-        return False
-    if ref.local_path is None:
-        return True
-    # File missing or sidecar check fails → needs materialize
-    return not _local_sidecar_ok(ref.local_path)
+    state = await run_in_thread(_local_copy, ref)
+    if state is _LocalCopy.UNVERIFIED:
+        path = ref.local_path
+        assert path is not None  # UNVERIFIED implies a local file
+        if rehashes is None:
+            return not await _rehash_matches_marker(path)
+        if path not in rehashes:
+            rehashes[path] = asyncio.ensure_future(_rehash_matches_marker(path))
+        return not await rehashes[path]
+    return state is _LocalCopy.STALE
 
 
 def has_refs_to_persist(data: Any) -> bool:
@@ -185,13 +251,18 @@ def has_refs_to_persist(data: Any) -> bool:
 
 
 def has_refs_to_materialize(data: Any) -> bool:
-    """Return True if *data* contains durable FileReferences that need downloading.
+    """Return True if *data* may contain durable FileReferences to download.
 
-    Checks for: missing local file, stale local_path (different worker),
-    missing local sha256 sidecar (conservative), and sidecar hash mismatch
-    (corrupt/partial file).
+    A cheap pre-check that only stats files and reads their markers, so it is
+    safe on the event loop. Missing local file, stale ``local_path``
+    (different worker), missing sidecar, or a size that disagrees with the
+    ref's ``size_bytes`` all return True — and so does a local copy whose
+    sidecar cannot be trusted on stat alone. ``materialize_file_refs`` hashes
+    those in a worker thread and downloads only the ones that do not match.
     """
-    return any(_needs_materialize(ref) for ref in _find_file_refs(data))
+    return any(
+        _local_copy(ref) is not _LocalCopy.CURRENT for ref in _find_file_refs(data)
+    )
 
 
 def _resolve_ref_store(
@@ -240,7 +311,8 @@ async def _replace_refs(
     - **Pass 1 (collect)**: walk the tree, bucket unique operations by
       ``storage_path`` (materialize) or ``id(ref)`` (persist).  Refs sharing
       the same ``storage_path`` are coalesced — only the first-encountered ref
-      triggers an actual download.
+      triggers an actual download. Whether a ref needs materialising is
+      decided once here, off the event loop, and reused by pass 3.
     - **Pass 2 (execute)**: run all unique coroutines concurrently under a
       bounded ``asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)``.
     - **Pass 3 (scatter)**: rebuild the tree synchronously via ``model_copy``
@@ -274,6 +346,11 @@ async def _replace_refs(
     # persist:     dedup by id(ref)      — same Python object → one upload.
     _factories: dict[str, Callable[[], Coroutine[Any, Any, FileReference]]] = {}
     _winners: dict[str, FileReference] = {}
+    # materialize: refs to check, in tree order. Whether each needs a download
+    # is decided once, below, and read back by the scatter pass — the check
+    # may hash a multi-GB file, so it must not run per pass (FND-4081).
+    _candidates: list[FileReference] = []
+    _needs: dict[int, bool] = {}
 
     def _is_lazy(node: BaseModel, name: str) -> bool:
         """Return True if field *name* on *node* carries the ``Lazy`` marker."""
@@ -295,14 +372,8 @@ async def _replace_refs(
                         store, r, output_path=output_path
                     )
                     _winners[key] = node
-            elif mode == "materialize" and _needs_materialize(node):
-                key = _materialize_key(node)
-                if key not in _factories:
-                    _ref = node
-                    _factories[key] = lambda r=_ref: materialize_file_reference(
-                        _resolve_ref_store(r, store, upstream_store), r
-                    )
-                    _winners[key] = node
+            elif mode == "materialize":
+                _candidates.append(node)
             return
         if isinstance(node, BaseModel):
             for name in type(node).model_fields:
@@ -327,6 +398,27 @@ async def _replace_refs(
                 _collect(v)
 
     _collect(data)
+
+    if _candidates:
+        check_sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
+        rehashes: dict[str, asyncio.Task[bool]] = {}
+
+        async def _check(ref: FileReference) -> bool:
+            async with check_sem:
+                return await _needs_materialize(ref, rehashes)
+
+        unique = list({id(ref): ref for ref in _candidates}.values())
+        verdicts = await asyncio.gather(*[_check(ref) for ref in unique])
+        _needs = {id(ref): needs for ref, needs in zip(unique, verdicts)}
+        for node in _candidates:
+            if not _needs[id(node)]:
+                continue
+            key = _materialize_key(node)
+            if key not in _factories:
+                _factories[key] = lambda r=node: materialize_file_reference(
+                    _resolve_ref_store(r, store, upstream_store), r
+                )
+                _winners[key] = node
 
     if not _factories:
         return data  # nothing to do — skip gather entirely
@@ -359,7 +451,7 @@ async def _replace_refs(
                 and not node.is_durable
             ):
                 return _results.get(str(id(node)), node)
-            if mode == "materialize" and _needs_materialize(node):
+            if mode == "materialize" and _needs.get(id(node), False):
                 key = _materialize_key(node)
                 result = _results.get(key, node)
                 if node is not _winners.get(key):

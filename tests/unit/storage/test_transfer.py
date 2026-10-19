@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.contracts.storage import UploadOutput
+from application_sdk.storage._local_marker import parse_marker, read_local_marker
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.transfer import download, upload
 
@@ -25,6 +26,12 @@ def _hash_bytes(data: bytes) -> str:
     h = hashlib.sha256()
     h.update(data)
     return h.hexdigest()
+
+
+def _marker_digest(local: Path) -> str | None:
+    """The digest the local ``.sha256`` marker beside *local* records."""
+    marker = read_local_marker(str(local))
+    return marker.sha256 if marker is not None else None
 
 
 # ``_sha256_file`` / ``_sha256_file_async`` moved to
@@ -574,7 +581,10 @@ class TestDownloadDirectory:
         # materialise of this ref reuses instead of downloading again.
         assert dl.ref.file_count == 1
         local_marker = dest / "data.txt.sha256"
-        assert local_marker.read_text().strip() == hashlib.sha256(b"data").hexdigest()
+        assert (
+            parse_marker(local_marker.read_text()).sha256  # type: ignore[union-attr]
+            == hashlib.sha256(b"data").hexdigest()
+        )
 
     async def test_path_traversal_in_listed_key_rejected(self, store, tmp_path) -> None:
         """A listed key containing ``..`` must not write outside dest_dir.
@@ -1317,7 +1327,7 @@ class TestUploadOnTheSharedEngine:
         src.mkdir()
         (src / "data.txt").write_bytes(b"old")
         await upload(str(src), "mk/", store=store)
-        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"old")
+        assert _marker_digest(src / "data.txt") == _hash_bytes(b"old")
 
         (src / "data.txt").write_bytes(b"new")
         up = await upload(str(src), "mk/", store=store, skip_if_exists=True)
@@ -1326,7 +1336,7 @@ class TestUploadOnTheSharedEngine:
         dest = tmp_path / "dest"
         await download("mk/", str(dest), store=store)
         assert (dest / "data.txt").read_bytes() == b"new"
-        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"new")
+        assert _marker_digest(src / "data.txt") == _hash_bytes(b"new")
 
     async def test_a_cancelled_store_copy_leaves_no_temp_file(
         self, store, tmp_path, monkeypatch: pytest.MonkeyPatch

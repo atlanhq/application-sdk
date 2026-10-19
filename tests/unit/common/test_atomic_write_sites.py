@@ -340,7 +340,7 @@ class TestLocalSidecarWrite:
 
         _write_local_sidecar(str(artifact), "a" * 64)
 
-        assert (tmp_path / "data.parquet.sha256").read_text() == "a" * 64
+        assert (tmp_path / "data.parquet.sha256").read_text().split()[0] == "a" * 64
 
 
 # ---------------------------------------------------------------------------

@@ -274,10 +274,12 @@ uploads it to **`infra.storage`** (`objectstore` — the deployment store):
 2. Uploads the local file (or all files in a local directory) to the store.
 3. Writes a `{storage_path}.sha256` sidecar to the store — used for integrity
    verification on download.
-4. Writes a `{local_path}.sha256` sidecar locally — allows the same worker to
-   skip re-download if the task is retried locally.
-5. Returns a **durable** ref (`is_durable=True`, `storage_path` set) in the
-   serialised Output that Temporal stores.
+4. Writes a `{local_path}.sha256` marker locally — the digest plus the file's
+   `(size, mtime_ns, inode)`. A later task on the same worker reuses the file
+   without downloading it, and without reading it while that stat still matches.
+5. Returns a **durable** ref (`is_durable=True`, `storage_path` set, and
+   `size_bytes` for a single file) in the serialised Output that Temporal
+   stores.
 
 The original local file is **not deleted** unless you pass
 `retain_local_copy=False` to `App.upload()` (that is a different code path).
@@ -285,8 +287,9 @@ The original local file is **not deleted** unless you pass
 #### Materialize (input side)
 
 Before your `@task` runs, the SDK inspects every `FileReference` field on the
-Input. For each durable ref that needs downloading (file absent, sidecar missing,
-or sidecar hash mismatch), the SDK:
+Input. For each durable ref that needs downloading (file absent, marker missing,
+size different from `size_bytes`, or file hash different from the marker), the
+SDK:
 
 1. Downloads the file from the store to a temp path under `TEMPORARY_PATH`.
 2. Verifies the downloaded content SHA-256 against the stored sidecar.
@@ -297,9 +300,17 @@ or sidecar hash mismatch), the SDK:
 will be a stale path from another machine. The sidecar check catches this: the
 local sidecar is absent (different pod, different disk), so the SDK re-downloads.
 
-**Cache hit:** if the same worker retries and the local file + sidecar are intact,
-the SDK skips the download entirely (`file_ref.materialize.skipped` event emitted
-at DEBUG).
+**Cache hit:** if the same worker hands the ref on, or retries, and the local
+file is intact, the SDK skips the download entirely. A file whose size, mtime and
+inode still match its marker is trusted without being read, so even a multi-GB
+hand-off costs only a `stat`. If the stat has moved, or the marker was written by
+an older SDK that recorded only the digest, the file is re-hashed in a worker
+thread (never on the event loop): a match re-stamps the marker, a mismatch
+re-downloads. A replacement that restores the original size *and* mtime on the
+same inode (`cp -p` over the file in place) is not caught.
+
+The local marker is SDK bookkeeping. Do not parse it in app code or tests: its
+format is not a contract.
 
 #### Directory FileReferences
 

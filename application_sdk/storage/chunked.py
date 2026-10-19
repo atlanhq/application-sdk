@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -227,6 +229,102 @@ class _ChunkProgress:
     #: Bytes THIS attempt transferred — what the terminal event/metrics report.
     fetched_bytes: int = 0
     done: set[int] = field(default_factory=set)
+    #: Called after each chunk is written and added to :attr:`done`.
+    on_chunk_done: Callable[[], None] | None = None
+
+
+class _InOrderHasher:
+    """SHA-256 of a chunked download, computed while the chunks are landing.
+
+    Chunks land out of order and SHA-256 cannot combine digests of separate
+    ranges, so the digest is fed strictly in file order: whenever the run of
+    completed chunks from the current cursor grows, those bytes are read back
+    from the part file (still in page cache) and hashed in a worker thread.
+    Reading back, rather than keeping out-of-order chunks in memory, holds
+    memory to one read buffer however late a slow early chunk lands. When the
+    last chunk lands only the tail is left to hash, so the finished file is
+    not read a second time (FND-4081).
+
+    One coroutine owns the hash object, so feeds never overlap. Each feed
+    opens and closes its own handle, so none is open on the part file when
+    it is renamed into place — Windows cannot rename an open file.
+    """
+
+    _READ_SIZE = 1 << 20
+
+    def __init__(
+        self, part: Path, *, size: int, chunk_size_bytes: int, done: set[int]
+    ) -> None:
+        self._part = part
+        self._size = size
+        self._chunk_size = chunk_size_bytes
+        self._chunks = max(1, (size + chunk_size_bytes - 1) // chunk_size_bytes)
+        self._done = done
+        self._hash = hashlib.sha256()
+        self._next = 0
+        self._stop = False
+        self._wake = asyncio.Event()
+        self._task = asyncio.ensure_future(self._run())
+
+    def chunk_done(self) -> None:
+        """Wake the feeder: a chunk has been written."""
+        self._wake.set()
+
+    async def _run(self) -> None:
+        while self._next < self._chunks and not self._stop:
+            end = self._next
+            while end < self._chunks and end in self._done:
+                end += 1
+            if end == self._next:
+                self._wake.clear()
+                if self._next not in self._done:
+                    await self._wake.wait()
+                continue
+            start_off = self._next * self._chunk_size
+            end_off = min(end * self._chunk_size, self._size)
+            await run_in_thread(self._feed, start_off, end_off)
+            self._next = end
+
+    def _feed(self, start: int, end: int) -> None:
+        """Hash bytes ``[start, end)`` of the part file. Runs in a thread."""
+        with open(self._part, "rb") as fh:
+            fh.seek(start)
+            remaining = end - start
+            while remaining > 0 and not self._stop:
+                buf = fh.read(min(self._READ_SIZE, remaining))
+                if not buf:
+                    raise OSError(
+                        f"part file ended at {end - remaining} bytes, "
+                        f"expected {end}"
+                    )
+                self._hash.update(buf)
+                remaining -= len(buf)
+
+    async def finish(self) -> str | None:
+        """Hash whatever is left and return the digest.
+
+        ``None`` if hashing failed; the caller then re-reads the published
+        file, as it did before this existed.
+        """
+        self._wake.set()
+        try:
+            await self._task
+        # conformance: ignore[E004] the streamed digest is an optimisation; any failure falls back to re-reading the finished file
+        except Exception:
+            logger.debug("In-order download hash failed; re-reading", exc_info=True)
+            return None
+        if self._stop or self._next < self._chunks:
+            return None
+        return self._hash.hexdigest()
+
+    async def abort(self) -> None:
+        """Stop hashing and wait until no thread is reading the part file."""
+        self._stop = True
+        self._wake.set()
+        # Not cancelled: a cancelled await would leave its thread reading the
+        # part file. _feed checks _stop between reads, so this returns quickly.
+        with contextlib.suppress(Exception):
+            await asyncio.shield(self._task)
 
 
 async def _fetch_chunk(
@@ -292,6 +390,8 @@ async def _fetch_chunk(
         os.lseek(fd, offset, os.SEEK_SET)
         os.write(fd, raw)
         progress.done.add(idx)
+        if progress.on_chunk_done is not None:
+            progress.on_chunk_done()
         if resume:
             _save_transfer_state(
                 state_path, {**state_base, "done": sorted(progress.done)}
@@ -479,10 +579,11 @@ async def download_file_chunked(
             (enabled unless set to ``"false"``).
         verify: Validate the completed file against the digest its producer
             recorded (FND-306).  ``None`` (default) follows
-            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.  Unlike the single-stream path,
-            verifying here costs a re-read of the finished file (chunks land
-            out of order, so they cannot feed one hasher) — the re-read runs in
-            a worker thread so it never blocks the heartbeat loop.
+            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.  Chunks land out of order, so
+            the digest is computed by reading each completed in-order run back
+            from the part file in a worker thread while later chunks are still
+            in flight; it never blocks the heartbeat loop, and the finished
+            file is not re-read.
         expected_sha256: Digest to verify against.  Pass it when the caller
             already holds the producer's digest — the sidecar lookup is then
             skipped, saving a round trip.  ``None`` (default) fetches the
@@ -728,6 +829,21 @@ async def _download_chunked_locked(
                 size_bytes=progress.completed_bytes,
             )
 
+        # Hash in file order while the chunks land, so the finished file is
+        # not read back in full. Only when someone needs the digest: the
+        # caller asked for it, or the verify switch may compare it against
+        # the producer's sidecar. Chunks a resumed attempt already has are in
+        # ``done`` from the start, so the hasher reads them first.
+        hasher = (
+            _InOrderHasher(
+                part, size=size, chunk_size_bytes=chunk_size_bytes, done=done
+            )
+            if compute_hash or verifying
+            else None
+        )
+        if hasher is not None:
+            progress.on_chunk_done = hasher.chunk_done
+
         chunk_tasks = [
             asyncio.ensure_future(
                 _fetch_chunk(
@@ -764,6 +880,8 @@ async def _download_chunked_locked(
             for _t in chunk_tasks:
                 _t.cancel()
             await asyncio.gather(*chunk_tasks, return_exceptions=True)
+            if hasher is not None:
+                await hasher.abort()
             os.close(fd)
             _log_storage_event(
                 logging.WARNING,
@@ -799,6 +917,8 @@ async def _download_chunked_locked(
             for _t in chunk_tasks:
                 _t.cancel()
             await asyncio.gather(*chunk_tasks, return_exceptions=True)
+            if hasher is not None:
+                await hasher.abort()
             os.close(fd)
             raise
         else:
@@ -814,6 +934,9 @@ async def _download_chunked_locked(
             # failed unlink must not report the download as failed — a
             # checkpoint that outlives its part file is discarded by
             # validation on the next attempt, so removal is best-effort.
+            # Finish the in-order hash before the publish: it reads the part
+            # file, which must not be open when it is renamed.
+            streamed = await hasher.finish() if hasher is not None else None
             # conformance: ignore[E004] publish error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
             try:
                 try:
@@ -865,15 +988,15 @@ async def _download_chunked_locked(
             if not compute_hash and expected_sha256 is None:
                 return None
 
-            # Chunks land out of order, so no single hasher can be fed during
-            # the transfer: both the caller's digest and the integrity check
-            # cost one re-read of the finished file. ``integrity.sha256_file``
-            # runs it through ``run_in_thread`` — inline, a multi-GB re-read
-            # holds the event loop, and with it the enclosing activity's
-            # auto-heartbeat, for the full read+hash, so a transfer that
-            # actually succeeded gets retried (ADR-0010, P031; FND-282 made
-            # this offload here, FND-306 moved the body to the shared helper).
-            digest = await integrity.sha256_file(path)
+            # The in-order hasher above normally has the digest already. Only
+            # if it failed is the finished file re-read — through
+            # ``integrity.sha256_file``, which runs it in a thread: inline, a
+            # multi-GB re-read holds the event loop, and with it the enclosing
+            # activity's auto-heartbeat, so a transfer that actually succeeded
+            # gets retried (ADR-0010, P031; FND-282, FND-306, FND-4081).
+            digest = (
+                streamed if streamed is not None else await integrity.sha256_file(path)
+            )
             if verifying and expected_sha256 is not None:
                 integrity.check_transfer_digest(
                     "download",
