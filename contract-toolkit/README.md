@@ -101,6 +101,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
 - [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`. They also render `contract/generated/input.pkl`, the typed DAG node that is synced into the toolkit as `src/system/<name>.pkl` for callers to import.
+- [`examples/system-bundle/`](examples/system-bundle/) — `type = "system"` with two entrypoints, each a UI-less system sub-contract with its own `inputs`. Each renders `app/generated/<entrypoint_snake>/` (importable), `contract/generated/<entrypoint>/input.pkl`, and an `_e2e_base.py` extending `SystemAppE2ETest`.
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.
@@ -501,6 +502,14 @@ app/generated/
 **Per-entrypoint input classes:** each `{entrypoint}/_input.py` declares `<PascalCase(entrypoint)>AppInputContract` (`crawler` → `CrawlerAppInputContract`, `miner` → `MinerAppInputContract`) and keeps `AppInputContract = <that class>` as an alias, so existing imports still work. Single-entrypoint apps still get `class AppInputContract`. See [docs/reference.md](docs/reference.md#multi-entrypoint-bundle).
 
 See [`examples/bundle/`](examples/bundle/) for a runnable example.
+
+**System bundles (FND-3563):** a bundle entrypoint is a *UI-less system entrypoint* when its contract (or the bundle root) sets `type = "system"` and the contract declares no `uiConfig`. Only these entrypoints change layout; every other entrypoint renders byte-for-byte as before.
+
+- Its files go to `app/generated/<entrypoint_snake>/` (`usage-analysis` → `usage_analysis`), so `from app.generated.usage_analysis._input import UsageAnalysisAppInputContract` imports. A hyphen-free name is unchanged. The SDK already imports `app.generated.<entrypoint_snake>._input`. The SDK's artifact-schema readers (`validation.sources.artifact_schema_paths` and the registration-time guard) and conformance K016 look for `artifact_schemas.json` under the wire-name dir, then the snake_case dir.
+- Its caller node goes to `contract/generated/<entrypoint>/input.pkl` instead of `app/generated/<entrypoint>/contract/generated/input.pkl`. This also applies to a system sub-contract that has a `uiConfig`; that entrypoint otherwise keeps its wire-name dir and existing e2e base, because the SDK reads its manifest and form under the wire name. Each sub-contract's file names its own synced home, `src/system/<contract name>.pkl`, and its `inputContractToolkitImport` default (`../App.pkl`) resolves from there as it does for a single-entrypoint system app.
+- Its `_e2e_base.py` extends `SystemAppE2ETest`, as a single-entrypoint system app's does: no `argo_*`, `app_service_url`, `connector_config_name`, `manifest_path`, `required_dag_nodes` or `expect_*` lines (it has no manifest, credential or extract/publish DAG), a comment telling the suite to set `manifest_path` and `required_dag_nodes`, and `entrypoint = "<entrypoint>"`.
+
+See [`examples/system-bundle/`](examples/system-bundle/).
 
 ## Widget Types
 

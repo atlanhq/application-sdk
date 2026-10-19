@@ -248,6 +248,45 @@ class TestGeneratedLayouts:
         assert "'transformed_entities'" in messages[0]
         assert "entry point 'extract-metadata'" in messages[0]
 
+    def test_ui_less_system_entrypoint_reads_its_snake_case_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """FND-3563: a UI-less system entry point has no manifest and a snake dir."""
+        _write_declarations(
+            tmp_path / "app" / "generated" / "extract_metadata", "raw_queries"
+        )
+
+        with warnings.catch_warnings(record=True) as recorded:
+            warnings.simplefilter("always")
+
+            class SystemBundleApp(App):
+                name = "system-bundle-app"
+
+                @entrypoint
+                async def extract_metadata(self, input: DeclaredInput) -> PlainOutput:
+                    return PlainOutput()
+
+                @entrypoint
+                async def mine_queries(self, input: PlainInput) -> PlainOutput:
+                    return PlainOutput()
+
+        assert _boundary_warnings(recorded) == []
+
+    def test_absent_multi_declaration_names_the_generated_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """FND-3563: cite the snake_case dir a UI-less system entry point has."""
+        generated = tmp_path / "app" / "generated"
+        (generated / "usage_analysis").mkdir(parents=True)
+        (generated / "extract-metadata").mkdir()
+
+        system = _declared_artifact_schema_keys("usage-analysis", layout="multi")
+        assert system.path == Path("app/generated/usage_analysis/artifact_schemas.json")
+        wire = _declared_artifact_schema_keys("extract-metadata", layout="multi")
+        assert wire.path == Path("app/generated/extract-metadata/artifact_schemas.json")
+        unknown = _declared_artifact_schema_keys("mine-queries", layout="multi")
+        assert unknown.path == Path("app/generated/mine-queries/artifact_schemas.json")
+
     def test_nested_declaration_does_not_answer_for_a_sibling(
         self, tmp_path: Path
     ) -> None:

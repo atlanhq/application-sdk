@@ -1008,6 +1008,7 @@ toolkit output actually writes:
 |---|---|
 | One `manifest.json` at the root | `app/generated/artifact_schemas.json` |
 | A `manifest.json` per entry-point subdirectory (a bundle) | `app/generated/{entry-point}/artifact_schemas.json`, one per entry point |
+| A UI-less system entry point in a bundle (no manifest of its own) | `app/generated/{entry_point_snake}/artifact_schemas.json`, the snake_case dir its `_input.py` imports from |
 
 A **route/card-split** app — one marketplace card plus extra `@entrypoint`s the DAG invokes by
 `workflow_type` — has a flat tree, so all of its entry points share the one flat file. That is why

@@ -601,11 +601,49 @@ def test_candidate_paths_are_nested_first_and_empty_for_unplaceable_shapes(
     ]
     assert candidate_paths(tmp_path, "multi", "extract-metadata") == [
         generated / "extract-metadata" / "artifact_schemas.json",
+        # FND-3563: a UI-less system entry point's dir is snake_case.
+        generated / "extract_metadata" / "artifact_schemas.json",
+        generated / "artifact_schemas.json",
+    ]
+    assert candidate_paths(tmp_path, "multi", "crawler") == [
+        generated / "crawler" / "artifact_schemas.json",
         generated / "artifact_schemas.json",
     ]
     # multi mode needs a wire name to name the subdirectory.
     assert candidate_paths(tmp_path, "multi", None) == []
     assert candidate_paths(tmp_path, "absent", "extract-metadata") == []
+
+
+def test_system_entrypoint_declarations_are_read_from_the_snake_case_dir(
+    tmp_path: Path,
+) -> None:
+    """FND-3563: a UI-less system entry point writes ``app/generated/<snake>/``."""
+    snake = tmp_path / "app" / "generated" / "usage_analysis"
+    _write_schemas(snake / "artifact_schemas.json", "raw_queries")
+
+    found = read_declarations(tmp_path, "multi", "usage-analysis")
+    assert found.status == "declared"
+    assert found.keys == frozenset({"raw_queries"})
+    assert found.path == snake / "artifact_schemas.json"
+
+
+def test_absent_declarations_name_the_dir_the_toolkit_generated(
+    tmp_path: Path,
+) -> None:
+    generated = tmp_path / "app" / "generated"
+    (generated / "usage_analysis").mkdir(parents=True)
+    (generated / "extract-metadata").mkdir()
+
+    assert read_declarations(tmp_path, "multi", "usage-analysis").path == (
+        generated / "usage_analysis" / "artifact_schemas.json"
+    )
+    assert read_declarations(tmp_path, "multi", "extract-metadata").path == (
+        generated / "extract-metadata" / "artifact_schemas.json"
+    )
+    # Nothing generated for this entry point: the wire-name path, as before.
+    assert read_declarations(tmp_path, "multi", "mine-queries").path == (
+        generated / "mine-queries" / "artifact_schemas.json"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -404,6 +404,8 @@ The mapping between the kebab-case entry-point name (on the wire, and the `app/g
 
 Discovery is best-effort and conservative: a missing module / wrong-shaped attribute falls through to the app-level `Handler` (1:1 with single-entry-point behaviour). Both the handler functions and `compute_manifest` must be `async def` — a sync `def` is ignored and falls through. A module that *exists but fails to import* (a real bug in the connector's code) is **not** swallowed — it surfaces.
 
+A bundle's UI-less system entry point (its contract is `type = "system"` with no `uiConfig`) is the exception: the toolkit writes its contract dir as `app/generated/<segment>/`, so `app.generated.<segment>._input` imports. The SDK already imports that module path. `validation.sources.artifact_schema_paths`, the registration-time artifact-schema guard and conformance K016 look for its `artifact_schemas.json` under the wire-name dir, then the snake_case dir.
+
 ### Dockerfile
 
 One App = one `ATLAN_APP_MODULE` entry (no comma-separated list):

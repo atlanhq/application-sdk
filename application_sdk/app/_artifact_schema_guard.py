@@ -73,6 +73,7 @@ from application_sdk.app._generated_tree import (
     GeneratedLayout,
     generated_layout,
 )
+from application_sdk.common._generated_tree import entrypoint_dirs
 from application_sdk.constants import CONTRACT_GENERATED_DIR
 from application_sdk.contracts.types import FileReference, asset_artifact_marker
 from application_sdk.observability.logger_adaptor import get_logger
@@ -157,7 +158,9 @@ def _declared_artifact_schema_keys(
     entry-point count (see :func:`_generated_layout`):
 
     ``multi``
-        ``app/generated/<wire-name>/artifact_schemas.json``, then the flat file.
+        ``app/generated/<wire-name>/artifact_schemas.json``, then its
+        snake_case directory (a UI-less system entry point's, FND-3563), then
+        the flat file.
         The flat fallback is safe by construction — declaring ``artifactSchemas``
         on a bundle root is a toolkit generation error, so a root-level file can
         only ever belong to a single-entry-point app.
@@ -194,9 +197,12 @@ def _declared_artifact_schema_keys(
         exists but could not be understood.
     """
     generated = Path(CONTRACT_GENERATED_DIR)
-    nested = generated / entrypoint_name / _ARTIFACT_SCHEMAS_FILENAME
+    nested = tuple(
+        d / _ARTIFACT_SCHEMAS_FILENAME
+        for d in entrypoint_dirs(generated, entrypoint_name)
+    )
     flat = generated / _ARTIFACT_SCHEMAS_FILENAME
-    candidates = (flat,) if layout == "single" else (nested, flat)
+    candidates = (flat,) if layout == "single" else (*nested, flat)
     for candidate in candidates:
         try:
             raw = candidate.read_bytes()
@@ -231,7 +237,10 @@ def _declared_artifact_schema_keys(
     # layout is unknown, name nothing: a cited path that the toolkit will never
     # write is worse than none, because following it cannot clear the warning.
     if layout == "multi":
-        return _Declarations(path=nested)
+        # The wire-name dir, or the snake_case one a UI-less system entry point
+        # writes (FND-3563): whichever the toolkit generated for this entry point.
+        written = next((p for p in nested if p.parent.is_dir()), nested[0])
+        return _Declarations(path=written)
     if layout == "single":
         return _Declarations(path=flat)
     return _Declarations()
