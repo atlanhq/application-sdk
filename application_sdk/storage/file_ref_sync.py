@@ -202,15 +202,19 @@ async def _rehash_matches_marker(local_path: str) -> bool:
         marker = await run_in_thread(read_local_marker, local_path)
         if marker is None:
             return False
-        actual, fingerprint = await hash_fingerprinted(local_path)
+        hashed = await hash_fingerprinted(local_path)
     except Exception:
         logger.warning("sha256 verification failed for local sidecar", exc_info=True)
         return False
-    # No fingerprint means the file changed while it was being hashed: the
-    # digest describes bytes it may no longer hold, so it proves nothing.
-    if fingerprint is None or actual != marker.sha256:
+    # A file that changed while it was being hashed: the digest describes
+    # bytes it may no longer hold, so it proves nothing.
+    if not hashed.stable or hashed.value != marker.sha256:
         return False
-    await run_in_thread(_write_local_sidecar, local_path, actual, fingerprint)
+    # A symlink re-stamps digest-only (fingerprint None) and is re-hashed
+    # next time, as before FND-4081.
+    await run_in_thread(
+        _write_local_sidecar, local_path, hashed.value, hashed.fingerprint
+    )
     return True
 
 

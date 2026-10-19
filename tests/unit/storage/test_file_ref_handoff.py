@@ -40,7 +40,10 @@ from application_sdk.storage.file_ref_sync import (
     materialize_file_refs,
 )
 from application_sdk.storage.ops import download_file_chunked, upload_file
-from application_sdk.storage.reference import persist_file_reference
+from application_sdk.storage.reference import (
+    materialize_file_reference,
+    persist_file_reference,
+)
 from tests.unit.loop_probe import LoopProbe
 
 pytestmark = pytest.mark.asyncio
@@ -323,6 +326,66 @@ class TestFingerprintIsOfTheHashedBytes:
 
         # Not reused on the strength of a stale digest: re-downloaded.
         assert Path(out.ref.local_path).read_bytes() == _PAYLOAD
+
+
+class TestUnstableHashIsNotProof:
+    """A hash only proves what is at the path if the file held still (F-242ae1)."""
+
+    @staticmethod
+    def _rewrite_after_hashing(local: Path) -> Any:
+        real = integrity._sha256_file_sync
+
+        def _hash_then_rewrite(path: Path) -> str:
+            digest = real(path)  # the old, valid bytes
+            local.write_bytes(b"Z" * len(_PAYLOAD))
+            _bump_mtime(local)
+            return digest
+
+        return patch.object(integrity, "_sha256_file_sync", _hash_then_rewrite)
+
+    async def test_single_file_fast_path_downloads_instead_of_reusing(
+        self, tmp_path: Path
+    ) -> None:
+        store, local, ref = await _persisted(tmp_path)
+        (tmp_path / "out.bin.sha256").unlink()  # force the fast path to hash
+
+        with self._rewrite_after_hashing(local):
+            out = await materialize_file_reference(store, ref)
+
+        assert Path(out.local_path).read_bytes() == _PAYLOAD
+
+    async def test_directory_fast_path_downloads_instead_of_reusing(
+        self, tmp_path: Path
+    ) -> None:
+        store = create_memory_store()
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.bin").write_bytes(_PAYLOAD)
+        ref = await persist_file_reference(store, FileReference.from_local(src))
+        local = src / "a.bin"
+        # Digest-only marker: not trusted on stat, so the file is hashed.
+        (src / "a.bin.sha256").write_text(_sha(_PAYLOAD))
+
+        with self._rewrite_after_hashing(local):
+            out = await materialize_file_reference(store, ref)
+
+        assert (Path(out.local_path) / "a.bin").read_bytes() == _PAYLOAD
+
+    async def test_a_symlinked_file_that_held_still_is_still_reused(
+        self, tmp_path: Path
+    ) -> None:
+        """Not trusted on stat, but a stable hash still proves it: no download."""
+        store, local, ref = await _persisted(tmp_path)
+        target = tmp_path / "target.bin"
+        os.replace(local, target)
+        local.symlink_to(target)
+        (tmp_path / "out.bin.sha256").write_text(_sha(_PAYLOAD))
+
+        out = await materialize_file_refs(store, _OneRef(ref=ref))
+
+        assert out.ref is ref  # verified in place
+        assert local.is_symlink()
+        assert read_local_marker(str(local)).fingerprint is None  # type: ignore[union-attr]
 
 
 class TestSymlinkSize:

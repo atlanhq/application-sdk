@@ -462,12 +462,17 @@ async def _persist_file(
     try:
         # data_present=False: nothing to dedup against, so skip the local hash too.
         if dedup is _Dedup.REMOTE_DIGEST and data_present is not False:
-            local_digest, local_fp = await hash_fingerprinted(str(local))
+            hashed = await hash_fingerprinted(str(local))
+            local_digest, local_fp = hashed.value, hashed.fingerprint
             remote_digest = await integrity.read_expected_digest(
                 store, key, sidecar_present=sidecar_present
             )
-            if remote_digest == local_digest and (
-                data_present or await exists(key, store, normalize=False)
+            # Skipping the upload needs the file to have held still while
+            # it was hashed; a write mid-hash makes the digest stale.
+            if (
+                hashed.stable
+                and remote_digest == local_digest
+                and (data_present or await exists(key, store, normalize=False))
             ):
                 await run_in_thread(
                     _write_local_sidecar, str(local), local_digest, local_fp
@@ -475,9 +480,10 @@ async def _persist_file(
                 return local_digest, False
         # The upload streams and hashes the file; the stat bracket around it
         # ties the marker's fingerprint to the bytes that were hashed.
-        sha256, uploaded_fp = await fingerprinted(
+        uploaded = await fingerprinted(
             str(local), lambda: upload_file(key, local, store, normalize=False)
         )
+        sha256, uploaded_fp = uploaded.value, uploaded.fingerprint
         # compute_hash defaults to True, so the digest is always returned here.
         assert sha256 is not None
         await run_in_thread(_write_local_sidecar, str(local), sha256, uploaded_fp)
@@ -1247,7 +1253,11 @@ async def _materialize_single_file(
         restamp = local_hash is None
         local_fp: Fingerprint | None = None
         if local_hash is None:
-            local_hash, local_fp = await hash_fingerprinted(ref.local_path)
+            hashed = await hash_fingerprinted(ref.local_path)
+            # A write during the hash leaves a digest of bytes the path may no
+            # longer hold: no proof, so the file is downloaded.
+            local_hash = hashed.value if hashed.stable else None
+            local_fp = hashed.fingerprint
         stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 
         if stored_hash is not None and local_hash == stored_hash:
@@ -1531,7 +1541,10 @@ async def _materialize_directory(
                 hashed = reference is not None and local_hash is None
                 local_fp: Fingerprint | None = None
                 if hashed:
-                    local_hash, local_fp = await hash_fingerprinted(dest)
+                    bracketed = await hash_fingerprinted(dest)
+                    # A write during the hash proves nothing: download.
+                    local_hash = bracketed.value if bracketed.stable else None
+                    local_fp = bracketed.fingerprint
                 if reference is not None and local_hash == reference:
                     # Re-stamp after a full hash, so a digest-only (pre-
                     # FND-4081) or stale-stat marker is trusted next time.

@@ -18,8 +18,9 @@ caught — the same trade ``download_prefix(sync=True)`` makes in
 The fingerprint must describe the bytes the digest was computed over, not
 whatever is on disk when the marker is written. So it is taken *before* the
 bytes are read and re-taken after: if the two differ, something wrote the file
-while it was being hashed, and the marker is written digest-only — never
-trusted on stat. :func:`fingerprinted` is that bracket. Any later change moves
+while it was being hashed, so the hash is not evidence about the file now —
+it must not be used to reuse the file, and the marker is written digest-only,
+never trusted on stat. :func:`fingerprinted` is that bracket. Any later change moves
 the stat away from the recorded one, which also makes the marker untrusted.
 
 A marker written before the fingerprint existed holds only the digest. It is
@@ -38,7 +39,7 @@ import stat
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar
+from typing import Generic, TypeVar
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.storage import integrity
@@ -133,25 +134,60 @@ def trusted_digest(local_path: str, *, size_bytes: int | None = None) -> str | N
     return marker.sha256
 
 
+@dataclass(frozen=True)
+class Bracketed(Generic[T]):
+    """What a read of a local file returned, and whether the file held still."""
+
+    value: T
+    stable: bool
+    """The file (through any symlink) had the same ``(size, mtime_ns, inode)``
+    before and after the read, so *value* describes the bytes now at the path.
+    ``False`` means a write landed during the read: *value* proves nothing
+    about the file as it is now."""
+    fingerprint: Fingerprint | None
+    """What a marker for *value* may record: the pre-read stat when the read
+    was :attr:`stable` and the path is a regular file, ``None`` otherwise —
+    so a symlink, or a file that moved, gets a digest-only marker."""
+
+
+def _followed_stat(path: str) -> Fingerprint | None:
+    """``(size, mtime_ns, inode)`` of whatever *path* resolves to, if a regular file."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode):
+        return None
+    return (st.st_size, st.st_mtime_ns, st.st_ino)
+
+
+def _bracket_stats(path: str) -> tuple[Fingerprint | None, Fingerprint | None]:
+    return _followed_stat(path), file_fingerprint(path)
+
+
 async def fingerprinted(
     local_path: str, read: Callable[[], Awaitable[T]]
-) -> tuple[T, Fingerprint | None]:
+) -> Bracketed[T]:
     """Run *read* — which reads *local_path* — bracketed by a stat on each side.
 
-    Returns *read*'s result and the fingerprint to record with it: the stat
-    from before the read, or ``None`` if the file changed during the read (or
-    is not a regular file). A ``None`` fingerprint writes a digest-only marker,
-    so a file that moved under the hash is re-verified next time rather than
-    trusted with a digest of bytes it no longer holds.
+    A hash is only evidence about the file at *local_path* if nothing wrote
+    to it while it was read, so callers that reuse a file on the strength of
+    a hash must check :attr:`Bracketed.stable`; a marker written for the hash
+    records :attr:`Bracketed.fingerprint`.
     """
-    before = await run_in_thread(file_fingerprint, local_path)
-    result = await read()
-    after = await run_in_thread(file_fingerprint, local_path)
-    return result, (before if before is not None and before == after else None)
+    followed_before, own_before = await run_in_thread(_bracket_stats, local_path)
+    value = await read()
+    followed_after, _ = await run_in_thread(_bracket_stats, local_path)
+    stable = followed_before is not None and followed_before == followed_after
+    return Bracketed(
+        value=value,
+        stable=stable,
+        fingerprint=own_before if stable and own_before == followed_before else None,
+    )
 
 
-async def hash_fingerprinted(local_path: str) -> tuple[str, Fingerprint | None]:
-    """SHA-256 of *local_path*, off the event loop, with its :func:`fingerprinted` stat."""
+async def hash_fingerprinted(local_path: str) -> Bracketed[str]:
+    """SHA-256 of *local_path*, off the event loop, :func:`fingerprinted`."""
     return await fingerprinted(
         local_path, lambda: integrity.sha256_file(Path(local_path))
     )
