@@ -101,6 +101,16 @@ class GitHub:
             return "unknown"
         return str((data or {}).get("status") or "unknown")
 
+    def merge_base(self, base: str, head: str) -> str:
+        """The merge base of `base...head` (what the PR's diff is against), or ""."""
+        try:
+            data = self._call(
+                "GET", f"/repos/{self.repo}/compare/{base}...{head}?per_page=1"
+            )
+        except GitHubError:
+            return ""
+        return str(((data or {}).get("merge_base_commit") or {}).get("sha") or "")
+
     def file_at(self, path: str, ref: str) -> str | None:
         q = urllib.parse.quote(path)
         try:
