@@ -1305,10 +1305,16 @@ except TemporalWorkflowFailureError as e:
 ```
 
 `TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — commonly
-one of `TemporalActivityError`, `TemporalApplicationError` (a direct raise from
-`run()`/`@entrypoint`, and the `.cause` of a `TemporalActivityError`),
-`TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, or
-`TemporalTimeoutError`, but not limited to those — always include a catch-all case.
+one of `TemporalActivityError`, `TemporalApplicationError`, `TemporalCancelledError`,
+`TemporalChildWorkflowError`, `TemporalTerminatedError`, or `TemporalTimeoutError`, but
+not limited to those — always include a catch-all case. Which level holds the error
+depends on where it was raised:
+
+- An `@task` raised: `e.cause` is `TemporalActivityError`, and the task's own error is
+  one level down, at `e.cause.cause` (a `TemporalApplicationError`).
+- `run()`/`@entrypoint` raised: the SDK wraps any non-Temporal exception in an
+  `ApplicationError`, so `e.cause` is a `TemporalApplicationError` directly.
+
 These six are re-exported (not wrapped) with a `Temporal` prefix so they don't collide
 with SDK types of the same short name, e.g.
 `application_sdk.common.error_codes.ActivityError`,
