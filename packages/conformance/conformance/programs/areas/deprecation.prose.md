@@ -196,8 +196,9 @@ human audit):
     it to `App.upload` first (the `upload_to_atlan` bullet above), and keep the
     uploaded object-store keys the same (P030: pass `storage_path` when the
     published prefix differs from the run prefix). Removing the task is safe
-    under the default PINNED worker versioning; on AUTO_UPGRADE, let in-flight
-    runs finish first. A `SqlApp` port is a
+    under PINNED when worker versioning is enabled (`ATLAN_APP_BUILD_ID` set);
+    for unversioned deployments or AUTO_UPGRADE, let in-flight runs finish
+    first. A `SqlApp` port is a
     structural change — draft it and let the test gate decide.
   - **SDR test → split by concern**: a finding naming `BaseSDRIntegrationTest`
     (import / subclass from `application_sdk.testing.sdr`) means the app's
