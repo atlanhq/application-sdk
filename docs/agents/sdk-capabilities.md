@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.49.2
-source-sha:    cc65aecd302e9539759412d8cec816debc383c9c
-source-date:   2026-10-18T20:58:10Z
+source-sha:    795bf87ef00ef958f02fb7c4d62b6c1bcc58d531
+source-date:   2026-10-19T10:56:51+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -7551,7 +7551,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `auto_materialize: bool` `= True`
   - `manifest_path: str | None`
   - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
-  - `size_bytes: int | None`
+  - `size_bytes: int | None` `= Field(default=None, ge=0)`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`
