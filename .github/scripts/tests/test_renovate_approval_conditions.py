@@ -372,6 +372,8 @@ class TestDepFileAllowlist:
             "apps/foo/contract/PklProject",
             "app/generated/contract.pkl",
             "app/generated/nested/deep.pkl",
+            "contract/generated/input.pkl",
+            "contract/generated/keifu/input.pkl",
             "atlan.yaml",
             "app.yaml",
             "contract_schema.lock.json",
@@ -394,6 +396,11 @@ class TestDepFileAllowlist:
             # ...and the (.*/)? prefix requires a directory boundary.
             "myuv.lock",
             "notrequirements.txt",
+            # Only contract/'s generated subtree is generated; the rest is the
+            # app's hand-written contract source.
+            "contract/app.pkl",
+            "contract/post-generate.sh",
+            "contract/generatedX/input.pkl",
         ],
     )
     def test_non_dependency_paths_are_refused(self, path):
@@ -405,6 +412,7 @@ class TestDepFileAllowlist:
             "sub/atlan.yaml",
             "sub/app.yaml",
             "x/app/generated/a.pkl",
+            "apps/foo/contract/generated/input.pkl",
             "sub/contract_schema.lock.json",
         ],
     )

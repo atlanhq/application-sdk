@@ -4233,9 +4233,10 @@ local function epTemplateName(ep: Entrypoint): String =
 
 local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOutput {
   local c = ep.contract!!
-  // A UI-less system sub-contract makes its entrypoint a system one, as a
-  // system root does. One with a uiConfig keeps the existing output.
-  local isSystemEp = isSystemApp || isUiLessSystemEntrypoint(ep)
+  // A system sub-contract makes its entrypoint a system one, as a system root
+  // does, with or without a uiConfig: `type` decides the base class, as in
+  // `generateE2EBasePy`. A uiConfig only decides whether a manifest exists.
+  local isSystemEp = isSystemApp || isSystemSubContract(ep)
   local baseClass =
     if (isSystemEp) "SystemAppE2ETest"
     else e2eBaseClassForCategory(ep.sourceCategory ?? c.connector?.category)
@@ -4281,7 +4282,9 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
       "    # connector's manifest, and required_dag_nodes to the nodes it runs.\n" +
       "    entrypoint = \"\(escapePyStr(ep.name))\"\n"
     else
-      "    connector_config_name = \"\(escapePyStr(configName))\"\n" +
+      // A system entrypoint has no credential config of its own and submits
+      // straight to AE, so no connector config is named.
+      (if (isSystemEp) "" else "    connector_config_name = \"\(escapePyStr(configName))\"\n") +
       "    # This entrypoint's own manifest. Without it the harness reads the\n" +
       "    # single-entrypoint default (app/generated/manifest.json), which a bundle\n" +
       "    # does not have, and fails with ManifestFileNotFoundError.\n" +
@@ -5052,8 +5055,9 @@ local function isSystemSubContract(ep: Entrypoint): Boolean =
   ep.contract!!.getPropertyOrNull("type") == "system"
 
 // FND-3563: a system entrypoint with no setup form, typically a system app's
-// sub-contract that declares only `inputs`. Its directory and e2e base change
-// below; every other entrypoint renders as before.
+// sub-contract that declares only `inputs`. It has no manifest or form, so its
+// directory is snake_case and its e2e base names no manifest. Whether a
+// contract is a system one is `isSystemSubContract`'s question, not this one's.
 local function isUiLessSystemEntrypoint(ep: Entrypoint): Boolean =
   (isSystemApp || isSystemSubContract(ep))
     && ep.contract!!.getPropertyOrNull("uiConfig") == null

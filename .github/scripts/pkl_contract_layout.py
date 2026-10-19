@@ -80,6 +80,13 @@ ROOT_FILES = ("atlan.yaml", "app.yaml")
 # the fleet; apps that differ are refused rather than mis-written.
 GENERATED_DIR = "app/generated"
 
+# Where an ``App.pkl`` system app's caller node lands: ``contract/generated/
+# input.pkl``, or ``contract/generated/<entrypoint>/input.pkl`` per entrypoint of
+# a system bundle (FND-3563). Prefixed family only, keyed repo-root-relative like
+# every other ``App.pkl`` output. Placed overwrite-only, never replaced
+# wholesale: ``contract/`` is the app's hand-written source tree.
+CONTRACT_GENERATED_DIR = "contract/generated"
+
 # Subdirectory names under the generated dir that NO pkl contract, in any
 # family or toolkit version, ever emits into — so baseline/override detection
 # (which compares what a contract emitted then vs. now) can never see them and
@@ -328,8 +335,9 @@ def plan_swap(
     the working tree — that is what makes override detection possible.
 
     Root files map to the repo root; generated artifacts map under
-    ``generated_dir`` with the family's prefix stripped. An empty mapping means
-    there was nothing to place.
+    ``generated_dir`` with the family's prefix stripped. In the prefixed family
+    a caller node under :data:`CONTRACT_GENERATED_DIR` maps to the same
+    repo-relative path. An empty mapping means there was nothing to place.
     """
     layout = detect_layout(out_dir)
     plan: dict[Path, Path] = {}
@@ -351,6 +359,14 @@ def plan_swap(
             if layout == "native" and len(rel.parts) == 1 and rel.name in ROOT_FILES:
                 continue
             plan[target / rel] = src
+
+    # Without this the caller node was evaluated and then dropped, so a toolkit
+    # bump never refreshed it in the app's repo.
+    callers = out_dir / CONTRACT_GENERATED_DIR
+    if layout == "prefixed" and callers.is_dir():
+        for src in sorted(callers.rglob("*")):
+            if src.is_file():
+                plan[Path(CONTRACT_GENERATED_DIR) / src.relative_to(callers)] = src
 
     return layout, plan
 

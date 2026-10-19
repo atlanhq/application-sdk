@@ -88,13 +88,7 @@ def candidate_paths(root: Path, mode: str, wire_name: str | None) -> list[Path]:
     if mode == "single":
         return [flat]
     if mode == "multi" and wire_name:
-        # A UI-less system entry point's dir is snake_case (FND-3563), so its
-        # Python imports. Same kebab-to-snake rule as the SDK's
-        # ``entrypoint_module_segment``, restated: conformance does not import it.
-        dirs = [wire_name]
-        if "-" in wire_name:
-            dirs.append(wire_name.replace("-", "_"))
-        return [*(generated / d / ARTIFACT_SCHEMAS_FILENAME for d in dirs), flat]
+        return [generated / wire_name / ARTIFACT_SCHEMAS_FILENAME, flat]
     return []
 
 
@@ -121,8 +115,5 @@ def read_declarations(root: Path, mode: str, wire_name: str | None) -> Declarati
         )
 
     # Nothing exists. The app declares nothing, and the finding should point at
-    # where the declaration would land — the per-entry-point candidate whose
-    # directory the toolkit generated, else the first. The flat file (always
-    # last) is never picked by that scan: its parent exists in every app.
-    target = next((p for p in candidates[:-1] if p.parent.is_dir()), candidates[0])
-    return Declarations(status="absent", path=target)
+    # where the declaration would land — the first (most specific) candidate.
+    return Declarations(status="absent", path=candidates[0])

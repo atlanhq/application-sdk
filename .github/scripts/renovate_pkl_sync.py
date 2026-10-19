@@ -82,6 +82,7 @@ from pathlib import Path
 # regenerate_contract.py / check_generated_freshness.py — see that module.
 sys.path.insert(0, str(Path(__file__).parent))
 from pkl_contract_layout import (  # noqa: E402
+    CONTRACT_GENERATED_DIR,
     GENERATED_DIR,
     ROOT_FILES,
     baseline_contract_ref,
@@ -96,7 +97,8 @@ LOCK_PATH = "contract/PklProject.deps.json"
 
 # Everything a contract can emit, relative to the repo root. Mirrors the
 # cleanup list in contract-toolkit/scripts/regenerate-all.sh.
-OUTPUT_PATHS = [GENERATED_DIR, *ROOT_FILES]
+# CONTRACT_GENERATED_DIR holds a system app's caller node (FND-3563).
+OUTPUT_PATHS = [GENERATED_DIR, CONTRACT_GENERATED_DIR, *ROOT_FILES]
 
 # `pkl eval` can fail transiently on a cold CI runner while fetching the remote
 # @app-contract-toolkit package — a network blip returns a non-zero code (not an

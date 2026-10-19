@@ -145,6 +145,39 @@ def test_prefixed_reserved_subdir_yields_to_a_real_emitted_key(tree, capsys):
     assert "collides with a reserved name" in capsys.readouterr().out
 
 
+def test_prefixed_places_caller_nodes_overwrite_only(tree):
+    """A system app's caller node is emitted repo-root-relative under
+    `contract/generated/` — one file, or one per entrypoint of a system bundle
+    (FND-3563). It must land where the key says, and since `contract/` is the
+    app's own source tree, nothing there is deleted."""
+    _write(tree / "contract" / "app.pkl", "app\n")
+    _write(tree / "contract" / "generated" / "input.pkl", "stale\n")
+    _write(tree / "contract" / "generated" / "notes.md", "app-owned\n")
+    _write(tree / "out" / "app" / "generated" / "_input.py", "x\n")
+    _write(tree / "out" / "contract" / "generated" / "input.pkl", "fresh\n")
+    _write(tree / "out" / "contract" / "generated" / "keifu" / "input.pkl", "ep\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    contract = tree / "contract"
+    assert contract.joinpath("generated", "input.pkl").read_text() == "fresh\n"
+    assert contract.joinpath("generated", "keifu", "input.pkl").read_text() == "ep\n"
+    assert contract.joinpath("generated", "notes.md").read_text() == "app-owned\n"
+    assert contract.joinpath("app.pkl").read_text() == "app\n"
+    # Not misplaced under the generated dir.
+    assert not (tree / "app" / "generated" / "contract").exists()
+
+
+def test_native_does_not_map_contract_generated(tree):
+    """Only the prefixed family keys output repo-root-relative. A native
+    contract's bare `contract/...` key would be relative to the generated dir."""
+    _write(tree / "out" / "contract" / "generated" / "input.pkl")
+
+    _, plan = mod.plan_swap(tree / "out")
+
+    assert Path("contract/generated/input.pkl") not in plan
+
+
 # ── swap_outputs: native family ──────────────────────────────────────────────
 
 

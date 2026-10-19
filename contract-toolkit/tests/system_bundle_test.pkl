@@ -28,8 +28,8 @@ local mixedBundle = (bundleApp) {
 }
 
 // A system sub-contract WITH a setup form, under a non-system root. It has a
-// manifest and form the SDK reads under the kebab wire name, so only its caller
-// node moves; its directory and e2e base stay as for a non-system contract.
+// manifest and form the SDK reads under the kebab wire name, so its directory
+// keeps that name. It is still a system contract, so its e2e base is a system one.
 local setupForm = new App.UIConfig {
   tasks { ["Settings"] { inputs { ["target"] = new App.TextInput { title = "Target" } } } }
 }
@@ -41,6 +41,7 @@ local function withEntrypoint(c) = (bundleApp) {
   }
 }
 local systemUiBundle = withEntrypoint(DigestWithUi)
+local systemUiBase: String = systemUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text
 local connectorUiBundle = withEntrypoint((DigestWithUi) { type = "connector"; inputs = new Mapping {}; hasCredentialConfig = false })
 
 local minerOnlyBundle = (bundleApp) {
@@ -129,10 +130,16 @@ facts {
       == minerOnlyBundle.output.files["app/generated/miner/manifest.json"].text
   }
 
-  ["A system sub-contract with a uiConfig keeps its dir and e2e base; only its caller node moves"] {
-    systemUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text
-      == connectorUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text
-    systemUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text.contains("(BaseE2ETest):")
+  ["A system sub-contract with a uiConfig keeps its kebab dir and manifest, and is still a system entrypoint"] {
+    // `type` picks the base class; the uiConfig only means a manifest exists.
+    systemUiBase.contains("(SystemAppE2ETest):")
+    systemUiBase.contains("    manifest_path = \"app/generated/digest-ui/manifest.json\"\n")
+    systemUiBase.contains("    entrypoint = \"digest-ui\"\n")
+    !systemUiBase.contains("connector_config_name")
+    !systemUiBase.contains("argo_package_name")
+    !systemUiBase.contains("app_service_url")
+    connectorUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text.contains("(BaseE2ETest):")
+    connectorUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text.contains("connector_config_name")
     systemUiBundle.output.files.containsKey("app/generated/digest-ui/manifest.json")
     systemUiBundle.output.files.containsKey("contract/generated/digest-ui/input.pkl")
     !systemUiBundle.output.files.keys.any((k) -> k.startsWith("app/generated/digest_ui/"))

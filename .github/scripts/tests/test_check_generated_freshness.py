@@ -116,6 +116,34 @@ def test_drift_when_regeneration_adds_untracked_file(repo, monkeypatch):
     assert mod.main([]) == 1
 
 
+def test_drift_when_caller_node_is_stale(repo, monkeypatch):
+    """A system app's caller node (`contract/generated/**`, FND-3563) is
+    generated output too: a fresh eval that changes it is drift."""
+    caller = repo / "contract" / "generated" / "keifu" / "input.pkl"
+    caller.parent.mkdir(parents=True)
+    caller.write_text("stale\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "caller node")
+    real = _fake_run()
+
+    def fake_run(cmd, *, check=False):
+        if cmd[0] == "pkl" and cmd[1] == "eval":
+            out_dir = Path(cmd[cmd.index("-m") + 1])
+            gen = out_dir / "app" / "generated"
+            gen.mkdir(parents=True, exist_ok=True)
+            (gen / "manifest.json").write_text(COMMITTED_MANIFEST)
+            (out_dir / "atlan.yaml").write_text(COMMITTED_ATLAN)
+            fresh = out_dir / "contract" / "generated" / "keifu" / "input.pkl"
+            fresh.parent.mkdir(parents=True)
+            fresh.write_text("fresh\n")
+            return types.SimpleNamespace(returncode=0)
+        return real(cmd, check=check)
+
+    monkeypatch.setattr(sync, "run", fake_run)
+    assert mod.main([]) == 1
+    assert caller.read_text() == "fresh\n"
+
+
 def test_opt_out_skips_check(repo, monkeypatch):
     called = {"pkl": False}
 
