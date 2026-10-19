@@ -94,6 +94,12 @@ CONTRACT_GENERATED_DIR = "contract/generated"
 # ``renovate_approval_conditions.DEP_FILE_RE``.
 CALLER_NODE_FILENAME = "input.pkl"
 
+# Git pathspec for every caller node, at any depth (``**/`` also matches no
+# directory). The sync stages, and the freshness checks compare, only these:
+# other files under :data:`CONTRACT_GENERATED_DIR` are the app's, so a change to
+# one is neither generated output nor drift.
+CALLER_NODE_PATHSPEC = f":(glob){CONTRACT_GENERATED_DIR}/**/{CALLER_NODE_FILENAME}"
+
 # Subdirectory names under the generated dir that NO pkl contract, in any
 # family or toolkit version, ever emits into — so baseline/override detection
 # (which compares what a contract emitted then vs. now) can never see them and

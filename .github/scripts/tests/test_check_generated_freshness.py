@@ -158,6 +158,21 @@ def test_drift_when_a_caller_node_is_no_longer_emitted(repo, monkeypatch):
     assert not caller.exists()
 
 
+def test_app_owned_files_beside_caller_nodes_are_not_drift(repo, monkeypatch):
+    """Only caller nodes under `contract/generated/` are generated. An app-owned
+    file there, edited or newly added, must not fail the gate."""
+    callers = repo / "contract" / "generated"
+    callers.mkdir(parents=True)
+    (callers / "notes.md").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "app notes")
+    (callers / "notes.md").write_text("v2\n")
+    (callers / "helper.pkl").write_text("new\n")
+    monkeypatch.setattr(sync, "run", _fake_run())
+
+    assert mod.main([]) == 0
+
+
 def test_opt_out_skips_check(repo, monkeypatch):
     called = {"pkl": False}
 
