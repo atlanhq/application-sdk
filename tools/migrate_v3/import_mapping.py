@@ -184,10 +184,10 @@ SYMBOL_MAP: dict[tuple[str, str], RewriteTarget] = {
         "application_sdk.activities.metadata_extraction.base",
         "BaseMetadataExtractionActivities",
     ): RewriteTarget(
-        "application_sdk.templates",
-        "BaseMetadataExtractor",
+        "application_sdk.app",
+        "App",
         structural=True,
-        note="Extend BaseMetadataExtractor or SqlMetadataExtractor directly.",
+        note="Extend App directly (templates.SqlApp for a SQL source).",
     ),
     (
         "application_sdk.activities.metadata_extraction.incremental",
@@ -345,9 +345,9 @@ MODULE_MAP: dict[str, tuple[str, bool, str]] = {
         "Activities replaced by App + @task. See migration guide Steps 1-3.",
     ),
     "application_sdk.activities.metadata_extraction.base": (
-        "application_sdk.templates",
+        "application_sdk.app",
         True,
-        "Use BaseMetadataExtractor from application_sdk.templates.",
+        "Use App from application_sdk.app (templates.SqlApp for a SQL source).",
     ),
     "application_sdk.activities.metadata_extraction.sql": (
         "application_sdk.templates",

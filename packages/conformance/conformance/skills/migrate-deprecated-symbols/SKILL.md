@@ -141,6 +141,12 @@ use), because each use changes with the migration.
     alone, or an undetermined run shows "all checks passed".
   - `upload_to_atlan(...)` → `App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED))`:
     different arguments and return value.
+  - `class X(BaseMetadataExtractor)` on a non-SQL source → `class X(App)`
+    (`application_sdk.app.App`). The base adds only the deprecated
+    `upload_to_atlan` task, so the swap removes that task from the worker:
+    move every call to it to `App.upload` first (above). This is safe under
+    PINNED when worker versioning is enabled (`ATLAN_APP_BUILD_ID` set); for
+    unversioned deployments or AUTO_UPGRADE, let in-flight runs finish first. On a SQL source it is a route to `templates.SqlApp` (below).
   - `get_workflow_id()` → `input.workflow_id` (needs the typed Input in
     scope); `get_workflow_run_id()` → `App.run_id`.
   - `build_output_path()`: moving the **import** to the public
@@ -161,8 +167,8 @@ use), because each use changes with the migration.
     FileReference field on the typed Input read with `pandas.read_parquet`
     through `run_in_thread`).
   - `QueryBasedTransformer`, `TransformerInterface` (→ the asset-mapper
-    pattern) and `BaseMetadataExtractor`, `SqlMetadataExtractor`
-    (→ `templates.SqlApp`) are structural v3 migrations no packaged skill
+    pattern), and `SqlMetadataExtractor` or `BaseMetadataExtractor` on a SQL
+    source (→ `templates.SqlApp`) are structural v3 migrations no packaged skill
     performs: hand them to the developer with
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
     (in the `atlanhq/application-sdk` repo, not shipped with this package).
