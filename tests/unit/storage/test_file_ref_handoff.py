@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import threading
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -186,7 +187,9 @@ class TestCorruptionIsStillCaught:
 
         local.write_bytes(_PAYLOAD + b"tail")
         # A marker re-stamped over the wrong bytes still disagrees with the ref.
-        _write_local_sidecar(str(local), _sha(_PAYLOAD + b"tail"))
+        _write_local_sidecar(
+            str(local), _sha(_PAYLOAD + b"tail"), file_fingerprint(str(local))
+        )
 
         out = await materialize_file_refs(store, _OneRef(ref=ref))
 
@@ -273,6 +276,74 @@ class TestSizeBytesWireContract:
         assert dumped.model_dump(mode="json")["size_bytes"] == 5
 
 
+class TestFingerprintIsOfTheHashedBytes:
+    """A write that lands while the file is hashed must not inherit the digest.
+
+    The marker's stat has to describe the bytes the digest was computed over.
+    Stat-ing at marker-write time would pair the old digest with the new
+    bytes' stat, and every later hand-off would trust the new bytes unread.
+    """
+
+    async def test_persist_leaves_the_marker_untrusted_if_the_file_moved(
+        self, tmp_path: Path
+    ) -> None:
+        store = create_memory_store()
+        local = tmp_path / "out.bin"
+        local.write_bytes(_PAYLOAD)
+        real_upload = upload_file
+
+        async def _upload_then_rewrite(*args: Any, **kwargs: Any) -> str | None:
+            digest = await real_upload(*args, **kwargs)
+            local.write_bytes(b"Z" * len(_PAYLOAD))  # same size, after the hash
+            _bump_mtime(local)
+            return digest
+
+        with patch("application_sdk.storage.ops.upload_file", _upload_then_rewrite):
+            await persist_file_reference(store, FileReference.from_local(local))
+
+        marker = read_local_marker(str(local))
+        assert marker is not None and marker.sha256 == _sha(_PAYLOAD)
+        assert trusted_digest(str(local)) is None
+
+    async def test_rehash_does_not_restamp_a_file_that_moved_during_the_hash(
+        self, tmp_path: Path
+    ) -> None:
+        store, local, ref = await _persisted(tmp_path)
+        (tmp_path / "out.bin.sha256").write_text(_sha(_PAYLOAD))  # untrusted
+        real = integrity._sha256_file_sync
+
+        def _hash_then_rewrite(path: Path) -> str:
+            digest = real(path)
+            local.write_bytes(b"Z" * len(_PAYLOAD))
+            _bump_mtime(local)
+            return digest
+
+        with patch.object(integrity, "_sha256_file_sync", _hash_then_rewrite):
+            out = await materialize_file_refs(store, _OneRef(ref=ref))
+
+        # Not reused on the strength of a stale digest: re-downloaded.
+        assert Path(out.ref.local_path).read_bytes() == _PAYLOAD
+
+
+class TestSymlinkSize:
+    async def test_symlink_to_a_wrong_size_target_is_redownloaded(
+        self, tmp_path: Path
+    ) -> None:
+        """A symlink is never trusted on stat, but its target's size is still checked."""
+        store, local, ref = await _persisted(tmp_path)
+        other = tmp_path / "other.bin"
+        other.write_bytes(b"short")
+        local.unlink()
+        local.symlink_to(other)
+        # A marker that agrees with the target's bytes, so only size can catch it.
+        (tmp_path / "out.bin.sha256").write_text(_sha(b"short"))
+
+        assert has_refs_to_materialize(_OneRef(ref=ref)) is True
+        out = await materialize_file_refs(store, _OneRef(ref=ref))
+
+        assert Path(out.ref.local_path).read_bytes() == _PAYLOAD
+
+
 # ---------------------------------------------------------------------------
 # Chunked download: hash as chunks land
 # ---------------------------------------------------------------------------
@@ -329,3 +400,80 @@ class TestInOrderHasher:
 
         assert digest == _sha(data)
         assert (tmp_path / "dest.bin").read_bytes() == data
+
+    async def test_cancelled_finish_leaves_the_feeder_running_until_abort(
+        self, tmp_path: Path
+    ) -> None:
+        """Cancelling the caller must not orphan a thread reading the part file."""
+        part = tmp_path / "f.part"
+        part.write_bytes(b"x" * 4096)
+        hasher = _InOrderHasher(
+            part, size=4096, chunk_size_bytes=1024, done={0, 1, 2, 3}
+        )
+        started, release, finished = (threading.Event() for _ in range(3))
+        real_feed = hasher._feed
+
+        def _slow_feed(start: int, end: int) -> None:
+            started.set()
+            release.wait(5)
+            real_feed(start, end)
+            finished.set()
+
+        hasher._feed = _slow_feed  # type: ignore[method-assign]
+        waiter = asyncio.ensure_future(hasher.finish())
+        assert await asyncio.to_thread(started.wait, 5)
+
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        aborting = asyncio.ensure_future(hasher.abort())
+        await asyncio.sleep(0.05)
+        assert not aborting.done()  # still waiting for the thread
+
+        release.set()
+        await aborting
+        assert finished.is_set()
+
+    async def test_cancel_during_the_tail_hash_closes_the_part_fd(
+        self, tmp_path: Path
+    ) -> None:
+        store = create_memory_store()
+        data = os.urandom(16 * 1024)
+        src = tmp_path / "src.bin"
+        src.write_bytes(data)
+        await upload_file("k/blob.bin", src, store, normalize=False)
+        closed: list[int] = []
+        real_close = os.close
+
+        def _tracking_close(fd: int) -> None:
+            closed.append(fd)
+            real_close(fd)
+
+        async def _cancelled(self: _InOrderHasher) -> str | None:
+            raise asyncio.CancelledError
+
+        real_open = os.open
+        opened: list[int] = []
+
+        def _tracking_open(*args: Any, **kwargs: Any) -> int:
+            fd = real_open(*args, **kwargs)
+            opened.append(fd)
+            return fd
+
+        with (
+            patch.object(_InOrderHasher, "finish", _cancelled),
+            patch("application_sdk.storage.chunked.os.open", _tracking_open),
+            patch("application_sdk.storage.chunked.os.close", _tracking_close),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await download_file_chunked(
+                "k/blob.bin",
+                tmp_path / "dest.bin",
+                store,
+                chunk_size_bytes=4096,
+                max_concurrent_chunks=4,
+                compute_hash=True,
+                normalize=False,
+            )
+
+        assert opened and set(opened) <= set(closed)

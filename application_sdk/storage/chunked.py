@@ -305,10 +305,15 @@ class _InOrderHasher:
 
         ``None`` if hashing failed; the caller then re-reads the published
         file, as it did before this existed.
+
+        Shielded: cancelling the caller must not cancel the feeder, whose
+        worker thread would keep reading the part file with nothing left to
+        wait for it. A cancelled caller calls :meth:`abort`, which stops the
+        feeder and waits for its thread.
         """
         self._wake.set()
         try:
-            await self._task
+            await asyncio.shield(self._task)
         # conformance: ignore[E004] the streamed digest is an optimisation; any failure falls back to re-reading the finished file
         except Exception:
             logger.debug("In-order download hash failed; re-reading", exc_info=True)
@@ -936,7 +941,19 @@ async def _download_chunked_locked(
             # validation on the next attempt, so removal is best-effort.
             # Finish the in-order hash before the publish: it reads the part
             # file, which must not be open when it is renamed.
-            streamed = await hasher.finish() if hasher is not None else None
+            # conformance: ignore[E004] cancellation/failure cleanup; stops the feeder thread and closes the fd, then re-raises with no swallow
+            try:
+                streamed = await hasher.finish() if hasher is not None else None
+            except BaseException:
+                # Cancelled while the tail was hashing. Same cleanup as the
+                # cancellation path above: no thread left reading the part
+                # file, fd closed; part + checkpoint stay for resume.
+                try:
+                    if hasher is not None:
+                        await hasher.abort()
+                finally:
+                    os.close(fd)
+                raise
             # conformance: ignore[E004] publish error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
             try:
                 try:

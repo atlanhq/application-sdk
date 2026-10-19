@@ -54,8 +54,11 @@ from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
 from application_sdk.storage._local_marker import (
+    Fingerprint,
     file_fingerprint,
+    fingerprinted,
     format_marker,
+    hash_fingerprinted,
     marker_path,
     read_local_marker,
     trusted_digest,
@@ -336,14 +339,19 @@ _materialize_lock = _MATERIALIZE_LOCKS.lock
 _materialize_guard = _MATERIALIZE_LOCKS.guard
 
 
-def _write_local_sidecar(local_path: str, sha256: str) -> None:
+def _write_local_sidecar(
+    local_path: str, sha256: str, fingerprint: Fingerprint | None
+) -> None:
     """Write a local ``.sha256`` sidecar next to *local_path*.
 
-    The marker records *sha256* with the file's ``(size, mtime_ns, inode)``
-    as of now, so a later same-pod materialise can trust it on a stat instead
-    of re-reading the file (FND-4081; format in ``_local_marker``). Call it
-    only once the file holds the bytes *sha256* was computed over. Blocking
-    (stat + fsync): call it through ``run_in_thread``.
+    The marker records *sha256* with *fingerprint*, so a later same-pod
+    materialise can trust it on a stat instead of re-reading the file
+    (FND-4081; format in ``_local_marker``). *fingerprint* must be the stat of
+    the bytes *sha256* was computed over — take it with
+    ``_local_marker.fingerprinted`` around the read, never by stat-ing the
+    file here, where a write since the hash would be blessed with the old
+    digest. ``None`` writes a digest-only marker, which is never trusted on
+    stat. Blocking (fsync): call it through ``run_in_thread``.
 
     Atomic even though the write is best-effort, and *because* it is: a
     truncated digest is not a missing sidecar, it is a wrong one. A later
@@ -353,7 +361,7 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
     (FND-318).
     """
     try:
-        marker = format_marker(sha256, file_fingerprint(local_path))
+        marker = format_marker(sha256, fingerprint)
         with atomic_write(
             marker_path(local_path), operation="local sidecar write"
         ) as sidecar:
@@ -362,6 +370,18 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
         logger.warning(
             "Sidecar write failed (best-effort, continuing without)", exc_info=True
         )
+
+
+def _stamp_downloaded(local_path: str, sha256: str) -> None:
+    """Stamp the marker of a file a download just published, with its stat now.
+
+    Unlike a persist or a re-hash there is no earlier stat to bracket with:
+    the file did not exist before the download published it. The stat taken
+    here is of the hashed bytes because the destination is SDK-owned and held
+    under the per-path materialise lock (or is a private temp name) from
+    publish to stamp. Blocking: call it through ``run_in_thread``.
+    """
+    _write_local_sidecar(local_path, sha256, file_fingerprint(local_path))
 
 
 def _list_upload_files(root: Path) -> list[Path]:
@@ -442,19 +462,25 @@ async def _persist_file(
     try:
         # data_present=False: nothing to dedup against, so skip the local hash too.
         if dedup is _Dedup.REMOTE_DIGEST and data_present is not False:
-            local_digest = await integrity.sha256_file(local)
+            local_digest, local_fp = await hash_fingerprinted(str(local))
             remote_digest = await integrity.read_expected_digest(
                 store, key, sidecar_present=sidecar_present
             )
             if remote_digest == local_digest and (
                 data_present or await exists(key, store, normalize=False)
             ):
-                await run_in_thread(_write_local_sidecar, str(local), local_digest)
+                await run_in_thread(
+                    _write_local_sidecar, str(local), local_digest, local_fp
+                )
                 return local_digest, False
-        sha256 = await upload_file(key, local, store, normalize=False)
+        # The upload streams and hashes the file; the stat bracket around it
+        # ties the marker's fingerprint to the bytes that were hashed.
+        sha256, uploaded_fp = await fingerprinted(
+            str(local), lambda: upload_file(key, local, store, normalize=False)
+        )
         # compute_hash defaults to True, so the digest is always returned here.
         assert sha256 is not None
-        await run_in_thread(_write_local_sidecar, str(local), sha256)
+        await run_in_thread(_write_local_sidecar, str(local), sha256, uploaded_fp)
         return sha256, True
     finally:
         # One file resolved — uploaded or deduplicated — is one unit of
@@ -1217,13 +1243,19 @@ async def _materialize_single_file(
             if reuse is _Reuse.VERIFIED
             else None
         )
+        # A trusted marker is already current; only a fresh hash re-stamps.
+        restamp = local_hash is None
+        local_fp: Fingerprint | None = None
         if local_hash is None:
-            local_hash = await integrity.sha256_file(Path(ref.local_path))
+            local_hash, local_fp = await hash_fingerprinted(ref.local_path)
         stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 
         if stored_hash is not None and local_hash == stored_hash:
             # File is intact — stamp local sidecar and reuse.
-            await run_in_thread(_write_local_sidecar, ref.local_path, local_hash)
+            if restamp:
+                await run_in_thread(
+                    _write_local_sidecar, ref.local_path, local_hash, local_fp
+                )
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
                 "file_ref.materialize.skipped",
@@ -1341,7 +1373,7 @@ async def _materialize_single_file(
                 key=ref.storage_path,
             )
 
-        await run_in_thread(_write_local_sidecar, out_path, sha256)
+        await run_in_thread(_stamp_downloaded, out_path, sha256)
     # conformance: ignore[E004] cleanup handler that always re-raises; BaseException so a cancelled transfer strands no owned temp either
     except BaseException as exc:
         if isinstance(exc, Exception):
@@ -1497,13 +1529,16 @@ async def _materialize_directory(
                     else None
                 )
                 hashed = reference is not None and local_hash is None
+                local_fp: Fingerprint | None = None
                 if hashed:
-                    local_hash = await integrity.sha256_file(dest_path)
+                    local_hash, local_fp = await hash_fingerprinted(dest)
                 if reference is not None and local_hash == reference:
                     # Re-stamp after a full hash, so a digest-only (pre-
                     # FND-4081) or stale-stat marker is trusted next time.
                     if hashed:
-                        await run_in_thread(_write_local_sidecar, dest, local_hash)
+                        await run_in_thread(
+                            _write_local_sidecar, dest, local_hash, local_fp
+                        )
                     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.skipped",
@@ -1554,7 +1589,7 @@ async def _materialize_directory(
                 local_path=dest,
             )
         if sha256 is not None:
-            await run_in_thread(_write_local_sidecar, dest, sha256)
+            await run_in_thread(_stamp_downloaded, dest, sha256)
         return False
 
     try:

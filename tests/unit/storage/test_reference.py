@@ -56,18 +56,22 @@ class TestWriteLocalSidecar:
         local = tmp_path / "f.txt"
         local.write_bytes(b"x")
         digest = "d" * 64
-        _write_local_sidecar(str(local), digest)
-        st = local.stat()
-        # The digest plus the stat that lets a same-pod reuse skip the hash.
-        assert (tmp_path / "f.txt.sha256").read_text() == (
-            f"{digest} {st.st_size} {st.st_mtime_ns} {st.st_ino}"
-        )
+        # The digest plus the stat of the hashed bytes, as the caller took it —
+        # not a fresh stat, which could bless a later write.
+        _write_local_sidecar(str(local), digest, (1, 2, 3))
+        assert (tmp_path / "f.txt.sha256").read_text() == f"{digest} 1 2 3"
+
+    def test_no_fingerprint_writes_a_digest_only_marker(self, tmp_path) -> None:
+        local = tmp_path / "f.txt"
+        local.write_bytes(b"x")
+        _write_local_sidecar(str(local), "d" * 64, None)
+        assert (tmp_path / "f.txt.sha256").read_text() == "d" * 64
 
     def test_failure_swallowed(self, tmp_path) -> None:
         # Pointing at a directory that doesn't exist → write fails → swallowed
         bogus = str(tmp_path / "no_such_dir" / "x.txt")
         # Should NOT raise
-        _write_local_sidecar(bogus, "abc")
+        _write_local_sidecar(bogus, "abc", None)
 
 
 class TestConcurrentMaterialize:

@@ -15,6 +15,13 @@ replacement that also restores size *and* mtime on the same inode is not
 caught — the same trade ``download_prefix(sync=True)`` makes in
 ``batch._plan_sync``.
 
+The fingerprint must describe the bytes the digest was computed over, not
+whatever is on disk when the marker is written. So it is taken *before* the
+bytes are read and re-taken after: if the two differ, something wrote the file
+while it was being hashed, and the marker is written digest-only — never
+trusted on stat. :func:`fingerprinted` is that bracket. Any later change moves
+the stat away from the recorded one, which also makes the marker untrusted.
+
 A marker written before the fingerprint existed holds only the digest. It is
 still read, but never trusted on stat alone: the caller re-hashes (off the
 event loop) and re-stamps it in the current format.
@@ -28,9 +35,16 @@ from __future__ import annotations
 
 import os
 import stat
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import TypeVar
 
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk.storage import integrity
 from application_sdk.storage.integrity import SIDECAR_SUFFIX, _is_sha256_hex
+
+T = TypeVar("T")
 
 #: ``(size, mtime_ns, inode)`` of a regular file.
 Fingerprint = tuple[int, int, int]
@@ -117,3 +131,27 @@ def trusted_digest(local_path: str, *, size_bytes: int | None = None) -> str | N
     if size_bytes is not None and current[0] != size_bytes:
         return None
     return marker.sha256
+
+
+async def fingerprinted(
+    local_path: str, read: Callable[[], Awaitable[T]]
+) -> tuple[T, Fingerprint | None]:
+    """Run *read* — which reads *local_path* — bracketed by a stat on each side.
+
+    Returns *read*'s result and the fingerprint to record with it: the stat
+    from before the read, or ``None`` if the file changed during the read (or
+    is not a regular file). A ``None`` fingerprint writes a digest-only marker,
+    so a file that moved under the hash is re-verified next time rather than
+    trusted with a digest of bytes it no longer holds.
+    """
+    before = await run_in_thread(file_fingerprint, local_path)
+    result = await read()
+    after = await run_in_thread(file_fingerprint, local_path)
+    return result, (before if before is not None and before == after else None)
+
+
+async def hash_fingerprinted(local_path: str) -> tuple[str, Fingerprint | None]:
+    """SHA-256 of *local_path*, off the event loop, with its :func:`fingerprinted` stat."""
+    return await fingerprinted(
+        local_path, lambda: integrity.sha256_file(Path(local_path))
+    )

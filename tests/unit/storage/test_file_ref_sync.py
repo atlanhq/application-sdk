@@ -108,6 +108,7 @@ class TestHasRefsToMaterialize:
     def test_returns_false_for_durable_ref_with_valid_sidecar(self) -> None:
         import hashlib
 
+        from application_sdk.storage._local_marker import file_fingerprint
         from application_sdk.storage.reference import _write_local_sidecar
 
         content = b"verified content"
@@ -116,7 +117,7 @@ class TestHasRefsToMaterialize:
             os.write(fd, content)
             os.close(fd)
             digest = hashlib.sha256(content).hexdigest()
-            _write_local_sidecar(path, digest)
+            _write_local_sidecar(path, digest, file_fingerprint(path))
             inp = _TaskInput(
                 ref=FileReference(
                     is_durable=True, storage_path="file_refs/abc", local_path=path

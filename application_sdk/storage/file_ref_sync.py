@@ -50,7 +50,6 @@ import os
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
@@ -59,9 +58,9 @@ from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.contracts.types import FileReference, Lazy, StoreTarget
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage import integrity
 from application_sdk.storage._local_marker import (
     file_fingerprint,
+    hash_fingerprinted,
     read_local_marker,
     trusted_digest,
 )
@@ -168,12 +167,17 @@ def _local_copy(ref: FileReference) -> _LocalCopy:
         if trusted_digest(ref.local_path, size_bytes=ref.size_bytes) is not None:
             return _LocalCopy.CURRENT
         current = file_fingerprint(ref.local_path)
-        if current is None:
-            # Missing, a directory, or not a regular file: only a full
-            # materialise can produce something to hand the task.
-            if not os.path.isfile(ref.local_path):
-                return _LocalCopy.STALE
-        elif ref.size_bytes is not None and current[0] != ref.size_bytes:
+        if current is not None:
+            size = current[0]
+        elif os.path.isfile(ref.local_path):
+            # A symlink to a regular file: never trusted on stat, but its
+            # target's size is still checked against the producer's record.
+            size = os.path.getsize(ref.local_path)
+        else:
+            # Missing or a directory: only a full materialise can produce
+            # something to hand the task.
+            return _LocalCopy.STALE
+        if ref.size_bytes is not None and size != ref.size_bytes:
             return _LocalCopy.STALE
         if read_local_marker(ref.local_path) is None:
             return _LocalCopy.STALE
@@ -198,13 +202,15 @@ async def _rehash_matches_marker(local_path: str) -> bool:
         marker = await run_in_thread(read_local_marker, local_path)
         if marker is None:
             return False
-        actual = await integrity.sha256_file(Path(local_path))
+        actual, fingerprint = await hash_fingerprinted(local_path)
     except Exception:
         logger.warning("sha256 verification failed for local sidecar", exc_info=True)
         return False
-    if actual != marker.sha256:
+    # No fingerprint means the file changed while it was being hashed: the
+    # digest describes bytes it may no longer hold, so it proves nothing.
+    if fingerprint is None or actual != marker.sha256:
         return False
-    await run_in_thread(_write_local_sidecar, local_path, actual)
+    await run_in_thread(_write_local_sidecar, local_path, actual, fingerprint)
     return True
 
 
