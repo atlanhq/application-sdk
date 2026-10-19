@@ -195,7 +195,9 @@ human audit):
     `App` drops only the deprecated `upload_to_atlan` task: move every call to
     it to `App.upload` first (the `upload_to_atlan` bullet above), and keep the
     uploaded object-store keys the same (P030: pass `storage_path` when the
-    published prefix differs from the run prefix). A `SqlApp` port is a
+    published prefix differs from the run prefix). Removing the task is safe
+    under the default PINNED worker versioning; on AUTO_UPGRADE, let in-flight
+    runs finish first. A `SqlApp` port is a
     structural change — draft it and let the test gate decide.
   - **SDR test → split by concern**: a finding naming `BaseSDRIntegrationTest`
     (import / subclass from `application_sdk.testing.sdr`) means the app's

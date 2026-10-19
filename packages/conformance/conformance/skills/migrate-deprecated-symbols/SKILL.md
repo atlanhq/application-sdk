@@ -144,8 +144,9 @@ use), because each use changes with the migration.
   - `class X(BaseMetadataExtractor)` on a non-SQL source → `class X(App)`
     (`application_sdk.app.App`). The base adds only the deprecated
     `upload_to_atlan` task, so the swap removes that task from the worker:
-    move every call to it to `App.upload` first (above). On a SQL source it
-    is a route to `templates.SqlApp` (below).
+    move every call to it to `App.upload` first (above). This is safe under
+    the default PINNED worker versioning; on AUTO_UPGRADE, let in-flight runs
+    finish first. On a SQL source it is a route to `templates.SqlApp` (below).
   - `get_workflow_id()` → `input.workflow_id` (needs the typed Input in
     scope); `get_workflow_run_id()` → `App.run_id`.
   - `build_output_path()`: moving the **import** to the public
