@@ -25,13 +25,15 @@ import json
 import re
 import time
 import urllib.parse
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import holistic, prompts, surface, trace
+from . import baseline, holistic, prompts, surface, trace
 from .agent import AgentLimits, BundleResult, review_bundle
+from .baseline import PRAdditions
 from .bundle import Bundle, group
 from .config import Config
 from .diff import (
@@ -534,6 +536,19 @@ def run(
         )
     pr_meta["released_surface_removals"] = released
 
+    # ---- what this PR itself added, against the merge base (FND-4163) -------
+    # An incremental round sees only the commits since the last review, so code
+    # an earlier commit of this PR added reads as pre-existing. A compatibility
+    # claim about it is capped in code (agent.calibrate); both prompts are told.
+    with trace.group("3c · added by this PR (merge base vs PR head)"):
+        added = pr_added(gh, base, head, full_files, head_text)
+        trace.line(
+            f"{len(added.paths)} added path(s), "
+            f"{sum(len(v) for v in added.symbols.values())} added symbol(s) in existing files"
+        )
+    pr_meta["paths_added"] = added.render_paths()
+    pr_meta["symbols_added"] = added.render_symbols()
+
     # ---- verify still-open findings (1 call) -------------------------------
     # Every open finding, not only those whose own file changed: a fix often lands
     # in another file (a data file's finding fixed in the code that reads it). The
@@ -575,6 +590,7 @@ def run(
                     concerns,
                     removed=removed_paths(full_files),
                     released=released,
+                    added=added,
                     max_tokens=res.verify_max_tokens,
                 )
                 if to_verify or concerns
@@ -653,6 +669,7 @@ def run(
             cfg.limits,
             reflect=cfg.reflect,
             budget_usd=left * weights[b.label] / total_w,
+            added=added,
         )
 
     with trace.group(f"6 · line review: {len(bundles)} bundle(s)"):
@@ -709,15 +726,7 @@ def run(
         )
 
     # ---- state -----------------------------------------------------------
-    ledger.spent_usd += round_ledger.spent_usd
-    ledger.calls += round_ledger.calls
-    ledger.input_tokens += round_ledger.input_tokens
-    ledger.cached_tokens += round_ledger.cached_tokens
-    ledger.output_tokens += round_ledger.output_tokens
-    ledger.failed_requests += round_ledger.failed_requests
-    for k, v in round_ledger.by_stage.items():
-        stage = k.split(":", 1)[0]
-        ledger.by_stage[stage] = ledger.by_stage.get(stage, 0.0) + v
+    _book(ledger, round_ledger)
     failed_paths: list[str] = []
     bundle_paths = {b.label: b.paths for b in bundles}
     for b in res.bundles:
@@ -866,6 +875,340 @@ def dismiss(
     return res
 
 
+def _book(ledger: Ledger, spent: Ledger) -> None:
+    """Add one run's spend to the PR's ledger."""
+    ledger.spent_usd += spent.spent_usd
+    ledger.calls += spent.calls
+    ledger.input_tokens += spent.input_tokens
+    ledger.cached_tokens += spent.cached_tokens
+    ledger.output_tokens += spent.output_tokens
+    ledger.failed_requests += spent.failed_requests
+    for k, v in spent.by_stage.items():
+        stage = k.split(":", 1)[0]
+        ledger.by_stage[stage] = ledger.by_stage.get(stage, 0.0) + v
+
+
+# ---- /lens recheck -------------------------------------------------------------
+
+CAPABILITIES_DOC = "docs/agents/sdk-capabilities.md"
+RECHECK_REASON_KEEP = 300
+
+
+@dataclass
+class RecheckEvidence:
+    facts: list[str]  # deterministic, one line each; facts[0] is the merge-base fact
+    absent_on_merge_base: bool
+    code_now: str
+    at_merge_base: str
+
+
+def _private(parts: list[str]) -> bool:
+    return any(p.startswith("_") and not p.startswith("__") for p in parts)
+
+
+def recheck_evidence(
+    ws: Workspace,
+    f: Finding,
+    added: PRAdditions,
+    merge_base_text: Callable[[str], str | None],
+    capabilities: str,
+) -> RecheckEvidence:
+    """What git and the repository say about one finding's subject, with no
+    model call: merge-base existence, callers, privacy, the capability manifest."""
+    text = ws.text(f.path) or ""
+    lines = text.splitlines()
+    at = locate_in_text(text, f.evidence)
+    sym = ws.index.enclosing(f.path, at) if at else None
+    lo, hi = (
+        (sym.start, sym.end)
+        if sym and sym.end - sym.start < 120
+        else (max(at - 15, 1), at + 15)
+    )
+    code_now = (
+        "\n".join(f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1))
+        if at
+        else "(the quoted code is not in this file any more)"
+    )
+    fd = ws.diffs.get(f.path)
+    base_path = fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
+    dotted = sym.qualname.split(":", 1)[1] if sym else ""
+    facts: list[str] = []
+    absent = False
+    at_base = ""
+    why = added.added(f.path, sym)
+    if why:
+        facts.append(why)
+        absent = True
+    else:
+        base = merge_base_text(base_path)
+        if base is None:
+            facts.append(f"merge-base copy of {base_path} could not be read")
+        elif sym is not None:
+            names = baseline.dotted_names(base_path, base) or set()
+            if dotted in names:
+                facts.append(f"present on merge base: {dotted} in {base_path}")
+            else:
+                facts.append(f"absent on merge base: {dotted} in {base_path}")
+                absent = True
+        elif snippet_in_text(base, f.evidence):
+            facts.append(f"present on merge base: the quoted code is in {base_path}")
+        else:
+            facts.append(f"absent on merge base: the quoted code is not in {base_path}")
+            absent = True
+        if base is not None:
+            base_at = locate_in_text(base, f.evidence)
+            if base_at:
+                bl = base.splitlines()
+                at_base = "\n".join(
+                    f"{i:>5} {bl[i - 1]}"
+                    for i in range(max(base_at - 15, 1), min(base_at + 15, len(bl)) + 1)
+                )
+    module = f.path[:-3].replace("/", ".") if f.path.endswith(".py") else f.path
+    private = _private(f.path.removesuffix(".py").split("/")) or _private(
+        dotted.split(".") if dotted else []
+    )
+    facts.append(
+        f"{'private' if private else 'public'}: module {module}"
+        + (f", symbol {dotted}" if dotted else "")
+    )
+    listed = module in capabilities or (
+        bool(sym) and f"{module}.{sym.name}" in capabilities
+    )
+    facts.append(
+        f"{'listed' if listed else 'not listed'} in {CAPABILITIES_DOC}"
+        if capabilities
+        else f"{CAPABILITIES_DOC} not found on the base branch"
+    )
+    if sym is not None:
+        callers = [
+            c
+            for c in ws.index.callers_of(sym.name, limit=8)
+            if c.qualname != sym.qualname
+        ]
+        total = len(ws.index.callers.get(sym.name, []))
+        facts.append(
+            f"callers of {sym.name} at the PR head ({total} by name): "
+            + (
+                ", ".join(
+                    f"{c.path}:{c.start} {c.qualname.split(':')[-1]}"
+                    + (" (added by this PR)" if added.added(c.path, c) else "")
+                    for c in callers
+                )
+                or "none"
+            )
+        )
+    return RecheckEvidence(facts, absent, code_now, at_base or "(none)")
+
+
+def _recheck_call(
+    client: Client,
+    items: list[tuple[Finding, RecheckEvidence]],
+    author_claim: str,
+    max_tokens: int,
+) -> dict[str, tuple[str, str]] | None:
+    """One model call over every finding that needs one: id -> (status, reason).
+    None when no verdict came back (budget, transport, or out of output tokens)."""
+    parts = []
+    if author_claim:
+        # Untrusted: shown as a claim to check, and unable to close or open a tag.
+        claim = author_claim.replace("<", "‹").replace(">", "›")
+        parts.append(f"<author_claim>\n{claim}\n</author_claim>")
+    for f, ev in items:
+        parts.append(
+            f'<finding id="{f.id}" path="{f.path}" severity="{f.severity}">\n{f.title}. {f.body}\n'
+            f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
+            f"<code_now>\n{ev.code_now}\n</code_now>\n"
+            f"<at_merge_base>\n{ev.at_merge_base}\n</at_merge_base>\n"
+            "<evidence>\n"
+            + "\n".join(f"- {x}" for x in ev.facts)
+            + "\n</evidence>\n</finding>"
+        )
+    messages = [
+        {"role": "system", "content": prompts.RECHECK_SYSTEM},
+        {"role": "user", "content": "\n".join(parts)},
+    ]
+    try:
+        comp = client.complete(
+            "recheck",
+            messages,
+            max_tokens=max_tokens,
+            tools=prompts.RECHECK_TOOLS,
+            tool_choice="required",
+            cache_key="lens-recheck",
+        )
+    except (BudgetExhausted, LLMError) as e:
+        trace.line(f"recheck: no verdict — {trace.short(str(e), 200)}")
+        return None
+    if not comp.tool_calls:
+        return None
+    ids = {f.id for f, _ in items}
+    out: dict[str, tuple[str, str]] = {}
+    for tc in comp.tool_calls:
+        args = parse_args((tc.get("function") or {}).get("arguments") or "")
+        for it in args.get("items") or []:
+            iid = str(it.get("id"))
+            if iid in ids and it.get("status") in ("resolved", "open"):
+                out[iid] = (
+                    str(it["status"]),
+                    " ".join(str(it.get("reason") or "").split()),
+                )
+    return out
+
+
+def recheck(
+    *,
+    gh: GitHub,
+    number: int,
+    ids: list[str],
+    reason: str,
+    root: Path,
+    cfg: Config,
+    client_factory: Any,
+    actor: str,
+    post: bool = True,
+    run_url: str = "",
+) -> RunResult:
+    """`/lens recheck F-… [reason]`: re-judge open findings with repo-aware evidence.
+
+    Deterministic first: the evidence (merge-base existence, callers, privacy,
+    the capability manifest) is gathered with no model call, and a compatibility
+    finding whose subject is absent on the merge base is resolved on that alone.
+    Anything else gets one model call, from what is left of the PR's $ cap.
+    It is not a round: `state.round` and `reviewed_head` do not move, so the
+    round cap never blocks it and the next `/lens` still reviews any new commits.
+    Who may ask is decided in event.py; the PR author may."""
+    state, _ = find_state(gh, number)
+    if state is None:
+        return RunResult(
+            "skipped", reason="lens has not reviewed this PR yet: nothing to re-check"
+        )
+    by_id = {f.id: f for f in state.findings}
+    targets: list[Finding] = []
+    refused: list[str] = []
+    for fid in dict.fromkeys(ids):
+        f = by_id.get(fid)
+        if f is None or f.status != "open":
+            refused.append(f"`{fid}` is not an open finding")
+        else:
+            targets.append(f)
+    ledger = (
+        Ledger.from_dict(state.ledger, cfg.cap_usd_per_pr)
+        if state.ledger
+        else Ledger(cfg.cap_usd_per_pr)
+    )
+    res = RunResult(
+        "skipped",
+        mode="recheck",
+        state=state,
+        ledger=ledger,
+        run_url=run_url,
+        blob_base=(
+            f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
+            if state.reviewed_head
+            else ""
+        ),
+    )
+    resolved: list[tuple[Finding, str]] = []
+    kept: list[tuple[Finding, str, list[str]]] = []
+    spent = Ledger(cap_usd=max(ledger.remaining, 0.0))
+    if targets:
+        pr = gh.pr(number)
+        head, base = pr["head"]["sha"], pr["base"]["sha"]
+        full_files = parse_unified_diff(gh.diff(base, head))
+        head_text = head_side_text(gh, full_files, head, cfg.max_changed_files)
+        mb = gh.merge_base(base, head)
+
+        def read_base(path: str) -> str | None:
+            return gh.file_at(path, mb) if mb else None
+
+        added = baseline.pr_additions(full_files, head_text, read_base)
+        ws = Workspace(
+            root=root,
+            head_text=head_text,
+            diffs={fd.path: fd for fd in full_files},
+            index=build_index(root, overrides=head_text),
+        )
+        caps = root / CAPABILITIES_DOC
+        capabilities = caps.read_text(encoding="utf-8") if caps.is_file() else ""
+        ask: list[tuple[Finding, RecheckEvidence]] = []
+        for f in targets:
+            ev = recheck_evidence(ws, f, added, read_base, capabilities)
+            trace.line(f"recheck {f.id}: " + "; ".join(ev.facts))
+            if f.compatibility and ev.absent_on_merge_base:
+                resolved.append(
+                    (f, f"{ev.facts[0]}: a compatibility claim about code this PR adds")
+                )
+            else:
+                ask.append((f, ev))
+        if ask and ledger.remaining <= 0.01:
+            refused += [
+                f"`{f.id}` was not re-checked: the PR budget of ${cfg.cap_usd_per_pr:.2f} is spent"
+                for f, _ in ask
+            ]
+        elif ask:
+            client: Client = client_factory(spent)
+            verdicts = _recheck_call(client, ask, reason, cfg.limits.verify_max_tokens)
+            if verdicts is None:
+                res.incomplete.append("re-check: no verdict came back")
+            for f, ev in ask:
+                status, why = (verdicts or {}).get(f.id, ("", ""))
+                if status == "resolved":
+                    resolved.append(
+                        (f, f"{ev.facts[0]} — {why}" if why else ev.facts[0])
+                    )
+                else:
+                    kept.append((f, why or "no verdict came back", ev.facts))
+            _book(ledger, spent)
+    for f, why in resolved:
+        f.status, f.fixed_round, f.fixed_by = "fixed", state.round, "rechecked"
+        f.dismissed_by, f.dismiss_reason = actor, why[:RECHECK_REASON_KEEP]
+    closed = [f.id for f, _ in resolved]
+    res.action = "rechecked" if targets else "skipped"
+    res.reason = "; ".join(refused)
+    res.resolved_verified = closed
+    res.mode_label = (
+        f"recheck · {', '.join(f.id for f in targets) or 'nothing'} by @{actor}"
+    )
+    state.ledger = ledger.to_dict()
+    if targets:
+        state.history.append(
+            {
+                "round": state.round,
+                "head": state.reviewed_head[:12],
+                "base": "",
+                "mode": "recheck",
+                "label": res.mode_label,
+                "new": 0,
+                "resolved": len(closed),
+                "blocking": len(state.open_findings(BLOCKING)),
+                "incomplete": bool(res.incomplete),
+                "usd": round(spent.spent_usd, 4),
+                "calls": spent.calls,
+                "run": run_url,
+            }
+        )
+        del state.history[:-MAX_HISTORY]
+    trace.line(
+        f"recheck by @{actor}: resolved {closed or 'none'}; kept {[f.id for f, *_ in kept] or 'none'}; "
+        f"refused {refused or 'none'}; ${spent.spent_usd:.4f}"
+    )
+    if not post:
+        return res
+    lines = [f"- ✅ `{f.id}` resolved: {why}" for f, why in resolved]
+    for f, why, facts in kept:
+        lines.append(f"- ❌ `{f.id}` still stands: {why}")
+        lines += [f"  - {x}" for x in facts]
+    lines += [f"- ⚠️ {r}" for r in refused]
+    if not targets:
+        gh.comment(number, "lens: nothing was re-checked.\n\n" + "\n".join(lines))
+        return res
+    url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
+    gh.comment(number, "\n".join([verdict_brief(res, url), "", *lines]))
+    if state.reviewed_head:
+        gh.set_status(state.reviewed_head, *verdict_status(res), url)
+    return res
+
+
 RISKY_PREFIXES = (
     "application_sdk/credentials/",
     "application_sdk/storage/",
@@ -922,6 +1265,38 @@ def removed_paths(files: list[FileDiff]) -> str:
     lines = [f"deleted: {fd.path}" for fd in files if fd.status == "deleted"]
     lines += [f"renamed: {fd.old_path} -> {fd.path}" for fd in renamed_away(files)]
     return "\n".join(sorted(lines, key=lambda line: line.split(": ", 1)[1]))
+
+
+def pr_added(
+    gh: GitHub,
+    base: str,
+    head: str,
+    full_files: list[FileDiff],
+    head_text: dict[str, str],
+) -> PRAdditions:
+    """`baseline.pr_additions` with the merge-base copies read through the API.
+
+    No merge base, no symbols: it fails closed (added paths still come from the
+    PR's diff, which GitHub computes against the merge base)."""
+    mb = gh.merge_base(base, head)
+    return baseline.pr_additions(
+        full_files, head_text, (lambda p: gh.file_at(p, mb)) if mb else (lambda p: None)
+    )
+
+
+def added_blocks(added: PRAdditions | None) -> list[str]:
+    if added is None:
+        return []
+    out = []
+    if added.paths:
+        out.append(
+            f"<paths_added_by_this_pr>\n{added.render_paths()}\n</paths_added_by_this_pr>"
+        )
+    if added.symbols:
+        out.append(
+            f"<symbols_added_by_this_pr>\n{added.render_symbols()}\n</symbols_added_by_this_pr>"
+        )
+    return out
 
 
 def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
@@ -1053,6 +1428,7 @@ def _verify(
     *,
     removed: str = "",
     released: str = "",
+    added: PRAdditions | None = None,
     max_tokens: int = AgentLimits.verify_max_tokens,
 ) -> Verified:
     """Every open finding, VERIFY_BATCH at a time, and the open approach concerns
@@ -1073,6 +1449,7 @@ def _verify(
             concerns if n == 0 else None,
             removed=removed,
             released=released,
+            added=added,
             max_tokens=max_tokens,
         )
         out.fixed += got.fixed
@@ -1090,6 +1467,7 @@ def _verify_batch(
     *,
     removed: str = "",
     released: str = "",
+    added: PRAdditions | None = None,
     max_tokens: int = AgentLimits.verify_max_tokens,
 ) -> Verified:
     items = (
@@ -1101,6 +1479,7 @@ def _verify_batch(
         items.append(
             f"<released_surface_removals>\n{released}\n</released_surface_removals>"
         )
+    items += added_blocks(added)
     if changes:
         items.append(f"<changes_this_round>\n{changes}\n</changes_this_round>")
     for cid, c in concerns or []:
@@ -1206,6 +1585,9 @@ def _how(f: Finding) -> str:
     if f.fixed_by == "dismissed":
         why = f": {f.dismiss_reason}" if f.dismiss_reason else ""
         return f"dismissed by @{f.dismissed_by}{why}".replace("|", "/")
+    if f.fixed_by == "rechecked":
+        why = f": {f.dismiss_reason}" if f.dismiss_reason else ""
+        return f"re-checked at @{f.dismissed_by}'s request{why}".replace("|", "/")
     return _FIXED_BY.get(f.fixed_by, "—")
 
 
@@ -1271,6 +1653,8 @@ def _run_title(res: RunResult, round_no: int) -> str:
     label = res.mode_label or res.mode
     if res.mode == "dismiss":
         return f"dismissal after round {round_no} · {label.removeprefix('dismiss · ')}"
+    if res.mode == "recheck":
+        return f"re-check after round {round_no} · {label.removeprefix('recheck · ')}"
     return f"round {round_no} · {label}"
 
 
