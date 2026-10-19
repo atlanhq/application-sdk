@@ -3990,6 +3990,87 @@ def parse_payload(payload):
     ), f"deferred and try-else raises should remain flagged: {findings!r}"
 
 
+def test_p012_inner_except_star_is_not_skipped_for_outer_translation() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        try:
+            raise TypeError
+        except* TypeError:
+            pass
+    except TypeError:
+        raise MalformedPayloadError(message="Malformed payload")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 1
+    ), f"the inner except* handler swallows the sentinel: {findings!r}"
+
+
+def test_p012_shadowed_builtin_handler_is_no_translation_boundary() -> None:
+    src = """\
+import builtins
+
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+class TypeError(Exception):
+    pass
+
+def parse_payload(payload):
+    try:
+        raise builtins.TypeError
+    except TypeError:
+        raise MalformedPayloadError(message="Malformed payload")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 1
+    ), f"the shadowed handler does not catch builtins.TypeError: {findings!r}"
+
+
+def test_p012_handler_rebinding_sdk_error_name_is_no_translation_boundary() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+def parse_payload(payload):
+    try:
+        raise TypeError
+    except TypeError as InvalidInputError:
+        raise InvalidInputError()
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 1
+    ), f"the handler's as-name is the caught TypeError, not the SDK error: {findings!r}"
+
+
+def test_p012_builtins_qualified_sentinel_translated_to_typed_error() -> None:
+    src = """\
+import builtins
+
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        raise builtins.TypeError
+    except TypeError:
+        raise MalformedPayloadError(message="Malformed payload") from None
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert not findings, f"unshadowed builtin handler translates: {findings!r}"
+
+
 # ── P013 — LegacyAtlanErrorRaise ─────────────────────────────────────────────
 
 

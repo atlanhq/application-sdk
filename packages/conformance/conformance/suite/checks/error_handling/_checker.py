@@ -12,7 +12,7 @@ from .exception_chaining import ExceptionChainingMixin, ExceptionHelper
 from .http_failure import HttpFailureMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
-from .untyped_raise import UntypedRaiseMixin
+from .untyped_raise import UntypedRaiseMixin, module_bindings
 
 
 def import_bindings(tree: ast.Module) -> dict[str, str]:
@@ -98,7 +98,11 @@ class Checker(
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._module: ast.Module | None = None
         self._except_stack: list[ast.ExceptHandler] = []
-        self._try_stack: list[ast.Try] = []
+        self._try_stack: list[ast.Try | ast.TryStar] = []
+        # Every name the module binds, and the subset bound by anything other
+        # than an import or a module-level class (see module_bindings).
+        self._bound_names: frozenset[str] = frozenset()
+        self._rebound_names: frozenset[str] = frozenset()
         self._class_stack: list[ast.ClassDef] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         # Set True while generic_visit walks the children of a Raise node so
@@ -126,6 +130,7 @@ class Checker(
     def visit_Module(self, node: ast.Module) -> None:
         self._module = node
         self._import_origins = import_bindings(node)
+        self._bound_names, self._rebound_names = module_bindings(node)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
@@ -183,10 +188,12 @@ class Checker(
         self.generic_visit(node)
         self._loop_stack.pop()
 
-    def visit_Try(self, node: ast.Try) -> None:
+    def visit_Try(self, node: ast.Try | ast.TryStar) -> None:
         # Except clauses catch failures from the try body only, not from their
         # handlers, else suite, or finally suite. Preserve that distinction for
-        # E012's internal-sentinel translation check.
+        # E012's internal-sentinel translation check. ``except*`` scopes are
+        # tracked too, so an inner except* handler is not skipped in favour of
+        # an outer try's handler.
         self._try_stack.append(node)
         for stmt in node.body:
             self.visit(stmt)
@@ -197,6 +204,8 @@ class Checker(
             self.visit(stmt)
         for stmt in node.finalbody:
             self.visit(stmt)
+
+    visit_TryStar = visit_Try
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         self._except_stack.append(node)
