@@ -112,7 +112,9 @@ for the App context in unit tests.
 
 Before you call a site "no public equivalent", look for a public surface that
 answers the same question the code asks, and swap to it. Example: the app's
-entrypoints are on `AppRegistry.get_instance().get(<App>.name).entry_points`.
+entrypoints are in `entry_points` on its entry in
+`AppRegistry.get_instance().list_all()` (match `app_cls`); unlike the private
+scan, it also lists `run()` when the app implements it.
 
 ## Reference shapes
 
@@ -223,7 +225,7 @@ One row per **use**, not per finding, `tests/` included: one import of
   `upload_refs`) stay in `run()` (P008 forbids them in a task). A P021 hit in
   a `@query` is not a move: see owner decision 7. I/O on files another step
   wrote (for example a delete of a folder right after `self.upload` in `run()`)
-  is not a move either: a new task would get a local path that is empty on
+  is not a move either: a new task would get a local path that can be empty on
   another worker. Route it to `migrate-storage`.
 - **v2 residue** — a test or module written for the v2 harness (`Worker`,
   `Client`, `WorkflowEnvironment`, activity stubs). If the app's fixture-kit
@@ -239,14 +241,15 @@ One row per **use**, not per finding, `tests/` included: one import of
 
 1. **Activity names and workflow type.** Replacing `@activity.defn(name=...)`
    or string activity names with `@task` changes the registered activity type
-   (`{app name}:{task name}`); in-flight workflows replay against the old
-   names. Renaming the App or an entrypoint changes the workflow type and
-   strands scheduled DAGs unless `legacy_workflow_types` lists the old one.
+   (`{app name}:{task name}`); in-flight workflows finish on the old build
+   (see decision 2), so that is safe for them. Renaming the App or an
+   entrypoint changes the workflow type and strands scheduled DAGs unless
+   `legacy_workflow_types` lists the old one.
 2. **Workflow history.** Moving I/O from `run()` into a `@task` (P021) adds an
-   activity to the history. Workers run with PINNED versioning by default, so
-   in-flight workflows finish on the old build and need no drain. Only an app
-   that set `TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR` to auto-upgrade needs a
-   drain or deploy window (`workflow.patched` is not public).
+   activity to the history. Deployed workers use PINNED versioning by
+   default, so in-flight workflows finish on the old build and need no drain.
+   Only an app that set `TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR` to auto-upgrade
+   needs a drain or deploy window (`workflow.patched` is not public).
 3. **Retry and timeout values** that the migration would change.
 4. **Task queues and routing.** `run_dev_combined` sets its own task queue
    and interceptors; per-run agent-queue routing has no public seam.
