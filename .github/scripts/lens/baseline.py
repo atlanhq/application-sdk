@@ -75,11 +75,11 @@ def dotted_names(rel: str, text: str) -> set[str] | None:
 
 def pr_additions(
     files: list[FileDiff],
-    head_text: dict[str, str],
+    head_text: Callable[[str], str | None],
     base_text: Callable[[str], str | None],
 ) -> PRAdditions:
-    """`files` is the whole PR's diff; `base_text(path)` reads a path at the
-    merge base (None when unreadable)."""
+    """`files` is the whole PR's diff; `head_text(path)` / `base_text(path)`
+    read a path at the PR head / the merge base (None when unreadable)."""
     out = PRAdditions()
     for fd in files:
         if fd.status == "added":
@@ -87,7 +87,7 @@ def pr_additions(
             continue
         if fd.status == "deleted" or not fd.path.endswith(".py"):
             continue
-        head = head_text.get(fd.path)
+        head = head_text(fd.path)
         if not head:
             continue
         base_path = fd.old_path if fd.status == "renamed" and fd.old_path else fd.path

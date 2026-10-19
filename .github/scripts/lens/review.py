@@ -943,13 +943,22 @@ def recheck_evidence(
         base = merge_base_text(base_path)
         if base is None:
             facts.append(f"merge-base copy of {base_path} could not be read")
+        elif (names := baseline.dotted_names(base_path, base)) is None:
+            # Unknown is not absent: a copy that does not parse proves nothing.
+            facts.append(f"merge-base copy of {base_path} could not be parsed")
         elif sym is not None:
-            names = baseline.dotted_names(base_path, base) or set()
             if dotted in names:
                 facts.append(f"present on merge base: {dotted} in {base_path}")
             else:
                 facts.append(f"absent on merge base: {dotted} in {base_path}")
                 absent = True
+        elif not at:
+            # The quote is gone from the head, so its enclosing symbol is unknown:
+            # its absence from the merge base says nothing about that symbol.
+            facts.append(
+                f"the quoted code is no longer in {f.path} at the PR head: "
+                "merge-base presence of its symbol unknown"
+            )
         elif snippet_in_text(base, f.evidence):
             facts.append(f"present on merge base: the quoted code is in {base_path}")
         else:
@@ -1000,6 +1009,21 @@ def recheck_evidence(
     return RecheckEvidence(facts, absent, code_now, at_base or "(none)")
 
 
+# The tags a recheck request is built from. PR-derived text (code, quotes,
+# finding prose, paths) must not be able to open or close one of them.
+_RECHECK_TAGS = re.compile(
+    r"<(/?)(finding|quoted_when_raised|code_now|at_merge_base|evidence|author_claim)\b",
+    re.IGNORECASE,
+)
+
+
+def _inert(text: str) -> str:
+    """`text` with every recheck tag delimiter made literal: `</code_now>` in a
+    PR's source reads as `‹/code_now>`, so it cannot end the block it sits in or
+    forge an <evidence> block. Other `<` (comparisons, generics) are untouched."""
+    return _RECHECK_TAGS.sub(lambda m: f"‹{m.group(1)}{m.group(2)}", text)
+
+
 def _recheck_call(
     client: Client,
     items: list[tuple[Finding, RecheckEvidence]],
@@ -1014,13 +1038,15 @@ def _recheck_call(
         claim = author_claim.replace("<", "‹").replace(">", "›")
         parts.append(f"<author_claim>\n{claim}\n</author_claim>")
     for f, ev in items:
+        path = _inert(f.path).replace('"', "'")
         parts.append(
-            f'<finding id="{f.id}" path="{f.path}" severity="{f.severity}">\n{f.title}. {f.body}\n'
-            f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
-            f"<code_now>\n{ev.code_now}\n</code_now>\n"
-            f"<at_merge_base>\n{ev.at_merge_base}\n</at_merge_base>\n"
+            f'<finding id="{f.id}" path="{path}" severity="{f.severity}">\n'
+            f"{_inert(f.title)}. {_inert(f.body)}\n"
+            f"<quoted_when_raised>\n{_inert(f.evidence)}\n</quoted_when_raised>\n"
+            f"<code_now>\n{_inert(ev.code_now)}\n</code_now>\n"
+            f"<at_merge_base>\n{_inert(ev.at_merge_base)}\n</at_merge_base>\n"
             "<evidence>\n"
-            + "\n".join(f"- {x}" for x in ev.facts)
+            + "\n".join(f"- {_inert(x)}" for x in ev.facts)
             + "\n</evidence>\n</finding>"
         )
     messages = [
@@ -1043,15 +1069,13 @@ def _recheck_call(
         return None
     ids = {f.id for f, _ in items}
     out: dict[str, tuple[str, str]] = {}
-    for tc in comp.tool_calls:
-        args = parse_args((tc.get("function") or {}).get("arguments") or "")
-        for it in args.get("items") or []:
-            iid = str(it.get("id"))
-            if iid in ids and it.get("status") in ("resolved", "open"):
-                out[iid] = (
-                    str(it["status"]),
-                    " ".join(str(it.get("reason") or "").split()),
-                )
+    for it in verdict_items(comp.tool_calls):
+        iid = str(it.get("id"))
+        if iid in ids and it.get("status") in ("resolved", "open"):
+            out[iid] = (
+                str(it["status"]),
+                " ".join(str(it.get("reason") or "").split()),
+            )
     return out
 
 
@@ -1121,7 +1145,9 @@ def recheck(
         def read_base(path: str) -> str | None:
             return gh.file_at(path, mb) if mb else None
 
-        added = baseline.pr_additions(full_files, head_text, read_base)
+        added = baseline.pr_additions(
+            full_files, head_reader(gh, head, head_text, full_files), read_base
+        )
         ws = Workspace(
             root=root,
             head_text=head_text,
@@ -1279,9 +1305,48 @@ def pr_added(
     No merge base, no symbols: it fails closed (added paths still come from the
     PR's diff, which GitHub computes against the merge base)."""
     mb = gh.merge_base(base, head)
+
+    def read_base(path: str) -> str | None:
+        return gh.file_at(path, mb) if mb else None
+
     return baseline.pr_additions(
-        full_files, head_text, (lambda p: gh.file_at(p, mb)) if mb else (lambda p: None)
+        full_files, head_reader(gh, head, head_text, full_files), read_base
     )
+
+
+BASELINE_EXTRA_FILES = 200  # head reads past `max_changed_files`, for the baseline only
+
+
+def head_reader(
+    gh: GitHub, head: str, head_text: dict[str, str], full_files: list[FileDiff]
+) -> Callable[[str], str | None]:
+    """PR-head text for the baseline: the overlay first, then the API.
+
+    The overlay holds only the first `max_changed_files` files, and a Python
+    file past it would otherwise drop out of the baseline, so a compatibility
+    finding on a symbol it adds could still block. Those files are read here,
+    up to BASELINE_EXTRA_FILES; past that the rest fail closed (judged as before)
+    and the trace says so."""
+    extra = [
+        fd.path
+        for fd in full_files
+        if fd.path.endswith(".py")
+        and fd.status in ("modified", "renamed")
+        and fd.path not in head_text
+    ]
+    allowed = set(extra[:BASELINE_EXTRA_FILES])
+    if len(extra) > len(allowed):
+        trace.line(
+            f"baseline: {len(extra) - len(allowed)} changed Python file(s) past "
+            f"{BASELINE_EXTRA_FILES} extra reads were left out (judged as before)"
+        )
+
+    def read(path: str) -> str | None:
+        if path in head_text:
+            return head_text[path] or None
+        return gh.file_at(path, head) if path in allowed else None
+
+    return read
 
 
 def added_blocks(added: PRAdditions | None) -> list[str]:
@@ -1534,22 +1599,37 @@ def _verify_batch(
     moot: list[str] = []
     by_id = {f.id: f for f in open_}
     concern_ids = {cid for cid, _ in concerns or []}
-    for tc in comp.tool_calls:
-        for it in (
-            parse_args((tc.get("function") or {}).get("arguments") or "").get("items")
-            or []
-        ):
-            verdict = it.get("status")
-            iid, ok = str(it.get("id")), verdict in ("fixed", "moot")
-            f = by_id.get(iid)
-            if f and ok:
-                f.status = "fixed"
-                fixed.append(f.id)
-                if verdict == "moot":
-                    moot.append(f.id)
-            elif iid in concern_ids and ok:
-                fixed.append(iid)
+    for it in verdict_items(comp.tool_calls):
+        verdict = it.get("status")
+        iid, ok = str(it.get("id")), verdict in ("fixed", "moot")
+        f = by_id.get(iid)
+        if f and ok:
+            f.status = "fixed"
+            fixed.append(f.id)
+            if verdict == "moot":
+                moot.append(f.id)
+        elif iid in concern_ids and ok:
+            fixed.append(iid)
     return Verified(fixed=fixed, moot=moot)
+
+
+def verdict_items(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The `items` of every verdicts call, keeping only well-formed entries.
+
+    Tool arguments are model output: a missing or non-list `items`, or an entry
+    that is not an object, is skipped, so its finding keeps its status."""
+    out: list[dict[str, Any]] = []
+    for tc in tool_calls:
+        fn = tc.get("function") if isinstance(tc, dict) else None
+        args = (
+            parse_args(str((fn or {}).get("arguments") or ""))
+            if isinstance(fn, dict)
+            else {}
+        )
+        items = args.get("items")
+        if isinstance(items, list):
+            out += [it for it in items if isinstance(it, dict)]
+    return out
 
 
 def _out_of_output_budget(comp: Any, max_tokens: int) -> bool:
