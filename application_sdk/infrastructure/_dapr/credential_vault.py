@@ -4,6 +4,7 @@ Fetches credential config from S3 via Dapr binding, then resolves secret
 references via the Dapr secret store.
 """
 
+import asyncio
 import copy
 import re
 from enum import Enum
@@ -63,6 +64,22 @@ def _is_missing_object_error(exc: BaseException) -> bool:
     """True if *exc* is an object-store binding saying the key does not exist."""
     detail = dapr_error_detail(exc) if isinstance(exc, Exception) else None
     return detail is not None and _MISSING_OBJECT_RE.search(detail) is not None
+
+
+#: Pauses between attempts to fetch a credential config that the object store
+#: answers not-found for. An object store reached through a gateway can answer
+#: not-found for a few seconds while the gateway's routes load; a short ladder
+#: rides that out without spending the cold-start budget on a key that is
+#: really absent. Four attempts in all.
+_MISSING_CONFIG_RETRY_DELAYS_SECONDS: tuple[float, ...] = (2.0, 5.0, 10.0)
+
+
+class _ConfigObjectNotFound(Exception):
+    """The upstream store answered not-found for the credential config key.
+
+    Deliberately not a :class:`ColdStartRaceError`, so the cold-start retry
+    re-raises it at once and the caller's own ladder decides what to do.
+    """
 
 
 class _CredentialSource(str, Enum):
@@ -242,8 +259,11 @@ class DaprCredentialVault:
 
         A binding 5xx whose Dapr error body says the key does not exist (Azure
         Blob's "blob not found", S3's "object not found" or ``NoSuchKey``) is
-        the missing-config answer, not an outage, and fails at once with "No
-        credential config found" instead of being retried.
+        not an outage, so it is not retried on the cold-start budget. A gateway
+        in front of the store can answer not-found for a few seconds before its
+        routes load, so it is retried on its own short ladder
+        (``_MISSING_CONFIG_RETRY_DELAYS_SECONDS``, about 17s) and only then
+        reported as "No credential config found", with the attempt count.
 
         Raises:
             CredentialVaultError: If the GUID contains unsafe characters or no
@@ -296,11 +316,12 @@ class DaprCredentialVault:
             try:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
             except BindingError as exc:
-                # Treated as the "no config" answer below, not a cold start:
-                # retrying a key that does not exist only delays the failure
-                # and relabels it as an unreachable sidecar.
+                # Not a cold start, so it must not burn the cold-start budget
+                # (and be relabelled an unreachable sidecar). A gateway can
+                # answer not-found before its routes load, so the caller
+                # retries this on a short ladder before calling it missing.
                 if exc.cause is not None and _is_missing_object_error(exc.cause):
-                    return BindingResponse(data=None, metadata={})
+                    raise _ConfigObjectNotFound() from exc
                 if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
                     # str() of a dropped connection (e.g. ReadError) is empty,
                     # so name the cause by type as well.
@@ -313,11 +334,24 @@ class DaprCredentialVault:
                     ) from exc
                 raise
 
-        response = await retry_past_dapr_cold_start(
-            _fetch,
-            description=f"Credential-vault config fetch for '{credential_guid}'",
-            component=DAPR_UPSTREAM_BINDING_COMPONENT,
-        )
+        delays = _MISSING_CONFIG_RETRY_DELAYS_SECONDS
+        for delay in (*delays, None):
+            try:
+                response = await retry_past_dapr_cold_start(
+                    _fetch,
+                    description=f"Credential-vault config fetch for '{credential_guid}'",
+                    component=DAPR_UPSTREAM_BINDING_COMPONENT,
+                )
+                break
+            except _ConfigObjectNotFound:
+                if delay is None:
+                    raise CredentialVaultError(
+                        "No credential config found for GUID %s in upstream store "
+                        "(object store answered not-found on %d attempts over %ds)"
+                        % (credential_guid, len(delays) + 1, sum(delays)),
+                        credential_guid=credential_guid,
+                    ) from None
+                await asyncio.sleep(delay)
 
         if response.data is None:
             raise CredentialVaultError(

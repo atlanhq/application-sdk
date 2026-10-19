@@ -12,6 +12,7 @@ import pytest
 
 from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.infrastructure._dapr.credential_vault import (
+    _MISSING_CONFIG_RETRY_DELAYS_SECONDS,
     DaprCredentialVault,
     _resolve_credentials,
 )
@@ -1011,9 +1012,11 @@ def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
 class TestDaprCredentialVaultMissingConfigBlob:
     """Some object-store bindings (Azure Blob among them) answer a GET for a
     key that does not exist with HTTP 500 and a "not found" Dapr error body,
-    not a 200 with empty data. That is a missing credential config, and must
-    fail at once with the real cause rather than be retried for the whole
-    cold-start budget and then reported as an unreachable sidecar."""
+    not a 200 with empty data. A gateway can also answer not-found briefly
+    before its routes load, so the fetch is retried on a short ladder of its
+    own: it recovers if the config appears, and otherwise fails with the real
+    cause and the attempt count rather than burning the cold-start budget and
+    being reported as an unreachable sidecar."""
 
     def _make_vault(self, mock_client: MagicMock) -> DaprCredentialVault:
         return DaprCredentialVault(
@@ -1035,19 +1038,58 @@ class TestDaprCredentialVaultMissingConfigBlob:
             "error invoking output binding upstream-objectstore: object not found",
         ],
     )
-    async def test_missing_credential_config_blob_is_not_retried(
+    async def test_missing_credential_config_blob_is_retried_briefly_then_reported_missing(
         self, deterministic_dapr_cold_start_deadline, dapr_message: str
     ) -> None:
         mock_client = MagicMock()
         mock_client.invoke_binding = AsyncMock(side_effect=_binding_500(dapr_message))
+        attempts = len(_MISSING_CONFIG_RETRY_DELAYS_SECONDS) + 1
 
-        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(
+                "application_sdk.infrastructure._dapr.credential_vault.asyncio.sleep",
+                AsyncMock(),
+            ),
+        ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError) as exc_info:
                 await vault.get_credentials("example-credential")
 
         assert "No credential config found" in str(exc_info.value)
-        assert mock_client.invoke_binding.await_count == 1
+        assert f"on {attempts} attempts" in str(exc_info.value)
+        assert mock_client.invoke_binding.await_count == attempts
+
+    async def test_config_blob_appearing_during_not_found_retries_succeeds(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        message = "error invoking output binding upstream-objectstore: blob not found"
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=[
+                _binding_500(message),
+                _binding_500(message),
+                BindingResult(data=json.dumps(config).encode(), metadata={}),
+            ]
+        )
+        mock_client.get_secret = AsyncMock(return_value={"password": "secret_pass"})
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(
+                "application_sdk.infrastructure._dapr.credential_vault.asyncio.sleep",
+                AsyncMock(),
+            ),
+        ):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("example-credential")
+
+        assert result["host"] == "db.example.com"
+        assert result["password"] == "secret_pass"
+        assert mock_client.invoke_binding.await_count == 3
 
     async def test_binding_500_without_not_found_is_still_retried(
         self, deterministic_dapr_cold_start_deadline
