@@ -894,7 +894,7 @@ class TestPreflightGateOutcomeEvent:
         assert ev[FAILURE_AUDIENCE_KEY] == "USER"
         assert ml.error.call_count == 1
 
-    async def test_hard_block_error_row_shows_the_reason_without_a_stack(
+    async def test_hard_block_error_row_shows_the_reason_without_frames(
         self, loguru_capture: list[dict[str, Any]]
     ) -> None:
         """The run log panel lists ERROR records and shows each one's
