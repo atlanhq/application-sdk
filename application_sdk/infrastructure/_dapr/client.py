@@ -127,10 +127,11 @@ def is_dapr_transport_unavailable(exc: BaseException) -> bool:
 
     Used by
     :meth:`~application_sdk.infrastructure._dapr.credential_vault.DaprCredentialVault._fetch_credential_config`
-    (Dapr binding/object-store fetches), where a missing blob is signalled by
-    a *successful* response with empty data rather than an error status, so a
-    5xx reaching this predicate is unambiguously a transport/availability
-    problem. The Dapr *secrets* API doesn't have that luxury — see
+    (Dapr binding/object-store fetches). Some object-store bindings answer a
+    missing key with a 5xx and a "not found" error body rather than an empty
+    200; that caller recognises those bodies before consulting this predicate,
+    so a 5xx reaching it is treated as a transport/availability problem. The
+    Dapr *secrets* API doesn't have that luxury — see
     :func:`classify_secret_fetch_error`, which does NOT use this predicate,
     for why a bare 5xx isn't a safe "unreachable" signal there.
     """
