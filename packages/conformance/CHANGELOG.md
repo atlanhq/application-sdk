@@ -2,6 +2,27 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.51.0] - 2026-10-19
+
+### Features
+
+- FND-4155 re-export Temporal ApplicationError as TemporalApplicationError (#4464) ([a49e2dd](https://github.com/atlanhq/application-sdk/commit/a49e2dd))
+- E007 flags a broad except that logs then returns an empty sentinel [FND-4080] (#4455) ([5c3cc69](https://github.com/atlanhq/application-sdk/commit/5c3cc69))
+
+### Bug fixes
+
+- resync adds TWINGATE_SHARED_KEY to explicit tests.yaml secrets mappings [FND-4174] (#4481) ([33a3253](https://github.com/atlanhq/application-sdk/commit/33a3253))
+- FND-4162 migrate-orchestration skill lessons from sweep 1 (#4470) ([9ea48b7](https://github.com/atlanhq/application-sdk/commit/9ea48b7))
+- E012 false positive on compliant code (1 repo) (#4467) ([c8ca1be](https://github.com/atlanhq/application-sdk/commit/c8ca1be))
+- L006 false positive on compliant code (1 repo) (#4468) ([7fbf884](https://github.com/atlanhq/application-sdk/commit/7fbf884))
+- FND-4152 BaseMetadataExtractor notice names App for non-SQL sources (#4462) ([b8257f4](https://github.com/atlanhq/application-sdk/commit/b8257f4))
+- E010 false positive on compliant code (1 repo) (#4461) ([27560b3](https://github.com/atlanhq/application-sdk/commit/27560b3))
+- retry and classify the blobstorage gateway's transient "no Route matched" 404 (#4303) ([cfbfdff](https://github.com/atlanhq/application-sdk/commit/cfbfdff))
+
+### Other changes
+
+- chore(deps): update dependency ruff to v0.17.1 (#4451) ([71c8ac9](https://github.com/atlanhq/application-sdk/commit/71c8ac9))
+
 ## [0.50.2] - 2026-10-16
 
 ### Bug fixes
