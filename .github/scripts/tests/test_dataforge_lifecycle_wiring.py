@@ -258,6 +258,30 @@ def test_both_jobs_connect_the_vpn_before_calling(jobs: dict) -> None:
         assert not any("--resource-id" in r for r in run_steps), job
 
 
+def test_both_jobs_try_twingate_before_globalprotect(
+    workflow: dict, jobs: dict
+) -> None:
+    on = workflow.get("on") or workflow.get(True)
+    assert "TWINGATE_SHARED_KEY" in on["workflow_call"]["secrets"]
+    for job in ("wake-dataforge-source", "pause-dataforge-source"):
+        steps = jobs[job]["steps"]
+        uses = [s.get("uses", "") for s in steps]
+        tg = next(i for i, u in enumerate(uses) if "twingate-connect" in u)
+        gp = next(i for i, u in enumerate(uses) if "globalprotect-connect" in u)
+        assert tg < gp, job
+
+        twingate, globalprotect = steps[tg], steps[gp]
+        assert twingate["continue-on-error"] is True, job
+        assert "env.TWINGATE_SHARED_KEY != ''" in twingate["if"], job
+        assert twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        assert (
+            f"steps.{twingate['id']}.outputs.connected != 'true'" in globalprotect["if"]
+        ), job
+
+        checkout = next(s for s in steps if "actions/checkout" in s.get("uses", ""))
+        assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]
+
+
 def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> None:
     """The 172.17/16 re-subnet lives in globalprotect-connect, not at call sites.
 
