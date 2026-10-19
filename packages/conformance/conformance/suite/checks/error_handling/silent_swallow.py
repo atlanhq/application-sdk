@@ -1476,10 +1476,14 @@ def _condition_checks_exception(node: ast.AST, item_names: set[str]) -> bool:
             and _is_exception_type(node.args[1])
         )
     if isinstance(node, ast.BoolOp):
-        return any(
-            _condition_checks_exception(value, item_names)
-            for value in _reachable_operands(node)
-        )
+        operands = _reachable_operands(node)
+        # `isinstance(r, Exception) and False` never selects anything, so the
+        # test it contains never takes effect.
+        if isinstance(node.op, ast.And) and any(
+            isinstance(value, ast.Constant) and not value.value for value in operands
+        ):
+            return False
+        return any(_condition_checks_exception(value, item_names) for value in operands)
     if isinstance(node, ast.IfExp):
         return _condition_checks_exception(node.test, item_names)
     return False
@@ -1522,9 +1526,16 @@ def _result_item_names(
         and iterable.func.id in {"enumerate", "zip"}
         and (
             not iterable.keywords
+            # `zip(..., strict=True)` only; `strict=False` silently drops the
+            # results past the shorter partner.
             or (
                 iterable.func.id == "zip"
-                and all(keyword.arg == "strict" for keyword in iterable.keywords)
+                and all(
+                    keyword.arg == "strict"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                    for keyword in iterable.keywords
+                )
             )
         )
         and isinstance(target, (ast.Tuple, ast.List))
@@ -1607,7 +1618,21 @@ def _helper_handles_gathered_results(helper: ast.FunctionDef, parameter: str) ->
         item_names = _result_item_names(loop.iter, loop.target, {parameter})
         if not item_names:
             continue
-        for candidate in _iter_shallow(loop):
+        # The body only: `orelse` runs once after the loop, not per item.
+        body = [
+            *loop.body,
+            *(node for statement in loop.body for node in _iter_shallow(statement)),
+        ]
+        # A nested loop or assignment that rebinds the item name means a later
+        # test may be looking at something other than the gathered result.
+        if any(
+            isinstance(node, ast.Name)
+            and node.id in item_names
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            for node in body
+        ):
+            continue
+        for candidate in body:
             if not isinstance(candidate, ast.If):
                 continue
             if not _condition_checks_exception(candidate.test, item_names):
