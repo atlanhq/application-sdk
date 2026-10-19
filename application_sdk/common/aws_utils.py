@@ -25,7 +25,11 @@ logger = get_logger(__name__)
 #: Timeouts for the STS client behind ``AssumeRole``. botocore's defaults (60 s
 #: connect, 60 s read, retried) let one unreachable STS endpoint hold a SQL
 #: client's ``load()`` for minutes; bounded, the worst case (two attempts plus
-#: backoff) stays inside ``SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``.
+#: backoff, about 40 s) stays inside the default ``SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``.
+#: These bounds, not that budget, end the call: ``load()`` gives up at its
+#: deadline, but cancelling the await does not stop the worker thread. With a
+#: budget below about 40 s, a hung AssumeRole keeps its thread until these
+#: limits end it.
 _STS_CONNECT_TIMEOUT_SECONDS = 5
 _STS_READ_TIMEOUT_SECONDS = 15
 _STS_MAX_ATTEMPTS = 2

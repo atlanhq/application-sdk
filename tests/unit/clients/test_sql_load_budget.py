@@ -23,6 +23,7 @@ from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import (
     AsyncBaseSQLClient,
     BaseSQLClient,
+    _cap_next_connect_timeout,
     _with_connect_timeout,
 )
 from application_sdk.clients.sql_errors import SqlClientConnectTimeoutError
@@ -125,8 +126,96 @@ class TestWithConnectTimeout:
         assert connect_args == {}
 
 
-@pytest.mark.asyncio
+class _Stop(Exception):
+    """Raised by the recorder so no connect ever reaches a socket."""
+
+
+def _record_connect_params(engine: Any) -> list[dict[str, Any]]:
+    """Record each connect's driver params, then stop it before any socket opens.
+
+    Registered after the cap, so it sees the params the driver would get.
+    """
+    from sqlalchemy import event
+
+    seen: list[dict[str, Any]] = []
+
+    def _record(
+        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
+    ) -> None:
+        seen.append(dict(cparams))
+        raise _Stop
+
+    event.listen(engine, "do_connect", _record)
+    return seen
+
+
+class TestCapNextConnectTimeout:
+    @pytest.mark.parametrize(
+        ("connect_args", "url_query", "first"),
+        [
+            ({"connect_timeout": 60}, "", 7),
+            # Already below the cap: kept.
+            ({"connect_timeout": 3}, "", 3),
+            # A URL value arrives as a string; capped all the same.
+            ({}, "?connect_timeout=300", 7),
+        ],
+    )
+    def test_caps_only_the_next_connect(
+        self, connect_args: dict[str, Any], url_query: str, first: int
+    ) -> None:
+        pytest.importorskip("psycopg2")
+        from sqlalchemy import create_engine
+
+        url = f"postgresql+psycopg2://u:p@127.0.0.1:1/d{url_query}"
+        engine = create_engine(url, connect_args=connect_args)
+        _cap_next_connect_timeout(engine, url, 6.2)
+        seen = _record_connect_params(engine)
+        for _ in range(2):
+            with pytest.raises(_Stop):
+                engine.raw_connection()
+        assert int(seen[0]["connect_timeout"]) == first
+        # Later connects keep the configured value.
+        assert (
+            seen[1]["connect_timeout"]
+            == (connect_args or {"connect_timeout": "300"})["connect_timeout"]
+        )
+
+    def test_leaves_other_drivers_and_doubles_alone(self) -> None:
+        engine = MagicMock()
+        _cap_next_connect_timeout(engine, "postgresql://u:p@h/d", 5)
+        _cap_next_connect_timeout(engine, "mysql+pymysql://u:p@h/d", 5)
+        engine.assert_not_called()
+
+
 class TestSyncLoadBudget:
+    async def test_ping_gets_only_the_budget_left_after_sts(self) -> None:
+        """A slow STS leaves less time for the ping; its driver timeout shrinks to match.
+
+        Otherwise a black-holed connect would run on in its worker thread for the
+        full timeout after load() had already given up.
+        """
+        client = BaseSQLClient()
+        client.DB_CONFIG = _config()
+
+        def _slow_sts() -> str:
+            time.sleep(1.2)
+            return "postgresql+psycopg2://u:p@127.0.0.1:1/d"
+
+        client.get_sqlalchemy_connection_string = _slow_sts  # type: ignore[method-assign]
+        caps: list[float] = []
+        engine = MagicMock()
+        with (
+            _budget(3.0),
+            patch("sqlalchemy.create_engine", return_value=engine),
+            patch(
+                "application_sdk.clients.sql._cap_next_connect_timeout",
+                side_effect=lambda _e, _cs, seconds: caps.append(seconds),
+            ),
+        ):
+            await client.load({})
+        assert len(caps) == 1
+        assert 1.0 < caps[0] <= 3.0 - 1.2
+
     async def test_hung_connection_string_is_typed_timeout(
         self, release: threading.Event
     ) -> None:
@@ -189,7 +278,6 @@ class TestSyncLoadBudget:
         assert isinstance(exc_info.value.__cause__, TimeoutError)
 
 
-@pytest.mark.asyncio
 class TestAsyncLoadBudget:
     async def test_hung_connection_string_is_typed_timeout(
         self, release: threading.Event

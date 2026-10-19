@@ -151,7 +151,7 @@ def _bound_params(
 
 if TYPE_CHECKING:
     import pandas as pd
-    from sqlalchemy.engine import Connection
+    from sqlalchemy.engine import URL, Connection
     from sqlalchemy.engine.interfaces import DBAPICursor, ExecutionContext
     from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
@@ -253,6 +253,27 @@ _DIALECT_DEFAULT_DRIVER: dict[str, str] = {
 }
 
 
+def _connect_timeout_arg(connection_string: object) -> tuple[str, "URL"] | None:
+    """The URL's driver connect-timeout keyword and the parsed URL, if it has one.
+
+    None for a URL that does not parse or names a driver not in
+    ``_DRIVER_CONNECT_TIMEOUT_ARG``.
+    """
+    from sqlalchemy.engine import make_url  # noqa: PLC0415 — optional dep: sqlalchemy
+    from sqlalchemy.exc import ArgumentError  # noqa: PLC0415 — optional dep: sqlalchemy
+
+    try:
+        url = make_url(cast(Any, connection_string))
+    except (ArgumentError, ValueError):
+        return None
+    # Read from the URL rather than ``get_driver_name()``, which imports the
+    # dialect (and fails for one that is not installed).
+    dialect, _, driver = url.drivername.lower().partition("+")
+    driver = driver or _DIALECT_DEFAULT_DRIVER.get(dialect, "")
+    arg = _DRIVER_CONNECT_TIMEOUT_ARG.get(driver)
+    return None if arg is None else (arg, url)
+
+
 def _with_connect_timeout(
     connection_string: object, connect_args: dict[str, Any], seconds: float
 ) -> dict[str, Any]:
@@ -262,21 +283,49 @@ def _with_connect_timeout(
     query string. A URL that does not parse, or names a driver not in
     ``_DRIVER_CONNECT_TIMEOUT_ARG``, gets ``connect_args`` unchanged.
     """
-    from sqlalchemy.engine import make_url  # noqa: PLC0415 — optional dep: sqlalchemy
-    from sqlalchemy.exc import ArgumentError  # noqa: PLC0415 — optional dep: sqlalchemy
-
-    try:
-        url = make_url(cast(Any, connection_string))
-    except (ArgumentError, ValueError):
+    found = _connect_timeout_arg(connection_string)
+    if found is None:
         return connect_args
-    # Read from the URL rather than ``get_driver_name()``, which imports the
-    # dialect (and fails for one that is not installed).
-    dialect, _, driver = url.drivername.lower().partition("+")
-    driver = driver or _DIALECT_DEFAULT_DRIVER.get(dialect, "")
-    arg = _DRIVER_CONNECT_TIMEOUT_ARG.get(driver)
-    if arg is None or arg in connect_args or arg in url.query:
+    arg, url = found
+    if arg in connect_args or arg in url.query:
         return connect_args
     return {**connect_args, arg: max(1, math.ceil(seconds))}
+
+
+def _cap_next_connect_timeout(
+    engine: object, connection_string: object, seconds: float
+) -> None:
+    """Cap the driver connect timeout of ``engine``'s next connect at ``seconds``.
+
+    ``load()``'s ping starts after the connection string is built, which may
+    have spent much of the budget on STS. With the full timeout from
+    ``connect_args`` a black-holed connect would outlive ``load()`` and hold
+    its worker thread past the deadline; capped at what is left, the thread is
+    freed when ``load()`` gives up. Only the next connect (the ping) is capped:
+    later connects keep the full value. A value of any size — ours, from
+    ``connect_args`` or from the URL — is capped. Anything not an Engine (a
+    test double), or a driver not in ``_DRIVER_CONNECT_TIMEOUT_ARG``, is left
+    alone.
+    """
+    from sqlalchemy import event  # noqa: PLC0415 — optional dep: sqlalchemy
+    from sqlalchemy.engine import Engine  # noqa: PLC0415 — optional dep: sqlalchemy
+
+    found = _connect_timeout_arg(connection_string)
+    if not isinstance(engine, Engine) or found is None:
+        return
+    arg, _ = found
+    cap = max(1, math.ceil(seconds))
+
+    def _cap(
+        dialect: object, conn_rec: object, cargs: object, cparams: dict[str, Any]
+    ) -> None:
+        try:
+            current = int(float(cparams.get(arg, cap)))
+        except (TypeError, ValueError):
+            return  # not a number: the driver will reject it on its own
+        cparams[arg] = min(current, cap)
+
+    event.listen(engine, "do_connect", _cap, once=True)
 
 
 def _load_budget_expired() -> SqlClientConnectTimeoutError:
@@ -425,6 +474,12 @@ class BaseSQLClient(ClientInterface):
                     with _engine.connect() as _:
                         pass  # Connection test successful
 
+                # Cancelling the await does not stop the thread, so the driver
+                # must give up by the deadline on its own.
+                remaining = (
+                    cast(float, budget.when()) - asyncio.get_running_loop().time()
+                )
+                _cap_next_connect_timeout(_engine, connection_string, remaining)
                 await run_in_thread(_ping)
 
             # Don't store persistent connection
