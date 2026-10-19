@@ -24,6 +24,9 @@ from _bump_skip import without_bump_skip  # noqa: E402
 _WORKFLOW = (
     Path(__file__).resolve().parents[3] / ".github/workflows/tests-reusable.yaml"
 )
+_TWINGATE_ACTION = (
+    Path(__file__).resolve().parents[3] / ".github/actions/twingate-connect/action.yml"
+)
 
 
 @pytest.fixture(scope="module")
@@ -256,6 +259,77 @@ def test_both_jobs_connect_the_vpn_before_calling(jobs: dict) -> None:
         run_steps = [s.get("run", "") for s in steps if "run" in s]
         assert any("dataforge_source_lifecycle.py --mode" in r for r in run_steps), job
         assert not any("--resource-id" in r for r in run_steps), job
+
+
+def test_both_jobs_try_twingate_before_globalprotect(
+    workflow: dict, jobs: dict
+) -> None:
+    on = workflow.get("on") or workflow.get(True)
+    assert "TWINGATE_SHARED_KEY" in on["workflow_call"]["secrets"]
+    for job in ("wake-dataforge-source", "pause-dataforge-source"):
+        steps = jobs[job]["steps"]
+        uses = [s.get("uses", "") for s in steps]
+        tg = next(i for i, u in enumerate(uses) if "twingate-connect" in u)
+        gp = next(i for i, u in enumerate(uses) if "globalprotect-connect" in u)
+        assert tg < gp, job
+
+        twingate, globalprotect = steps[tg], steps[gp]
+        cleanup = steps[gp - 1]
+        pin_gate = "env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''"
+        for step in (twingate, cleanup, globalprotect):
+            assert step["if"].startswith(pin_gate), (job, step["name"])
+        assert "env.HAS_TWINGATE_KEY == 'true'" in twingate["if"], job
+        assert jobs[job]["env"]["HAS_TWINGATE_KEY"] == (
+            "${{ secrets.TWINGATE_SHARED_KEY != '' }}"
+        )
+        assert "steps.twingate.outcome == 'failure'" in cleanup["if"], job
+        assert "steps.twingate.outcome == 'cancelled'" in cleanup["if"], job
+        assert "twingate stop" in cleanup["run"], job
+        assert cleanup["continue-on-error"] is True, job
+        assert "/etc/resolv.conf" in cleanup["run"], job
+        assert "twingate.list" in cleanup["run"], job
+        # docs/standards/ci.md: no branching in inlined shell.
+        assert cleanup["run"].startswith("set -euo pipefail\n"), job
+        assert not re.search(
+            r"^\s*(if|for|while|case)\b", cleanup["run"], re.MULTILINE
+        ), job
+        assert (
+            f"steps.{twingate['id']}.outputs.connected != 'true'" in globalprotect["if"]
+        ), job
+
+        assert twingate["continue-on-error"] is True, job
+        assert twingate["with"]["service-key"] == "${{ secrets.TWINGATE_SHARED_KEY }}"
+        assert twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        assert "TWINGATE_SHARED_KEY" not in (jobs[job].get("env") or {}), job
+        assert twingate["timeout-minutes"] < jobs[job]["timeout-minutes"], job
+
+        checkout = next(s for s in steps if "actions/checkout" in s.get("uses", ""))
+        assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]
+
+
+def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
+    action = yaml.safe_load(_TWINGATE_ACTION.read_text(encoding="utf-8"))
+    script = action["runs"]["steps"][0]["run"]
+    bounded = sum(
+        int(n) + int(k or 0)
+        for k, n in re.findall(r"timeout (?:-k (\d+) )?(\d+) ", script)
+    )
+    # A retried curl can spend --max-time on every attempt plus the delays. The
+    # probe curl (`-w`) is excluded here: probe_attempts below already counts it.
+    for flags in re.findall(r"curl (?![^\n]*-w )([^\n]*--max-time \d+)", script):
+        max_time = int(re.search(r"--max-time (\d+)", flags).group(1))
+        retries = re.search(r"--retry (\d+)", flags)
+        delay = re.search(r"--retry-delay (\d+)", flags)
+        n = int(retries.group(1)) if retries else 0
+        bounded += max_time * (n + 1) + n * (int(delay.group(1)) if delay else 1)
+    probe_attempts = int(action["inputs"]["probe-attempts"]["default"])
+    bounded += probe_attempts * (10 + 3)
+    assert "timeout " in script and "-k " in script
+    for job in ("wake-dataforge-source", "pause-dataforge-source"):
+        step = next(
+            s for s in jobs[job]["steps"] if "twingate-connect" in s.get("uses", "")
+        )
+        assert bounded < step["timeout-minutes"] * 60, (job, bounded)
 
 
 def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> None:
