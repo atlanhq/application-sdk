@@ -516,9 +516,18 @@ def _warn_if_raise_on_error_unset(
 
 
 def _endpoint(url: str) -> str:
-    """The request URL without userinfo, query or fragment, which can carry secrets."""
+    """The request URL's scheme, host and port only.
+
+    Userinfo, query and fragment can carry secrets, and so can a path segment
+    (``/keys/<token>/``), which no redaction pattern recognises. Every failure
+    this names got no response from the source, so the host is what locates
+    it; the caller's own frames say which call it was.
+    """
     try:
-        return str(httpx.URL(url).copy_with(userinfo=b"", query=None, fragment=None))
+        parsed = httpx.URL(url)
+        if not parsed.host:
+            return "<invalid url>"
+        return str(httpx.URL(scheme=parsed.scheme, host=parsed.host, port=parsed.port))
     except httpx.InvalidURL:
         # No exc_info and no URL: the unparsed URL may hold a credential.
         logger.debug("Request URL could not be parsed; logged as <invalid url>")

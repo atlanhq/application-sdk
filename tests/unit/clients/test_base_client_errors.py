@@ -25,8 +25,8 @@ from application_sdk.observability.logger_adaptor import (
     _redact_exception_records,
 )
 
-_URL = "http://user:pw@source.example.test:8080/api/items?token=secret#frag"
-_ENDPOINT = "http://source.example.test:8080/api/items"
+_URL = "http://user:pw@source.example.test:8080/api/keys/FAKEPATH/items?token=secret#frag"
+_ENDPOINT = "http://source.example.test:8080"
 
 
 class _LoadedClient(BaseClient):
@@ -69,7 +69,6 @@ def _client_with_backend(failures: int) -> tuple[_LoadedClient, _RefusingBackend
     return client, backend
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["GET", "POST"])
 async def test_connect_failure_is_retried_then_succeeds(method: str) -> None:
     client, backend = _client_with_backend(failures=3)
@@ -88,7 +87,6 @@ async def test_connect_failure_is_retried_then_succeeds(method: str) -> None:
     assert backend.connect_attempts == 4
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["GET", "POST"])
 async def test_connect_failure_after_retries_raises_source_unavailable(
     method: str,
@@ -116,10 +114,10 @@ async def test_connect_failure_after_retries_raises_source_unavailable(
     assert error.network_error == "ConnectError"
     assert error.endpoint == _ENDPOINT
     assert error.message == f"HTTP {method} {_ENDPOINT} failed: ConnectError"
-    assert "secret" not in error.message and "pw" not in error.message
+    for leaked in ("secret", "pw", "FAKEPATH"):
+        assert leaked not in error.message and leaked not in str(error.endpoint)
 
 
-@pytest.mark.asyncio
 async def test_connect_failure_without_raise_on_error_returns_none_and_warns() -> None:
     client, _ = _client_with_backend(failures=100)
     try:
@@ -132,7 +130,6 @@ async def test_connect_failure_without_raise_on_error_returns_none_and_warns() -
     assert record[0].filename == __file__, "warning must point at the caller"
 
 
-@pytest.mark.asyncio
 async def test_explicit_false_returns_none_without_warning() -> None:
     client, _ = _client_with_backend(failures=100)
     try:
@@ -147,7 +144,6 @@ async def test_explicit_false_returns_none_without_warning() -> None:
     assert result is None
 
 
-@pytest.mark.asyncio
 async def test_raise_on_error_returns_error_status_responses() -> None:
     """A 5xx is a response, not a missing one: it is returned, never raised."""
 
@@ -164,7 +160,6 @@ async def test_raise_on_error_returns_error_status_responses() -> None:
     assert response.status_code == 503
 
 
-@pytest.mark.asyncio
 async def test_raise_on_error_propagates_non_network_errors_unchanged() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise RuntimeError("bug in a custom transport")
@@ -178,7 +173,6 @@ async def test_raise_on_error_propagates_non_network_errors_unchanged() -> None:
         await client.close()
 
 
-@pytest.mark.asyncio
 async def test_http_retry_transport_set_in_load_is_used() -> None:
     """The documented hook: assigning ``http_retry_transport`` in ``load()``."""
     seen: list[str] = []
@@ -209,7 +203,6 @@ def _raising(exc_factory: Any) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "exc_type", [httpx.ReadTimeout, httpx.ReadError, httpx.RemoteProtocolError]
 )
@@ -227,7 +220,6 @@ async def test_source_transport_failures_raise_source_unavailable(
     assert isinstance(raised.value.cause, exc_type)
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "exc_type",
     [httpx.PoolTimeout, httpx.UnsupportedProtocol, httpx.TooManyRedirects],
@@ -246,7 +238,6 @@ async def test_non_source_httpx_errors_propagate_unchanged(
         await client.close()
 
 
-@pytest.mark.asyncio
 async def test_unsupported_scheme_on_default_transport_propagates_unchanged() -> None:
     client = _LoadedClient()
     try:
@@ -258,7 +249,6 @@ async def test_unsupported_scheme_on_default_transport_propagates_unchanged() ->
         await client.close()
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("exc_factory", "exc_name"),
     [
