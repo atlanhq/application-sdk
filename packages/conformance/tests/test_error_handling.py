@@ -3288,6 +3288,82 @@ async def run():
     )
 
 
+def test_p010_no_finding_helper_checks_gathered_results() -> None:
+    _none(
+        """\
+import asyncio
+def consume_results(items):
+    for item in items:
+        if isinstance(item, Exception):
+            raise item
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    consume_results(results)
+"""
+    )
+
+
+def test_p010_no_finding_helper_logs_zipped_gather_results() -> None:
+    _none(
+        """\
+import asyncio
+def report_results(keys, outcomes):
+    for key, outcome in zip(keys, outcomes, strict=False):
+        if isinstance(outcome, Exception):
+            logger.error("task failed: %s", outcome)
+async def run():
+    outcomes = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    report_results(keys, outcomes)
+"""
+    )
+
+
+def test_p010_helper_that_only_counts_results_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def count_results(items):
+    return len(items)
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    count_results(results)
+""",
+        "E010",
+    )
+
+
+def test_p010_helper_checking_unrelated_value_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def inspect_unrelated(items, marker):
+    for item in items:
+        if isinstance(marker, Exception):
+            raise marker
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    inspect_unrelated(results, marker)
+""",
+        "E010",
+    )
+
+
+def test_p010_helper_dropping_exception_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def discard_failures(items):
+    for item in items:
+        if isinstance(item, Exception):
+            continue
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    discard_failures(results)
+""",
+        "E010",
+    )
+
+
 def test_p010_no_finding_isinstance_check() -> None:
     _none(
         """\

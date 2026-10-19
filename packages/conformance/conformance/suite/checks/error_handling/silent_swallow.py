@@ -1226,6 +1226,7 @@ class SilentSwallowMixin:
                 "Inspect results: 'for r in results: if isinstance(r, Exception): ...'",
             )
 
+        local_helpers = visible_helpers(self._local_helpers, self._function_stack)
         for var_name, assign_node in gather_vars.items():
             # The results may be inspected under another name: callers routinely
             # copy them into an accumulator (`dest.extend(chunk_results)`) and
@@ -1275,6 +1276,33 @@ class SilentSwallowMixin:
                 ):
                     inspected = True
                     break
+            if not inspected:
+                for call in _iter_shallow(func_node):
+                    if not isinstance(call, ast.Call) or not isinstance(
+                        call.func, ast.Name
+                    ):
+                        continue
+                    helper = local_helpers.get(call.func.id)
+                    if helper is None:
+                        continue
+                    parameters = [
+                        *helper.args.posonlyargs,
+                        *helper.args.args,
+                        *helper.args.kwonlyargs,
+                    ]
+                    if any(
+                        isinstance(
+                            argument := _call_argument_for_parameter(
+                                call, helper, parameter.arg
+                            ),
+                            ast.Name,
+                        )
+                        and argument.id in names
+                        and _helper_handles_gathered_results(helper, parameter.arg)
+                        for parameter in parameters
+                    ):
+                        inspected = True
+                        break
             if not inspected:
                 self._add(
                     "E010",
@@ -1492,7 +1520,13 @@ def _result_item_names(
         isinstance(iterable, ast.Call)
         and isinstance(iterable.func, ast.Name)
         and iterable.func.id in {"enumerate", "zip"}
-        and not iterable.keywords
+        and (
+            not iterable.keywords
+            or (
+                iterable.func.id == "zip"
+                and all(keyword.arg == "strict" for keyword in iterable.keywords)
+            )
+        )
         and isinstance(target, (ast.Tuple, ast.List))
         # `zip(*cols, rs)` / `for *a, r in ...` hide the width, so positions
         # cannot be lined up.
@@ -1550,6 +1584,40 @@ def _comprehension_checks_exceptions(
         _condition_checks_exception(expression, item_names)
         for expression in (*conditions, *elements)
     )
+
+
+def _helper_handles_gathered_results(helper: ast.FunctionDef, parameter: str) -> bool:
+    """Whether a local helper handles exception values from its results parameter.
+
+    Only a direct per-item exception test followed by a raise or log is a proven
+    handling boundary. Merely passing the results to an opaque helper, counting
+    them, or continuing past a detected exception does not satisfy E010.
+    """
+    if any(
+        isinstance(node, ast.Name)
+        and node.id == parameter
+        and isinstance(node.ctx, (ast.Store, ast.Del))
+        for node in _iter_shallow(helper)
+    ):
+        return False
+
+    for loop in _iter_shallow(helper):
+        if not isinstance(loop, ast.For):
+            continue
+        item_names = _result_item_names(loop.iter, loop.target, {parameter})
+        if not item_names:
+            continue
+        for candidate in _iter_shallow(loop):
+            if not isinstance(candidate, ast.If):
+                continue
+            if not _condition_checks_exception(candidate.test, item_names):
+                continue
+            if any(
+                isinstance(statement, ast.Raise) or _is_log_call_stmt(statement)
+                for statement in candidate.body
+            ):
+                return True
+    return False
 
 
 def _cancelled_task_names(
