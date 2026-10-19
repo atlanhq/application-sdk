@@ -28,7 +28,7 @@ optional_triggers:
   - "upload_prefix replacement"
   - "RollingFileWriter migration"
 owner: connector-platform-team
-last_updated: "2026-10-15"
+last_updated: "2026-10-19"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -258,6 +258,8 @@ each use to the inventory.
   existing `self.upload(UploadInput(local_path=<dir>))` in `run()` that only
   works because the legacy writers already put the files at mirrored keys
   must become `upload_refs` in the same change that retires those writers.
+  A delete of that local folder in `run()` after the upload (P021) goes in
+  the same change: the SDK owns the files of the refs.
   A copy that runs only when `ENABLE_ATLAN_UPLOAD` is set worked because the
   files already sat at their canonical keys (a pinned `storage_path`, or a
   legacy writer's mirrored key). A ref from `FileReference.from_local` lands

@@ -96,7 +96,7 @@ imports and other non-orchestration privates (`constants._HTTP_POOL_LIMITS`,
 | retry policy | `RetryPolicy(max_attempts=3, initial_interval=1s, max_interval=5m, backoff_coefficient=2.0, non_retryable_errors=())`; the `@task` keyword defaults differ: `retry_max_attempts=3`, `retry_initial_interval_seconds=1`, `retry_max_interval_seconds=30` | `application_sdk.app` | 3.0.0 |
 | sandbox passthrough | `passthrough_modules: ClassVar[set[str]]` on the App class | App | — |
 | workflow-type rename alias | `legacy_workflow_types` on the App class | App | 3.29.0 |
-| client type, failure types | `TemporalClient`; `TemporalWorkflowFailureError`, `TemporalActivityError`, `TemporalApplicationError` (not `ApplicationError` from the same module: that is a narrower subclass for raising, and an `isinstance` check on a failure read back from Temporal is False for it), `TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, `TemporalTimeoutError` | `application_sdk.execution` | 3.20.0 / 3.21.0; `TemporalApplicationError`: first release after 3.49.2 |
+| client type, failure types | `TemporalClient`; `TemporalWorkflowFailureError`, `TemporalActivityError`, `TemporalApplicationError` (not `ApplicationError` from the same module: that is a narrower subclass for raising, and an `isinstance` check on a failure read back from Temporal is False for it; it sits at `e.cause.cause` under a `TemporalActivityError`, and at `e.cause` when `run()` raised), `TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, `TemporalTimeoutError` | `application_sdk.execution` | 3.20.0 / 3.21.0; `TemporalApplicationError`: first release after 3.49.2 |
 | converters, backend | `create_data_converter_for_app`, `TemporalExecutorBackend` | `application_sdk.execution` | 3.20.0 |
 | dev boot | `run_dev_combined(app_class, *, credential_stores=, example_input=, task_queue=, ...)` | `application_sdk.main` | 3.0.0 |
 | integration tests | `from application_sdk.testing.integration.fixtures import *` (the kit owns worker and client) | `application_sdk.testing.integration.fixtures` | — |
@@ -112,9 +112,11 @@ for the App context in unit tests.
 
 Before you call a site "no public equivalent", look for a public surface that
 answers the same question the code asks, and swap to it. Example: the app's
-entrypoints are in `entry_points` on its entry in
-`AppRegistry.get_instance().list_all()` (match `app_cls`); unlike the private
-scan, it also lists `run()` when the app implements it.
+entrypoints are in `entry_points` on the entry of
+`AppRegistry.get_instance().list_all()` whose `app_cls is <App>`. Unlike the
+private scan, it also holds the `run()` entry (`implicit=True`, key `run`)
+when the app implements `run()`; drop it where the old code listed only
+`@entrypoint` methods.
 
 ## Reference shapes
 
@@ -226,7 +228,9 @@ One row per **use**, not per finding, `tests/` included: one import of
   a `@query` is not a move: see owner decision 7. I/O on files another step
   wrote (for example a delete of a folder right after `self.upload` in `run()`)
   is not a move either: a new task would get a local path that can be empty on
-  another worker. Route it to `migrate-storage`.
+  another worker. `migrate-storage` (it runs first) removes such a delete when
+  it replaces the folder upload with `upload_refs`; list the site as routed
+  there and re-run P021 after it.
 - **v2 residue** — a test or module written for the v2 harness (`Worker`,
   `Client`, `WorkflowEnvironment`, activity stubs). If the app's fixture-kit
   suite already runs the workflow end to end, or the test only exercises its
@@ -241,15 +245,17 @@ One row per **use**, not per finding, `tests/` included: one import of
 
 1. **Activity names and workflow type.** Replacing `@activity.defn(name=...)`
    or string activity names with `@task` changes the registered activity type
-   (`{app name}:{task name}`); in-flight workflows finish on the old build
-   (see decision 2), so that is safe for them. Renaming the App or an
+   (`{app name}:{task name}`); in-flight workflows are safe only under the
+   condition in decision 2. Renaming the App or an
    entrypoint changes the workflow type and strands scheduled DAGs unless
    `legacy_workflow_types` lists the old one.
 2. **Workflow history.** Moving I/O from `run()` into a `@task` (P021) adds an
-   activity to the history. Deployed workers use PINNED versioning by
-   default, so in-flight workflows finish on the old build and need no drain.
-   Only an app that set `TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR` to auto-upgrade
-   needs a drain or deploy window (`workflow.patched` is not public).
+   activity to the history. In-flight workflows finish on the build that
+   started them only when the deployment is versioned (`ATLAN_APP_BUILD_ID`
+   set) and keeps the default PINNED behaviour. With no build id (local,
+   self-deployed) or with `TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR` set to
+   auto-upgrade, they replay on the new build and fail: agree a drain or
+   deploy window (`workflow.patched` is not public).
 3. **Retry and timeout values** that the migration would change.
 4. **Task queues and routing.** `run_dev_combined` sets its own task queue
    and interceptors; per-run agent-queue routing has no public seam.
