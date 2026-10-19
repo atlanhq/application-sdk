@@ -73,10 +73,12 @@ from application_sdk.handler.contracts import (
     unverifiable_preflight_result,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.observability.events import PREFLIGHT_OUTCOME_EVENT
 from application_sdk.observability.logger_adaptor import (
     CHECK_MATRIX_KEY,
     GATE_MODE_KEY,
     PREFLIGHT_SURFACE_KEY,
+    _extract_exception_attributes,
 )
 from application_sdk.testing.preflight import first_outcome_or_none, outcome_level
 
@@ -131,6 +133,13 @@ def _verdict_gate(
 # connector suite reads the row the same way, at every level it can arrive at.
 _outcome_event = first_outcome_or_none
 _outcome_level = outcome_level
+
+
+def _outcome_record(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """The one outcome row as the real logger wrote it, exception and all."""
+    rows = [r for r in records if r["message"] == PREFLIGHT_OUTCOME_EVENT]
+    assert len(rows) == 1, rows
+    return rows[0]
 
 
 _LOGGER = "application_sdk.execution._temporal.preflight_gate.logger"
@@ -883,9 +892,31 @@ class TestPreflightGateOutcomeEvent:
         assert _outcome_level(ml) == "error"
         ev = _outcome_event(ml)
         assert ev[FAILURE_AUDIENCE_KEY] == "USER"
-        # An expected typed outcome, not a crash: no stack on the verdict path.
-        assert "exc_info" not in ev
         assert ml.error.call_count == 1
+
+    async def test_hard_block_error_row_shows_the_reason_without_a_stack(
+        self, loguru_capture: list[dict[str, Any]]
+    ) -> None:
+        """The run log panel lists ERROR records and shows each one's
+        ``exception.message``. The block row's Body is the pinned event name, so
+        the reason must arrive as the row's exception — as one line, not a crash.
+        """
+        reason = "The client secret has expired. Generate a new one in Azure."
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message=reason)
+                )
+            ],
+        )
+        with pytest.raises(ApplicationError):
+            await _verdict_gate(out)(PreflightGateInput())
+        row = _outcome_record(loguru_capture)
+        assert row["level"].name == "ERROR"
+        attrs = _extract_exception_attributes(row["exception"])
+        assert attrs["exception.message"] == f"Preflight failed: {reason}"
+        assert "Traceback" not in attrs["exception.stacktrace"]
 
     async def test_soft_would_block_stays_info_with_audience(self) -> None:
         out = PreflightOutput(
@@ -899,6 +930,19 @@ class TestPreflightGateOutcomeEvent:
         assert _outcome_level(ml) == "info"
         assert _outcome_event(ml)[FAILURE_AUDIENCE_KEY] == "USER"
         ml.error.assert_not_called()
+
+    async def test_soft_would_block_row_carries_no_exception(
+        self, loguru_capture: list[dict[str, Any]]
+    ) -> None:
+        """The run proceeds, so its INFO row must not read as a failure."""
+        out = PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="auth", passed=False, error=AuthError(message="x"))
+            ],
+        )
+        await _verdict_gate(out, mode=PreflightGateMode.SOFT)(PreflightGateInput())
+        assert _outcome_record(loguru_capture)["exception"] is None
 
     async def test_proceeded_stays_info_without_audience(self) -> None:
         out = PreflightOutput(status=PreflightStatus.READY, checks=[])

@@ -631,6 +631,15 @@ cannot say different things. One gap remains by design: a **soft**-mode gate doe
 `would_block` row has no lifecycle record to carry the sentence and is reachable through
 `failure.message` only.
 
+A `blocked` row from a verdict or an unidentifiable connection also carries the block error as its
+own exception, so its `exception.message` is the raised message (`Preflight failed: …`), with no
+stack frames. The run log panel opens a failed step at ERROR and shows a record's
+`exception.message` next to its `Body`. The row's `Body` is the pinned event name, so this is how
+the reason reaches that default view. A verdict `would_block` row stays INFO and carries no
+exception. An unverifiable source carries the handler's own exception in both modes, because that
+cause is the diagnostic. For any Temporal error, `exception.message` is the error's own message,
+without the `<type>: ` tag that Temporal's `str()` puts in front of it.
+
 `frame_lost` is its own value because the failure chain cannot separate a probe that stalled
 the event loop past the gate's cancel from a worker that died under it. It is a `TIMEOUT`, so
 hard mode reports it as `would_block` rather than blocking, and the classification keeps the two
