@@ -1610,9 +1610,12 @@ jobs:
       - name: Clean up after a stopped Twingate step
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
         continue-on-error: true
+        # Straight-line: each command is a no-op when Twingate never got that
+        # far (no client, no resolver snapshot), so there is nothing to branch on.
         run: |
+          set -euo pipefail
           sudo timeout -k 5 15 twingate stop || true
-          if [ -f /tmp/resolv.conf.pre-twingate ]; then sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf; fi
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
           sudo rm -f /etc/apt/sources.list.d/twingate.list
           sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)
@@ -2910,9 +2913,12 @@ jobs:
       - name: Clean up after a stopped Twingate step
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
         continue-on-error: true
+        # Straight-line: each command is a no-op when Twingate never got that
+        # far (no client, no resolver snapshot), so there is nothing to branch on.
         run: |
+          set -euo pipefail
           sudo timeout -k 5 15 twingate stop || true
-          if [ -f /tmp/resolv.conf.pre-twingate ]; then sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf; fi
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
           sudo rm -f /etc/apt/sources.list.d/twingate.list
           sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)

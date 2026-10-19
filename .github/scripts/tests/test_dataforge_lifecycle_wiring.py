@@ -288,6 +288,11 @@ def test_both_jobs_try_twingate_before_globalprotect(
         assert cleanup["continue-on-error"] is True, job
         assert "/etc/resolv.conf" in cleanup["run"], job
         assert "twingate.list" in cleanup["run"], job
+        # docs/standards/ci.md: no branching in inlined shell.
+        assert cleanup["run"].startswith("set -euo pipefail\n"), job
+        assert not re.search(
+            r"^\s*(if|for|while|case)\b", cleanup["run"], re.MULTILINE
+        ), job
         assert (
             f"steps.{twingate['id']}.outputs.connected != 'true'" in globalprotect["if"]
         ), job
@@ -309,7 +314,14 @@ def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
         int(n) + int(k or 0)
         for k, n in re.findall(r"timeout (?:-k (\d+) )?(\d+) ", script)
     )
-    bounded += sum(int(n) for n in re.findall(r"--max-time (\d+)", script))
+    # A retried curl can spend --max-time on every attempt plus the delays. The
+    # probe curl (`-w`) is excluded here: probe_attempts below already counts it.
+    for flags in re.findall(r"curl (?![^\n]*-w )([^\n]*--max-time \d+)", script):
+        max_time = int(re.search(r"--max-time (\d+)", flags).group(1))
+        retries = re.search(r"--retry (\d+)", flags)
+        delay = re.search(r"--retry-delay (\d+)", flags)
+        n = int(retries.group(1)) if retries else 0
+        bounded += max_time * (n + 1) + n * (int(delay.group(1)) if delay else 1)
     probe_attempts = int(action["inputs"]["probe-attempts"]["default"])
     bounded += probe_attempts * (10 + 3)
     assert "timeout " in script and "-k " in script

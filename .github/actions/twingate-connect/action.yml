@@ -80,7 +80,9 @@ runs:
         # Linux docs use; the trusted=yes form in their CI snippet disables
         # signature verification for a package that then runs as root and
         # creates network interfaces on the runner.
-        curl -fsSL --max-time 30 https://packages.twingate.com/apt/gpg.key \
+        # Retried: a one-shot fetch that hits a reset or a 5xx skips Twingate and
+        # lands the job back on the GlobalProtect pool this action exists to avoid.
+        curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 --max-time 15 https://packages.twingate.com/apt/gpg.key \
           | sudo gpg --dearmor -o /usr/share/keyrings/twingate-client-keyring.gpg || {
             echo "::error::could not fetch the Twingate signing key."; exit 1; }
         echo "deb [signed-by=/usr/share/keyrings/twingate-client-keyring.gpg] https://packages.twingate.com/apt/ * *" \
@@ -109,13 +111,11 @@ runs:
         # here would exit without teardown, and a failure that reached the probe
         # would be reported as "reachability failed" - the wrong diagnosis, which
         # is the exact class of bug #2577 fixed for globalprotect-connect.
-        rc=0
-        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo timeout -k 10 30 twingate setup --headless=- || rc=$?
-        if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
-          echo "::error::twingate setup timed out."; teardown; exit 1
-        elif [ "${rc}" -ne 0 ]; then
-          echo "::error::twingate setup failed - the service key was rejected."; teardown; exit 1
-        fi
+        # One message for both causes, with the exit code to tell them apart:
+        # timeout(1) exits 124 (or 137 once -k kills it); anything else is
+        # twingate rejecting the key.
+        printf '%s' "${TWINGATE_SERVICE_KEY}" | sudo timeout -k 10 30 twingate setup --headless=- || {
+            rc=$?; echo "::error::twingate setup failed (exit ${rc}; 124/137 = timed out, otherwise the service key was rejected)."; teardown; exit 1; }
         sudo timeout -k 10 30 twingate start || {
             echo "::error::twingate start failed."; teardown; exit 1; }
 
