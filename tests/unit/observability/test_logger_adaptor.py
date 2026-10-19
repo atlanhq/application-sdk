@@ -3380,7 +3380,9 @@ def _explode(payload):
 
 
 def _raise():
-    creds = {"client_secret": CANARY}
+    # Under a non-secret key: ``client_secret`` is masked by redact_secrets
+    # even with diagnose on, which would make the enabled control vacuous.
+    creds = {"client_id": CANARY}
     _explode(creds)
 
 
@@ -3597,3 +3599,65 @@ def test_console_sink_passes_records_without_an_exception_through():
     finally:
         logger.remove(sink_id)
     assert str(lines[0]).strip() == "see https://h.example.com/p?page=2"
+
+
+# --- FND-4153: a transport error quoting request headers leaves masked ---
+
+
+def _raise_with_request_headers() -> None:
+    """A custom retry transport that quotes the request it gave up on."""
+    raise ConnectionError(
+        "gave up after 3 attempts\n"
+        "Authorization: Bearer FAKEJWT.h4.s1g\n"
+        "Cookie: session=FAKESESS; theme=dark\n"
+        "headers={'Authorization': 'Bearer FAKEJWT2', 'Accept': '*/*'}"
+    )
+
+
+def _captured_header_exc_info() -> tuple[Any, Any, Any]:
+    try:
+        _raise_with_request_headers()
+    except ConnectionError:
+        return sys.exc_info()
+    raise AssertionError("unreachable")
+
+
+_FAKE_HEADER_SECRETS = ("FAKEJWT", "FAKESESS", "FAKEJWT2")
+
+
+def test_otel_exception_attributes_mask_request_headers():
+    exc_type, exc_value, exc_tb = _captured_header_exc_info()
+    attrs = _extract_exception_attributes(
+        mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb)
+    )
+    for secret in _FAKE_HEADER_SECRETS:
+        assert secret not in attrs["exception.message"]
+        assert secret not in attrs["exception.stacktrace"]
+    assert attrs["exception.message"] == (
+        "gave up after 3 attempts\n"
+        "Authorization: Bearer ***\n"
+        "Cookie: ***\n"
+        "headers={'Authorization': 'Bearer ***', 'Accept': '*/*'}"
+    )
+    assert "_raise_with_request_headers" in attrs["exception.stacktrace"]
+
+
+@pytest.mark.parametrize("diagnose", [False, True])
+def test_console_sink_masks_request_headers(diagnose: bool):
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="{message}\n{exception}",
+        diagnose=diagnose,
+        backtrace=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_header_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error("request failed")
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in _FAKE_HEADER_SECRETS:
+        assert secret not in line
+    assert "Authorization: Bearer ***" in line
+    assert "_raise_with_request_headers" in line
