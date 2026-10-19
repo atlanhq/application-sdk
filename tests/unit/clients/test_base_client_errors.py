@@ -25,7 +25,9 @@ from application_sdk.observability.logger_adaptor import (
     _redact_exception_records,
 )
 
-_URL = "http://user:pw@source.example.test:8080/api/keys/FAKEPATH/items?token=secret#frag"
+_URL = (
+    "http://user:pw@source.example.test:8080/api/keys/FAKEPATH/items?token=secret#frag"
+)
 _ENDPOINT = "http://source.example.test:8080"
 
 
