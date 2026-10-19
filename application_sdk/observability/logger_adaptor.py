@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 import traceback as tb_module
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 
 from loguru import logger
 from opentelemetry import trace as otel_trace
@@ -44,6 +44,7 @@ from application_sdk.constants import (
 # background thread logging while the main thread is still initialising the
 # observability package would otherwise import this module mid-boot and deadlock
 # on the module lock (_DeadlockError at startup when the log level is DEBUG).
+from application_sdk.errors.base import redact_secrets
 from application_sdk.observability.console_sink import (
     console_writer,
     flush_console_logs,
@@ -429,7 +430,11 @@ def _make_log_record_dict(message: Any) -> dict[str, Any]:
 
 
 def _format_exception_stacktrace(exception: Any) -> str:
-    """Format a Loguru exception record into a traceback string."""
+    """Format a Loguru exception record into a secret-redacted traceback string.
+
+    The chained ``__cause__`` / ``__context__`` messages and the source lines
+    are part of the text, so all of it goes through ``redact_secrets``.
+    """
     if exception is None:
         return ""
     exc_type = getattr(exception, "type", None)
@@ -437,8 +442,8 @@ def _format_exception_stacktrace(exception: Any) -> str:
     exc_traceback = getattr(exception, "traceback", None)
     if exc_type is None:
         return ""
-    return "".join(
-        tb_module.format_exception(exc_type, exc_value, exc_traceback)
+    return redact_secrets(
+        "".join(tb_module.format_exception(exc_type, exc_value, exc_traceback))
     ).rstrip()
 
 
@@ -458,13 +463,29 @@ def _extract_exception_attributes(exception: Any) -> dict[str, str]:
 
     attrs: dict[str, str] = {"exception.type": type_name}
     if exc_value is not None:
-        attrs["exception.message"] = str(exc_value)
+        attrs["exception.message"] = redact_secrets(str(exc_value))
 
     stacktrace = _format_exception_stacktrace(exception)
     if stacktrace:
         attrs["exception.stacktrace"] = stacktrace
 
     return attrs
+
+
+def _redact_exception_records(write: Callable[[str], None]) -> Callable[[Any], None]:
+    """Wrap a console sink so a record carrying an exception is written redacted.
+
+    loguru renders the traceback itself (``{exception}`` in the format), so the
+    only place to redact it is the finished line. Records without an exception
+    pass through untouched, which keeps the per-line cost at one dict lookup.
+    """
+
+    def _sink(message: Any) -> None:
+        if message.record["exception"] is not None:
+            message = redact_secrets(str(message))
+        write(message)
+
+    return _sink
 
 
 def _normalize_log_extra_value(key: str, value: Any) -> Any:
@@ -990,6 +1011,14 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # `_format_exception_stacktrace`, which never carried local values. So this
         # changes console output only; nothing queryable downstream moves.
         #
+        # Every line that carries an exception is passed through
+        # ``redact_secrets`` before it is queued (``_redact_exception_records``).
+        # That covers the message, the chained causes and the source lines, and
+        # with ``diagnose`` on it also covers the annotated values — but only for
+        # the shapes ``redact_secrets`` knows (URL userinfo/query/fragment, known
+        # ``key=value`` names). A repr like ``{'password': 'x'}`` is not one of
+        # them, so ``diagnose`` stays a leak channel and stays off by default.
+        #
         # Both sinks are callables from ``console_writer`` (FND-4075). loguru
         # still renders the format and the traceback on the logging thread, so
         # context fields and ``diagnose`` behave as they did with a stream
@@ -997,7 +1026,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # writes it, so a stalled stdout/stderr pipe can't block the event loop.
         _ERROR_LEVEL_NO = SEVERITY_MAPPING["ERROR"]
         self.logger.add(
-            console_writer.sink(sys.stdout),
+            _redact_exception_records(console_writer.sink(sys.stdout)),
             format=get_log_format,
             level=SEVERITY_MAPPING[LOG_LEVEL],
             colorize=colorize,
@@ -1005,7 +1034,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             filter=lambda record: record["level"].no < _ERROR_LEVEL_NO,
         )
         self.logger.add(
-            console_writer.sink(sys.stderr),
+            _redact_exception_records(console_writer.sink(sys.stderr)),
             format=get_log_format,
             level=max(SEVERITY_MAPPING[LOG_LEVEL], _ERROR_LEVEL_NO),
             colorize=colorize,

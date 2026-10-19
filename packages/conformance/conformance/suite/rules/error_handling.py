@@ -337,8 +337,14 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError "
             "from urlsplit, logs it, and only then returns its '<unparseable url>' "
-            "sentinel; the sentinel is the function's contract, and because the event "
-            "is logged first it needs no suppression. It is the credential-boundary "
+            "sentinel; the sentinel is the function's contract. It needs no "
+            "suppression for two reasons, and both are required: the log before the "
+            "return clears E007's no-log arm, and because the catch is narrow and the "
+            "value is a non-empty placeholder, the logged-sentinel arm does not "
+            "apply. Logging alone is not enough: under a broad catch "
+            "(`except Exception`), logging before an empty return (None, [], {}) "
+            "still fires E007 (FND-4080, which deliberately supersedes the "
+            "log-then-sentinel reading in #4428). It is the credential-boundary "
             "form of the fix: the log is `logger.debug` through sanitize_cause_repr with "
             "no exc_info, because the url it guards may be a pre-signed secret held in "
             "that frame. Outside such a boundary, log with exc_info=True."
@@ -367,7 +373,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "sentinels and stringified exceptions (`str(exc)`, `repr(exc)`, an "
             "f-string or `.format(exc)`) still fire, because a string is the "
             "failure laundered into a plain value. Found by a consumer app's "
-            "preflight probe arms in FND-2493."
+            "preflight probe arms in FND-2493. Under a broad catch, a log before an "
+            "empty-sentinel return does not clear E007 (FND-4080): there the fix is "
+            "to raise or return typed data, never to add or move a log line. E004 "
+            "still applies to the same handler independently, so its exc_info "
+            "requirement holds whichever way the E007 is fixed."
         ),
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
@@ -382,7 +392,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "failure point: the caller sees a plausible empty result and fails later, often "
             "somewhere unrelated, making the original failure invisible."
         ),
-        short_description="except block returns a value without logging — error hidden",
+        short_description="except block returns a value that hides the error",
         full_description=(
             "Exception is converted to a return value (None, {}, [], False) with no\n"
             "trace.  Callers see a wrong result with no idea why.  At minimum log\n"
@@ -391,6 +401,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "A return that hands the caught exception back as typed data is not\n"
             "flagged: the failure leaves the frame for the caller to report. This\n"
             "is the same typed-failure predicate E004 uses.\n"
+            "\n"
+            "Under a broad catch (`Exception`, `BaseException`, bare `except:`)\n"
+            "logging first does not clear it: `logger.<level>(...); return None`\n"
+            '(or `[]`, `{}`, `()`, `""`, `dict()` ...) leaves the trace in the log\n'
+            "only, and the caller still cannot tell the failure from a genuine\n"
+            "empty result. Raise a domain error or return the failure as typed\n"
+            "data. A narrow catch, a bare `return`, a `return None` inside a\n"
+            "`-> None` function, and any file in a wholesale-deprecated module (one\n"
+            "whose own top level, or an enclosing package `__init__.py`, emits a\n"
+            "module-level `DeprecationWarning`) are left out of this arm.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
         remediation_reference=RemediationReference(
