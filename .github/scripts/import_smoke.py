@@ -168,13 +168,19 @@ def check_scripts(
     # The console script sits beside the interpreter in the venv's bin dir.
     bindir = Path(python).parent
     runs: list[list[str]] = []
+    dispatched = False
     for name, value in scripts:
         runs.append([name, "--help"])
         if value.partition(":")[0] == dispatcher:
+            dispatched = True
             runs.extend([name, command, "--help"] for command in commands)
-    if commands and not any(len(r) == 3 for r in runs):
+    # Fail closed: an empty table or a dispatcher no script points at would
+    # otherwise leave only the top-level --help runs, and pass.
+    if commands_from is not None and not commands:
+        return len(runs), [Failure(commands_from, "declares no CLI subcommands")]
+    if commands_from is not None and not dispatched:
         return len(runs), [
-            Failure(commands_from or "", f"no console script of {dist} dispatches it")
+            Failure(commands_from, f"no console script of {dist} dispatches it")
         ]
     failures = [
         f

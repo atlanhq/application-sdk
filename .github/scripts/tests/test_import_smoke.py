@@ -164,6 +164,31 @@ def test_scripts_come_from_metadata(
     assert "ran 3 console-script invocations" in capsys.readouterr().out
 
 
+def test_red_when_command_table_is_empty(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An empty table must not shrink the gate to the top-level --help runs."""
+    python, src = _make_venv(tmp_path, ACYCLIC_B)
+    cli = src / "cyc" / "cli.py"
+    cli.write_text(cli.read_text().replace('{"ok": None, "uses-a": None}', "{}"))
+    assert _smoke(python) == 1
+    err = capsys.readouterr().err
+    assert _failed(err) == {"cyc.cli:_COMMANDS"}
+    assert "declares no CLI subcommands" in err
+
+
+def test_red_when_no_script_dispatches_the_table(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    python, _ = _make_venv(
+        tmp_path, ACYCLIC_B, "[console_scripts]\ncyc-cli = cyc.b:y\n"
+    )
+    assert _smoke(python) == 1
+    err = capsys.readouterr().err
+    assert _failed(err) == {"cyc.cli:_COMMANDS"}
+    assert "no console script of cyc dispatches it" in err
+
+
 def test_red_when_dist_declares_no_scripts(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
