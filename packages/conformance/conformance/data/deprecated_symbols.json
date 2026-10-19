@@ -498,7 +498,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": " subclasses BaseMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
+      "message": " subclasses BaseMetadataExtractor which is deprecated. Use application_sdk.app.App for non-SQL sources, or application_sdk.templates.SqlApp for SQL sources, instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.base_metadata_extractor",
       "removal_version": "4.0.0",
