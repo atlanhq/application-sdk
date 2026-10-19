@@ -105,12 +105,18 @@ class TestByteBudget:
             big = asyncio.ensure_future(_hold(budget, 80, asyncio.Event()))
             await _settle()
             small_done = asyncio.Event()
-            small = asyncio.ensure_future(_hold(budget, 40, small_done))
+            # Held until released: the assertion below must see the small
+            # waiter's bytes, whichever task the loop resumes first.
+            small_release = asyncio.Event()
+            small = asyncio.ensure_future(
+                _hold(budget, 40, small_done, release=small_release)
+            )
             await _settle()
             assert not small_done.is_set()
             big.cancel()
             await asyncio.wait_for(small_done.wait(), _TIMEOUT)
             assert budget.used == 90
+            small_release.set()
         await asyncio.wait_for(small, _TIMEOUT)
         with pytest.raises(asyncio.CancelledError):
             await big
@@ -147,10 +153,19 @@ class TestByteBudget:
         assert asyncio.run(_get()) is not asyncio.run(_get())
 
 
-async def _hold(budget: ByteBudget, nbytes: int, entered: asyncio.Event) -> None:
+async def _hold(
+    budget: ByteBudget,
+    nbytes: int,
+    entered: asyncio.Event,
+    *,
+    release: asyncio.Event | None = None,
+) -> None:
     async with budget.reserve(nbytes):
         entered.set()
-        await asyncio.sleep(0)
+        if release is None:
+            await asyncio.sleep(0)
+        else:
+            await release.wait()
 
 
 class TestBudgetSizing:
