@@ -1745,6 +1745,20 @@ class TestExtractExceptionAttributes:
         assert attrs["exception.message"] == "boom"
         assert "Traceback" in attrs["exception.stacktrace"]
 
+    def test_temporal_error_message_drops_the_type_tag(self):
+        """Temporal's ``str()`` is ``"<type>: <message>"``. ``exception.message``
+        carries the message alone, the same text the Temporal UI shows."""
+        from temporalio.exceptions import ApplicationError
+
+        try:
+            raise ApplicationError(
+                "Preflight failed: bad secret", type="PreflightFailed"
+            )
+        except ApplicationError:
+            t, v, tb = sys.exc_info()
+        attrs = _extract_exception_attributes(mock.Mock(type=t, value=v, traceback=tb))
+        assert attrs["exception.message"] == "Preflight failed: bad secret"
+
 
 class TestFormatExceptionStacktrace:
     def test_none_returns_empty_string(self):

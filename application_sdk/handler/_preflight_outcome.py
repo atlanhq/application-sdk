@@ -105,8 +105,9 @@ FAILURE_AUDIENCE_KEY = "failure.audience"
 # FAILURE_AUDIENCE_KEY and unlike GATE_OUTCOME_ROW_KEYS: a row with nothing
 # failed carries neither. ``reason`` is a code so dashboards can separate fault
 # classes, and ``check_matrix`` deliberately holds no messages, so without these
-# the sentence lived only on the adjacent "Completing activity as failed" record
-# under ``exception.message`` — one record away, under a key nobody searches.
+# a query on the row could not find the sentence: it lived only on the adjacent
+# "Completing activity as failed" record. A blocked row also carries it as its
+# own ``exception.message``, the field the run log panel shows.
 # They use the ``failure.`` prefix the logger already passes through, so neither
 # needs an entry in ``_KNOWN_EXTRA_KEYS``.
 FAILURE_CHECK_KEY = "failure.check"
