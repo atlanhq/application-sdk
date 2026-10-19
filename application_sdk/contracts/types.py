@@ -478,6 +478,13 @@ class FileReference(BaseModel, frozen=True):
             rather than listing an empty prefix in the deployment store. An
             app on an older SDK drops the field on decode and reads the
             deployment store, as it always did.
+        size_bytes: Size in bytes of the single file this ref names, as
+            recorded when it was persisted or materialised. ``None`` for
+            directory refs and for refs from an SDK that predates the field.
+            A hint, not a check of the stored object: a same-pod hand-off
+            reuses ``local_path`` without hashing it only while the file
+            still has this size and the stat its local ``.sha256`` marker
+            recorded. An app on an older SDK drops the field on decode.
     """
 
     local_path: str | None = None
@@ -488,6 +495,7 @@ class FileReference(BaseModel, frozen=True):
     auto_materialize: bool = True
     manifest_path: str | None = None
     store: StoreTarget = StoreTarget.DEPLOYMENT
+    size_bytes: int | None = Field(default=None, ge=0)
 
     @staticmethod
     def from_local(
