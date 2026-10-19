@@ -156,18 +156,27 @@ _QUOTED_SECRET_RE = re.compile(
 # the rest of the repr, which over-masks rather than leaks. The lookahead
 # straight after ``:`` leaves an already-masked value alone; placed after the
 # optional spaces and scheme instead, the engine would backtrack them to empty
-# and re-mask ``Authorization: ***`` as ``Authorization:***``.
+# and re-mask ``Authorization: ***`` as ``Authorization:***``. Only a value
+# that is exactly ``***`` to the end of the line counts as masked: a value that
+# merely starts with it (``X-Api-Key: ***FAKEKEY``) is masked again.
 _SECRET_HEADER_LINE_RE = re.compile(
     r"(?im)("
     + _TOKEN_START
     + r"(?:proxy-authorization|authorization|set-cookie|cookie|x-api-key|api-key|x-auth-token)"
-    r"[ \t]*:(?![ \t]*" + _AUTH_SCHEME + r"\*\*\*)[ \t]*" + _AUTH_SCHEME + r")[^\r\n]+",
+    r"[ \t]*:(?![ \t]*"
+    + _AUTH_SCHEME
+    + r"\*\*\*[ \t]*\r?$)[ \t]*"
+    + _AUTH_SCHEME
+    + r")[^\r\n]+",
 )
 # A ``Bearer <token68>`` with no header name around it, as exception text
-# quotes it. ``token`` itself is skipped so ``invalid bearer token`` stays
-# readable.
+# quotes it. The word ``token`` on its own is skipped so ``invalid bearer
+# token`` stays readable, but ``token-…`` and ``token.…`` are token68 and are
+# masked. ``*`` is in the value class and ``***`` is exempt only when nothing
+# token-like follows it, so ``Bearer ***FAKE`` cannot pass as already masked.
 _BEARER_TOKEN_RE = re.compile(
-    r"(?i)(" + _TOKEN_START + r"bearer\s+)(?!\*\*\*|token\b)[a-z0-9._~+/-]+=*",
+    r"(?i)(" + _TOKEN_START + r"bearer\s+)"
+    r"(?!(?:\*\*\*|token)(?![a-z0-9._~+/*=-]))[a-z0-9._~+/*-]+=*",
 )
 # An absolute URL's query and/or fragment: everything from the first ``?`` or
 # ``#`` up to the end of the URL. The URL ends at whitespace, a quote or an angle

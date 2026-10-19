@@ -206,6 +206,10 @@ def test_signature_redaction_does_not_eat_pagination_cursors() -> None:
             "ConnectionError('retry\\nCookie: sid=FAKESID')",
             "ConnectionError('retry\\nCookie: ***",
         ),
+        # Only a whole ``***`` value counts as already masked, not a prefix.
+        ("X-Api-Key: ***FAKEKEY", "X-Api-Key: ***"),
+        ("Authorization: Bearer ***FAKE", "Authorization: Bearer ***"),
+        ("Cookie: *** FAKESID", "Cookie: ***"),
     ],
 )
 def test_redacts_raw_header_lines(text: str, expected: str) -> None:
@@ -254,6 +258,12 @@ def test_redacts_a_bare_bearer_token() -> None:
     )
     # Prose about the token is not a token, and stays readable.
     assert redact_secrets("invalid bearer token") == "invalid bearer token"
+    assert redact_secrets("bearer token, expired") == "bearer token, expired"
+    # ...but a token that merely starts with the word is a token.
+    assert redact_secrets("401 Bearer token-FAKEXYZ") == "401 Bearer ***"
+    assert redact_secrets("Bearer token.FAKE") == "Bearer ***"
+    # A leading ``***`` is not proof the value was masked.
+    assert redact_secrets("Bearer ***FAKE") == "Bearer ***"
 
 
 @pytest.mark.parametrize(
