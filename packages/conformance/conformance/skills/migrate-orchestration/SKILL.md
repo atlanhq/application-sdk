@@ -114,7 +114,8 @@ Before you call a site "no public equivalent", look for a public surface that
 answers the same question the code asks, and swap to it. Example: a test that
 reads the private `_scan_entrypoints` reads `entry_points` on the entry of
 `AppRegistry.get_instance().list_all()` whose `app_cls is <App>` (SDK 3.0.0).
-Unlike the private scan, it also holds the `run()` entry (`implicit=True`, key `run`)
+Unlike the private scan, from SDK 3.15.0 it also holds the `run()` entry
+(`implicit=True`, key `run`)
 when the app implements `run()`; drop it where the old code listed only
 `@entrypoint` methods.
 
