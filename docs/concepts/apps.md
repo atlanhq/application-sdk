@@ -1285,6 +1285,7 @@ no need to import `temporalio` yourself:
 ```python
 from application_sdk.execution import (
     TemporalActivityError,
+    TemporalApplicationError,
     TemporalCancelledError,
     TemporalWorkflowFailureError,
 )
@@ -1297,20 +1298,23 @@ except TemporalWorkflowFailureError as e:
             ...  # an @task raised
         case TemporalCancelledError():
             ...  # the workflow was cancelled
+        case TemporalApplicationError():
+            ...  # run()/@entrypoint itself raised directly
         case _:
-            ...  # e.g. temporalio.exceptions.ApplicationError when run()/@entrypoint
-            # itself raised directly — still log/handle it, don't ignore silently
+            ...  # any other cause — still log/handle it, don't ignore silently
 ```
 
 `TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — commonly
-one of `TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
-`TemporalTerminatedError`, or `TemporalTimeoutError`, but not limited to those (e.g. a
-direct raise from `run()`/`@entrypoint` surfaces as the unexported
-`temporalio.exceptions.ApplicationError` — always include a catch-all case). These
-five are re-exported (not wrapped) with a `Temporal` prefix so they don't collide with
-unrelated SDK types of the same short name, e.g.
-`application_sdk.common.error_codes.ActivityError` and
-`application_sdk.errors.leaves.CancelledError`.
+one of `TemporalActivityError`, `TemporalApplicationError` (a direct raise from
+`run()`/`@entrypoint`, and the `.cause` of a `TemporalActivityError`),
+`TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, or
+`TemporalTimeoutError`, but not limited to those — always include a catch-all case.
+These six are re-exported (not wrapped) with a `Temporal` prefix so they don't collide
+with SDK types of the same short name, e.g.
+`application_sdk.common.error_codes.ActivityError`,
+`application_sdk.errors.leaves.CancelledError` and
+`application_sdk.execution.ApplicationError` (a subclass for raising; a failure read
+back from Temporal is never an instance of it, so match on `TemporalApplicationError`).
 
 This is distinct from error handling *inside* `run()`/`@task` code: there, raise
 and catch `application_sdk.errors.AppError` leaves (`CancelledError`,
