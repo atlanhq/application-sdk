@@ -9,7 +9,7 @@ script does those steps on a schedule, from ``.github/workflows/release-train.ym
 
 Phases (all times IST, a fixed UTC+05:30)
 -----------------------------------------
-``sync``  08:00 Mon-Fri. For every app in scope: eligibility, schedule, the bump
+``sync``  08:00 Mon-Fri. For every listed app: eligibility, schedule, the bump
           PR's title suffix and status comment; disarm auto-merge this job armed
           on an earlier day that has not merged; on a release day post a new
           comment naming the app's CODEOWNERS.
@@ -31,6 +31,20 @@ Skips are PR comments, never labels: ``/release-skip <reason>`` skips the app's
 next slot and ``/release-resume`` cancels a pending skip. Only commenters with
 Write/Maintain/Admin (collaborator-permission API, as ``pr_test_command`` does)
 count; bots never do.
+
+The schedule is one central list
+--------------------------------
+``.github/release-train.yaml`` maps each ``owner/repo`` to its releases
+(``{day, slot}``, at most one a day). Being listed is what puts an app on the
+train; an unlisted app is never read or touched. The 08:00 sync re-reads it, so
+a merged edit takes effect the next morning.
+
+Public logs
+-----------
+This repo is public, so its run logs are too. They carry repo names (already
+public in the list), states and counts only: never a reason, title, comment
+text, login or raw API error. Those go to the bump PR's status comment, which
+only people who can read the app repo see.
 
 Safety
 ------
@@ -58,7 +72,6 @@ import yaml
 _HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE))
 
-import discover_org_consumers as discover  # noqa: E402
 import pr_test_command as ptc  # noqa: E402
 from react_to_comment import is_transient  # noqa: E402
 from renovate_rearm_automerge import merge_method  # noqa: E402
@@ -94,10 +107,10 @@ STATES = (PLANNED, GATE_REQUESTED, ARMED, MERGED, BLOCKED, SKIPPED, NOT_ON_TRAIN
 BUMP_BRANCH = "bump-version-main"
 BASE_BRANCH = "main"
 TITLE_SEP = " · "
-SCHEDULE_PATH = "app/generated/release_schedule.yaml"
 ATLAN_YAML = "atlan.yaml"
 RELEASE_GATE_SCRIPT = ".github/scripts/release_gate.py"
 CODEOWNERS_PATH = ".github/CODEOWNERS"
+SCHEDULE_SOURCE = "application-sdk `.github/release-train.yaml`"
 #: The app's bump workflow (bootstrap template ``release.yaml``).
 BUMP_WORKFLOW = "release.yaml"
 #: Required on main. A ruleset context is the check-run name, so a reusable's
@@ -135,6 +148,20 @@ class GhError(RuntimeError):
 # ── Config ───────────────────────────────────────────────────────────────
 
 
+CONFIG_KEYS = frozenset(
+    {
+        "schema_version",
+        "timezone",
+        "days",
+        "slots",
+        "per_slot_cap",
+        "per_day_cap",
+        "max_regate_per_pr",
+        "schedule",
+    }
+)
+
+
 @dataclass(frozen=True)
 class Config:
     days: tuple[str, ...]
@@ -142,9 +169,7 @@ class Config:
     per_slot_cap: int
     per_day_cap: int
     max_regate_per_pr: int
-    scope: tuple[str, ...] = ()
-    exclude: frozenset[str] = frozenset()
-    default_schedule: dict[str, tuple[Entry, ...]] = field(default_factory=dict)
+    schedule: dict[str, tuple[Entry, ...]] = field(default_factory=dict)
 
 
 def _int_at_least(data: dict, key: str, floor: int) -> int:
@@ -152,18 +177,6 @@ def _int_at_least(data: dict, key: str, floor: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < floor:
         raise ConfigError(f"{key} must be an integer >= {floor}, got {value!r}")
     return value
-
-
-def _repo_list(data: dict, key: str) -> tuple[str, ...]:
-    value = data.get(key) or []
-    if not isinstance(value, list):
-        raise ConfigError(f"{key} must be a list of owner/repo")
-    for repo in value:
-        if not isinstance(repo, str) or not _REPO_RE.match(repo):
-            raise ConfigError(f"{key}: {repo!r} is not owner/repo")
-    if len(set(value)) != len(value):
-        raise ConfigError(f"{key} lists a repo twice")
-    return tuple(value)
 
 
 def parse_releases(
@@ -203,6 +216,9 @@ def parse_config(text: str) -> Config:
         raise ConfigError("schema_version must be 1")
     if data.get("timezone") != "IST":
         raise ConfigError("timezone must be IST (fixed UTC+05:30)")
+    unknown = sorted(set(data) - CONFIG_KEYS)
+    if unknown:
+        raise ConfigError(f"unknown keys {unknown}; allowed: {sorted(CONFIG_KEYS)}")
 
     days = data.get("days")
     if not isinstance(days, list) or not days:
@@ -236,42 +252,28 @@ def parse_config(text: str) -> Config:
 
     ordered_days = tuple(sorted(days, key=WEEKDAYS.index))
     ordered_slots = tuple(sorted(slots))
-    raw_default = data.get("default_schedule") or {}
-    if not isinstance(raw_default, dict):
-        raise ConfigError("default_schedule must map owner/repo to releases")
-    default: dict[str, tuple[Entry, ...]] = {}
-    for repo, entries in raw_default.items():
+    raw = data.get("schedule")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ConfigError("schedule must map owner/repo to releases")
+    schedule: dict[str, tuple[Entry, ...]] = {}
+    for repo, entries in raw.items():
         if not isinstance(repo, str) or not _REPO_RE.match(repo):
-            raise ConfigError(f"default_schedule: {repo!r} is not owner/repo")
-        default[repo] = parse_releases(
-            entries, ordered_days, ordered_slots, f"default_schedule[{repo}]"
+            raise ConfigError(f"schedule: {repo!r} is not owner/repo")
+        releases = parse_releases(
+            entries, ordered_days, ordered_slots, f"schedule[{repo}]"
         )
+        if not releases:
+            raise ConfigError(f"schedule[{repo}]: list at least one release")
+        schedule[repo] = releases
     return Config(
         days=ordered_days,
         slots=ordered_slots,
         per_slot_cap=per_slot,
         per_day_cap=per_day,
         max_regate_per_pr=regates,
-        scope=_repo_list(data, "scope"),
-        exclude=frozenset(_repo_list(data, "exclude")),
-        default_schedule=default,
-    )
-
-
-def parse_schedule_file(text: str, config: Config) -> tuple[Entry, ...]:
-    """An app's generated ``app/generated/release_schedule.yaml``."""
-    try:
-        data = yaml.safe_load(text)
-    except yaml.YAMLError as exc:
-        raise ConfigError(f"{SCHEDULE_PATH} is not valid YAML") from exc
-    if not isinstance(data, dict):
-        raise ConfigError(f"{SCHEDULE_PATH} must be a mapping")
-    if data.get("schema_version") != 1:
-        raise ConfigError(f"{SCHEDULE_PATH}: schema_version must be 1")
-    if data.get("timezone") != "IST":
-        raise ConfigError(f"{SCHEDULE_PATH}: timezone must be IST")
-    return parse_releases(
-        data.get("releases") or [], config.days, config.slots, SCHEDULE_PATH
+        schedule=schedule,
     )
 
 
@@ -437,7 +439,6 @@ class Record:
     week: str
     repo: str
     schedule: list[dict] = field(default_factory=list)
-    schedule_source: str | None = None
     state: str = PLANNED
     reason: str | None = None
     events: list[dict] = field(default_factory=list)
@@ -451,7 +452,6 @@ class Record:
             "week": self.week,
             "repo": self.repo,
             "schedule": self.schedule,
-            "schedule_source": self.schedule_source,
             "state": self.state,
             "reason": self.reason,
             "events": self.events,
@@ -468,7 +468,6 @@ class Record:
             week=str(data["week"]),
             repo=str(data["repo"]),
             schedule=[e for e in data.get("schedule") or [] if isinstance(e, dict)],
-            schedule_source=data.get("schedule_source"),
             state=state if state in STATES else PLANNED,
             reason=data.get("reason"),
             events=[e for e in data.get("events") or [] if isinstance(e, dict)],
@@ -577,7 +576,6 @@ def roll_week(record: Record, week: str) -> Record:
         week=week,
         repo=record.repo,
         schedule=record.schedule,
-        schedule_source=record.schedule_source,
         state=PLANNED,
         reason=None,
         events=keep,
@@ -688,8 +686,8 @@ def honour_commands(
             continue
         try:
             allowed = can_push(login)
-        except Exception as exc:  # noqa: BLE001 — any failure refuses, retried later
-            print(f"::warning::permission lookup for {login} failed: {exc}")
+        except Exception:  # noqa: BLE001 — any failure refuses, retried later
+            print("::warning::a commenter permission lookup failed; retried next run")
             continue
         if not allowed:
             refused.append((comment_id, "needs the Write, Maintain or Admin role"))
@@ -773,14 +771,11 @@ def release_model(atlan_yaml_text: str) -> str | None:
 def eligibility(
     repo: str,
     *,
-    exclude: Iterable[str],
     atlan_yaml: str | None,
     release_gate: str | None,
     rules: list[dict] | None,
 ) -> str | None:
     """``None`` when the app may ride the train, else the next action."""
-    if repo in set(exclude):
-        return "excluded in application-sdk .github/release-train.yaml"
     if atlan_yaml is None:
         return "no atlan.yaml on main"
     model = release_model(atlan_yaml)
@@ -847,6 +842,18 @@ def _inert(text: str | None, limit: int = REASON_MAX) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
+_HTTP_STATUS_RE = re.compile(r"\bHTTP (\d{3})\b")
+
+
+def public_error(exc: BaseException) -> str:
+    """What a public run log may say about a failure: the HTTP status, never the
+    message (it can quote a private repo's paths, titles or API detail)."""
+    match = _HTTP_STATUS_RE.search(str(exc))
+    if match:
+        return f"GitHub API error (HTTP {match.group(1)})"
+    return f"{type(exc).__name__}; detail on the bump PR status comment"
+
+
 def base_title(title: str) -> str:
     return (title or "").split(TITLE_SEP, 1)[0].rstrip()
 
@@ -876,12 +883,8 @@ def render_status(
     record: Record, *, next_at: datetime | None, gate: str | None, head_sha: str | None
 ) -> str:
     schedule = tuple((e.get("day", ""), e.get("slot", "")) for e in record.schedule)
-    source = {
-        "declared": f"declared in `{SCHEDULE_PATH}`",
-        "default": "default from application-sdk `.github/release-train.yaml`",
-    }.get(record.schedule_source or "", "not scheduled")
     rows = [
-        ("Schedule", f"{_schedule_text(schedule)} ({source})"),
+        ("Schedule", f"{_schedule_text(schedule)} ({SCHEDULE_SOURCE})"),
         ("Next release", format_slot(next_at) if next_at else "—"),
         ("State", f"`{record.state}`"),
     ]
@@ -1067,9 +1070,8 @@ class Writer:
         return action()
 
     def comment(self, repo: str, number: int, body: str) -> Any:
-        first = body.splitlines()[0] if body else ""
         return self._do(
-            f"comment on {repo}#{number}: {_inert(first, 80)}",
+            f"comment on {repo}#{number}",
             lambda: self.gh.write(
                 "POST", f"repos/{repo}/issues/{number}/comments", {"body": body}
             ),
@@ -1085,7 +1087,7 @@ class Writer:
 
     def set_title(self, repo: str, number: int, title: str) -> Any:
         return self._do(
-            f"retitle {repo}#{number} to {title!r}",
+            f"retitle {repo}#{number}",
             lambda: self.gh.write(
                 "PATCH", f"repos/{repo}/pulls/{number}", {"title": title}
             ),
@@ -1105,7 +1107,7 @@ class Writer:
         self, repo: str, number: int, node_id: str, method: str, sha: str
     ) -> Any:
         return self._do(
-            f"enable auto-merge ({method}) on {repo}#{number} at {sha[:7]}",
+            f"enable auto-merge ({method}) on {repo}#{number}",
             lambda: self.gh.mutate(
                 _ENABLE_AUTOMERGE, {"id": node_id, "method": method, "sha": sha}
             ),
@@ -1147,8 +1149,6 @@ class App:
     repo: str
     not_eligible: str | None = None
     schedule: tuple[Entry, ...] = ()
-    schedule_source: str | None = None
-    schedule_error: str | None = None
     pr: PullRequest | None = None
     ahead_by: int | None = None
     behind_by: int | None = None
@@ -1203,20 +1203,6 @@ def gate_state(statuses: Iterable[dict]) -> str | None:
     return None
 
 
-def schedule_for(
-    repo: str, declared_text: str | None, config: Config
-) -> tuple[tuple[Entry, ...], str | None, str | None]:
-    """(schedule, source, error). A declared file wins over the config default."""
-    if declared_text is not None:
-        try:
-            return parse_schedule_file(declared_text, config), "declared", None
-        except ConfigError as exc:
-            return (), "declared", str(exc)
-    if repo in config.default_schedule:
-        return config.default_schedule[repo], "default", None
-    return (), None, None
-
-
 def merged_this_week(repo: str, gh: Gh, bot_login: str, week: str) -> list[MergedPR]:
     owner = repo.split("/", 1)[0]
     found: list[MergedPR] = []
@@ -1261,14 +1247,11 @@ def load_app(
     rules = gh.get(f"repos/{repo}/rules/branches/{BASE_BRANCH}")
     app.not_eligible = eligibility(
         repo,
-        exclude=config.exclude,
         atlan_yaml=gh.file(repo, ATLAN_YAML),
         release_gate=gh.file(repo, RELEASE_GATE_SCRIPT),
         rules=rules if isinstance(rules, list) else None,
     )
-    app.schedule, app.schedule_source, app.schedule_error = schedule_for(
-        repo, gh.file(repo, SCHEDULE_PATH), config
-    )
+    app.schedule = config.schedule.get(repo, ())
     app.owners = codeowners(gh.file(repo, CODEOWNERS_PATH))
 
     owner, name = repo.split("/", 1)
@@ -1371,7 +1354,6 @@ class Train:
         record = app.record or Record(week=self.week, repo=app.repo)
         record = roll_week(record, self.week)
         record.schedule = [{"day": d, "slot": s} for d, s in app.schedule]
-        record.schedule_source = app.schedule_source
         record.gm = {"stage": gm_canary_stage(app.repo)}
         return record
 
@@ -1422,12 +1404,7 @@ class Train:
         return slot
 
     def _ready(self, app: App) -> bool:
-        return (
-            app.not_eligible is None
-            and app.schedule_error is None
-            and bool(app.schedule)
-            and app.pr is not None
-        )
+        return app.not_eligible is None and bool(app.schedule) and app.pr is not None
 
     def plan(self, pairs: Iterable[tuple[App, Record]]) -> dict[str, str | None]:
         dues: list[Due] = []
@@ -1461,14 +1438,9 @@ class Train:
         if app.not_eligible:
             record.state, record.reason = NOT_ON_TRAIN, app.not_eligible
             return None
-        if app.schedule_error:
-            record.state, record.reason = BLOCKED, app.schedule_error
-            return None
         if not app.schedule:
             record.state = NOT_ON_TRAIN
-            record.reason = (
-                f"declare releases in contract/app.pkl ({SCHEDULE_PATH} not on main)"
-            )
+            record.reason = f"not listed in {SCHEDULE_SOURCE}"
             return None
         if app.ahead_by == 0:
             record.state, record.reason = BLOCKED, "bump PR has no changes over main"
@@ -1538,7 +1510,8 @@ class Train:
         if record is None:
             self.rows.append(Row(app.repo, "no bump PR", detail))
             return
-        self.rows.append(Row(app.repo, record.state, detail or record.reason or ""))
+        # Never the reason: the public log gets states and slot times only.
+        self.rows.append(Row(app.repo, record.state, detail))
 
     def _each(
         self,
@@ -1557,20 +1530,20 @@ class Train:
             try:
                 step(app, record)
             except (GhError, ptc.GitHubError) as exc:
-                self.errors.append(f"{app.repo}: {exc}")
+                self.errors.append(f"{app.repo}: {public_error(exc)}")
                 if not publish:
                     continue
-                record.reason = "a GitHub call failed; the next run retries"
+                record.reason = f"a GitHub call failed, retried next run: {exc}"
                 try:
                     self._publish(app, record, None)
                 except (GhError, ptc.GitHubError) as again:
-                    self.errors.append(f"{app.repo}: {again}")
+                    self.errors.append(f"{app.repo}: {public_error(again)}")
 
     def _prepare(self, apps: list[App]) -> list[tuple[App, Record]]:
         pairs: list[tuple[App, Record]] = []
         for app in apps:
             if app.pr is None:
-                self._row(app, None, app.not_eligible or "no open bump PR")
+                self._row(app, None, "not eligible" if app.not_eligible else "")
                 continue
             pairs.append((app, self.record_for(app)))
         self._each(pairs, self._commands, publish=False)
@@ -1841,28 +1814,13 @@ def parse_repos(raw: str) -> list[str]:
     return list(value)
 
 
-def roster(config: Config, requested: list[str], gh: Gh) -> list[str]:
-    """``--repos`` narrows the config scope (never widens a non-empty one);
-    an empty scope means the whole Renovate-onboarded fleet."""
-    if config.scope:
-        outside = sorted(set(requested) - set(config.scope))
-        if outside:
-            raise ValueError(f"--repos outside the configured scope: {outside}")
-        return sorted(requested or config.scope)
-    if requested:
-        return sorted(requested)
-
-    def _discover_run(args: list) -> tuple[int, str, str]:
-        result = gh.run(args)
-        return result.returncode, result.stdout or "", result.stderr or ""
-
-    return discover.discover_fleet(
-        "atlanhq",
-        discover.DEFAULT_NAME_PATTERN,
-        discover.PRESET_MARKER,
-        {"atlanhq/application-sdk"},
-        run=_discover_run,
-    )
+def roster(config: Config, requested: list[str]) -> list[str]:
+    """The listed apps. ``--repos`` narrows the list and never widens it; an
+    empty list releases nothing (it never falls back to the whole fleet)."""
+    outside = sorted(set(requested) - set(config.schedule))
+    if outside:
+        raise ValueError(f"--repos not in the schedule list: {outside}")
+    return sorted(requested or config.schedule)
 
 
 def run(
@@ -1893,7 +1851,7 @@ def run(
                 )
             )
         except (GhError, ptc.GitHubError, ValueError) as exc:
-            train.errors.append(f"{repo}: {exc}")
+            train.errors.append(f"{repo}: {public_error(exc)}")
     {SYNC: train.sync, SLOT: train.slot, CLOSE: train.close}[phase](apps)
     return train
 
@@ -1929,8 +1887,8 @@ def main(
     gh = Gh(runner)
     slug = os.environ.get("APP_SLUG") or DEFAULT_APP_SLUG
     try:
-        repos = roster(config, requested, gh)
-    except (ValueError, discover.DiscoveryError) as exc:
+        repos = roster(config, requested)
+    except ValueError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 2
     print(f"Release train: phase={phase} mode={args.mode} repos={len(repos)}")

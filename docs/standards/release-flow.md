@@ -352,19 +352,47 @@ precedence: the file is the only source a single-app SDR customer has.
 
 ## Release train scheduler
 
-The central job that releases each semver app at its slot (FND-4036, design
-FND-3529). It complements the **Release train** section (FND-4039), which
-covers how an app declares its release days. This section covers the job that
-acts on them. It does the two human steps of Stage 1: it comments `/gate-check` on the
-bump PR and lets the merge queue merge it.
+The central job that releases each listed semver app at its slot (FND-4036,
+design FND-3529). It does the two human steps of Stage 1: it comments
+`/gate-check` on the bump PR and lets the merge queue merge it.
 
 | | |
 |---|---|
 | Workflow | `.github/workflows/release-train.yml` |
 | Script | `.github/scripts/release_train.py` (tests: `.github/scripts/tests/test_release_train.py`) |
-| Config | `.github/release-train.yaml` — days, slots, caps, scope, exclusions, default schedules. Reviewed like code. |
-| Per-app schedule | `app/generated/release_schedule.yaml` on the app's `main` (generated from `contract/app.pkl`). Until an app has one, `default_schedule` in the config applies. With neither, the app is *not scheduled*: it is tracked but never released. |
+| Config and schedule | `.github/release-train.yaml` — days, slots, caps, and `schedule`: the one list of apps on the train and when each releases. Reviewed like code. |
 | Identity | The `atlan-app-fleet` App (`FLEET_APP_ID` / `FLEET_APP_PRIVATE_KEY`). The workflow asserts the minted slug. |
+
+### The schedule list
+
+`schedule` in `.github/release-train.yaml` maps each `owner/repo` to one to
+four releases a week, each `{day, slot}` with at most one a day:
+
+```yaml
+schedule:
+  atlanhq/atlan-openapi-app: [{day: mon, slot: "12:00"}]
+  atlanhq/atlan-mysql-app: [{day: mon, slot: "12:00"}, {day: thu, slot: "15:00"}]
+```
+
+- Being listed is what puts an app on the train. An unlisted app is never read
+  or touched, and an empty list releases nothing: the job never falls back to
+  discovering the fleet.
+- To add, move or remove an app, open a PR that edits the list. The CI script
+  tests parse the checked-in file, so a bad day, an unquoted or unknown slot, a
+  second release on one day or an unknown key fails the PR, not the 08:00 run.
+- The 08:00 `sync` re-reads the list every morning, so a merged edit takes
+  effect the next day.
+- This repository is public. Listing an app publishes its repo name and slot.
+
+### Public logs
+
+Run logs and job summaries of a public repository are public, so they carry
+repo names (already public in the list), states, slot times and counts only.
+They never carry a reason, a PR title, comment text, a login or a raw API
+error: an error shows as its HTTP status. The reason and the full error go to
+the bump PR's status comment, visible only to people who can read the app
+repo. Configuration errors are printed in full, since they only describe the
+public config file.
 
 ### Phases
 
@@ -373,7 +401,7 @@ the config rejects `fri`, `sat` and `sun`.
 
 | Phase | Cron (UTC) | IST | Does |
 |---|---|---|---|
-| `sync` | `30 2 * * 1-5` | 08:00 Mon–Fri | Checks eligibility and the schedule. Sets the bump PR title suffix and status comment. Disarms auto-merge the job armed on an earlier day that did not merge. On a release day, posts a new comment that mentions the app's CODEOWNERS: `Releasing today at HH:MM IST. To skip: /release-skip <reason>`. |
+| `sync` | `30 2 * * 1-5` | 08:00 Mon–Fri | Re-reads the list, checks eligibility. Sets the bump PR title suffix and status comment. Disarms auto-merge the job armed on an earlier day that did not merge. On a release day, posts a new comment that mentions the app's CODEOWNERS: `Releasing today at HH:MM IST. To skip: /release-skip <reason>`. |
 | `slot` | `30 3,6,9,12,15 * * 1-4` | 09/12/15/18/21 Mon–Thu | For each app due by now, runs pre-flight, then comments `/gate-check` (the bare command, nothing else), sets the plain title and arms auto-merge. Also re-gates apps armed this week whose head moved. |
 | `close` | `30 17 * * 4` | 23:00 Thu | Disarms everything still armed, expires this week's skips, and writes the weekly summary to the job summary. |
 
@@ -420,7 +448,8 @@ An app rides the train only if all of these hold. Otherwise its title says
 - `.github/scripts/release_gate.py` on `main` reads the `gate-check` status.
   If it does not, run `bootstrap --resync`.
 - The `main` ruleset requires both `Release Gate` and `tests / Tests Gate`.
-- The app is not listed in the config's `exclude` (system and partner apps).
+
+Keep system and partner apps off the list; nothing else excludes them.
 
 ### What the bump PR shows
 
@@ -434,7 +463,7 @@ an edit bills nothing.
 | `· Next release Mon 26 Oct 12:00 IST` | Planned. |
 | `· Skipped, next release …` | The next slot is skipped. |
 | `· Blocked: <reason>` | Pre-flight or the gate failed; the reason says which. |
-| `· Not on the train: <next action>` | Ineligible or not scheduled. |
+| `· Not on the train: <next action>` | Ineligible. |
 | *(none)* | `/gate-check` requested and auto-merge armed. |
 
 ### Skips
@@ -463,7 +492,7 @@ commands) and a hidden JSON record:
 ```
 <!-- release-train:record v1
 {"week": "2026-W44", "repo": "atlanhq/atlan-example-app",
- "schedule": [{"day": "mon", "slot": "12:00"}], "schedule_source": "declared",
+ "schedule": [{"day": "mon", "slot": "12:00"}],
  "state": "armed", "reason": null,
  "events": [{"at": "2026-10-26T06:31:04Z", "slot": "2026-10-26T12:00+05:30",
              "action": "gate_requested", "sha": "<sha>", "by": "release-train"}],
@@ -488,14 +517,15 @@ later, plus the skip history.
 ### Safety
 
 - **Dry run by default.** The script makes no write unless `--mode live`. A dry
-  run prints every write it would make and lists them in the job summary.
+  run prints every write it would make (action and PR only, never its text) and
+  lists them in the job summary.
 - **Live** needs `vars.RELEASE_TRAIN_LIVE == 'true'` and either a scheduled
   run or a dispatch with `dry_run: false`.
 - **Kill switch.** If `vars.RELEASE_TRAIN_ENABLED` is not `'true'`, the job
   runs report-only.
 - The workflow computes the mode in a single expression
   (`test_workflow_mode_expression` pins it); the script does the branching.
-- A dispatch's `repos` can narrow the configured scope but never widen it.
+- A dispatch's `repos` can narrow the schedule list but never widen it.
 - Runs are serialised (`concurrency: release-train`, never cancelled).
 
 **Dependencies.** `pr_test_command.py` must honour the fleet App's bare

@@ -475,19 +475,17 @@ under the required `tests / …` checks and override the PR's real results
 (FND-3839). Renaming a context or the dispatch inputs needs the old name
 accepted until every repo has resynced.
 
-## The per-app release schedule (`app/generated/release_schedule.yaml`)
+## The release train record (bump PR status comment)
 
 | | |
 |---|---|
-| **Produced by** | The contract toolkit, from the release-days field of `contract/app.pkl` (App.pkl base), generated into each app repo's `app/generated/release_schedule.yaml` |
-| **Served at** | The app repo's `main` branch, read through the contents API |
-| **Key** | `schema_version: 1`, `timezone: IST`, `releases: [{day, slot}]`. `day` is one of `mon`..`thu`. `slot` is a quoted `"HH:MM"` from the release train's slots. At most one release a day |
-| **Read by** | `.github/scripts/release_train.py`, the release train scheduler. It is the first reader |
-| **Pinned by** | `TestReleaseScheduleContract` in `.github/scripts/tests/test_release_train.py` |
+| **Produced by** | `.github/scripts/release_train.py`, the release train scheduler, as the `atlan-app-fleet` App |
+| **Served at** | One comment per app bump PR, marked `<!-- release-train:status -->`, carrying `<!-- release-train:record v1 {json} -->` |
+| **Key** | `week`, `repo`, `schedule` (`[{day, slot}]`), `state`, `reason`, `events`, `regates`, `gm`, `seen_commands`, `skip_weeks` |
+| **Read by** | connector-pulse's release train refresh (`scripts/run_release_train_refresh.py`), for the Release Train tab |
+| **Pinned by** | `test_record_round_trip_and_escaping` in `.github/scripts/tests/test_release_train.py` |
 
-A file the scheduler cannot parse blocks the app's release (`Blocked: …` in the
-bump PR title) rather than falling back to the config default. A malformed
-declaration must not silently ship on someone else's schedule. Before changing
-the shape, bump `schema_version`, and teach the scheduler the new version
-before the toolkit emits it. Apps regenerate the file only on their own bumps,
-so for a while the fleet carries both versions.
+A reader must trust the comment only when its author is `atlan-app-fleet[bot]`:
+anyone can post the marker. Fields are additive; a breaking change bumps the
+`v1` in the marker. Teach connector-pulse the new version before the
+scheduler writes it.

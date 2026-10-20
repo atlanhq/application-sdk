@@ -45,9 +45,7 @@ def _config(**overrides) -> rt.Config:
         "per_slot_cap": 10,
         "per_day_cap": 40,
         "max_regate_per_pr": 2,
-        "scope": [APP],
-        "exclude": [],
-        "default_schedule": {APP: [{"day": "mon", "slot": "12:00"}]},
+        "schedule": {APP: [{"day": "mon", "slot": "12:00"}]},
     }
     data.update(overrides)
     return rt.parse_config(yaml.safe_dump(data))
@@ -60,8 +58,14 @@ def test_the_checked_in_config_is_valid() -> None:
     config = rt.parse_config(CONFIG_FILE.read_text())
     assert config.days == ("mon", "tue", "wed", "thu")
     assert config.slots == rt.CRON_SLOTS
-    assert config.exclude == frozenset()
-    assert set(config.scope) == set(config.default_schedule)
+    # The pilot: the three canonical apps. Widening the train is an edit here.
+    assert set(config.schedule) == {
+        "atlanhq/atlan-openapi-app",
+        "atlanhq/atlan-mysql-app",
+        "atlanhq/atlan-metabase-app",
+    }
+    for releases in config.schedule.values():
+        assert 1 <= len(releases) <= len(config.days)
 
 
 @pytest.mark.parametrize("day", ["fri", "sat", "sun"])
@@ -86,12 +90,18 @@ def test_weekend_days_are_rejected(day: str) -> None:
         ({"max_regate_per_pr": -1}, "max_regate_per_pr"),
         ({"schema_version": 2}, "schema_version"),
         ({"timezone": "UTC"}, "IST"),
-        ({"scope": ["not-a-repo"]}, "owner/repo"),
-        ({"default_schedule": {APP: [{"day": "fri", "slot": "12:00"}]}}, "train day"),
-        ({"default_schedule": {APP: [{"day": "mon", "slot": "13:00"}]}}, "train slot"),
+        ({"schedule": {"not-a-repo": [{"day": "mon", "slot": "12:00"}]}}, "owner/repo"),
+        ({"schedule": [APP]}, "must map owner/repo"),
+        ({"schedule": {APP: []}}, "at least one release"),
+        ({"schedule": {APP: {"day": "mon"}}}, "must be a list"),
+        ({"schedule": {APP: ["mon"]}}, "is not {day, slot}"),
+        ({"schedule": {APP: [{"day": "fri", "slot": "12:00"}]}}, "train day"),
+        ({"schedule": {APP: [{"day": "mon", "slot": "13:00"}]}}, "train slot"),
+        ({"scope": [APP]}, "unknown keys"),
+        ({"default_schedule": {}}, "unknown keys"),
         (
             {
-                "default_schedule": {
+                "schedule": {
                     APP: [
                         {"day": "mon", "slot": "09:00"},
                         {"day": "mon", "slot": "12:00"},
@@ -107,66 +117,52 @@ def test_invalid_config_is_rejected(overrides: dict, match: str) -> None:
         _config(**overrides)
 
 
-def test_schedule_file_parses_and_must_use_train_days() -> None:
-    config = _config()
-    text = (
-        "# AUTO-GENERATED\nschema_version: 1\ntimezone: IST\n"
-        'releases:\n  - day: tue\n    slot: "15:00"\n'
+def test_schedule_entries_are_sorted_by_day_then_slot() -> None:
+    config = _config(
+        schedule={
+            APP: [
+                {"day": "thu", "slot": "09:00"},
+                {"day": "mon", "slot": "21:00"},
+                {"day": "tue", "slot": "12:00"},
+            ]
+        }
     )
-    assert rt.parse_schedule_file(text, config) == (("tue", "15:00"),)
-    with pytest.raises(rt.ConfigError):
-        rt.parse_schedule_file(text.replace("tue", "sat"), config)
-
-
-class TestReleaseScheduleContract:
-    """Pins the shape contract-toolkit generates into app/generated/
-    release_schedule.yaml (docs/standards/cross-repo-contracts.md). This job is
-    its first reader: a toolkit change that drifts from this must fail here."""
-
-    GENERATED = (
-        "# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.\n"
-        "schema_version: 1\n"
-        "timezone: IST\n"
-        "releases:\n"
-        "  - day: mon\n"
-        '    slot: "12:00"\n'
+    assert config.schedule[APP] == (
+        ("mon", "21:00"),
+        ("tue", "12:00"),
+        ("thu", "09:00"),
     )
 
-    def test_the_generated_shape_parses(self) -> None:
-        assert rt.SCHEDULE_PATH == "app/generated/release_schedule.yaml"
-        assert rt.parse_schedule_file(self.GENERATED, _config()) == (("mon", "12:00"),)
 
-    def test_an_empty_release_list_means_declared_but_unscheduled(self) -> None:
-        text = "schema_version: 1\ntimezone: IST\nreleases: []\n"
-        assert rt.parse_schedule_file(text, _config()) == ()
+def test_an_unquoted_slot_is_rejected_not_guessed() -> None:
+    # Unquoted 12:00 is YAML 1.1 sexagesimal (720); it must fail, not shift.
+    text = CONFIG_FILE.read_text().replace('slot: "12:00"', "slot: 12:00")
+    with pytest.raises(rt.ConfigError, match="train slot"):
+        rt.parse_config(text)
 
-    @pytest.mark.parametrize(
-        "mutation",
-        [
-            ("schema_version: 1", "schema_version: 2"),
-            ("timezone: IST", "timezone: UTC"),
-            ("day: mon", "day: fri"),
-            ('slot: "12:00"', 'slot: "12:30"'),
-            ('slot: "12:00"', "slot: 720"),  # unquoted 12:00 is YAML sexagesimal
-        ],
+
+def test_an_empty_or_missing_schedule_lists_no_apps() -> None:
+    assert _config(schedule={}).schedule == {}
+    assert _config(schedule=None).schedule == {}
+
+
+# ── Roster ───────────────────────────────────────────────────────────────
+
+
+def test_roster_is_the_list_and_never_the_whole_fleet() -> None:
+    other = "atlanhq/atlan-other-app"
+    config = _config(
+        schedule={
+            APP: [{"day": "mon", "slot": "12:00"}],
+            other: [{"day": "tue", "slot": "09:00"}],
+        }
     )
-    def test_a_drifted_shape_is_rejected_not_guessed(self, mutation) -> None:
-        with pytest.raises(rt.ConfigError):
-            rt.parse_schedule_file(self.GENERATED.replace(*mutation), _config())
-
-
-def test_declared_schedule_wins_over_the_default_and_errors_are_reported() -> None:
-    config = _config()
-    declared = 'schema_version: 1\ntimezone: IST\nreleases: [{day: wed, slot: "09:00"}]'
-    assert rt.schedule_for(APP, declared, config) == (
-        (("wed", "09:00"),),
-        "declared",
-        None,
-    )
-    assert rt.schedule_for(APP, None, config) == ((("mon", "12:00"),), "default", None)
-    assert rt.schedule_for("atlanhq/atlan-other-app", None, config) == ((), None, None)
-    schedule, source, error = rt.schedule_for(APP, "schema_version: 9", config)
-    assert (schedule, source) == ((), "declared") and error
+    assert rt.roster(config, []) == sorted([APP, other])
+    assert rt.roster(config, [other]) == [other]
+    with pytest.raises(ValueError, match="not in the schedule list"):
+        rt.roster(config, ["atlanhq/atlan-unlisted-app"])
+    # An empty list releases nothing: no fallback to discovering the fleet.
+    assert rt.roster(_config(schedule={}), []) == []
 
 
 # ── Phases and time ──────────────────────────────────────────────────────
@@ -318,7 +314,6 @@ RULES = [
 
 def _eligible(**overrides) -> str | None:
     kwargs = {
-        "exclude": [],
         "atlan_yaml": "name: example\nrelease_model: semver\n",
         "release_gate": GATE_SCRIPT,
         "rules": RULES,
@@ -335,7 +330,6 @@ def test_an_eligible_app() -> None:
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
-        ({"exclude": [APP]}, "excluded"),
         ({"atlan_yaml": None}, "no atlan.yaml"),
         ({"atlan_yaml": "name: x\n"}, "release_model: semver"),
         ({"atlan_yaml": "name: x\nrelease_model: cd\n"}, "is cd"),
@@ -874,9 +868,10 @@ def test_ineligible_app_is_titled_not_on_the_train() -> None:
 
 def test_an_unscheduled_app_is_tracked_not_released() -> None:
     fake = FakeGitHub()
-    _train(fake, MON_1210, config=_config(default_schedule={}))
+    # Only reachable via an explicit repos list; roster() never yields it.
+    _train(fake, MON_1210, config=_config(schedule={}))
     assert "/gate-check" not in fake.bot_comments()
-    assert "Not on the train: declare releases" in fake.pull["title"]
+    assert "Not on the train: not listed in" in fake.pull["title"]
 
 
 def _armed_world(regates: int, head: str = "b" * 40) -> FakeGitHub:
@@ -938,7 +933,7 @@ def test_per_slot_cap_overflows_across_apps() -> None:
     config = _config(per_slot_cap=1)
     apps = []
     for name in ("atlanhq/atlan-a-app", "atlanhq/atlan-b-app"):
-        app = rt.App(repo=name, schedule=(("mon", "12:00"),), schedule_source="default")
+        app = rt.App(repo=name, schedule=(("mon", "12:00"),))
         app.pr = rt.PullRequest(1, "PR", "Bump version to 1.0.0", HEAD)
         apps.append((app, rt.Record(week="2026-W44", repo=name)))
     train = rt.Train(
@@ -986,6 +981,34 @@ def test_same_login_bridges_rest_graphql_and_gh_shapes() -> None:
     assert rt.same_login("app/atlan-app-fleet", BOT)
     assert not rt.same_login("a-human", BOT)
     assert not rt.same_login(None, BOT)
+
+
+# ── Public logs (this repo is public) ────────────────────────────────────
+
+
+def test_public_error_keeps_the_status_and_drops_the_message() -> None:
+    exc = rt.GhError("gh api repos/o/r/contents/x: HTTP 404: Not Found (private)")
+    assert rt.public_error(exc) == "GitHub API error (HTTP 404)"
+    assert "private" not in rt.public_error(ValueError("a private path"))
+
+
+def test_the_public_summary_never_carries_a_reason_or_title(capsys) -> None:
+    fake = FakeGitHub()
+    fake.files["atlan.yaml"] = "name: example\nrelease_model: cd\n"
+    train = _train(fake, MON_1210, live=False)
+    text = train.summary("slot", "dry-run") + capsys.readouterr().out
+    assert APP in text and rt.NOT_ON_TRAIN in text
+    assert "release_model" not in text  # the reason stays on the bump PR
+    assert "Bump version" not in text  # titles stay on the bump PR
+
+
+def test_a_failed_write_is_public_as_a_status_and_private_in_full() -> None:
+    fake = FakeGitHub()
+    fake.fail_mutations.add("enablePullRequestAutoMerge")
+    train = _train(fake, MON_1210)
+    assert train.errors == [f"{APP}: GitHub API error (HTTP 502)"]
+    status = next(b for b in fake.bot_comments() if rt.STATUS_MARKER in b)
+    assert "a GitHub call failed, retried next run" in status
 
 
 def test_a_failed_arm_is_retried_without_a_second_gate_request() -> None:
@@ -1038,7 +1061,7 @@ def test_close_disarms_expires_skips_and_summarises(
     )
     fake.writes.clear()
     config = _config(
-        default_schedule={
+        schedule={
             APP: [{"day": "mon", "slot": "12:00"}, {"day": "thu", "slot": "21:00"}]
         }
     )

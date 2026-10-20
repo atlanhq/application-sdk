@@ -3,8 +3,7 @@ name: Release Train
 # Releases each app at its slot (FND-4036, design FND-3529). Every app repo
 # keeps one bump-version PR open; releasing it means commenting `/gate-check`
 # and merging. .github/scripts/release_train.py does that on a schedule, for
-# the apps and slots in .github/release-train.yaml (or each app's own
-# app/generated/release_schedule.yaml). See
+# the apps and slots listed in .github/release-train.yaml (the only list). See
 # docs/standards/release-flow.md#release-train-scheduler.
 #
 # Phases (IST = UTC+05:30):
@@ -51,7 +50,7 @@ on:
         type: boolean
         default: true
       repos:
-        description: 'Optional JSON list of "owner/repo" within the configured scope.'
+        description: 'Optional JSON list of "owner/repo" within the schedule list.'
         type: string
         default: ""
 
