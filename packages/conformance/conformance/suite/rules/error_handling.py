@@ -287,9 +287,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "L004). Enriching it with exc_info=True or safe_traceback(exc) clears "
             "E005 and L004 but not L009, whose fix then deletes the line. Apply "
             "L009's resolution instead: delete the line when the exception has an "
-            "upstream record, otherwise downgrade it to a sanitized DEBUG through "
-            "locals, or reduce the handler to a bare raise. That one edit clears "
-            "E005, L004 and L009 together."
+            "upstream record (which may leave a bare raise), otherwise downgrade it "
+            "to a sanitized DEBUG through locals. Never reduce the handler to a bare "
+            "raise without an upstream record: that drops the only record of the "
+            "failure. That one edit clears E005, L004 and L009 together."
         ),
         short_description="except block logs without exc_info=True — stack trace discarded",
         full_description=(

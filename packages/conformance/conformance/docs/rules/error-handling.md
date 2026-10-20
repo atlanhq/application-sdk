@@ -270,8 +270,10 @@ often impossible under production data volumes.
   the same block is also an L009 site (and usually L004). Enriching it with
   exc_info=True or safe_traceback(exc) clears E005 and L004 but not L009, whose fix then
   deletes the line. Apply L009's resolution instead: delete the line when the exception
-  has an upstream record, otherwise downgrade it to a sanitized DEBUG through locals, or
-  reduce the handler to a bare raise. That one edit clears E005, L004 and L009 together.
+  has an upstream record (which may leave a bare raise), otherwise downgrade it to a
+  sanitized DEBUG through locals. Never reduce the handler to a bare raise without an
+  upstream record: that drops the only record of the failure. That one edit clears E005,
+  L004 and L009 together.
 
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`

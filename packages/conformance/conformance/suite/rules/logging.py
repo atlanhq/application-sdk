@@ -199,9 +199,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "statements before a raise in the same block is also an L009 site (and "
             "usually E005). Enriching it clears L004 and E005 but not L009, whose fix "
             "then deletes the line. Apply L009's resolution instead: delete the line "
-            "when the exception has an upstream record, otherwise downgrade it to a "
-            "sanitized DEBUG through locals, or reduce the handler to a bare raise. "
-            "That one edit clears L004, E005 and L009 together."
+            "when the exception has an upstream record (which may leave a bare raise), "
+            "otherwise downgrade it to a sanitized DEBUG through locals. Never reduce "
+            "the handler to a bare raise without an upstream record. That one edit "
+            "clears L004, E005 and L009 together."
         ),
         short_description="logger.warning/error in except block without exc_info=True",
         full_description=(
@@ -413,10 +414,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "Do not enrich an L009 site; resolve it here in one edit, which clears "
             "all three: delete the line when the exception has an upstream record "
             "(exc_info=True or the safe_traceback form; for anything raised out of "
-            "an @task, the SDK's activity.ended ERROR record), otherwise downgrade "
-            "it to a sanitized DEBUG through locals, or reduce the handler to a "
-            "bare raise. Non-activity paths (handlers, preflight) have no SDK "
-            "record: confirm the caller logs it, or keep the sanitized DEBUG."
+            "an @task on a v3 SDK worker, the SDK's activity.ended ERROR record), "
+            "otherwise downgrade it to a sanitized DEBUG through locals. Deleting may "
+            "leave a bare raise; never reduce the handler to one without an upstream "
+            "record. v2 apps and non-activity paths (handlers, preflight) have no "
+            "SDK record: confirm the caller logs it, or keep the sanitized DEBUG."
         ),
         short_description="logger.warning/error immediately before raise — duplicate log records",
         full_description=(

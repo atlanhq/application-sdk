@@ -884,12 +884,17 @@ def test_pre_raise_log_takes_l009s_resolution_not_enrichment() -> None:
         assert "Carve-out — pre-raise logs" in section, name
         delete = section.index("delete the line")
         debug = section.index("sanitized DEBUG")
-        bare = section.index("bare `raise`")
-        assert delete < debug < bare, f"{name} lists L009's resolution out of order"
+        assert delete < debug, f"{name} lists L009's resolution out of order"
+        # A bare raise is only what deleting leaves behind, never a standalone
+        # option: without an upstream record it drops the only record (lens
+        # F-ac9c73 / F-9598d7 on #4492).
+        assert "or reduce the handler to a bare" not in section, name
+        assert "never reduce the handler to one without that record" in section, name
         assert "L009" in section and "together" in section, name
 
     assert "`safe_traceback(exc)`" in l009
     assert "activity.ended" in l009
+    assert "On a v3 SDK, anything raised out of an `@task`" in l009
     assert "interceptors/log.py" in l009
     assert "preflight" in l009
 
@@ -901,3 +906,8 @@ def test_pre_raise_rules_cross_reference_each_other() -> None:
     assert "L009" in get_rule("E005").rule_interactions
     l009 = get_rule("L009").rule_interactions
     assert "L004" in l009 and "E005" in l009
+    # L009 is scope=BOTH, so the activity.ended shortcut must not reach v2 apps.
+    assert "v3 SDK worker" in l009 and "v2 apps" in l009
+    for rule_id in ("L004", "E005", "L009"):
+        text = get_rule(rule_id).rule_interactions
+        assert "without an upstream record" in text, rule_id

@@ -81,8 +81,11 @@ by a later warn-tier one, churning the same lines through two PRs.  Apply
 L009's resolution in the same edit instead, in this order:
 
 1. **Delete the log line** when the exception has an upstream record (L009
-   below says what counts; for anything raised out of an `@task` method the
-   SDK's `activity.ended` ERROR record is that record).
+   below says what counts; for anything raised out of an `@task` method on a
+   v3 SDK worker, the SDK's `activity.ended` ERROR record is that record; on
+   a v2 app, confirm the caller logs it).  Deleting it may leave the handler
+   as a bare `except ...: raise`; that is fine only because the upstream
+   record still holds the failure.
 2. **Otherwise downgrade it to a sanitized DEBUG**, binding the redacted
    cause and traceback to locals, and keep the raise: a bare `raise`, or a
    classified typed error raised in its place.
@@ -99,14 +102,16 @@ L009's resolution in the same edit instead, in this order:
        raise
    ```
 
-3. **Or reduce the handler to a bare `raise`** (`except ...: raise`) when the
-   log line carries nothing the exception does not.
+Never reduce the handler to a bare `raise` without an upstream record, even
+when the log line carries nothing the exception does not: on a path whose
+caller does not log the exception, that deletes the only record of the
+failure.  Keep the sanitized DEBUG instead.
 
-Each of these clears L004, E005 and L009 together: L004 and E005 inspect
+Both of these clear L004, E005 and L009 together: L004 and E005 inspect
 only `warning`/`error` calls, L009 matches only `warning`/`error`, and L008
 flags only `repr`/`str`/serialisation calls in a DEBUG argument, so the
 sanitizer calls do not trip it.  Say in the edit description which of the
-three you applied.
+two you applied, and for a deletion, what the upstream record is.
 
 #### Credential-boundary contraindication — read before adding `exc_info=True`
 
@@ -193,10 +198,11 @@ report that site the same way.
   statements before a `raise` in the same block (an L009 site), do not add
   `exc_info=True` and do not switch to the sanitized `safe_traceback` form.
   Apply L009's resolution in the same edit, in this order: delete the line
-  when there is an upstream record; otherwise downgrade it to a sanitized
-  DEBUG through locals (`cause = sanitize_cause_repr(exc)`,
+  when there is an upstream record (which may leave a bare `raise`; never
+  reduce the handler to one without that record); otherwise downgrade it to
+  a sanitized DEBUG through locals (`cause = sanitize_cause_repr(exc)`,
   `trace = safe_traceback(exc)`, `logger.debug("...%s\n%s", cause, trace)`)
-  and keep the raise; or reduce the handler to a bare `raise`.  That one edit
+  and keep the raise.  That one edit
   clears L004, E005 and L009 together; enriching clears L004 and E005 only,
   and the later L009 fix deletes the enriched line.  See "Pre-raise
   carve-out" above.
@@ -396,8 +402,8 @@ report that site the same way.
   `transform_data` has, raising `MissingTypenameInputError` with no log line
   before it (as does `_build_client` for `MetabaseCredentialInputError`).
 
-  **Anything raised out of an `@task` method has an upstream record.**  The
-  SDK's activity log interceptor, which every worker installs, catches every
+  **On a v3 SDK, anything raised out of an `@task` method has an upstream
+  record.**  The SDK's activity log interceptor, which every v3 worker installs, catches every
   exception that leaves an activity and logs an `activity.ended` record at
   ERROR with `exc_info=True`
   (`application_sdk/execution/_temporal/interceptors/log.py`).  Every v3 SDK

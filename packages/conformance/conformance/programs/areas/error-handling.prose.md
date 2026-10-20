@@ -141,11 +141,13 @@ Only the second is true, and only the second survives review.
   sanitized `safe_traceback` form: that clears E005 and L004 but leaves L009,
   and the later L009 fix deletes the enriched line.  Apply L009's resolution
   in the same edit, in this order: delete the line when the exception has an
-  upstream record (for anything raised out of an `@task` method, the SDK's
-  `activity.ended` ERROR record); otherwise downgrade it to a sanitized DEBUG
+  upstream record (for anything raised out of an `@task` method on a v3 SDK
+  worker, the SDK's `activity.ended` ERROR record; on a v2 app, confirm the
+  caller logs it), which may leave a bare `raise` (never reduce the handler
+  to one without that record); otherwise downgrade it to a sanitized DEBUG
   through locals (`cause = sanitize_cause_repr(exc)`,
   `trace = safe_traceback(exc)`, `logger.debug("...%s\n%s", cause, trace)`)
-  and keep the raise; or reduce the handler to a bare `raise`.  That one edit
+  and keep the raise.  That one edit
   clears E005, L004 and L009 together.  The logging area's "Pre-raise
   carve-out" has the full resolution.
 

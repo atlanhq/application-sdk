@@ -177,9 +177,9 @@ data — so the incident stays open for days instead of being read off the trace
   warning/error within the three statements before a raise in the same block is also an
   L009 site (and usually E005). Enriching it clears L004 and E005 but not L009, whose
   fix then deletes the line. Apply L009's resolution instead: delete the line when the
-  exception has an upstream record, otherwise downgrade it to a sanitized DEBUG through
-  locals, or reduce the handler to a bare raise. That one edit clears L004, E005 and
-  L009 together.
+  exception has an upstream record (which may leave a bare raise), otherwise downgrade
+  it to a sanitized DEBUG through locals. Never reduce the handler to a bare raise
+  without an upstream record. That one edit clears L004, E005 and L009 together.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to `logger.warning()` /
@@ -358,9 +358,10 @@ without dedup logic.
   usually also reported by L004 (block) and E005, whose fix is to enrich it with
   exc_info=True or safe_traceback(exc). Do not enrich an L009 site; resolve it here in
   one edit, which clears all three: delete the line when the exception has an upstream
-  record (exc_info=True or the safe_traceback form; for anything raised out of an @task,
-  the SDK's activity.ended ERROR record), otherwise downgrade it to a sanitized DEBUG
-  through locals, or reduce the handler to a bare raise. Non-activity paths (handlers,
+  record (exc_info=True or the safe_traceback form; for anything raised out of an @task
+  on a v3 SDK worker, the SDK's activity.ended ERROR record), otherwise downgrade it to
+  a sanitized DEBUG through locals. Deleting may leave a bare raise; never reduce the
+  handler to one without an upstream record. v2 apps and non-activity paths (handlers,
   preflight) have no SDK record: confirm the caller logs it, or keep the sanitized
   DEBUG.
 
