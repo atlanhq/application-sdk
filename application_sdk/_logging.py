@@ -1,12 +1,12 @@
 """Logger lookup for code that ships in the api distribution.
 
-The handler surface (errors, handler, contracts, credential specs) is published
-twice: inside ``atlan-application-sdk`` and on its own as
-``atlan-application-sdk-api``, which the consolidated API host installs without
-the worker SDK. Those files log through this helper. With the full SDK installed
-it returns the SDK's structured logger, exactly as before; with only the api
-distribution installed ``application_sdk.observability`` does not exist, and it
-falls back to the standard library.
+The handler surface (errors, handler, contracts, credential specs) ships in
+``atlan-application-sdk-api``, which ``atlan-application-sdk`` depends on and
+which the consolidated API host installs without the worker SDK. Those files log
+through this helper. With the full SDK installed it returns the SDK's structured
+logger (``observability.logger_adaptor.get_logger``), exactly as before; with
+only the api distribution installed ``application_sdk.observability`` does not
+exist, and it falls back to the standard library.
 """
 
 from __future__ import annotations

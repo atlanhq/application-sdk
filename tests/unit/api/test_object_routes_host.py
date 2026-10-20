@@ -177,3 +177,40 @@ def test_the_host_key_is_the_workers_key(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_the_store_comes_from_s3_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("S3_BUCKET", raising=False)
     assert S3ObjectStore.from_env() is None
+
+
+def test_the_worker_keeps_accepting_any_prefix() -> None:
+    """Only the shared host validates the prefix; a worker (no upload namespace)
+    stores it as given, exactly as before."""
+    from fastapi import FastAPI
+
+    from application_sdk.handler.object_routes import (
+        ObjectRoutesSource,
+        register_object_routes,
+    )
+
+    uploaded: list[str] = []
+
+    async def _no_config(*_: object) -> None:
+        return None
+
+    async def _upload(key: str, _local_path: str) -> None:
+        uploaded.append(key)
+
+    app = FastAPI()
+    register_object_routes(
+        app,
+        ObjectRoutesSource(
+            configured=lambda: True,
+            load_config=_no_config,
+            save_config=_no_config,
+            upload_file=_upload,
+        ),
+    )
+    response = TestClient(app).post(
+        "/workflows/v1/file",
+        files={"file": ("rows.csv", b"a,b\n", "text/csv")},
+        data={"prefix": "my uploads/./2026 run"},
+    )
+    assert response.status_code == 200
+    assert uploaded[0].startswith("my uploads/./2026 run/")

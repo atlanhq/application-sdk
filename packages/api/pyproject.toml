@@ -1,7 +1,21 @@
 [project]
 name = "atlan-application-sdk-api"
 version = "3.50.0"
+description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
+license = "Apache-2.0"
+authors = [
+    {name = "Atlan App Team", email = "connect@atlan.com"}
+]
+readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["atlan", "sdk", "handler", "api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
 dependencies = [
     "fastapi>=0.143.0,<0.144.0",
     "pydantic>=2.10.6,<3.0.0",
@@ -9,6 +23,9 @@ dependencies = [
     # Form parsing for the file-upload route. Arrives on the worker through
     # fastapi[standard]; the floor is the SDK's CVE constraint.
     "python-multipart>=0.0.26",
+    # application_sdk.errors maps httpx failures onto the error leaves
+    # (errors/http.py); same pin as the SDK's core dependency.
+    "httpx>=0.27.0,<0.29.0",
 ]
 
 # Same extras, same pins, as atlan-application-sdk: a handler that uses the SQL
