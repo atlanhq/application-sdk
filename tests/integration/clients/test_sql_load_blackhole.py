@@ -154,6 +154,17 @@ async def test_black_holed_sts_times_out_without_blocking_the_loop(
     monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "credentials"))
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
 
+    # Warm boto3 first. A process's first boto3 client loads botocore's JSON
+    # models in C calls that hold the GIL. On the worker thread that stalls the
+    # loop for a one-off ~35 ms locally (over 200 ms on a CI runner), which would
+    # drown out what this test measures: the loop while AssumeRole hangs.
+    # Built with no network call, against the default session load() also uses.
+    boto3 = pytest.importorskip("boto3")
+    # A fresh default session, restored at teardown: it caches the synthetic
+    # credentials above, which must not leak into later tests in this process.
+    monkeypatch.setattr(boto3, "DEFAULT_SESSION", None)
+    boto3.client("sts", region_name="us-east-1")
+
     client = _PostgresClient()
     credentials = {
         "authType": "iam_role",
