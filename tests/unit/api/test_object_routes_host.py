@@ -1,0 +1,248 @@
+"""The config and file routes on the consolidated API host.
+
+Heracles writes a credential's non-secret fields to the app's config on every
+credential create and update and before every run submit, and the app's worker
+reads them back at run time. On the host the write must land on exactly the
+key the worker reads, under the hosted app's name — never the host's own.
+"""
+
+from __future__ import annotations
+
+import io
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from application_sdk.handler import (
+    AuthInput,
+    AuthOutput,
+    AuthStatus,
+    Handler,
+    MetadataInput,
+    PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
+    SqlMetadataOutput,
+)
+from application_sdk.handler.asgi import build_asgi_app
+from application_sdk.handler.object_routes import S3ObjectStore
+
+
+class _Handler(Handler):
+    async def test_auth(self, input: AuthInput) -> AuthOutput:
+        return AuthOutput(status=AuthStatus.SUCCESS)
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        return PreflightOutput(status=PreflightStatus.READY, checks=[])
+
+    async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
+        return SqlMetadataOutput(objects=[])
+
+
+class _NoSuchKey(Exception):
+    response = {"Error": {"Code": "NoSuchKey"}}
+
+
+class _FakeS3:
+    """The three boto3 S3 client calls the store makes, over a dict."""
+
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        try:
+            return {"Body": io.BytesIO(self.objects[(Bucket, Key)])}
+        except KeyError:
+            raise _NoSuchKey() from None
+
+    def put_object(self, *, Bucket: str, Key: str, Body: bytes, ContentType: str):
+        self.objects[(Bucket, Key)] = Body
+
+    def upload_file(self, filename: str, bucket: str, key: str) -> None:
+        with open(filename, "rb") as f:
+            self.objects[(bucket, key)] = f.read()
+
+
+@pytest.fixture
+def s3() -> _FakeS3:
+    return _FakeS3()
+
+
+@pytest.fixture
+def host(s3: _FakeS3) -> TestClient:
+    store = S3ObjectStore("tenant-bucket", client=s3)
+    return TestClient(
+        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        raise_server_exceptions=False,
+    )
+
+
+def test_a_credential_config_lands_where_the_apps_worker_reads_it(
+    host: TestClient, s3: _FakeS3
+) -> None:
+    body = {"host": "db.example", "port": 3306, "authType": "basic"}
+    response = host.post("/workflows/v1/config/guid-1?type=credentials", json=body)
+    assert response.status_code == 200
+    key = "persistent-artifacts/apps/mysql/credentials/guid-1/config.json"
+    assert ("tenant-bucket", key) in s3.objects
+    fetched = host.get("/workflows/v1/config/guid-1?type=credentials")
+    assert fetched.status_code == 200
+    assert fetched.json()["data"] == body
+
+
+def test_a_missing_config_is_404(host: TestClient) -> None:
+    assert host.get("/workflows/v1/config/nope?type=credentials").status_code == 404
+
+
+class _AccessDenied(Exception):
+    response = {"Error": {"Code": "AccessDenied"}}
+
+
+class _DenyingS3(_FakeS3):
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        raise _AccessDenied()
+
+
+def test_a_failed_store_read_is_503_not_404() -> None:
+    """IAM, network or 5xx: the store is unavailable; the config is not missing."""
+    store = S3ObjectStore("tenant-bucket", client=_DenyingS3())
+    client = TestClient(
+        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        raise_server_exceptions=False,
+    )
+    response = client.get("/workflows/v1/config/guid-1?type=credentials")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Object store unavailable"
+
+
+def test_without_a_store_the_routes_answer_503() -> None:
+    bare = TestClient(build_asgi_app(_Handler(), app_name="mysql", object_store=None))
+    assert bare.get("/workflows/v1/config/guid-1").status_code == 503
+    assert bare.post("/workflows/v1/config/guid-1", json={}).status_code == 503
+    upload = bare.post("/workflows/v1/file", files={"file": ("a.csv", b"x,y\n")})
+    assert upload.status_code == 503
+
+
+def test_a_path_traversal_id_is_refused(host: TestClient) -> None:
+    assert host.get("/workflows/v1/config/..%2Fsecrets").status_code in (404, 422)
+
+
+def test_a_file_upload_is_stored_under_its_key(host: TestClient, s3: _FakeS3) -> None:
+    response = host.post(
+        "/workflows/v1/file",
+        files={"file": ("rows.csv", b"a,b\n1,2\n", "text/csv")},
+        data={"prefix": "sample_data"},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    # On the host every upload stays under the app's own namespace.
+    assert data["key"].startswith(
+        "persistent-artifacts/apps/mysql/uploads/sample_data/"
+    )
+    assert data["key"].endswith(".csv")
+    assert s3.objects[("tenant-bucket", data["key"])] == b"a,b\n1,2\n"
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "../other",
+        "a/../../b",
+        "/absolute",
+        "a//b",
+        "trailing/",
+        "x" * 300,
+        "abc\n",
+        ".",
+        "./a",
+        "a/./b",
+        "a/.",
+    ],
+)
+def test_an_unsafe_upload_prefix_is_refused(
+    host: TestClient, s3: _FakeS3, prefix: str
+) -> None:
+    response = host.post(
+        "/workflows/v1/file",
+        files={"file": ("rows.csv", b"a,b\n", "text/csv")},
+        data={"prefix": prefix},
+    )
+    assert response.status_code == 400
+    assert s3.objects == {}
+
+
+def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
+    host: TestClient, s3: _FakeS3
+) -> None:
+    response = host.post(
+        "/workflows/v1/file",
+        files={"file": ("x.csv", b"1\n", "text/csv")},
+        data={"prefix": "persistent-artifacts/apps/redshift/credentials"},
+    )
+    assert response.status_code == 200
+    ((bucket, key),) = s3.objects
+    assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
+
+
+def test_the_store_comes_from_atlan_s3_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ATLAN_S3_BUCKET", raising=False)
+    assert S3ObjectStore.from_env() is None
+
+
+def test_an_unprefixed_s3_bucket_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runtime settings take the ``ATLAN_`` prefix (docs/standards/env-vars.md):
+    a pod's generic ``S3_BUCKET`` for something else must not become this store."""
+    monkeypatch.delenv("ATLAN_S3_BUCKET", raising=False)
+    monkeypatch.setenv("S3_BUCKET", "someone-elses-bucket")
+    assert S3ObjectStore.from_env() is None
+
+
+def test_the_store_reads_the_atlan_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        S3ObjectStore,
+        "__init__",
+        lambda self, bucket, region=None, client=None: built.append((bucket, region)),
+    )
+    monkeypatch.setenv("ATLAN_S3_BUCKET", "tenant-bucket")
+    monkeypatch.setenv("ATLAN_S3_REGION", "eu-west-1")
+    assert S3ObjectStore.from_env() is not None
+    assert built == [("tenant-bucket", "eu-west-1")]
+
+
+def test_the_worker_keeps_accepting_any_prefix() -> None:
+    """Only the shared host validates the prefix; a worker (no upload namespace)
+    stores it as given, exactly as before."""
+    from fastapi import FastAPI
+
+    from application_sdk.handler.object_routes import (
+        ObjectRoutesSource,
+        register_object_routes,
+    )
+
+    uploaded: list[str] = []
+
+    async def _no_config(*_: object) -> None:
+        return None
+
+    async def _upload(key: str, _local_path: str) -> None:
+        uploaded.append(key)
+
+    app = FastAPI()
+    register_object_routes(
+        app,
+        ObjectRoutesSource(
+            configured=lambda: True,
+            load_config=_no_config,
+            save_config=_no_config,
+            upload_file=_upload,
+        ),
+    )
+    response = TestClient(app).post(
+        "/workflows/v1/file",
+        files={"file": ("rows.csv", b"a,b\n", "text/csv")},
+        data={"prefix": "my uploads/./2026 run"},
+    )
+    assert response.status_code == 200
+    assert uploaded[0].startswith("my uploads/./2026 run/")

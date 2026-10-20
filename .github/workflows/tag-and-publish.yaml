@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # PyPI trusted publishing (OIDC) for atlan-application-sdk-api; see the
+      # api publish step below.
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -44,6 +47,48 @@ jobs:
       - name: Extract changelog for this version
         run: |
           python .github/scripts/extract_release_notes.py "${{ env.VERSION }}" > .github/release_notes.md
+
+      # TODO: Uncomment in case we need to publish to TestPyPI
+      # Available at: https://test.pypi.org/project/atlan-application-sdk/
+      # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
+      # testpypi config available (commented out) under pyproject.toml
+      # - name: Build and publish to TestPyPI
+      #   env:
+      #     UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      #   run: |
+      #     uv build
+      #     uv publish --index testpypi
+
+      # Both packages are published BEFORE the tag and the GitHub Release, so a
+      # failed publish never leaves a v<version> tag or Release with nothing on
+      # PyPI behind it. --check-url makes a rerun idempotent: files already on
+      # PyPI with identical content are skipped instead of rejected, so a run
+      # that published the api package and then failed on the SDK can simply be
+      # re-run.
+      #
+      # Lockstep release: atlan-application-sdk pins atlan-application-sdk-api at
+      # its own version, so the api package (packages/api) is published first,
+      # from this same commit. If it fails, the SDK is not published.
+      # Available at: https://pypi.org/project/atlan-application-sdk-api/
+      #
+      # Published with PyPI trusted publishing (OIDC, id-token: write above), no
+      # token. The PyPI trusted publisher for atlan-application-sdk-api is bound
+      # to repository atlanhq/application-sdk, THIS workflow's filename
+      # (tag-and-publish.yaml), with any environment allowed. Renaming this
+      # file breaks api publishing until the publisher entry on PyPI is
+      # updated to match.
+      - name: Build and publish the api package to PyPI
+        run: |
+          uv build packages/api --out-dir dist-api
+          uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist-api/*
+
+      # Available at: https://pypi.org/project/atlan-application-sdk/
+      - name: Build and publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          uv build
+          uv publish --check-url https://pypi.org/simple/
 
       - name: Create Git tag
         run: |
@@ -85,25 +130,6 @@ jobs:
           draft: false
           prerelease: ${{ contains(env.VERSION, 'rc') }}
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-
-      # TODO: Uncomment in case we need to publish to TestPyPI
-      # Available at: https://test.pypi.org/project/atlan-application-sdk/
-      # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
-      # testpypi config available (commented out) under pyproject.toml
-      # - name: Build and publish to TestPyPI
-      #   env:
-      #     UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
-      #   run: |
-      #     uv build
-      #     uv publish --index testpypi
-
-      # Available at: https://pypi.org/project/atlan-application-sdk/
-      - name: Build and publish to PyPI
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          uv build
-          uv publish
 
   fan-out:
     # After an SDK release, trigger the self-hosted Renovate runner so consumers

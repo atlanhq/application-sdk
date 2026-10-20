@@ -5,9 +5,12 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
+# Defined in the api distribution's light module so the handler can raise it on
+# the API host; re-exported here, the same class.
+from application_sdk._context_errors import SecretStoreNotConfiguredError  # noqa: F401
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.errors.categories import Audience
-from application_sdk.errors.leaves import (
+from application_sdk.errors.leaves import (  # noqa: F401 — PreconditionError re-exported for existing importers
     ColdStartRaceError,
     DaprSidecarUnreachableError,
     DependencyUnavailableError,
@@ -192,16 +195,6 @@ async def _fetch_deployment_secret(key: str) -> Any:
 def _is_present(value: Any) -> bool:
     """Whether a store answered with a usable value (``None`` and ``""`` are absent)."""
     return value is not None and value != ""
-
-
-@dataclass(kw_only=True)
-class SecretStoreNotConfiguredError(PreconditionError):
-    """Secret store required by get_secret / resolve_credential but not configured."""
-
-    code: ClassVar[str] = "PRECONDITION_SECRET_STORE_NOT_CONFIGURED"
-    message: str = "No secret store configured"
-    resource: str | None = "secret_store"
-    expected_state: str | None = "configured"
 
 
 @dataclass(kw_only=True)

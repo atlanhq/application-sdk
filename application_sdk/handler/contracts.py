@@ -18,7 +18,7 @@ on ingress (``model_validate``), direct JSON serialization on egress
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from typing import Any
 
 from pydantic import (
@@ -31,12 +31,18 @@ from pydantic import (
 )
 from pydantic.alias_generators import to_camel
 
+from application_sdk._logging import get_logger
 from application_sdk.contracts.base import SerializableEnum
+from application_sdk.credentials.extra import parse_credentials_extra
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors.base import AppError, sanitize_cause_repr
 from application_sdk.errors.leaves import InternalError
 from application_sdk.errors.wire import FailureDetails
+
+# Named for application_sdk.handler.service, not this module: the only lines
+# logged here are normalize_credentials' "Converting v2 ..." lines, which moved
+# from that module and keep its logger name so log queries are unchanged.
+logger = get_logger("application_sdk.handler.service")
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -247,6 +253,77 @@ def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, s
     return pairs
 
 
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "host",
+        "port",
+        "authType",
+        "username",
+        "password",
+        "connectorType",
+        "connectorConfigName",
+        "extra",
+    }
+)
+
+
+# v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
+def normalize_credentials(
+    body: dict[str, Any], *, keys: Collection[str] | None = None
+) -> dict[str, Any]:
+    """Normalize v2 credential formats to v3 list[{key, value}] format.
+
+    Moved from ``application_sdk.handler.service._normalize_credentials`` so the
+    consolidated API host can use it; the behaviour is unchanged. Handles three
+    formats:
+
+    1. v3 array (already correct) -- the body is returned as is:
+        {"credentials": [{"key": "host", "value": "..."}]}
+
+    2. v2 nested dict (Heracles internal):
+        {"credentials": {"host": "...", "username": "...", "extra": {...}}}
+
+    3. v2 flat top-level (Heracles credential test):
+        {"host": "...", "authType": "basic", "password": "...", "extra": {...}}
+
+    In formats 2 and 3 only ``credentials`` is replaced; every other key of the
+    body (including format 3's flat keys) is kept as sent.
+
+    ``keys`` is the set of v2 flat top-level keys treated as credential
+    material; ``None`` means :data:`_CREDENTIAL_KEYS`. The worker passes
+    ``application_sdk.handler.service._CREDENTIAL_KEYS`` (read per call)
+    because connector apps extend that module attribute at import time
+    (e.g. adding ``kerberos``), and that rebinding must keep taking effect.
+
+    Returns the body with credentials normalized to v3 array format.
+    """
+    credential_keys = _CREDENTIAL_KEYS if keys is None else frozenset(keys)
+    creds = body.get("credentials")
+
+    # Already v3 array format — no conversion needed
+    if isinstance(creds, list):
+        return body
+
+    # Format 2: nested dict under "credentials" key
+    if isinstance(creds, dict):
+        logger.info(
+            "Converting v2 nested-dict credentials to v3 list, keys=%s",
+            list(creds.keys()),
+        )
+        return {**body, "credentials": flatten_credentials_to_pairs(dict(creds))}
+
+    # Format 3: flat top-level keys (detect by presence of known credential keys)
+    if creds is None and credential_keys & body.keys():
+        flat_creds = {k: body[k] for k in list(body.keys()) if k in credential_keys}
+        logger.info(
+            "Converting v2 flat top-level credentials to v3 list, keys=%s",
+            list(flat_creds.keys()),
+        )
+        return {**body, "credentials": flatten_credentials_to_pairs(flat_creds)}
+
+    return body
+
+
 class AuthStatus(SerializableEnum):
     """Result of an authentication attempt."""
 
@@ -275,6 +352,9 @@ _AUTH_STATUS_HTTP_CODES: dict[AuthStatus, int] = {
     AuthStatus.EXPIRED: 401,
     AuthStatus.INVALID_CREDENTIALS: 401,
 }
+
+#: Public name for the AuthStatus → HTTP status map (the serving routes read it).
+AUTH_STATUS_HTTP_CODES = _AUTH_STATUS_HTTP_CODES
 
 
 class AuthInput(BaseModel):

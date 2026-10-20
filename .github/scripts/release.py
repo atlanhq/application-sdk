@@ -4,6 +4,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 import release_guard
 import semver
@@ -108,6 +109,11 @@ def get_commits_since_last_tag() -> list[str]:
     try:
         # Get all commits in that range, excluding sub-packages that manage
         # their own versioning and changelogs (contract-toolkit, conformance).
+        # Two layers, and BOTH are needed: this pathspec drops commits that only
+        # touch a sub-package, and _SUBPKG_RE below drops scoped subjects from
+        # mixed commits the pathspec still lets through. packages/api is NOT
+        # excluded: it is released in lockstep with the SDK (same job, same
+        # version), so a change there is an SDK change.
         commits = _git(
             "log",
             *rev_range,
@@ -243,6 +249,44 @@ def update_pyproject_version(new_version: str) -> None:
     except subprocess.CalledProcessError as e:
         logging.error(f"Failed to update version in pyproject.toml: {e}")
         raise
+    update_api_lockstep(new_version)
+
+
+#: The api package released in lockstep with the SDK (packages/api).
+_API_PYPROJECT = "packages/api/pyproject.toml"
+_API_PIN_RE = re.compile(r'("atlan-application-sdk-api==)[^"]+(")')
+_VERSION_LINE_RE = re.compile(r'^(version = ")[^"]+(")', re.MULTILINE)
+
+
+def update_api_lockstep(new_version: str, root: Path | None = None) -> None:
+    """Move the api package to ``new_version`` and re-pin the SDK to it exactly.
+
+    ``atlan-application-sdk`` depends on ``atlan-application-sdk-api==<its own
+    version>`` and the release job publishes both from the same commit, so an SDK
+    can never be installed next to a stale api. Each substitution must match
+    exactly once; a miss raises instead of releasing a half-bumped pair.
+
+    The api wheel ships ``application_sdk/version.py`` itself, so ``__version__``
+    moves with the SDK's own bump. A repository without ``packages/api`` — every
+    app repo, which runs this same script through release-version-bump — has
+    nothing to move.
+    """
+    base = root or Path(".")
+    if not (base / _API_PYPROJECT).is_file():
+        return
+    for rel, pattern in (
+        ("pyproject.toml", _API_PIN_RE),
+        (_API_PYPROJECT, _VERSION_LINE_RE),
+    ):
+        path = base / rel
+        text = path.read_text(encoding="utf-8")
+        updated, count = pattern.subn(rf"\g<1>{new_version}\g<2>", text)
+        if count != 1:
+            raise RuntimeError(
+                f"{rel}: expected exactly one version to update, found {count}"
+            )
+        path.write_text(updated, encoding="utf-8")
+    logging.info(f"Moved {_API_PYPROJECT} and the SDK's pin to {new_version}")
 
 
 def apply_first_release_floor(

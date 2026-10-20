@@ -28,6 +28,7 @@ import argparse
 import asyncio
 import contextlib
 import faulthandler
+import importlib.util as _importlib_util
 import os
 import random
 import signal
@@ -39,6 +40,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import orjson
+
+# The handler surface (application_sdk.handler, .contracts, .errors, …) ships in
+# atlan-application-sdk-api, which this SDK depends on at the same version. A pip
+# upgrade from a release that predates the split deletes those files when it
+# removes the old SDK. Say so plainly instead of failing on the first import.
+if _importlib_util.find_spec("application_sdk.handler.base") is None:
+    raise ImportError(
+        "atlan-application-sdk-api's files are missing (application_sdk.handler "
+        "and the rest of the handler surface). This happens after a pip upgrade "
+        "from an SDK release that predates atlan-application-sdk-api. Fix: "
+        "pip install --force-reinstall --no-deps atlan-application-sdk-api"
+    )
 
 from application_sdk.common import restart_marker
 from application_sdk.common._env import env_int as _env_int

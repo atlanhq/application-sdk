@@ -1,0 +1,103 @@
+[project]
+name = "atlan-application-sdk-api"
+version = "3.50.0"
+description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
+license = "Apache-2.0"
+authors = [
+    {name = "Atlan App Team", email = "connect@atlan.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+keywords = ["atlan", "sdk", "handler", "api"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
+dependencies = [
+    "fastapi>=0.143.0,<0.144.0",
+    "pydantic>=2.10.6,<3.0.0",
+    "orjson>=3.11.6,<4.0.0",
+    # Form parsing for the file-upload route. Arrives on the worker through
+    # fastapi[standard]; the floor is the SDK's CVE constraint.
+    "python-multipart>=0.0.26",
+    # application_sdk.errors maps httpx failures onto the error leaves
+    # (errors/http.py); same pin as the SDK's core dependency.
+    "httpx>=0.27.0,<0.29.0",
+]
+
+# Same extras, same pins, as atlan-application-sdk: a handler that uses the SQL
+# client base or the AWS helpers declares the extra, exactly as the worker does.
+[project.optional-dependencies]
+# One extra per [tool.atlan-api.seeds] group beyond core, same pins as
+# atlan-application-sdk. A handler that uses the SQL client base or the AWS
+# helpers declares the extra, exactly as it does on the worker.
+sql = [
+    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
+    "httpx>=0.27.0,<0.29.0",
+    "python-dotenv>=1.1.0,<2.0.0",
+]
+pandas = ["pandas>=2.2.3,<3.0.0"]
+aws = [
+    "boto3>=1.38.6,<2.0.0",
+    "httpx>=0.27.0,<0.29.0",
+    "python-dotenv>=1.1.0,<2.0.0",
+]
+# Never needed to serve a handler: the input-contract models import pyatlan_v9
+# only inside ConnectionRef's Atlas conversion helpers, which the host never
+# calls. Declared so those function-level imports are an extra's, as on the worker.
+pyatlan = ["pyatlan>=11.3,<12"]
+
+[project.urls]
+Homepage = "https://github.com/atlanhq/application-sdk"
+Source = "https://github.com/atlanhq/application-sdk/tree/main/packages/api"
+Documentation = "https://github.com/atlanhq/application-sdk/blob/main/docs/standards/api-distribution.md"
+# Released in lockstep with atlan-application-sdk, so the SDK's changelog covers both.
+Changelog = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+# An editable install points at the shared source tree (see hatch_build.py).
+dev-mode-dirs = ["../.."]
+
+[tool.hatch.build.targets.wheel.hooks.custom]
+
+[tool.hatch.build.targets.sdist.hooks.custom]
+
+# What the api distribution is FOR: the modules the consolidated host needs,
+# grouped by the extra that brings their third-party deps. api-files.txt is
+# generated from these by .github/scripts/gen_api_files.py (their import
+# closure) and committed; CI fails when it is stale. check_api_surface.py fails
+# when a core file imports anything beyond the core dependencies, or a group's
+# file imports beyond core + that extra. To put another SDK surface on the
+# host, add its module to a group and regenerate.
+[tool.atlan-api.seeds]
+core = [
+    "application_sdk.handler.asgi",
+    "application_sdk.handler.base",
+    "application_sdk.handler.contracts",
+    "application_sdk.handler.manifest",
+    "application_sdk.handler.service_errors",
+    "application_sdk.errors",
+    "application_sdk.credentials.errors",
+    "application_sdk.credentials.spec",
+    "application_sdk.credentials.ingress",
+    "application_sdk.credentials.types",
+    "application_sdk.common.concurrency",
+    "application_sdk.common.logger",
+    "application_sdk.templates.contracts",
+    "application_sdk.handler.metadata_routes",
+]
+sql = [
+    "application_sdk.clients.sql",
+    "application_sdk.credentials.utils",
+]
+aws = [
+    "application_sdk.common.aws_utils",
+]

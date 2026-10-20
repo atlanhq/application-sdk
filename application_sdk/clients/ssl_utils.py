@@ -4,8 +4,8 @@ import functools
 import os
 import ssl
 
+from application_sdk._logging import get_logger
 from application_sdk.constants import SSL_CERT_DIR
-from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 

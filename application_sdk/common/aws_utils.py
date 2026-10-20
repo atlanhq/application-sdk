@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from botocore.config import Config
     from sqlalchemy.engine.url import URL
 
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk._logging import get_logger
 
 logger = get_logger(__name__)
 

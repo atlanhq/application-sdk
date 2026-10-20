@@ -8,7 +8,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk._logging import get_logger
 
 logger = get_logger(__name__)
 

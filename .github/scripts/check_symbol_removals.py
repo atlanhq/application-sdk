@@ -98,7 +98,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -117,6 +118,9 @@ DEFAULT_PACKAGE = "application_sdk"
 #: set statically; ``application_sdk/execution/_temporal/preflight_gate.py`` is
 #: the reference implementation.
 ALIAS_MAPPING_NAME = "_DEPRECATED_CONSTANTS"
+#: A package ``__init__``'s PEP 562 map of names it serves lazily (not
+#: deprecated): ``{"Name": ("defining.module", "attr")}``.
+LAZY_MAPPING_NAME = "_LAZY"
 
 #: Decorator names that mark a def/class as deprecated (``typing_extensions``
 #: and ``warnings`` both export ``deprecated``; either import style is matched
@@ -151,14 +155,30 @@ _PLUMBING = frozenset(
 # ---------------------------------------------------------------------------
 
 
+class SymbolKind(StrEnum):
+    """What binds an importable name. The value is what a snapshot's JSON stores."""
+
+    FUNCTION = "function"
+    """A top-level ``def`` / ``async def``."""
+    CLASS = "class"
+    """A top-level ``class``."""
+    METHOD = "method"
+    """A public method (or ``__init__``) of a top-level class, as ``Cls.name``."""
+    CONSTANT = "constant"
+    """A top-level assignment or annotated assignment."""
+    REEXPORT = "reexport"
+    """A name a module deliberately re-publishes from elsewhere (eager or lazy)."""
+    ALIAS = "alias"
+    """A deprecated name served only by the PEP 562 alias shim."""
+
+
 @dataclass(frozen=True)
 class Symbol:
     """One importable name, keyed in a snapshot by ``module:qualname``."""
 
     module: str
     qualname: str
-    kind: str
-    """``function`` | ``class`` | ``method`` | ``constant`` | ``reexport`` | ``alias``."""
+    kind: SymbolKind
     deprecated: bool
     """True when the name carries ``@deprecated`` or is served by a PEP 562 alias."""
     params: tuple[str, ...] = ()
@@ -210,7 +230,7 @@ class Snapshot:
             key: Symbol(
                 module=rec["module"],
                 qualname=rec["qualname"],
-                kind=rec["kind"],
+                kind=SymbolKind(rec["kind"]),
                 deprecated=rec["deprecated"],
                 params=tuple(rec.get("params", ())),
                 required_params=tuple(rec.get("required_params", ())),
@@ -360,6 +380,81 @@ def _alias_names(tree: ast.Module) -> set[str]:
                 if isinstance(k, ast.Constant) and isinstance(k.value, str)
             )
     return names
+
+
+def _lazy_names(tree: ast.Module) -> dict[str, tuple[str, str]]:
+    """Names served lazily by the module's ``__getattr__``, mapped to their source.
+
+    Reads the module-level ``_LAZY`` dict literal of ``"Name": ("module", "attr")``
+    entries, and only when the module also defines ``__getattr__``. A package
+    ``__init__`` uses it to keep a name importable without importing its module
+    at package-import time, so the name is surface exactly like an eager
+    re-export.
+    """
+    if not any(
+        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "__getattr__"
+        for n in tree.body
+    ):
+        return {}
+    served: dict[str, tuple[str, str]] = {}
+    for node in tree.body:
+        targets: Sequence[ast.expr]
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == LAZY_MAPPING_NAME for t in targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        for k, v in zip(node.value.keys, node.value.values):
+            if (
+                isinstance(k, ast.Constant)
+                and isinstance(k.value, str)
+                and isinstance(v, ast.Tuple)
+                and len(v.elts) == 2
+                and all(
+                    isinstance(e, ast.Constant) and isinstance(e.value, str)
+                    for e in v.elts
+                )
+            ):
+                served[k.value] = (v.elts[0].value, v.elts[1].value)  # type: ignore[union-attr]
+    return served
+
+
+def reexport_sources(
+    tree: ast.Module, module: str, package: str = DEFAULT_PACKAGE
+) -> dict[str, tuple[str, str]]:
+    """``{bound name: (source module, source name)}`` for intra-package re-exports.
+
+    Covers ``from <package>... import X`` at module level (relative or absolute)
+    and the ``_LAZY`` map. Used to follow a re-export to the definition it
+    names, so a class that moves to another module keeps its methods on the
+    surface of every module that re-exports it.
+    """
+    is_package = module.split(".")[-1] == "__init__"
+    here = module.removesuffix(".__init__") if is_package else module
+    parent = here if is_package else here.rpartition(".")[0]
+    sources: dict[str, tuple[str, str]] = dict(_lazy_names(tree))
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        src = node.module or ""
+        if node.level:
+            parts = parent.split(".")
+            parts = parts[: len(parts) - (node.level - 1)]
+            src = ".".join([*parts, src] if src else parts)
+        if not (src == package or src.startswith(package + ".")):
+            continue
+        for alias in node.names:
+            if alias.name != "*":
+                sources.setdefault(alias.asname or alias.name, (src, alias.name))
+    return sources
 
 
 def _declared_all(tree: ast.Module) -> frozenset[str] | None:
@@ -537,7 +632,11 @@ def extract_module(
     symbols: list[Symbol] = []
 
     def add(
-        qualname: str, kind: str, *, deprecated: bool = False, sig=((), (), ())
+        qualname: str,
+        kind: SymbolKind,
+        *,
+        deprecated: bool = False,
+        sig=((), (), ()),
     ) -> None:
         if qualname in _PLUMBING:
             return
@@ -557,7 +656,7 @@ def extract_module(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             add(
                 node.name,
-                "function",
+                SymbolKind.FUNCTION,
                 deprecated=any(
                     _is_deprecated_decorator(d) for d in node.decorator_list
                 ),
@@ -567,7 +666,7 @@ def extract_module(
             cls_deprecated = any(
                 _is_deprecated_decorator(d) for d in node.decorator_list
             )
-            add(node.name, "class", deprecated=cls_deprecated)
+            add(node.name, SymbolKind.CLASS, deprecated=cls_deprecated)
             for child in node.body:
                 if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
@@ -575,7 +674,7 @@ def extract_module(
                     continue
                 add(
                     f"{node.name}.{child.name}",
-                    "method",
+                    SymbolKind.METHOD,
                     deprecated=cls_deprecated
                     or any(_is_deprecated_decorator(d) for d in child.decorator_list),
                     sig=_signature(child),
@@ -583,10 +682,10 @@ def extract_module(
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    add(target.id, "constant")
+                    add(target.id, SymbolKind.CONSTANT)
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name):
-                add(node.target.id, "constant")
+                add(node.target.id, SymbolKind.CONSTANT)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             # A top-level import binds a name on this module, which is how every
             # package ``__init__`` publishes its surface. Removing the re-export
@@ -600,19 +699,30 @@ def extract_module(
             # ``__all__``, or re-exported from inside this package (relative
             # import, or an ``application_sdk.*`` absolute one).
             for bound in _reexported_names(node, declared_all, package):
-                add(bound, "reexport")
+                add(bound, SymbolKind.REEXPORT)
 
     bound = {s.qualname for s in symbols}
     for name in _lazy_reexports(tree, declared_all, package):
         if name not in bound:
-            add(name, "reexport")
+            add(name, SymbolKind.REEXPORT)
             bound.add(name)
+    # A name a package ``__init__`` serves through a ``_LAZY`` map is surface
+    # like an eager re-export; record it so moving it behind ``__getattr__`` is
+    # not a removal.
+    for name in sorted(set(_lazy_names(tree)) - bound - aliases):
+        add(name, SymbolKind.REEXPORT)
+        bound.add(name)
 
     # A name served by the shim need not exist as a real binding; record the
     # remainder so the alias keeps the old name present in the snapshot.
     for name in sorted(aliases - bound):
         symbols.append(
-            Symbol(module=module, qualname=name, kind="alias", deprecated=True)
+            Symbol(
+                module=module,
+                qualname=name,
+                kind=SymbolKind.ALIAS,
+                deprecated=True,
+            )
         )
     return symbols
 
@@ -628,6 +738,7 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
     if not package_root.is_dir():
         raise ValueError(f"no package {package!r} under {root}")
     snapshot = Snapshot(package=package)
+    sources: dict[str, tuple[str, str]] = {}
     for file in iter_modules(package_root):
         try:
             text = file.read_text(encoding="utf-8")
@@ -640,7 +751,62 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         module = module_path(file, package_root, package)
         for symbol in extract_module(tree, module, package):
             snapshot.symbols[symbol.key] = symbol
+        is_init = file.name == "__init__.py"
+        for bound, source in reexport_sources(
+            tree, f"{module}.__init__" if is_init else module, package
+        ).items():
+            sources[f"{module}:{bound}"] = source
+    _resolve_reexports(snapshot, sources)
     return snapshot
+
+
+def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) -> None:
+    """Give each re-export the kind, signature and methods of what it names.
+
+    A re-export recorded only as a name hides a class's methods: moving the
+    class to another module and re-exporting it would drop them from the old
+    module's surface, and narrowing a re-exported function's signature would go
+    unseen. Following each re-export (through chains) to its definition makes
+    the old path carry exactly what the definition carries, in both snapshots.
+    """
+    for key, (src_module, src_name) in sorted(sources.items()):
+        symbol = snapshot.symbols.get(key)
+        if symbol is None or symbol.kind != SymbolKind.REEXPORT:
+            continue
+        target_module, target_name, seen = src_module, src_name, set()
+        target = snapshot.symbols.get(f"{target_module}:{target_name}")
+        while (
+            target is not None
+            and target.kind == SymbolKind.REEXPORT
+            and target.key not in seen
+        ):
+            seen.add(target.key)
+            nxt = sources.get(target.key)
+            if nxt is None:
+                break
+            target_module, target_name = nxt
+            target = snapshot.symbols.get(f"{target_module}:{target_name}")
+        if target is None or target.kind in (SymbolKind.REEXPORT, SymbolKind.ALIAS):
+            continue
+        snapshot.symbols[key] = replace(
+            target,
+            module=symbol.module,
+            qualname=symbol.qualname,
+            deprecated=symbol.deprecated or target.deprecated,
+        )
+        if target.kind != SymbolKind.CLASS:
+            continue
+        prefix = f"{target_module}:{target_name}."
+        for member_key, member in list(snapshot.symbols.items()):
+            if member_key.startswith(prefix):
+                qual = f"{symbol.qualname}.{member.qualname[len(target_name) + 1 :]}"
+                moved = replace(
+                    member,
+                    module=symbol.module,
+                    qualname=qual,
+                    deprecated=symbol.deprecated or member.deprecated,
+                )
+                snapshot.symbols.setdefault(moved.key, moved)
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +861,10 @@ def _narrowing(base: Symbol, head: Symbol) -> str | None:
 
     Adding an optional parameter, or *loosening* a kind, is not narrowing.
     """
-    if base.kind != head.kind or head.kind not in ("function", "method"):
+    if base.kind != head.kind or head.kind not in (
+        SymbolKind.FUNCTION,
+        SymbolKind.METHOD,
+    ):
         return None
     dropped = [p for p in base.params if p not in head.params]
     if dropped:

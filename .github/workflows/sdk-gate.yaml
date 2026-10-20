@@ -61,6 +61,7 @@ jobs:
       toolkit: ${{ steps.filter.outputs.toolkit }}
       conformance: ${{ steps.filter.outputs.conformance }}
       conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
+      api_pkg: ${{ steps.filter.outputs.api_pkg }}
       container: ${{ steps.filter.outputs.container }}
       force_all: ${{ steps.final-force.outputs.force_all }}
       force_sdk: ${{ steps.final-force.outputs.force_sdk }}
@@ -149,6 +150,9 @@ jobs:
             # other area.
             sdk:
               - 'application_sdk/**'
+              # The SDK re-exports the api package (same objects) and pins it at its
+              # own version, so an api change must run the full SDK suite too.
+              - 'packages/api/**'
               - 'tests/**'
               - 'pyproject.toml'
               - 'uv.lock'
@@ -204,6 +208,15 @@ jobs:
               # Self-test the suite-test harness: editing the reusable that runs
               # the package's pytest must re-run it (same reasoning as `sdk`).
               - '.github/workflows/conformance-suite-tests-reusable.yaml'
+            # The api DISTRIBUTION (packages/api: its file list, build hook and
+            # pyproject.toml) and its checks. A change to a listed application_sdk/
+            # file also runs them: api-suite-tests triggers on `sdk` too.
+            api_pkg:
+              - 'packages/api/**'
+              - '.github/workflows/api-suite-tests-reusable.yaml'
+              - '.github/scripts/check_api_surface.py'
+              - '.github/scripts/gen_api_files.py'
+              - '.github/scripts/probe_api_wheels.py'
             # A container change (base image / daprd / system deps / entrypoint)
             # can alter SDK runtime behaviour, so it runs ALL gate areas — in
             # addition to the orthogonal Trivy container scan + connector e2e
@@ -342,6 +355,19 @@ jobs:
     uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
     secrets: inherit
 
+  # The api package's own suites. force_sdk is included for the same reason
+  # as sdk-tests: a bump-version-main PR publishes this wheel alongside the
+  # SDK, and when a force flag is set the dorny/paths-filter step is skipped
+  # entirely, so `api_pkg`/`sdk` are the empty string rather than 'false'.
+  # force_all fans out to force_sdk, but is kept explicit so a release/* or v*
+  # run cannot silently skip these tests while the gate reads green. Gated on
+  # the bump-PR opt-in like every other area.
+  api-suite-tests:
+    name: API Suite Tests
+    needs: changes
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.api_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_sdk == 'true' || needs.changes.outputs.force_all == 'true')
+    uses: ./.github/workflows/api-suite-tests-reusable.yaml
+
   # ── The single required check ───────────────────────────────────────────────
   # Always runs and always concludes, so branch protection can require exactly
   # this one context for all three areas.  A reusable-workflow call that was
@@ -354,7 +380,7 @@ jobs:
     # ANDed with success(needs.changes), so if detection fails every area
     # skips — and skipped→pass would make this gate falsely green while
     # NOTHING ran. Fail closed on a non-success `changes` result.
-    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests]
+    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests, api-suite-tests]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -373,6 +399,7 @@ jobs:
           CONFORMANCE_RESULT: ${{ needs.conformance.result }}
           TOOLKIT_RESULT: ${{ needs.toolkit.result }}
           CONFORMANCE_PKG_RESULT: ${{ needs.conformance-suite-tests.result }}
+          API_PKG_RESULT: ${{ needs.api-suite-tests.result }}
         run: |
           set -euo pipefail
           # Detection has no `if:`, so it always runs — anything other than
@@ -395,6 +422,7 @@ jobs:
           check "Conformance"           "$CONFORMANCE_RESULT"
           check "Contract Toolkit"      "$TOOLKIT_RESULT"
           check "Conformance Suite Tests" "$CONFORMANCE_PKG_RESULT"
+          check "API Suite Tests"         "$API_PKG_RESULT"
           if [[ "$ok" != "true" ]]; then
             echo "::error::SDK gate FAILED — one or more areas did not pass."
             exit 1

@@ -546,6 +546,51 @@ def test_snapshot_roundtrips_through_json():
     assert restored.symbols == original.symbols
 
 
+def test_every_symbol_kind_is_recorded_as_the_enum():
+    """Each of the six kinds comes out as a ``SymbolKind`` member, and the JSON
+    snapshot stores its plain string (a base snapshot from an older script must
+    still load)."""
+    original = snap(
+        "from application_sdk.other import Moved\n"
+        "_DEPRECATED_CONSTANTS = {'Old': 'application_sdk.other.New'}\n"
+        "def __getattr__(name): ...\n"
+        "def f(): ...\n"
+        "class C:\n    def m(self): ...\n"
+        "K = 1\n"
+    )
+    kinds = {s.qualname: s.kind for s in original.symbols.values()}
+    assert all(type(k) is mod.SymbolKind for k in kinds.values())
+    assert kinds["f"] is mod.SymbolKind.FUNCTION
+    assert kinds["C"] is mod.SymbolKind.CLASS
+    assert kinds["C.m"] is mod.SymbolKind.METHOD
+    assert kinds["K"] is mod.SymbolKind.CONSTANT
+    assert kinds["Moved"] is mod.SymbolKind.REEXPORT
+    assert kinds["Old"] is mod.SymbolKind.ALIAS
+
+    raw = json.loads(original.to_json())
+    assert {rec["kind"] for rec in raw["symbols"].values()} == {
+        "function",
+        "class",
+        "method",
+        "constant",
+        "reexport",
+        "alias",
+    }
+    restored = mod.Snapshot.from_json(original.to_json())
+    assert all(type(s.kind) is mod.SymbolKind for s in restored.symbols.values())
+
+
+def test_a_snapshot_with_an_unknown_kind_does_not_load():
+    """A seventh kind the gate does not know is a gate that cannot see: refuse
+    it rather than compare a string no branch handles."""
+    text = (
+        '{"package": "application_sdk", "symbols": {"m:x": {"module": "m",'
+        ' "qualname": "x", "kind": "property", "deprecated": false}}}'
+    )
+    with pytest.raises(ValueError, match="property"):
+        mod.Snapshot.from_json(text)
+
+
 def test_build_snapshot_walks_the_package(tmp_path: Path):
     pkg = tmp_path / "application_sdk" / "sub"
     pkg.mkdir(parents=True)
@@ -737,3 +782,102 @@ def test_check_exits_2_when_no_tag_is_reachable(tmp_path: Path):
     _run_git(repo, "add", "-A")
     _run_git(repo, "commit", "-qm", "c")
     assert mod.main(["check", "--repo", str(repo)]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Lazy package exports and re-export resolution (the api-distribution split)
+# ---------------------------------------------------------------------------
+
+
+def _tree_snapshot(tmp_path: Path, files: dict[str, str]) -> mod.Snapshot:
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return mod.build_snapshot(tmp_path)
+
+
+_LAZY_INIT = """
+import importlib
+from typing import Any
+
+_LAZY: dict[str, tuple[str, str]] = {
+    "Thing": ("application_sdk.pkg.thing", "Thing"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    module, attr = _LAZY[name]
+    return getattr(importlib.import_module(module), attr)
+"""
+
+_THING = "class Thing:\n    def run(self, x): ...\n"
+
+
+def test_moving_a_reexport_behind_a_lazy_map_is_not_a_removal(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {
+            "application_sdk/pkg/__init__.py": "from application_sdk.pkg.thing import Thing\n",
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/pkg/__init__.py": _LAZY_INIT,
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    assert "application_sdk.pkg:Thing.run" in base.symbols
+    assert mod.compare(base, head) == []
+
+
+def test_a_lazy_map_without_getattr_serves_nothing(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {
+            "application_sdk/pkg/__init__.py": "from application_sdk.pkg.thing import Thing\n",
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/pkg/__init__.py": _LAZY_INIT.split("def __getattr__")[0],
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    assert "application_sdk.pkg:Thing" in blocking(mod.compare(base, head))
+
+
+def test_a_class_moved_and_reexported_keeps_its_methods(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {"application_sdk/__init__.py": "", "application_sdk/old.py": _THING},
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/__init__.py": "",
+            "application_sdk/new.py": _THING,
+            "application_sdk/old.py": "from application_sdk.new import Thing\n",
+        },
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_narrowing_a_moved_class_method_is_still_caught(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {"application_sdk/__init__.py": "", "application_sdk/old.py": _THING},
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/__init__.py": "",
+            "application_sdk/new.py": "class Thing:\n    def run(self): ...\n",
+            "application_sdk/old.py": "from application_sdk.new import Thing\n",
+        },
+    )
+    assert "application_sdk.old:Thing.run" in blocking(mod.compare(base, head))

@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 from urllib.parse import quote, quote_plus
 
+from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import (
     CancelHandle,
     run_in_thread,
@@ -60,7 +61,6 @@ from application_sdk.constants import (
 )
 from application_sdk.credentials.utils import parse_credentials_extra
 from application_sdk.errors import AppError, sanitize_cause_repr
-from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 

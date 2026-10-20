@@ -14,7 +14,11 @@ from collections.abc import Awaitable
 
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import SourceUnavailableError
-from application_sdk.handler.contracts import WarmupObservation
+from application_sdk.handler.contracts import (
+    CheckTier,
+    PreflightOutput,
+    WarmupObservation,
+)
 
 #: ``App.preflight_warmup_ceiling_seconds``: how long the gate waits, from gate
 #: start, for the warmup to report ``READY``. Floored, never capped: any cap is
@@ -177,3 +181,18 @@ def warmup_unavailable_error(
         app_name=app_name,
         retryable=True,
     )
+
+
+def rows_outside_tiers(
+    result: PreflightOutput, tiers: frozenset[CheckTier]
+) -> list[str]:
+    """Names of the checks *result* returned outside the requested *tiers*.
+
+    The post-call tier check ``/check`` and the gate share. Handlers do not
+    reliably filter (none of the canonical apps reads ``checks_to_run``), so the
+    SDK checks what came back instead of trusting it. A non-empty answer means
+    the handler ran a check it was told not to (a ``WARMUP`` probe against
+    compute that is not ready), so its verdict cannot be read as one about the
+    requested tiers: the caller treats it as no verdict, never as a silent drop.
+    """
+    return [check.name for check in result.checks if check.tier not in tiers]

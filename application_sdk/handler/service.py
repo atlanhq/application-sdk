@@ -32,38 +32,34 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import json
-import mimetypes
 import os
-import re
-import shutil
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from pathlib import Path, PurePosixPath
-from types import ModuleType
-from typing import TYPE_CHECKING, Annotated, Any, TypeVar, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import orjson
 import temporalio.service
-from fastapi import FastAPI, File, Form, HTTPException
-from fastapi import Path as PathParam
-from fastapi import Query, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
-from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common._generated_tree import (
+from application_sdk._runtime.offload import (  # noqa: F401 — re-exported (served here before object_routes)
+    run_in_thread,
+)
+from application_sdk.common._generated_tree import (  # noqa: F401 — MANIFEST_STEM, choose_form_configmap, names_entrypoint re-exported (served here before metadata_routes)
     MANIFEST_STEM,
     choose_form_configmap,
     eligible_form_configmaps,
     names_entrypoint,
 )
-from application_sdk.common.build_identity import (
+from application_sdk.common.build_identity import (  # noqa: F401 — re-exported (served here before metadata_routes)
     BUILD_IDENTITY_CONFIGMAP_ID,
     build_identity,
 )
@@ -71,57 +67,22 @@ from application_sdk.common.dispatch import (
     canonical_workflow_type,
     resolve_dispatch_workflow_id,
 )
-from application_sdk.common.task_queue import (
+from application_sdk.common.task_queue import (  # noqa: F401 — resolve_manifest_tokens re-exported (served here before metadata_routes)
     resolve_manifest_tokens,
     task_queue_from_env,
 )
 from application_sdk.constants import CONTRACT_GENERATED_DIR as _CONTRACT_GENERATED_DIR
 from application_sdk.constants import DEPLOYMENT_NAME, LOCAL_ENVIRONMENT
-from application_sdk.credentials.ingress import lift_agent_json
-from application_sdk.errors import (
-    AppError,
-    InternalError,
-    PreconditionError,
-    safe_traceback,
-    sanitize_cause_repr,
-)
-from application_sdk.errors.categories import FailureCategory
-from application_sdk.handler._preflight_outcome import (
-    PreflightSurface,
-    emit_preflight_check_outcome,
-    emit_preflight_crash_outcome,
-    rows_outside_tiers,
-)
-from application_sdk.handler._warmup import (
-    bounded_warmup_probe,
-    warmup_ceiling_seconds,
-    warmup_probe_timeout_seconds,
-    warmup_unavailable_error,
-)
-from application_sdk.handler.base import Handler, HandlerError
-from application_sdk.handler.context import HandlerContext, bind_handler_context
-from application_sdk.handler.contracts import (
-    AuthInput,
-    CheckTier,
+from application_sdk.errors import PreconditionError
+from application_sdk.handler.base import Handler
+from application_sdk.handler.context import HandlerContext
+from application_sdk.handler.contracts import (  # noqa: F401 — FileUploadResponse re-exported (served here before object_routes)
     EventTriggerConfig,
     FileUploadResponse,
-    HandlerCredential,
-    MetadataInput,
-    PreflightCheck,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
     SubscriptionConfig,
-    WarmupInput,
-    WarmupObservation,
-    WarmupState,
 )
-from application_sdk.handler.contracts import (
-    flatten_credentials_to_pairs as _flatten_to_pairs,
-)
-from application_sdk.handler.contracts import unverifiable_preflight_result
 from application_sdk.handler.manifest import AppManifest
-from application_sdk.handler.service_errors import (
+from application_sdk.handler.service_errors import (  # noqa: F401 — re-exported for existing importers (raised in object_routes)
     InvalidConfigIdError,
     InvalidConfigTypeError,
     TempPathEscapeError,
@@ -130,27 +91,144 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-_CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
-    FailureCategory.AUTH: 401,
-    FailureCategory.PERMISSION: 403,
-    FailureCategory.NOT_FOUND: 404,
-    FailureCategory.ALREADY_EXISTS: 409,
-    FailureCategory.INVALID_INPUT: 400,
-    FailureCategory.PRECONDITION: 412,
-    FailureCategory.RATE_LIMITED: 429,
-    FailureCategory.TIMEOUT: 504,
-    FailureCategory.SOURCE_UNAVAILABLE: 503,
-    FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
-    FailureCategory.RESOURCE_EXHAUSTED: 503,
-    FailureCategory.DATA_INTEGRITY: 500,
-    FailureCategory.INTERNAL: 500,
-    FailureCategory.UNIMPLEMENTED: 501,
-    FailureCategory.CANCELLED: 499,  # client-closed-request (nginx convention)
-}
+# Names this module imported (and so offered) before its handler routes moved to
+# the api package; kept importable from here, same objects.
+from application_sdk.credentials.ingress import lift_agent_json  # noqa: E402,F401
+from application_sdk.errors import FailureCategory  # noqa: E402,F401
+from application_sdk.errors.base import (  # noqa: E402,F401
+    AppError,
+    safe_traceback,
+    sanitize_cause_repr,
+)
+from application_sdk.errors.leaves import InternalError  # noqa: E402,F401
+from application_sdk.handler._preflight_outcome import (  # noqa: E402
+    PreflightSurface,
+    emit_preflight_check_outcome,
+    emit_preflight_crash_outcome,
+)
+from application_sdk.handler._warmup import (  # noqa: E402,F401 — re-exported for existing importers
+    bounded_warmup_probe,
+    rows_outside_tiers,
+    warmup_ceiling_seconds,
+    warmup_probe_timeout_seconds,
+    warmup_unavailable_error,
+)
+from application_sdk.handler.base import HandlerError  # noqa: E402,F401
+from application_sdk.handler.context import bind_handler_context  # noqa: E402,F401
+
+# The handler HTTP surface lives in the api package and is shared with the
+# consolidated API host. These private names are the same objects, kept for the
+# worker-only routes below (and tests) that use them.
+from application_sdk.handler.contracts import (  # noqa: E402
+    _CREDENTIAL_KEYS as _DEFAULT_CREDENTIAL_KEYS,
+)
+from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported for existing importers
+    AuthInput,
+    CheckTier,
+    HandlerCredential,
+    MetadataInput,
+    PreflightCheck,
+    PreflightInput,
+    PreflightOutput,
+    PreflightStatus,
+    WarmupInput,
+    WarmupObservation,
+    WarmupState,
+)
+from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported
+    flatten_credentials_to_pairs as _flatten_to_pairs,
+)
+from application_sdk.handler.contracts import (  # noqa: E402
+    normalize_credentials as _contracts_normalize_credentials,
+)
+from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported for existing importers
+    unverifiable_preflight_result,
+)
+from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
+from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
+    RequestContractError as _RequestContractError,
+)
+from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
+    validate_request as _validate_request,
+)
+from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
+    _CATEGORY_TO_HTTP,
+    _app_error_to_http_status,
+    _import_optional_app_module,
+)
+from application_sdk.handler.routes import (  # noqa: E402
+    _normalize_preflight_request as _routes_normalize_preflight_request,
+)
+from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
+    _preflight_failure_response,
+    _preflight_response,
+    _preflight_runtime_summary,
+    _summarize_check,
+    _validated_entrypoint,
+    _wrap_response,
+    has_warmup,
+    include_app_routers_on,
+    register_handler_routes,
+)
+
+# The v2 flat top-level keys the worker treats as credential material, and the
+# worker's credential normalization. Both stay THIS module's attributes (not
+# just contracts') because connector apps patch them at import time:
+#   * extending the key set:
+#     ``service._CREDENTIAL_KEYS = service._CREDENTIAL_KEYS | {"kerberos"}``
+#   * wrapping the normalization:
+#     ``service._normalize_credentials = wrapper_calling_the_original``
+# Every worker-side normalization (/start and the auth / check / metadata
+# routes) resolves both names here at call time, so either patch applies
+# everywhere, as it did when those routes lived in this module. The API host
+# does not import this module and keeps the contracts default.
+_CREDENTIAL_KEYS: frozenset[str] = _DEFAULT_CREDENTIAL_KEYS
 
 
-def _app_error_to_http_status(exc: AppError) -> int:
-    return _CATEGORY_TO_HTTP.get(exc.category, 500)
+def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+    """:func:`~application_sdk.handler.contracts.normalize_credentials` with this module's current ``_CREDENTIAL_KEYS``."""
+    return _contracts_normalize_credentials(body, keys=_CREDENTIAL_KEYS)
+
+
+def _worker_normalize(body: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch to this module's ``_normalize_credentials`` as bound right now."""
+    return _normalize_credentials(body)
+
+
+def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
+    """The shared preflight normalization, through the worker's normalization."""
+    return _routes_normalize_preflight_request(body, normalize=_worker_normalize)
+
+
+class _GatePreflightObserver:
+    """Reports ``/check`` verdicts and crashes through the preflight gate's emitters.
+
+    The shared route takes an observer so the API host (no gate) can log instead;
+    the worker keeps the setup funnel's outcome rows exactly as before.
+    """
+
+    def __init__(self, app_name: str) -> None:
+        self._app_name = app_name
+
+    def outcome(self, result: Any, *, entrypoint: str, request_id: str) -> None:
+        emit_preflight_check_outcome(
+            logger,
+            self._app_name,
+            result,
+            surface=PreflightSurface.HTTP,
+            entrypoint=entrypoint,
+            request_id=request_id,
+        )
+
+    def crash(self, exc: BaseException, *, entrypoint: str, request_id: str) -> None:
+        emit_preflight_crash_outcome(
+            logger,
+            self._app_name,
+            exc,
+            surface=PreflightSurface.HTTP,
+            entrypoint=entrypoint,
+            request_id=request_id,
+        )
 
 
 def _record_proxy_failure(
@@ -182,281 +260,6 @@ def _record_proxy_failure(
     logger.warning(log_message, *log_args, exc_info=exc_info)
 
 
-ModelT = TypeVar("ModelT", bound=PydanticBaseModel)
-
-
-class _RequestContractError(Exception):
-    """A request body did not fit its typed contract at ingress → 422.
-
-    The marker *is* the enforcement. The 422 handler is registered on this
-    type, not on pydantic's ``ValidationError``, so an endpoint gets a
-    contract-shaped answer only by validating through
-    :func:`_validate_request` — which is also the only place that decides a
-    failure is the caller's fault. A ``ValidationError`` raised anywhere else
-    (inside an endpoint's error boundary, in handler business logic, in an
-    output contract) keeps that endpoint's own 500 and can never be
-    mistaken for a malformed request.
-
-    Which endpoints answer 422 is therefore visible in the call sites rather
-    than asserted in prose, and the default for a new endpoint is the safe
-    one: a bare ``model_validate`` still yields a 500.
-    """
-
-    def __init__(self, cause: ValidationError) -> None:
-        super().__init__(str(cause))
-        # The pydantic failure, kept so the handler can name the fields.
-        self.cause = cause
-
-
-def _validate_request(model: type[ModelT], body: dict[str, Any]) -> ModelT:
-    """Validate an already-normalised request body into its typed contract.
-
-    Raises :class:`_RequestContractError` so the app-level handler answers 422
-    naming the offending field. Use this for anything a *caller* controls; use
-    ``model_validate`` directly where a failure would be an internal bug.
-    """
-    try:
-        return model.model_validate(body)
-    except ValidationError as exc:
-        raise _RequestContractError(exc) from exc
-
-
-_CREDENTIAL_KEYS = frozenset(
-    {
-        "host",
-        "port",
-        "authType",
-        "username",
-        "password",
-        "connectorType",
-        "connectorConfigName",
-        "extra",
-    }
-)
-
-
-# v2-compat: remove when Heracles sends credentials in v3 list[{key, value}] format.
-def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
-    """Normalize v2 credential formats to v3 list[{key, value}] format.
-
-    Handles three formats:
-
-    1. v3 array (already correct):
-        {"credentials": [{"key": "host", "value": "..."}]}
-
-    2. v2 nested dict (Heracles internal):
-        {"credentials": {"host": "...", "username": "...", "extra": {...}}}
-
-    3. v2 flat top-level (Heracles credential test):
-        {"host": "...", "authType": "basic", "password": "...", "extra": {...}}
-
-    Returns the body with credentials normalized to v3 array format.
-    """
-    creds = body.get("credentials")
-
-    # Already v3 array format — no conversion needed
-    if isinstance(creds, list):
-        return body
-
-    # Format 2: nested dict under "credentials" key
-    if isinstance(creds, dict):
-        logger.info(
-            "Converting v2 nested-dict credentials to v3 list, keys=%s",
-            list(creds.keys()),
-        )
-        return {**body, "credentials": _flatten_to_pairs(dict(creds))}
-
-    # Format 3: flat top-level keys (detect by presence of known credential keys)
-    if creds is None and _CREDENTIAL_KEYS & body.keys():
-        flat_creds = {k: body[k] for k in list(body.keys()) if k in _CREDENTIAL_KEYS}
-        logger.info(
-            "Converting v2 flat top-level credentials to v3 list, keys=%s",
-            list(flat_creds.keys()),
-        )
-        return {**body, "credentials": _flatten_to_pairs(flat_creds)}
-
-    return body
-
-
-def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
-    """Normalize preflight-specific compatibility fields before validation."""
-    normalized = _normalize_credentials(lift_agent_json(body))
-    has_metadata = "metadata" in normalized and normalized["metadata"] is not None
-    has_connection_config = (
-        "connection_config" in normalized
-        and normalized["connection_config"] is not None
-    )
-
-    if has_metadata and not has_connection_config:
-        return {**normalized, "connection_config": normalized["metadata"]}
-    if has_connection_config and not has_metadata:
-        return {**normalized, "metadata": normalized["connection_config"]}
-    return normalized
-
-
-def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
-    """One check as the HTTP caller sees it.
-
-    ``cause_repr`` is the exception text behind a typed error. It stays in the
-    server log and the Temporal payload; an HTTP caller gets the typed fields.
-    """
-    dumped = check.model_dump(
-        mode="json", exclude_none=True, exclude={"error": {"cause_repr"}}
-    )
-    # The -1.0 "not measured" sentinel belongs to the telemetry row
-    # (check_matrix), not to this display payload — the frontend should see
-    # no duration rather than a negative one.
-    if dumped.get("duration_ms", 0) < 0:
-        del dumped["duration_ms"]
-    # The default tier stays off the wire, as in PreflightCheck.to_wire, so an
-    # app that never tiers its checks answers exactly as before tiers existed.
-    if check.tier is CheckTier.PREFLIGHT:
-        del dumped["tier"]
-    dumped["message"] = check.resolved_message
-    if check.resolved_suggested_action:
-        dumped["suggested_action"] = check.resolved_suggested_action
-    return dumped
-
-
-def _preflight_response(
-    result: PreflightOutput, *, success: bool | None = None
-) -> dict[str, Any]:
-    """The ``/workflows/v1/check`` body for a verdict.
-
-    ``data`` is the v2 map the SageV2 widget iterates: one camelCase key per
-    check with ``success`` and, because the widget renders
-    ``checkResult.success ? successMessage : failureMessage`` with no fallback,
-    both message fields (DBBI-665, WARE-1250). Envelope ``success`` means
-    "preflight executed", not "every check passed": the widget short-circuits
-    on ``!response.success`` and would otherwise render every PARTIAL or
-    NOT_READY verdict as a blank failure. The canonical verdict lives under
-    ``preflight``.
-    """
-    data: dict[str, Any] = {}
-    for check in result.checks:
-        key = check.name[0].lower() + check.name[1:]
-        msg = check.resolved_message or ""
-        data[key] = {
-            "success": check.passed,
-            "message": msg,
-            "successMessage": msg if check.passed else "",
-            "failureMessage": "" if check.passed else msg,
-        }
-    response = _wrap_response(
-        data,
-        message=result.message or f"Preflight check {result.status.value}",
-        success=(len(result.checks) > 0 or result.status is PreflightStatus.PENDING)
-        if success is None
-        else success,
-    )
-    response["preflight"] = _preflight_runtime_summary(result)
-    return response
-
-
-def _preflight_failure_response(
-    exc: AppError, app_name: str, status_code: int, detail: str | None = None
-) -> JSONResponse:
-    """The ``/workflows/v1/check`` body when the handler raised instead of returning.
-
-    A raise used to leave the caller with an HTTP status and a string. It now
-    carries the same verdict shape a returned ``NOT_READY`` does, built the way
-    the gate builds it: ``status`` is ``not_ready`` and one ``preflightVerdict``
-    check carries the raise as typed ``FailureDetails`` — the leaf's own for a
-    typed raise, ``InternalError`` with ``classification_pending`` for a crash.
-    So the status says the source was not verified while the check says who
-    must act. The HTTP status is unchanged. ``detail`` is the typed leaf's own
-    message, never ``str(exc)``: for an ``AppError`` that is the same string as
-    before, for the deprecated ``HandlerError`` it drops the ``[CODE]`` prefix
-    and the ``handler=`` / ``app=`` suffix, which stay in the server log. The
-    raw exception text never reaches the body: ``cause_repr`` is dropped before
-    the verdict is rendered, because after secret redaction it still names the
-    caller's hosts and accounts, and the untyped path passes a fixed ``detail``.
-    """
-    return JSONResponse(
-        status_code=status_code,
-        content=_preflight_failure_body(exc, app_name, detail),
-    )
-
-
-def _preflight_failure_body(
-    exc: AppError, app_name: str, detail: str | None = None
-) -> dict[str, Any]:
-    """The body :func:`_preflight_failure_response` sends."""
-    output = unverifiable_preflight_result(exc, app_name, include_cause=False)
-    body = _preflight_response(output, success=False)
-    failure = output.checks[0].error
-    body["detail"] = detail if detail is not None else output.message
-    body["error"] = (
-        failure.model_dump(mode="json", exclude_none=True)
-        if failure is not None
-        else None
-    )
-    return body
-
-
-def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
-    """Runtime metadata kept outside the SageV2 ``data`` map.
-
-    ``status`` is the verdict (``ready`` / ``not_ready`` / ``partial``, and
-    ``pending`` on a tiered request whose warmup-tier checks have not run);
-    ``not_ready`` means blocked. Per-check ``message``/``suggested_action`` follow
-    the precedence rule (typed ``error`` wins). Consumed for display/diagnostics.
-    """
-    summary: dict[str, Any] = {
-        "status": result.status.value,
-        "message": result.message,
-        "total_duration_ms": result.total_duration_ms,
-        "checks": [_summarize_check(check) for check in result.checks],
-    }
-    # ``warmup`` is present exactly when it explains the verdict: always on
-    # PENDING (``null`` when warmup was not probed), and whenever an observation
-    # was taken. An untiered request never has one, so its body is unchanged.
-    if result.status is PreflightStatus.PENDING or result.warmup is not None:
-        summary["warmup"] = (
-            _warmup_body(result.warmup) if result.warmup is not None else None
-        )
-    return summary
-
-
-def _warmup_body(observation: WarmupObservation) -> dict[str, Any]:
-    """An observation as the HTTP caller sees it."""
-    return observation.model_dump(mode="json", exclude_none=True)
-
-
-def _with_warmup_verdict(
-    result: PreflightOutput,
-    observation: WarmupObservation | None,
-    app_name: str,
-    *,
-    warmup_pending: bool,
-) -> PreflightOutput:
-    """*result* with the warmup folded into a tiered ``/check`` verdict.
-
-    ``NOT_READY`` always wins. An ``UNAVAILABLE`` observation is a ``NOT_READY``
-    of its own, attributed to the source. Otherwise, when the ``WARMUP``-tier
-    checks did not run (``warmup_pending``), the verdict is ``PENDING`` and
-    carries the observation that explains why, or ``None`` when warmup was not
-    probed. No placeholder rows: the UI shows one line for the source compute.
-    """
-    if result.status is PreflightStatus.NOT_READY:
-        return result.model_copy(update={"warmup": observation})
-    if observation is not None and observation.state is WarmupState.UNAVAILABLE:
-        error = warmup_unavailable_error(observation, app_name)
-        return result.model_copy(
-            update={
-                "status": PreflightStatus.NOT_READY,
-                "message": error.message,
-                "error": error.to_failure_details(),
-                "warmup": observation,
-            }
-        )
-    if warmup_pending:
-        return result.model_copy(
-            update={"status": PreflightStatus.PENDING, "warmup": observation}
-        )
-    return result
-
-
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
     from temporalio.client import Client
@@ -469,23 +272,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _wrap_response(
-    data: dict[str, Any] | list[Any],
-    *,
-    message: str = "",
-    success: bool = True,
-) -> dict[str, Any]:
-    """Wrap response data in the standard envelope: {success, message, data}.
-
-    ``message`` is omitted from the response when empty to match the legacy
-    /credentials/query format expected by the frontend filter widgets.
-    """
-    result: dict[str, Any] = {"success": success, "data": data}
-    if message:
-        result["message"] = message
-    return result
 
 
 async def _get_workflow_result(
@@ -616,21 +402,9 @@ CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
 
 def _entrypoint_form(entrypoint: str) -> tuple[Path | None, list[Path]]:
-    """The generated setup form served for *entrypoint*, and the files it was
-    chosen from.
-
-    Searches both generated layouts: multi-entrypoint apps nest each form under
-    ``CONTRACT_GENERATED_DIR/<entrypoint>/``, single-entrypoint apps emit it
-    flat in ``CONTRACT_GENERATED_DIR``. The nested directory wins. Within a
-    directory :func:`choose_form_configmap` decides. ``(None, [])`` when no
-    eligible form exists.
-    """
-    for search_dir in (CONTRACT_GENERATED_DIR / entrypoint, CONTRACT_GENERATED_DIR):
-        candidates = eligible_form_configmaps(search_dir)
-        target = choose_form_configmap(candidates, entrypoint)
-        if target is not None:
-            return target, candidates
-    return None, []
+    """The generated setup form served for *entrypoint* (see
+    :func:`application_sdk.handler.metadata_routes.entrypoint_form`)."""
+    return entrypoint_form(CONTRACT_GENERATED_DIR, entrypoint)
 
 
 def generated_entrypoints() -> list[str]:
@@ -741,11 +515,23 @@ def warn_on_warmup_flag_drift(
 # separate, deliberate decision).
 
 
+from application_sdk.handler.metadata_routes import (  # noqa: E402
+    MAX_FE_INPUTS_BYTES,
+    MetadataSource,
+    decode_fe_inputs,
+    entrypoint_form,
+    register_metadata_routes,
+)
+from application_sdk.handler.object_routes import (  # noqa: E402
+    ObjectRoutesSource,
+    register_object_routes,
+    validated_temp_path,
+)
+
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
 # Identical to the @entrypoint decorator constraint. Used as a path-traversal guard
 # in get_manifest() before any filesystem path is constructed.
-_ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
-
+from application_sdk.handler.routes import _ENTRYPOINT_NAME_RE  # noqa: E402
 
 # Per-entry-point hook signatures resolved by the discovery helpers below.
 # ``HandlerFn`` is the per-entry-point handler convention
@@ -763,30 +549,6 @@ HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
 _ComputeManifestFn = Callable[
     [dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]
 ]
-
-
-def _import_optional_app_module(dotted: str) -> ModuleType | None:
-    """Import an optional consumer-owned module by dotted path.
-
-    Returns ``None`` only when the module *itself* (or one of its parent
-    packages) is absent — the expected "this app ships no such hook" case.
-    Re-raises when the module exists but fails to import: a transitive
-    ``ModuleNotFoundError`` (a missing dependency named somewhere other than the
-    target's own dotted path) or any other ``ImportError`` is a real bug in the
-    connector's code and must surface, not be silently swallowed into a
-    fall-through.
-    """
-    import importlib  # noqa: PLC0415 — cold path: per-entrypoint discovery only
-
-    try:
-        return importlib.import_module(dotted)
-    except ModuleNotFoundError as exc:  # conformance: ignore[E008] re-raises if missing dep is not the target module itself
-        missing = exc.name or ""
-        # Swallow only if what's missing is the target or one of its parents
-        # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
-        if missing == dotted or dotted.startswith(f"{missing}."):
-            return None
-        raise
 
 
 def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
@@ -836,92 +598,6 @@ def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
     )
 
 
-def _validated_entrypoint(name: str) -> str:
-    """Return the per-entrypoint name to dispatch to, or ``""`` when none is sent.
-
-    The orchestrator resolves the exact entry-point name (e.g.
-    ``asset-export-advanced``) from the Global Marketplace app catalog and
-    sends it in the ``entrypoint`` field, so resolution is a direct,
-    deterministic reference — there is no parsing, filesystem glob, or
-    suffix-matching of the legacy ``connector`` string. The name becomes part
-    of a module path (``app.<segment>.handler`` / ``.core``), so we validate
-    its format and otherwise use it verbatim.
-
-    - **Empty / absent** → ``""``: single-entrypoint apps send no ``entrypoint``
-      and fall through to the app-level ``Handler`` instance, 1:1 with today's
-      behavior.
-    - **Non-empty but malformed** → ``HTTPException(400)``: a bad name is a
-      client error, not a silent fall-back to the default entrypoint. This
-      keeps the auth/check/metadata routes consistent with
-      ``/workflows/v1/manifest`` and the input-contract route, which already
-      reject malformed names with 400.
-    """
-    if not name:
-        return ""
-    if not _ENTRYPOINT_NAME_RE.match(name):
-        raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-    return name
-
-
-def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
-    """Look for a per-entrypoint handler function.
-
-    Convention: ``app.<segment>.handler.<fn_name>`` where ``segment`` is
-    :func:`~application_sdk.app.entrypoint.entrypoint_module_segment` of the
-    entry-point name and ``fn_name`` is one of ``"test_auth"``,
-    ``"preflight_check"``, ``"fetch_metadata"``, ``"warmup"``. Multi-entrypoint apps that
-    need *per-entrypoint* lifecycle hooks drop a ``handler.py`` next to their
-    package's hand-written code with::
-
-        async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
-        async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
-        async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
-        async def warmup(input: WarmupInput, ctx: HandlerContext) -> WarmupObservation: ...
-
-    The dispatch is best-effort: if the per-entrypoint module / attribute
-    is absent, the route falls through to the app-level ``Handler`` instance
-    (``DefaultHandler`` if no custom handler is configured), preserving
-    today's single-entrypoint behavior 1:1.
-
-    Precedence & silent fall-through — important when reasoning about which
-    code actually runs (mirrored in ``docs/concepts/handlers.md``):
-
-    - When a per-entrypoint ``<fn_name>`` exists, it **pre-empts** the
-      app-level ``Handler.<fn_name>`` for that entry point. Defining both
-      silently runs the module one; the class method never executes.
-    - Resolution is per-op: a module that defines only ``fetch_metadata``
-      leaves ``test_auth`` / ``preflight_check`` falling back to the
-      app-level ``Handler`` — one entry point can be split across two files.
-    - A wrong name or a non-``async`` ``def`` does not match (see the
-      ``iscoroutinefunction`` check below) and **silently** falls through
-      rather than erroring — so a typo'd hook quietly does nothing.
-
-    Returns the callable or ``None`` if absent.
-    """
-    # Lazy: app.entrypoint pulls in app.base, which imports this module
-    # (handler.service is the FastAPI entry point); deferring to this cold
-    # path avoids the import cycle.
-    from application_sdk.app.entrypoint import (  # noqa: PLC0415
-        entrypoint_module_segment,
-    )
-
-    segment = entrypoint_module_segment(entrypoint)
-    module = _import_optional_app_module(f"app.{segment}.handler")
-    if module is None:
-        return None
-    fn = getattr(module, fn_name, None)
-    # The dispatch ``await``s the result, so require a coroutine function — a
-    # sync ``def`` falls through to the app-level Handler rather than blowing up
-    # with a TypeError at request time.
-    if fn is not None and not inspect.iscoroutinefunction(fn):
-        logger.debug(
-            "app.%s.%s found but not async; falling through to app-level Handler",
-            segment,
-            fn_name,
-        )
-    return cast("HandlerFn | None", fn if inspect.iscoroutinefunction(fn) else None)
-
-
 #: Max size of the decoded ``fe_inputs`` query payload, in UTF-8 bytes.
 #
 # ``fe_inputs`` rides in a GET query string (``/workflows/v1/manifest?...``),
@@ -934,56 +610,27 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
 # GUIDs / tags) is ~5 KB — so 8 KB leaves headroom without rejecting legitimate
 # forms. Anything materially larger should move to a POST body (tracked
 # follow-up) rather than grow the query string.
-_MAX_FE_INPUTS_BYTES = 8192
+_MAX_FE_INPUTS_BYTES = MAX_FE_INPUTS_BYTES
 
 
 def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
-    """Decode the ``fe_inputs`` query payload (JSON, sent URL-encoded by
-    Heracles for dynamic-manifest apps). Returns ``{}`` when absent; raises
-    ``HTTPException(413)`` when it exceeds :data:`_MAX_FE_INPUTS_BYTES` and
-    ``HTTPException(400)`` when present but malformed."""
-    if not raw:
-        return {}
-    if len(raw.encode("utf-8")) > _MAX_FE_INPUTS_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"fe_inputs exceeds the {_MAX_FE_INPUTS_BYTES}-byte limit",
-        )
-    try:
-        # orjson.JSONDecodeError subclasses json.JSONDecodeError, so the
-        # existing except clause still catches malformed input.
-        parsed = orjson.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(status_code=400, detail="fe_inputs must be a JSON object")
-    return parsed
+    """Decode the ``fe_inputs`` query payload (see
+    :func:`application_sdk.handler.metadata_routes.decode_fe_inputs`)."""
+    return decode_fe_inputs(raw, _MAX_FE_INPUTS_BYTES)
 
 
-# Allowed characters for config_id and config_type path components.
-# Prevents path traversal (no slashes, dots, or percent-encoding) when these
-# values are interpolated into object-store keys.
-_CONFIG_KEY_PATTERN = r"^[a-zA-Z0-9_\-]{1,128}$"
-_CONFIG_KEY_RE = re.compile(_CONFIG_KEY_PATTERN)
+# Allowed characters for config_id and config_type path components: one
+# pattern, defined (and enforced by ``config_key``) in ``object_routes``; the
+# worker's old private names are kept for existing importers.
+from application_sdk.handler.object_routes import _CONFIG_KEY_RE  # noqa: E402,F401
+from application_sdk.handler.object_routes import config_key  # noqa: E402
+from application_sdk.handler.object_routes import (  # noqa: E402,F401
+    CONFIG_KEY_PATTERN as _CONFIG_KEY_PATTERN,
+)
 
-# Strips any character that is not a simple alphanumeric from file extensions
-# before they are used as mkstemp suffixes, preventing taint-flow path traversal.
-_SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
-
-
-def _validated_temp_path(path: str) -> str:
-    """Resolve *path* and require it to lie strictly inside the system temp directory.
-
-    The temp directory itself is rejected; :func:`tempfile.mkstemp` never
-    returns it. Returns the resolved path.
-    """
-    tmp_root = os.path.realpath(tempfile.gettempdir())
-    real = os.path.realpath(path)
-    if not real.startswith(tmp_root + os.sep):
-        raise TempPathEscapeError()
-    return real
+#: The one temp-path guard, shared with the host's routes; the old name is kept
+#: for existing importers.
+_validated_temp_path = validated_temp_path
 
 
 async def _get_temporal_client() -> Client:
@@ -1275,17 +922,14 @@ _WORKFLOW_SENSITIVE_FIELDS = {
 def _config_objectstore_key(config_id: str, config_type: str = "workflows") -> str:
     """Build S3 key matching v2 SDK statestore path convention.
 
-    Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
+    Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json — the
+    worker's own app name over :func:`~application_sdk.handler.object_routes.config_key`.
     """
-    if not _CONFIG_KEY_RE.match(config_id):
-        raise InvalidConfigIdError(config_id=config_id)
-    if not _CONFIG_KEY_RE.match(config_type):
-        raise InvalidConfigTypeError(config_type=config_type)
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
         APPLICATION_NAME,
     )
 
-    return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
+    return config_key(APPLICATION_NAME, config_id, config_type)
 
 
 async def _config_load_from_objectstore(
@@ -1301,11 +945,14 @@ async def _config_load_from_objectstore(
     fd, tmp = tempfile.mkstemp(suffix=".json")
     safe_tmp = _validated_temp_path(tmp)
     os.close(fd)
+    from application_sdk.storage.errors import StorageNotFoundError  # noqa: PLC0415
+
     try:
         await download_file(key, safe_tmp, _storage)
         return orjson.loads(Path(safe_tmp).read_bytes())
-    except Exception:
-        logger.warning("Object-store config load failed for key=%s", key, exc_info=True)
+    except (StorageNotFoundError, FileNotFoundError):
+        # A missing key is the ordinary 404. Any other failure propagates: the
+        # route answers 503, since the store could not answer.
         return None
     finally:
         if os.path.exists(safe_tmp):
@@ -1857,142 +1504,32 @@ def _register_workflow_routes(
             ) from None
 
     # ------------------------------------------------------------------
-    # Config (state store)
+    # Config (object store) and file upload (shared with the host)
     # ------------------------------------------------------------------
 
-    @app.get("/workflows/v1/config/{config_id}")
-    async def get_workflow_config(
-        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
-        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
-    ) -> JSONResponse:
-        """Fetch workflow config from object store."""
-        config = await _config_load_from_objectstore(config_id, config_type=type)
-
-        if config is None and _storage is None:
-            raise HTTPException(
-                status_code=503,
-                detail="No object store configured",
-            )
-        if config is None:
-            raise HTTPException(
-                status_code=404, detail=f"Config not found: {config_id}"
-            )
-        return JSONResponse(
-            content=_wrap_response(
-                cast("dict[str, Any]", config),
-                message="Workflow configuration fetched successfully",
-            )
-        )
-
-    @app.post("/workflows/v1/config/{config_id}")
-    async def update_workflow_config(
-        config_id: Annotated[str, PathParam(pattern=_CONFIG_KEY_PATTERN)],
-        request: Request,
-        type: Annotated[str, Query(pattern=_CONFIG_KEY_PATTERN)] = "workflows",
-    ) -> JSONResponse:
-        """Save workflow config to object store."""
-        body = await request.json()
-
-        if type == "workflows":
-            warnings.warn(
-                "Saving config with type='workflows' is deprecated; "
-                "use a specific config type instead. "
-                "Will be removed in v4.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
-        saved = await _config_save_to_objectstore(config_id, body, config_type=type)
-
-        if not saved:
-            raise HTTPException(
-                status_code=503,
-                detail="No object store configured",
-            )
-        return JSONResponse(
-            content=_wrap_response(
-                cast("dict[str, Any]", body),
-                message="Workflow configuration updated successfully",
-            )
-        )
-
-    # ------------------------------------------------------------------
-    # File upload
-    # ------------------------------------------------------------------
-
-    @app.post("/workflows/v1/file")
-    async def upload_file(
-        file: UploadFile = File(...),
-        filename: str | None = Form(None),
-        prefix: str | None = Form(None),
-        contentType: str | None = Form(None),
-    ) -> JSONResponse:
-        if _storage is None:
-            raise HTTPException(status_code=503, detail="Storage not configured")
-
+    async def _upload_to_storage(key: str, local_path: str) -> None:
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related
             upload_file as _upload_file,
         )
 
-        raw_name = filename or file.filename or "upload"
-        # Strip non-alphanumeric chars and cap at 16 chars for object-store key safety.
-        extension = _SAFE_EXT_RE.sub("", PurePosixPath(raw_name).suffix.lstrip("."))[
-            :16
-        ]
-        resolved_type = (
-            contentType
-            or file.content_type
-            or (mimetypes.guess_type(raw_name)[0] if raw_name else None)
-            or "application/octet-stream"
-        )
+        await _upload_file(key, local_path, _storage)
 
-        file_id = str(uuid4())
-        effective_prefix = prefix or "workflow_file_upload"
-        stored_name = f"{file_id}.{extension}" if extension else file_id
-        key = f"{effective_prefix}/{stored_name}"
-
-        # Stream the upload: drain the spooled temp file to a named temp file,
-        # then stream-upload to the object store (avoids materialising in memory).
-        fd, tmp_path = tempfile.mkstemp(suffix=f".{extension}" if extension else "")
-        safe_tmp_path = _validated_temp_path(tmp_path)
-        try:
-            os.close(fd)
-
-            def _drain_to_tmp() -> int:
-                with open(safe_tmp_path, "wb") as dst:
-                    shutil.copyfileobj(file.file, dst)
-                return os.path.getsize(safe_tmp_path)
-
-            file_size = await run_in_thread(_drain_to_tmp)
-            await _upload_file(key, safe_tmp_path, _storage)
-        finally:
-            try:
-                os.unlink(safe_tmp_path)
-            except FileNotFoundError:  # conformance: ignore[E002] temp file already removed; nothing to clean up
-                pass
-
-        now_ms = int(datetime.now(UTC).timestamp() * 1000)
-        response_obj = FileUploadResponse(
-            id=file_id,
-            version="1",
-            is_active=True,
-            created_at=now_ms,
-            updated_at=now_ms,
-            file_name=stored_name,
-            raw_name=raw_name,
-            key=key,
-            extension=extension,
-            content_type=resolved_type,
-            file_size=file_size,
-            is_uploaded=True,
-            uploaded_at=datetime.now(UTC).isoformat(),
-        )
-        return JSONResponse(
-            content=_wrap_response(
-                response_obj.model_dump(by_alias=True),
-                message="File uploaded successfully",
-            )
-        )
+    # Every operation reads this module's _storage per request.
+    register_object_routes(
+        app,
+        ObjectRoutesSource(
+            configured=lambda: _storage is not None,
+            load_config=lambda config_id, config_type: _config_load_from_objectstore(
+                config_id, config_type=config_type
+            ),
+            save_config=lambda config_id,
+            body,
+            config_type: _config_save_to_objectstore(
+                config_id, body, config_type=config_type
+            ),
+            upload_file=_upload_to_storage,
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Dapr pub/sub and event-triggered workflow endpoints
@@ -2171,653 +1708,80 @@ def _register_workflow_routes(
         app.add_api_route(_sub_route, _sub.handler, methods=["POST"])
 
     # ------------------------------------------------------------------
-    # ConfigMap endpoints
+    # ConfigMaps, manifest and input contract (shared with the host)
     # ------------------------------------------------------------------
 
-    @app.get("/workflows/v1/configmap/{config_map_id}")
-    async def get_configmap(config_map_id: str) -> JSONResponse:
-        # 0. The reserved build-identity id (FND-1684).
-        #
-        # Answered BEFORE the generated-file scan, deliberately: an app that
-        # happens to ship `atlan-build-identity.json` would otherwise shadow the
-        # one fact only a running pod can report — and it would shadow it with a
-        # committed file, which is exactly the class of answer that cannot tell
-        # this build apart from one shipped months ago.
-        #
-        # Served on THIS route rather than a new one because
-        # `/api/service/configmaps/{name}` is already proxied by Heracles. A new
-        # route would need a new proxy rule, in a repo the e2e fix does not
-        # otherwise touch, before CI could read any of this.
-        #
-        # `build_id` is "" for an image that carries no stamp. That is a valid
-        # answer, not an error: the reader has to distinguish "this pod reports a
-        # different build" from "this pod cannot report one", and a 404 here
-        # would collapse the second into "no such route".
-        if config_map_id == BUILD_IDENTITY_CONFIGMAP_ID:
-            identity: dict[str, Any] = {
-                "build_id": build_identity(),
-                "app_name": _workflow_config.app_name,
-            }
-            return JSONResponse(
-                content=_wrap_response(
-                    cast(
-                        "dict[str, Any]",
-                        {
-                            "kind": "ConfigMap",
-                            "apiVersion": "v1",
-                            "metadata": {"name": config_map_id},
-                            # Same envelope as a real configmap — `data.config`
-                            # is a JSON string — so a generic client needs no
-                            # special case here, with the parsed keys repeated
-                            # alongside it for one that does.
-                            "data": {
-                                "config": orjson.dumps(identity).decode(),
-                                **identity,
-                            },
-                        },
-                    ),
-                    message="Build identity fetched successfully",
-                )
-            )
-
-        # 1. Direct match against any generated configmap file stem.
-        #    The setup form normally requests the form file by its stem
-        #    (e.g. "snowflake-crawler"), which lands here.
-        available_configmaps: list[str] = []
-        target: Path | None = None
-        if CONTRACT_GENERATED_DIR.exists():
-            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
-                available_configmaps.append(json_file.stem)
-                if json_file.stem == config_map_id:
-                    target = json_file
-                    break
-
-        # 2. Default-entrypoint fallback (aligns with PR #1965 semantics
-        #    used by /workflows/v1/start and /workflows/v1/input-contract).
-        #    The marketplace UI sometimes builds the configmap URL from the
-        #    app/marketplace id (e.g. "atlan-snowflake", bare "snowflake")
-        #    rather than the entrypoint-form stem. In that case, resolve to
-        #    the app's default entrypoint and serve its form configmap.
-        #    When ep resolution fails or the ep directory has no eligible
-        #    form configmap, target stays None and the handler returns 404.
-        if target is None:
-            try:
-                _, ep = _resolve_app_entrypoint(
-                    _workflow_config.app_name, None, unknown_ep_status=404
-                )
-            except HTTPException:
-                # No default entrypoint resolvable (the only HTTPException
-                # _resolve_app_entrypoint raises), so the handler falls through
-                # to a 404. Warning, not debug: this is exc_info-worthy
-                # telemetry an operator should see in production, not just
-                # local control flow.
-                logger.warning(
-                    "No default entrypoint for app %s; serving configmap 404",
-                    _workflow_config.app_name,
-                    exc_info=True,
-                )
-                ep = None
-            if ep is not None:
-                # Locate the entrypoint's form configmap across BOTH generated
-                # layouts:
-                #   * multi-entrypoint (bundle) apps nest each entrypoint's form
-                #     under CONTRACT_GENERATED_DIR/<ep.name>/ (see
-                #     EntryPointMetadata: kebab name on the wire and on disk);
-                #   * single-entrypoint apps emit it FLAT in CONTRACT_GENERATED_DIR
-                #     itself (e.g. `openapi.json` alongside `manifest.json`).
-                # Search the nested dir first, then fall back to the flat dir, so
-                # an app-id request (e.g. "atlan-openapi", which the marketplace
-                # UI builds instead of the form stem) resolves for either shape.
-                # Previously only the nested layout was searched, so a flat
-                # single-entrypoint app 404'd on an app-id request even though its
-                # form file was present — a blank setup wizard in the UI.
-                #
-                # Within each directory `choose_form_configmap` decides: a form
-                # that names the entrypoint (`<ep.name>.json`, or the connector
-                # convention `<source>-<ep.name>.json`), else the only file that
-                # survives the non-form exclusion (`manifest.json`,
-                # `artifact_schemas.json`, the `{atlan,csa}-connectors-*`
-                # credential templates), else the alphabetically first.
-                #
-                # That last step is a guess, and it stays: it is the
-                # compatibility path for apps whose form name the SDK cannot
-                # recognise, and 404ing them to avoid a hypothetical would break
-                # working apps. FND-1682 was not the guess being reachable — it
-                # was `artifact_schemas.json` being eligible at all, which
-                # NON_FORM_STEMS now fixes. What the guess still owes an
-                # operator is *visibility*: it produced an HTTP 200 carrying a
-                # document with no `properties`, so a blank setup wizard looked
-                # identical to a working app from the logs, the network tab and
-                # pod stderr alike. Hence the warning below — the next
-                # unrecognised sibling shows up in the logs on the first
-                # request, before anyone opens the wizard.
-                target, candidates = _entrypoint_form(ep.name)
-                if target is not None:
-                    if len(candidates) > 1 and not names_entrypoint(
-                        target.stem, ep.name
-                    ):
-                        # conformance: ignore[L009] logs caller-invisible context (the rejected candidates) that no HTTP response carries.
-                        logger.warning(
-                            "ConfigMap form chosen alphabetically for entrypoint "
-                            "%s: %d generated files are eligible and none is "
-                            "named for it, so %s.json was served as the setup "
-                            "form (candidates=%s). If that is the wrong file, "
-                            "name the form <entrypoint>.json or "
-                            "<source>-<entrypoint>.json in the app's contract.",
-                            ep.name,
-                            len(candidates),
-                            target.stem,
-                            [c.stem for c in candidates],
-                        )
-
-        if target is not None:
-            with open(target, encoding="utf-8") as f:
-                raw = json.load(f)
-            data: dict[str, Any] = {
-                "config": orjson.dumps(raw.get("config", raw)).decode()
-            }
-            # Some configmaps (e.g., connector apps) carry a top-level
-            # `defaultConnectorType`; surface it alongside `config` when present.
-            default_connector_type = raw.get("defaultConnectorType")
-            if default_connector_type is not None:
-                data["defaultConnectorType"] = default_connector_type
-            configmap = {
-                "kind": "ConfigMap",
-                "apiVersion": "v1",
-                "metadata": {"name": config_map_id},
-                "data": data,
-            }
-            return JSONResponse(
-                content=_wrap_response(
-                    cast("dict[str, Any]", configmap),
-                    message="ConfigMap fetched successfully",
-                )
-            )
-
-        # conformance: ignore[L009] logs caller-invisible context (the available configmaps) that the generic 404 HTTPException detail does not carry.
-        logger.warning(
-            "ConfigMap not found: requested=%s available=%s",
-            config_map_id,
-            sorted(available_configmaps),
+    def _registry_default_entrypoint() -> str:
+        _, ep = _resolve_app_entrypoint(
+            _workflow_config.app_name, None, unknown_ep_status=404
         )
-        raise HTTPException(
-            status_code=404, detail=f"ConfigMap '{config_map_id}' not found"
+        return ep.name
+
+    def _registry_explicit_entrypoints() -> list[str]:
+        # Resolved INDEPENDENTLY of the default: a servable multi-entrypoint
+        # app must not 404 just because the builder marked no default. A
+        # connector that implements run() AND declares explicit @entrypoints
+        # gets run() forced as its default, but run() has no generated manifest
+        # dir — so the explicit ones, alphabetically, are the fallback.
+        from application_sdk.app.registry import (  # noqa: PLC0415
+            AppNotFoundError,
+            AppRegistry,
         )
 
-    @app.get("/workflows/v1/configmaps")
-    async def list_configmaps() -> JSONResponse:
-        # Everything this endpoint's sibling will serve by exact stem, minus
-        # the DAG manifest, which `/workflows/v1/manifest` owns.
-        #
-        # Deliberately NOT `is_form_configmap`, and the difference is worth
-        # stating because the two look interchangeable. That predicate answers
-        # "which single file is the setup form", for the fallback that has to
-        # pick exactly one. This answers "which names does this endpoint
-        # respond to", and the credential templates it excludes are ones the
-        # UI genuinely fetches — the setup form's `credential` widget requests
-        # `atlan-connectors-<source>` as its own configmap. Filtering them here
-        # would drop names that work.
-        #
-        # The manifest stem comes from `_generated_tree` rather than a literal:
-        # a hand-spelled `"manifest"` here was the last copy of that vocabulary
-        # left in this module after FND-1682, and one divergent spelling is all
-        # the artifact_schemas bug needed.
-        seen: set[str] = set()
-        configmap_ids: list[str] = []
-        if CONTRACT_GENERATED_DIR.exists():
-            for json_file in CONTRACT_GENERATED_DIR.rglob("*.json"):
-                stem = json_file.stem
-                if stem == MANIFEST_STEM or stem in seen:
-                    continue
-                seen.add(stem)
-                configmap_ids.append(stem)
-        return JSONResponse(
-            content=_wrap_response(
-                cast("dict[str, Any]", {"configmaps": configmap_ids}),
-                message="ConfigMaps listed successfully",
-            )
-        )
-
-    # ------------------------------------------------------------------
-    # Manifest endpoint
-    # ------------------------------------------------------------------
-
-    def _resolve_manifest_placeholders(raw: bytes, source: str) -> bytes:
-        """Substitute the manifest's ``{app_name}`` / ``{deployment_name}`` tokens.
-
-        Delegates to :func:`application_sdk.common.task_queue.resolve_manifest_tokens`,
-        handing it the queue this process was configured with — the same value
-        ``create_worker`` receives, in every mode. The served ``task_queue`` is
-        therefore *stamped from* what the worker polls rather than independently
-        re-derived from the same env and hoped to match. Re-deriving is what let
-        AE submit to a queue nothing polled (FND-195 / CONNECT-183).
-
-        An ``{app_name}`` token means the app's committed manifest predates the
-        toolkit's bake (#2271 / #2478) — worth a WARNING even when this fills it,
-        because any other writer of that DAG gets no such backstop. With nothing
-        to fill it from, the token is served as-is and logged at ERROR:
-        deliberately not papered over with ``constants.APPLICATION_NAME``'s
-        ``"default"``, since ``atlan-default-<deployment>`` reads as a legitimate
-        queue and hangs the run silently, whereas a literal ``{app_name}`` in the
-        DAG is greppable and immediately diagnosable.
-        """
-        resolution = resolve_manifest_tokens(
-            raw,
-            task_queue=_workflow_config.task_queue or None,
-            # _workflow_config.app_name is populated from app_class._app_name and
-            # is empty for a handler served without an app class; the app_name
-            # argument carries the same value in that case.
-            app_name=_workflow_config.app_name or app_name or None,
-            deployment_fallback=DEPLOYMENT_NAME or "default",
-        )
-        if resolution.unresolved_app_name:
-            # conformance: ignore[L009] not a request-boundary handler — the manifest is
-            # still served (the token is the diagnostic); this log is the operator's signal.
-            logger.error(
-                "Manifest for %s carries an unresolved {app_name} token and no app "
-                "name is available (neither a registered app class nor "
-                "ATLAN_APPLICATION_NAME), so the SDK is serving the literal token "
-                "rather than inventing a name that would look legitimate and be "
-                "polled by nobody. Failure attribution for runs started from this "
-                "manifest will be blank, and any task_queue the SDK could not stamp "
-                "(stamped queue: %r) targets no worker. Set ATLAN_APPLICATION_NAME "
-                "on the deployment, or regenerate the contract so the toolkit bakes "
-                "the app name.",
-                source,
-                resolution.task_queue,
-            )
-        elif resolution.had_app_name_token:
-            logger.warning(
-                "Manifest for %s shipped an unbaked {app_name} token; filled with "
-                "%r for this response. The committed manifest is stale — bump the "
-                "contract toolkit and regenerate contracts, since any writer of "
-                "this DAG that does not go through this route gets no such fallback.",
-                source,
-                resolution.app_name,
-            )
-        return resolution.raw
-
-    async def _serve_entrypoint_manifest(
-        entrypoint_name: str,
-        fe_inputs: str | dict[str, Any] | None,
-    ) -> Response:
-        """Read <entrypoint>/manifest.json, substitute placeholders, run the
-        optional ``compute_manifest`` hook, and return the Response.
-
-        Shared by the explicit-``?entrypoint=`` branch and the default-
-        entrypoint fallback below — avoids duplicating the placeholder /
-        hook logic across both code paths.
-
-        ``fe_inputs`` arrives either as the raw URL-encoded JSON string (GET,
-        subject to :data:`_MAX_FE_INPUTS_BYTES`) or as an already-parsed dict
-        (POST body, unbounded). It stays undecoded until the hook actually
-        needs it — see the decode site below.
-        """
-        # Build a registry from the filesystem: {entrypoint_name → manifest_path}.
-        # The Path objects in the dict come from glob(), not from user input, so
-        # the path that reaches read_bytes() is never tainted by the HTTP param.
-        # glob("*/manifest.json") only returns direct children of CONTRACT_GENERATED_DIR,
-        # so no is_relative_to guard is needed.
-        registry: dict[str, Path] = {
-            p.parent.name: p for p in CONTRACT_GENERATED_DIR.glob("*/manifest.json")
-        }
-        ep_manifest = registry.get(entrypoint_name)
-        if ep_manifest is None:
-            # Multi-entrypoint (bundle) apps nest each entrypoint's manifest
-            # under <ep.name>/manifest.json (matched above). Single-entrypoint
-            # apps emit it FLAT at CONTRACT_GENERATED_DIR/manifest.json, with no
-            # per-entrypoint subdir. Heracles/AE always sends ?entrypoint=<name>
-            # on package-workflow submit, so without this fallback a flat
-            # single-entrypoint app 404s ("No manifest found for entrypoint")
-            # and the platform surfaces it as a 500 on submit — blocking every
-            # run. Mirrors the flat-layout fallback in get_configmap and the
-            # no-?entrypoint branch of get_manifest.
-            flat_manifest = CONTRACT_GENERATED_DIR / "manifest.json"
-            if flat_manifest.is_file():
-                ep_manifest = flat_manifest
-            else:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No manifest found for entrypoint {entrypoint_name!r}",
-                )
-        raw = _resolve_manifest_placeholders(
-            ep_manifest.read_bytes(), f"entrypoint {entrypoint_name!r}"
-        )
-
-        # Dynamic-manifest hook: if the app defines
-        # `app.<entrypoint_snake>.core.compute_manifest`, hand the
-        # static manifest + decoded `fe_inputs` to it and use the
-        # returned dict as the response body. Apps that don't define
-        # the hook get the static manifest unchanged (current behavior).
-        compute = _discover_compute_manifest(entrypoint_name)
-        if compute is not None:
-            # Decode lazily and only here: an app with no hook has always
-            # ignored fe_inputs, so decoding at the route would start 413-ing
-            # static apps that work today. A dict came from the POST body, where
-            # the query-string cap does not apply.
-            fe_inputs_decoded = (
-                fe_inputs
-                if isinstance(fe_inputs, dict)
-                else _decode_fe_inputs(fe_inputs)
-            )
-            manifest_dict = orjson.loads(raw)
-            try:
-                # The hook is async-only (discovery rejects sync defs), so
-                # await it directly. Authors doing CPU/IO-bound work inside
-                # (SQL generation, full DAG rewrite) own offloading it — e.g.
-                # `from application_sdk.execution.heartbeat import run_in_thread`
-                # then `await run_in_thread(...)` — rather than the SDK
-                # guessing on their behalf.
-                computed = await compute(manifest_dict, fe_inputs_decoded)
-            except HTTPException:
-                raise
-            except Exception:
-                # Don't leak the hook's internals (stack/SQL/paths) to the
-                # caller — mirror the other handler routes' generic 500.
-                # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
-                logger.error(
-                    "compute_manifest hook failed for entrypoint %r",
-                    entrypoint_name,
-                    exc_info=True,
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
-            if not isinstance(computed, dict):
-                # conformance: ignore[L009] logs caller-invisible context (the actual returned type) that the generic 500 HTTPException detail omits.
-                logger.error(
-                    "compute_manifest for entrypoint %r returned %s, expected dict",
-                    entrypoint_name,
-                    type(computed).__name__,
-                )
-                raise HTTPException(status_code=500, detail="Internal server error")
-            # Reconcile the hook's output, not just the static file. The hook
-            # *replaces* the manifest wholesale, so without this second pass
-            # everything it emits — a task_queue, a freshly generated node, a
-            # token it re-introduced — is served unreconciled, and FND-195's
-            # guarantee silently does not hold for exactly the apps that need it
-            # most: a bundle's marketplace entry points have their DAG computed
-            # per submission by this hook.
-            #
-            # Idempotent, so the pre-hook pass above stays (the hook should see
-            # resolved values it may key on): after that pass no template
-            # remains, so this one is a no-op unless the hook introduced
-            # something new. Note it catches unresolved *tokens*, not a hook
-            # that hardcodes a concrete-but-wrong queue — that string has no
-            # token to match, and normalising every `atlan-*` queue would
-            # rewrite the legitimate cross-app dispatch nodes this deliberately
-            # leaves alone. Conformance O005 is the guard for that shape.
-            raw = _resolve_manifest_placeholders(
-                orjson.dumps(computed),
-                f"entrypoint {entrypoint_name!r} (compute_manifest output)",
-            )
-
-        return Response(content=raw, media_type="application/json")
-
-    async def _serve_manifest(
-        entrypoint: str | None,
-        fe_inputs: str | dict[str, Any] | None,
-    ) -> Response:
-        """Resolve the entrypoint and serve its manifest.
-
-        Transport-agnostic: GET hands in the raw query string, POST the parsed
-        body dict. Everything downstream is identical and lives here once so the
-        two methods cannot drift.
-        """
-        if entrypoint:
-            # Guard 1 (400): reject obviously-malformed names before touching disk.
-            if not _ENTRYPOINT_NAME_RE.match(entrypoint):
-                raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-            return await _serve_entrypoint_manifest(entrypoint, fe_inputs)
-
-        # No entrypoint param: single-entrypoint path
-        if manifest is not None:
-            # Same reconciliation as the disk branches. A programmatic
-            # AppManifest is the one shape with no contract-toolkit bake behind
-            # it — the DAG was hand-built in Python — so every argument for
-            # "the toolkit already resolved this" is inapplicable here, and it
-            # is the branch most likely to carry an unresolved template rather
-            # than the least. Serving it verbatim also left this route with two
-            # behaviours across three manifest sources, which is the drift this
-            # module exists to remove (FND-195).
-            raw = _resolve_manifest_placeholders(
-                manifest.model_dump_json().encode(), "programmatic manifest"
-            )
-            return Response(content=raw, media_type="application/json")
-        manifest_path = CONTRACT_GENERATED_DIR / "manifest.json"
-        if manifest_path.exists():
-            # Disk: contract-generated file — serve raw bytes with placeholder
-            # substitution. No parse/reserialize: the file is already valid JSON,
-            # validated at build time by the contract tooling.
-            raw = _resolve_manifest_placeholders(
-                manifest_path.read_bytes(), "root manifest"
-            )
-            return Response(content=raw, media_type="application/json")
-
-        # Default-entrypoint fallback (aligns with PR #1965 semantics used
-        # by /workflows/v1/start and /workflows/v1/input-contract — same
-        # treatment we apply to /workflows/v1/configmap above). Multi-
-        # entrypoint apps don't have a root manifest.json by design: each
-        # entrypoint has its own under <ep.name>/manifest.json. When the
-        # caller (e.g. Heracles/AE pre-validation) omits ?entrypoint=, fall
-        # back to the app's default entrypoint instead of 404-ing.
         try:
-            app_meta, default_ep = _resolve_app_entrypoint(
-                _workflow_config.app_name, None, unknown_ep_status=404
-            )
-        except HTTPException:
-            # No *default* entrypoint resolvable. Don't give up on the fallback:
-            # resolve the app's metadata INDEPENDENTLY of default resolution so
-            # the explicit-entrypoint alphabetical fallback below still applies.
-            # A servable multi-entrypoint app must not 404 just because the
-            # builder didn't mark a default — that invariant is off-screen and
-            # load-bearing, and this keeps the fallback robust to it changing.
-            # Warning, not debug: exc_info-worthy telemetry for operators.
-            logger.warning(
-                "No default entrypoint for app %s; trying explicit-entrypoint "
-                "fallback before serving 404",
-                _workflow_config.app_name,
-                exc_info=True,
-            )
-            default_ep = None
-            try:
-                from application_sdk.app.registry import (  # noqa: PLC0415
-                    AppNotFoundError,
-                    AppRegistry,
-                )
+            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
+        except AppNotFoundError:
+            return []
+        return [
+            ep.name
+            for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
+            if not ep.implicit
+        ]
 
-                app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
-            except AppNotFoundError:
-                # App genuinely not registered — no fallback possible, 404.
-                app_meta = None
-
-        # Candidate order: the resolved default first, then every *explicit*
-        # (non-implicit) entrypoint alphabetically. The second group matters
-        # for a connector that both implements run() (via the
-        # SqlMetadataExtractor template) AND declares explicit @entrypoints:
-        # the framework forces the implicit run() as the default (see
-        # app/entrypoint.py — "run() + @entrypoint(s) → run() always"), but
-        # run() has no generated manifest dir, so serving it 404s. Rather than
-        # 404 the whole route, fall back to the explicit entrypoints, ordered
-        # alphabetically — the same tie-break the framework uses when multiple
-        # @entrypoints carry no marked default. For a SQL bundle app this
-        # resolves to `crawler` (c < m < …), the connector's primary path.
-        candidates: list[str] = []
-        if default_ep is not None:
-            candidates.append(default_ep.name)
-        if app_meta is not None:
-            candidates.extend(
-                ep.name
-                for ep in sorted(app_meta.entry_points.values(), key=lambda e: e.name)
-                if not ep.implicit and ep.name not in candidates
-            )
-        for cand in candidates:
-            try:
-                return await _serve_entrypoint_manifest(cand, fe_inputs)
-            except HTTPException as exc:
-                if exc.status_code != 404:
-                    raise
-                # This candidate has no manifest file on disk — try the next.
-
-        raise HTTPException(status_code=404, detail="No manifest available")
-
-    @app.get("/workflows/v1/manifest")
-    async def get_manifest(
-        entrypoint: str | None = None,
-        fe_inputs: str | None = None,
-    ) -> Response:
-        """Serve a manifest with ``fe_inputs`` as a query parameter.
-
-        Retained: the playground, connector integration tests and the
-        AE/marketplace probes fetch manifests this way and send no
-        ``fe_inputs``. Callers that do should use ``POST`` — the query string
-        caps the payload at :data:`_MAX_FE_INPUTS_BYTES` (CSA-539).
-        """
-        return await _serve_manifest(entrypoint, fe_inputs)
-
-    @app.post("/workflows/v1/manifest")
-    async def post_manifest(request: Request) -> Response:
-        """Serve a manifest with ``fe_inputs`` in the request body.
-
-        Body: ``{"entrypoint": str | null, "fe_inputs": {...}, "user_id": str | null}``
-        — all optional. ``{}``, ``null`` and an absent body are all equivalent to
-        a bare GET. ``fe_inputs`` must be a JSON object, not a JSON *string*: a
-        caller porting a GET query param must pass the decoded object.
-
-        Exists because ``fe_inputs`` on the query string is bounded by the
-        request line: an ~11 KB payload was rejected with 413 before
-        ``compute_manifest`` ran, and past ~64 KB the URL is silently truncated
-        (CSA-539). A body has neither limit. ``user_id`` is accepted and ignored
-        so callers that already send it (as a GET query param, where it is
-        likewise ignored) keep working.
-        """
-        raw = await request.body()
-        if not raw.strip():
-            # Absent/empty body means "no inputs", same as a bare GET. Callers
-            # fall back only on 405, so 400-ing this would hard-fail them.
-            body: Any = {}
-        else:
-            try:
-                body = await request.json()
-            except Exception as exc:
-                raise HTTPException(
-                    status_code=400, detail=f"Request body is not valid JSON: {exc}"
-                ) from exc
-        if body is None:
-            body = {}
-        if not isinstance(body, dict):
-            raise HTTPException(
-                status_code=400, detail="Request body must be a JSON object"
-            )
-
-        entrypoint = body.get("entrypoint")
-        if entrypoint is not None and not isinstance(entrypoint, str):
-            raise HTTPException(status_code=400, detail="entrypoint must be a string")
-
-        fe_inputs = body.get("fe_inputs")
-        if fe_inputs is None:
-            fe_inputs = {}
-        if not isinstance(fe_inputs, dict):
-            # Same contract as the GET path, so a mis-shaped payload gets the
-            # same answer on either transport.
-            raise HTTPException(
-                status_code=400, detail="fe_inputs must be a JSON object"
-            )
-
-        return await _serve_manifest(entrypoint, fe_inputs)
-
-    # ------------------------------------------------------------------
-    # Backwards-compatibility alias — TACTICAL, remove once Heracles /
-    # Automation Engine is updated to call /workflows/v1/manifest instead.
-    # v2 exposed an unversioned /manifest endpoint; v3 moved it to the
-    # canonical versioned path above.  Until the orchestrator is patched,
-    # this alias keeps existing deployments working.
-    # TODO(v3-cleanup): delete this route after Heracles/AE migration (BLDX-804).
-    # ------------------------------------------------------------------
-
-    @app.get("/manifest", include_in_schema=False)
-    async def get_manifest_legacy(
-        entrypoint: str | None = None,
-        fe_inputs: str | None = None,
-    ) -> Response:
-        """Unversioned alias for ``GET /workflows/v1/manifest``.
-
-        .. deprecated::
-            This route exists **only** for backwards-compatibility with
-            Heracles / Automation Engine, which still calls the v2-era
-            unversioned ``/manifest`` path.  It will be removed once those
-            orchestrators have been updated to use ``/workflows/v1/manifest``.
-            Do **not** add new callers of this endpoint.
-        """
-        return await get_manifest(entrypoint=entrypoint, fe_inputs=fe_inputs)
-
-    @app.post("/manifest", include_in_schema=False)
-    async def post_manifest_legacy(request: Request) -> Response:
-        """Unversioned alias for ``POST /workflows/v1/manifest``.
-
-        .. deprecated::
-            Same deprecation as the GET alias above. Exists so callers can
-            migrate method and path independently — they all call the
-            unversioned path today, and v2-era images serve only this path.
-            Do **not** add new callers.
-        """
-        return await post_manifest(request)
-
-    # ------------------------------------------------------------------
-    # Input-contract endpoint
-    # ------------------------------------------------------------------
-
-    @app.get("/workflows/v1/input-contract")
-    async def get_input_contract(entrypoint: str | None = None) -> Response:
-        """Return the input contract (JSON Schema) for an entry point.
-
-        This is the app's machine-readable input contract: exactly
-        ``AppInputContract.model_json_schema()`` for the selected entry point —
-        the same Pydantic model that ``/workflows/v1/start`` validates against.
-        Heracles consumes it to validate caller inputs and to discover which
-        fields are credentials (a field whose schema is a ``$ref`` to the
-        ``CredentialRef``/``AgentCredentialSpec`` def).
-
-        Entry-point resolution mirrors ``/workflows/v1/start``: an explicit
-        ``?entrypoint=`` selects it; a single-entry-point app resolves
-        automatically; a multi-entry-point app requires the param.
-        """
-        if entrypoint is not None and not _ENTRYPOINT_NAME_RE.match(entrypoint):
-            raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-
+    def _registry_input_contract(entrypoint: str | None) -> Any:
         try:
             _, ep = _resolve_app_entrypoint(
                 _workflow_config.app_name, entrypoint, unknown_ep_status=404
             )
         except HTTPException as exc:
             # Registry miss — the entry point may be a *marketplace* (bundle)
-            # entry point that exists only as a generated contract dir on disk
-            # (its registry entrypoints are the DAG-node workflows, not the
-            # marketplace name). Filesystem-resolve it like the manifest and
-            # configmap routes already do; re-raise when it isn't one.
+            # entry point that exists only as a generated contract dir on disk.
+            # Filesystem-resolve it like the manifest and configmap routes do;
+            # re-raise when it isn't one.
             if exc.status_code != 404 or not entrypoint:
                 raise
             contract = _marketplace_entrypoint_contract(entrypoint)
             if contract is None:
                 raise
-            return Response(
-                content=orjson.dumps(contract.model_json_schema()),
-                media_type="application/json",
-            )
-
-        # Prefer the generated AppInputContract (rich, validatable, credential
-        # refs) over the entry point's thin runtime input_type. See
-        # _published_input_contract.
+            return contract
+        # Prefer the generated AppInputContract over the entry point's thin
+        # runtime input_type. See _published_input_contract.
         input_type = _published_input_contract(ep)
         if input_type is None:
             raise HTTPException(
                 status_code=500, detail="Entry point has no input type."
             )
+        return input_type
 
-        return Response(
-            content=orjson.dumps(input_type.model_json_schema()),
-            media_type="application/json",
-        )
+    # Every lookup reads this module's globals per request, so a process
+    # reconfigured after startup (and a test that repoints them) is seen.
+    register_metadata_routes(
+        app,
+        MetadataSource(
+            generated_dir=lambda: CONTRACT_GENERATED_DIR,
+            app_name=lambda: _workflow_config.app_name,
+            fallback_app_name=app_name,
+            task_queue=lambda: _workflow_config.task_queue,
+            deployment_name=lambda: DEPLOYMENT_NAME,
+            default_entrypoint=_registry_default_entrypoint,
+            explicit_entrypoints=_registry_explicit_entrypoints,
+            input_contract=_registry_input_contract,
+            compute_manifest=lambda ep: _discover_compute_manifest(ep),
+            programmatic_manifest=manifest,
+            log=lambda: logger,
+            max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Dev-only: local credential provisioning
@@ -2874,6 +1838,11 @@ def create_app_handler_service(
     state_store: Any = None,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
+
+    .. deprecated:: 3.37
+        Use :func:`server_sdk.build_asgi_app` from ``atlan-application-sdk-server``.
+        It installs without the worker dependency tree and registers the handler
+        routes only, so check the routes your app relies on. Removed in v4.0.
 
     Args:
         handler: The Handler instance to serve.
@@ -3048,542 +2017,23 @@ def create_app_handler_service(
     )
     app.add_middleware(LogMiddleware)
 
-    @app.exception_handler(_RequestContractError)
-    async def _handle_request_contract_error(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
-        """Turn a request-body contract failure into a 422 naming the field.
-
-        The form endpoints validate their own body (they have to normalise v2
-        wire shapes first), so FastAPI's own ``RequestValidationError`` handling
-        never sees it: an unhandled ``ValidationError`` becomes Starlette's
-        plain-text ``Internal Server Error``, which reaches the caller as an
-        opaque JSON-decode failure with no hint of which field was wrong. The
-        offending field name is the whole diagnosis, so say it.
-
-        Registered on :class:`_RequestContractError`, never on pydantic's
-        ``ValidationError``: reaching here takes an explicit
-        :func:`_validate_request` call, so a 422 always means "the request did
-        not fit the contract" and no other validation failure in the process
-        can be reported as the caller's fault. See the marker's docstring.
-
-        Pydantic's ``input`` and ``ctx`` are omitted: the rejected value can be
-        a credential, and the field path plus the reason is what a caller can
-        act on.
-        """
-        errors = (
-            exc.cause.errors(
-                include_url=False, include_input=False, include_context=False
-            )
-            if isinstance(exc, _RequestContractError)
-            else []
-        )
-        detail = [
-            {
-                "field": ".".join(str(part) for part in error["loc"]),
-                "message": error["msg"],
-                "type": error["type"],
-            }
-            for error in errors
-        ]
-        fields = ", ".join(item["field"] for item in detail if item["field"]) or "body"
-        logger.warning(
-            "Rejected a malformed request to %s for app %s: invalid field(s) %s",
-            request.url.path,
-            app_name,
-            fields,
-        )
-        return JSONResponse(
-            status_code=422,
-            content={
-                "success": False,
-                "message": f"Invalid request: {fields}",
-                "detail": detail,
-            },
-        )
-
-    def _create_context(credentials: list[HandlerCredential]) -> HandlerContext:
-        return HandlerContext(
-            app_name=app_name,
-            request_id=uuid4(),
-            started_at=datetime.now(UTC),
-            _credentials=credentials,
-            _secret_store=_secret_store,
-        )
-
-    # The warmup tier's two numbers, clamped by the same functions the gate
-    # uses so the route and the gate cannot disagree about them.
-    _warmup_ceiling, _ = warmup_ceiling_seconds(
-        getattr(app_class, "preflight_warmup_ceiling_seconds", None)
+    # The auth / check / metadata routes, the request contract's 422 and the
+    # error boundary are ONE implementation shared with the consolidated API host
+    # (application_sdk.handler.routes). The worker reports /check outcomes through
+    # the preflight gate's emitters so the setup funnel keeps its rows.
+    register_handler_routes(
+        app,
+        handler,
+        app_name=app_name,
+        secret_store=_secret_store,
+        observer=_GatePreflightObserver(app_name),
+        include_app_routers=False,
+        normalize=_worker_normalize,
+        warmup_ceiling=getattr(app_class, "preflight_warmup_ceiling_seconds", None),
+        warmup_probe_timeout=getattr(
+            app_class, "preflight_warmup_probe_timeout_seconds", None
+        ),
     )
-    _warmup_probe_timeout, _ = warmup_probe_timeout_seconds(
-        getattr(app_class, "preflight_warmup_probe_timeout_seconds", None),
-        _warmup_ceiling,
-    )
-
-    def _has_warmup(entrypoint: str) -> bool:
-        """Whether the entry point has a warmup probe of its own (its module
-        hook, or an app handler that overrides ``Handler.warmup``)."""
-        if entrypoint and _discover_handler_fn(entrypoint, "warmup") is not None:
-            return True
-        return type(handler).warmup is not Handler.warmup
-
-    async def _probe_warmup(
-        entrypoint: str, source: PreflightInput, context: HandlerContext
-    ) -> WarmupObservation:
-        """One ``warmup`` probe for the entry point, bounded by the app's probe
-        timeout. A probe still running at the bound reads as ``WARMING``."""
-        warmup_input = WarmupInput.model_validate(
-            {
-                **{
-                    name: getattr(source, name)
-                    for name in WarmupInput.model_fields
-                    if name in PreflightInput.model_fields
-                },
-                "probe_timeout_seconds": _warmup_probe_timeout,
-            }
-        )
-        ep_fn = _discover_handler_fn(entrypoint, "warmup") if entrypoint else None
-        probe = (
-            ep_fn(warmup_input, context)
-            if ep_fn is not None
-            else handler.warmup(warmup_input)
-        )
-        seen = await bounded_warmup_probe(probe, _warmup_probe_timeout)
-        return seen or WarmupObservation(state=WarmupState.WARMING)
-
-    # ------------------------------------------------------------------
-    # Auth
-    # ------------------------------------------------------------------
-
-    @app.post("/workflows/v1/auth")
-    async def test_auth(request: Request) -> JSONResponse:
-        body = _normalize_credentials(lift_agent_json(await request.json()))
-        auth_input = _validate_request(AuthInput, body)
-        credentials = [
-            HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
-        ]
-        context = _create_context(credentials)
-        with bind_handler_context(context):
-            try:
-                logger.info(
-                    "Auth test started: app=%s request=%s",
-                    app_name,
-                    context.request_id_str,
-                )
-                # Per-entrypoint dispatch: multi-entrypoint apps may ship
-                # `app.<segment>.handler.test_auth`. The orchestrator sends the
-                # exact entry-point name (resolved from the marketplace
-                # catalog), so this is a direct lookup — when it maps to a
-                # per-entrypoint module, route to it; else (empty/single-
-                # entrypoint) fall through to the app-level `Handler` instance.
-                entrypoint = _validated_entrypoint(auth_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, "test_auth")
-                    if entrypoint
-                    else None
-                )
-                if ep_fn is not None:
-                    result = await ep_fn(auth_input, context)
-                else:
-                    result = await handler.test_auth(auth_input)
-                logger.info(
-                    "Auth test completed: app=%s request=%s status=%s",
-                    app_name,
-                    context.request_id_str,
-                    result.status.value,
-                )
-                return JSONResponse(
-                    status_code=result.status.http_status,
-                    content=_wrap_response(
-                        result.model_dump(
-                            mode="json", exclude={"error": {"cause_repr"}}
-                        ),
-                        message=result.message
-                        or f"Authentication {result.status.value}",
-                        success=result.status.is_success,
-                    ),
-                )
-            except HandlerError as e:
-                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
-                # AppError subclass caught here first so http_status is preserved.
-                # Remove once all connector subclasses raise typed AppError leaves.
-                # Tracked alongside the Handler abstract-method contract migration.
-                # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Auth test failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-            except AppError as e:
-                # Forward-looking: typed AppError leaves from connectors that raise
-                # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Auth test failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=_app_error_to_http_status(e), detail=str(e)
-                ) from None
-            except HTTPException:
-                # Deliberate HTTP responses (e.g. 400 from a malformed
-                # entrypoint name) are already client-facing — pass them
-                # through rather than masking them as a generic 500.
-                raise
-            except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Auth test failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
-
-    # ------------------------------------------------------------------
-    # Preflight
-    # ------------------------------------------------------------------
-
-    @app.post("/workflows/v1/check")
-    async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_preflight_request(await request.json())
-        preflight_input = _validate_request(PreflightInput, body)
-        credentials = [
-            HandlerCredential(key=c.key, value=c.value)
-            for c in preflight_input.credentials
-        ]
-        context = _create_context(credentials)
-        with bind_handler_context(context):
-
-            def _crash_row(e: BaseException) -> None:
-                emit_preflight_crash_outcome(
-                    logger,
-                    app_name,
-                    e,
-                    surface=PreflightSurface.HTTP,
-                    entrypoint=entrypoint,
-                    request_id=context.request_id_str,
-                )
-
-            # Seeded from the *requested* value, not "", so a raise before
-            # validation still names what the caller asked for — an empty
-            # seed would be stamped as "<implicit>" and misattribute the row.
-            entrypoint = preflight_input.entrypoint or ""
-            try:
-                logger.info(
-                    "Preflight check started: app=%s request=%s",
-                    app_name,
-                    context.request_id_str,
-                )
-                # Per-entrypoint dispatch (see test_auth above for rationale).
-                entrypoint = _validated_entrypoint(preflight_input.entrypoint)
-                # Without ``tiers`` the request is today's: every tier, no
-                # warmup probe. ``tiers`` naming WARMUP probes the warmup first
-                # (the caller asked for compute); ``tiers`` without it never
-                # starts compute (the design's cost policy).
-                requested = preflight_input.tiers
-                tiered = "tiers" in preflight_input.model_fields_set
-                observation: WarmupObservation | None = None
-                run_tiers = requested
-                if tiered and CheckTier.WARMUP in requested:
-                    observation = await _probe_warmup(
-                        entrypoint, preflight_input, context
-                    )
-                    if observation.state is not WarmupState.READY:
-                        run_tiers = requested - {CheckTier.WARMUP}
-                if run_tiers:
-                    call_input = preflight_input.model_copy(update={"tiers": run_tiers})
-                    ep_fn = (
-                        _discover_handler_fn(entrypoint, "preflight_check")
-                        if entrypoint
-                        else None
-                    )
-                    if ep_fn is not None:
-                        result = await ep_fn(call_input, context)
-                    else:
-                        result = await handler.preflight_check(call_input)
-                else:
-                    result = PreflightOutput(status=PreflightStatus.READY)
-                outside = rows_outside_tiers(result, run_tiers)
-                if outside:
-                    # Post-call tier check: the handler ran a check it was told
-                    # not to, so its verdict is not one about these tiers.
-                    raise InternalError(
-                        message=(
-                            "Preflight handler returned checks outside the "
-                            f"requested tiers: {', '.join(sorted(outside))}"
-                        ),
-                        app_name=app_name,
-                        retryable=False,
-                        component="preflight_handler",
-                    )
-                if tiered:
-                    result = _with_warmup_verdict(
-                        result,
-                        observation,
-                        app_name,
-                        warmup_pending=CheckTier.WARMUP not in run_tiers
-                        and (observation is not None or _has_warmup(entrypoint)),
-                    )
-                emit_preflight_check_outcome(
-                    logger,
-                    app_name,
-                    result,
-                    surface=PreflightSurface.HTTP,
-                    entrypoint=entrypoint,
-                    request_id=context.request_id_str,
-                )
-                return JSONResponse(content=_preflight_response(result))
-            except HandlerError as e:
-                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
-                # AppError subclass caught here first so http_status is preserved.
-                # Remove once all connector subclasses raise typed AppError leaves.
-                # Tracked alongside the Handler abstract-method contract migration.
-                # See typed-error-prescription.md §5 (HandlerError row).
-                logger.error(
-                    "Preflight check failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                _crash_row(e)
-                return _preflight_failure_response(e, app_name, e.http_status)
-            except AppError as e:
-                logger.error(
-                    "Preflight check failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                _crash_row(e)
-                return _preflight_failure_response(
-                    e, app_name, _app_error_to_http_status(e)
-                )
-            except HTTPException as e:
-                # Deliberate client-facing responses (e.g. 400 from a malformed
-                # entrypoint name) pass through unrecorded — the response *is*
-                # the channel, so a row would double-count what the caller can
-                # already see. A 5xx raised this way is a crash wearing an HTTP
-                # status: it reaches none of the boundary handlers around it, so
-                # without this it drops out of the setup funnel's denominator —
-                # the same hole on this surface that CONNECT-1170 gap 3 closed
-                # for handler raises.
-                if e.status_code >= 500:
-                    _crash_row(e)
-                raise
-            except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info); the response carries a fixed message, never the exception text.
-                logger.error(
-                    "Preflight check failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                _crash_row(e)
-                return _preflight_failure_response(
-                    InternalError(
-                        message="Preflight could not be verified due to an internal error.",
-                        app_name=app_name,
-                        cause=e,
-                        retryable=False,
-                        component="preflight_handler",
-                        classification_pending=True,
-                    ),
-                    app_name,
-                    500,
-                    "Internal server error",
-                )
-
-    # ------------------------------------------------------------------
-    # Warmup
-    # ------------------------------------------------------------------
-
-    @app.post("/workflows/v1/warmup")
-    async def warmup(request: Request) -> JSONResponse:
-        """Probe the source's compute once and report what it saw.
-
-        Stateless and idempotent: the UI polls it, sending ``/check``'s body
-        each time, until ``state`` is ``ready``, then calls ``/check`` with
-        ``tiers=["warmup"]``. No request is held longer than one probe timeout.
-        ``ceiling_seconds`` is the app's warmup ceiling, so the UI has a stop
-        condition of its own.
-        """
-        body = _normalize_preflight_request(await request.json())
-        preflight_input = _validate_request(PreflightInput, body)
-        credentials = [
-            HandlerCredential(key=c.key, value=c.value)
-            for c in preflight_input.credentials
-        ]
-        context = _create_context(credentials)
-        with bind_handler_context(context):
-            try:
-                entrypoint = _validated_entrypoint(preflight_input.entrypoint)
-                observation = await _probe_warmup(entrypoint, preflight_input, context)
-                logger.info(
-                    "Warmup probed: app=%s request=%s state=%s",
-                    app_name,
-                    context.request_id_str,
-                    observation.state.value,
-                )
-                return JSONResponse(
-                    content=_wrap_response(
-                        {
-                            **_warmup_body(observation),
-                            "ceiling_seconds": _warmup_ceiling,
-                        },
-                        message=f"Warmup {observation.state.value}",
-                        success=observation.state is not WarmupState.UNAVAILABLE,
-                    ),
-                )
-            except AppError as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Warmup failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=_app_error_to_http_status(e), detail=e.message
-                ) from None
-            except HTTPException:
-                # Deliberate client-facing responses (e.g. 400 from a
-                # malformed entrypoint name) pass through.
-                raise
-            except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Warmup failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
-
-    # ------------------------------------------------------------------
-    # Metadata
-    # ------------------------------------------------------------------
-
-    @app.post("/workflows/v1/metadata")
-    async def fetch_metadata(request: Request) -> JSONResponse:
-        body = _normalize_credentials(lift_agent_json(await request.json()))
-        metadata_input = _validate_request(MetadataInput, body)
-        # The widget routing key (``metadataTemplateKey`` / ``type`` on the
-        # wire) now lands in its documented home, ``metadata_template_key``,
-        # via the field's validation alias. Mirror it onto ``object_filter``
-        # when that's empty so per-entrypoint hooks reading the legacy field
-        # (e.g. asset-export-advanced's tags vs connectors vs typenames widgets)
-        # keep working. New hooks can read ``metadata_template_key`` directly.
-        if not metadata_input.object_filter and metadata_input.metadata_template_key:
-            metadata_input = metadata_input.model_copy(
-                update={"object_filter": metadata_input.metadata_template_key}
-            )
-        credentials = [
-            HandlerCredential(key=c.key, value=c.value)
-            for c in metadata_input.credentials
-        ]
-        context = _create_context(credentials)
-        with bind_handler_context(context):
-            try:
-                logger.info(
-                    "Metadata fetch started: app=%s request=%s",
-                    app_name,
-                    context.request_id_str,
-                )
-                # Per-entrypoint dispatch (see test_auth above for rationale).
-                entrypoint = _validated_entrypoint(metadata_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, "fetch_metadata")
-                    if entrypoint
-                    else None
-                )
-                if ep_fn is not None:
-                    result = await ep_fn(metadata_input, context)
-                else:
-                    result = await handler.fetch_metadata(metadata_input)
-
-                # Both SqlMetadataOutput and ApiMetadataOutput expose
-                # .objects — model_dump() produces the correct shape for
-                # the corresponding frontend widget (sqltree / apitree).
-                data = [
-                    obj.model_dump() if hasattr(obj, "model_dump") else obj
-                    for obj in result.objects
-                ]
-                count = len(result.objects)
-                logger.info(
-                    "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
-                    app_name,
-                    context.request_id_str,
-                    type(result).__name__,
-                    count,
-                )
-                # message omitted: a non-empty message field caused the
-                # frontend filter widgets to render empty dropdowns
-                return JSONResponse(content=_wrap_response(data))
-            except HandlerError as e:
-                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
-                # AppError subclass caught here first so http_status is preserved.
-                # Remove once all connector subclasses raise typed AppError leaves.
-                # Tracked alongside the Handler abstract-method contract migration.
-                # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-            except AppError as e:
-                # Forward-looking: typed AppError leaves from connectors that raise
-                # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=_app_error_to_http_status(e), detail=str(e)
-                ) from None
-            except HTTPException:
-                # Deliberate HTTP responses (e.g. 400 from a malformed
-                # entrypoint name) are already client-facing — pass them
-                # through rather than masking them as a generic 500.
-                raise
-            except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Metadata fetch failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
 
     _register_workflow_routes(
         app,
@@ -3690,6 +2140,10 @@ def create_app_handler_service(
             status_code=404,
         )
 
+    # The app's own routers go after every SDK route (so a redefinition is
+    # refused) and before the static mount (which would shadow them).
+    include_app_routers_on(app, handler, app_name)
+
     static_dir = Path(frontend_assets_path)
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=str(static_dir)), name="static")
@@ -3705,7 +2159,9 @@ def create_app_handler_service(
     # importing the registry loads execution code, which the handler process
     # must never do (FND-3280).
     try:
-        warn_on_warmup_flag_drift(generated_entrypoints(), _has_warmup)
+        warn_on_warmup_flag_drift(
+            generated_entrypoints(), lambda ep: has_warmup(handler, ep)
+        )
     except Exception:
         logger.warning(
             "Could not compare setup forms' warmup flags with the handler",
@@ -3724,6 +2180,11 @@ def run_app_handler_service(
     **kwargs: Any,
 ) -> None:
     """Create and run the handler service with uvicorn.
+
+    .. deprecated:: 3.37
+        Use :func:`server_sdk.build_asgi_app` with your own ``uvicorn.run``. The
+        consolidated host owns the run loop, so ``atlan-application-sdk-server``
+        ships no blocking entry point. Removed in v4.0.
 
     Convenience wrapper around ``create_app_handler_service()`` that blocks
     until the server is stopped. All keyword arguments are forwarded to

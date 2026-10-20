@@ -71,7 +71,7 @@ What this means in practice:
 
 | | |
 |---|---|
-| **Produced by** | `resolve_manifest_tokens()` in `application_sdk/common/task_queue.py`, applied by the manifest route in `application_sdk/handler/service.py` |
+| **Produced by** | `resolve_manifest_tokens()` in `application_sdk/common/task_queue.py`, applied by the manifest route in `application_sdk/handler/metadata_routes.py`, which both the worker's handler service and the consolidated host (`handler/asgi.py`) register |
 | **Served at** | `GET`/`POST /workflows/v1/manifest` (and the deprecated unversioned `/manifest` alias) |
 | **Key** | `task_queue`, at `dag.<node>.task_queue`, `dag.<node>.inputs.task_queue`, and top level on single-node manifests |
 | **Read by** | The Automation Engine, which writes it into the DAG and submits work to it; from FND-224, the runtime scenario suite's contract tier, which diffs it against the TWD trigger, the KEDA metadata and the rerouter's formula |
@@ -85,6 +85,24 @@ explicit `ATLAN_TASK_QUEUE` / `--task-queue` override is not reproducible by
 re-derivation. Two paths deriving the same answer is a convention that holds
 until someone's inputs differ; one path copying the other's answer is
 structural.
+
+**On the consolidated host** the serving process is not the worker, so it
+cannot copy the worker's in-process value. It stamps the worker's
+`ATLAN_TASK_QUEUE` override when the host's app-env sync carries one
+(`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`, from the app's `atlan.yaml`
+`deploy.env`), and otherwise derives from the app's name and the deployment
+name. It never reads the bare `ATLAN_TASK_QUEUE` or `ATLAN_APPLICATION_NAME`:
+an override and an app name are one app's, and the host serves many
+(`resolve_manifest_tokens(from_process_env=False)`). The deployment name is
+`ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` when set, else the host's own
+`ATLAN_DEPLOYMENT_NAME`: the atlan-app chart gives the host and every app's
+worker the same tenant-wide `deploymentName`. A Self-Deployed Runtime run
+polls a different queue, but Heracles re-stamps every agent-side node with
+`atlan-<sdr deployment>` on create and update (`stampSDRTaskQueue`), so the
+served queue only reaches cloud-side nodes. With no deployment name at all it
+stamps nothing and logs an ERROR. The residual risk is an override set on the
+worker some other way (not in `deploy.env`): the host cannot see it. Pinned by
+`test_metadata_route_parity.py`.
 
 That is the FND-195 fix, and the failure it removed is silent by construction:
 when the served queue and the polled queue disagree, nothing errors. AE submits

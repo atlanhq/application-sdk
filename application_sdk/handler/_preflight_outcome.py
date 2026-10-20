@@ -26,6 +26,9 @@ from application_sdk.errors.base import AppError, redact_and_cap, redact_secrets
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import PreconditionError
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.handler._warmup import (  # noqa: F401 — re-exported; lives in the api distribution
+    rows_outside_tiers,
+)
 from application_sdk.handler.contracts import (
     CheckTier,
     PreflightCheck,
@@ -599,18 +602,3 @@ def emit_preflight_crash_outcome(
         },
         **extra,
     )
-
-
-def rows_outside_tiers(
-    result: PreflightOutput, tiers: frozenset[CheckTier]
-) -> list[str]:
-    """Names of the checks *result* returned outside the requested *tiers*.
-
-    The post-call tier check ``/check`` and the gate share. Handlers do not
-    reliably filter (none of the canonical apps reads ``checks_to_run``), so the
-    SDK checks what came back instead of trusting it. A non-empty answer means
-    the handler ran a check it was told not to (a ``WARMUP`` probe against
-    compute that is not ready), so its verdict cannot be read as one about the
-    requested tiers: the caller treats it as no verdict, never as a silent drop.
-    """
-    return [check.name for check in result.checks if check.tier not in tiers]

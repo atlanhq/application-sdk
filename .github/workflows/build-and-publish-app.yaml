@@ -117,6 +117,11 @@ on:
         required: false
         type: boolean
         default: true
+      docker_build_args:
+        description: "Extra Docker build args for the arch image build, one KEY=VALUE per line (default none). For non-secret build switches only: build args are recorded in the image config and readable via `docker history` by anyone who can pull it, so a credential must never go here (FND-697; private git access uses the git_token BuildKit secret). Example: common-app-server's test builds pass ATLAN_API_APPS_ALLOW_OVERRIDES=1 to stage unreleased apps."
+        required: false
+        type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -1413,6 +1418,8 @@ jobs:
           # preflight's log is: it prints the resolved base references and the
           # pinned digest, or a warning saying why it did not pin one.
           build-contexts: ${{ needs.prepare.outputs.base_build_contexts }}
+          # Non-secret build switches from the caller (docker_build_args).
+          build-args: ${{ inputs.docker_build_args }}
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.

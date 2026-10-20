@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.49.2
-source-sha:    795bf87ef00ef958f02fb7c4d62b6c1bcc58d531
-source-date:   2026-10-19T10:56:51+01:00
+sdk-version:   3.50.0
+source-sha:    7ada10d8c3517269378fd4c0e7de5454ad121fdc
+source-date:   2026-10-16T12:15:10+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,9 +18,9 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 48 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 56 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -60,6 +60,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `class AppContext(app_name: str, ...)`
 - **Summary:** Execution context passed to Apps during execution.
 - **Defined in:** `application_sdk/app/context.py`
+
+#### `AppContextError`
+
+- **Import:** `from application_sdk.app.base import AppContextError`
+- **Signature:** `class AppContextError(message: str, *, error_code: ErrorCode | None = None)`
+- **Summary:** Raised when App or task context is accessed outside of valid execution scope.
+- **Defined in:** `application_sdk/_context_errors.py`
 
 #### `AppError`
 
@@ -721,6 +728,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Use DuckDB to compare current tables vs previous current-state.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
 
+#### `get_logger`
+
+- **Import:** `from application_sdk.common.logger import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
+- **Defined in:** `application_sdk/_logging.py`
+
 #### `get_persistent_artifacts_path`
 
 - **Import:** `from application_sdk.common.incremental import get_persistent_artifacts_path`
@@ -993,7 +1007,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Import:** `from application_sdk.contracts import MaxItems`
 - **Signature:** `class MaxItems(limit: int)`
 - **Summary:** Constraint marker indicating maximum collection size.
-- **Defined in:** `application_sdk/contracts/types.py`
+- **Defined in:** `application_sdk/contracts/base.py`
 
 #### `Output`
 
@@ -1537,7 +1551,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Import:** `from application_sdk.credentials import parse_credentials_extra`
 - **Signature:** `parse_credentials_extra(credentials: dict[str, Any], *, strict: bool = True)`
 - **Summary:** Decode the ``extra`` field of a credential dict.
-- **Defined in:** `application_sdk/credentials/utils.py`
+- **Defined in:** `application_sdk/credentials/extra.py`
 
 #### `register_credential_type`
 

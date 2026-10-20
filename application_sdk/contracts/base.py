@@ -63,6 +63,7 @@ import sys
 import typing
 import warnings
 from collections.abc import Iterable
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import (
     Annotated,
@@ -81,12 +82,27 @@ import typing_extensions
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
-from application_sdk.contracts.types import MaxItems
+from application_sdk._logging import get_logger
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
-from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class MaxItems:
+    """Constraint marker indicating maximum collection size.
+
+    Use with Annotated to declare bounded collections in contracts:
+
+        class MyInput(Input):
+            settings: Annotated[dict[str, str], MaxItems(100)]
+            items: Annotated[list[Record], MaxItems(1000)]
+    """
+
+    limit: int
+    """Maximum number of items allowed in the collection."""
+
 
 # =============================================================================
 # Serializable Enum Base Class
@@ -995,6 +1011,14 @@ class PublishInputMixin(BaseModel):
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
+            # conformance: ignore[E002,E008] api-only install has no Temporal (any missing module here meant "not a workflow context" before the split too, via the broad swallow below); output_path stays empty by design
+            except ModuleNotFoundError:  # noqa: S110 — see above
+                # The api distribution ships no Temporal: never a workflow
+                # context, so output_path stays empty -- the same outcome as the
+                # broad swallow below, which caught this before the split.
+                # (Named separately only so check_api_surface sees the lazy
+                # worker-only imports above as guarded.)
+                pass
             # conformance: ignore[E002,E004] probe to detect Temporal workflow context; swallow is intentional, output_path stays empty by design
             except Exception:  # noqa: S110 — not in a Temporal workflow context; output_path stays empty by design
                 pass

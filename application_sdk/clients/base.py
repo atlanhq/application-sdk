@@ -12,6 +12,7 @@ from httpx._types import (
     RequestFiles,
 )
 
+from application_sdk._logging import get_logger
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.http_errors import HttpClientSourceUnavailableError
 from application_sdk.clients.sql_errors import AbstractClientLoadError
@@ -23,7 +24,6 @@ from application_sdk.constants import (
 )
 from application_sdk.errors.http import classify_http_exception
 from application_sdk.errors.leaves import SourceUnavailableError
-from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
