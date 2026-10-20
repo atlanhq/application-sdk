@@ -162,6 +162,7 @@ def _package_generated_dir(app_package: str) -> Path | None:
             "metadata routes are not served",
             app_package,
             missing,
+            exc_info=True,
         )
         return None
     module_file = getattr(module, "__file__", None)
