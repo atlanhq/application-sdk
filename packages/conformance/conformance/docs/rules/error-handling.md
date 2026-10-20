@@ -266,6 +266,14 @@ often impossible under production data volumes.
   WARNING with exc_info=True before returning None. The message says what failed; the
   traceback says where.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+- **Interacts with:** L009 at a pre-raise log: a warning/error within the three statements before a raise in
+  the same block is also an L009 site (and usually L004). Enriching it with
+  exc_info=True or safe_traceback(exc) clears E005 and L004 but not L009, whose fix then
+  deletes the line. Apply L009's resolution instead: delete the line when the exception
+  has an upstream record (which may leave a bare raise), otherwise downgrade it to a
+  sanitized DEBUG through locals. Never reduce the handler to a bare raise without an
+  upstream record: that drops the only record of the failure. That one edit clears E005,
+  L004 and L009 together.
 
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
@@ -502,15 +510,19 @@ blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/failures.py — every leaf subclasses an SDK category (e.g.
-  `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Raise
-  one of these, never a bare ValueError or RuntimeError.
+  `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Use one
+  of these for failures that leave the error boundary; a builtin used only as a sentinel
+  inside a matching typed-translation handler does not escape as the outward failure.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
-SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
-— no category, code, audience, or retryable field. Dashboards are blind; on-call routing
-is impossible.  Use the typed error leaf from `application_sdk.errors`.  Acceptable only
-inside dataclass `__post_init__` / stdlib validator methods where Python semantics
-require `TypeError`/`ValueError` for stdlib interoperability.
+SDK code that lets a bare Python builtin reach the Automation Engine sends an opaque
+string — no category, code, audience, or retryable field. Dashboards are blind; on-call
+routing is impossible.  Use the typed error leaf from `application_sdk.errors`.  A
+builtin used as an internal validation sentinel is acceptable only when a matching
+`except` handler unconditionally translates it into a typed `AppError` before it leaves
+that boundary; swallowing, conditional handling, and re-raising do not qualify. Builtin
+raises are also acceptable inside dataclass `__post_init__` / stdlib validator methods
+where Python semantics require `TypeError` or `ValueError` for stdlib interoperability.
 
 ---
 
