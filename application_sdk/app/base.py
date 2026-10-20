@@ -2468,7 +2468,10 @@ class App(ABC):
                     import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
 
                     aliased = 0
-                    for batch in obs.list(resolved, prefix=storage_path):
+                    # async for: each page is fetched off the loop. A plain
+                    # ``for`` drives the same ListStream synchronously, blocking
+                    # the loop on every page's round trip (FND-4084).
+                    async for batch in obs.list(resolved, prefix=storage_path):
                         tasks = []
                         for item in batch:
                             key = str(item["path"])
@@ -2526,7 +2529,7 @@ class App(ABC):
             prefix = build_output_path() + "/"
             import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
 
-            for batch in obs.list(resolved, prefix=prefix):
+            async for batch in obs.list(resolved, prefix=prefix):
                 tasks = []
                 for item in batch:
                     key = str(item["path"])

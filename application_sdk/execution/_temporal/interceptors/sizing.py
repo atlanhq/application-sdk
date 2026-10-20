@@ -15,6 +15,7 @@ from temporalio.worker import (
     Interceptor,
 )
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.observability.cgroup import track_container_usage
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.sizing import SizingObservation, record_observation
@@ -110,29 +111,36 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
             concurrency_max = CENSUS.peak(token)
             # After the ``async with`` exits: the tracker fills the peak and CPU
             # deltas in its own ``finally``, so reading inside would record nothing.
-            if trace is not None:
-                duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
-                # Read after the activity, once readers have reported. args[1] is
-                # the Input (args[0] is TaskContext).
-                input_size = describe_inputs(
-                    input.args[1] if len(input.args) > 1 else None
-                )
-                record_observation(
-                    SizingObservation.from_trace(
-                        trace,
-                        activity_type=info.activity_type or "",
-                        task_queue=info.task_queue or "",
-                        workflow_type=info.workflow_type or "",
-                        attempt=info.attempt,
-                        outcome=outcome,
-                        duration_seconds=duration_s,
-                        input_size=input_size,
-                        started_at=started_at,
-                        pod=_pod_name(),
-                        concurrency_max=concurrency_max,
+            # try/finally: the walk below is an await, and a cancel delivered
+            # there must still end the collection.
+            try:
+                if trace is not None:
+                    duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
+                    # Read after the activity, once readers have reported. args[1] is
+                    # the Input (args[0] is TaskContext). In a thread: with no
+                    # reported reads it walks every materialised FileReference, up
+                    # to 10k files (FND-4084). The context is copied, so the
+                    # collector begin_collection() set is still the one it reads.
+                    input_size = await run_in_thread(
+                        describe_inputs, input.args[1] if len(input.args) > 1 else None
                     )
-                )
-            end_collection()
+                    record_observation(
+                        SizingObservation.from_trace(
+                            trace,
+                            activity_type=info.activity_type or "",
+                            task_queue=info.task_queue or "",
+                            workflow_type=info.workflow_type or "",
+                            attempt=info.attempt,
+                            outcome=outcome,
+                            duration_seconds=duration_s,
+                            input_size=input_size,
+                            started_at=started_at,
+                            pod=_pod_name(),
+                            concurrency_max=concurrency_max,
+                        )
+                    )
+            finally:
+                end_collection()
 
 
 class SizingTelemetryInterceptor(Interceptor):

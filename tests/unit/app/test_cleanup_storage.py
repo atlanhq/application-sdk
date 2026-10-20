@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 from unittest import mock
@@ -26,6 +27,12 @@ class _CSInput(Input, allow_unbounded_fields=True):
 @dataclass
 class _CSOutput(Output, allow_unbounded_fields=True):
     result: str = ""
+
+
+async def _stream(batches: list[Any]) -> AsyncIterator[Any]:
+    """Stand-in for obstore's ListStream, which cleanup_storage reads with ``async for``."""
+    for batch in batches:
+        yield batch
 
 
 def _make_app() -> App:
@@ -125,7 +132,9 @@ class TestCleanupStorage:
                 with mock.patch(
                     "application_sdk.storage.ops.delete", side_effect=_mock_delete
                 ):
-                    with mock.patch("obstore.list", return_value=iter([])):
+                    with mock.patch(
+                        "obstore.list", side_effect=lambda *a, **k: _stream([])
+                    ):
                         result = await app.cleanup_storage(StorageCleanupInput())
 
         assert "file_refs/abc123.parquet" in deleted_keys
@@ -288,7 +297,8 @@ class TestCleanupStorage:
                         return_value="artifacts/apps/test/workflows/wf1/run1",
                     ):
                         with mock.patch(
-                            "obstore.list", return_value=iter([batch_items])
+                            "obstore.list",
+                            side_effect=lambda *a, **k: _stream([batch_items]),
                         ):
                             result = await app.cleanup_storage(
                                 StorageCleanupInput(include_prefix_cleanup=True)
@@ -317,7 +327,7 @@ class TestCleanupStorage:
 
         def _tracking_list(resolved: Any, prefix: str = "") -> Any:
             list_calls.append(prefix)
-            return iter([])
+            return _stream([])
 
         with mock.patch(
             "application_sdk.app.base._get_execution_id_from_task",
@@ -377,7 +387,9 @@ class TestCleanupStorage:
                 with mock.patch(
                     "application_sdk.storage.ops.delete", side_effect=_flaky_delete
                 ):
-                    with mock.patch("obstore.list", return_value=iter([])):
+                    with mock.patch(
+                        "obstore.list", side_effect=lambda *a, **k: _stream([])
+                    ):
                         result = await app.cleanup_storage(StorageCleanupInput())
 
         # aaa → 2 errors (key + .sha256), bbb → 2 successes
@@ -423,7 +435,10 @@ class TestCleanupStorage:
                 with mock.patch(
                     "application_sdk.storage.ops.delete", side_effect=_mock_delete
                 ):
-                    with mock.patch("obstore.list", return_value=iter([batch_items])):
+                    with mock.patch(
+                        "obstore.list",
+                        side_effect=lambda *a, **k: _stream([batch_items]),
+                    ):
                         result = await app.cleanup_storage(StorageCleanupInput())
 
         assert "file_refs/dir123/part-0.parquet" in deleted_keys
@@ -461,7 +476,7 @@ async def _run_cleanup_capturing_deletes(
         ),
         mock.patch("application_sdk.storage.ops._resolve_store", return_value=store),
         mock.patch("application_sdk.storage.ops.delete", side_effect=_mock_delete),
-        mock.patch("obstore.list", side_effect=lambda *a, **k: iter(listing or [])),
+        mock.patch("obstore.list", side_effect=lambda *a, **k: _stream(listing or [])),
         mock.patch(
             "application_sdk.execution.build_output_path",
             return_value="artifacts/apps/test/workflows/wf-test/r1",
