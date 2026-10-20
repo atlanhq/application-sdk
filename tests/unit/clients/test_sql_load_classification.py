@@ -309,7 +309,7 @@ class TestLoadKeepsTypedErrors:
             patch("sqlalchemy.create_engine", return_value=engine),
             patch(
                 "application_sdk.clients.sql.run_in_thread",
-                AsyncMock(side_effect=typed),
+                AsyncMock(side_effect=["test_connection_string", typed]),
             ),
             pytest.raises(SqlCredentialsParseError) as exc_info,
         ):

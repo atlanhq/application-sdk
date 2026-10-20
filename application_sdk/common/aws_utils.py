@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import re
+import time
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from application_sdk.common.aws_utils_errors import (
@@ -16,11 +20,75 @@ from application_sdk.constants import AWS_SESSION_NAME
 
 if TYPE_CHECKING:
     import boto3
+    from botocore.config import Config
     from sqlalchemy.engine.url import URL
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+#: Timeouts for the STS client behind ``AssumeRole``. botocore's defaults (60 s
+#: connect, 60 s read, retried) let one unreachable STS endpoint hold a SQL
+#: client's ``load()`` for minutes. Bounded, the worst case is two attempts of
+#: connect + read, about 40 s; a caller with less time left than that shrinks
+#: them further through ``_sts_deadline``.
+_STS_CONNECT_TIMEOUT_SECONDS = 5.0
+_STS_READ_TIMEOUT_SECONDS = 15.0
+_STS_MAX_ATTEMPTS = 2
+#: Floor for each shrunk timeout: a zero or negative timeout means "none" to
+#: some socket layers, the opposite of what an expired deadline wants.
+_STS_MIN_TIMEOUT_SECONDS = 1.0
+
+#: ``time.monotonic()`` by which an STS call made in this context must finish,
+#: or None for the fixed bounds above. A context variable rather than a
+#: parameter so it reaches ``AssumeRole`` through any connector's override of
+#: ``get_sqlalchemy_connection_string``; ``run_in_thread`` copies it into the
+#: worker thread.
+_STS_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "_STS_DEADLINE", default=None
+)
+
+
+@contextlib.contextmanager
+def _sts_deadline(seconds: float) -> Iterator[None]:
+    """Fit STS calls made in this context into the next ``seconds``.
+
+    Cancelling the await of an offloaded call does not stop its thread, so a
+    caller that gives up at a deadline must also have the call itself stop by
+    then — otherwise a hung ``AssumeRole`` holds a blocking-pool thread for
+    the full fixed bounds after the caller has moved on.
+
+    Only ever shrinks the fixed bounds; a deadline further out than they reach
+    changes nothing. Enter it before ``run_in_thread`` so the copied context
+    carries it.
+    """
+    token = _STS_DEADLINE.set(time.monotonic() + seconds)
+    try:
+        yield
+    finally:
+        _STS_DEADLINE.reset(token)
+
+
+def _sts_client_config() -> Config:
+    """The STS client's timeouts and retries, fitted to any ``_sts_deadline``."""
+    from botocore.config import Config  # noqa: PLC0415 — optional dep: botocore
+
+    connect = _STS_CONNECT_TIMEOUT_SECONDS
+    read = _STS_READ_TIMEOUT_SECONDS
+    attempts = _STS_MAX_ATTEMPTS
+    deadline = _STS_DEADLINE.get()
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining < attempts * (connect + read):
+            # One attempt, its connect and read sharing what is left.
+            attempts = 1
+            connect = max(_STS_MIN_TIMEOUT_SECONDS, min(connect, remaining / 4))
+            read = max(_STS_MIN_TIMEOUT_SECONDS, min(read, remaining - connect))
+    return Config(
+        connect_timeout=connect,
+        read_timeout=read,
+        retries={"total_max_attempts": attempts, "mode": "standard"},
+    )
 
 
 def _normalize_external_id(external_id: str | None) -> str | None:
@@ -127,7 +195,10 @@ def generate_aws_rds_token_with_iam_role(
         # os.environ is process-global, so concurrent callers race: one can
         # observe another's staged value as the "original" and restore a live
         # credential into the ambient environment instead of clearing it.
-        sts_kwargs: dict[str, Any] = {"region_name": resolved_region}
+        sts_kwargs: dict[str, Any] = {
+            "region_name": resolved_region,
+            "config": _sts_client_config(),
+        }
         if has_access_key and has_secret_key:
             sts_kwargs["aws_access_key_id"] = aws_access_key_id
             sts_kwargs["aws_secret_access_key"] = aws_secret_access_key
