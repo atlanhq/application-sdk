@@ -14,7 +14,9 @@ import orjson
 
 from application_sdk._logging import get_logger
 
-logger = get_logger(__name__)
+# Named for application_sdk.credentials.utils, not this module: this decoder
+# moved from there and keeps its logger name, so its warning is unchanged.
+logger = get_logger("application_sdk.credentials.utils")
 
 
 def parse_credentials_extra(

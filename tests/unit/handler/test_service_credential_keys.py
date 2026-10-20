@@ -157,19 +157,19 @@ class TestServiceAttribute:
 
 
 class TestRebindingReachesWorkerNormalization:
-    def test_normalize_credentials_moves_kerberos_into_credentials(
+    def test_normalize_credentials_copies_kerberos_into_credentials(
         self, kerberos_rebound: None
     ) -> None:
         body = service._normalize_credentials({**_FLAT_BODY, "name": "x"})
-        assert "kerberos" not in body
         assert body["name"] == "x"
         assert "kerberos" in {p["key"] for p in body["credentials"]}
+        # As on main: only ``credentials`` is added; the flat keys stay.
+        assert body["kerberos"] == _KERBEROS
 
-    def test_preflight_normalization_moves_kerberos(
+    def test_preflight_normalization_copies_kerberos(
         self, kerberos_rebound: None
     ) -> None:
         body = service._normalize_preflight_request(dict(_FLAT_BODY))
-        assert "kerberos" not in body
         assert "kerberos" in {p["key"] for p in body["credentials"]}
 
     def test_auth_check_metadata_routes_see_kerberos_as_credential(
@@ -193,15 +193,14 @@ class TestRebindingReachesWorkerNormalization:
             service._CREDENTIAL_KEYS = original
         assert "kerberos" in handler.seen["auth"]
 
-    def test_start_strips_kerberos_from_workflow_input(
+    def test_start_strips_only_the_credentials_key(
         self, kerberos_rebound: None, clean_registry: None
     ) -> None:
         input_data = _start_input({**_FLAT_BODY, "name": "x"})
-        # Treated as credential material: moved under ``credentials`` and then
-        # stripped with it, so it never reaches Temporal history.
-        assert input_data.kerberos is None
-        dumped = input_data.model_dump()
-        assert "host" not in dumped and "credentials" not in dumped
+        # As on main: /start deletes ``credentials`` and nothing else, so a
+        # flat key the input declares still validates into it.
+        assert input_data.kerberos == _KERBEROS
+        assert "credentials" not in input_data.model_dump()
 
 
 class TestDefaultSetWithoutRebinding:
@@ -210,7 +209,7 @@ class TestDefaultSetWithoutRebinding:
         assert body == contracts.normalize_credentials(dict(_FLAT_BODY))
         assert body["kerberos"] == _KERBEROS
         assert "kerberos" not in {p["key"] for p in body["credentials"]}
-        assert "host" not in body
+        assert body["host"] == _FLAT_BODY["host"]
 
     def test_routes_use_default_set(self) -> None:
         handler = _CapturingHandler()

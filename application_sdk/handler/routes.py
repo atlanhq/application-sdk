@@ -3,19 +3,20 @@
 One implementation, registered by both the worker's handler service
 (``application_sdk.handler.service``) and the consolidated API host
 (:func:`application_sdk.build_asgi_app`), so an app's handler answers the
-same way on either surface: the same request contract (422 on a malformed
-body), credential normalisation, per-entrypoint dispatch, error boundary,
-``AppError.category`` → HTTP status mapping, redaction and response envelope.
+same way on either surface: the same request contract (422 on a body that
+fails its typed contract), credential normalisation, per-entrypoint dispatch, error boundary,
+``AppError.category`` → HTTP status mapping and response envelope.
 
-Moved verbatim from ``application_sdk.handler.service``; the differences are
-the seams a thin package needs:
+Moved verbatim from ``application_sdk.handler.service``, and behaves exactly as
+it did there (including its logger name); the differences are the seams a thin
+package needs:
 
 * ``app_package`` names the package holding per-entrypoint handler modules
   (``app`` on the worker, e.g. ``atlan_mysql_api`` on the host);
 * preflight outcome rows go through a :class:`PreflightObserver` — the worker
   passes the preflight gate's emitters, the host logs;
-* the request body is read with :func:`read_json_object`, so unparseable JSON or
-  a non-object answers 422 instead of 500 on both surfaces.
+* the credential normalization is injected (``normalize``), so the worker keeps
+  resolving ``application_sdk.handler.service._normalize_credentials`` per call.
 """
 
 from __future__ import annotations
@@ -66,11 +67,13 @@ from application_sdk.handler.contracts import (
 )
 from application_sdk.handler.request_contract import (
     RequestContractError,
-    read_json_object,
     validate_request,
 )
 
-logger = get_logger(__name__)
+# Named for application_sdk.handler.service, not this module: this code moved
+# from there and keeps its logger name, so every log line (and any query or
+# alert on it) is unchanged.
+logger = get_logger("application_sdk.handler.service")
 
 
 def entrypoint_module_segment(name: str) -> str:
@@ -115,13 +118,6 @@ def _normalize_preflight_request(
     :func:`normalize_credentials` with the contracts default key set).
     """
     normalized = (normalize or normalize_credentials)(lift_agent_json(body))
-    # Fold the camelCase spelling onto the field name first: the mirror below
-    # decides which block to copy by inspecting the raw body, so a caller that
-    # sends only ``connectionConfig`` would otherwise get an empty ``metadata``.
-    if "connectionConfig" in normalized and "connection_config" not in normalized:
-        normalized = {
-            k: v for k, v in normalized.items() if k != "connectionConfig"
-        } | {"connection_config": normalized["connectionConfig"]}
     has_metadata = "metadata" in normalized and normalized["metadata"] is not None
     has_connection_config = (
         "connection_config" in normalized
@@ -543,7 +539,7 @@ def register_handler_routes(
             exc.cause.errors(
                 include_url=False, include_input=False, include_context=False
             )
-            if isinstance(exc, RequestContractError) and exc.cause is not None
+            if isinstance(exc, RequestContractError)
             else []
         )
         detail = [
@@ -556,10 +552,7 @@ def register_handler_routes(
         ]
         fields = ", ".join(item["field"] for item in detail if item["field"]) or "body"
         logger.warning(
-            # %r on the path: it is caller-controlled and percent-decoded, so a
-            # %0A in it would forge a log line. No exc_info here, so this record
-            # is single-line and a forged one would be indistinguishable.
-            "Rejected a malformed request to %r for app %s: invalid field(s) %s",
+            "Rejected a malformed request to %s for app %s: invalid field(s) %s",
             request.url.path,
             app_name,
             fields,
@@ -616,7 +609,7 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = _normalize(lift_agent_json(await read_json_object(request)))
+        body = _normalize(lift_agent_json(await request.json()))
         auth_input = validate_request(AuthInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
@@ -715,9 +708,7 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_preflight_request(
-            await read_json_object(request), normalize=_normalize
-        )
+        body = _normalize_preflight_request(await request.json(), normalize=_normalize)
         preflight_input = validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -875,9 +866,7 @@ def register_handler_routes(
         ``ceiling_seconds`` is the app's warmup ceiling, so the UI has a stop
         condition of its own.
         """
-        body = _normalize_preflight_request(
-            await read_json_object(request), normalize=_normalize
-        )
+        body = _normalize_preflight_request(await request.json(), normalize=_normalize)
         preflight_input = validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -939,7 +928,7 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = _normalize(lift_agent_json(await read_json_object(request)))
+        body = _normalize(lift_agent_json(await request.json()))
         metadata_input = validate_request(MetadataInput, body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,
@@ -1063,7 +1052,10 @@ def include_app_routers_on(app: FastAPI, handler: Handler, app_name: str) -> Non
     }
     for router in routers:
         for route in router.routes:
-            path = f"{router.prefix}{getattr(route, 'path', '')}"
+            # ``route.path`` already carries the router's prefix (APIRouter
+            # applies it when the route is added), and the router is included
+            # with no extra prefix, so it is exactly the path that will be served.
+            path = getattr(route, "path", "")
             for method in getattr(route, "methods", None) or ():
                 if (path, method) in taken:
                     raise ValueError(

@@ -82,7 +82,6 @@ import typing_extensions
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
-from application_sdk._install import worker_only_missing
 from application_sdk._logging import get_logger
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
@@ -996,7 +995,7 @@ class PublishInputMixin(BaseModel):
         # Auto-resolve output_path from Temporal context if not set
         if not self.output_path:
             try:
-                from temporalio import (  # noqa: PLC0415 — absent on an api-only install
+                from temporalio import (  # noqa: PLC0415 — defensive: try/except wraps "not in Temporal context"
                     workflow as _wf,
                 )
 
@@ -1006,19 +1005,20 @@ class PublishInputMixin(BaseModel):
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
                     WORKFLOW_OUTPUT_PATH_TEMPLATE,
                 )
-            except ModuleNotFoundError as exc:
-                # api-only install: no Temporal, so never a workflow context.
-                if not worker_only_missing(exc):
-                    raise
-                _wf = None
-            try:
-                if _wf is None:
-                    raise LookupError("no Temporal workflow context")
+
                 self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
                     application_name=AppRegistry.resolve_running_app_name(),
                     workflow_id=_wf.info().workflow_id,
                     run_id=_wf.info().run_id,
                 )
+            # conformance: ignore[E002,E008] api-only install has no Temporal (any missing module here meant "not a workflow context" before the split too, via the broad swallow below); output_path stays empty by design
+            except ModuleNotFoundError:  # noqa: S110 — see above
+                # The api distribution ships no Temporal: never a workflow
+                # context, so output_path stays empty -- the same outcome as the
+                # broad swallow below, which caught this before the split.
+                # (Named separately only so check_api_surface sees the lazy
+                # worker-only imports above as guarded.)
+                pass
             # conformance: ignore[E002,E004] probe to detect Temporal workflow context; swallow is intentional, output_path stays empty by design
             except Exception:  # noqa: S110 — not in a Temporal workflow context; output_path stays empty by design
                 pass

@@ -51,7 +51,10 @@ from application_sdk.handler.routes import (
     entrypoint_module_segment,
 )
 
-logger = get_logger(__name__)
+# Named for application_sdk.handler.service, not this module: these routes moved
+# from there and keep its logger name (the worker also passes that module's
+# logger as ``MetadataSource.log``), so their log lines are unchanged.
+logger = get_logger("application_sdk.handler.service")
 
 # Heracles URL-encodes the whole setup-form payload into ``fe_inputs`` on the
 # GET. A typical form is ~1.6 KB decoded and a heavy multi-select (lists of

@@ -17,7 +17,8 @@ Fails when:
 * ``build_asgi_app`` cannot build it, or the app's ``state.app_name`` is not the
   entry-point name (the host routes on it);
 * the host matrix fails: ``/health`` is not 200, a malformed body on
-  ``/workflows/v1/auth`` is not 422, or an empty-credentials auth call answers a
+  ``/workflows/v1/auth`` is accepted (it must be rejected, as the worker rejects
+  it), or an empty-credentials auth call answers a
   bare 500 instead of a JSON envelope;
 * ``/workflows/v1/check`` or ``/workflows/v1/metadata``, called with empty
   credentials, reaches a worker-only import. Those calls are expected to fail
@@ -76,10 +77,13 @@ def check_response(
     result: Result,
     *,
     want: int | None = None,
+    rejected: bool = False,
     not_500_json: bool = False,
 ) -> None:
     if want is not None and status != want:
         result.fail(f"{label}: expected HTTP {want}, got {status}")
+    if rejected and status < 400:
+        result.fail(f"{label}: expected the request to be rejected, got {status}")
     if not_500_json and (status == 500 and not isinstance(body, dict)):
         result.fail(f"{label}: answered a bare 500 instead of a JSON envelope")
 
@@ -175,7 +179,7 @@ def run(name: str, package: str, obj: str) -> Result:
         bad.status_code,
         None,
         result,
-        want=422,
+        rejected=True,
     )
     auth = client.post("/workflows/v1/auth", json={"credentials": []})
     try:

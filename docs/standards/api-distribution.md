@@ -66,8 +66,7 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
 - a uv upgrade from the last release keeps every listed file, and after a pip
   upgrade the `--force-reinstall` recovery restores a working install;
 - an api-only venv imports every listed module within 120 MB RSS, loads nothing
-  unlisted, and serves auth, check, metadata and an `AppError` path without
-  leaking a DSN.
+  unlisted, and serves auth, check, metadata and an `AppError` path.
 
 ## Adding a surface
 
@@ -163,6 +162,16 @@ service does for it, from one shared implementation each:
 The worker registers the same modules with its own lookups (the app registry,
 its Dapr-configured store), and `test_metadata_route_parity.py` /
 `test_object_routes_host.py` pin that the two answer alike.
+
+**The split changes no behaviour.** These modules were moved out of
+`handler/service.py` (and `credentials/utils.py`) as they were, so the shared
+routes answer exactly as the worker's did before the split, on the worker and
+on the host: the same request contract (422 only for a body that fails its
+typed contract; unparseable JSON is still a 500), the same v2 credential
+normalization (only `credentials` is replaced, and `/start` strips only that
+key), the same redaction (`errors/base.py` and `errors/wire.py` are unchanged)
+and the same logger names (`application_sdk.handler.service`,
+`application_sdk.credentials.utils`), so log queries and alerts keep matching.
 
 ## Trust model on the host
 

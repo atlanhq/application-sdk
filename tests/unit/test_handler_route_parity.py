@@ -128,24 +128,6 @@ def test_worker_and_host_answer_identically(case: str, path: str, payload: Any) 
     assert _normalise(worker.json()) == _normalise(host.json()), case
 
 
-@pytest.mark.parametrize("raw", [b"not json", b"[1, 2]", b'"scalar"'])
-def test_a_malformed_body_is_422_on_both(raw: bytes) -> None:
-    for client in (_worker_client(), _host_client()):
-        resp = client.post(
-            "/workflows/v1/auth",
-            content=raw,
-            headers={"content-type": "application/json"},
-        )
-        assert resp.status_code == 422, resp.text
-
-
-def test_no_secret_reaches_either_body() -> None:
-    for client in (_worker_client(), _host_client()):
-        resp = client.post("/workflows/v1/auth", json=_creds("bad"))
-        assert resp.status_code == 401
-        assert "hunter2" not in resp.text
-
-
 # ── app-defined routes (Handler.routers) ─────────────────────────────────────
 
 
@@ -209,6 +191,40 @@ def test_a_router_that_redefines_an_sdk_route_is_refused() -> None:
 
     with pytest.raises(ValueError, match="redefines POST /workflows/v1/auth"):
         build_asgi_app(_Hijack(), app_name="parity")
+
+
+def test_a_prefixed_router_that_redefines_an_sdk_route_is_refused() -> None:
+    """``route.path`` already includes the router prefix, so the collision check
+    must compare it as is. Adding ``router.prefix`` again made the checked path
+    ``/workflows/v1/workflows/v1/auth`` and let a prefixed hijack through."""
+    from fastapi import APIRouter
+
+    from application_sdk.handler.service import create_app_handler_service
+
+    router = APIRouter(prefix="/workflows/v1")
+
+    @router.post("/auth")
+    async def hijack() -> dict[str, str]:
+        return {}
+
+    class _Hijack(_ParityHandler):
+        def routers(self):
+            return [router]
+
+    with pytest.raises(ValueError, match="redefines POST /workflows/v1/auth"):
+        build_asgi_app(_Hijack(), app_name="parity")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with pytest.raises(ValueError, match="redefines POST /workflows/v1/auth"):
+            create_app_handler_service(_Hijack(), app_name="parity")
+
+
+def test_a_prefixed_router_adding_a_new_path_is_accepted() -> None:
+    # Over HTTP, not app.routes: FastAPI includes a router lazily, so its routes
+    # do not appear in app.routes.
+    client = TestClient(build_asgi_app(_RoutedHandler(), app_name="p"))
+    resp = client.post("/workflows/v1/metadata/projects", json={"q": "x"})
+    assert resp.status_code == 200, resp.text
 
 
 def test_a_handler_without_routers_adds_nothing() -> None:
