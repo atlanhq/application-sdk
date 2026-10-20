@@ -161,6 +161,12 @@ PREFLIGHT_RESULTS_ENDPOINT = os.getenv(
 PREFLIGHT_RESULTS_TIMEOUT_SECONDS = float(
     os.getenv("ATLAN_PREFLIGHT_RESULTS_TIMEOUT_SECONDS", "30")
 )
+#: Bound on a SQL client's ``load()``: building the connection string (an STS
+#: AssumeRole for IAM-role auth) plus the first connect. Also handed to drivers
+#: with no connect timeout of their own, so a hung connect frees its thread.
+SQL_CLIENT_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS", "60")
+)
 # REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT, SQL_SERVER_MIN_VERSION,
 # SQL_QUERIES_PATH — unused internally, v2-only external consumers.
 

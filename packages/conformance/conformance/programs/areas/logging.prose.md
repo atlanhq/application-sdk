@@ -64,6 +64,55 @@ _Read by `remediate-finding` when `finding.area == "logging"`._
 Consult the finding's `hint` and `message`, then read the actual source lines
 around `finding.line` in `finding.file` before proposing a fix.
 
+#### Pre-raise carve-out — one edit clears L004, E005 and L009
+
+A `logger.warning(...)` / `logger.error(...)` inside an `except` that sits
+within the three statements before a `raise` in the same block is an **L009
+site**, and the same line is usually reported by L004 and E005 as well.  The
+test: L009 also reports the line, or, reading the code, the call is one of
+the three statements immediately preceding a `raise` in the same statement
+list (a `raise` inside a nested `if`/`with` does not count).
+
+At an L009 site, **do not enrich the log**: add neither `exc_info=True` nor
+the sanitized `sanitize_cause_repr(exc)` / `safe_traceback(exc)` arguments.
+Enriching clears L004 and E005 but leaves L009 standing, and the L009 fix
+then deletes the line that was just enriched: a block-tier fix gets undone
+by a later warn-tier one, churning the same lines through two PRs.  Apply
+L009's resolution in the same edit instead, in this order:
+
+1. **Delete the log line** when the exception has an upstream record (L009
+   below says what counts; for anything raised out of an `@task` method on a
+   v3 SDK worker, the SDK's `activity.ended` ERROR record is that record; on
+   a v2 app, confirm the caller logs it).  Deleting it may leave the handler
+   as a bare `except ...: raise`; that is fine only because the upstream
+   record still holds the failure.
+2. **Otherwise downgrade it to a sanitized DEBUG**, binding the redacted
+   cause and traceback to locals, and keep the raise: a bare `raise`, or a
+   classified typed error raised in its place.
+
+   ```python
+   from application_sdk.errors import safe_traceback, sanitize_cause_repr
+
+   try:
+       connect()
+   except ConnectionError as exc:
+       cause = sanitize_cause_repr(exc)
+       trace = safe_traceback(exc)
+       logger.debug("connect failed: %s\n%s", cause, trace)
+       raise
+   ```
+
+Never reduce the handler to a bare `raise` without an upstream record, even
+when the log line carries nothing the exception does not: on a path whose
+caller does not log the exception, that deletes the only record of the
+failure.  Keep the sanitized DEBUG instead.
+
+Both of these clear L004, E005 and L009 together: L004 and E005 inspect
+only `warning`/`error` calls, L009 matches only `warning`/`error`, and L008
+flags only `repr`/`str`/serialisation calls in a DEBUG argument, so the
+sanitizer calls do not trip it.  Say in the edit description which of the
+two you applied, and for a deletion, what the upstream record is.
+
 #### Credential-boundary contraindication — read before adding `exc_info=True`
 
 The raw exception from a database driver, an HTTP client or an auth call can
@@ -73,6 +122,10 @@ serialises the traceback *separately*, so it bypasses whatever redaction the
 message itself performs — adding it at such a site **creates a leak that was
 not there before**.  A production security review over the fleet remediation
 (FND-57) found exactly this shape in five connector repos.
+
+None of this applies at a pre-raise L009 site: there the line is deleted or
+downgraded (the carve-out above), never enriched, with or without a
+sanitizer.
 
 Before adding `exc_info=True` (L004, and the L005/L017 rewrites that add it),
 ask what the caught exception can carry.  If the `try` wraps a connect, an
@@ -140,6 +193,19 @@ report that site the same way.
   trace from a nested handler does not count.
   `logger.warning("msg")` → `logger.warning("msg", exc_info=True)`.
   If the call already has keyword arguments, append after them.
+
+  **Carve-out — pre-raise logs.** If the call is within the three
+  statements before a `raise` in the same block (an L009 site), do not add
+  `exc_info=True` and do not switch to the sanitized `safe_traceback` form.
+  Apply L009's resolution in the same edit, in this order: delete the line
+  when there is an upstream record (which may leave a bare `raise`; never
+  reduce the handler to one without that record); otherwise downgrade it to
+  a sanitized DEBUG through locals (`cause = sanitize_cause_repr(exc)`,
+  `trace = safe_traceback(exc)`, `logger.debug("...%s\n%s", cause, trace)`)
+  and keep the raise.  That one edit
+  clears L004, E005 and L009 together; enriching clears L004 and E005 only,
+  and the later L009 fix deletes the enriched line.  See "Pre-raise
+  carve-out" above.
 
   **Contraindication — redaction boundaries.** Never add `exc_info=True` when
   the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
@@ -329,14 +395,38 @@ report that site the same way.
   and `no_new_findings` will not see it because the swallow was already there.
 
   So establish the caller first.  **If you can show the exception is logged
-  upstream** — the handler that catches this type logs it with `exc_info=True`
-  — delete the call; that is the shape `atlan-metabase-app app/connector.py`'s
+  upstream**, delete the call.  "Logged upstream" means the handler that
+  catches this type logs it with the traceback: `exc_info=True`, or the
+  sanitized-traceback form (`safe_traceback(exc)`, see the credential section
+  above).  That is the shape `atlan-metabase-app app/connector.py`'s
   `transform_data` has, raising `MissingTypenameInputError` with no log line
-  before it (as does `_build_client` for `MetabaseCredentialInputError`).  **If you
-  cannot** (no handler in the repo, or the handler swallows), do not delete:
-  **downgrade the level** to `logger.debug(...)`.  The rule matches only
-  `warning` and `error`, so a DEBUG line clears the finding, stops inflating
-  the error count, and keeps the local detail for whoever debugs it.
+  before it (as does `_build_client` for `MetabaseCredentialInputError`).
+
+  **On a v3 SDK, anything raised out of an `@task` method has an upstream
+  record.**  The SDK's activity log interceptor, which every v3 worker installs, catches every
+  exception that leaves an activity and logs an `activity.ended` record at
+  ERROR with `exc_info=True`
+  (`application_sdk/execution/_temporal/interceptors/log.py`).  Every v3 SDK
+  has an equivalent record: before 3.6.0 the default worker installed a
+  failure-logging interceptor that logged "Temporal activity failed" at ERROR
+  with `exc_info=True`.  On a v2 app, establish the caller as for any
+  non-activity path.  The one
+  exception is a preflight-gate block, which it logs at WARNING without a
+  traceback.  So when the `raise` propagates out of the task (nothing between
+  it and the task boundary catches and swallows it), deleting the pre-raise
+  log loses nothing.  **Non-activity paths have no such record.**  For a
+  handler method, preflight, or a helper called from them, check that the
+  caller really logs the exception; if you cannot show it, keep a sanitized
+  DEBUG.
+
+  **If you cannot** show an upstream record (no handler in the repo, or the
+  handler swallows), do not delete: **downgrade the level** to
+  `logger.debug(...)`, passing the exception only through
+  `sanitize_cause_repr(exc)` / `safe_traceback(exc)` bound to locals, never
+  raw `exc` or `exc_info=True`.  The rule matches only `warning` and `error`,
+  so a DEBUG line clears the finding, stops inflating the error count, and
+  keeps the local detail for whoever debugs it.  The sanitized DEBUG also
+  clears L004 and E005 at the same site, which inspect only `warning`/`error`.
 
   Keep the line at its current level only when it carries context the
   exception genuinely cannot (a loop index, the URL being retried) — then the
