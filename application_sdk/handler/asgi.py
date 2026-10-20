@@ -143,10 +143,26 @@ def _deployment_name(app_name: str) -> str:
 
 
 def _package_generated_dir(app_package: str) -> Path | None:
-    """The ``generated/`` folder shipped inside *app_package*, if it has one."""
+    """The ``generated/`` folder shipped inside *app_package*, if it has one.
+
+    ``None`` when the package itself is not installed (logged): the app is served
+    without metadata routes. Any other import failure — the package exists but
+    its own code or a dependency fails to import — is a real error and raises.
+    """
     try:
         module = importlib.import_module(app_package)
-    except ImportError:
+    except ModuleNotFoundError as exc:
+        missing = exc.name or ""
+        if not missing or not (
+            app_package == missing or app_package.startswith(f"{missing}.")
+        ):
+            raise
+        logger.warning(
+            "App package %s is not importable (module %s not found), so its "
+            "metadata routes are not served",
+            app_package,
+            missing,
+        )
         return None
     module_file = getattr(module, "__file__", None)
     if not module_file:

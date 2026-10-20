@@ -97,7 +97,16 @@ that needs a declared dependency or a guarded fallback.
   Measured at 66 MB with every extra installed.
 - The structured logger (loguru and OpenTelemetry) is **not** in the api
   distribution. SDK files in the set log through `application_sdk._logging`:
-  the SDK's structured logger on the worker, stdlib logging on the host.
+  the SDK's structured logger on the worker, stdlib logging on the host. On the
+  host the first such lookup gives the `application_sdk` stdlib logger one
+  minimal handler (INFO and above, to stderr) and sets its level to INFO, so
+  the shared routes' INFO lines are not dropped by the root logger's default
+  WARNING level. It does so only when neither that logger nor the root logger
+  has a handler yet; a host that configures logging before importing handler
+  code is left alone. If the root logger is given a handler later, the SDK's
+  handler stands down so no line is written twice, but the `application_sdk`
+  logger stays at INFO: a host that wants it quieter sets that logger's level.
+  The worker's logging is unchanged: the full install never takes this path.
 - **Handler code does not log.** It reports through its return value or a typed
   `AppError`, and the SDK's shared routes log every outcome with the request id.
   `gen_app_api.py check` fails on logging in a hosted app's handler module
