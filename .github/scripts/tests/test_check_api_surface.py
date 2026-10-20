@@ -109,6 +109,13 @@ def test_clean(tmp_path: Path, src: str) -> None:
             "does not exist",
         ),
         ("import application_sdk.handler.nope\n", "does not exist"),
+        # Only a positive TYPE_CHECKING guard skips its body: a negated one runs.
+        (
+            "from typing import TYPE_CHECKING\n"
+            "if not TYPE_CHECKING:\n"
+            "    from application_sdk.execution.worker import W\n",
+            "not in",
+        ),
     ],
 )
 def test_flagged(tmp_path: Path, src: str, fragment: str) -> None:

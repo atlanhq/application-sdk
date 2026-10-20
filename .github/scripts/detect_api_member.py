@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -105,6 +106,16 @@ def find_members(root: Path) -> list[ApiMember]:
     return members
 
 
+#: What each output value may be. One value per ``GITHUB_OUTPUT`` line, so a
+#: value carrying a newline could write a line of its own (``present=false``).
+_VALID: dict[str, re.Pattern[str]] = {
+    "member": re.compile(r"[A-Za-z0-9_./-]+"),
+    "name": re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*"),
+    "package": re.compile(r"[A-Za-z_][A-Za-z0-9_]*"),
+    "object": re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"),
+}
+
+
 def outputs(members: list[ApiMember]) -> list[str]:
     """The ``GITHUB_OUTPUT`` lines for ``members`` (raises on more than one)."""
     if not members:
@@ -115,6 +126,17 @@ def outputs(members: list[ApiMember]) -> list[str]:
             + ", ".join(f"{m.name} ({m.member})" for m in members)
         )
     m = members[0]
+    for field, value in (
+        ("member", m.member),
+        ("name", m.name),
+        ("package", m.package),
+        ("object", m.object),
+    ):
+        if not _VALID[field].fullmatch(value):
+            raise ValueError(
+                f"{GROUP} entry point {field} {value!r} is not a valid {field} "
+                f"(expected {_VALID[field].pattern})"
+            )
     return [
         "present=true",
         f"member={m.member}",

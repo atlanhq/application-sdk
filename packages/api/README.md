@@ -122,7 +122,7 @@ an app answers identically from either one:
 | `POST /workflows/v1/metadata` | `Handler.fetch_metadata` |
 | `POST /workflows/v1/warmup` | `Handler.warmup` (optional) |
 | `GET /workflows/v1/configmap/{id}`, `/configmaps`, `/input-contract`, `GET`/`POST /workflows/v1/manifest` | The app's `generated/` folder, if the app package ships one |
-| `GET`/`POST /workflows/v1/config/{id}`, `POST /workflows/v1/file` | An S3 bucket named by `S3_BUCKET` (and `S3_REGION`); needs the `aws` extra. These routes return 503 when it isn't set |
+| `GET`/`POST /workflows/v1/config/{id}`, `POST /workflows/v1/file` | An S3 bucket named by `ATLAN_S3_BUCKET` (and `ATLAN_S3_REGION`); needs the `aws` extra. These routes return 503 when it isn't set |
 | Your own routes | FastAPI routers returned from `Handler.routers()`, served after the SDK's |
 
 `build_asgi_app` takes a few keyword options:

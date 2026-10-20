@@ -6903,6 +6903,47 @@ class TestConfigEndpointPersistence:
         assert response.status_code == 404
         assert "abc-123" in response.json()["detail"]
 
+    @pytest.mark.parametrize(
+        ("error", "status"),
+        [
+            (PermissionError("denied"), 503),
+            (OSError("connection reset"), 503),
+        ],
+    )
+    def test_get_config_load_failure_is_not_a_missing_config(
+        self, error: Exception, status: int
+    ) -> None:
+        """Only a missing key is a 404; any other load failure is a 503."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cfg-test", storage=MagicMock()
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        with patch(
+            "application_sdk.storage.ops.download_file",
+            new=AsyncMock(side_effect=error),
+        ):
+            response = client.get("/workflows/v1/config/abc-123")
+        assert response.status_code == status
+        assert response.json()["detail"] == "Object store unavailable"
+
+    def test_get_config_404_on_a_storage_not_found(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.storage.errors import StorageNotFoundError
+
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cfg-test", storage=MagicMock()
+        )
+        client = TestClient(app)
+        with patch(
+            "application_sdk.storage.ops.download_file",
+            new=AsyncMock(side_effect=StorageNotFoundError("missing", key="k")),
+        ):
+            response = client.get("/workflows/v1/config/abc-123")
+        assert response.status_code == 404
+
     def test_post_config_200_when_storage_present(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
 

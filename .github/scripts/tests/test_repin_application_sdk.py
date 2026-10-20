@@ -88,3 +88,14 @@ def test_rerunning_is_a_no_op(tmp_path: Path) -> None:
     first = (tmp_path / "pyproject.toml").read_text()
     _repin(tmp_path, first)
     assert (tmp_path / "pyproject.toml").read_text() == first
+
+
+@pytest.mark.parametrize("script", SCRIPTS, ids=["integration", "sdr-e2e"])
+def test_indented_pins_are_moved_not_duplicated(tmp_path: Path, script: Path) -> None:
+    """Indentation is valid TOML; a pin that is not matched is inserted again,
+    and the duplicate key fails the parse after pyproject.toml is written."""
+    sources = _repin(tmp_path, f"{HEAD}\n[tool.uv.sources]\n  {SDK}\n\t{API}\n", script)
+    _assert_pinned(sources)
+    text = (tmp_path / "pyproject.toml").read_text()
+    assert text.count("atlan-application-sdk =") == 1
+    assert text.count("atlan-application-sdk-api =") == 1

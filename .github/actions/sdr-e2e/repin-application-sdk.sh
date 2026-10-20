@@ -48,7 +48,7 @@ new_line = (
 # combination of branch/rev/tag/path inside the braces). Anchored to a
 # line start and runs to a closing brace + EOL.
 pattern = re.compile(
-    r'^atlan-application-sdk\s*=\s*\{[^}]*\}\s*$',
+    r'^[ \t]*atlan-application-sdk\s*=\s*\{[^}]*\}\s*$',
     flags=re.MULTILINE,
 )
 replaced, n = pattern.subn(new_line, src)
@@ -59,7 +59,7 @@ api_line = (
     'subdirectory = "packages/api" }'
 )
 api_pattern = re.compile(
-    r'^atlan-application-sdk-api\s*=\s*\{[^}]*\}\s*$',
+    r'^[ \t]*atlan-application-sdk-api\s*=\s*\{[^}]*\}\s*$',
     flags=re.MULTILINE,
 )
 replaced, n_api = api_pattern.subn(api_line, replaced)

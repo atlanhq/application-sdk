@@ -43,6 +43,7 @@ import importlib
 import importlib.util
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 #: Handler methods the host serves that the probe calls with empty credentials.
@@ -104,11 +105,30 @@ def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
         setattr(handler, method, wrapped)
 
 
-def check_metadata_routes(client: Any, result: Result) -> None:
-    """The routes Heracles serves setup forms and run submits from."""
+def ships_contracts(generated: Path) -> bool:
+    """Whether the app's source tree has contract-toolkit output to serve."""
+    return generated.is_dir() and any(generated.glob("*.json"))
+
+
+def check_metadata_routes(
+    client: Any, result: Result, *, expects_contracts: bool
+) -> None:
+    """The routes Heracles serves setup forms and run submits from.
+
+    A 404 on ``/configmaps`` is a pass only for an app with no generated
+    contract files. When its source ships them (``expects_contracts``), the 404
+    means they are missing from the api member wheel, and the host would serve
+    no setup form, manifest or input contract.
+    """
     listing = client.get("/workflows/v1/configmaps")
     if listing.status_code == 404:
-        return  # the app ships no generated contract files
+        if expects_contracts:
+            result.fail(
+                "GET /workflows/v1/configmaps: 404, but the app ships generated "
+                "contract files (app/generated/*.json); they are missing from "
+                "the api member wheel"
+            )
+        return
     check_response(
         "GET /workflows/v1/configmaps", listing.status_code, None, result, want=200
     )
@@ -129,7 +149,9 @@ def check_metadata_routes(client: Any, result: Result) -> None:
         )
 
 
-def run(name: str, package: str, obj: str) -> Result:
+def run(
+    name: str, package: str, obj: str, *, expects_contracts: bool = False
+) -> Result:
     result = Result()
     module = importlib.import_module(package)
     check_api_only(importlib.util.find_spec("application_sdk.main") is not None, result)
@@ -189,7 +211,7 @@ def run(name: str, package: str, obj: str) -> Result:
         result,
         not_500_json=True,
     )
-    check_metadata_routes(client, result)
+    check_metadata_routes(client, result, expects_contracts=expects_contracts)
     config = client.get("/workflows/v1/config/probe-guid?type=credentials")
     check_response(
         "GET /workflows/v1/config (no object store)",
@@ -220,8 +242,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--name", required=True)
     parser.add_argument("--package", required=True)
     parser.add_argument("--object", default="handler")
+    parser.add_argument(
+        "--generated",
+        type=Path,
+        default=Path("app/generated"),
+        help="the app's contract-toolkit output in its source tree",
+    )
     args = parser.parse_args(argv)
-    result = run(args.name, args.package, args.object)
+    result = run(
+        args.name,
+        args.package,
+        args.object,
+        expects_contracts=ships_contracts(args.generated),
+    )
     for line in result.problems:
         print(f"::error::api member: {line}", file=sys.stderr)
     if not result.problems:

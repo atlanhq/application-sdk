@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -581,3 +582,46 @@ def test_module_resolution_matches_check_api_surface(tmp_path: Path) -> None:
         } - {None}
         assert ours - theirs == _KNOWN_DIVERGENCE.get(rel, set()), rel
         assert theirs <= ours, rel
+
+
+def test_a_dependency_marker_with_quotes_is_valid_toml(tmp_path: Path) -> None:
+    """A PEP 508 marker carries double quotes; the generated pyproject must parse."""
+    marker = 'tomli>=2; python_version < "3.12"'
+    root = _app(
+        tmp_path,
+        "from .client import C\n",
+        _PYPROJECT.replace(
+            'dependencies = ["pymysql>=1.1"]', f"dependencies = [{marker!r}]"
+        ),
+    )
+    parsed = tomllib.loads(gen._pyproject(gen.load(root)))  # noqa: SLF001
+    assert marker in parsed["project"]["dependencies"]
+
+
+@pytest.mark.parametrize(
+    ("declared", "locked", "expected"),
+    [
+        # An exact pin is the app's statement of what it runs: kept as is.
+        ("==3.40.0", "3.40.0", "==3.40.0"),
+        # A compatible release keeps its upper bound under the raised floor.
+        ("~=3.40", "3.46.0", ">=3.46.0,~=3.40"),
+        # The ordinary range: floor raised, upper bound kept.
+        (">=3.40.0,<4.0.0", "3.46.0", ">=3.46.0,<4.0.0"),
+    ],
+)
+def test_the_floor_keeps_the_apps_other_constraints(
+    declared: str, locked: str, expected: str
+) -> None:
+    assert gen._floored(declared, locked) == expected  # noqa: SLF001
+
+
+def test_a_plain_import_of_app_is_reported_as_a_manual_fix(tmp_path: Path) -> None:
+    """``fix`` rewrites ``from app... import`` only: ``import app.client`` binds
+    ``app`` and its uses would need rewriting too, so check says so instead of
+    sending the author to a ``fix`` that leaves it untouched."""
+    root = _app(tmp_path, "import app.client\n")
+    problems = gen.check(root, gen.load(root))
+    absolute = [p for p in problems if "absolute import of app.client" in p]
+    assert len(absolute) == 1, problems
+    assert "by hand" in absolute[0]
+    assert "run `fix`" not in absolute[0]

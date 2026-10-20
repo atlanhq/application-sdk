@@ -234,15 +234,29 @@ def tracked_files(root: Path) -> set[str]:
     return {line for line in out.splitlines() if line}
 
 
+#: Seconds any one venv creation or install may take. Each reaches a package
+#: index; a stalled one fails the probe instead of holding the job until the
+#: workflow's own timeout kills it.
+INSTALL_TIMEOUT_S = 600
+
+
+def _install(argv: list[str]) -> None:
+    subprocess.run(argv, check=True, timeout=INSTALL_TIMEOUT_S)
+
+
 def _venv(where: Path) -> Path:
-    subprocess.run(["uv", "venv", "-q", str(where)], check=True)
+    _install(["uv", "venv", "-q", str(where)])
     return where / "bin" / "python"
 
 
 def _pip(python: Path, *args: str) -> None:
-    subprocess.run(
-        ["uv", "pip", "install", "-q", "--python", str(python), *args], check=True
-    )
+    """``uv pip install`` into *python*'s venv."""
+    _install(["uv", "pip", "install", "-q", "--python", str(python), *args])
+
+
+def _pip_module(python: Path, *args: str) -> None:
+    """``pip install`` run by *python* itself (the pip upgrade path)."""
+    _install([str(python), "-m", "pip", "install", "-q", *args])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -279,23 +293,8 @@ def main(argv: list[str] | None = None) -> int:
         py = _venv(Path(tmp) / "upgrade-pip")
         _pip(py, f"atlan-application-sdk=={release}")
         _pip(py, "pip")
-        subprocess.run(
-            [str(py), "-m", "pip", "install", "-q", "-U", str(api), str(sdk)],
-            check=True,
-        )
-        subprocess.run(
-            [
-                str(py),
-                "-m",
-                "pip",
-                "install",
-                "-q",
-                "--force-reinstall",
-                "--no-deps",
-                str(api),
-            ],
-            check=True,
-        )
+        _pip_module(py, "-U", str(api), str(sdk))
+        _pip_module(py, "--force-reinstall", "--no-deps", str(api))
         done = subprocess.run([str(py), "-c", _PRESENT, ",".join(listed)], cwd=tmp)
         if done.returncode:
             failures.append(

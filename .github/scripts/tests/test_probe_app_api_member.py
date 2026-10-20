@@ -64,3 +64,42 @@ def test_a_handler_that_fails_for_want_of_a_source_passes(
 ) -> None:
     package = _member(tmp_path, monkeypatch, "raise ConnectionError('no source')")
     assert _problems(probe.run("demo", package, "handler")) == []
+
+
+class _Answer:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.text = "{}"
+
+
+class _NoConfigmaps:
+    """A host that serves no contract files: every metadata route is a 404."""
+
+    def get(self, path: str) -> _Answer:
+        return _Answer(404)
+
+    def post(self, path: str, json: object = None) -> _Answer:
+        return _Answer(404)
+
+
+def test_a_404_is_a_pass_when_the_app_ships_no_contract_files() -> None:
+    result = probe.Result()
+    probe.check_metadata_routes(_NoConfigmaps(), result, expects_contracts=False)
+    assert result.problems == []
+
+
+def test_a_404_fails_when_the_app_ships_contract_files() -> None:
+    """The files exist in the source but not in the wheel: the host would serve
+    no setup form, and the manifest and input-contract checks must not be skipped."""
+    result = probe.Result()
+    probe.check_metadata_routes(_NoConfigmaps(), result, expects_contracts=True)
+    assert len(result.problems) == 1, result.problems
+    assert "configmaps" in result.problems[0]
+
+
+def test_contract_files_are_read_from_the_apps_generated_dir(tmp_path: Path) -> None:
+    assert probe.ships_contracts(tmp_path / "app/generated") is False
+    (tmp_path / "app/generated").mkdir(parents=True)
+    assert probe.ships_contracts(tmp_path / "app/generated") is False
+    (tmp_path / "app/generated/demo.json").write_text("{}")
+    assert probe.ships_contracts(tmp_path / "app/generated") is True

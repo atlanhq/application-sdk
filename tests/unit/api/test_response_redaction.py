@@ -64,17 +64,44 @@ def _raise_for(mode: str) -> None:
             raise HandlerError(LEAKY, http_status=401)
     if mode == "crash":
         raise RuntimeError(LEAKY)
+    if mode == "evidence-raise":
+        raise _evidence_error()
+
+
+def _evidence_error() -> AuthError:
+    """A typed error whose non-secret-named evidence field carries the DSN."""
+    return AuthError(message="Authentication failed", failure_reason=LEAKY)
 
 
 class _LeakyHandler(Handler):
     """Every route raises, or answers, with the DSN in its own text."""
 
     async def test_auth(self, input: AuthInput) -> AuthOutput:
-        _raise_for(_mode(input.credentials))
+        mode = _mode(input.credentials)
+        _raise_for(mode)
+        if mode == "evidence-return":
+            return AuthOutput(
+                status=AuthStatus.FAILED,
+                message="Authentication failed",
+                error=_evidence_error().to_failure_details(),
+            )
         return AuthOutput(status=AuthStatus.SUCCESS, message=LEAKY)
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        _raise_for(_mode(input.credentials))
+        mode = _mode(input.credentials)
+        _raise_for(mode)
+        if mode == "evidence-return":
+            return PreflightOutput(
+                status=PreflightStatus.NOT_READY,
+                checks=[
+                    PreflightCheck(
+                        name="connectivity",
+                        passed=False,
+                        message="Authentication failed",
+                        error=_evidence_error().to_failure_details(),
+                    )
+                ],
+            )
         return PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[
@@ -259,3 +286,23 @@ def test_malformed_manifest_body_answers_a_fixed_message() -> None:
     assert resp.status_code == 400, resp.text
     assert resp.json()["detail"] == "Request body is not valid JSON"
     assert SECRET not in resp.text
+
+
+# ── typed evidence: a non-secret-named field can still carry a DSN ──────────
+
+
+@pytest.mark.parametrize(
+    ("route", "mode"),
+    [
+        ("auth", "evidence-return"),
+        ("check", "evidence-return"),
+        ("check", "evidence-raise"),
+    ],
+)
+def test_error_evidence_values_are_redacted(
+    client: TestClient, route: str, mode: str
+) -> None:
+    """``FailureDetails`` rejects secret-named evidence keys but keeps values, so
+    the response copy of every serialized ``error`` is redacted; the model is not."""
+    resp = _post(client, route, mode)
+    assert REDACTED in resp.text, resp.text

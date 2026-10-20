@@ -11,8 +11,8 @@ consolidated API host register the same routes through
 
 * the worker uses its Dapr-configured ``application_sdk.storage`` store;
 * the host has no Dapr, so it uses :class:`S3ObjectStore`, configured from the
-  chart-injected ``S3_BUCKET`` / ``S3_REGION`` with the pod's ambient AWS
-  identity (the ``aws`` extra). Without ``S3_BUCKET`` the routes answer 503,
+  chart-injected ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION`` with the pod's ambient AWS
+  identity (the ``aws`` extra). Without ``ATLAN_S3_BUCKET`` the routes answer 503,
   exactly as the worker does without a store.
 
 Both write a config to ``persistent-artifacts/apps/{app_name}/{type}/{id}/config.json``.
@@ -118,7 +118,8 @@ class ObjectRoutesSource:
         configured: Whether a store is configured. ``False`` makes every route
             answer 503.
         load_config: ``(config_id, config_type)`` → the stored config, or
-            ``None`` when it is missing or unreadable.
+            ``None`` when it is missing. Raises when the store cannot answer
+            (the route answers 503).
         save_config: ``(config_id, body, config_type)`` → ``True`` once stored,
             ``False`` when no store is configured. Raises on a failed write.
         upload_file: ``(key, local_path)`` → stores the file at ``key``.
@@ -145,7 +146,21 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
         type: Annotated[str, Query(pattern=CONFIG_KEY_PATTERN)] = "workflows",
     ) -> JSONResponse:
         """Fetch workflow config from object store."""
-        config = await source.load_config(config_id, type)
+        try:
+            config = await source.load_config(config_id, type)
+        except Exception as exc:
+            # A missing key loads as None (404 below). Anything else (IAM,
+            # network, a 5xx, an unreadable object) means the store could not
+            # answer, which is not the same as the config being absent.
+            logger.warning(
+                "Object-store config load failed for config_id=%s type=%s",
+                config_id,
+                type,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=503, detail="Object store unavailable"
+            ) from exc
 
         if config is None and not source.configured():
             raise HTTPException(
@@ -322,38 +337,39 @@ class S3ObjectStore:
 
     @classmethod
     def from_env(cls) -> S3ObjectStore | None:
-        """From ``S3_BUCKET`` / ``S3_REGION``; ``None`` when no bucket is set."""
-        bucket = os.environ.get("S3_BUCKET", "").strip()
+        """From ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION``; ``None`` when no bucket is set."""
+        bucket = os.environ.get("ATLAN_S3_BUCKET", "").strip()
         if not bucket:
             return None
         try:
-            return cls(bucket, os.environ.get("S3_REGION", "").strip() or None)
+            return cls(bucket, os.environ.get("ATLAN_S3_REGION", "").strip() or None)
         except ModuleNotFoundError:
             logger.warning(
-                "S3_BUCKET is set but boto3 is not installed, so the config and "
+                "ATLAN_S3_BUCKET is set but boto3 is not installed, so the config and "
                 "file routes answer 503. Install atlan-application-sdk-api[aws].",
                 exc_info=True,
             )
             return None
 
     async def get_json(self, key: str) -> dict[str, Any] | None:
-        """The object at ``key``, or ``None`` when it is missing or unreadable."""
+        """The object at ``key``, or ``None`` when it is missing.
 
-        def _get() -> bytes:
-            response = self._client.get_object(Bucket=self._bucket, Key=key)
+        Any other failure (IAM, network, throttling, an unreadable object)
+        raises: the store could not answer, which is not a missing object.
+        """
+
+        def _get() -> bytes | None:
+            try:
+                response = self._client.get_object(Bucket=self._bucket, Key=key)
+            except Exception as exc:
+                code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
+                if code in ("NoSuchKey", "404"):
+                    return None
+                raise
             return response["Body"].read()
 
-        try:
-            return orjson.loads(await run_in_thread(_get))
-        except Exception as exc:
-            code = getattr(exc, "response", {}).get("Error", {}).get("Code", "")
-            if code not in ("NoSuchKey", "404"):
-                # A missing object is the ordinary 404; anything else (IAM,
-                # network, throttling) is an operational problem worth a line.
-                logger.warning(
-                    "Object-store config load failed for key=%s", key, exc_info=True
-                )
-            return None
+        raw = await run_in_thread(_get)
+        return None if raw is None else orjson.loads(raw)
 
     async def put_json(self, key: str, body: dict[str, Any]) -> None:
         await run_in_thread(

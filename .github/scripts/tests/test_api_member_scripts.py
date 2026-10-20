@@ -86,6 +86,28 @@ def test_two_entry_points_are_an_error(tmp_path: Path) -> None:
         detect.outputs(detect.find_members(tmp_path))
 
 
+@pytest.mark.parametrize(
+    "target",
+    [
+        '"""atlan_mysql_api:handler\npresent=false"""',
+        '"atlan_mysql_api:handler present=false"',
+        '"atlan-mysql-api:handler"',
+    ],
+)
+def test_an_entry_point_that_is_not_a_plain_name_is_an_error(
+    tmp_path: Path, target: str
+) -> None:
+    """Each value lands on its own ``GITHUB_OUTPUT`` line: a newline in one would
+    write a second ``present=false`` and skip the hosted-handler checks."""
+    _write(
+        tmp_path,
+        "api/pyproject.toml",
+        _MEMBER.replace('"atlan_mysql_api:handler"', target),
+    )
+    with pytest.raises(ValueError, match="not a valid"):
+        detect.outputs(detect.find_members(tmp_path))
+
+
 def test_the_full_sdk_in_the_member_venv_fails() -> None:
     result = probe.Result()
     probe.check_api_only(True, result)

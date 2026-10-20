@@ -173,3 +173,22 @@ def test_isolated_import_ignores_the_cwd_and_pythonpath(
     failures = probe.import_each_alone(python, ["only_in_cwd", "no_such_module_xyz"])
     assert [f.split(":")[0] for f in failures] == ["only_in_cwd", "no_such_module_xyz"]
     assert all("ModuleNotFoundError" in f for f in failures)
+
+
+def test_every_install_is_bounded(monkeypatch, tmp_path: Path) -> None:
+    """A stalled package index must fail the probe, not hold the job until the
+    workflow timeout kills it."""
+    calls: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append({"argv": argv, **kwargs})
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(probe.subprocess, "run", fake_run)
+    py = probe._venv(tmp_path / "v")
+    probe._pip(py, "atlan-application-sdk==3.39.1")
+    probe._pip_module(py, "-U", "x.whl")
+    assert len(calls) == 3
+    for call in calls:
+        assert call["check"] is True
+        assert 0 < call["timeout"] <= probe.INSTALL_TIMEOUT_S, call

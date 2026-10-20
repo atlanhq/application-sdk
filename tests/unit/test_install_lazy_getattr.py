@@ -55,6 +55,23 @@ def test_hasattr_does_not_import_the_handler_service() -> None:
     )
 
 
+def test_dir_lists_the_eager_submodules_before_they_are_imported() -> None:
+    """``dir(pkg)`` showed these submodules before the imports went lazy."""
+    _run(
+        """
+        import sys
+        import application_sdk.contracts as contracts
+        import application_sdk.credentials as credentials
+
+        assert "application_sdk.credentials.git" not in sys.modules
+        assert {"atlan", "git", "utils"} <= set(dir(credentials))
+        assert {"events", "storage", "types"} <= set(dir(contracts))
+        # Listing does not import them.
+        assert "application_sdk.credentials.git" not in sys.modules
+        """
+    )
+
+
 def test_the_eager_submodules_are_still_attributes() -> None:
     _run(
         """

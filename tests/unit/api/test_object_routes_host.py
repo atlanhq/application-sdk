@@ -95,6 +95,27 @@ def test_a_missing_config_is_404(host: TestClient) -> None:
     assert host.get("/workflows/v1/config/nope?type=credentials").status_code == 404
 
 
+class _AccessDenied(Exception):
+    response = {"Error": {"Code": "AccessDenied"}}
+
+
+class _DenyingS3(_FakeS3):
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        raise _AccessDenied()
+
+
+def test_a_failed_store_read_is_503_not_404() -> None:
+    """IAM, network or 5xx: the store is unavailable; the config is not missing."""
+    store = S3ObjectStore("tenant-bucket", client=_DenyingS3())
+    client = TestClient(
+        build_asgi_app(_Handler(), app_name="mysql", object_store=store),
+        raise_server_exceptions=False,
+    )
+    response = client.get("/workflows/v1/config/guid-1?type=credentials")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Object store unavailable"
+
+
 def test_without_a_store_the_routes_answer_503() -> None:
     bare = TestClient(build_asgi_app(_Handler(), app_name="mysql", object_store=None))
     assert bare.get("/workflows/v1/config/guid-1").status_code == 503
@@ -164,9 +185,30 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
     assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
 
 
-def test_the_store_comes_from_s3_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("S3_BUCKET", raising=False)
+def test_the_store_comes_from_atlan_s3_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ATLAN_S3_BUCKET", raising=False)
     assert S3ObjectStore.from_env() is None
+
+
+def test_an_unprefixed_s3_bucket_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runtime settings take the ``ATLAN_`` prefix (docs/standards/env-vars.md):
+    a pod's generic ``S3_BUCKET`` for something else must not become this store."""
+    monkeypatch.delenv("ATLAN_S3_BUCKET", raising=False)
+    monkeypatch.setenv("S3_BUCKET", "someone-elses-bucket")
+    assert S3ObjectStore.from_env() is None
+
+
+def test_the_store_reads_the_atlan_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    built: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        S3ObjectStore,
+        "__init__",
+        lambda self, bucket, region=None, client=None: built.append((bucket, region)),
+    )
+    monkeypatch.setenv("ATLAN_S3_BUCKET", "tenant-bucket")
+    monkeypatch.setenv("ATLAN_S3_REGION", "eu-west-1")
+    assert S3ObjectStore.from_env() is not None
+    assert built == [("tenant-bucket", "eu-west-1")]
 
 
 def test_the_worker_keeps_accepting_any_prefix() -> None:

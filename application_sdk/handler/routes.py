@@ -49,6 +49,7 @@ from application_sdk.errors import FailureCategory
 from application_sdk.errors.base import (
     AppError,
     redact_secrets,
+    redact_wire_value,
     safe_traceback,
     sanitize_cause_repr,
 )
@@ -148,6 +149,16 @@ def _normalize_preflight_request(
     return normalized
 
 
+def _redacted_error(error: dict[str, Any]) -> dict[str, Any]:
+    """A serialized ``FailureDetails`` with every string in it redacted.
+
+    ``FailureDetails`` redacts ``message`` and ``suggested_action`` and rejects
+    secret-named ``evidence`` keys, but keeps evidence values: a field such as
+    ``failure_reason`` can still hold a DSN. Applied to the response copy only.
+    """
+    return cast("dict[str, Any]", redact_wire_value(error))
+
+
 def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     """One check as the HTTP caller sees it.
 
@@ -166,6 +177,8 @@ def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     # app that never tiers its checks answers exactly as before tiers existed.
     if check.tier is CheckTier.PREFLIGHT:
         del dumped["tier"]
+    if "error" in dumped:
+        dumped["error"] = _redacted_error(dumped["error"])
     dumped["message"] = redact_secrets(check.resolved_message)
     if check.resolved_suggested_action:
         dumped["suggested_action"] = redact_secrets(check.resolved_suggested_action)
@@ -243,7 +256,7 @@ def _preflight_failure_body(
     failure = output.checks[0].error
     body["detail"] = redact_secrets(detail if detail is not None else output.message)
     body["error"] = (
-        failure.model_dump(mode="json", exclude_none=True)
+        _redacted_error(failure.model_dump(mode="json", exclude_none=True))
         if failure is not None
         else None
     )
@@ -672,6 +685,8 @@ def register_handler_routes(
                 )
                 data = result.model_dump(mode="json", exclude={"error": {"cause_repr"}})
                 data["message"] = redact_secrets(data["message"])
+                if data.get("error") is not None:
+                    data["error"] = _redacted_error(data["error"])
                 return JSONResponse(
                     status_code=result.status.http_status,
                     content=_wrap_response(

@@ -945,11 +945,14 @@ async def _config_load_from_objectstore(
     fd, tmp = tempfile.mkstemp(suffix=".json")
     safe_tmp = _validated_temp_path(tmp)
     os.close(fd)
+    from application_sdk.storage.errors import StorageNotFoundError  # noqa: PLC0415
+
     try:
         await download_file(key, safe_tmp, _storage)
         return orjson.loads(Path(safe_tmp).read_bytes())
-    except Exception:
-        logger.warning("Object-store config load failed for key=%s", key, exc_info=True)
+    except (StorageNotFoundError, FileNotFoundError):
+        # A missing key is the ordinary 404. Any other failure propagates: the
+        # route answers 503, since the store could not answer.
         return None
     finally:
         if os.path.exists(safe_tmp):

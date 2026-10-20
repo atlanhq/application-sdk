@@ -109,7 +109,12 @@ def file_of(root: Path, module: str) -> str | None:
 
 
 def _is_type_checking(test: ast.expr) -> bool:
-    return "TYPE_CHECKING" in ast.unparse(test)
+    """``if TYPE_CHECKING:`` or ``if typing.TYPE_CHECKING:`` and nothing else.
+
+    A negated or compound test (``if not TYPE_CHECKING:``) runs its body, so its
+    imports are runtime imports and are checked like any other.
+    """
+    return ast.unparse(test).strip() in ("TYPE_CHECKING", "typing.TYPE_CHECKING")
 
 
 def _catches_module_not_found(node: ast.Try) -> bool:

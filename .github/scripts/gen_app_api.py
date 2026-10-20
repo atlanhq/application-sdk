@@ -46,6 +46,7 @@ import argparse
 import ast
 import glob
 import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -228,7 +229,15 @@ def closure(root: Path, config: Config) -> tuple[list[str], list[str]]:
             if _module_file(root, target) is None:
                 continue  # a name inside a module
             if not relative:
-                absolute.append(f"{rel}:{node.lineno}: absolute import of {target}")
+                how = (
+                    "rewrite it as a relative `from . import ...` by hand, with "
+                    "its uses (`fix` rewrites only `from app... import`)"
+                    if isinstance(node, ast.Import)
+                    else "run `fix`"
+                )
+                absolute.append(
+                    f"{rel}:{node.lineno}: absolute import of {target} ({how})"
+                )
             stack.append(target)
     for pattern in config.data:
         matches = sorted(glob.glob(pattern, root_dir=root))
@@ -548,7 +557,11 @@ def _floored(spec: str, locked: str) -> str:
     """
     if not locked:
         return spec
-    keep = [c.strip() for c in spec.split(",") if c.strip().startswith(("<", "!="))]
+    constraints = [c.strip() for c in spec.split(",") if c.strip()]
+    if any(c.startswith("==") for c in constraints):
+        return spec  # an exact pin is what the app runs: nothing to raise
+    # Only the lower bounds are replaced; ``~=``, ``<`` and ``!=`` are kept.
+    keep = [c for c in constraints if not c.startswith((">=", ">"))]
     return ",".join([f">={locked}", *keep])
 
 
@@ -566,6 +579,11 @@ def _api_requirement(config: Config) -> str:
     return f"atlan-application-sdk-api{extras}{_floored(config.sdk_spec, config.sdk_locked)}"
 
 
+def _toml_str(value: str) -> str:
+    """*value* as a TOML basic string: a dependency marker carries ``"``."""
+    return json.dumps(value)
+
+
 def _pyproject(config: Config) -> str:
     deps = [_api_requirement(config), *config.dependencies]
     direct = config.api_source is not None and "git" in config.api_source
@@ -574,7 +592,7 @@ def _pyproject(config: Config) -> str:
         f'name = "{config.distribution}"\n'
         f'version = "{config.version}"\n'
         'requires-python = ">=3.11"\n'
-        "dependencies = [\n" + "".join(f'    "{d}",\n' for d in deps) + "]\n\n"
+        "dependencies = [\n" + "".join(f"    {_toml_str(d)},\n" for d in deps) + "]\n\n"
         '[project.entry-points."atlan.app_api"]\n'
         f'{config.name} = "{config.package}:handler"\n\n'
         '[project.entry-points."atlan.app_server"]\n'
@@ -724,8 +742,7 @@ def handler_file(root: Path, config: Config) -> str:
 def check(root: Path, config: Config) -> list[str]:
     files, absolute = closure(root, config)
     problems = [
-        f"{a} — the handler's files must import each other relatively (run `fix`)"
-        for a in absolute
+        f"{a} — the handler's files must import each other relatively" for a in absolute
     ]
     for rel in files:
         if not rel.endswith(".py"):
