@@ -307,6 +307,45 @@ def test_both_jobs_try_twingate_before_globalprotect(
         assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]
 
 
+def test_test_jobs_try_twingate_before_globalprotect(jobs: dict) -> None:
+    for job in ("integration", "e2e"):
+        steps = jobs[job]["steps"]
+        uses = [s.get("uses", "") for s in steps]
+        tg = next(i for i, u in enumerate(uses) if "twingate-connect" in u)
+        gp = next(i for i, u in enumerate(uses) if "globalprotect-connect" in u)
+        assert tg < gp, job
+
+        twingate, cleanup, globalprotect = steps[tg], steps[gp - 1], steps[gp]
+        gate = "inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''"
+        for step in (twingate, cleanup, globalprotect):
+            assert step["if"].startswith(gate), (job, step["name"])
+            assert step["continue-on-error"] is True, (job, step["name"])
+        assert "env.HAS_TWINGATE_KEY == 'true'" in twingate["if"], job
+        assert jobs[job]["env"]["HAS_TWINGATE_KEY"] == (
+            "${{ secrets.TWINGATE_SHARED_KEY != '' }}"
+        )
+        assert "steps.twingate.outcome == 'failure'" in cleanup["if"], job
+        assert "steps.twingate.outcome == 'cancelled'" in cleanup["if"], job
+        assert "twingate stop" in cleanup["run"], job
+        assert cleanup["run"].startswith("set -euo pipefail\n"), job
+        assert not re.search(
+            r"^\s*(if|for|while|case)\b", cleanup["run"], re.MULTILINE
+        ), job
+        assert "steps.twingate.outputs.connected != 'true'" in globalprotect["if"]
+        assert globalprotect["with"]["resubnet-docker"] == "true", job
+
+        assert twingate["with"]["service-key"] == "${{ secrets.TWINGATE_SHARED_KEY }}"
+        assert twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        assert "TWINGATE_SHARED_KEY" not in jobs[job]["env"], job
+
+        checkout = next(
+            s
+            for s in steps
+            if (s.get("with") or {}).get("path") == "application-sdk-scripts"
+        )
+        assert ".github/actions/twingate-connect" in checkout["with"]["sparse-checkout"]
+
+
 def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
     action = yaml.safe_load(_TWINGATE_ACTION.read_text(encoding="utf-8"))
     script = action["runs"]["steps"][0]["run"]
@@ -325,7 +364,12 @@ def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
     probe_attempts = int(action["inputs"]["probe-attempts"]["default"])
     bounded += probe_attempts * (10 + 3)
     assert "timeout " in script and "-k " in script
-    for job in ("wake-dataforge-source", "pause-dataforge-source"):
+    for job in (
+        "wake-dataforge-source",
+        "pause-dataforge-source",
+        "integration",
+        "e2e",
+    ):
         step = next(
             s for s in jobs[job]["steps"] if "twingate-connect" in s.get("uses", "")
         )

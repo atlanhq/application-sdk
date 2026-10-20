@@ -570,8 +570,9 @@ on:
         required: false
         description: |
           Org-wide Twingate service-account key; reaches api.dataforge.atlan.dev.
-          The dataforge wake / pause jobs try it before GlobalProtect, which
-          stays the fallback. Empty means GlobalProtect only, as before.
+          Every dataforge VPN step (wake, pause, integration, e2e) tries it
+          before GlobalProtect, which stays the fallback. Empty means
+          GlobalProtect only, as before.
       # Resolved per leg by .github/scripts/resolve_e2e_tenant.py. The pointer
       # lives in a YAML comment rather than in the description below because
       # test_resolve_e2e_tenant.py's call-site guard treats any non-comment
@@ -940,6 +941,7 @@ jobs:
       # source credentials from one locked instance, never two. Empty when the
       # caller does not use dataforge; the fetch chain below then self-skips.
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
       # Same reason: the rewrite step gates on the credential, not the flag.
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
@@ -978,7 +980,7 @@ jobs:
       # Exported/run here rather than passed to the composite action below,
       # because every action this workflow calls is pinned @main: an input added
       # on a feature branch is silently ignored until it lands. Sparse-checks-out
-      # .github/scripts and globalprotect-connect (the latter needed only on the
+      # .github/scripts and the VPN actions (the latter needed only on the
       # dataforge path — a couple of extra files otherwise). Unconditional: the
       # Docker Hub mirror step below runs a script from it on every connector.
       - name: Fetch SDK CI scripts (Docker mirror, source credentials, dataforge fetch)
@@ -998,6 +1000,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           # No `token:` here: application-sdk is public, so the run's own
@@ -1053,13 +1056,32 @@ jobs:
       # the instance (curation is the instance owner's one-time setup).
       #
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action, from the
+      # egress IPs. Twingate first (no shared address pool), then this repo's
+      # own globalprotect-connect action as the fallback, both from the
       # job.workflow_sha sparse checkout — same provenance pinning as the
       # scripts above. `resubnet-docker` moves Docker off Atlan's 172.17/16
       # before the tunnel comes up; it was a separate copy-pasted step at each
       # of the four dataforge call sites until the action absorbed it.
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Clean up after a stopped Twingate step
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:
@@ -2493,6 +2515,7 @@ jobs:
       # See the integration job: needed as env for the step-level `if:` gates.
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
@@ -2537,6 +2560,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           # Falls back to the run's own token because this step became
@@ -2604,16 +2628,34 @@ jobs:
       # hermetic source carries the run instead of failing it.
       #
       # dataforge's api host and the provisioned sources admit only the VPN
-      # egress IPs. This repo's own globalprotect-connect action, from the
-      # job.workflow_sha sparse checkout — same provenance pinning
-      # as the scripts. The health probe targets the dataforge api host —
-      # the thing this tunnel actually has to reach. KNOWN LIMIT: the
+      # egress IPs. Twingate first, then this repo's own globalprotect-connect
+      # action as the fallback, both from the job.workflow_sha sparse checkout
+      # — same provenance pinning as the scripts. The health probe targets the
+      # dataforge api host — the thing this tunnel actually has to reach. KNOWN LIMIT: the
       # action derives its GP client identity from run/job/attempt, and
       # GITHUB_JOB is identical across matrix legs, so concurrent legs can
       # displace each other's sessions — the fetch then falls back to repo
       # creds by design. A better run strategy is tracked on FND-279.
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Clean up after a stopped Twingate step
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == ''
+        if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:
