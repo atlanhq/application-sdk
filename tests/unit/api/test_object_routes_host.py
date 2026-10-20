@@ -26,7 +26,7 @@ from application_sdk.handler import (
     SqlMetadataOutput,
 )
 from application_sdk.handler.asgi import build_asgi_app
-from application_sdk.handler.object_routes import S3ObjectStore, config_key
+from application_sdk.handler.object_routes import S3ObjectStore
 
 
 class _Handler(Handler):
@@ -162,16 +162,6 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
     assert response.status_code == 200
     ((bucket, key),) = s3.objects
     assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
-
-
-def test_the_host_key_is_the_workers_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    import application_sdk.constants as constants
-    from application_sdk.handler.service import _config_objectstore_key
-
-    monkeypatch.setattr(constants, "APPLICATION_NAME", "mysql")
-    assert _config_objectstore_key("guid-1", "credentials") == config_key(
-        "mysql", "guid-1", "credentials"
-    )
 
 
 def test_the_store_comes_from_s3_bucket(monkeypatch: pytest.MonkeyPatch) -> None:

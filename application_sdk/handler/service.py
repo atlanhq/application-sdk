@@ -33,13 +33,11 @@ import dataclasses
 import inspect
 import json
 import os
-import re
 import tempfile
 import warnings
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -156,6 +154,7 @@ from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re
 from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
     _CATEGORY_TO_HTTP,
     _app_error_to_http_status,
+    _import_optional_app_module,
 )
 from application_sdk.handler.routes import (  # noqa: E402
     _normalize_preflight_request as _routes_normalize_preflight_request,
@@ -552,30 +551,6 @@ _ComputeManifestFn = Callable[
 ]
 
 
-def _import_optional_app_module(dotted: str) -> ModuleType | None:
-    """Import an optional consumer-owned module by dotted path.
-
-    Returns ``None`` only when the module *itself* (or one of its parent
-    packages) is absent — the expected "this app ships no such hook" case.
-    Re-raises when the module exists but fails to import: a transitive
-    ``ModuleNotFoundError`` (a missing dependency named somewhere other than the
-    target's own dotted path) or any other ``ImportError`` is a real bug in the
-    connector's code and must surface, not be silently swallowed into a
-    fall-through.
-    """
-    import importlib  # noqa: PLC0415 — cold path: per-entrypoint discovery only
-
-    try:
-        return importlib.import_module(dotted)
-    except ModuleNotFoundError as exc:  # conformance: ignore[E008] re-raises if missing dep is not the target module itself
-        missing = exc.name or ""
-        # Swallow only if what's missing is the target or one of its parents
-        # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
-        if missing == dotted or dotted.startswith(f"{missing}."):
-            return None
-        raise
-
-
 def _discover_compute_manifest(entrypoint: str) -> _ComputeManifestFn | None:
     """Look for a per-entrypoint ``compute_manifest`` hook.
 
@@ -644,16 +619,14 @@ def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
     return decode_fe_inputs(raw, _MAX_FE_INPUTS_BYTES)
 
 
-# Allowed characters for config_id and config_type path components.
-# Prevents path traversal (no slashes, dots, or percent-encoding) when these
-# values are interpolated into object-store keys.
-_CONFIG_KEY_PATTERN = r"^[a-zA-Z0-9_\-]{1,128}$"
-_CONFIG_KEY_RE = re.compile(_CONFIG_KEY_PATTERN)
-
-# Strips any character that is not a simple alphanumeric from file extensions
-# before they are used as mkstemp suffixes, preventing taint-flow path traversal.
-_SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
-
+# Allowed characters for config_id and config_type path components: one
+# pattern, defined (and enforced by ``config_key``) in ``object_routes``; the
+# worker's old private names are kept for existing importers.
+from application_sdk.handler.object_routes import _CONFIG_KEY_RE  # noqa: E402,F401
+from application_sdk.handler.object_routes import config_key  # noqa: E402
+from application_sdk.handler.object_routes import (  # noqa: E402,F401
+    CONFIG_KEY_PATTERN as _CONFIG_KEY_PATTERN,
+)
 
 #: The one temp-path guard, shared with the host's routes; the old name is kept
 #: for existing importers.
@@ -949,17 +922,14 @@ _WORKFLOW_SENSITIVE_FIELDS = {
 def _config_objectstore_key(config_id: str, config_type: str = "workflows") -> str:
     """Build S3 key matching v2 SDK statestore path convention.
 
-    Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json
+    Path: persistent-artifacts/apps/{app_name}/{type}/{id}/config.json — the
+    worker's own app name over :func:`~application_sdk.handler.object_routes.config_key`.
     """
-    if not _CONFIG_KEY_RE.match(config_id):
-        raise InvalidConfigIdError(config_id=config_id)
-    if not _CONFIG_KEY_RE.match(config_type):
-        raise InvalidConfigTypeError(config_type=config_type)
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when computing app paths
         APPLICATION_NAME,
     )
 
-    return f"persistent-artifacts/apps/{APPLICATION_NAME}/{config_type}/{config_id}/config.json"
+    return config_key(APPLICATION_NAME, config_id, config_type)
 
 
 async def _config_load_from_objectstore(
