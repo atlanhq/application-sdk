@@ -74,9 +74,9 @@ jobs:
       # Published with PyPI trusted publishing (OIDC, id-token: write above), no
       # token. The PyPI trusted publisher for atlan-application-sdk-api is bound
       # to repository atlanhq/application-sdk, THIS workflow's filename
-      # (tag-and-publish.yaml) and no environment. Renaming this file, or moving
-      # this step into a job with an environment, breaks api publishing until
-      # the publisher entry on PyPI is updated to match.
+      # (tag-and-publish.yaml), with any environment allowed. Renaming this
+      # file breaks api publishing until the publisher entry on PyPI is
+      # updated to match.
       - name: Build and publish the api package to PyPI
         run: |
           uv build packages/api --out-dir dist-api

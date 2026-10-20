@@ -215,9 +215,9 @@ handler.
 - **Publishing.** `atlan-application-sdk-api` is published with PyPI trusted
   publishing (OIDC), not a token. The trusted publisher on PyPI is bound to the
   repository `atlanhq/application-sdk`, the workflow file
-  `.github/workflows/tag-and-publish.yaml` and no environment. Renaming that
-  file, or moving the publish into a job with an environment, breaks api
-  publishing until the PyPI entry is updated to match.
+  `.github/workflows/tag-and-publish.yaml`, with any environment allowed.
+  Renaming that file breaks api publishing until the PyPI entry is updated to
+  match.
 - **Yanking.** The two packages are one release. Yanking an SDK version means
   yanking `atlan-application-sdk-api` at the same version too, and the reverse:
   an SDK left installable pins an api that is not, and an api left installable
