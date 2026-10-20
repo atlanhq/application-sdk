@@ -3,18 +3,23 @@
 One implementation, registered by both the worker's handler service
 (``application_sdk.handler.service``) and the consolidated API host
 (:func:`application_sdk.build_asgi_app`), so an app's handler answers the
-same way on either surface: the same request contract (422 on a body that
-fails its typed contract), credential normalisation, per-entrypoint dispatch, error boundary,
-``AppError.category`` → HTTP status mapping and response envelope.
+same way on either surface: the same request contract (422 on a malformed body
+or one that fails its typed contract), credential normalisation,
+per-entrypoint dispatch, error boundary, ``AppError.category`` → HTTP status
+mapping and response envelope.
 
 Moved verbatim from ``application_sdk.handler.service``, and behaves exactly as
-it did there (including its logger name and every log line) except for one
-deliberate fix: every response-body text field that can carry exception or
+it did there (including its logger name and every log line) except for two
+deliberate fixes. First, every response-body text field that can carry exception or
 handler text — an error's ``detail``, the envelope ``message``, ``AuthOutput.message``,
 each preflight check's and the verdict's message, a warmup's ``source_state`` —
 passes through :func:`~application_sdk.errors.base.redact_secrets` as the body
 is built, so a DSN password in an ``AuthError`` no longer reaches the caller
 (the log was already redacted). Models are never mutated; only the JSON body is.
+Second, the request body is read with :func:`read_json_object`, so a body
+that is not valid JSON, or is valid JSON but not an object, answers the same 422
+envelope as a body that fails its typed contract (``Invalid request: body``,
+never echoing the body) instead of a bare 500, on both surfaces.
 The other differences are the seams a thin package needs:
 
 * ``app_package`` names the package holding per-entrypoint handler modules
@@ -78,6 +83,7 @@ from application_sdk.handler.contracts import (
 )
 from application_sdk.handler.request_contract import (
     RequestContractError,
+    read_json_object,
     validate_request,
 )
 
@@ -559,7 +565,7 @@ def register_handler_routes(
             exc.cause.errors(
                 include_url=False, include_input=False, include_context=False
             )
-            if isinstance(exc, RequestContractError)
+            if isinstance(exc, RequestContractError) and exc.cause is not None
             else []
         )
         detail = [
@@ -629,7 +635,7 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = _normalize(lift_agent_json(await request.json()))
+        body = _normalize(lift_agent_json(await read_json_object(request)))
         auth_input = validate_request(AuthInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
@@ -732,7 +738,9 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_preflight_request(await request.json(), normalize=_normalize)
+        body = _normalize_preflight_request(
+            await read_json_object(request), normalize=_normalize
+        )
         preflight_input = validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -890,7 +898,9 @@ def register_handler_routes(
         ``ceiling_seconds`` is the app's warmup ceiling, so the UI has a stop
         condition of its own.
         """
-        body = _normalize_preflight_request(await request.json(), normalize=_normalize)
+        body = _normalize_preflight_request(
+            await read_json_object(request), normalize=_normalize
+        )
         preflight_input = validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -953,7 +963,7 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = _normalize(lift_agent_json(await request.json()))
+        body = _normalize(lift_agent_json(await read_json_object(request)))
         metadata_input = validate_request(MetadataInput, body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,

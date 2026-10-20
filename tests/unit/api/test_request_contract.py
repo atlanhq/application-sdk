@@ -104,3 +104,95 @@ def test_a_bare_model_validate_still_yields_the_unsafe_default() -> None:
 
     with pytest.raises(ValidationError):
         AuthInput.model_validate({"timeout_seconds": "soon"})
+
+
+# ── a body that is not a JSON object at all ─────────────────────────────────
+# The routes read the body themselves (they normalise it before validating), so
+# a body that is not JSON, or is JSON but not an object, used to escape the 422
+# as a bare 500. Both surfaces now answer the contract's own 422.
+
+_NOT_AN_OBJECT = [
+    b"[1]",
+    b"{bad",
+    b'"string"',
+    # A caller-controlled body on these routes is routinely a credential.
+    b"{bad fake-pw-123",
+    b'["fake-pw-123"]',
+    b'"fake-pw-123"',
+]
+
+
+def _worker() -> TestClient:
+    import warnings
+
+    from application_sdk.handler.service import create_app_handler_service
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        app = create_app_handler_service(DefaultHandler(), app_name="acme")
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _host() -> TestClient:
+    return TestClient(
+        build_asgi_app(DefaultHandler(), app_name="acme"),
+        raise_server_exceptions=False,
+    )
+
+
+@pytest.mark.parametrize("surface", [_worker, _host], ids=["worker", "host"])
+@pytest.mark.parametrize("route", ["auth", "check", "warmup", "metadata"])
+@pytest.mark.parametrize("body", _NOT_AN_OBJECT, ids=lambda b: b.decode())
+def test_a_body_that_is_not_a_json_object_is_422(
+    surface, route: str, body: bytes
+) -> None:
+    resp = surface().post(
+        f"/workflows/v1/{route}",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 422, resp.text
+    assert resp.json() == {
+        "success": False,
+        "message": "Invalid request: body",
+        "detail": [],
+    }
+    assert "fake-pw-123" not in resp.text
+    assert "string" not in resp.text
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [(b"{bad", "not valid JSON"), (b"[1]", "got list"), (b'"s"', "got str")],
+)
+async def test_read_json_object_raises_the_marker_without_a_cause(
+    body: bytes, reason: str
+) -> None:
+    from application_sdk.handler.request_contract import read_json_object
+
+    class _Request:
+        async def json(self):
+            import json
+
+            return json.loads(body)
+
+    with pytest.raises(RequestContractError, match=reason) as caught:
+        await read_json_object(_Request())
+    assert caught.value.cause is None
+    assert "fake-pw-123" not in str(caught.value)
+
+
+async def test_read_json_object_lets_a_non_value_error_through() -> None:
+    """The body-size cap signals with a bare Exception from inside the ASGI
+    receive; swallowing it would answer 422 for a body that must be a 413."""
+    from application_sdk.handler.request_contract import read_json_object
+
+    class _TooLarge(Exception):
+        pass
+
+    class _Request:
+        async def json(self):
+            raise _TooLarge
+
+    with pytest.raises(_TooLarge):
+        await read_json_object(_Request())

@@ -178,25 +178,31 @@ The worker registers the same modules with its own lookups (the app registry,
 its Dapr-configured store), and `test_metadata_route_parity.py` /
 `test_object_routes_host.py` pin that the two answer alike.
 
-**The split changes no behaviour, except one deliberate fix: secrets are
-redacted from response bodies.** These modules were moved out of
-`handler/service.py` (and `credentials/utils.py`) as they were, so the shared
-routes answer exactly as the worker's did before the split, on the worker and
-on the host: the same request contract (422 only for a body that fails its
-typed contract; unparseable JSON is still a 500), the same v2 credential
-normalization (only `credentials` is replaced, and `/start` strips only that
-key), the same log redaction (`errors/base.py` and `errors/wire.py` are
+**The split changes no behaviour, except two deliberate fixes: secrets are
+redacted from response bodies; a malformed body is a 422.** These modules
+were moved out of `handler/service.py` (and `credentials/utils.py`) as they
+were, so the shared routes answer exactly as the worker's did before the split,
+on the worker and on the host: the same request contract (422 for a body that
+fails its typed contract), the same v2 credential normalization (only
+`credentials` is replaced, and `/start` strips only that key), the same log
+redaction (`errors/base.py` and `errors/wire.py` are
 unchanged) and the same logger names (`application_sdk.handler.service`,
 `application_sdk.credentials.utils`), so log queries and alerts keep matching.
-The fix: every response-body text field that can carry exception or handler
-text (an error's `detail`, the envelope `message`, `AuthOutput.message`, each
+The first fix: every response-body text field that can carry exception or
+handler text (an error's `detail`, the envelope `message`, `AuthOutput.message`, each
 preflight check's and the verdict's message, a warmup's `source_state`) goes
 through `redact_secrets` as the body is built, so an
 `AuthError("... postgres://u:<pw>@h/db")` answers 401 with
 `postgres://***@h/db` where it used to carry the password. A malformed
 `fe_inputs` answers a fixed `fe_inputs is not valid JSON`, without the parser's
 text. Logs and models are unchanged; `test_response_redaction.py` pins the body
-on both surfaces.
+on both surfaces. The second: `/workflows/v1/auth`, `/check`, `/warmup` and
+`/metadata` read the body with `read_json_object`, so one that is not valid
+JSON (`{bad`) or is valid JSON but not an object (`[1]`, `"string"`) answers
+the contract's own 422, `{"success": false, "message": "Invalid request: body",
+"detail": []}`, never echoing the body, where it used to escape as a bare 500
+(the log line is unchanged). `test_request_contract.py` pins it on both
+surfaces.
 
 ## Trust model on the host
 

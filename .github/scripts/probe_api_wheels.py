@@ -21,7 +21,7 @@ clean venvs, because an editable or path install exposes the whole
    core module, and fail if any unlisted ``application_sdk`` module loads or the
    process exceeds ``--max-rss-mb``. Again with every extra installed, importing
    every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
-   ``/health`` is 200, a non-object body on ``/workflows/v1/auth`` is rejected,
+   ``/health`` is 200, a non-object body on ``/workflows/v1/auth`` is a 422,
    auth / check / metadata answer, and an ``AuthError`` carrying a DSN answers
    with the password redacted from the body.
 4. **Each module alone.** Step 3 imports the modules in one process, in sorted
@@ -85,8 +85,9 @@ from application_sdk.handler.asgi import build_asgi_app
 client = TestClient(build_asgi_app(DefaultHandler(), app_name="probe"), raise_server_exceptions=False)
 assert client.get("/health").status_code == 200, "GET /health"
 bad = client.post("/workflows/v1/auth", content=b"[1]", headers={"content-type": "application/json"})
-# Rejected exactly as the worker rejects it (the split changes no behaviour).
-assert bad.status_code >= 400, f"non-object body answered {bad.status_code}"
+# A 422 on both surfaces, never echoing the body (one of the split's two
+# deliberate fixes; it used to be a bare 500).
+assert bad.status_code == 422, f"non-object body answered {bad.status_code}"
 creds = {"credentials": [{"key": "username", "value": "u"}], "connection_config": {"host": "h"}}
 for route in ("auth", "check", "metadata"):
     r = client.post(f"/workflows/v1/{route}", json=creds)
