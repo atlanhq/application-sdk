@@ -23,6 +23,10 @@ order is load-bearing for cost as well as for the log):
   e. every ruleset-required check is green (``gh pr checks --required``)
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
   g. atlan-ci has not already posted an APPROVED review with our signature
+  h. the PR's HEAD is still the evaluated SHA (re-read after any wait)
+  i. no release train is in flight: no open ``bump-version*`` PR has had a
+     ``/gate-check`` (FND-4175, :func:`releases_in_flight`), unless overridden
+     by ``RELEASE_FREEZE``
 
 A PR by ``atlan-conformance-sync[bot]`` on ``bot/conformance-resync`` never reaches
 (a)–(g): :func:`process_pr` hands it to ``resync_approval_conditions``, whose
@@ -54,6 +58,10 @@ Environment:
                             polling while required checks are still PENDING
                             before judging (e). Empty or 0 = no wait. See
                             :func:`wait_for_pending_checks`.
+    RELEASE_FREEZE          optional override for condition (i), from the
+                            caller's ``RENOVATE_RELEASE_FREEZE`` variable:
+                            empty/``auto``, ``on`` or ``off``. See
+                            :func:`parse_freeze_mode`.
 """
 
 from __future__ import annotations
@@ -122,6 +130,29 @@ MEND_REPOS = frozenset({"atlanhq/application-sdk"})
 
 #: Renovate's own artifact-update status context (condition f).
 ARTIFACT_CONTEXT = "renovate/artifacts"
+
+#: Head-ref prefix of every release bump PR (``bump-version-main``,
+#: ``-conformance``, ``-contract-toolkit``). Shared with bump_pr_opt_in.py.
+BUMP_BRANCH_PREFIX = "bump-version"
+
+#: The commit status ``/gate-check`` posts on a bump PR's head (FND-3839). Its
+#: presence, in any state, is what makes a release train "in flight" for
+#: condition (i). Shared with bump_pr_opt_in.py and pr_test_command.py.
+GATE_CHECK_CONTEXT = "gate-check"
+
+#: Hidden marker of the ``/gate-check`` sticky PR comment, and the identity
+#: that writes it (``github.token``). Pinned to ``test_command_comment.marker``
+#: by a drift test; see :func:`releases_in_flight` for why the comment counts.
+GATE_CHECK_COMMENT_MARKER = "<!-- test-commands:gate-check -->"
+GATE_CHECK_COMMENT_AUTHOR = "github-actions[bot]"
+
+#: Manual override for condition (i), read from the caller repo's
+#: ``RENOVATE_RELEASE_FREEZE`` variable: empty or ``auto`` follows the release
+#: train, ``off`` never freezes, ``on`` always freezes. Anything else freezes —
+#: a typo must not silently turn the freeze off.
+FREEZE_AUTO = "auto"
+FREEZE_ON = "on"
+FREEZE_OFF = "off"
 
 #: Sentinel for "no ``renovate/artifacts`` state could be read". Deliberately a
 #: value that is not ``success`` rather than an empty string or None, so it
@@ -347,6 +378,54 @@ def check_head_unchanged(pr: str, head_sha: str, eval_sha: str) -> tuple[bool, s
             False,
             f"PR #{pr}: HEAD moved ({eval_sha} → {head_sha}). "
             "Skipping — a later run will re-evaluate.",
+        )
+    return True, ""
+
+
+def parse_freeze_mode(raw: str) -> str:
+    """The ``RENOVATE_RELEASE_FREEZE`` override as a mode, failing towards ON.
+
+    An unrecognised value freezes and says so: the override exists to be set by
+    hand, and a mistyped ``of`` must not read as "no freeze".
+    """
+    value = raw.strip().lower()
+    if value in ("", FREEZE_AUTO):
+        return FREEZE_AUTO
+    if value in (FREEZE_ON, FREEZE_OFF):
+        return value
+    print(
+        f"::warning::RENOVATE_RELEASE_FREEZE={raw!r} is not one of "
+        f"'{FREEZE_AUTO}', '{FREEZE_ON}', '{FREEZE_OFF}'; treating it as "
+        f"'{FREEZE_ON}'."
+    )
+    return FREEZE_ON
+
+
+def check_release_freeze(pr: str, mode: str, trains: list[str]) -> tuple[bool, str]:
+    """Condition (i): no release train may be in flight (FND-4175).
+
+    A Renovate merge to main moves every open bump branch: the release workflow
+    re-renders it, the push lands a head with no ``gate-check`` status, and the
+    release gate that was running or had passed starts over. So while a train
+    is in flight the approval is withheld. The PR stays open with auto-merge
+    armed, and the thaw (renovate_release_thaw.py) re-evaluates it when the
+    bump PR closes.
+
+    ``trains`` names the bump PRs a train is running on (see
+    :func:`releases_in_flight`); ``mode`` is from :func:`parse_freeze_mode`.
+    """
+    if mode == FREEZE_OFF:
+        return True, ""
+    if mode == FREEZE_ON:
+        return (
+            False,
+            f"PR #{pr}: Renovate is frozen by RENOVATE_RELEASE_FREEZE=on — " "holding.",
+        )
+    if trains:
+        return (
+            False,
+            f"PR #{pr}: release train in flight ({', '.join(trains)}) — holding "
+            "until the bump PR closes.",
         )
     return True, ""
 
@@ -885,6 +964,76 @@ def fetch_artifact_state(repo: str, eval_sha: str, runner: Runner) -> str:
     return classify_artifact_state(payload)
 
 
+def _gh_list(args: list[str], runner: Runner, *, what: str) -> list[Any]:
+    """A paginated ``gh api`` listing as one flat list, or raise :class:`GhError`."""
+    payload = _gh_json([*args, "--paginate", "--slurp"], runner, what=what)
+    if not isinstance(payload, list):
+        raise GhError(f"{what}: unexpected payload shape")
+    return payload
+
+
+def releases_in_flight(repo: str, runner: Runner) -> list[str]:
+    """The open bump PRs a release train is running on, as ``#N``.
+
+    A bump PR is open almost all the time — a new one opens on the first merge
+    after each release — so "a bump PR is open" would freeze Renovate for good.
+    The train starts at the first ``/gate-check`` on the bump PR and ends only
+    when that PR closes. Two signals, either one enough:
+
+    * a ``gate-check`` status on the head, in any state, ``failure`` included
+      (a failed gate is still a release someone is driving);
+    * the ``/gate-check`` sticky comment (:data:`GATE_CHECK_COMMENT_MARKER`).
+      This is what keeps the train across a head move: the status is bound to
+      one commit, so a push leaves a head without it, while the comment is
+      edited in place and survives every push. Without it, a merge that slipped
+      past the freeze (a human one, or a Renovate PR already queued) would
+      re-push the bump branch and lift the freeze, inviting the next merge.
+      Only the comment ``github-actions[bot]`` writes counts.
+
+    Raises :class:`GhError` on any unreadable listing, which aborts the step
+    and approves nothing.
+    """
+    pulls = _gh_list(
+        ["api", f"repos/{repo}/pulls?state=open&per_page=100"],
+        runner,
+        what="listing open PRs for the release freeze",
+    )
+    trains = []
+    for pull in pulls:
+        head = (pull.get("head") or {}) if isinstance(pull, dict) else {}
+        if not str(head.get("ref") or "").startswith(BUMP_BRANCH_PREFIX):
+            continue
+        number = pull.get("number")
+        sha = str(head.get("sha") or "")
+        # The per-commit list, paged, not the combined status: the combined
+        # endpoint pages its `statuses` too, and a gate-check past its first
+        # page would read as "no train".
+        statuses = _gh_list(
+            ["api", f"repos/{repo}/commits/{sha}/statuses?per_page=100"],
+            runner,
+            what=f"reading the {GATE_CHECK_CONTEXT} status of bump PR #{number}",
+        )
+        if any(
+            isinstance(s, dict) and s.get("context") == GATE_CHECK_CONTEXT
+            for s in statuses
+        ):
+            trains.append(f"#{number}")
+            continue
+        comments = _gh_list(
+            ["api", f"repos/{repo}/issues/{number}/comments?per_page=100"],
+            runner,
+            what=f"reading the /{GATE_CHECK_CONTEXT} comment on bump PR #{number}",
+        )
+        if any(
+            isinstance(c, dict)
+            and ((c.get("user") or {}).get("login")) == GATE_CHECK_COMMENT_AUTHOR
+            and GATE_CHECK_COMMENT_MARKER in str(c.get("body") or "")
+            for c in comments
+        ):
+            trains.append(f"#{number}")
+    return trains
+
+
 def fetch_reviews(repo: str, pr: str, runner: Runner) -> list[Any]:
     payload = _gh_json(
         ["api", f"repos/{repo}/pulls/{pr}/reviews", "--paginate", "--slurp"],
@@ -939,6 +1088,7 @@ def process_pr(
     *,
     budget: FanInBudget | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    freeze_mode: str = FREEZE_AUTO,
 ) -> bool:
     """Evaluate one PR and approve it if every condition holds.
 
@@ -1035,6 +1185,15 @@ def process_pr(
     if not _head_still_at(repo, pr, eval_sha, runner):
         return False
 
+    # i. No release train in flight. Last, so it reads the bump PRs as close
+    # to the approval as possible: a train that started during the fan-in
+    # wait still holds this PR.
+    trains = [] if freeze_mode == FREEZE_OFF else releases_in_flight(repo, runner)
+    ok, message = check_release_freeze(pr, freeze_mode, trains)
+    if not ok:
+        print(message)
+        return False
+
     approve(repo, pr, eval_sha, runner)
     print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
     return True
@@ -1050,6 +1209,7 @@ def main(
     extra_pattern = os.environ.get("EXTRA_DEP_PATTERN", "")
     workflow_ref = os.environ.get("CALLER_WORKFLOW_REF", "")
     follow_up = os.environ.get("FOLLOW_UP_WHEN_PENDING", "").strip().lower() == "true"
+    freeze_mode = parse_freeze_mode(os.environ.get("RELEASE_FREEZE", ""))
     budget = FanInBudget.from_seconds(
         parse_wait_seconds(os.environ.get("CHECKS_WAIT_MINUTES", ""))
     )
@@ -1071,6 +1231,7 @@ def main(
                 runner,
                 budget=budget,
                 sleep=sleep,
+                freeze_mode=freeze_mode,
             )
         if budget.still_pending:
             request_follow_up(
