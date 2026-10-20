@@ -50,6 +50,13 @@ aws = [
 # calls. Declared so those function-level imports are an extra's, as on the worker.
 pyatlan = ["pyatlan>=11.3,<12"]
 
+[project.urls]
+Homepage = "https://github.com/atlanhq/application-sdk"
+Source = "https://github.com/atlanhq/application-sdk/tree/main/packages/api"
+Documentation = "https://github.com/atlanhq/application-sdk/blob/main/docs/standards/api-distribution.md"
+# Released in lockstep with atlan-application-sdk, so the SDK's changelog covers both.
+Changelog = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
