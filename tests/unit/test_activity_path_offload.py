@@ -1,9 +1,14 @@
 """The activity path keeps the event loop free at each site FND-4084 offloaded.
 
-Each test makes one blocking primitive slow (``_STALL`` seconds) and measures
-the worst loop stall while the call that uses it runs. Inline on the loop, the
-stall is at least ``_STALL``; offloaded, the loop keeps ticking. The bar is the
-issue's: under ``_MAX_LOOP_LAG``.
+Each test makes one blocking primitive slow (``_STALL`` seconds) and checks
+two things while the call that uses it runs:
+
+* **Which thread ran it** (deterministic): never the loop's. This is the proof.
+* **The worst loop stall**: under ``_MAX_LOOP_LAG``. Inline on the loop, the
+  stall is at least ``_STALL``, so the bar sits at half of it. A tighter bar
+  measures the runner instead: a loaded Windows CI runner stalled an
+  offloaded run by 276 ms (GC, antivirus on file close), which failed a
+  100 ms bar with nothing on the loop.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+import threading
 import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -22,8 +28,8 @@ from pydantic import BaseModel
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.contracts.types import FileReference
 
-_STALL = 0.3
-_MAX_LOOP_LAG = 0.1
+_STALL = 1.0
+_MAX_LOOP_LAG = _STALL / 2
 
 
 @contextlib.asynccontextmanager
@@ -63,7 +69,7 @@ class TestChunkedDownloadCheckpoint:
         fsyncs: list[int] = []
 
         def slow_fsync(fd: int) -> None:
-            fsyncs.append(fd)
+            fsyncs.append(threading.get_ident())
             time.sleep(_STALL)
             real_fsync(fd)
 
@@ -99,6 +105,7 @@ class TestChunkedDownloadCheckpoint:
         assert checkpoints == [_transfer_state_path(path)] * 4
         # ...and the only fsync left is the part file's, once, before publish.
         assert len(fsyncs) == 1
+        assert threading.get_ident() not in fsyncs, "fsync ran on the loop thread"
         assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
 
 
@@ -108,8 +115,10 @@ class _SlowListStream:
 
     def __init__(self, batches: list[list[dict[str, str]]]) -> None:
         self._batches = batches
+        self.iterated_synchronously = False
 
     def __iter__(self) -> Iterator[list[dict[str, str]]]:
+        self.iterated_synchronously = True
         for batch in self._batches:
             time.sleep(_STALL)
             yield batch
@@ -155,6 +164,12 @@ class TestCleanupStorageListing:
             [{"path": "file_refs/dir/part-0.parquet"}],
             [{"path": "file_refs/dir/part-1.parquet"}],
         ]
+        streams: list[_SlowListStream] = []
+
+        def _list(*_: Any, **__: Any) -> _SlowListStream:
+            streams.append(_SlowListStream(listing))
+            return streams[-1]
+
         with mock.patch(
             "application_sdk.app.base._get_execution_id_from_task",
             return_value="wf-lag",
@@ -169,10 +184,7 @@ class TestCleanupStorageListing:
                         return_value=store,
                     ),
                     mock.patch("application_sdk.storage.ops.delete", _delete),
-                    mock.patch(
-                        "obstore.list",
-                        side_effect=lambda *a, **k: _SlowListStream(listing),
-                    ),
+                    mock.patch("obstore.list", side_effect=_list),
                 ):
                     async with _loop_lag() as lag:
                         result = await app.cleanup_storage(StorageCleanupInput())
@@ -187,6 +199,7 @@ class TestCleanupStorageListing:
             "file_refs/dir/part-1.parquet",
         ]
         assert result.deleted_count == 2
+        assert streams and not any(s.iterated_synchronously for s in streams)
         assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
 
 
@@ -207,11 +220,11 @@ class TestMaterializeEmptyPrefix:
             file_count=0,
         )
         real_iterdir = Path.iterdir
-        counted: list[Path] = []
+        counted: list[int] = []
 
         def slow_iterdir(self: Path) -> Iterator[Path]:
             if self == dest:
-                counted.append(self)
+                counted.append(threading.get_ident())
                 time.sleep(_STALL)
             return real_iterdir(self)
 
@@ -220,7 +233,8 @@ class TestMaterializeEmptyPrefix:
                 result = await materialize_file_reference(create_memory_store(), ref)
 
         assert result is ref
-        assert counted == [dest]
+        assert len(counted) == 1
+        assert threading.get_ident() not in counted, "counted on the loop thread"
         assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
 
 
@@ -233,7 +247,13 @@ class TestAzureClientClose:
         assert real_executor is not None
         real_executor.shutdown(wait=True)
         executor = mock.MagicMock()
-        executor.shutdown.side_effect = lambda wait=True: time.sleep(_STALL)
+        shutdowns: list[int] = []
+
+        def slow_shutdown(wait: bool = True) -> None:
+            shutdowns.append(threading.get_ident())
+            time.sleep(_STALL)
+
+        executor.shutdown.side_effect = slow_shutdown
         client._executor = executor
 
         async with _loop_lag() as lag:
@@ -241,6 +261,7 @@ class TestAzureClientClose:
 
         executor.shutdown.assert_called_once_with(wait=True)
         assert client._executor is None
+        assert threading.get_ident() not in shutdowns, "shut down on the loop thread"
         assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
 
 
@@ -263,8 +284,10 @@ class TestSizingInterceptorInputWalk:
         tree.mkdir()
         (tree / "a.parquet").write_bytes(b"x" * 100)
         real_walk = os.walk
+        walks: list[int] = []
 
         def slow_walk(top: Any, *args: Any, **kwargs: Any) -> Any:
+            walks.append(threading.get_ident())
             time.sleep(_STALL)
             return real_walk(top, *args, **kwargs)
 
@@ -309,4 +332,5 @@ class TestSizingInterceptorInputWalk:
         assert got == "ok"
         size = record.call_args[0][0].input_bytes
         assert size == 100
+        assert walks and threading.get_ident() not in walks, "walked on the loop thread"
         assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
