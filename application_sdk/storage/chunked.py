@@ -220,6 +220,9 @@ def _load_and_validate_checkpoint(
         and st.get("etag") == etag
         and path.is_file()
         and path.stat().st_size == size
+        # Every index must name a chunk of this object: an out-of-range one
+        # would skip nothing yet still be counted as on disk.
+        and all(0 <= i < -(-size // chunk_size_bytes) for i in st["done"])
     ):
         return set(st["done"])
     with contextlib.suppress(OSError):
@@ -797,6 +800,12 @@ async def _download_chunked_locked(
             else set()
         )
         resuming = bool(done)
+
+        # Nothing to resume: any part file left by an earlier attempt is about
+        # to be truncated, so drop it first — its blocks would otherwise count
+        # against the free-space check below. Best-effort, like every discard.
+        if not resuming:
+            _discard_transfer_state(path)
 
         # Fail a volume that plainly cannot hold the rest of the object now, in
         # seconds, typed as a full disk. The checkpoint is not fsynced (see

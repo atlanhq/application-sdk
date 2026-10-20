@@ -121,16 +121,14 @@ class _SlowListStream:
 
 
 class TestCleanupStorageListing:
-    async def test_listing_pages_do_not_block_the_loop(self) -> None:
+    async def test_listing_pages_do_not_block_the_loop(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
         from application_sdk.app.base import App, TaskStateAccessor
         from application_sdk.app.context import AppContext
-        from application_sdk.app.registry import AppRegistry, TaskRegistry
         from application_sdk.constants import TRACKED_FILE_REFS_KEY
         from application_sdk.contracts.base import Input, Output
         from application_sdk.contracts.cleanup import StorageCleanupInput
-
-        AppRegistry.reset()
-        TaskRegistry.reset()
 
         class _In(Input):
             value: str = ""
@@ -183,8 +181,6 @@ class TestCleanupStorageListing:
 
                 with _app_state_lock:
                     _app_state.pop("wf-lag", None)
-                AppRegistry.reset()
-                TaskRegistry.reset()
 
         assert deleted == [
             "file_refs/dir/part-0.parquet",
