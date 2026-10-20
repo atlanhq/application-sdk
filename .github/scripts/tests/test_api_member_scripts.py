@@ -50,6 +50,35 @@ def test_venvs_and_tests_are_not_scanned(tmp_path: Path) -> None:
     assert detect.outputs(detect.find_members(tmp_path)) == ["present=false"]
 
 
+def test_a_repo_with_no_root_pyproject_is_not_present(tmp_path: Path) -> None:
+    """Every app's CI runs the detector; one without a root pyproject must pass."""
+    assert detect.main(["--root", str(tmp_path)]) == 0
+    assert detect.outputs(detect.find_members(tmp_path)) == ["present=false"]
+
+
+def test_a_pyproject_that_is_not_toml_is_skipped_not_fatal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A template with {{ }} placeholders must not fail an app that never opted in."""
+    _write(tmp_path, "pyproject.toml", '[project]\nname = "atlan-publish-app"\n')
+    _write(tmp_path, "examples/pyproject.toml", "name = {{ cookiecutter.name }}\n")
+    assert detect.main(["--root", str(tmp_path)]) == 0
+    out = capsys.readouterr()
+    assert out.out.strip() == "present=false"
+    assert "::warning::examples/pyproject.toml is not valid TOML" in out.err
+
+
+def test_an_invalid_root_pyproject_is_skipped_not_fatal(tmp_path: Path) -> None:
+    _write(tmp_path, "pyproject.toml", "[project\n")
+    assert detect.main(["--root", str(tmp_path)]) == 0
+
+
+def test_a_member_next_to_an_invalid_pyproject_is_still_found(tmp_path: Path) -> None:
+    _write(tmp_path, "examples/pyproject.toml", "name = {{ x }}\n")
+    _write(tmp_path, "api/pyproject.toml", _MEMBER)
+    assert detect.outputs(detect.find_members(tmp_path))[0] == "present=true"
+
+
 def test_two_entry_points_are_an_error(tmp_path: Path) -> None:
     _write(tmp_path, "api/pyproject.toml", _MEMBER)
     _write(tmp_path, "api2/pyproject.toml", _MEMBER.replace("mysql =", "other ="))

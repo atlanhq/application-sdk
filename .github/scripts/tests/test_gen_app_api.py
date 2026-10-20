@@ -133,6 +133,12 @@ def test_a_repo_without_the_config_is_not_using_this_layout(tmp_path: Path) -> N
     assert gen.main(["check", "--root", str(tmp_path)]) == 0
 
 
+def test_a_repo_with_no_pyproject_has_nothing_to_check(tmp_path: Path) -> None:
+    """Every app's CI may run check; a repo with no root pyproject must pass it."""
+    assert gen.load(tmp_path) is None
+    assert gen.main(["check", "--root", str(tmp_path)]) == 0
+
+
 def test_nested_modules_get_the_right_number_of_dots(tmp_path: Path) -> None:
     root = _app(tmp_path, "from .sub.helper import H\n")
     (root / "app/sub").mkdir()
