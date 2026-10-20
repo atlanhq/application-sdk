@@ -400,7 +400,11 @@ report that site the same way.
   SDK's activity log interceptor, which every worker installs, catches every
   exception that leaves an activity and logs an `activity.ended` record at
   ERROR with `exc_info=True`
-  (`application_sdk/execution/_temporal/interceptors/log.py`).  The one
+  (`application_sdk/execution/_temporal/interceptors/log.py`).  Every v3 SDK
+  has an equivalent record: before 3.6.0 the default worker installed a
+  failure-logging interceptor that logged "Temporal activity failed" at ERROR
+  with `exc_info=True`.  On a v2 app, establish the caller as for any
+  non-activity path.  The one
   exception is a preflight-gate block, which it logs at WARNING without a
   traceback.  So when the `raise` propagates out of the task (nothing between
   it and the task boundary catches and swallows it), deleting the pre-raise
