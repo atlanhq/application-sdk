@@ -77,6 +77,11 @@ message itself performs — adding it at such a site **creates a leak that was
 not there before**.  A production security review over the fleet remediation
 (FND-57) found exactly this shape in five connector repos.
 
+None of this applies to a log call within the three statements before a
+`raise` in the same block (an L009 site): there the line is deleted or
+downgraded to a sanitized DEBUG, never enriched (see the E005 carve-out
+below).
+
 So before adding `exc_info=True`, or adding a log call that formats the
 exception, ask what the caught exception can carry.  If the `try` wraps a
 connect, an authenticate, a token refresh, or any request whose URL, headers
@@ -129,6 +134,20 @@ Only the second is true, and only the second survives review.
   inside the except block.  The edit is always a single keyword argument
   addition.  Example: `logger.warning("msg")` → `logger.warning("msg",
   exc_info=True)`.
+
+  **Carve-out — pre-raise logs.** If the call is within the three
+  statements before a `raise` in the same block, it is also an L009 site
+  (logging area).  Do not add `exc_info=True` and do not switch to the
+  sanitized `safe_traceback` form: that clears E005 and L004 but leaves L009,
+  and the later L009 fix deletes the enriched line.  Apply L009's resolution
+  in the same edit, in this order: delete the line when the exception has an
+  upstream record (for anything raised out of an `@task` method, the SDK's
+  `activity.ended` ERROR record); otherwise downgrade it to a sanitized DEBUG
+  through locals (`cause = sanitize_cause_repr(exc)`,
+  `trace = safe_traceback(exc)`, `logger.debug("...%s\n%s", cause, trace)`)
+  and keep the raise; or reduce the handler to a bare `raise`.  That one edit
+  clears E005, L004 and L009 together.  The logging area's "Pre-raise
+  carve-out" has the full resolution.
 
   **Contraindication — redaction boundaries.** Never add `exc_info=True` when
   the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
