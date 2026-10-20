@@ -269,11 +269,14 @@ def test_mirror_step_runs_between_vpn_and_tests(integration_steps: list[dict]) -
     vpn = _index(
         integration_steps, lambda s: "globalprotect-connect" in str(s.get("uses", ""))
     )
+    twingate = _index(
+        integration_steps, lambda s: "twingate-connect" in str(s.get("uses", ""))
+    )
     tests = _index(
         integration_steps,
         lambda s: "connector-integration-tests" in str(s.get("uses", "")),
     )
-    assert vpn < mirror < tests
+    assert twingate < vpn < mirror < tests
     step = integration_steps[mirror]
     assert "if" not in step
     assert "--mirror https://mirror.gcr.io" in " ".join(step["run"].split())
