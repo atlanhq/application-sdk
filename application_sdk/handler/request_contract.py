@@ -12,10 +12,13 @@ Ported from ``application_sdk.handler.service`` so both surfaces agree.
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from fastapi import Request
 
 ModelT = TypeVar("ModelT", bound=PydanticBaseModel)
 
@@ -58,7 +61,7 @@ def validate_request(model: type[ModelT], body: dict[str, Any]) -> ModelT:
         raise RequestContractError(exc) from exc
 
 
-async def read_json_object(request: Any) -> dict[str, Any]:
+async def read_json_object(request: Request) -> dict[str, Any]:
     """Read a request body that must be a JSON object, answering 422 if not.
 
     The routes normalise the body before validating, so they have to read it

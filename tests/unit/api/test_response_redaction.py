@@ -243,3 +243,19 @@ def test_malformed_fe_inputs_answers_a_fixed_message() -> None:
         decode_fe_inputs(f"{{password={SECRET}")
     assert caught.value.status_code == 400
     assert caught.value.detail == "fe_inputs is not valid JSON"
+
+
+def test_malformed_manifest_body_answers_a_fixed_message() -> None:
+    """The parser's text never reaches the caller: a fixed 400, as fe_inputs.
+
+    Worker only: the host registers the metadata routes only for an app that
+    ships ``generated/``, and both surfaces share ``register_metadata_routes``.
+    """
+    resp = _worker().post(
+        "/workflows/v1/manifest",
+        content=f'{{"fe_inputs": {{"password": "{SECRET}"'.encode(),
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"] == "Request body is not valid JSON"
+    assert SECRET not in resp.text

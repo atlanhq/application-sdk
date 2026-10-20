@@ -45,7 +45,6 @@ from application_sdk.common.build_identity import (
     build_identity,
 )
 from application_sdk.common.task_queue import resolve_manifest_tokens
-from application_sdk.errors.base import redact_secrets
 from application_sdk.handler.routes import (
     _ENTRYPOINT_NAME_RE,
     _wrap_response,
@@ -624,10 +623,11 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
         else:
             try:
                 body = await request.json()
-            except Exception as exc:
+            except ValueError as exc:
+                # A fixed message: no parser or exception text in a response
+                # body. ValueError covers JSONDecodeError and a non-UTF-8 body.
                 raise HTTPException(
-                    status_code=400,
-                    detail=redact_secrets(f"Request body is not valid JSON: {exc}"),
+                    status_code=400, detail="Request body is not valid JSON"
                 ) from exc
         if body is None:
             body = {}
