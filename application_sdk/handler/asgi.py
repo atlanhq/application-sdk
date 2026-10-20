@@ -28,8 +28,10 @@ import concurrent.futures
 import functools
 import importlib
 import os
+from collections.abc import Callable
+from enum import Enum, auto
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import FastAPI
 
@@ -52,6 +54,9 @@ from application_sdk.handler.routes import (
     include_app_routers_on,
     register_handler_routes,
 )
+
+if TYPE_CHECKING:
+    from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = get_logger(__name__)
 
@@ -86,11 +91,13 @@ def default_object_store() -> S3ObjectStore | None:
     return S3ObjectStore.from_env()
 
 
-#: ``build_asgi_app(object_store=...)`` default: build the store from env.
-_FROM_ENV: Any = object()
+class _Unset(Enum):
+    """``build_asgi_app(object_store=...)`` default: build the store from env."""
+
+    FROM_ENV = auto()
 
 
-def _task_queue(app_name: str, deployment: Any) -> str | None:
+def _task_queue(app_name: str, deployment: Callable[[], str]) -> str | None:
     """The queue the app's worker polls, for the served manifest.
 
     Stamped, not derived, wherever the host can be told: the worker's own
@@ -151,11 +158,11 @@ def _package_generated_dir(app_package: str) -> Path | None:
 class _AppBlockingExecutor:
     """ASGI middleware: ``run_in_thread`` in this app's requests uses its pool."""
 
-    def __init__(self, app: Any, executor: concurrent.futures.Executor) -> None:
+    def __init__(self, app: ASGIApp, executor: concurrent.futures.Executor) -> None:
         self.app = app
         self.executor = executor
 
-    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         with blocking_executor(self.executor):
             await self.app(scope, receive, send)
 
@@ -167,7 +174,7 @@ def build_asgi_app(
     app_package: str = "app",
     blocking_threads: int = DEFAULT_BLOCKING_THREADS,
     generated_dir: Path | None = None,
-    object_store: S3ObjectStore | None = _FROM_ENV,
+    object_store: S3ObjectStore | None | Literal[_Unset.FROM_ENV] = _Unset.FROM_ENV,
 ) -> FastAPI:
     """A FastAPI app serving ``handler`` as ``app_name``.
 
@@ -221,7 +228,7 @@ def build_asgi_app(
                 from_process_env=False,
             ),
         )
-    store = default_object_store() if object_store is _FROM_ENV else object_store
+    store = default_object_store() if object_store is _Unset.FROM_ENV else object_store
     register_object_routes(app, host_object_source(app_name, store))
     # The app's own routers go last, so one that redefines an SDK route is refused.
     include_app_routers_on(app, handler, app_name)

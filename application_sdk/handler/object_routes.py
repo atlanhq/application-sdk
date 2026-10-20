@@ -28,11 +28,11 @@ import re
 import shutil
 import tempfile
 import warnings
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Protocol, cast
 from uuid import uuid4
 
 import orjson
@@ -284,6 +284,22 @@ def _normalize_key(key: str) -> str:
     return "" if normalized == "." else normalized
 
 
+class S3Client(Protocol):
+    """The boto3 S3 client calls :class:`S3ObjectStore` makes.
+
+    A Protocol rather than the ``mypy_boto3_s3`` client type: boto3 is the
+    ``aws`` extra, so it is never imported at module level here.
+    """
+
+    def get_object(self, *, Bucket: str, Key: str) -> Mapping[str, Any]: ...
+
+    def put_object(
+        self, *, Bucket: str, Key: str, Body: bytes, ContentType: str
+    ) -> object: ...
+
+    def upload_file(self, filename: str, bucket: str, key: str, /) -> None: ...
+
+
 class S3ObjectStore:
     """One S3 bucket through a boto3 client: the host's store.
 
@@ -294,12 +310,14 @@ class S3ObjectStore:
     event loop.
     """
 
-    def __init__(self, bucket: str, region: str | None = None, client: Any = None):
+    def __init__(
+        self, bucket: str, region: str | None = None, client: S3Client | None = None
+    ):
         if client is None:
             import boto3  # noqa: PLC0415 — the aws extra; loaded only when S3 is configured
 
-            client = boto3.client("s3", region_name=region or None)
-        self._client = client
+            client = cast("S3Client", boto3.client("s3", region_name=region or None))
+        self._client: S3Client = client
         self._bucket = bucket
 
     @classmethod
