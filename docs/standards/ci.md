@@ -716,6 +716,52 @@ against a private git dependency fails on the next build rather than at merge.
 version string, a target arch, a base-image reference — are what `build-args`
 are for, and recording those in image history is a feature.
 
+## Renovate release freeze
+
+Renovate PRs do not merge into application-sdk `main` while a release train is in
+flight (FND-4175). A Renovate merge moves `main`. `release.yaml` then re-renders and
+force-pushes `bump-version-main` (the SDK renders `chore` commits in its notes, so every
+merge changes the bump branch). The new head has no `gate-check` status, so a release
+gate that was running or had already passed starts over.
+
+**Freeze on.** A train starts with `/gate-check` on a bump PR, which posts the `gate-check`
+commit status on its head. While any open `bump-version*` PR (main, conformance or
+contract-toolkit) has that status in any state, the Renovate auto-approve gate withholds
+the atlan-ci code-owner approval (condition i in
+`.github/scripts/renovate_approval_conditions.py`). Without that approval the PR cannot
+merge. It keeps auto-merge armed, and its log says `release train in flight (#N) — holding`.
+An open bump PR on its own does not freeze anything. A new one opens on the first merge after
+every release, so it is open nearly all the time.
+
+**Freeze off.** When a bump PR closes (its release merged, or someone closed it),
+`renovate-release-thaw.yml` dispatches `renovate-auto-approve.yml` once for each open
+`renovate/` PR. The gate re-checks every condition, the freeze included. Held PRs that are
+still green are approved and merge as usual. If another bump PR's train is still running,
+nothing is dispatched; that train's own close thaws them.
+
+A train can also end without a close: a human merge moves `main`, the bump branch is
+re-pushed, and its new head has no status. In that case the held PRs are re-evaluated on
+their next CI completion, or sooner if you dispatch `renovate-auto-approve.yml` with their
+`pr_number`.
+
+**Manual override:** the repo variable `RENOVATE_RELEASE_FREEZE`.
+
+| Value | Effect |
+|---|---|
+| unset / `auto` | follow the release train (default) |
+| `off` | never freeze, e.g. when a release is stuck and a dependency fix must land |
+| `on` | always freeze, e.g. for a release that does not go through `/gate-check` |
+
+Any other value freezes and logs a warning. After you clear `on`, dispatch
+`renovate-auto-approve.yml` per held PR, or wait for their next CI run. A human approval
+always bypasses the freeze. The freeze only withholds the bot's approval.
+
+**Scope.** Only repos whose ruleset requires the atlan-ci approval are frozen, which today
+means application-sdk alone. Fleet repos retired the auto-approve caller (bootstrap
+`RETIRED_FILES`), so their Renovate PRs merge on required checks alone. A Renovate PR that
+was approved and queued just before `/gate-check` can still land; the freeze closes the
+approval, not the queue.
+
 ## Renovate post-upgrade commands
 
 Three run today, all installed as bare PATH commands by `.github/workflows/renovate.yaml`

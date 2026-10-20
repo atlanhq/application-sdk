@@ -145,7 +145,17 @@ class FakeGh:
         status=None,
         reviews=None,
         checks_exit=0,
+        open_pulls=None,
+        bump_status=None,
+        open_pulls_fail=False,
     ):
+        # Open-PR listing read by the release freeze (condition i); empty by
+        # default, i.e. no train in flight. ``bump_status`` maps a bump head SHA
+        # to its combined-status payload.
+        self.open_pulls = (
+            None if open_pulls_fail else ([] if open_pulls is None else open_pulls)
+        )
+        self.bump_status = bump_status or {}
         self.meta = pr_payload() if meta is _UNSET else meta
         self.commit_pulls = (
             [{"state": "open", "number": 7}] if commit_pulls is _UNSET else commit_pulls
@@ -175,6 +185,10 @@ class FakeGh:
                 out, rc = self._respond(self.files, slurp=True)
             elif path.endswith("/reviews"):
                 out, rc = self._respond(self.reviews, slurp=True)
+            elif "/pulls?state=open" in path:
+                out, rc = self._respond(self.open_pulls, slurp=True)
+            elif path.split("/")[-2] in self.bump_status:
+                out, rc = self._respond(self.bump_status[path.split("/")[-2]])
             elif path.endswith("/status"):
                 out, rc = self._respond(self.status)
             elif path.endswith("/pulls"):
@@ -1574,3 +1588,147 @@ class TestDeliberateDivergences:
         # pages, so the count is one number.
         pages = [[HUMAN_REVIEW] * 30, [HUMAN_REVIEW]]
         assert gate.count_signature_approvals(gate._flatten_pages(pages)) == 0
+
+
+# ---------------------------------------------------------------------------
+# Condition (i): release freeze (FND-4175)
+# ---------------------------------------------------------------------------
+
+BUMP_SHA = "bump999"
+
+
+def bump_pull(number=41, ref="bump-version-main", sha=BUMP_SHA):
+    return {"number": number, "head": {"ref": ref, "sha": sha}}
+
+
+def gate_check(state):
+    return status_payload((gate.GATE_CHECK_CONTEXT, state))
+
+
+class TestParseFreezeMode:
+    @pytest.mark.parametrize("raw", ["", "  ", "auto", "AUTO", " Auto "])
+    def test_empty_and_auto_follow_the_train(self, raw):
+        assert gate.parse_freeze_mode(raw) == gate.FREEZE_AUTO
+
+    @pytest.mark.parametrize(
+        "raw, mode",
+        [("on", gate.FREEZE_ON), ("OFF", gate.FREEZE_OFF), (" off ", gate.FREEZE_OFF)],
+    )
+    def test_on_and_off(self, raw, mode):
+        assert gate.parse_freeze_mode(raw) == mode
+
+    @pytest.mark.parametrize("raw", ["of", "false", "0", "disabled"])
+    def test_anything_else_freezes_and_warns(self, raw, capsys):
+        assert gate.parse_freeze_mode(raw) == gate.FREEZE_ON
+        assert "::warning::" in capsys.readouterr().out
+
+
+class TestCheckReleaseFreeze:
+    def test_no_train_passes(self):
+        assert gate.check_release_freeze("7", gate.FREEZE_AUTO, []) == (True, "")
+
+    def test_a_train_holds_and_names_the_bump_pr(self):
+        ok, message = gate.check_release_freeze("7", gate.FREEZE_AUTO, ["#41"])
+        assert not ok
+        assert "release train in flight (#41)" in message
+
+    def test_off_passes_even_with_a_train(self):
+        assert gate.check_release_freeze("7", gate.FREEZE_OFF, ["#41"]) == (True, "")
+
+    def test_on_holds_without_a_train(self):
+        ok, message = gate.check_release_freeze("7", gate.FREEZE_ON, [])
+        assert not ok
+        assert "RENOVATE_RELEASE_FREEZE=on" in message
+
+
+class TestReleaseFreeze:
+    """End to end: a PR that passes (a)–(h) is approved iff (i) holds."""
+
+    @pytest.mark.parametrize("state", ["pending", "success", "failure", "error"])
+    def test_a_gate_check_in_any_state_holds_the_pr(self, monkeypatch, capsys, state):
+        code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            open_pulls=[bump_pull()],
+            bump_status={BUMP_SHA: gate_check(state)},
+        )
+        assert code == 0
+        assert fake.approved_prs == []
+        assert "release train in flight (#41)" in log
+
+    @pytest.mark.parametrize(
+        "ref",
+        [
+            "bump-version-main",
+            "bump-version-conformance",
+            "bump-version-contract-toolkit",
+        ],
+    )
+    def test_every_bump_lane_freezes(self, monkeypatch, ref):
+        _, fake, _ = run_main(
+            monkeypatch,
+            open_pulls=[bump_pull(ref=ref)],
+            bump_status={BUMP_SHA: gate_check("pending")},
+        )
+        assert fake.approved_prs == []
+
+    def test_an_open_bump_pr_without_gate_check_does_not_freeze(self, monkeypatch):
+        # The bump PR is open nearly all the time; only /gate-check starts a train.
+        _, fake, _ = run_main(
+            monkeypatch,
+            open_pulls=[bump_pull()],
+            bump_status={BUMP_SHA: status_payload(("other", "success"))},
+        )
+        assert fake.approved_prs == ["7"]
+
+    def test_gate_check_on_a_non_bump_pr_does_not_freeze(self, monkeypatch):
+        _, fake, _ = run_main(
+            monkeypatch,
+            open_pulls=[bump_pull(ref="feature/x")],
+            bump_status={BUMP_SHA: gate_check("success")},
+        )
+        assert fake.approved_prs == ["7"]
+        assert not any(BUMP_SHA in p for p in fake.api_paths)
+
+    def test_no_open_prs_approves(self, monkeypatch):
+        _, fake, _ = run_main(monkeypatch, open_pulls=[])
+        assert fake.approved_prs == ["7"]
+
+    def test_override_off_approves_through_a_train_without_reading_it(
+        self, monkeypatch
+    ):
+        _, fake, _ = run_main(
+            monkeypatch,
+            env={"RELEASE_FREEZE": "off"},
+            open_pulls=[bump_pull()],
+            bump_status={BUMP_SHA: gate_check("success")},
+        )
+        assert fake.approved_prs == ["7"]
+        assert not any("/pulls?state=open" in p for p in fake.api_paths)
+
+    def test_override_on_holds_without_a_train(self, monkeypatch, capsys):
+        _, fake, log = run_main(
+            monkeypatch, capsys=capsys, env={"RELEASE_FREEZE": "on"}
+        )
+        assert fake.approved_prs == []
+        assert "RENOVATE_RELEASE_FREEZE=on" in log
+
+    def test_unreadable_listing_aborts_and_approves_nothing(self, monkeypatch, capsys):
+        code, fake, log = run_main(monkeypatch, capsys=capsys, open_pulls_fail=True)
+        assert code == 1
+        assert fake.approved_prs == []
+        assert "::error::" in log
+
+    def test_unreadable_bump_status_aborts_and_approves_nothing(self, monkeypatch):
+        code, fake, _ = run_main(
+            monkeypatch,
+            open_pulls=[bump_pull()],
+            bump_status={BUMP_SHA: None},
+        )
+        assert code == 1
+        assert fake.approved_prs == []
+
+    def test_freeze_is_read_after_the_other_conditions(self, monkeypatch):
+        # A PR that fails an earlier condition never costs the freeze lookup.
+        _, fake, _ = run_main(monkeypatch, files=file_payload("src/app.py"))
+        assert not any("/pulls?state=open" in p for p in fake.api_paths)
