@@ -305,9 +305,16 @@ outcome mirroring the error-handling shape in the reference app named by
   an empty sentinel".  Adding, moving or upgrading the log is a wrong edit.
   Either raise a domain error (`raise XError(...) from exc`) so the caller gets
   an error code, or return the failure as typed data (the already-clearing
-  shape below).  If the empty value genuinely is the function's documented
-  contract, a justified `# conformance: ignore[E007] <which contract>` is the
-  end state, as described in the rule's terminal state.  This arm skips narrow
+  shape below).  The one already-clearing variant is a per-item `return None`
+  after the handler calls the imported `residuals.record_residual_failure`
+  with an output path and a category (atlan-metabase-app
+  `app/extracts/questions.py`): the failure is recorded as durable data, not
+  just logged.  An empty aggregate (`{}`, `[]`) after that call still fires.
+  If the empty value genuinely is the function's documented contract — for
+  example an optional cache whose misses fall back to another lookup — a
+  justified `# conformance: ignore[E007] <which contract>` is the end state, as
+  described in the rule's terminal state.  Put that suppression in the app;
+  do not teach the detector to prove the contract.  This arm skips narrow
   catches, a bare `return`, a `return None` in a `-> None` function, and
   wholesale-deprecated modules (a module-level `DeprecationWarning` in the file
   or an enclosing package's `__init__.py`), which are being removed rather

@@ -329,8 +329,11 @@ unrelated, making the original failure invisible.
   and the value is a non-empty placeholder, the logged-sentinel arm does not apply.
   Logging alone is not enough: under a broad catch (`except Exception`), logging before
   an empty return (None, [], {}) still fires E007 (FND-4080, which deliberately
-  supersedes the log-then-sentinel reading in #4428). It is the credential-boundary form
-  of the fix: the log is `logger.debug` through sanitize_cause_repr with no exc_info,
+  supersedes the log-then-sentinel reading in #4428). The one broad-catch exception is
+  atlan-metabase-app app/extracts/questions.py: a per-item `return None` after
+  `record_residual_failure(output_path, category, ...)`, which writes the failure to a
+  durable residual trail rather than only the log. It is the credential-boundary form of
+  the fix: the log is `logger.debug` through sanitize_cause_repr with no exc_info,
   because the url it guards may be a pre-signed secret held in that frame. Outside such
   a boundary, log with exc_info=True.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
@@ -346,13 +349,16 @@ unrelated, making the original failure invisible.
   fire, because a string is the failure laundered into a plain value. Found by a
   consumer app's preflight probe arms in FND-2493. Under a broad catch, a log before an
   empty-sentinel return does not clear E007 (FND-4080): there the fix is to raise or
-  return typed data, never to add or move a log line. E004 still applies to the same
-  handler independently, so its exc_info requirement holds whichever way the E007 is
-  fixed.
+  return typed data, never to add or move a log line. Only a per-item `return None`
+  after the imported `residuals.record_residual_failure` clears it (FND-4199). E004
+  still applies to the same handler independently, so its exc_info requirement holds
+  whichever way the E007 is fixed.
 - **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
   the sentinel genuinely IS the function's contract — the caller is documented to treat
   the empty/None return as a normal outcome rather than as success. The reason must say
-  which contract, as atlan-openapi-app `redact_url` does. Where the sentinel instead
+  which contract, as atlan-openapi-app `redact_url` does. An optional cache whose misses
+  fall back to another lookup is such a contract: suppress it in the app with the
+  contract named; the detector does not try to prove it. Where the sentinel instead
   stands in for a failure the caller cannot distinguish from success, the directive is
   unremediated: either raise, or record the failure to a durable evidence trail and
   declare the gap (see E020).
@@ -369,8 +375,10 @@ Under a broad catch (`Exception`, `BaseException`, bare `except:`) logging first
 not clear it: `logger.<level>(...); return None` (or `[]`, `{}`, `()`, `""`, `dict()`
 ...) leaves the trace in the log only, and the caller still cannot tell the failure from
 a genuine empty result. Raise a domain error or return the failure as typed data. A
-narrow catch, a bare `return`, a `return None` inside a `-> None` function, and any file
-in a wholesale-deprecated module (one whose own top level, or an enclosing package
+per-item `return None` after an imported `residuals.record_residual_failure(output_path,
+category, ...)` call is not flagged: the failure is recorded as durable data. A narrow
+catch, a bare `return`, a `return None` inside a `-> None` function, and any file in a
+wholesale-deprecated module (one whose own top level, or an enclosing package
 `__init__.py`, emits a module-level `DeprecationWarning`) are left out of this arm.
 
 ---
