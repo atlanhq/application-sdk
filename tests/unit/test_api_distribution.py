@@ -49,22 +49,69 @@ def test_the_api_core_dependencies_match_the_sdks_pins() -> None:
         assert sdk.get(name) == req, (name, sdk.get(name), req)
 
 
+def _name(req: str) -> str:
+    return re.split(r"[<>=!~;\[ ]", req, maxsplit=1)[0]
+
+
+def _sdk_pins_for_extra(sdk: dict, extra: str) -> dict[str, str]:
+    """What ``atlan-application-sdk[extra]`` pins: its core dependencies plus
+    that one extra's (never another extra's). A name pinned differently in the
+    core and in the extra has no single answer, so it fails here."""
+    pins = {_name(r): r for r in sdk["dependencies"]}
+    for req in sdk.get("optional-dependencies", {}).get(extra, []):
+        name = _name(req)
+        assert pins.setdefault(name, req) == req, (extra, name, pins[name], req)
+    return pins
+
+
 def test_the_api_extras_match_the_sdks_pins() -> None:
-    """A handler declares the same extra on either install and gets the same pin."""
-    sdk_reqs = {
-        re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0]: r
-        for reqs in _project(ROOT / "pyproject.toml")["optional-dependencies"].values()
-        for r in reqs
-    } | {
-        re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0]: r
-        for r in _project(ROOT / "pyproject.toml")["dependencies"]
-    }
-    for reqs in _project(ROOT / "packages/api/pyproject.toml")[
-        "optional-dependencies"
-    ].values():
+    """A handler declares the same extra on either install and gets the same pin.
+
+    Compared extra by extra: merging every SDK extra into one map would let a
+    package pinned differently in two extras silently take whichever came last.
+    """
+    sdk = _project(ROOT / "pyproject.toml")
+    api = _project(ROOT / "packages/api/pyproject.toml")
+    for extra, reqs in api["optional-dependencies"].items():
+        pins = _sdk_pins_for_extra(sdk, extra)
         for req in reqs:
-            name = re.split(r"[<>=!~;\[ ]", req, maxsplit=1)[0]
-            assert sdk_reqs.get(name) == req, (name, sdk_reqs.get(name), req)
+            name = _name(req)
+            assert pins.get(name) == req, (extra, name, pins.get(name), req)
+
+
+def test_extra_pins_are_read_from_that_extra_only() -> None:
+    sdk = {
+        "dependencies": ["httpx>=0.27,<0.29"],
+        "optional-dependencies": {"a": ["pandas>=2,<3"], "b": ["pandas>=1,<2"]},
+    }
+    assert _sdk_pins_for_extra(sdk, "a")["pandas"] == "pandas>=2,<3"
+    assert _sdk_pins_for_extra(sdk, "b")["pandas"] == "pandas>=1,<2"
+    assert "pandas" not in _sdk_pins_for_extra(sdk, "absent")
+    assert _sdk_pins_for_extra(sdk, "absent")["httpx"] == "httpx>=0.27,<0.29"
+
+
+def test_the_two_entrypoint_module_segment_copies_agree() -> None:
+    """``handler/routes.py`` keeps its own copy (the api wheel cannot import
+    ``application_sdk.app``); the two must convert every name the same way."""
+    from application_sdk.app.entrypoint import entrypoint_module_segment as canonical
+    from application_sdk.handler.routes import entrypoint_module_segment as copy
+
+    for name in (
+        "",
+        "extract",
+        "extract-metadata",
+        "asset-export-advanced",
+        "already_snake",
+        "mixed-kebab_snake",
+        "--double--",
+        "-leading",
+        "trailing-",
+        "UPPER-Case",
+        "v2-api-3",
+        "dots.stay.dots",
+        "ünïcode-näme",
+    ):
+        assert copy(name) == canonical(name), name
 
 
 def test_every_listed_file_is_part_of_the_sdk_package() -> None:
