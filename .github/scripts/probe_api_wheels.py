@@ -22,7 +22,8 @@ clean venvs, because an editable or path install exposes the whole
    process exceeds ``--max-rss-mb``. Again with every extra installed, importing
    every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
    ``/health`` is 200, a non-object body on ``/workflows/v1/auth`` is rejected,
-   and auth / check / metadata answer.
+   auth / check / metadata answer, and an ``AuthError`` carrying a DSN answers
+   with the password redacted from the body.
 4. **Each module alone.** Step 3 imports the modules in one process, in sorted
    order, so a module that only imports because an earlier one already loaded
    its dependency would pass. In both api venvs, ``python -I`` imports each
@@ -100,6 +101,7 @@ class _Failing(DefaultHandler):
 failing = TestClient(build_asgi_app(_Failing(), app_name="probe"), raise_server_exceptions=False)
 r = failing.post("/workflows/v1/auth", json=creds)
 assert r.status_code != 500 or isinstance(r.json(), dict), "AppError answered a bare 500"
+assert "secret" not in r.text, "AppError response leaked the DSN password"
 extra = sorted(
     m for m in sys.modules
     if (m == "application_sdk" or m.startswith("application_sdk."))

@@ -45,6 +45,7 @@ from application_sdk.common.build_identity import (
     build_identity,
 )
 from application_sdk.common.task_queue import resolve_manifest_tokens
+from application_sdk.errors.base import redact_secrets
 from application_sdk.handler.routes import (
     _ENTRYPOINT_NAME_RE,
     _wrap_response,
@@ -84,8 +85,9 @@ def decode_fe_inputs(
         # orjson.JSONDecodeError subclasses json.JSONDecodeError.
         parsed = orjson.loads(raw)
     except json.JSONDecodeError as exc:
+        # A fixed message: no parser or exception text in a response body.
         raise HTTPException(
-            status_code=400, detail=f"fe_inputs is not valid JSON: {exc}"
+            status_code=400, detail="fe_inputs is not valid JSON"
         ) from exc
     if not isinstance(parsed, dict):
         raise HTTPException(status_code=400, detail="fe_inputs must be a JSON object")
@@ -624,7 +626,8 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
                 body = await request.json()
             except Exception as exc:
                 raise HTTPException(
-                    status_code=400, detail=f"Request body is not valid JSON: {exc}"
+                    status_code=400,
+                    detail=redact_secrets(f"Request body is not valid JSON: {exc}"),
                 ) from exc
         if body is None:
             body = {}

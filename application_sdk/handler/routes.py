@@ -8,8 +8,14 @@ fails its typed contract), credential normalisation, per-entrypoint dispatch, er
 ``AppError.category`` → HTTP status mapping and response envelope.
 
 Moved verbatim from ``application_sdk.handler.service``, and behaves exactly as
-it did there (including its logger name); the differences are the seams a thin
-package needs:
+it did there (including its logger name and every log line) except for one
+deliberate fix: every response-body text field that can carry exception or
+handler text — an error's ``detail``, the envelope ``message``, ``AuthOutput.message``,
+each preflight check's and the verdict's message, a warmup's ``source_state`` —
+passes through :func:`~application_sdk.errors.base.redact_secrets` as the body
+is built, so a DSN password in an ``AuthError`` no longer reaches the caller
+(the log was already redacted). Models are never mutated; only the JSON body is.
+The other differences are the seams a thin package needs:
 
 * ``app_package`` names the package holding per-entrypoint handler modules
   (``app`` on the worker, e.g. ``atlan_mysql_api`` on the host);
@@ -35,7 +41,12 @@ from fastapi.responses import JSONResponse
 from application_sdk._logging import get_logger
 from application_sdk.credentials.ingress import lift_agent_json
 from application_sdk.errors import FailureCategory
-from application_sdk.errors.base import AppError, safe_traceback, sanitize_cause_repr
+from application_sdk.errors.base import (
+    AppError,
+    redact_secrets,
+    safe_traceback,
+    sanitize_cause_repr,
+)
 from application_sdk.errors.leaves import InternalError
 from application_sdk.handler._warmup import (
     bounded_warmup_probe,
@@ -149,9 +160,9 @@ def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     # app that never tiers its checks answers exactly as before tiers existed.
     if check.tier is CheckTier.PREFLIGHT:
         del dumped["tier"]
-    dumped["message"] = check.resolved_message
+    dumped["message"] = redact_secrets(check.resolved_message)
     if check.resolved_suggested_action:
-        dumped["suggested_action"] = check.resolved_suggested_action
+        dumped["suggested_action"] = redact_secrets(check.resolved_suggested_action)
     return dumped
 
 
@@ -172,7 +183,7 @@ def _preflight_response(
     data: dict[str, Any] = {}
     for check in result.checks:
         key = check.name[0].lower() + check.name[1:]
-        msg = check.resolved_message or ""
+        msg = redact_secrets(check.resolved_message or "")
         data[key] = {
             "success": check.passed,
             "message": msg,
@@ -181,7 +192,9 @@ def _preflight_response(
         }
     response = _wrap_response(
         data,
-        message=result.message or f"Preflight check {result.status.value}",
+        message=redact_secrets(
+            result.message or f"Preflight check {result.status.value}"
+        ),
         success=(len(result.checks) > 0 or result.status is PreflightStatus.PENDING)
         if success is None
         else success,
@@ -222,7 +235,7 @@ def _preflight_failure_body(
     output = unverifiable_preflight_result(exc, app_name, include_cause=False)
     body = _preflight_response(output, success=False)
     failure = output.checks[0].error
-    body["detail"] = detail if detail is not None else output.message
+    body["detail"] = redact_secrets(detail if detail is not None else output.message)
     body["error"] = (
         failure.model_dump(mode="json", exclude_none=True)
         if failure is not None
@@ -241,7 +254,7 @@ def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     """
     summary: dict[str, Any] = {
         "status": result.status.value,
-        "message": result.message,
+        "message": redact_secrets(result.message),
         "total_duration_ms": result.total_duration_ms,
         "checks": [_summarize_check(check) for check in result.checks],
     }
@@ -256,8 +269,15 @@ def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
 
 
 def _warmup_body(observation: WarmupObservation) -> dict[str, Any]:
-    """An observation as the HTTP caller sees it."""
-    return observation.model_dump(mode="json", exclude_none=True)
+    """An observation as the HTTP caller sees it.
+
+    ``source_state`` is the handler's own free text, so it is redacted here, at
+    the response boundary, like every other handler-authored string in a body.
+    """
+    body = observation.model_dump(mode="json", exclude_none=True)
+    if body.get("source_state"):
+        body["source_state"] = redact_secrets(body["source_state"])
+    return body
 
 
 def _with_warmup_verdict(
@@ -644,14 +664,15 @@ def register_handler_routes(
                     context.request_id_str,
                     result.status.value,
                 )
+                data = result.model_dump(mode="json", exclude={"error": {"cause_repr"}})
+                data["message"] = redact_secrets(data["message"])
                 return JSONResponse(
                     status_code=result.status.http_status,
                     content=_wrap_response(
-                        result.model_dump(
-                            mode="json", exclude={"error": {"cause_repr"}}
+                        data,
+                        message=redact_secrets(
+                            result.message or f"Authentication {result.status.value}"
                         ),
-                        message=result.message
-                        or f"Authentication {result.status.value}",
                         success=result.status.is_success,
                     ),
                 )
@@ -669,7 +690,9 @@ def register_handler_routes(
                     sanitize_cause_repr(e),
                     safe_traceback(e),
                 )
-                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+                raise HTTPException(
+                    status_code=e.http_status, detail=redact_secrets(str(e))
+                ) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
@@ -682,7 +705,8 @@ def register_handler_routes(
                     safe_traceback(e),
                 )
                 raise HTTPException(
-                    status_code=_app_error_to_http_status(e), detail=str(e)
+                    status_code=_app_error_to_http_status(e),
+                    detail=redact_secrets(str(e)),
                 ) from None
             except HTTPException:
                 # Deliberate HTTP responses (e.g. 400 from a malformed
@@ -903,7 +927,8 @@ def register_handler_routes(
                     safe_traceback(e),
                 )
                 raise HTTPException(
-                    status_code=_app_error_to_http_status(e), detail=e.message
+                    status_code=_app_error_to_http_status(e),
+                    detail=redact_secrets(e.message),
                 ) from None
             except HTTPException:
                 # Deliberate client-facing responses (e.g. 400 from a
@@ -996,7 +1021,9 @@ def register_handler_routes(
                     sanitize_cause_repr(e),
                     safe_traceback(e),
                 )
-                raise HTTPException(status_code=e.http_status, detail=str(e)) from None
+                raise HTTPException(
+                    status_code=e.http_status, detail=redact_secrets(str(e))
+                ) from None
             except AppError as e:
                 # Forward-looking: typed AppError leaves from connectors that raise
                 # non-HandlerError typed errors (already migrated).
@@ -1009,7 +1036,8 @@ def register_handler_routes(
                     safe_traceback(e),
                 )
                 raise HTTPException(
-                    status_code=_app_error_to_http_status(e), detail=str(e)
+                    status_code=_app_error_to_http_status(e),
+                    detail=redact_secrets(str(e)),
                 ) from None
             except HTTPException:
                 # Deliberate HTTP responses (e.g. 400 from a malformed
