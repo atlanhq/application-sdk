@@ -19,6 +19,21 @@ from types import ModuleType
 #: A module the full SDK always ships and the api distribution never does.
 _WORKER_SENTINEL = "application_sdk.main"
 
+#: The modules the :func:`worker_only_missing` guards import, none of them shipped
+#: by the api distribution: the object store (``contracts.types``,
+#: ``credentials.utils``, ``common.utils``, ``observability.observability``), the
+#: worker's infrastructure (``handler.context``, ``observability.observability``),
+#: the SDK's structured logger (``_logging``) and Temporal
+#: (``observability.utils``). A guard falls back only when one of these (or a
+#: submodule of one) is what is missing; anything else is a real error. A new
+#: guard over another worker-only module adds that module here.
+_WORKER_ONLY_PREFIXES: tuple[str, ...] = (
+    "application_sdk.infrastructure",
+    "application_sdk.observability",
+    "application_sdk.storage",
+    "temporalio",
+)
+
 
 @functools.cache
 def api_only_install() -> bool:
@@ -31,9 +46,17 @@ def worker_only_missing(exc: ModuleNotFoundError) -> bool:
 
     Use it in ``except ModuleNotFoundError as exc: if not worker_only_missing(exc):
     raise``. With the full SDK installed it is always False, so the error
-    propagates exactly as it did before the split.
+    propagates exactly as it did before the split. On an api-only install it is
+    True only when the missing module is one of :data:`_WORKER_ONLY_PREFIXES`;
+    a missing api file or third-party dependency still raises.
     """
-    return api_only_install()
+    if not api_only_install():
+        return False
+    missing = exc.name or ""
+    return any(
+        missing == prefix or missing.startswith(prefix + ".")
+        for prefix in _WORKER_ONLY_PREFIXES
+    )
 
 
 def import_submodule(package: str, name: str) -> ModuleType | None:

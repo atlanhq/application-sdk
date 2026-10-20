@@ -57,7 +57,13 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
    ```
 
    `worker_only_missing` (`application_sdk._install`) is true only on an
-   api-only install. With the full SDK installed a missing module still raises.
+   api-only install, and only when the missing module is one of
+   `_WORKER_ONLY_PREFIXES` (the worker modules the guards wrap: the object
+   store, the worker's infrastructure, the structured logger, Temporal) or a
+   submodule of one. Any other missing module — a listed file, a third-party
+   dependency — still raises on the host. A new guard over another worker-only
+   module adds that module to `_WORKER_ONLY_PREFIXES`. With the full SDK
+   installed a missing module always raises.
 
 `probe_api_wheels.py` then checks the **built** wheels:
 
