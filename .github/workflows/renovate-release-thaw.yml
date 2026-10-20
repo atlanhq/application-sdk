@@ -1,16 +1,14 @@
 name: Renovate — thaw after a release train
 
-# Lifts the release freeze (FND-4175). While a bump-version* PR's head carries a
-# `gate-check` status, renovate_approval_conditions.py withholds the atlan-ci
+# Lifts the release freeze (FND-4175). From a bump-version* PR's first
+# /gate-check until it closes, renovate_approval_conditions.py withholds the atlan-ci
 # approval from Renovate PRs (condition i), so none of them can merge and move
 # main under the release. A held PR keeps auto-merge armed but nothing re-fires
 # the gate for it, so when the bump PR closes (the release merging, or a train
 # abandoned by closing it) this dispatches renovate-auto-approve.yml once per
 # open renovate/ PR. Every condition is re-checked there, the freeze included.
 #
-# A train abandoned by a push to the bump branch (a human merge moved main)
-# ends without a close; its held PRs are re-evaluated on their next CI
-# completion, or by dispatching renovate-auto-approve.yml with pr_number.
+# A dispatch that fails twice reds the run; re-running it is safe.
 #
 # All logic lives in the tested .github/scripts/renovate_release_thaw.py.
 

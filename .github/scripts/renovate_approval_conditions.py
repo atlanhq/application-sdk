@@ -24,9 +24,9 @@ order is load-bearing for cost as well as for the log):
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
   g. atlan-ci has not already posted an APPROVED review with our signature
   h. the PR's HEAD is still the evaluated SHA (re-read after any wait)
-  i. no release train is in flight: no open ``bump-version*`` PR carries a
-     ``gate-check`` status on its head (FND-4175), unless overridden by
-     ``RELEASE_FREEZE``
+  i. no release train is in flight: no open ``bump-version*`` PR has had a
+     ``/gate-check`` (FND-4175, :func:`releases_in_flight`), unless overridden
+     by ``RELEASE_FREEZE``
 
 A PR by ``atlan-conformance-sync[bot]`` on ``bot/conformance-resync`` never reaches
 (a)–(g): :func:`process_pr` hands it to ``resync_approval_conditions``, whose
@@ -139,6 +139,12 @@ BUMP_BRANCH_PREFIX = "bump-version"
 #: presence, in any state, is what makes a release train "in flight" for
 #: condition (i). Shared with bump_pr_opt_in.py and pr_test_command.py.
 GATE_CHECK_CONTEXT = "gate-check"
+
+#: Hidden marker of the ``/gate-check`` sticky PR comment, and the identity
+#: that writes it (``github.token``). Pinned to ``test_command_comment.marker``
+#: by a drift test; see :func:`releases_in_flight` for why the comment counts.
+GATE_CHECK_COMMENT_MARKER = "<!-- test-commands:gate-check -->"
+GATE_CHECK_COMMENT_AUTHOR = "github-actions[bot]"
 
 #: Manual override for condition (i), read from the caller repo's
 #: ``RENOVATE_RELEASE_FREEZE`` variable: empty or ``auto`` follows the release
@@ -405,7 +411,7 @@ def check_release_freeze(pr: str, mode: str, trains: list[str]) -> tuple[bool, s
     armed, and the thaw (renovate_release_thaw.py) re-evaluates it when the
     bump PR closes.
 
-    ``trains`` names the bump PRs that carry a ``gate-check`` status (see
+    ``trains`` names the bump PRs a train is running on (see
     :func:`releases_in_flight`); ``mode`` is from :func:`parse_freeze_mode`.
     """
     if mode == FREEZE_OFF:
@@ -958,50 +964,73 @@ def fetch_artifact_state(repo: str, eval_sha: str, runner: Runner) -> str:
     return classify_artifact_state(payload)
 
 
+def _gh_list(args: list[str], runner: Runner, *, what: str) -> list[Any]:
+    """A paginated ``gh api`` listing as one flat list, or raise :class:`GhError`."""
+    payload = _gh_json([*args, "--paginate", "--slurp"], runner, what=what)
+    if not isinstance(payload, list):
+        raise GhError(f"{what}: unexpected payload shape")
+    return payload
+
+
 def releases_in_flight(repo: str, runner: Runner) -> list[str]:
-    """The open bump PRs whose head carries a ``gate-check`` status, as ``#N``.
+    """The open bump PRs a release train is running on, as ``#N``.
 
     A bump PR is open almost all the time — a new one opens on the first merge
     after each release — so "a bump PR is open" would freeze Renovate for good.
-    The train starts at ``/gate-check``, which posts the status, and ends when
-    the bump PR closes or its head moves to a commit without one.
+    The train starts at the first ``/gate-check`` on the bump PR and ends only
+    when that PR closes. Two signals, either one enough:
 
-    Any state counts, ``failure`` included: a failed gate is still a release
-    someone is driving, and the fix they merge moves the head, which ends it.
-    Raises :class:`GhError` on any unreadable listing or status, which aborts
-    the step and approves nothing.
+    * a ``gate-check`` status on the head, in any state, ``failure`` included
+      (a failed gate is still a release someone is driving);
+    * the ``/gate-check`` sticky comment (:data:`GATE_CHECK_COMMENT_MARKER`).
+      This is what keeps the train across a head move: the status is bound to
+      one commit, so a push leaves a head without it, while the comment is
+      edited in place and survives every push. Without it, a merge that slipped
+      past the freeze (a human one, or a Renovate PR already queued) would
+      re-push the bump branch and lift the freeze, inviting the next merge.
+      Only the comment ``github-actions[bot]`` writes counts.
+
+    Raises :class:`GhError` on any unreadable listing, which aborts the step
+    and approves nothing.
     """
-    pulls = _gh_json(
-        ["api", f"repos/{repo}/pulls?state=open&per_page=100", "--paginate", "--slurp"],
+    pulls = _gh_list(
+        ["api", f"repos/{repo}/pulls?state=open&per_page=100"],
         runner,
         what="listing open PRs for the release freeze",
     )
-    if not isinstance(pulls, list):
-        raise GhError(
-            "listing open PRs for the release freeze: unexpected payload shape"
-        )
     trains = []
     for pull in pulls:
         head = (pull.get("head") or {}) if isinstance(pull, dict) else {}
         if not str(head.get("ref") or "").startswith(BUMP_BRANCH_PREFIX):
             continue
+        number = pull.get("number")
         sha = str(head.get("sha") or "")
-        status = _gh_json(
-            ["api", f"repos/{repo}/commits/{sha}/status"],
+        # The per-commit list, paged, not the combined status: the combined
+        # endpoint pages its `statuses` too, and a gate-check past its first
+        # page would read as "no train".
+        statuses = _gh_list(
+            ["api", f"repos/{repo}/commits/{sha}/statuses?per_page=100"],
             runner,
-            what=f"reading the {GATE_CHECK_CONTEXT} status of bump PR #{pull.get('number')}",
+            what=f"reading the {GATE_CHECK_CONTEXT} status of bump PR #{number}",
         )
-        statuses = status.get("statuses") if isinstance(status, dict) else None
-        if not isinstance(statuses, list):
-            raise GhError(
-                f"reading the {GATE_CHECK_CONTEXT} status of bump PR "
-                f"#{pull.get('number')}: unexpected payload shape"
-            )
         if any(
             isinstance(s, dict) and s.get("context") == GATE_CHECK_CONTEXT
             for s in statuses
         ):
-            trains.append(f"#{pull.get('number')}")
+            trains.append(f"#{number}")
+            continue
+        comments = _gh_list(
+            ["api", f"repos/{repo}/issues/{number}/comments?per_page=100"],
+            runner,
+            what=f"reading the /{GATE_CHECK_CONTEXT} comment on bump PR #{number}",
+        )
+        if any(
+            isinstance(c, dict)
+            and ((c.get("user") or {}).get("login")) == GATE_CHECK_COMMENT_AUTHOR
+            and GATE_CHECK_COMMENT_MARKER in str(c.get("body") or "")
+            for c in comments
+        ):
+            trains.append(f"#{number}")
     return trains
 
 

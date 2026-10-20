@@ -18,22 +18,25 @@ import renovate_release_thaw as thaw  # noqa: E402
 REPO = "atlanhq/application-sdk"
 BUMP_SHA = "bump999"
 
+_DEFAULT = object()
+
 
 def pull(number, ref, sha="x"):
     return {"number": number, "head": {"ref": ref, "sha": sha}}
 
 
 class FakeGh:
-    """Serves the open-PR listing and bump statuses; records dispatches.
+    """Serves the open-PR listing, bump statuses and comments; records dispatches.
 
-    ``pulls=None`` / a ``None`` status simulates a non-2xx response.
-    ``dispatch_fail`` names PRs whose dispatch exits non-zero.
+    ``pulls=None`` / ``statuses=None`` / ``comments=None`` simulate a non-2xx
+    response. ``dispatch_fail`` maps a PR to how many of its dispatches fail.
     """
 
-    def __init__(self, pulls, status=None, dispatch_fail=()):
+    def __init__(self, pulls, statuses=_DEFAULT, comments=_DEFAULT, dispatch_fail=None):
         self.pulls = pulls
-        self.status = status if status is not None else {"statuses": []}
-        self.dispatch_fail = set(dispatch_fail)
+        self.statuses = [] if statuses is _DEFAULT else statuses
+        self.comments = [] if comments is _DEFAULT else comments
+        self.dispatch_fail = dict(dispatch_fail or {})
         self.dispatched: list[str] = []
         self.calls: list[list[str]] = []
 
@@ -42,29 +45,40 @@ class FakeGh:
         args = cmd[1:]
         if args[:2] == ["workflow", "run"]:
             pr = args[-1].split("=", 1)[1]
-            if pr in self.dispatch_fail:
+            if self.dispatch_fail.get(pr, 0) > 0:
+                self.dispatch_fail[pr] -= 1
                 return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="HTTP 403")
             self.dispatched.append(pr)
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        payload = self.pulls if "/pulls?state=open" in args[1] else self.status
+        path = args[1]
+        if "/pulls?state=open" in path:
+            payload = self.pulls
+        elif "/statuses?" in path:
+            payload = self.statuses
+        else:
+            payload = self.comments
         if payload is None:
             return subprocess.CompletedProcess(cmd, 1, stdout="{}", stderr="")
-        if "/pulls?state=open" in args[1]:
-            payload = [payload]  # --paginate --slurp wraps pages
+        # --paginate --slurp wraps pages in an outer array.
         return subprocess.CompletedProcess(
-            cmd, 0, stdout=json.dumps(payload), stderr=""
+            cmd, 0, stdout=json.dumps([payload]), stderr=""
         )
 
     @property
     def workflows(self) -> set[str]:
         return {c[3] for c in self.calls if c[1:3] == ["workflow", "run"]}
 
+    @property
+    def train_reads(self) -> list[str]:
+        """Every status or comment read, i.e. every look at a bump PR's train."""
+        return [c[2] for c in self.calls if c[1] == "api" and "/pulls?" not in c[2]]
 
-def run(monkeypatch, fake, **env):
+
+def run(monkeypatch, fake, sleeps=None, **env):
     monkeypatch.setenv("REPO", REPO)
     for key in ("RELEASE_FREEZE", "APPROVE_WORKFLOW"):
         monkeypatch.setenv(key, env.get(key, ""))
-    return thaw.main(fake)
+    return thaw.main(fake, sleep=(sleeps if sleeps is not None else []).append)
 
 
 class TestThaw:
@@ -92,13 +106,24 @@ class TestThaw:
     def test_does_not_thaw_while_another_train_is_in_flight(self, monkeypatch, capsys):
         fake = FakeGh(
             [pull(9, "renovate/x"), pull(30, "bump-version-conformance", BUMP_SHA)],
-            status={
-                "statuses": [{"context": gate.GATE_CHECK_CONTEXT, "state": "pending"}]
-            },
+            statuses=[{"context": gate.GATE_CHECK_CONTEXT, "state": "pending"}],
         )
         assert run(monkeypatch, fake) == 0
         assert fake.dispatched == []
         assert "#30" in capsys.readouterr().out
+
+    def test_a_train_kept_by_the_sticky_comment_blocks_the_thaw(self, monkeypatch):
+        fake = FakeGh(
+            [pull(9, "renovate/x"), pull(30, "bump-version-main", BUMP_SHA)],
+            comments=[
+                {
+                    "user": {"login": gate.GATE_CHECK_COMMENT_AUTHOR},
+                    "body": gate.GATE_CHECK_COMMENT_MARKER,
+                }
+            ],
+        )
+        assert run(monkeypatch, fake) == 0
+        assert fake.dispatched == []
 
     def test_an_open_bump_pr_without_gate_check_does_not_block_the_thaw(
         self, monkeypatch
@@ -116,18 +141,33 @@ class TestThaw:
     def test_override_off_thaws_without_reading_trains(self, monkeypatch):
         fake = FakeGh(
             [pull(9, "renovate/x"), pull(30, "bump-version-main", BUMP_SHA)],
-            status=None,  # would fail the step if it were read
+            statuses=None,  # would fail the step if it were read
+            comments=None,
         )
         assert run(monkeypatch, fake, RELEASE_FREEZE="off") == 0
         assert fake.dispatched == ["9"]
+        assert fake.train_reads == []
 
-    def test_a_failed_dispatch_warns_and_continues(self, monkeypatch, capsys):
+    def test_a_failed_dispatch_is_retried_once(self, monkeypatch):
+        fake = FakeGh([pull(9, "renovate/a")], dispatch_fail={"9": 1})
+        sleeps = []
+        assert run(monkeypatch, fake, sleeps=sleeps) == 0
+        assert fake.dispatched == ["9"]
+        assert sleeps == [thaw.RETRY_DELAY_SECONDS]
+
+    def test_a_dispatch_that_fails_twice_fails_the_run_after_the_rest(
+        self, monkeypatch, capsys
+    ):
+        # A dropped dispatch would strand a held PR whose checks are already
+        # green: nothing else re-fires the gate for it.
         fake = FakeGh(
-            [pull(9, "renovate/a"), pull(10, "renovate/b")], dispatch_fail={"9"}
+            [pull(9, "renovate/a"), pull(10, "renovate/b")], dispatch_fail={"9": 2}
         )
-        assert run(monkeypatch, fake) == 0
+        assert run(monkeypatch, fake) == 1
         assert fake.dispatched == ["10"]
-        assert "::warning::PR #9" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "::error::PR #9" in out
+        assert "re-run this workflow" in out
 
     def test_unreadable_listing_fails_the_step(self, monkeypatch, capsys):
         fake = FakeGh(None)

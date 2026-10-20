@@ -19,10 +19,13 @@ Nothing is dispatched while the freeze still holds (another lane's train, or
 ``RENOVATE_RELEASE_FREEZE=on``): each run would only hold the PR again. The
 thaw for that other train re-evaluates them.
 
-A failed dispatch is a warning, not a failure: the PR is re-evaluated on its
-next CI completion anyway, and a red thaw would only ask someone to re-run
-what a re-run would not fix. A listing that cannot be read does fail, because
-then nothing was re-evaluated.
+A failed dispatch is retried once, then fails the run. A held PR's checks
+were already green when the gate held it, and most lanes do not rebase on a
+bump merge, so no later CI completion is coming to re-evaluate it: a dropped
+dispatch strands it until someone notices. The red run is that notice, and
+re-running it re-dispatches every open Renovate PR, which is safe — the gate
+does not approve the same commit twice. A listing that cannot be read fails
+too, because then nothing was re-evaluated.
 
 Environment:
     GH_TOKEN         token with actions: write (dispatch), pull-requests: read
@@ -42,6 +45,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import time
+from collections.abc import Callable
 
 import renovate_approval_conditions as gate
 
@@ -51,16 +56,17 @@ RENOVATE_BRANCH_PREFIX = "renovate/"
 
 DEFAULT_APPROVE_WORKFLOW = "renovate-auto-approve.yml"
 
+#: Seconds before the one retry of a failed dispatch.
+RETRY_DELAY_SECONDS = 10
+
 
 def open_renovate_prs(repo: str, runner: gate.Runner) -> list[str]:
     """Numbers of the open PRs on a ``renovate/`` branch, oldest first."""
-    pulls = gate._gh_json(
-        ["api", f"repos/{repo}/pulls?state=open&per_page=100", "--paginate", "--slurp"],
+    pulls = gate._gh_list(
+        ["api", f"repos/{repo}/pulls?state=open&per_page=100"],
         runner,
         what="listing open PRs to thaw",
     )
-    if not isinstance(pulls, list):
-        raise gate.GhError("listing open PRs to thaw: unexpected payload shape")
     numbers = [
         int(pull["number"])
         for pull in pulls
@@ -73,11 +79,30 @@ def open_renovate_prs(repo: str, runner: gate.Runner) -> list[str]:
     return [str(n) for n in sorted(numbers)]
 
 
-def thaw(repo: str, mode: str, workflow: str, runner: gate.Runner) -> list[str]:
-    """Dispatch one approval evaluation per open Renovate PR; return those sent."""
+def _dispatch(
+    repo: str, workflow: str, pr: str, runner: gate.Runner
+) -> subprocess.CompletedProcess:
+    return gate._gh(
+        ["workflow", "run", workflow, "--repo", repo, "-f", f"pr_number={pr}"],
+        runner,
+    )
+
+
+def thaw(
+    repo: str,
+    mode: str,
+    workflow: str,
+    runner: gate.Runner,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[list[str], list[str]]:
+    """Dispatch one approval evaluation per open Renovate PR.
+
+    Returns ``(sent, failed)``: the PRs dispatched, and those whose dispatch
+    still failed after one retry.
+    """
     if mode == gate.FREEZE_ON:
         print("RENOVATE_RELEASE_FREEZE=on — Renovate stays frozen; nothing to thaw.")
-        return []
+        return [], []
     if mode == gate.FREEZE_AUTO:
         trains = gate.releases_in_flight(repo, runner)
         if trains:
@@ -85,32 +110,42 @@ def thaw(repo: str, mode: str, workflow: str, runner: gate.Runner) -> list[str]:
                 f"Release train still in flight ({', '.join(trains)}) — not "
                 "thawing; its own close will."
             )
-            return []
-    sent = []
+            return [], []
+    sent, failed = [], []
     for pr in open_renovate_prs(repo, runner):
-        result = gate._gh(
-            ["workflow", "run", workflow, "--repo", repo, "-f", f"pr_number={pr}"],
-            runner,
-        )
+        result = _dispatch(repo, workflow, pr, runner)
+        if result.returncode != 0:
+            sleep(RETRY_DELAY_SECONDS)
+            result = _dispatch(repo, workflow, pr, runner)
         if result.returncode != 0:
             detail = (result.stderr or result.stdout or "").strip()
-            print(f"::warning::PR #{pr}: could not dispatch {workflow}: {detail}")
+            print(f"::error::PR #{pr}: could not dispatch {workflow}: {detail}")
+            failed.append(pr)
             continue
         print(f"PR #{pr}: dispatched an approval re-evaluation ({workflow}).")
         sent.append(pr)
-    if not sent:
-        print("No open Renovate PRs re-evaluated.")
-    return sent
+    if not sent and not failed:
+        print("No open Renovate PRs to re-evaluate.")
+    return sent, failed
 
 
-def main(runner: gate.Runner = subprocess.run) -> int:
+def main(
+    runner: gate.Runner = subprocess.run,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
     repo = os.environ["REPO"]
     mode = gate.parse_freeze_mode(os.environ.get("RELEASE_FREEZE", ""))
     workflow = os.environ.get("APPROVE_WORKFLOW", "") or DEFAULT_APPROVE_WORKFLOW
     try:
-        thaw(repo, mode, workflow, runner)
+        _, failed = thaw(repo, mode, workflow, runner, sleep)
     except gate.GhError as exc:
         print(f"::error::{exc}")
+        return 1
+    if failed:
+        print(
+            f"::error::{len(failed)} held Renovate PR(s) were not re-evaluated; "
+            "re-run this workflow."
+        )
         return 1
     return 0
 

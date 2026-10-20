@@ -58,8 +58,9 @@
 #   6. Renovate's own renovate/artifacts status is green — this is what stops a
 #      failed post-upgrade task from auto-merging
 #   7. atlan-ci has not already posted an APPROVED review with this signature
-#   8. No release train is in flight (FND-4175): no open bump-version* PR has a
-#      `gate-check` status on its head. A Renovate merge would move main, the
+#   8. No release train is in flight (FND-4175): no open bump-version* PR has
+#      had a /gate-check (head `gate-check` status, or its sticky comment,
+#      which survives a push). A Renovate merge would move main, the
 #      bump branch would be re-pushed, and the release gate would start over.
 #      The held PR keeps auto-merge armed; renovate-release-thaw.yml
 #      re-evaluates it when the bump PR closes. The caller repo's

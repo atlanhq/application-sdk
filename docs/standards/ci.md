@@ -724,11 +724,16 @@ force-pushes `bump-version-main` (the SDK renders `chore` commits in its notes, 
 merge changes the bump branch). The new head has no `gate-check` status, so a release
 gate that was running or had already passed starts over.
 
-**Freeze on.** A train starts with `/gate-check` on a bump PR, which posts the `gate-check`
-commit status on its head. While any open `bump-version*` PR (main, conformance or
-contract-toolkit) has that status in any state, the Renovate auto-approve gate withholds
-the atlan-ci code-owner approval (condition i in
-`.github/scripts/renovate_approval_conditions.py`). Without that approval the PR cannot
+**Freeze on.** A train starts with the first `/gate-check` on a bump PR and runs until that
+PR closes. While any open `bump-version*` PR (main, conformance or contract-toolkit) has a
+train running, the Renovate auto-approve gate withholds the atlan-ci code-owner approval
+(condition i in `.github/scripts/renovate_approval_conditions.py`). The gate counts a train if
+either of these is true: the head has a `gate-check` status (any state), or the PR has the
+`/gate-check` sticky comment from `github-actions[bot]`. The comment is what keeps the train
+alive across a push. The status belongs to one commit, so a merge that slipped past the
+freeze would re-push the bump branch and lift the freeze. The comment is edited in place and
+survives every push. A refused `/gate-check` also writes the comment, so it starts a train too.
+ Without that approval the PR cannot
 merge. It keeps auto-merge armed, and its log says `release train in flight (#N) — holding`.
 An open bump PR on its own does not freeze anything. A new one opens on the first merge after
 every release, so it is open nearly all the time.
@@ -739,10 +744,10 @@ every release, so it is open nearly all the time.
 still green are approved and merge as usual. If another bump PR's train is still running,
 nothing is dispatched; that train's own close thaws them.
 
-A train can also end without a close: a human merge moves `main`, the bump branch is
-re-pushed, and its new head has no status. In that case the held PRs are re-evaluated on
-their next CI completion, or sooner if you dispatch `renovate-auto-approve.yml` with their
-`pr_number`.
+If a dispatch fails, it is retried once. If it fails again, the thaw run goes red. Re-run it:
+it re-dispatches every open Renovate PR, and the gate never approves the same commit twice. To
+abandon a train without releasing, close the bump PR (the next merge opens a fresh one), or
+set the override to `off`.
 
 **Manual override:** the repo variable `RENOVATE_RELEASE_FREEZE`.
 

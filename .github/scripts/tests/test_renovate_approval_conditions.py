@@ -33,6 +33,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import renovate_approval_conditions as gate  # noqa: E402
+import test_command_comment as sticky  # noqa: E402
 
 SHA = "abc123"
 REPO = "owner/repo"
@@ -148,14 +149,17 @@ class FakeGh:
         open_pulls=None,
         bump_status=None,
         open_pulls_fail=False,
+        bump_comments=None,
     ):
         # Open-PR listing read by the release freeze (condition i); empty by
         # default, i.e. no train in flight. ``bump_status`` maps a bump head SHA
-        # to its combined-status payload.
+        # to its statuses list, ``bump_comments`` a bump PR number to its
+        # comments; a ``None`` value is a failed read.
         self.open_pulls = (
             None if open_pulls_fail else ([] if open_pulls is None else open_pulls)
         )
         self.bump_status = bump_status or {}
+        self.bump_comments = bump_comments or {}
         self.meta = pr_payload() if meta is _UNSET else meta
         self.commit_pulls = (
             [{"state": "open", "number": 7}] if commit_pulls is _UNSET else commit_pulls
@@ -187,8 +191,12 @@ class FakeGh:
                 out, rc = self._respond(self.reviews, slurp=True)
             elif "/pulls?state=open" in path:
                 out, rc = self._respond(self.open_pulls, slurp=True)
-            elif path.split("/")[-2] in self.bump_status:
-                out, rc = self._respond(self.bump_status[path.split("/")[-2]])
+            elif "/statuses?" in path:
+                key = path.split("/")[-2]
+                out, rc = self._respond(self.bump_status.get(key, []), slurp=True)
+            elif "/comments?" in path:
+                key = path.split("/")[-2]
+                out, rc = self._respond(self.bump_comments.get(key, []), slurp=True)
             elif path.endswith("/status"):
                 out, rc = self._respond(self.status)
             elif path.endswith("/pulls"):
@@ -1602,7 +1610,14 @@ def bump_pull(number=41, ref="bump-version-main", sha=BUMP_SHA):
 
 
 def gate_check(state):
-    return status_payload((gate.GATE_CHECK_CONTEXT, state))
+    return [{"context": gate.GATE_CHECK_CONTEXT, "state": state}]
+
+
+def sticky_comment(author=gate.GATE_CHECK_COMMENT_AUTHOR):
+    return {
+        "user": {"login": author},
+        "body": f"{gate.GATE_CHECK_COMMENT_MARKER}\n### `/gate-check` · ✅ passed",
+    }
 
 
 class TestParseFreezeMode:
@@ -1677,7 +1692,7 @@ class TestReleaseFreeze:
         _, fake, _ = run_main(
             monkeypatch,
             open_pulls=[bump_pull()],
-            bump_status={BUMP_SHA: status_payload(("other", "success"))},
+            bump_status={BUMP_SHA: [{"context": "other", "state": "success"}]},
         )
         assert fake.approved_prs == ["7"]
 
@@ -1727,6 +1742,66 @@ class TestReleaseFreeze:
         )
         assert code == 1
         assert fake.approved_prs == []
+
+    def test_the_train_survives_a_bump_push(self, monkeypatch, capsys):
+        # A push leaves a head with no gate-check status; the sticky comment
+        # from the earlier /gate-check still holds the train (lens F-0a63c7).
+        _, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            open_pulls=[bump_pull()],
+            bump_comments={
+                "41": [{"user": {"login": "x"}, "body": "hi"}, sticky_comment()]
+            },
+        )
+        assert fake.approved_prs == []
+        assert "release train in flight (#41)" in log
+
+    def test_a_marker_comment_from_anyone_else_does_not_freeze(self, monkeypatch):
+        _, fake, _ = run_main(
+            monkeypatch,
+            open_pulls=[bump_pull()],
+            bump_comments={"41": [sticky_comment(author="someone")]},
+        )
+        assert fake.approved_prs == ["7"]
+
+    def test_a_gate_check_past_the_first_status_page_still_freezes(self, monkeypatch):
+        # The statuses list is read with --paginate --slurp (lens F-9e000b):
+        # served here as two pages, the gate-check on the second.
+        filler = [{"context": f"c{i}", "state": "success"} for i in range(100)]
+        fake = FakeGh(
+            **_defaults(open_pulls=[bump_pull()], bump_status={BUMP_SHA: filler})
+        )
+        real = fake._respond
+
+        def two_pages(payload, *, slurp=False):
+            if payload is filler:
+                return json.dumps([filler, gate_check("success")]), 0
+            return real(payload, slurp=slurp)
+
+        fake._respond = two_pages
+        for key, value in {
+            "REPO": REPO,
+            "EVENT_NAME": "workflow_run",
+            "RUN_SHA": SHA,
+            "DISPATCH_PR": "",
+            "EXTRA_DEP_PATTERN": "",
+        }.items():
+            monkeypatch.setenv(key, value)
+        assert gate.main(fake, sleep=[].append) == 0
+        assert fake.approved_prs == []
+        (call,) = [c for c in fake.calls if "/statuses?" in " ".join(c)]
+        assert "--paginate" in call and "--slurp" in call
+
+    def test_unreadable_bump_comments_abort_and_approve_nothing(self, monkeypatch):
+        code, fake, _ = run_main(
+            monkeypatch, open_pulls=[bump_pull()], bump_comments={"41": None}
+        )
+        assert code == 1
+        assert fake.approved_prs == []
+
+    def test_comment_marker_matches_the_sticky_comment_writer(self):
+        assert gate.GATE_CHECK_COMMENT_MARKER == sticky.marker(sticky.GATE_CHECK)
 
     def test_freeze_is_read_after_the_other_conditions(self, monkeypatch):
         # A PR that fails an earlier condition never costs the freeze lookup.
