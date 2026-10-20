@@ -3,7 +3,7 @@
 import base64
 import os
 import warnings
-from typing import Any, Literal, overload
+from typing import Literal, overload
 
 import orjson
 
