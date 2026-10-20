@@ -2641,3 +2641,89 @@ def test_l010_silent_for_resource_token_used_as_path_segment(body: str) -> None:
 )
 def test_l010_still_fires_outside_the_resource_token_exemption(body: str) -> None:
     assert "L010" in _ids(_L010_PREAMBLE + body)
+
+
+# ── L004 / E005 / L009 pre-raise interaction ────────────────────────────────
+#
+# A warning/error log inside an except, within three statements of a raise,
+# is reported by L004, E005 and L009 at once.  The prose prescribes L009's
+# resolution (delete, sanitized DEBUG through locals, or bare raise) instead
+# of enrichment, and claims that one edit clears all three.  These tests pin
+# that claim against the checkers, so the prescription cannot drift from them.
+
+_PRE_RAISE_PREAMBLE = (
+    "import logging\n"
+    "from application_sdk.errors import safe_traceback, sanitize_cause_repr\n"
+    "logger = logging.getLogger(__name__)\n\n"
+)
+
+_PRE_RAISE_RULES = {"L004", "L006", "L008", "L009", "E004", "E005"}
+
+
+def _pre_raise_ids(src: str) -> set[str]:
+    from conformance.suite.checks.error_handling import scan_text as scan_e
+
+    text = _PRE_RAISE_PREAMBLE + src
+    found = {
+        f.rule_id
+        for f in [*scan_text(text, "x.py"), *scan_e(text, "x.py")]
+        if not f.suppressed
+    }
+    return found & _PRE_RAISE_RULES
+
+
+def test_pre_raise_log_is_reported_by_l004_e005_and_l009() -> None:
+    src = (
+        "def f():\n"
+        "    try:\n"
+        "        connect()\n"
+        "    except ConnectionError as exc:\n"
+        "        logger.error('connect failed: %s', exc)\n"
+        "        raise\n"
+    )
+    assert _pre_raise_ids(src) == {"L004", "E005", "L009"}
+
+
+def test_enriching_a_pre_raise_log_leaves_l009_standing() -> None:
+    """The churn: the block-tier enrichment clears L004/E005 but not L009."""
+    src = (
+        "def f():\n"
+        "    try:\n"
+        "        connect()\n"
+        "    except ConnectionError as exc:\n"
+        "        logger.error('connect failed: %s\\n%s', sanitize_cause_repr(exc),"
+        " safe_traceback(exc))\n"
+        "        raise\n"
+    )
+    assert _pre_raise_ids(src) == {"L009"}
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        # (C) bare re-raise
+        "    except Exception:\n        raise\n",
+        # (D) sanitized DEBUG through locals, then bare raise
+        (
+            "    except ConnectionError as exc:\n"
+            "        cause = sanitize_cause_repr(exc)\n"
+            "        trace = safe_traceback(exc)\n"
+            "        logger.debug('connect failed: %s\\n%s', cause, trace)\n"
+            "        raise\n"
+        ),
+        # (E) sanitized DEBUG, then a classified raise
+        (
+            "    except ConnectionError as exc:\n"
+            "        cause = sanitize_cause_repr(exc)\n"
+            "        trace = safe_traceback(exc)\n"
+            "        logger.debug('connect failed: %s\\n%s', cause, trace)\n"
+            "        raise classify(exc, 'connect')\n"
+        ),
+        # Deleted: no log line at all before the raise
+        "    except ConnectionError as exc:\n        raise classify(exc, 'connect')\n",
+    ],
+    ids=["bare-raise", "sanitized-debug", "sanitized-debug-classified", "deleted"],
+)
+def test_l009_resolution_clears_l004_e005_and_l009_together(handler: str) -> None:
+    src = "def f():\n    try:\n        connect()\n" + handler
+    assert _pre_raise_ids(src) == set()

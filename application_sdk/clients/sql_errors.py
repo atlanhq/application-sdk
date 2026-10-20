@@ -58,9 +58,10 @@ class SqlClientConnectTimeoutError(AppTimeoutError):
     """The SQL client's connect or login ran out of time waiting on the source.
 
     ``AppTimeoutError`` defaults to ``APP_OWNER`` because a timeout's locus is
-    usually ambiguous. Here it is not: only the driver's or the socket's own
-    timeout can reach ``load()``'s connect, so the clock ran out waiting for
-    the customer's source.
+    usually ambiguous. Here it is not: what times out is the driver's or the
+    socket's own timeout, or ``load()``'s connect budget, spent building the
+    connection string (an STS AssumeRole for IAM-role auth) and connecting —
+    so the clock ran out waiting for the customer's source or its auth path.
     """
 
     code: ClassVar[str] = "TIMEOUT_SQL_CLIENT_CONNECT"

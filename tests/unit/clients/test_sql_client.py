@@ -101,23 +101,27 @@ def test_load_respects_pool_pre_ping_override(
 async def test_load_uses_run_in_thread_for_ping(
     mock_create_engine: Any, mock_run_in_thread: AsyncMock, sql_client: BaseSQLClient
 ):
-    """load() must delegate the blocking engine.connect() ping to run_in_thread.
+    """load() must delegate both blocking steps to run_in_thread.
 
-    The ping closes the event loop for the duration of the ODBC handshake; running
-    it on the event loop directly starves Temporal's auto-heartbeat. Verify that
-    run_in_thread is called (not a direct engine.connect() on the loop, and not
-    asyncio.to_thread — which would land on asyncio's shared default executor
-    instead of the SDK's dedicated pool).
+    Building the connection string runs an STS AssumeRole for IAM-role auth, and
+    the ping holds the loop for the whole driver handshake; either on the loop
+    starves Temporal's auto-heartbeat. Verify that run_in_thread is called for
+    both (not a direct call on the loop, and not asyncio.to_thread — which would
+    land on asyncio's shared default executor instead of the SDK's dedicated pool).
     """
     mock_engine = MagicMock()
     mock_create_engine.return_value = mock_engine
-    mock_run_in_thread.return_value = None
+    mock_run_in_thread.side_effect = ["test_connection_string", None]
 
     await sql_client.load({"username": "u", "password": "p"})
 
-    mock_run_in_thread.assert_called_once()
-    # The callable passed to run_in_thread should trigger engine.connect when called
-    ping_fn = mock_run_in_thread.call_args[0][0]
+    assert mock_run_in_thread.call_count == 2
+    build_fn = mock_run_in_thread.call_args_list[0][0][0]
+    assert build_fn is sql_client.get_sqlalchemy_connection_string
+    mock_create_engine.assert_called_once()
+    assert mock_create_engine.call_args[0][0] == "test_connection_string"
+    # The second callable should trigger engine.connect when called
+    ping_fn = mock_run_in_thread.call_args_list[1][0][0]
     ping_fn()
     mock_engine.connect.assert_called_once()
 
@@ -312,11 +316,18 @@ def test_connection_string_property_based(
 
         # Assertions to verify behavior
         assert sql_client.DB_CONFIG is not None
-        mock_create_engine.assert_called_once_with(
-            connection_string,
-            connect_args=sql_client.DB_CONFIG.connect_args,
-            pool_pre_ping=True,
-        )
+        mock_create_engine.assert_called_once()
+        args, kwargs = mock_create_engine.call_args
+        assert args == (connection_string,)
+        assert kwargs["pool_pre_ping"] is True
+        # DB_CONFIG.connect_args pass through untouched; the only thing ever
+        # added is a driver connect timeout (postgresql/mysql default drivers).
+        connect_args = kwargs["connect_args"]
+        added = connect_args.keys() - sql_client.DB_CONFIG.connect_args.keys()
+        assert added <= {"connect_timeout"}
+        assert {
+            k: v for k, v in connect_args.items() if k not in added
+        } == sql_client.DB_CONFIG.connect_args
         assert sql_client.engine == mock_engine
         # BaseSQLClient doesn't store persistent connection
         assert sql_client.connection is None
@@ -710,7 +721,10 @@ async def test_load_wraps_engine_failure_as_client_error(
 
     # Force the connect-test inside run_in_thread to fail
     actual_async_mock = AsyncMock(
-        side_effect=RuntimeError("password authentication failed for user")
+        side_effect=[
+            "test_connection_string",
+            RuntimeError("password authentication failed for user"),
+        ]
     )
     with patch("application_sdk.clients.sql.run_in_thread", actual_async_mock):
         with pytest.raises(SqlClientAuthFailedError) as exc_info:

@@ -194,7 +194,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "trips it. Narrow the except to what the try raises (E004). A catch "
             "that genuinely must stay broad is left as it is and reported for a "
             "person to decide: never suppress BLE001, and never add exc_info=True "
-            "to satisfy it, which would leak the credentials this exemption protects."
+            "to satisfy it, which would leak the credentials this exemption protects. "
+            "L009 and E005 at a pre-raise log: a warning/error within the three "
+            "statements before a raise in the same block is also an L009 site (and "
+            "usually E005). Enriching it clears L004 and E005 but not L009, whose fix "
+            "then deletes the line. Apply L009's resolution instead: delete the line "
+            "when the exception has an upstream record (which may leave a bare raise), "
+            "otherwise downgrade it to a sanitized DEBUG through locals. Never reduce "
+            "the handler to a bare raise without an upstream record. That one edit "
+            "clears L004, E005 and L009 together."
         ),
         short_description="logger.warning/error in except block without exc_info=True",
         full_description=(
@@ -398,6 +406,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "Logging immediately before re-raising creates two records for one event (raise "
             "site + handler), inflating error counts and making 'how many times did this "
             "fail?' unanswerable without dedup logic."
+        ),
+        rule_interactions=(
+            "L004 and E005 at a pre-raise log: inside an except, the same "
+            "warning/error line is usually also reported by L004 (block) and E005, "
+            "whose fix is to enrich it with exc_info=True or safe_traceback(exc). "
+            "Do not enrich an L009 site; resolve it here in one edit, which clears "
+            "all three: delete the line when the exception has an upstream record "
+            "(exc_info=True or the safe_traceback form; for anything raised out of "
+            "an @task on a v3 SDK worker, the SDK's activity.ended ERROR record), "
+            "otherwise downgrade it to a sanitized DEBUG through locals. Deleting may "
+            "leave a bare raise; never reduce the handler to one without an upstream "
+            "record. v2 apps and non-activity paths (handlers, preflight) have no "
+            "SDK record: confirm the caller logs it, or keep the sanitized DEBUG."
         ),
         short_description="logger.warning/error immediately before raise — duplicate log records",
         full_description=(

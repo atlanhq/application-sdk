@@ -1079,15 +1079,60 @@ class SilentSwallowMixin:
                     "return the failure as typed data.",
                 )
 
+    def _is_residual_failure_record_call(self, call: ast.Call) -> bool:
+        """Whether *call* invokes the imported durable residual-recording API."""
+        if isinstance(call.func, ast.Name):
+            origin = self._import_origins.get(call.func.id, "")
+            imported = origin.split(".")[-2:] == [
+                "residuals",
+                "record_residual_failure",
+            ]
+        elif (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "record_residual_failure"
+        ):
+            module = _get_name(call.func.value)
+            origin = self._import_origins.get(module or "", "")
+            imported = origin.split(".")[-1:] == ["residuals"]
+        else:
+            return False
+        keywords = {keyword.arg for keyword in call.keywords if keyword.arg}
+        has_output_path = bool(call.args) or "output_path" in keywords
+        has_category = len(call.args) >= 2 or "category" in keywords
+        return imported and has_output_path and has_category
+
+    def _has_residual_failure_record(
+        self, handler: ast.ExceptHandler, stmt: ast.Return
+    ) -> bool:
+        """True when the handler writes a residual record before a per-item ``None``.
+
+        An empty aggregate (``{}``, ``[]``) still reads as a genuine empty
+        result to the caller, so only ``return None`` qualifies.
+        """
+        if not (isinstance(stmt.value, ast.Constant) and stmt.value.value is None):
+            return False
+        for previous in handler.body:
+            if previous is stmt:
+                return False
+            if (
+                isinstance(previous, ast.Expr)
+                and isinstance(previous.value, ast.Call)
+                and self._is_residual_failure_record_call(previous.value)
+            ):
+                return True
+        return False
+
     def _is_logged_sentinel_return(
         self, handler: ast.ExceptHandler, stmt: ast.Return
     ) -> bool:
         # Logging does not make a broad catch's empty return safe: the caller
-        # still cannot tell the failure from a genuine empty result. Narrow
-        # catches stay out — `except KeyError: ...; return None` is usually the
-        # lookup's contract. So do procedures (`-> None`), where `return None`
-        # is a plain early exit, and wholesale-deprecated modules, which are
-        # being removed rather than fixed.
+        # still cannot tell the failure from a genuine empty result. A per-item
+        # `None` after a durable residual record is different — the gap is
+        # recorded as data, not just logged. Narrow catches stay out —
+        # `except KeyError: ...; return None` is usually the lookup's contract.
+        # So do procedures (`-> None`), where `return None` is a plain early
+        # exit, and wholesale-deprecated modules, which are being removed
+        # rather than fixed.
         if self._deprecated_module or not _is_empty_sentinel(stmt.value):
             return False
         if handler.type is None:
@@ -1100,6 +1145,8 @@ class SilentSwallowMixin:
         else:
             broad = _get_name(handler.type) in _BROAD_EXCEPT_TYPES
         if not broad:
+            return False
+        if self._has_residual_failure_record(handler, stmt):
             return False
         # Only `return None` is a procedure's early exit; `return []` from a
         # `-> None` function still hands the caller a plausible empty value.

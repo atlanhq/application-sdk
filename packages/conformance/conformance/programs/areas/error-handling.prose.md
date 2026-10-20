@@ -77,6 +77,11 @@ message itself performs — adding it at such a site **creates a leak that was
 not there before**.  A production security review over the fleet remediation
 (FND-57) found exactly this shape in five connector repos.
 
+None of this applies to a log call within the three statements before a
+`raise` in the same block (an L009 site): there the line is deleted or
+downgraded to a sanitized DEBUG, never enriched (see the E005 carve-out
+below).
+
 So before adding `exc_info=True`, or adding a log call that formats the
 exception, ask what the caught exception can carry.  If the `try` wraps a
 connect, an authenticate, a token refresh, or any request whose URL, headers
@@ -129,6 +134,22 @@ Only the second is true, and only the second survives review.
   inside the except block.  The edit is always a single keyword argument
   addition.  Example: `logger.warning("msg")` → `logger.warning("msg",
   exc_info=True)`.
+
+  **Carve-out — pre-raise logs.** If the call is within the three
+  statements before a `raise` in the same block, it is also an L009 site
+  (logging area).  Do not add `exc_info=True` and do not switch to the
+  sanitized `safe_traceback` form: that clears E005 and L004 but leaves L009,
+  and the later L009 fix deletes the enriched line.  Apply L009's resolution
+  in the same edit, in this order: delete the line when the exception has an
+  upstream record (for anything raised out of an `@task` method on a v3 SDK
+  worker, the SDK's `activity.ended` ERROR record; on a v2 app, confirm the
+  caller logs it), which may leave a bare `raise` (never reduce the handler
+  to one without that record); otherwise downgrade it to a sanitized DEBUG
+  through locals (`cause = sanitize_cause_repr(exc)`,
+  `trace = safe_traceback(exc)`, `logger.debug("...%s\n%s", cause, trace)`)
+  and keep the raise.  That one edit
+  clears E005, L004 and L009 together.  The logging area's "Pre-raise
+  carve-out" has the full resolution.
 
   **Contraindication — redaction boundaries.** Never add `exc_info=True` when
   the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
@@ -284,9 +305,16 @@ outcome mirroring the error-handling shape in the reference app named by
   an empty sentinel".  Adding, moving or upgrading the log is a wrong edit.
   Either raise a domain error (`raise XError(...) from exc`) so the caller gets
   an error code, or return the failure as typed data (the already-clearing
-  shape below).  If the empty value genuinely is the function's documented
-  contract, a justified `# conformance: ignore[E007] <which contract>` is the
-  end state, as described in the rule's terminal state.  This arm skips narrow
+  shape below).  The one already-clearing variant is a per-item `return None`
+  after the handler calls the imported `residuals.record_residual_failure`
+  with an output path and a category (atlan-metabase-app
+  `app/extracts/questions.py`): the failure is recorded as durable data, not
+  just logged.  An empty aggregate (`{}`, `[]`) after that call still fires.
+  If the empty value genuinely is the function's documented contract — for
+  example an optional cache whose misses fall back to another lookup — a
+  justified `# conformance: ignore[E007] <which contract>` is the end state, as
+  described in the rule's terminal state.  Put that suppression in the app;
+  do not teach the detector to prove the contract.  This arm skips narrow
   catches, a bare `return`, a `return None` in a `-> None` function, and
   wholesale-deprecated modules (a module-level `DeprecationWarning` in the file
   or an enclosing package's `__init__.py`), which are being removed rather
