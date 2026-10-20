@@ -355,14 +355,17 @@ jobs:
     uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
     secrets: inherit
 
-  # The api package's own suites. force_all is included because when it is
-  # set the dorny/paths-filter step is skipped entirely, so `api_pkg` is the
-  # empty string rather than 'false' — without it a release/* or v* run would
-  # silently skip these tests and the gate would still read green.
+  # The api package's own suites. force_sdk is included for the same reason
+  # as sdk-tests: a bump-version-main PR publishes this wheel alongside the
+  # SDK, and when a force flag is set the dorny/paths-filter step is skipped
+  # entirely, so `api_pkg`/`sdk` are the empty string rather than 'false'.
+  # force_all fans out to force_sdk, but is kept explicit so a release/* or v*
+  # run cannot silently skip these tests while the gate reads green. Gated on
+  # the bump-PR opt-in like every other area.
   api-suite-tests:
     name: API Suite Tests
     needs: changes
-    if: needs.changes.outputs.api_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_all == 'true'
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.api_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_sdk == 'true' || needs.changes.outputs.force_all == 'true')
     uses: ./.github/workflows/api-suite-tests-reusable.yaml
 
   # ── The single required check ───────────────────────────────────────────────

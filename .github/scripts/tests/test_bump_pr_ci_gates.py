@@ -459,7 +459,14 @@ def test_sdk_e2e_request_reads_the_head_commit() -> None:
 
 
 @pytest.mark.parametrize(
-    "job", ["sdk-tests", "conformance", "toolkit", "conformance-suite-tests"]
+    "job",
+    [
+        "sdk-tests",
+        "conformance",
+        "toolkit",
+        "conformance-suite-tests",
+        "api-suite-tests",
+    ],
 )
 @pytest.mark.parametrize(("opted_in", "runs"), [("true", True), ("false", False)])
 def test_sdk_gate_areas_wait_for_the_opt_in(
@@ -471,10 +478,43 @@ def test_sdk_gate_areas_wait_for_the_opt_in(
         "toolkit": "true",
         "conformance": "true",
         "conformance_pkg": "true",
+        "api_pkg": "true",
         "container": "false",
         "force_sdk": "true",
         "force_conformance": "true",
         "force_toolkit": "true",
+    }
+    expr = _job_if(WORKFLOWS / "sdk-gate.yaml", job)
+    assert evaluate(expr, {"needs": {"changes": {"outputs": outputs}}}) is runs
+
+
+@pytest.mark.parametrize(
+    ("forced", "runs"),
+    [
+        ({"force_sdk": "true"}, True),
+        ({"force_all": "true", "force_sdk": "true"}, True),
+        ({"force_conformance": "true"}, False),
+        ({"force_toolkit": "true"}, False),
+        ({}, False),
+    ],
+)
+@pytest.mark.parametrize("job", ["sdk-tests", "api-suite-tests"])
+def test_sdk_gate_force_sdk_runs_the_sdk_and_api_suites(
+    job: str, forced: dict[str, str], runs: bool
+) -> None:
+    """A bump-version-main PR sets force_sdk and skips paths-filter, so the
+    area outputs are empty strings: force_sdk alone must still run both the
+    SDK suite and the api package's suite (the api wheel ships with it)."""
+    outputs = {
+        "opted_in": "true",
+        "sdk": "",
+        "api_pkg": "",
+        "container": "",
+        "force_all": "false",
+        "force_sdk": "false",
+        "force_conformance": "false",
+        "force_toolkit": "false",
+        **forced,
     }
     expr = _job_if(WORKFLOWS / "sdk-gate.yaml", job)
     assert evaluate(expr, {"needs": {"changes": {"outputs": outputs}}}) is runs
