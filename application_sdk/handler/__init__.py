@@ -5,9 +5,9 @@ preflight, metadata, and optional warmup endpoints, plus the service factory for
 creating FastAPI applications.
 """
 
-import importlib
 from typing import TYPE_CHECKING, Any
 
+from application_sdk._install import lazy_getattr
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -87,17 +87,10 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    target = _LAZY.get(name)
-    if target is None:
-        from application_sdk._install import import_submodule  # noqa: PLC0415
-
-        module = import_submodule(__name__, name)
-        if module is None:
-            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-        return module
-    value = getattr(importlib.import_module(target[0]), target[1])
-    globals()[name] = value
-    return value
+    # No submodule fallback: ``service`` (FastAPI + Temporal) is an attribute
+    # only once something imports it, so ``hasattr(handler, "service")`` does
+    # not load it.
+    return lazy_getattr(__name__, name, _LAZY, globals())
 
 
 def __dir__() -> list[str]:

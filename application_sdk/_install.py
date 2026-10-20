@@ -14,7 +14,9 @@ from __future__ import annotations
 import functools
 import importlib
 import importlib.util
+from collections.abc import Collection, Mapping, MutableMapping
 from types import ModuleType
+from typing import Any
 
 #: A module the full SDK always ships and the api distribution never does.
 _WORKER_SENTINEL = "application_sdk.main"
@@ -64,8 +66,8 @@ def import_submodule(package: str, name: str) -> ModuleType | None:
 
     A package whose ``__init__`` imports lazily (a ``__getattr__`` over a
     ``_LAZY`` map) no longer has its submodules as attributes until something
-    imports them. Calling this from that ``__getattr__`` keeps
-    ``import pkg; pkg.sub`` working as it did when the imports were eager.
+    imports them. :func:`lazy_getattr` calls this for the submodules the package
+    used to import eagerly, so ``import pkg; pkg.sub`` keeps working for them.
     """
     if not name.isidentifier() or name.startswith("__"):
         return None
@@ -75,3 +77,54 @@ def import_submodule(package: str, name: str) -> ModuleType | None:
     except (ImportError, ValueError):
         return None
     return importlib.import_module(full) if spec is not None else None
+
+
+def _names_missing_module(exc: ModuleNotFoundError, module: str) -> bool:
+    """Whether ``exc`` is *module* itself (or a parent package) being absent."""
+    missing = exc.name or ""
+    return bool(missing) and (module == missing or module.startswith(f"{missing}."))
+
+
+def lazy_getattr(
+    module_name: str,
+    name: str,
+    lazy_map: Mapping[str, tuple[str, str]],
+    globals_: MutableMapping[str, Any],
+    submodules: Collection[str] = (),
+) -> Any:
+    """The PEP 562 ``__getattr__`` body of a package that imports lazily.
+
+    *lazy_map* maps a public name to ``(module, attribute)``; the first access
+    imports it and caches it in the package's *globals_*. *submodules* are the
+    submodules the package imported eagerly before it went lazy, so
+    ``import pkg; pkg.sub`` keeps working for those and only those: any other
+    submodule is an attribute only once something imports it, as with any
+    package (so ``hasattr(pkg, "sub")`` does not import it).
+    ``from pkg import sub`` needs no entry; the import system loads it.
+
+    A name whose module is not installed (on an api-only install the worker's
+    modules are absent) raises :class:`AttributeError` chained to the import
+    error, so ``hasattr`` and ``getattr(pkg, name, default)`` answer normally.
+    A module that is installed but fails to import raises its own error
+    unchanged: that is a real bug, and ``from pkg import name`` would otherwise
+    report only "cannot import name".
+    """
+    target = lazy_map.get(name)
+    if target is not None:
+        try:
+            module = importlib.import_module(target[0])
+        except ModuleNotFoundError as exc:
+            if not _names_missing_module(exc, target[0]):
+                raise
+            raise AttributeError(
+                f"module {module_name!r} has no attribute {name!r}: "
+                f"{target[0]} is not installed"
+            ) from exc
+        value = getattr(module, target[1])
+        globals_[name] = value
+        return value
+    if name in submodules:
+        submodule = import_submodule(module_name, name)
+        if submodule is not None:
+            return submodule
+    raise AttributeError(f"module {module_name!r} has no attribute {name!r}")

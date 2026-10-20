@@ -8,9 +8,9 @@ and their callers. Using these base classes ensures:
 4. Backwards compatibility - Add new fields with defaults
 """
 
-import importlib
 from typing import TYPE_CHECKING, Any
 
+from application_sdk._install import lazy_getattr
 from application_sdk.contracts.base import (
     ContractMetadata,
     ContractValidationError,
@@ -145,18 +145,13 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> Any:
-    target = _LAZY.get(name)
-    if target is None:
-        from application_sdk._install import import_submodule  # noqa: PLC0415
+#: The submodules this package imported eagerly before it went lazy: still
+#: attributes of the package on first access, as they always were.
+_EAGER_SUBMODULES = frozenset({"events", "storage", "types", "types_errors"})
 
-        module = import_submodule(__name__, name)
-        if module is None:
-            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-        return module
-    value = getattr(importlib.import_module(target[0]), target[1])
-    globals()[name] = value
-    return value
+
+def __getattr__(name: str) -> Any:
+    return lazy_getattr(__name__, name, _LAZY, globals(), _EAGER_SUBMODULES)
 
 
 def __dir__() -> list[str]:
