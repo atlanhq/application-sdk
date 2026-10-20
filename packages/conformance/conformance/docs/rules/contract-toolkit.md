@@ -21,7 +21,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K004](#k004) | `MissingGeneratedArtifact` | `warn` | `app` | `contract-toolkit` | yes | 0.9.0 |
 | [K005](#k005) | `GeneratedArtifactBannerStripped` | `warn` | `app` | `contract-toolkit` | — | 0.9.0 |
 | [K006](#k006) | `ManifestContractFieldMismatch` | `warn` | `app` | `contract-toolkit` | yes | 0.13.0 |
-| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
+| [K007](#k007) | `ToolkitVersionOutdated` | `warn` | `app` | `contract-toolkit` | — | 0.12.0 |
 | [K008](#k008) | `ToolkitSourceNonCanonical` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
 | [K009](#k009) | `UnresolvedScaffoldPlaceholder` | `block` | `app` | `contract-toolkit` | — | 0.12.0 |
 | [K010](#k010) | `E2EScaffoldingMissing` | `warn` | `app` | `contract-toolkit` | yes | 0.12.0 |
@@ -422,7 +422,7 @@ and deliberately deferred.
 
 ## K007 — `ToolkitVersionOutdated` {#k007}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.12.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `contract` · **Category:** `contract-toolkit` · **Autofixable:** — · **Since:** 0.12.0
 
 > app-contract-toolkit dependency resolves to a version below the latest published one — bump and regenerate
 
@@ -439,7 +439,7 @@ against drift in CI, so the check stays correct offline inside any consumer repo
   pin in contract/PklProject to the latest version data/toolkit_baseline.json records,
   which is the comparison K007 makes. Renovate opens the bump; the fix is to take it and
   re-run the repo's generate task, not to edit the pin alone.
-- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The `app-contract-toolkit` dependency in `contract/PklProject` resolves (per
 `contract/PklProject.deps.json`) to a version older than the latest the SDK publishes.
@@ -448,7 +448,9 @@ The check uses the resolved lock as the ground truth for the version actually in
 missing or stale lock is K003's concern, so K007 stays quiet in that case rather than
 guessing from a broad pin.
 
-**Fix:** bump the `@<version>` in `contract/PklProject` to the latest, run `pkl project
+**Fix:** merge the Renovate toolkit-bump PR: the self-hosted Renovate runner opens it
+and regenerates in postUpgradeTasks, so the remediation lane does not take this rule. By
+hand: bump the `@<version>` in `contract/PklProject` to the latest, run `pkl project
 resolve` to refresh the lock, then regenerate with `pkl eval -m . contract/app.pkl`. On
 a `renovate/**` branch the self-hosted Renovate runner does this automatically via
 postUpgradeTasks.

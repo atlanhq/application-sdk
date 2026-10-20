@@ -239,7 +239,7 @@ def mock_secret_store():
     """Automatically mock get_deployment_secret for all unit tests."""
     ctx = _safe_patch(
         "application_sdk.infrastructure.secrets.get_deployment_secret",
-        side_effect=lambda key: None,
+        side_effect=lambda key, **_: None,
     )
     yield
     if ctx is not None:

@@ -128,6 +128,7 @@ jobs:
             --branch "bump-version-${TARGET_BRANCH}" \
             --version-file pyproject.toml \
             --version-file application_sdk/version.py \
+            --version-file packages/api/pyproject.toml \
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
 
@@ -143,7 +144,9 @@ jobs:
           branch_name="bump-version-${TARGET_BRANCH}"
           git checkout -b "$branch_name"
 
-          git add pyproject.toml uv.lock CHANGELOG.md application_sdk/version.py
+          # packages/api/pyproject.toml: release.py moves the api package in lockstep
+          # (its version and the SDK's == pin), and the SDK pins that exact version.
+          git add pyproject.toml uv.lock CHANGELOG.md application_sdk/version.py packages/api/pyproject.toml
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git push origin "$branch_name" --force
 
@@ -163,6 +166,7 @@ jobs:
           - pyproject.toml
           - uv.lock
           - application_sdk/version.py
+          - packages/api/pyproject.toml
           - CHANGELOG.md
 
           Version: ${CURRENT_VERSION} → ${NEW_VERSION}

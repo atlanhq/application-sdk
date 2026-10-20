@@ -51,9 +51,9 @@ APPROVER_LOGIN = "atlan-ci"  # the CODEOWNERS user whose PAT is APPROVER_TOKEN
 def decision_for(res: Any) -> dict[str, Any]:
     """What the approval step should do, from this run's result (no side effects)."""
     st = res.state
-    # A dismissal can make a reviewed head ready; it is judged the same way.
+    # A dismissal or a re-check can make a reviewed head ready; judged the same way.
     if (
-        res.action not in ("reviewed", "dismissed")
+        res.action not in ("reviewed", "dismissed", "rechecked")
         or st is None
         or not st.reviewed_head
     ):

@@ -215,13 +215,17 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
 
         file_id = str(uuid4())
         effective_prefix = prefix or "workflow_file_upload"
-        if not valid_upload_prefix(effective_prefix):
-            raise HTTPException(
-                status_code=400,
-                detail="prefix must be relative path segments of letters, digits, "
-                "'_', '-' or '.', with no '.' or '..' segment",
-            )
         if source.upload_namespace:
+            # The consolidated host: one AWS identity and one bucket serve every
+            # hosted app, so a request routed to one app must not choose a key
+            # outside that app's namespace. A worker serves only its own app and
+            # keeps accepting the prefix as given, as it always has.
+            if not valid_upload_prefix(effective_prefix):
+                raise HTTPException(
+                    status_code=400,
+                    detail="prefix must be relative path segments of letters, "
+                    "digits, '_', '-' or '.', with no '.' or '..' segment",
+                )
             effective_prefix = f"{source.upload_namespace}/{effective_prefix}"
         stored_name = f"{file_id}.{extension}" if extension else file_id
         key = f"{effective_prefix}/{stored_name}"

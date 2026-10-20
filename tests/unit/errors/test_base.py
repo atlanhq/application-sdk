@@ -184,6 +184,208 @@ def test_signature_redaction_does_not_eat_pagination_cursors() -> None:
         assert redact_secrets(diagnostic) == diagnostic
 
 
+# --- FND-4153: HTTP header and dict/keyword-repr secret forms ---
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "send failed\nAuthorization: Bearer FAKEJWT.abc-def\nAccept: */*",
+            "send failed\nAuthorization: Bearer ***\nAccept: */*",
+        ),
+        ("authorization: Basic RkFLRTpGQUtF", "authorization: Basic ***"),
+        ("Proxy-Authorization: FAKEPROXY", "Proxy-Authorization: ***"),
+        ("Cookie: session=FAKESESS; theme=dark", "Cookie: ***"),
+        ("set-cookie: sid=FAKESID; Path=/", "set-cookie: ***"),
+        ("X-Api-Key: FAKEXKEY", "X-Api-Key: ***"),
+        ("Api-Key:FAKEKEY", "Api-Key:***"),
+        ("X-Auth-Token: FAKEXTOK", "X-Auth-Token: ***"),
+        # A repr()'d message: the escaped newline must not hide the name.
+        (
+            "ConnectionError('retry\\nCookie: sid=FAKESID')",
+            "ConnectionError('retry\\nCookie: ***",
+        ),
+        # Only a whole ``***`` value counts as already masked, not a prefix.
+        ("X-Api-Key: ***FAKEKEY", "X-Api-Key: ***"),
+        ("Authorization: Bearer ***FAKE", "Authorization: Bearer ***"),
+        ("Cookie: *** FAKESID", "Cookie: ***"),
+    ],
+)
+def test_redacts_raw_header_lines(text: str, expected: str) -> None:
+    """A header line's value runs to the end of the line: a cookie's value has
+    spaces and ``;`` in it, so the whole rest of the line is the secret. The
+    header name and the ``Authorization`` scheme stay."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "headers={'Authorization': 'Bearer FAKEJWT', 'Accept': '*/*'}",
+            "headers={'Authorization': 'Bearer ***', 'Accept': '*/*'}",
+        ),
+        ('{"cookie": "a=FAKEA; b=FAKEB"}', '{"cookie": "***"}'),
+        (
+            "[(b'x-api-key', b'FAKEXKEY'), (b'accept', b'*/*')]",
+            "[(b'x-api-key', b'***'), (b'accept', b'*/*')]",
+        ),
+        (
+            "{'Proxy-Authorization': 'Token FAKEPT'}",
+            "{'Proxy-Authorization': 'Token ***'}",
+        ),
+    ],
+)
+def test_redacts_header_entries_in_reprs(text: str, expected: str) -> None:
+    """A headers mapping rendered as a dict, a JSON object or httpx's raw
+    ``(name, value)`` pairs: the value is masked up to its closing quote, so the
+    entries after it survive."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+def test_redacts_a_bare_bearer_token() -> None:
+    """Exception text often quotes the credential without the header name."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("401 for Bearer FAKEJWT.eyJ-x_y+z/w== at /api")
+        == "401 for Bearer *** at /api"
+    )
+    # Prose about the token is not a token, and stays readable.
+    assert redact_secrets("invalid bearer token") == "invalid bearer token"
+    assert redact_secrets("bearer token, expired") == "bearer token, expired"
+    # ...but a token that merely starts with the word is a token.
+    assert redact_secrets("401 Bearer token-FAKEXYZ") == "401 Bearer ***"
+    assert redact_secrets("Bearer token.FAKE") == "Bearer ***"
+    # A leading ``***`` is not proof the value was masked.
+    assert redact_secrets("Bearer ***FAKE") == "Bearer ***"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("{'password': 'FAKEPW'}", "{'password': '***'}"),
+        ('{"api_key": "FAKE KEY, with spaces"}', '{"api_key": "***"}'),
+        (
+            "{'db_password': 'FAKE\\'PW', 'host': 'h'}",
+            "{'db_password': '***', 'host': 'h'}",
+        ),
+        (
+            '{"client_secret":"FAKECS","scope":"read"}',
+            '{"client_secret":"***","scope":"read"}',
+        ),
+        ("{'token': 'FAKETOK'}", "{'token': '***'}"),
+    ],
+)
+def test_redacts_dict_repr_entries(text: str, expected: str) -> None:
+    """Known secret names as quoted keys: the value is masked to its closing
+    quote, so a value with spaces, commas or an escaped quote cannot leak a
+    tail, and the key stays."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Conn(host='h', password='FAKE PW,1', port=5432)",
+            "Conn(host='h', password='***', port=5432)",
+        ),
+        ('Cfg(api_key="FAKE;KEY")', 'Cfg(api_key="***")'),
+    ],
+)
+def test_redacts_keyword_repr_entries(text: str, expected: str) -> None:
+    """A dataclass/keyword repr quotes the value. The bare ``key=value`` pass
+    stops at the first space, comma or ``;``, which leaked the rest of it."""
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "api_key",
+        "apikey",
+        "api-key",
+        "access_token",
+        "auth_token",
+        "refresh_token",
+        "id_token",
+        "password",
+        "passwd",
+        "pwd",
+        "secret",
+        "credential",
+        "private_key",
+        "signature",
+        "sharedaccesskey",
+        "accountkey",
+        "sig",
+        "token",
+        "auth",
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Set-Cookie",
+        "X-Api-Key",
+        "X-Auth-Token",
+    ],
+)
+def test_every_secret_name_passes_the_first_letter_gate(name: str) -> None:
+    """``_SECRET_NAME_START`` is a speed-up that must never drop a name: every
+    name in the lists is masked as a quoted key."""
+    import re
+
+    from application_sdk.errors import redact_secrets
+    from application_sdk.errors.base import _SECRET_HEADER_NAMES, _SECRET_NAMES
+
+    listed = re.findall(r"[a-z_-]{3,}", _SECRET_NAMES + _SECRET_HEADER_NAMES)
+    assert name.lower() in listed or any(name.lower().endswith(n) for n in listed)
+    assert redact_secrets(f"{{'{name}': 'FAKEV'}}") == f"{{'{name}': '***'}}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Authorization: Bearer FAKEJWT",
+        "Authorization: FAKERAW",
+        "Cookie:  a=FAKEA",
+        "{'Authorization': 'Bearer FAKEJWT'}",
+        "password='FAKE PW'",
+        "Bearer FAKEJWT",
+        "https://u:FAKEP@h/p?token=FAKET",
+    ],
+)
+def test_redaction_is_idempotent(text: str) -> None:
+    """The test harness's ``redact_text`` masks before calling ``redact_secrets``,
+    so an already-masked value must come back unchanged, spacing included."""
+    from application_sdk.errors import redact_secrets
+
+    once = redact_secrets(text)
+    assert "FAKE" not in once
+    assert redact_secrets(once) == once
+
+
+def test_quoted_pass_keeps_pagination_cursors() -> None:
+    """``token`` as a quoted key keeps the same boundary as the bare pass."""
+    from application_sdk.errors import redact_secrets
+
+    for diagnostic in (
+        "{'next_token': 'abc123', 'page_token': 'xyz'}",
+        "Page(continuation_token='deadbeef')",
+        "{'token_type': 'Bearer', 'expires_in': 3600}",
+    ):
+        assert redact_secrets(diagnostic) == diagnostic
+
+
 def test_logged_cause_of_a_signed_url_error_carries_no_signature() -> None:
     """The log copy of a driver error is uncapped-ish (8000) and indexed.
 
@@ -563,10 +765,11 @@ def test_redact_secrets_stops_at_the_path_and_keeps_a_query_email() -> None:
     never userinfo. The password is still fully redacted here; nothing leaks."""
     from application_sdk.errors import redact_secrets
 
-    # The `@b` in the query string is no longer swallowed; the password is.
+    # The `@b` in the query string is not taken as userinfo. The query value
+    # is redacted by the separate query pass (FND-4149), not by this one.
     assert (
         redact_secrets("postgresql://u:p@host/db?to=a@b")
-        == "postgresql://***@host/db?to=a@b"
+        == "postgresql://***@host/db?to=***"
     )
     # A whitespace boundary still protects the common "URL then prose" case.
     out = redact_secrets("postgresql://u:p@host/db connected as a@b")
@@ -629,13 +832,21 @@ def test_redact_secrets_covers_an_empty_username_with_a_password() -> None:
 
 
 def test_redact_secrets_leaves_a_port_and_query_email_alone() -> None:
+    """A port and an ``@`` in the query are not userinfo, so host and path
+    survive. The query value itself is redacted by the query pass (FND-4149)."""
     from application_sdk.errors import redact_secrets
 
-    for text in (
-        "https://host.internal:8080/api?owner=alice@corp.com",
-        "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
+    for text, expected in (
+        (
+            "https://host.internal:8080/api?owner=alice@corp.com",
+            "https://host.internal:8080/api?owner=***",
+        ),
+        (
+            "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=/Users/alice@corp.com/etl failed 403",
+            "GET https://adb-123.azuredatabricks.net/api/2.0/workspace/list?path=*** failed 403",
+        ),
     ):
-        assert redact_secrets(text) == text
+        assert redact_secrets(text) == expected
 
 
 # Synthetic Azure connection strings: no real credential material.
@@ -714,3 +925,161 @@ def test_safe_traceback_redacts_azure_connection_string() -> None:
         out = safe_traceback(exc)
     assert "FAKEsasKEY0123" not in out
     assert "SharedAccessKeyName=ExamplePolicy" in out
+
+
+# --- FND-4149: every URL query value and fragment, plus common bare names ---
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # A query param under a name no keyword list would know.
+        (
+            "GET https://api.example.com/v1/items?page=2&x_custom=FAKEVAL1 failed",
+            "GET https://api.example.com/v1/items?page=2&x_custom=*** failed",
+        ),
+        # Params a client merged into the sent URL (``params={"apikey": ...}``).
+        (
+            "RuntimeError: transport refused https://api.example.com/q?limit=10&apikey=FAKEKEY2",
+            "RuntimeError: transport refused https://api.example.com/q?limit=10&apikey=***",
+        ),
+        # A fragment is redacted whole, query or not.
+        (
+            "redirect to https://app.example.com/cb#access_token=FAKETOK3&state=s",
+            "redirect to https://app.example.com/cb#***",
+        ),
+        (
+            "https://api.example.com/p?a=1#token=FAKETOK4",
+            "https://api.example.com/p?a=***#***",
+        ),
+        # Userinfo, query and fragment in one URL.
+        (
+            "https://svc:FAKEPW5@api.example.com/p?code=FAKECODE5#frag",
+            "https://***@api.example.com/p?code=***#***",
+        ),
+        # A value-less param could itself be a bare token.
+        ("https://h.example.com/hook?FAKEBARE6", "https://h.example.com/hook?***"),
+        # Empty values and an empty fragment have nothing to hide.
+        ("https://h.example.com/p?a=&b=1#", "https://h.example.com/p?a=&b=***#"),
+        # Off the allowlist, a common-looking name is still redacted.
+        (
+            "https://h.example.com/p?state=FAKE12&cursor=FAKE13",
+            "https://h.example.com/p?state=***&cursor=***",
+        ),
+    ],
+)
+def test_redact_secrets_redacts_every_url_query_value_and_fragment(
+    text: str, expected: str
+) -> None:
+    from application_sdk.errors import redact_secrets
+
+    assert redact_secrets(text) == expected
+
+
+def test_redact_secrets_keeps_the_quote_that_closes_a_url() -> None:
+    """httpx and tracebacks quote URLs; the closing quote must survive both the
+    query pass and the bare ``token=`` pass that follows it."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("Client error for url 'https://h.example.com/p?token=FAKE7'")
+        == "Client error for url 'https://h.example.com/p?token=***'"
+    )
+    assert (
+        redact_secrets('client.get("https://h.example.com/p?q=FAKE8")')
+        == 'client.get("https://h.example.com/p?q=***")'
+    )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "token",
+        "apikey",
+        "api-key",
+        "refresh_token",
+        "id_token",
+        "client_secret",
+        "auth",
+    ],
+)
+def test_redact_secrets_redacts_common_bare_secret_names(name: str) -> None:
+    """Bare ``key=value`` with no URL around it, under names the list missed."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets(f"login failed: {name}=FAKESECRET9 user=svc")
+    assert "FAKESECRET9" not in out
+    assert f"{name}=***" in out
+    assert "user=svc" in out
+
+
+def test_redact_secrets_bare_token_and_auth_keep_cursor_like_names() -> None:
+    """``token`` / ``auth`` carry the ``sig`` lookbehind: a suffix is not a match."""
+    from application_sdk.errors import redact_secrets
+
+    for diagnostic in ("next_token=abc", "page_token=xyz", "oauth=enabled"):
+        assert redact_secrets(diagnostic) == diagnostic
+
+
+def test_safe_traceback_redacts_a_chained_cause_quoting_a_url() -> None:
+    """``SourceUnavailableError(cause=exc)`` chains the raw exception; its
+    message must come out redacted wherever the chain is formatted."""
+    from application_sdk.errors import safe_traceback
+
+    try:
+        try:
+            raise RuntimeError(
+                "send failed: https://h.example.com/p?apikey=FAKE10#token=FAKE11"
+            )
+        except RuntimeError as inner:
+            raise AuthError(message="source unavailable", cause=inner) from inner
+    except AuthError as exc:
+        out = safe_traceback(exc)
+    assert "FAKE10" not in out and "FAKE11" not in out
+    assert "?apikey=***#***" in out
+    assert "source unavailable" in out
+
+
+def test_redact_secrets_keeps_values_of_allowlisted_query_params() -> None:
+    """Pagination and Azure SAS scope/expiry are kept: ``se`` is what tells an
+    on-call the SAS expired. Matching is case-insensitive; the signature next
+    to them still goes."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets(
+            "https://a.blob.core.windows.net/c/k"
+            "?sv=2021-08-06&sr=b&sp=r&se=2026-01-01T00%3A00Z&sig=FAKESIG14"
+        )
+        == "https://a.blob.core.windows.net/c/k"
+        "?sv=2021-08-06&sr=b&sp=r&se=2026-01-01T00%3A00Z&sig=***"
+    )
+    assert (
+        redact_secrets("https://h.example.com/p?LIMIT=10&Page=2&offset=40&q=FAKE15")
+        == "https://h.example.com/p?LIMIT=10&Page=2&offset=40&q=***"
+    )
+
+
+def test_redact_secrets_sees_through_ansi_colour_codes() -> None:
+    """loguru's DEBUG console wraps the message in a colour code ending in
+    ``m``; glued to ``https://`` it defeated the scheme-boundary lookbehind,
+    for the query pass and the userinfo pass alike."""
+    from application_sdk.errors import redact_secrets
+
+    out = redact_secrets("\x1b[31mhttps://h.example.com/p?x_custom=FAKE16\x1b[0m")
+    assert "FAKE16" not in out
+    assert out == "https://h.example.com/p?x_custom=***"
+
+    out = redact_secrets("\x1b[1mhttps://svc:FAKEPW17@h.example.com/p\x1b[0m")
+    assert "FAKEPW17" not in out
+
+
+def test_redact_secrets_splits_query_params_on_semicolons() -> None:
+    """``;`` is a separator too: an allowlisted param must not carry the next
+    one's value through whole."""
+    from application_sdk.errors import redact_secrets
+
+    assert (
+        redact_secrets("https://h.example.com/p?page=2;owner=FAKE18&limit=5;sig=FAKE19")
+        == "https://h.example.com/p?page=2;owner=***&limit=5;sig=***"
+    )

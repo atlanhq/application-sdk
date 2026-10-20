@@ -29,10 +29,13 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
   host) keeps every file. pip's uninstall of the old release deletes the files
   the api wheel just wrote; recover with
   `pip install --force-reinstall atlan-application-sdk-api`.
-- `release.py` moves the api version and the pin together, and
-  `tag-and-publish` publishes the api package first. The release fails before
-  tagging when the api package's PyPI token is unset, so neither is ever
-  published alone.
+- `release.py` moves the api version and the pin together, and the bump PR
+  commits `packages/api/pyproject.toml` with the SDK's own version files.
+  `tag-and-publish` publishes the api package, then the SDK, and only then
+  creates the `v<version>` tag and GitHub Release, so a failed publish never
+  leaves a tag behind. If the api publish fails the SDK is not published; both
+  uploads pass `--check-url`, so a rerun skips what already reached PyPI. See
+  [Releasing the api package](#releasing-the-api-package).
 
 ## Rules for a listed file
 
@@ -206,3 +209,18 @@ handler.
   release workflow knows nothing about the host. The host resolves one api
   version for every app and fails its own lock in CI when it can't, and probes
   every staged app in its locked environment before a pin moves.
+
+## Releasing the api package
+
+- **Publishing.** `atlan-application-sdk-api` is published with PyPI trusted
+  publishing (OIDC), not a token. The trusted publisher on PyPI is bound to the
+  repository `atlanhq/application-sdk`, the workflow file
+  `.github/workflows/tag-and-publish.yaml`, with any environment allowed.
+  Renaming that file breaks api publishing until the PyPI entry is updated to
+  match.
+- **Yanking.** The two packages are one release. Yanking an SDK version means
+  yanking `atlan-application-sdk-api` at the same version too, and the reverse:
+  an SDK left installable pins an api that is not, and an api left installable
+  advertises a release that was withdrawn.
+- **Release candidates** need nothing extra: an `rc` SDK pins the `rc` api of
+  the same version, and both are published by the same run.

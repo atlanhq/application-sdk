@@ -187,9 +187,19 @@ human audit):
   - `from application_sdk.discovery import DiscoveryError` →
     `from application_sdk.errors import InvalidInputError`, and update every
     use of the old name in the file.
-  - `class X(BaseMetadataExtractor)` → migrate to `application_sdk.templates.SqlApp`
-    per the notice; this is a structural change — draft it and let the test gate
-    decide.
+  - `class X(BaseMetadataExtractor)` → subclass `application_sdk.app.App` for a
+    non-SQL source (as atlan-openapi-app and atlan-metabase-app do), or
+    `application_sdk.templates.SqlApp` for a SQL source (as atlan-mysql-app does).
+    A SQL source is one the app reads by running SQL queries through a SQL
+    client; a REST/HTTP API or a file source is non-SQL.
+    `App` drops only the deprecated `upload_to_atlan` task: move every call to
+    it to `App.upload` first (the `upload_to_atlan` bullet above), and keep the
+    uploaded object-store keys the same (P030: pass `storage_path` when the
+    published prefix differs from the run prefix). Removing the task is safe
+    under PINNED when worker versioning is enabled (`ATLAN_APP_BUILD_ID` set);
+    for unversioned deployments or AUTO_UPGRADE, let in-flight runs finish
+    first. A `SqlApp` port is a
+    structural change — draft it and let the test gate decide.
   - **SDR test → split by concern**: a finding naming `BaseSDRIntegrationTest`
     (import / subclass from `application_sdk.testing.sdr`) means the app's
     `tests/sdr/test_*_sdr.py` (or `tests/integration/test_sdr.py`) still uses the

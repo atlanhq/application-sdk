@@ -46,7 +46,8 @@
 #   3. Current HEAD SHA matches the evaluated SHA (race guard)
 #   4. Every changed file is under .github/, uv.lock, requirements.txt,
 #      pyproject.toml, the Pkl toolkit pin + lock (contract/PklProject[.deps.json]),
-#      or the regenerated contract artifacts (app/generated/**, atlan.yaml, app.yaml)
+#      or the regenerated contract artifacts (app/generated/**,
+#      contract/generated/**/input.pkl, atlan.yaml, app.yaml)
 #      ...and every changed file under .github/workflows/ is a PIN-ONLY diff:
 #      modified (never added/deleted/renamed), every +/- line a `uses:` step
 #      reference, and the same actions on both sides. A run:/permissions:/on:

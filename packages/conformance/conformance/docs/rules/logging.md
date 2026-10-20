@@ -173,7 +173,13 @@ data — so the incident stays open for days instead of being read off the trace
   at a credential catch trips it. Narrow the except to what the try raises (E004). A
   catch that genuinely must stay broad is left as it is and reported for a person to
   decide: never suppress BLE001, and never add exc_info=True to satisfy it, which would
-  leak the credentials this exemption protects.
+  leak the credentials this exemption protects. L009 and E005 at a pre-raise log: a
+  warning/error within the three statements before a raise in the same block is also an
+  L009 site (and usually E005). Enriching it clears L004 and E005 but not L009, whose
+  fix then deletes the line. Apply L009's resolution instead: delete the line when the
+  exception has an upstream record (which may leave a bare raise), otherwise downgrade
+  it to a sanitized DEBUG through locals. Never reduce the handler to a bare raise
+  without an upstream record. That one edit clears L004, E005 and L009 together.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to `logger.warning()` /
@@ -348,6 +354,16 @@ without dedup logic.
   and `_build_client` raises MetabaseCredentialInputError, with no log line before
   either. The raise is the record; whichever handler catches it logs it once.
 - **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
+- **Interacts with:** L004 and E005 at a pre-raise log: inside an except, the same warning/error line is
+  usually also reported by L004 (block) and E005, whose fix is to enrich it with
+  exc_info=True or safe_traceback(exc). Do not enrich an L009 site; resolve it here in
+  one edit, which clears all three: delete the line when the exception has an upstream
+  record (exc_info=True or the safe_traceback form; for anything raised out of an @task
+  on a v3 SDK worker, the SDK's activity.ended ERROR record), otherwise downgrade it to
+  a sanitized DEBUG through locals. Deleting may leave a bare raise; never reduce the
+  handler to one without an upstream record. v2 apps and non-activity paths (handlers,
+  preflight) have no SDK record: confirm the caller logs it, or keep the sanitized
+  DEBUG.
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not

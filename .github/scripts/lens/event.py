@@ -15,6 +15,16 @@ lens reviews only when asked — a push never spends money on its own:
 - `/lens dismiss F-1a2b3c [F-…] <reason>`: close findings the team decided not to
   fix, with the reason on record. No model call. A blocking (critical/high) finding
   cannot be dismissed by the PR's own author: someone else has to agree.
+- `/lens recheck F-1a2b3c [F-…] [reason]`: re-judge open findings with repo-aware
+  evidence the line review never had (does the file/symbol exist on the merge
+  base, who calls it, is it private or listed in docs/agents/sdk-capabilities.md).
+  Anyone who may trigger lens may ask, the PR author included: this is how an
+  author gets a disputed blocking finding a second look without a human. The
+  finding is resolved with the evidence on record, or kept and the evidence
+  shown. A compatibility claim on code absent from the merge base resolves with
+  no model call; anything else costs one call from the PR's $ cap. It does not
+  count as a round (`max_rounds` does not stop it). The reason is the author's
+  claim: the model checks it against the evidence, never follows it.
 - `workflow_dispatch` with a PR number: run (maintainers, from the Actions tab).
 - Anything else, including every `pull_request*` event: do not run.
 """
@@ -42,11 +52,19 @@ class Decision:
     actor: str = ""  # who asked
     pr_author: str = ""
     verify_budget: bool = False  # `/lens verify-budget`: the raised verify budget
+    recheck: list[str] = field(
+        default_factory=list
+    )  # finding ids to re-judge, for `/lens recheck`
+    recheck_reason: str = ""
 
 
 _FINDING_ID = re.compile(r"^F-[0-9a-f]{6}$")
 VERIFY_BUDGET = "verify-budget"
 DISMISS_USAGE = "usage: `/lens dismiss F-1a2b3c [F-…] <reason>` — at least one finding id and a reason"
+RECHECK_USAGE = (
+    "usage: `/lens recheck F-1a2b3c [F-…] [reason]` — at least one finding id"
+)
+USAGE_ERRORS = (DISMISS_USAGE, RECHECK_USAGE)
 
 
 def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
@@ -84,6 +102,19 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
                 comment_id=int(comment.get("id") or 0),
                 dismiss=ids,
                 dismiss_reason=reason[:300],
+                actor=str((comment.get("user") or {}).get("login") or ""),
+                pr_author=str((issue.get("user") or {}).get("login") or ""),
+            )
+        if len(words) > 1 and words[1].lower() == "recheck":
+            ids = [w for w in words[2:] if _FINDING_ID.match(w)]
+            reason = " ".join(w for w in words[2:] if not _FINDING_ID.match(w)).strip()
+            return Decision(
+                bool(ids),
+                int(issue["number"]),
+                reason="" if ids else RECHECK_USAGE,
+                comment_id=int(comment.get("id") or 0),
+                recheck=ids,
+                recheck_reason=reason[:300],
                 actor=str((comment.get("user") or {}).get("login") or ""),
                 pr_author=str((issue.get("user") or {}).get("login") or ""),
             )

@@ -19,7 +19,10 @@ leg with a job-level ``if`` (no conditional shell inlined in the workflow)::
     object=handler
 
 ``present=false`` (and nothing else) when the repo declares no such entry point;
-exits 1 when it declares more than one, which the host cannot mount.
+exits 1 when it declares more than one, which the host cannot mount. It runs in
+every app's CI, so a ``pyproject.toml`` that is not valid TOML (a template with
+``{{ }}`` placeholders, say) is skipped with a warning rather than failing an app
+that never opted in.
 
 Usage:
     python3 detect_api_member.py [--root <repo root>]
@@ -49,6 +52,11 @@ class ApiMember:
     object: str  # attribute holding the handler
 
 
+def _skip(path: Path, root: Path, exc: Exception) -> None:
+    rel = path.relative_to(root).as_posix()
+    print(f"::warning::{rel} is not valid TOML, skipped: {exc}", file=sys.stderr)
+
+
 def _pyprojects(root: Path) -> list[Path]:
     found = []
     for path in sorted(root.rglob("pyproject.toml")):
@@ -66,7 +74,11 @@ def find_members(root: Path) -> list[ApiMember]:
     entry point in a hand-written workspace member's ``pyproject.toml``.
     """
     members: list[ApiMember] = []
-    config = gen_app_api.load(root) if (root / "pyproject.toml").is_file() else None
+    try:
+        config = gen_app_api.load(root)
+    except tomllib.TOMLDecodeError as exc:
+        _skip(root / "pyproject.toml", root, exc)
+        config = None
     if config is not None:
         members.append(
             ApiMember(
@@ -74,7 +86,11 @@ def find_members(root: Path) -> list[ApiMember]:
             )
         )
     for path in _pyprojects(root):
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            _skip(path, root, exc)
+            continue
         eps = data.get("project", {}).get("entry-points", {}).get(GROUP, {})
         for name, target in sorted(eps.items()):
             module, _, obj = str(target).partition(":")

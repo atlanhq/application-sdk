@@ -202,6 +202,24 @@ it is read instead of listing the prefix.
   worker honouring the tag during a rolling deploy: it drops the field and
   reads the deployment store.
 
+## The `FileReference` size hint (`size_bytes`)
+
+| | |
+|---|---|
+| **Produced by** | `persist_file_reference()` and the single-file branch of `materialize_file_reference()` in `application_sdk/storage/reference.py` |
+| **Served at** | `FileReference.size_bytes` in Temporal payloads, an `int` or `null` |
+| **Read by** | `materialize_file_refs()` / `has_refs_to_materialize()` (via `_local_copy` in `application_sdk/storage/file_ref_sync.py`), as one condition for reusing `local_path` on the same pod without a download |
+| **Pinned by** | `TestSizeBytesWireContract` in `tests/unit/storage/test_file_ref_handoff.py` |
+
+- **The field is additive and must stay optional, defaulting to `null`.** A
+  producer on an older SDK sends none, and the consumer falls back to the
+  local marker alone. A consumer on an older SDK drops the field on decode.
+- **It is a hint, never a check of the stored object.** A wrong value can only
+  force a re-hash or a re-download, never make a stale file look current —
+  the local marker's stat and digest still have to agree. That is why a value
+  from outside the run needs no reset at the workflow boundary, unlike `store`.
+- **Directory refs leave it `null`.**
+
 ## The connection-scoped `persistent-artifacts` layout
 
 | | |

@@ -36,7 +36,8 @@ Both SQL client classes are typically **subclassed** for specific database types
     *   **`required` (list[str]):** Keys that must be present in `credentials`/`credentials.extra`. `{password}` is resolved via `get_auth_token()` depending on `authType`.
     *   **`parameters` (list[str], optional):** Optional keys appended as URL query parameters when present in `credentials`/`extra`.
     *   **`defaults` (dict[str, Any], optional):** Default URL parameters always appended unless already in the template.
-    *   **`connect_args` (dict[str, Any], optional):** Additional connection arguments to be passed directly to SQLAlchemy's `create_engine` or `create_async_engine`. Useful for driver-specific connection parameters that are not part of the connection URL. Defaults to `{}`.
+    *   **`connect_args` (dict[str, Any], optional):** Additional connection arguments to be passed directly to SQLAlchemy's `create_engine` or `create_async_engine`. Useful for driver-specific connection parameters that are not part of the connection URL. Defaults to `{}`. For psycopg2, psycopg and MySQLdb, which have no connect timeout of their own, `load()` adds `connect_timeout` (from `ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS`) unless `connect_args` or the URL already sets one.
+    *   **Connect budget:** `load()` (building the connection string, including any STS `AssumeRole`, plus the first connect) is bounded by `ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS` (default 60). Connection-string construction runs off the event loop on both clients, with any STS call's timeouts shrunk to fit the budget. So does `BaseSQLClient`'s first connect, whose driver timeout is capped at the budget left by then. `AsyncBaseSQLClient` awaits its first connect on the loop. On expiry `load()` raises `SqlClientConnectTimeoutError`.
     *   **`pool_pre_ping` (bool, optional):** Whether SQLAlchemy should test pooled connections for liveness before checkout. Defaults to `True` for backward compatibility; connector subclasses can set this to `False` when a dialect or endpoint has an unsafe ping/close path and the connector performs its own explicit validation query.
     *   **Credentials Note:** The `credentials` dictionary can include an `extra` field (JSON or dict). Lookups for `required` and `parameters` first check `credentials`, then `extra`.
 
@@ -127,7 +128,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 
 1.  **HTTP Configuration:**
     *   **`http_headers` (HeaderTypes):** HTTP headers for all requests made by this client. Supports dict, Headers object, or list of tuples. GET and POST requests through the `execute_http_get_request` and `execute_http_post_request` methods will use this header and allow for override through the `headers` parameter.
-    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. Uses httpx default transport by default, but can be overridden for custom retry behavior from libraries like `httpx-retries`.
+    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. The default httpx transport retries connection setup (connect errors and connect timeouts) up to 3 times. That retry happens before any request bytes are sent, so it is safe for POST. It does not retry read errors or status codes. Override it for custom retry behavior, for example with `httpx-retries`.
 
 2.  **Loading (`load` method):**
     *   Called with credentials and other configuration parameters.
@@ -137,6 +138,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 3.  **HTTP Request Methods:**
     *   **`execute_http_get_request()`:** Performs HTTP GET requests with configurable headers, parameters, and authentication.
     *   **`execute_http_post_request()`:** Performs HTTP POST requests with support for various data formats (JSON, form data, files, etc.).
+    *   Pass `raise_on_error=True`. A request the source did not answer (network failure, timeout, dropped connection) then raises `HttpClientSourceUnavailableError` (a `SourceUnavailableError`, code `SOURCE_UNAVAILABLE_HTTP_CLIENT`) with the httpx error as `cause`; other errors, such as `httpx.PoolTimeout` (the client's own pool running dry) or an unsupported URL scheme, propagate unchanged, and the return type is `httpx.Response` rather than `httpx.Response | None`. Without it, the helpers log the error and return `None`, and emit a `DeprecationWarning`; the default becomes `True` in v4.0. Either way, any HTTP response, 4xx and 5xx included, is returned for you to check.
 
 4.  **Closing (`close` method):**
     *   All requests on one client share `http_retry_transport` and its connection pool, so concurrent requests (for example under `asyncio.gather`) do not close each other's connections.
@@ -176,9 +178,10 @@ class MyApiClient(BaseClient):
         """Custom method to fetch data from the API."""
         response = await self.execute_http_get_request(
             url=f"https://api.example.com/{endpoint}",
-            params=params
+            params=params,
+            raise_on_error=True,  # an unreachable API raises SourceUnavailableError
         )
-        if response and response.status_code == 200:
+        if response.status_code == 200:
             return response.json()
         return {}
 
@@ -186,9 +189,10 @@ class MyApiClient(BaseClient):
         """Custom method to create a resource via POST."""
         response = await self.execute_http_post_request(
             url=f"https://api.example.com/{endpoint}",
-            json_data=data
+            json_data=data,
+            raise_on_error=True,
         )
-        if response and response.status_code == 201:
+        if response.status_code == 201:
             return response.json()
         return {}
 ```

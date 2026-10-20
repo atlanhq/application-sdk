@@ -11,6 +11,7 @@ import pytest
 
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage import ops
+from application_sdk.storage._local_marker import read_local_marker
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put, get_file_meta
@@ -33,6 +34,12 @@ def _hash_bytes(data: bytes) -> str:
     return h.hexdigest()
 
 
+def _marker_digest(local: Path) -> str | None:
+    """The digest the local ``.sha256`` marker beside *local* records."""
+    marker = read_local_marker(str(local))
+    return marker.sha256 if marker is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -48,14 +55,23 @@ class TestWriteLocalSidecar:
     def test_writes_sidecar(self, tmp_path) -> None:
         local = tmp_path / "f.txt"
         local.write_bytes(b"x")
-        _write_local_sidecar(str(local), "deadbeef")
-        assert (tmp_path / "f.txt.sha256").read_text() == "deadbeef"
+        digest = "d" * 64
+        # The digest plus the stat of the hashed bytes, as the caller took it —
+        # not a fresh stat, which could bless a later write.
+        _write_local_sidecar(str(local), digest, (1, 2, 3))
+        assert (tmp_path / "f.txt.sha256").read_text() == f"{digest} 1 2 3"
+
+    def test_no_fingerprint_writes_a_digest_only_marker(self, tmp_path) -> None:
+        local = tmp_path / "f.txt"
+        local.write_bytes(b"x")
+        _write_local_sidecar(str(local), "d" * 64, None)
+        assert (tmp_path / "f.txt.sha256").read_text() == "d" * 64
 
     def test_failure_swallowed(self, tmp_path) -> None:
         # Pointing at a directory that doesn't exist → write fails → swallowed
         bogus = str(tmp_path / "no_such_dir" / "x.txt")
         # Should NOT raise
-        _write_local_sidecar(bogus, "abc")
+        _write_local_sidecar(bogus, "abc", None)
 
 
 class TestConcurrentMaterialize:
@@ -139,7 +155,7 @@ class TestPersistFileReference:
         assert sidecar is not None
         assert sidecar.decode().strip() == _hash_bytes(b"payload")
         # Local sidecar created
-        assert (tmp_path / "data.bin.sha256").read_text() == _hash_bytes(b"payload")
+        assert _marker_digest(tmp_path / "data.bin") == _hash_bytes(b"payload")
 
     async def test_single_file_generates_storage_path_when_no_key(
         self, store, tmp_path
@@ -275,8 +291,7 @@ class TestDirectoryLocalSidecars:
         await persist_file_reference(store, ref)
 
         for rel, data in self._FILES.items():
-            sidecar = tmp_path / (rel + ".sha256")
-            assert sidecar.read_text() == _hash_bytes(data), rel
+            assert _marker_digest(tmp_path / rel) == _hash_bytes(data), rel
 
     async def test_same_pod_materialize_after_persist_downloads_nothing(
         self, store, tmp_path
@@ -311,7 +326,7 @@ class TestDirectoryLocalSidecars:
         assert await self._materialize_counting(store, cross_pod) == len(self._FILES)
         for rel, data in self._FILES.items():
             assert (consumer / rel).read_bytes() == data
-            assert (consumer / (rel + ".sha256")).read_text() == _hash_bytes(data)
+            assert _marker_digest(consumer / rel) == _hash_bytes(data)
 
     async def test_repersist_does_not_upload_local_sidecars(
         self, store, tmp_path
@@ -670,7 +685,7 @@ class TestMaterializeFileReference:
         result = await materialize_file_reference(store, ref)
         # Returned the same ref; local sidecar written.
         assert result is ref
-        assert (tmp_path / "data.bin.sha256").read_text() == _hash_bytes(b"payload")
+        assert _marker_digest(tmp_path / "data.bin") == _hash_bytes(b"payload")
 
     async def test_single_file_hash_mismatch_redownloads(self, store, tmp_path) -> None:
         """Local file present, remote sidecar exists but mismatches → re-download."""

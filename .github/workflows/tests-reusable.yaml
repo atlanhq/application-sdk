@@ -566,6 +566,12 @@ on:
       GLOBALPROTECT_PASSWORD:
         required: false
         description: Paired with GLOBALPROTECT_USERNAME.
+      TWINGATE_SHARED_KEY:
+        required: false
+        description: |
+          Org-wide Twingate service-account key; reaches api.dataforge.atlan.dev.
+          The dataforge wake / pause jobs try it before GlobalProtect, which
+          stays the fallback. Empty means GlobalProtect only, as before.
       # Resolved per leg by .github/scripts/resolve_e2e_tenant.py. The pointer
       # lives in a YAML comment rather than in the description below because
       # test_resolve_e2e_tenant.py's call-site guard treats any non-comment
@@ -849,11 +855,14 @@ jobs:
           test-dir: tests/integration
 
   # ── Hosted api member (consolidated API server) ────────────────────────────
-  # An app served by common-app-server keeps its one handler in a uv workspace
-  # member that declares an `atlan.app_api` entry point. detect-api-member finds
-  # it (a tested script; the job-level `if` below does the gating, no inlined
-  # conditional shell). Repos without one — worker-only apps, and every app not
-  # yet hosted — skip api-member entirely.
+  # An app served by common-app-server opts in with a [tool.atlan-app-api] block
+  # in its root pyproject.toml (handler stays in app/), or a package declaring an
+  # `atlan.app_api` entry point. detect-api-member finds it (a tested script; the
+  # job-level `if` below does the gating, no inlined conditional shell). It only
+  # reads pyproject files and never fails an app that has not opted in (no root
+  # pyproject, or one that is not valid TOML, reads as not opted in). Repos
+  # without one — worker-only apps, and every app not yet hosted — skip
+  # api-member entirely.
   detect-api-member:
     name: Detect hosted api member
     if: >-
@@ -881,21 +890,17 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
-      # An app that declares [tool.atlan-app-api] keeps its handler in app/;
-      # fail when one of the handler's files imports app absolutely (it would
-      # break under the host's package name). No-op without the config.
-      - name: Check the handler's app/ imports are relative
-        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
-
       - name: Find an atlan.app_api entry point
         id: detect
         run: python3 application-sdk-scripts/.github/scripts/detect_api_member.py >> "$GITHUB_OUTPUT"
 
-  # Installs the member ALONE (its own declared dependencies, no
-  # atlan-application-sdk) and mounts it with application_sdk.handler.asgi.build_asgi_app,
-  # exactly as the host does, then runs the host matrix (health, 422 on a
-  # malformed body, no bare 500). The same checks gate the host's pin bump, so a
-  # change that would break the host fails here, in the app's own PR.
+  # Opted-in apps only. Checks the handler's files are safe to host, then installs
+  # the member ALONE (its own declared dependencies, no atlan-application-sdk) and
+  # mounts it with application_sdk.handler.asgi.build_asgi_app, exactly as the host
+  # does, and runs the host matrix (health, the handler and metadata routes, 422
+  # on a malformed body, no bare 500). common-app-server's image build runs the
+  # same probe, so a change that would break the host fails here, in the app's
+  # own PR.
   api-member:
     name: Hosted api member
     needs: detect-api-member
@@ -918,6 +923,13 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      # With [tool.atlan-app-api]: fail on an absolute `from app` import, a
+      # worker-only import, an APPLICATION_NAME read, logging in the handler
+      # module or a compute_manifest hook (none of these work on the host).
+      # Prints "nothing to check" for an entry-point member without the config.
+      - name: Check the handler's files are safe to host
+        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
+
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.17"
@@ -1650,7 +1662,7 @@ jobs:
       ((needs.detect-integration.result == 'success' && needs.detect-integration.outputs.count != '0') ||
        (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0')))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write # create the per-run holder ref
       actions: read # parity with pause (holder-liveness reaping lives there)
@@ -1658,14 +1670,17 @@ jobs:
     env:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
     steps:
       # api.dataforge.atlan.dev admits only the VPN egress IPs, so — exactly like
       # the integration / e2e fetch steps — the job sparse-checks-out this
-      # reusable's scripts + globalprotect-connect at job.workflow_sha and dials
-      # the tunnel BEFORE the lifecycle call. Without this every call fails at
-      # connect on POST /oauth/token. All steps gated on the pin being set and
-      # repo creds absent, so a caller without a dataforge pin does nothing.
-      - name: Fetch SDK CI scripts + globalprotect-connect
+      # reusable's scripts + VPN actions at job.workflow_sha and dials the
+      # tunnel BEFORE the lifecycle call. Twingate first (no shared address
+      # pool), GlobalProtect only when Twingate is absent or fails. Without a
+      # tunnel every call fails at connect on POST /oauth/token. All steps gated
+      # on the pin being set and repo creds absent, so a caller without a
+      # dataforge pin does nothing.
+      - name: Fetch SDK CI scripts + VPN actions
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1674,11 +1689,32 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Clean up after a stopped Twingate step
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        # Straight-line: each command is a no-op when Twingate never got that
+        # far (no client, no resolver snapshot), so there is nothing to branch on.
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:
@@ -2936,7 +2972,7 @@ jobs:
       inputs.dataforge-mode == 'resource' &&
       needs.wake-dataforge-source.result != 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write # delete holder refs (this run's + reaped abandoned ones)
       actions: read # tell a live holder from a dead one
@@ -2944,9 +2980,10 @@ jobs:
     env:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
     steps:
       # Same VPN precondition as wake — pause hits the same private API host.
-      - name: Fetch SDK CI scripts + globalprotect-connect
+      - name: Fetch SDK CI scripts + VPN actions
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2955,11 +2992,32 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Clean up after a stopped Twingate step
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        # Straight-line: each command is a no-op when Twingate never got that
+        # far (no client, no resolver snapshot), so there is nothing to branch on.
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:

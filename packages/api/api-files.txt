@@ -11,7 +11,9 @@ application_sdk/_runtime/offload.py
 application_sdk/_runtime/progress.py
 application_sdk/clients/__init__.py
 application_sdk/clients/_interface.py
+application_sdk/clients/_sql_failure_classifier.py
 application_sdk/clients/base.py
+application_sdk/clients/http_errors.py
 application_sdk/clients/models.py
 application_sdk/clients/sql.py
 application_sdk/clients/sql_errors.py
@@ -50,6 +52,7 @@ application_sdk/credentials/utils.py
 application_sdk/errors/__init__.py
 application_sdk/errors/base.py
 application_sdk/errors/categories.py
+application_sdk/errors/http.py
 application_sdk/errors/leaves.py
 application_sdk/errors/wire.py
 application_sdk/handler/__init__.py

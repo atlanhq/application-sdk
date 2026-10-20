@@ -130,3 +130,28 @@ def test_a_lazy_package_still_exposes_its_submodules_as_attributes() -> None:
     assert credentials.spec.__name__ == "application_sdk.credentials.spec"
     with pytest.raises(AttributeError):
         contracts.no_such_submodule  # noqa: B018
+
+
+def test_the_worker_entry_point_names_the_fix_when_the_api_files_are_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pip upgrade across the split deletes the api distribution's files; the
+    worker entry point then says how to recover instead of a bare import error."""
+    import importlib
+    import importlib.util
+    import sys
+
+    real_find_spec = importlib.util.find_spec
+
+    def find_spec(name: str, *args: object, **kwargs: object):
+        if name == "application_sdk.handler.base":
+            return None
+        return real_find_spec(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib.util, "find_spec", find_spec)
+    monkeypatch.delitem(sys.modules, "application_sdk.main", raising=False)
+    with pytest.raises(
+        ImportError,
+        match="pip install --force-reinstall --no-deps atlan-application-sdk-api",
+    ):
+        importlib.import_module("application_sdk.main")

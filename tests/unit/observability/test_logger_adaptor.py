@@ -16,6 +16,7 @@ from hypothesis import strategies as st
 from loguru import logger
 
 from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
+from application_sdk.observability.console_sink import flush_console_logs
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -33,6 +34,7 @@ from application_sdk.observability.logger_adaptor import (
     _has_remote_otlp_endpoint,
     _make_log_record_dict,
     _normalize_log_extra_value,
+    _redact_exception_records,
     get_logger,
 )
 from application_sdk.testing.hypothesis.strategies.common.logger import (
@@ -79,7 +81,12 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
         },
     ):
-        yield AtlanLoggerAdapter("test_logger")
+        try:
+            yield AtlanLoggerAdapter("test_logger")
+        finally:
+            # Console lines are written by a background thread. Wait for them
+            # so tests that read capsys after the block see every line.
+            flush_console_logs()
 
 
 @pytest.fixture
@@ -727,6 +734,78 @@ class TestLogSinkFanOut:
 
         messages = [c.args[0]["message"] for c in mock_add_record.call_args_list]
         assert messages == ["from a thread-pool activity"]
+
+
+@contextmanager
+def _store_sink_adapters() -> (
+    Generator[tuple[AtlanLoggerAdapter, AtlanLoggerAdapter], None, None]
+):
+    """Yield ``(sink_owner, other)`` with the real loguru store sink registered.
+
+    ``sink_owner`` is constructed first, so loguru's ``_log_sink`` is bound to
+    it, as ``default_logger`` is in production. ``other`` is any later
+    ``get_logger(name)`` adapter. The periodic flush is stubbed out, so the
+    owner's buffer holds exactly what the sink appended.
+    """
+    with (
+        mock.patch(
+            "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+            True,
+        ),
+        mock.patch.object(AtlanLoggerAdapter, "_spawn_flush_thread"),
+        mock.patch.object(
+            AtlanLoggerAdapter, "_periodic_flush", new_callable=mock.AsyncMock
+        ),
+        create_logger_adapter() as owner,
+    ):
+        owner.logger_provider = None
+        other = get_logger("app.module")
+        try:
+            yield owner, other
+        finally:
+            logger.remove()
+            AtlanLoggerAdapter._reset_for_testing()
+
+
+class TestOffloadedLogsReachSinkOwner:
+    """Lines logged from offloaded code reach the store buffer, and ``error()``
+    on any adapter flushes it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_in_thread_log_lands_in_sink_owner_buffer(self):
+        """A line logged inside ``run_in_thread`` is buffered for upload.
+
+        ``run_in_thread`` targets run on a pool thread with no event loop, the
+        case where loguru skipped the old coroutine sink.
+        """
+        from application_sdk._runtime.offload import run_in_thread
+
+        with _store_sink_adapters() as (owner, other):
+            await run_in_thread(other.warning, "offloaded line")
+
+            messages = [r["message"] for r in owner._buffer]
+
+        assert messages == ["offloaded line"]
+
+    def test_error_on_other_adapter_flushes_sink_owner_buffer(self):
+        """``error()`` drains the buffer records actually land in.
+
+        Called from a thread with no running loop so ``_sync_flush`` runs the
+        flush to completion before returning.
+        """
+        with _store_sink_adapters() as (owner, other):
+            with mock.patch.object(
+                owner, "_flush_records", new_callable=mock.AsyncMock
+            ) as flush:
+                other.info("context line")
+                other.error("failure line")
+
+            flushed = [r["message"] for c in flush.await_args_list for r in c.args[0]]
+            remaining = list(owner._buffer)
+
+        assert flushed == ["context line", "failure line"]
+        assert remaining == []
 
 
 class TestCorrelationContext:
@@ -1665,6 +1744,20 @@ class TestExtractExceptionAttributes:
         assert attrs["exception.type"] == "builtins.ValueError"
         assert attrs["exception.message"] == "boom"
         assert "Traceback" in attrs["exception.stacktrace"]
+
+    def test_temporal_error_message_drops_the_type_tag(self):
+        """Temporal's ``str()`` is ``"<type>: <message>"``. ``exception.message``
+        carries the message alone, the same text the Temporal UI shows."""
+        from temporalio.exceptions import ApplicationError
+
+        try:
+            raise ApplicationError(
+                "Preflight failed: bad secret", type="PreflightFailed"
+            )
+        except ApplicationError:
+            t, v, tb = sys.exc_info()
+        attrs = _extract_exception_attributes(mock.Mock(type=t, value=v, traceback=tb))
+        assert attrs["exception.message"] == "Preflight failed: bad secret"
 
 
 class TestFormatExceptionStacktrace:
@@ -3287,7 +3380,9 @@ def _explode(payload):
 
 
 def _raise():
-    creds = {"client_secret": CANARY}
+    # Under a non-secret key: ``client_secret`` is masked by redact_secrets
+    # even with diagnose on, which would make the enabled control vacuous.
+    creds = {"client_id": CANARY}
     _explode(creds)
 
 
@@ -3405,3 +3500,164 @@ def test_apply_atlan_context_imports_nothing_at_log_time() -> None:
         _correlation_ctx.reset(token)
 
     assert kwargs["correlation_id"] == "corr-123"
+
+
+# --- FND-4149: exceptions leave the adaptor redacted, on every sink ---
+
+
+def _raise_with_url_in_source_and_cause() -> None:
+    """The raise line holds a literal URL, and the cause's message quotes one."""
+    try:
+        raise RuntimeError("transport refused https://h.example.com/q?apikey=FAKEK1")
+    except RuntimeError as inner:
+        raise ValueError(
+            "fetch https://svc:FAKEPW2@h.example.com/p?page=2#token=FAKEF3"
+        ) from inner
+
+
+def _captured_exc_info() -> tuple[Any, Any, Any]:
+    try:
+        _raise_with_url_in_source_and_cause()
+    except ValueError:
+        return sys.exc_info()
+    raise AssertionError("unreachable")
+
+
+_FAKE_SECRETS = ("FAKEK1", "FAKEPW2", "FAKEF3")
+
+
+def test_otel_exception_attributes_are_redacted():
+    """``exception.message`` and ``exception.stacktrace`` (which carries the
+    chained cause and the source lines) are redacted before export."""
+    exc_type, exc_value, exc_tb = _captured_exc_info()
+    attrs = _extract_exception_attributes(
+        mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb)
+    )
+    for secret in _FAKE_SECRETS:
+        assert secret not in attrs["exception.message"]
+        assert secret not in attrs["exception.stacktrace"]
+    assert attrs["exception.message"] == (
+        "fetch https://***@h.example.com/p?page=2#***"
+    )
+    assert "?apikey=***" in attrs["exception.stacktrace"]
+    # Frames are kept: redaction is not a substitute for the traceback.
+    assert "_raise_with_url_in_source_and_cause" in attrs["exception.stacktrace"]
+
+
+@pytest.mark.parametrize("diagnose", [False, True])
+def test_console_sink_renders_exceptions_redacted(diagnose: bool):
+    """loguru renders the traceback itself, so redaction must run on the
+    finished line. With ``diagnose`` on, the annotated values are covered too,
+    for the shapes ``redact_secrets`` knows."""
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="{message}\n{exception}",
+        diagnose=diagnose,
+        backtrace=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error("request failed")
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in _FAKE_SECRETS:
+        assert secret not in line
+    assert "request failed" in line
+    assert "_raise_with_url_in_source_and_cause" in line
+
+
+def test_colorized_console_sink_renders_exceptions_redacted():
+    """``LOG_LEVEL=DEBUG`` colorizes the line: a colour code glued to a URL at
+    the start of the message must not hide it from redaction."""
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="<level>{message}</level>\n{exception}",
+        colorize=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error(
+            "https://h.example.com/p?x_custom=FAKEC4 failed"
+        )
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in (*_FAKE_SECRETS, "FAKEC4"):
+        assert secret not in line
+    assert "x_custom=***" in line
+
+
+def test_console_sink_passes_records_without_an_exception_through():
+    """No exception, no redaction: the per-line cost stays one lookup."""
+    lines: list[Any] = []
+    sink_id = logger.add(_redact_exception_records(lines.append), format="{message}")
+    try:
+        logger.info("see https://h.example.com/p?page=2")
+    finally:
+        logger.remove(sink_id)
+    assert str(lines[0]).strip() == "see https://h.example.com/p?page=2"
+
+
+# --- FND-4153: a transport error quoting request headers leaves masked ---
+
+
+def _raise_with_request_headers() -> None:
+    """A custom retry transport that quotes the request it gave up on."""
+    raise ConnectionError(
+        "gave up after 3 attempts\n"
+        "Authorization: Bearer FAKEJWT.h4.s1g\n"
+        "Cookie: session=FAKESESS; theme=dark\n"
+        "headers={'Authorization': 'Bearer FAKEJWT2', 'Accept': '*/*'}"
+    )
+
+
+def _captured_header_exc_info() -> tuple[Any, Any, Any]:
+    try:
+        _raise_with_request_headers()
+    except ConnectionError:
+        return sys.exc_info()
+    raise AssertionError("unreachable")
+
+
+_FAKE_HEADER_SECRETS = ("FAKEJWT", "FAKESESS", "FAKEJWT2")
+
+
+def test_otel_exception_attributes_mask_request_headers():
+    exc_type, exc_value, exc_tb = _captured_header_exc_info()
+    attrs = _extract_exception_attributes(
+        mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb)
+    )
+    for secret in _FAKE_HEADER_SECRETS:
+        assert secret not in attrs["exception.message"]
+        assert secret not in attrs["exception.stacktrace"]
+    assert attrs["exception.message"] == (
+        "gave up after 3 attempts\n"
+        "Authorization: Bearer ***\n"
+        "Cookie: ***\n"
+        "headers={'Authorization': 'Bearer ***', 'Accept': '*/*'}"
+    )
+    assert "_raise_with_request_headers" in attrs["exception.stacktrace"]
+
+
+@pytest.mark.parametrize("diagnose", [False, True])
+def test_console_sink_masks_request_headers(diagnose: bool):
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="{message}\n{exception}",
+        diagnose=diagnose,
+        backtrace=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_header_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error("request failed")
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in _FAKE_HEADER_SECRETS:
+        assert secret not in line
+    assert "Authorization: Bearer ***" in line
+    assert "_raise_with_request_headers" in line

@@ -240,6 +240,134 @@ for item in items:
     assert "L006" in _ids(src)
 
 
+def test_l006_silent_for_terminal_recovery_log_before_return() -> None:
+    src = """
+from loguru import logger
+
+def fetch_with_retries():
+    for attempt in attempts:
+        try:
+            response = fetch()
+            if attempt > 0:
+                logger.info("request recovered on attempt %d", attempt)
+            return response
+        except TransientError:
+            continue
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_page_progress_logs_in_unbounded_loop() -> None:
+    src = """
+from loguru import logger
+
+def read_pages():
+    cursor = None
+    while True:
+        logger.info("fetching page for cursor %s", cursor)
+        page = fetch_page(cursor)
+        cursor = page.next_cursor
+        logger.info("fetched page with %d records", len(page.records))
+        if not cursor:
+            break
+"""
+    findings = scan_text(src, "x.py")
+    assert sum(f.rule_id == "L006" for f in findings) == 2
+
+
+def test_l006_fires_for_per_item_info_before_conditional_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        logger.info("processing item")
+        if is_final(item):
+            return
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def poll():
+    while True:
+        try:
+            if should_log():
+                logger.info("still processing")
+            return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_break_overrides_return_in_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        while True:
+            try:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+            finally:
+                break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_silent_when_finally_break_exits_outermost_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            if should_log(item):
+                logger.info("processed item")
+            return
+        finally:
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_when_outer_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            for attempt in attempts:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_return_is_in_nested_function() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        if should_log(item):
+            logger.info("processing item")
+        def finish_item():
+            return
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_terminal_summary_repeated_by_outer_loop() -> None:
     src = """
 from loguru import logger
@@ -519,6 +647,136 @@ def process_items(extra_items):
         logger.info("item %s", item)
 """
     assert "L006" in _ids(src)
+
+
+def test_l006_silent_for_small_literal_mapping_items() -> None:
+    src = """
+from loguru import logger
+
+def transform_entities():
+    entity_folders = {
+        "ENTITY_A": "processed/a",
+        "ENTITY_B": "processed/b",
+        "ENTITY_C": "processed/c",
+        "ENTITY_D": "processed/d",
+        "ENTITY_E": "processed/e",
+        "ENTITY_F": "processed/f",
+    }
+    for entity_type, folder in entity_folders.items():
+        logger.info("Transforming %s", entity_type)
+        transform(folder)
+        logger.info("Transformed %s entities", entity_type)
+
+    for entity_type, folder in {"ENTITY_A": "a", "ENTITY_B": "b"}.items():
+        logger.info("Transforming %s", entity_type)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_mapping_with_more_than_ten_items() -> None:
+    entries = ",\n        ".join(
+        f'"ENTITY_{index}": "processed/{index}"' for index in range(11)
+    )
+    src = f"""
+from loguru import logger
+
+def transform_entities():
+    entity_folders = {{
+        {entries}
+    }}
+    for entity_type, folder in entity_folders.items():
+        logger.info("Transformed %s entities", entity_type)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mutated_local_literal_mapping() -> None:
+    src = """
+from loguru import logger
+
+def transform_entities(extra_folders):
+    entity_folders = {"ENTITY_A": "processed/a"}
+    entity_folders.update(extra_folders)
+    for entity_type, folder in entity_folders.items():
+        logger.info("Transformed %s entities", entity_type)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_global_literal_mapping_rebound_elsewhere() -> None:
+    entries = ", ".join(f'"ENTITY_{index}": "processed/{index}"' for index in range(11))
+    src = f"""
+from loguru import logger
+
+folders = {{}}
+
+def widen():
+    global folders
+    folders = {{{entries}}}
+
+def run():
+    global folders
+    folders = {{"ENTITY_A": "processed/a"}}
+    widen()
+    for entity_type, folder in folders.items():
+        logger.info("Transformed %s entities", entity_type)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_nonlocal_literal_list_rebound_elsewhere() -> None:
+    src = """
+from loguru import logger
+
+def outer(extra):
+    items = []
+
+    def run():
+        nonlocal items
+        items = ["a"]
+        widen()
+        for item in items:
+            logger.info("Processed %s", item)
+
+    def widen():
+        nonlocal items
+        items = extra
+
+    run()
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_producer_progress_in_unbounded_async_for() -> None:
+    src = """
+from loguru import logger
+
+async def list_sources(client, writer, queue):
+    source_count = 0
+    async for source in client.get_sources():
+        await writer.write(source)
+        source_count += 1
+        if source_count % 5000 == 0:
+            logger.info("Producer progress: %s sources listed", source_count)
+        await queue.put(source)
+    logger.info("Producer done: %s sources listed", source_count)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_for_stream_progress_in_unbounded_async_for() -> None:
+    src = """
+from loguru import logger
+
+async def stream_records(records):
+    total_count = 0
+    async for record in records:
+        total_count += 1
+        if total_count % 10000 == 0:
+            logger.info("Streamed %s records so far", total_count)
+    logger.info("Finished streaming %s records", total_count)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -2383,3 +2641,89 @@ def test_l010_silent_for_resource_token_used_as_path_segment(body: str) -> None:
 )
 def test_l010_still_fires_outside_the_resource_token_exemption(body: str) -> None:
     assert "L010" in _ids(_L010_PREAMBLE + body)
+
+
+# ── L004 / E005 / L009 pre-raise interaction ────────────────────────────────
+#
+# A warning/error log inside an except, within three statements of a raise,
+# is reported by L004, E005 and L009 at once.  The prose prescribes L009's
+# resolution (delete, sanitized DEBUG through locals, or bare raise) instead
+# of enrichment, and claims that one edit clears all three.  These tests pin
+# that claim against the checkers, so the prescription cannot drift from them.
+
+_PRE_RAISE_PREAMBLE = (
+    "import logging\n"
+    "from application_sdk.errors import safe_traceback, sanitize_cause_repr\n"
+    "logger = logging.getLogger(__name__)\n\n"
+)
+
+_PRE_RAISE_RULES = {"L004", "L006", "L008", "L009", "E004", "E005"}
+
+
+def _pre_raise_ids(src: str) -> set[str]:
+    from conformance.suite.checks.error_handling import scan_text as scan_e
+
+    text = _PRE_RAISE_PREAMBLE + src
+    found = {
+        f.rule_id
+        for f in [*scan_text(text, "x.py"), *scan_e(text, "x.py")]
+        if not f.suppressed
+    }
+    return found & _PRE_RAISE_RULES
+
+
+def test_pre_raise_log_is_reported_by_l004_e005_and_l009() -> None:
+    src = (
+        "def f():\n"
+        "    try:\n"
+        "        connect()\n"
+        "    except ConnectionError as exc:\n"
+        "        logger.error('connect failed: %s', exc)\n"
+        "        raise\n"
+    )
+    assert _pre_raise_ids(src) == {"L004", "E005", "L009"}
+
+
+def test_enriching_a_pre_raise_log_leaves_l009_standing() -> None:
+    """The churn: the block-tier enrichment clears L004/E005 but not L009."""
+    src = (
+        "def f():\n"
+        "    try:\n"
+        "        connect()\n"
+        "    except ConnectionError as exc:\n"
+        "        logger.error('connect failed: %s\\n%s', sanitize_cause_repr(exc),"
+        " safe_traceback(exc))\n"
+        "        raise\n"
+    )
+    assert _pre_raise_ids(src) == {"L009"}
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        # (C) bare re-raise
+        "    except Exception:\n        raise\n",
+        # (D) sanitized DEBUG through locals, then bare raise
+        (
+            "    except ConnectionError as exc:\n"
+            "        cause = sanitize_cause_repr(exc)\n"
+            "        trace = safe_traceback(exc)\n"
+            "        logger.debug('connect failed: %s\\n%s', cause, trace)\n"
+            "        raise\n"
+        ),
+        # (E) sanitized DEBUG, then a classified raise
+        (
+            "    except ConnectionError as exc:\n"
+            "        cause = sanitize_cause_repr(exc)\n"
+            "        trace = safe_traceback(exc)\n"
+            "        logger.debug('connect failed: %s\\n%s', cause, trace)\n"
+            "        raise classify(exc, 'connect')\n"
+        ),
+        # Deleted: no log line at all before the raise
+        "    except ConnectionError as exc:\n        raise classify(exc, 'connect')\n",
+    ],
+    ids=["bare-raise", "sanitized-debug", "sanitized-debug-classified", "deleted"],
+)
+def test_l009_resolution_clears_l004_e005_and_l009_together(handler: str) -> None:
+    src = "def f():\n    try:\n        connect()\n" + handler
+    assert _pre_raise_ids(src) == set()

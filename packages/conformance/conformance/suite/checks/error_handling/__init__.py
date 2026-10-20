@@ -59,8 +59,10 @@ from ._constants import (
     SERIES,
 )
 from ._dependency_category import dependency_unavailable_classes
+from ._deprecated_module import module_is_deprecated
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
+from .exception_chaining import exception_helpers
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -94,7 +96,8 @@ def scan_text(
 
     *path* and *root* let E004 and E021 follow the scanned repo's own imports
     when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
-    and :mod:`._dependency_category`).
+    and :mod:`._dependency_category`), and let E007 see a deprecation marker
+    on an enclosing package (see :mod:`._deprecated_module`).
     """
     try:
         tree = ast.parse(text, filename=file)
@@ -107,14 +110,20 @@ def scan_text(
 
     directives = _parse_directives(text)
     local_helpers = module_helpers(tree)
+    sdk_errors = sdk_error_names(tree, path=path, root=root)
+    raised_error_helpers = exception_helpers(
+        tree, path=path, root=root, sdk_errors=sdk_errors
+    )
     checker = Checker(
         filename=file,
         directives=directives,
         atlan_ioerror_imported=atlan_ioerror,
         legacy_aliases=legacy_aliases,
         local_helpers=local_helpers,
-        sdk_errors=sdk_error_names(tree, path=path, root=root),
+        sdk_errors=sdk_errors,
+        raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
+        deprecated_module=module_is_deprecated(tree, path=path, root=root),
     )
     checker.visit(tree)
     return checker._findings

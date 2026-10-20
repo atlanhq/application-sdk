@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
+    AppTimeoutError,
     AuthError,
     InternalError,
     InvalidInputError,
+    SourceUnavailableError,
     UnimplementedError,
 )
 
@@ -29,6 +32,61 @@ class SqlClientAuthFailedError(AuthError):
     code: ClassVar[str] = "AUTH_SQL_CLIENT_FAILED"
     message: str = "SQL client authentication failed"
     auth_method: str | None = "sql"
+
+
+@dataclass(kw_only=True)
+class SqlClientSourceUnavailableError(SourceUnavailableError):
+    """The SQL client could not reach the source while connecting.
+
+    DNS failure, refused or filtered connection, TLS handshake failure: the
+    credentials were never checked, so this is not an authentication problem
+    and an account unlock will not fix it.
+    """
+
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE_SQL_CLIENT"
+    message: str = "SQL client could not reach the source"
+    suggested_action: str | None = (
+        "Check DNS resolution, firewall and private-link rules, TLS "
+        "configuration, and that the source is accepting connections from "
+        "the worker network."
+    )
+    source_type: str | None = "sql"
+
+
+@dataclass(kw_only=True)
+class SqlClientConnectTimeoutError(AppTimeoutError):
+    """The SQL client's connect or login ran out of time waiting on the source.
+
+    ``AppTimeoutError`` defaults to ``APP_OWNER`` because a timeout's locus is
+    usually ambiguous. Here it is not: what times out is the driver's or the
+    socket's own timeout, or ``load()``'s connect budget, spent building the
+    connection string (an STS AssumeRole for IAM-role auth) and connecting —
+    so the clock ran out waiting for the customer's source or its auth path.
+    """
+
+    code: ClassVar[str] = "TIMEOUT_SQL_CLIENT_CONNECT"
+    audience: ClassVar[Audience] = Audience.USER
+    message: str = "SQL client timed out connecting to the source"
+    suggested_action: str | None = (
+        "Check that the source is up and reachable from the worker network, "
+        "and that the connection's login timeout suits the source."
+    )
+    operation: str | None = "sql_client_connect"
+
+
+@dataclass(kw_only=True)
+class SqlClientConnectUnclassifiedError(InternalError):
+    """The SQL client failed to connect for a reason the classifier does not know.
+
+    Raised instead of guessing at authentication. ``classification_pending``
+    flags it so the driver error can be added to the shared SQL failure
+    classifier rather than read at face value.
+    """
+
+    code: ClassVar[str] = "INTERNAL_SQL_CLIENT_CONNECT"
+    message: str = "SQL client failed to connect for an unclassified reason"
+    component: str | None = "sql_client"
+    classification_pending: bool = True
 
 
 @dataclass(kw_only=True)

@@ -26,7 +26,7 @@ optional_triggers:
   - "remove private SDK imports"
   - "fix deprecation warnings from application_sdk"
 owner: connector-platform-team
-last_updated: "2026-10-15"
+last_updated: "2026-10-19"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -141,6 +141,12 @@ use), because each use changes with the migration.
     alone, or an undetermined run shows "all checks passed".
   - `upload_to_atlan(...)` → `App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED))`:
     different arguments and return value.
+  - `class X(BaseMetadataExtractor)` on a non-SQL source → `class X(App)`
+    (`application_sdk.app.App`). The base adds only the deprecated
+    `upload_to_atlan` task, so the swap removes that task from the worker:
+    move every call to it to `App.upload` first (above). This is safe under
+    PINNED when worker versioning is enabled (`ATLAN_APP_BUILD_ID` set); for
+    unversioned deployments or AUTO_UPGRADE, let in-flight runs finish first. On a SQL source it is a route to `templates.SqlApp` (below).
   - `get_workflow_id()` → `input.workflow_id` (needs the typed Input in
     scope); `get_workflow_run_id()` → `App.run_id`.
   - `build_output_path()`: moving the **import** to the public
@@ -161,13 +167,19 @@ use), because each use changes with the migration.
     FileReference field on the typed Input read with `pandas.read_parquet`
     through `run_in_thread`).
   - `QueryBasedTransformer`, `TransformerInterface` (→ the asset-mapper
-    pattern) and `BaseMetadataExtractor`, `SqlMetadataExtractor`
-    (→ `templates.SqlApp`) are structural v3 migrations no packaged skill
+    pattern), and `SqlMetadataExtractor` or `BaseMetadataExtractor` on a SQL
+    source (→ `templates.SqlApp`) are structural v3 migrations no packaged skill
     performs: hand them to the developer with
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
     (in the `atlanhq/application-sdk` repo, not shipped with this package).
-- **no public equivalent** — a private name the SDK or library does not
-  expose publicly (for example SDK constants such as `_HTTP_POOL_LIMITS`, or
+- **no public equivalent** — first look for a public surface that answers
+  the same question the code asks. Example: a test of how an error maps to an
+  HTTP status calls the real test-auth route (`POST /workflows/v1/auth`, no
+  Temporal needed) on `create_app_handler_service(handler)` with a test
+  client and a handler that raises that `AppError` (a `HandlerError` or a
+  failed result skips the mapping), not
+  `_app_error_to_http_status`. If none exists: a private name the SDK or
+  library does not expose publicly (for example SDK constants such as `_HTTP_POOL_LIMITS`, or
   a patched private method of a third-party library). Two
   options for the developer: for a plain value (a constant), copy it into
   the app under its own name; otherwise ignore it:

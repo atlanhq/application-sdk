@@ -129,7 +129,15 @@ class Config:
 
 
 def load(root: Path) -> Config | None:
-    data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    """The ``[tool.atlan-app-api]`` config, or ``None`` when the repo has none.
+
+    A repo with no root ``pyproject.toml`` has nothing to host, so it is ``None``
+    too: every app's CI runs ``check``, and only an opted-in app may fail it.
+    """
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():
+        return None
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     section = data.get("tool", {}).get(SECTION)
     if section is None:
         return None

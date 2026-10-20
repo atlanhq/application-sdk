@@ -55,6 +55,14 @@ before changing either value.
 
 ---
 
+## SQL clients
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS` | `60` | Bound on a SQL client's `load()`: building the connection string (including the STS `AssumeRole` for IAM-role auth) plus the first connect. Expiry raises `SqlClientConnectTimeoutError`. Also passed as `connect_timeout` to psycopg2, psycopg and MySQLdb, which have no connect timeout of their own, unless `DB_CONFIG.connect_args` or the URL already sets one. For IAM-role auth, the STS `AssumeRole` call's limits (5 s connect, 15 s read, 2 attempts) shrink to fit the time left, so a hung STS call frees its worker thread by the deadline too. |
+
+---
+
 ## Temporal / Workflow
 
 | Variable | Default | Description |
@@ -226,6 +234,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES` | `33554432` (32 MiB) | FileReference size threshold above which downloads use parallel range GETs. |
 | `ATLAN_FILE_REF_CHUNK_SIZE_BYTES` | `16777216` (16 MiB) | Size of each range-GET chunk in a chunked download. |
 | `ATLAN_FILE_REF_CHUNK_CONCURRENCY` | `4` | Maximum concurrent range-GET chunks per file. |
+| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Bytes of transfer buffers the SDK's file transfers in the process may hold at once — the range GETs, streaming downloads and multipart uploads behind `download_file`, `upload_file`, the prefix operations and FileReference hand-offs reserve from one budget, so the per-call concurrency limits cannot multiply past it. Whole-object byte reads and writes are not covered: `CloudStore` (including `CloudStore.get_bytes()`) holds each object it moves in memory outside the budget. `0` takes a quarter of the container memory limit (never under 128 MiB; 1 GiB when no limit is known). A transfer queued on the budget marks progress, so it is never killed as stalled. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
 | `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE` | `best_effort` | Controls dual-write behaviour when both stores are configured (SDR only). `best_effort` (default): artifact is written to the deployment (customer) store and the upstream (Atlan) store; a deployment-write failure logs a `WARNING` and the run continues. `required`: same dual-write, but a deployment-write failure causes the run to fail after the upstream write completes (a copy is guaranteed somewhere). `disabled`: upstream-only write (pre-BLDX-1464 behaviour). |
 | `ATLAN_VALIDATE_ASSETS_ON_UPLOAD` | `true` | Validate transformed assets against the pyatlan_v9 backbone before the SDR→Atlan upload handoff. Warn-only — invalid/orphaned assets are logged, never block the upload. Set to `false` to disable the check entirely. |

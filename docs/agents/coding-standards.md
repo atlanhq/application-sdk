@@ -319,8 +319,10 @@ that encapsulates the common pattern:
   - `max_buffer_bytes` — buffer ceiling in bytes (default **50 MB**)
   - `max_buffer_records` — buffer ceiling in records (default `None`,
     opt-in)
-- Optional `on_chunk_complete(chunk_index, chunk_path)` callback wires
-  cleanly to `activity.heartbeat(...)` for within-heartbeat checkpointing.
+- Optional `on_chunk_complete(chunk_index, chunk_path)` callback for
+  per-chunk checkpointing. Heartbeat with the SDK's `self.heartbeat(...)`.
+  A plain-function callback runs in the SDK's blocking pool, like `flush_fn`,
+  so it never stalls the event loop. `self.heartbeat` works from there.
 - `writer.file_reference` returns an ephemeral `FileReference` for your
   typed Output; the activity interceptor uploads on task return.
 
@@ -362,16 +364,12 @@ async def extract_users(self, inp: ExtractInput) -> ExtractOutput:
         extension=".parquet",
         flush_fn=_flush_parquet,
         chunk_interval_seconds=60.0,
-        on_chunk_complete=self._heartbeat_chunk,   # optional — see below
+        # optional: per-chunk checkpoint, resumable via get_last_heartbeat_details()
+        on_chunk_complete=lambda idx, path: self.heartbeat(f"wrote {path}"),
     ) as writer:
         async for df in self._stream_users():
             await writer.append(df)
     return ExtractOutput(data=writer.file_reference)
-
-
-async def _heartbeat_chunk(self, chunk_index: int, chunk_path: str) -> None:
-    from temporalio import activity  # noqa: PLC0415
-    activity.heartbeat(f"wrote {chunk_path}")
 ```
 
 #### JSON (line-delimited, `orjson`)
@@ -406,6 +404,27 @@ async def extract_events(self, inp: ExtractInput) -> ExtractOutput:
 To support a new format, write a 3-line `flush_fn` and plug it in. CSV via
 `pandas.to_csv`, Arrow IPC via `pyarrow.ipc`, msgpack via `msgpack.pack` —
 all the same shape.
+
+#### Throughput vs the deprecated writers
+
+Each run writes 200k rows (20 batches of 10k, 4 columns), with uploads
+excluded on both sides. `RollingFileWriter` uses the two examples above:
+DataFrame batches for Parquet, `list[dict]` + orjson for JSON.
+
+| Writer | Parquet | JSON |
+|---|---|---|
+| `ParquetFileWriter` / `JsonFileWriter`, as shipped (per-slice `gc.collect()`) | 0.77 s | 0.80 s |
+| same, `gc.collect()` removed | 0.11 s | 0.19 s |
+| `RollingFileWriter` | **0.07 s** | **0.07 s** |
+
+Measured on arm64 macOS, Python 3.12, with the worker's imports loaded.
+The `gc.collect()` cost grows with the heap. With a production-sized heap
+the deprecated writers took 11.7 s (Parquet) and 15.5 s (JSON); without the
+GC they took 1.1 s and 1.4 s.
+
+`tests/unit/storage/test_rolling_throughput.py` re-runs this comparison on
+every CI leg. It fails if `RollingFileWriter` is slower than the deprecated
+writer it replaces.
 
 ### Alternative: bare copy-paste (no helper class)
 

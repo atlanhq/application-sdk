@@ -131,6 +131,23 @@ passed, is the gateway being unavailable, and no credential change fixes it. Its
 `suggested_action` says so explicitly, because the generic wording ("lacked valid authentication
 credentials") sends an operator to rotate credentials that are working.
 
+### StorageGatewayNoRouteError — a 404 that does not mean the key is missing
+
+`StorageGatewayNoRouteError(StorageError)` carries
+`DEPENDENCY_UNAVAILABLE_STORAGE_GATEWAY_NO_ROUTE` / `AAF-STR-012`. A blobstorage gateway
+instance that joins the load balancer before its route table has synced answers every request with
+`404 {"message":"no Route matched with those values"}` for a few seconds. The object, the bucket
+and the credentials are fine; the next gateway instance would have accepted the request.
+
+The leaf matches on the 404 **and** the gateway's own text, so a plain 404 (a real missing bucket
+or container) still falls through. It is retryable, and its `suggested_action` says to wait and
+retry rather than to look for a missing key.
+
+`upload_file` retries this answer itself, with jittered backoff, and raises the typed error only
+once those retries are spent. The read path (`download_file`, `exists`, `get_file_meta`,
+`_get_bytes`, `delete`) does not treat this 404 as a missing key: it raises the typed error, which is
+retryable, instead of returning "absent" or raising the non-retryable `StorageNotFoundError`.
+
 ### ColdStartRaceError — the cross-domain transient marker
 
 `ColdStartRaceError(DependencyUnavailableError)` is not a domain umbrella itself — it's a
@@ -141,7 +158,9 @@ secret store registered yet"), independent of the general `retryable` wire hint.
 from the Dapr *secrets* API is deliberately NOT treated as proof of unreachability on its own:
 verified against a live sidecar, a genuinely-missing secret key also returns 500 with
 `errorCode=ERR_SECRET_GET` — indistinguishable by status code alone from a still-cold
-component — so classification there additionally inspects the JSON error body's `errorCode`
+component — so classification there additionally inspects the JSON error body's `errorCode`,
+and for `ERR_SECRET_GET` its message: only a not-found-shaped message is "absent"; a throttled,
+access-denied or KMS failure is a retryable `SecretStoreError`
 (see `application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`). A generic
 helper — `application_sdk.infrastructure.retry_past_dapr_cold_start` — retries any current or
 future subtype across domains (secret store today; state store, pub/sub, or credential-vault
@@ -222,6 +241,74 @@ raise StorageNotFoundError(
     key="artifacts/run-123/output.parquet",
 )
 ```
+
+### Map an HTTP failure to a leaf
+
+`classify_http_status(status)` and `classify_http_exception(exc)` pick the leaf for an HTTP
+failure, so an app does not keep its own status table. Both return the leaf **class**, or
+`None` when nothing maps; the app builds it with its own `message`, `suggested_action` and
+`cause`.
+
+| Status | Leaf |
+| --- | --- |
+| 401 | `AuthError` |
+| 403 | `AppPermissionDeniedError` |
+| 404 | `NotFoundError` |
+| 429 | `RateLimitedError` |
+| 5xx | `SourceUnavailableError` |
+
+`classify_http_exception` looks at the exception and then its explicit `__cause__` links
+(`raise Wrapper(...) from err`). It never follows implicit `__context__`: an error raised
+*while* handling a 403, such as a `KeyError` in your parsing code, is not a permission
+failure. The first `httpx` frame decides. A network error, a timeout or a dropped connection
+is `SourceUnavailableError`, and an `HTTPStatusError` goes through the table. An unmapped
+status, `httpx.PoolTimeout` (the client's own pool running dry, not the source) and any other
+httpx error (a decoding or redirect failure) return `None` instead of borrowing an older
+failure further down the chain. `overrides` replaces an entry, including one in the 5xx
+range, for a source whose statuses mean something else.
+
+The helpers are opt-in: nothing in the SDK calls them for you. The pattern is to keep a
+typed error you already have, classify an untyped HTTP failure, and fall back to
+`InternalError` for anything else, with wording that matches the leaf you picked:
+
+```python
+from application_sdk.errors import (
+    AppError,
+    AppPermissionDeniedError,
+    AuthError,
+    InternalError,
+    NotFoundError,
+    RateLimitedError,
+    SourceUnavailableError,
+    classify_http_exception,
+)
+
+_WORDING = {
+    AuthError: ("The source rejected the credentials.", "Check the API key, then try again."),
+    AppPermissionDeniedError: (
+        "The credentials cannot read the projects.",
+        "Grant the API user read access to the projects, then try again.",
+    ),
+    NotFoundError: ("The configured workspace was not found.", "Check the workspace name."),
+    RateLimitedError: ("The source is rate limiting requests.", "Wait, then try again."),
+    SourceUnavailableError: ("The source did not respond.", "Check that it is up, then retry."),
+    InternalError: ("Could not check the source.", "Retry, then contact support."),
+}
+
+
+def preflight_error(exc: Exception) -> AppError:
+    if isinstance(exc, AppError):
+        return exc
+    leaf = classify_http_exception(exc, overrides={402: AuthError, 503: RateLimitedError})
+    if leaf is None:
+        leaf = InternalError
+    message, action = _WORDING[leaf]
+    return leaf(message=message, suggested_action=action, cause=exc)
+```
+
+Validate what you know is a credential problem (an empty or malformed credential) with its
+own typed error before the call that can fail; the fallback is for causes you cannot name,
+and `InternalError` files them against the app rather than the customer.
 
 ### Catch by shape or by domain
 

@@ -281,6 +281,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "says something failed but carries no stack trace forces engineers to reproduce "
             "the failure — often impossible under production data volumes."
         ),
+        rule_interactions=(
+            "L009 at a pre-raise log: a warning/error within the three statements "
+            "before a raise in the same block is also an L009 site (and usually "
+            "L004). Enriching it with exc_info=True or safe_traceback(exc) clears "
+            "E005 and L004 but not L009, whose fix then deletes the line. Apply "
+            "L009's resolution instead: delete the line when the exception has an "
+            "upstream record (which may leave a bare raise), otherwise downgrade it "
+            "to a sanitized DEBUG through locals. Never reduce the handler to a bare "
+            "raise without an upstream record: that drops the only record of the "
+            "failure. That one edit clears E005, L004 and L009 together."
+        ),
         short_description="except block logs without exc_info=True — stack trace discarded",
         full_description=(
             "The message is logged but the stack trace is lost.  Add ``exc_info=True``\n"
@@ -337,8 +348,18 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError "
             "from urlsplit, logs it, and only then returns its '<unparseable url>' "
-            "sentinel; the sentinel is the function's contract, and because the event "
-            "is logged first it needs no suppression. It is the credential-boundary "
+            "sentinel; the sentinel is the function's contract. It needs no "
+            "suppression for two reasons, and both are required: the log before the "
+            "return clears E007's no-log arm, and because the catch is narrow and the "
+            "value is a non-empty placeholder, the logged-sentinel arm does not "
+            "apply. Logging alone is not enough: under a broad catch "
+            "(`except Exception`), logging before an empty return (None, [], {}) "
+            "still fires E007 (FND-4080, which deliberately supersedes the "
+            "log-then-sentinel reading in #4428). The one broad-catch exception is "
+            "atlan-metabase-app app/extracts/questions.py: a per-item `return None` "
+            "after `record_residual_failure(output_path, category, ...)`, which "
+            "writes the failure to a durable residual trail rather than only the "
+            "log. It is the credential-boundary "
             "form of the fix: the log is `logger.debug` through sanitize_cause_repr with "
             "no exc_info, because the url it guards may be a pre-signed secret held in "
             "that frame. Outside such a boundary, log with exc_info=True."
@@ -348,7 +369,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "end state where the sentinel genuinely IS the function's contract — the "
             "caller is documented to treat the empty/None return as a normal outcome "
             "rather than as success. The reason must say which contract, as "
-            "atlan-openapi-app `redact_url` does. Where the sentinel instead stands in "
+            "atlan-openapi-app `redact_url` does. An optional cache whose misses fall "
+            "back to another lookup is such a contract: suppress it in the app with "
+            "the contract named; the detector does not try to prove it. Where the "
+            "sentinel instead stands in "
             "for a failure the caller cannot distinguish from success, the directive "
             "is unremediated: either raise, or record the failure to a durable "
             "evidence trail and declare the gap (see E020)."
@@ -367,7 +391,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "sentinels and stringified exceptions (`str(exc)`, `repr(exc)`, an "
             "f-string or `.format(exc)`) still fire, because a string is the "
             "failure laundered into a plain value. Found by a consumer app's "
-            "preflight probe arms in FND-2493."
+            "preflight probe arms in FND-2493. Under a broad catch, a log before an "
+            "empty-sentinel return does not clear E007 (FND-4080): there the fix is "
+            "to raise or return typed data, never to add or move a log line. Only a "
+            "per-item `return None` after the imported `residuals."
+            "record_residual_failure` clears it (FND-4199). E004 "
+            "still applies to the same handler independently, so its exc_info "
+            "requirement holds whichever way the E007 is fixed."
         ),
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
@@ -382,7 +412,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "failure point: the caller sees a plausible empty result and fails later, often "
             "somewhere unrelated, making the original failure invisible."
         ),
-        short_description="except block returns a value without logging — error hidden",
+        short_description="except block returns a value that hides the error",
         full_description=(
             "Exception is converted to a return value (None, {}, [], False) with no\n"
             "trace.  Callers see a wrong result with no idea why.  At minimum log\n"
@@ -391,6 +421,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "A return that hands the caught exception back as typed data is not\n"
             "flagged: the failure leaves the frame for the caller to report. This\n"
             "is the same typed-failure predicate E004 uses.\n"
+            "\n"
+            "Under a broad catch (`Exception`, `BaseException`, bare `except:`)\n"
+            "logging first does not clear it: `logger.<level>(...); return None`\n"
+            '(or `[]`, `{}`, `()`, `""`, `dict()` ...) leaves the trace in the log\n'
+            "only, and the caller still cannot tell the failure from a genuine\n"
+            "empty result. Raise a domain error or return the failure as typed\n"
+            "data. A per-item `return None` after an imported\n"
+            "`residuals.record_residual_failure(output_path, category, ...)` call is\n"
+            "not flagged: the failure is recorded as durable data. A narrow catch,\n"
+            "a bare `return`, a `return None` inside a\n"
+            "`-> None` function, and any file in a wholesale-deprecated module (one\n"
+            "whose own top level, or an enclosing package `__init__.py`, emits a\n"
+            "module-level `DeprecationWarning`) are left out of this arm.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
         remediation_reference=RemediationReference(
@@ -562,7 +605,9 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-mysql-app app/failures.py — every leaf subclasses an SDK category "
             "(e.g. `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns "
-            "a `code`. Raise one of these, never a bare ValueError or RuntimeError."
+            "a `code`. Use one of these for failures that leave the error boundary; a "
+            "builtin used only as a sentinel inside a matching typed-translation handler "
+            "does not escape as the outward failure."
         ),
         scope=RuleScope.BOTH,
         name="UntypedBuiltinRaise",
@@ -580,12 +625,16 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description="raise ValueError/RuntimeError/... where a typed AppError applies",
         full_description=(
-            "SDK code raises a bare Python builtin.  The Automation Engine receives an\n"
+            "SDK code that lets a bare Python builtin reach the Automation Engine sends an\n"
             "opaque string — no category, code, audience, or retryable field.\n"
             "Dashboards are blind; on-call routing is impossible.  Use the typed error\n"
-            "leaf from ``application_sdk.errors``.  Acceptable only inside dataclass\n"
-            "``__post_init__`` / stdlib validator methods where Python semantics require\n"
-            "``TypeError``/``ValueError`` for stdlib interoperability.\n"
+            "leaf from ``application_sdk.errors``.  A builtin used as an internal\n"
+            "validation sentinel is acceptable only when a matching ``except`` handler\n"
+            "unconditionally translates it into a typed ``AppError`` before it leaves\n"
+            "that boundary; swallowing, conditional handling, and re-raising do not qualify.\n"
+            "Builtin raises are also acceptable inside dataclass ``__post_init__`` /\n"
+            "stdlib validator methods where Python semantics require ``TypeError`` or\n"
+            "``ValueError`` for stdlib interoperability.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
         remediation_reference=RemediationReference(
@@ -727,22 +776,35 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.2.0",
         rationale=(
             "When the Automation Engine rebuilds the typed wire envelope it walks the "
-            ".cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does "
-            "not follow __context__. Without explicit chaining the original exception — "
-            "attached only as __context__ — is visible at the interpreter level but dropped "
-            "from the wire envelope and every downstream system that reads it."
+            ".cause/__cause__ chain, not __context__. A replacing raise that neither "
+            "explicitly chains the caught exception nor carries it as the SDK error's cause "
+            "leaves the original attached only as __context__; it is visible at the "
+            "interpreter level but dropped from the wire envelope and every downstream "
+            "system that reads it."
         ),
-        short_description="raise inside except block missing 'from exc' cause — breaks exception chain",
+        short_description=(
+            "raise inside except block missing an explicit or SDK-visible cause — breaks "
+            "exception chaining"
+        ),
         full_description=(
-            "A non-bare ``raise`` inside an ``except … as e:`` block that does not\n"
-            "include ``from e`` (or ``from None``).  Without explicit chaining, Python\n"
-            "attaches the original as ``__context__`` with ``__suppress_context__=False``\n"
-            "— the chain is preserved at the interpreter level but AE's wire serialiser\n"
-            "only follows the ``__cause__`` chain, so the original exception is lost in\n"
-            "dashboards.  Fix: ``raise NewError(...) from e``.  Use ``from None`` only\n"
-            "when intentionally hiding the original (requires a comment explaining why).\n"
-            "Acceptable patterns: bare ``raise`` (re-raise), ``raise X() from e`` (already\n"
-            "chained), ``raise X() from None`` (intentional suppression).\n"
+            "A non-bare ``raise`` inside an ``except … as e:`` block that neither\n"
+            "includes ``from e`` (or ``from None``) nor carries ``e`` as a proven SDK\n"
+            "error's cause.  Without either, Python attaches the original only as\n"
+            "``__context__`` — preserved at the interpreter level, but AE's wire\n"
+            "serialiser follows the ``__cause__``/``.cause`` chain, so the original\n"
+            "exception is lost in dashboards.  Fix: ``raise NewError(...) from e``, and\n"
+            "for an SDK ``AppError`` also pass ``cause=e``.  Use ``from None`` only when\n"
+            "intentionally hiding the original (requires a comment explaining why).\n"
+            "Acceptable patterns: bare ``raise`` (re-raise); ``raise X() from e``\n"
+            "(already chained); ``raise X() from None`` (intentional suppression);\n"
+            "``raise SdkError(..., cause=e)`` where ``SdkError`` is proven to come from\n"
+            "``application_sdk.errors``, is not rebound or shadowed, and the call has no\n"
+            "``*args``/``**kwargs`` unpacking; ``raise classify(e)`` where ``classify``\n"
+            "is an unshadowed top-level function in this module or imported from the\n"
+            "scanned repo whose every return either passes through ``e`` already proven\n"
+            "to be an SDK error or builds an SDK error with ``cause=e``.  A cause the\n"
+            "rule cannot prove (``cause=str(e)``, an app-defined class, an opaque\n"
+            "helper) still needs ``from e``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
         remediation_reference=RemediationReference(

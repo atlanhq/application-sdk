@@ -40,7 +40,7 @@ class _Resolver:
         self._root = root.resolve() if root is not None else None
         self._trees: dict[Path, ast.Module | None] = {}
 
-    def _load(self, path: Path) -> ast.Module | None:
+    def load(self, path: Path) -> ast.Module | None:
         if path not in self._trees:
             try:
                 self._trees[path] = ast.parse(path.read_text(encoding="utf-8"))
@@ -48,7 +48,7 @@ class _Resolver:
                 self._trees[path] = None
         return self._trees[path]
 
-    def _module_file(
+    def module_file(
         self, module: str | None, level: int, current: Path | None
     ) -> Path | None:
         if self._root is None:
@@ -106,8 +106,8 @@ class _Resolver:
                         continue
                     if node.level == 0 and _is_sdk_errors_module(node.module):
                         return _is_error_leaf(alias.name)
-                    target = self._module_file(node.module, node.level, path)
-                    loaded = self._load(target) if target is not None else None
+                    target = self.module_file(node.module, node.level, path)
+                    loaded = self.load(target) if target is not None else None
                     return loaded is not None and self.is_sdk_error(
                         loaded, target, alias.name, visited
                     )

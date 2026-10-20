@@ -31,6 +31,7 @@ from conformance.bootstrap.render import (
     MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
     RETIRED_CONNECTOR_REVIEW_FILES,
+    RETIRED_FILES,
     RETIRED_WORKFLOWS,
     SARIF_UPLOAD_WORKFLOW,
     render,
@@ -1637,6 +1638,7 @@ def test_resync_keeps_an_explicit_secrets_mapping(
     assert _EXPLICIT_SECRETS_BLOCK in after
     # Line-exact: the block's own comment mentions `secrets: inherit` by name.
     assert "    secrets: inherit\n" not in after
+    assert "      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}\n" in after
 
 
 def test_resync_keeps_force_external_runtime(
@@ -2393,6 +2395,48 @@ def test_cmd_bootstrap_json_reports_a_removal_as_touched(
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     for name in RETIRED_WORKFLOWS:
         assert f".github/workflows/{name}" in payload["touched"]
+
+
+# ---------------------------------------------------------------------------
+# Dependabot config: superseded by the Renovate preset, never managed
+# ---------------------------------------------------------------------------
+
+_DEPENDABOT_CONFIGS = (".github/dependabot.yml", ".github/dependabot.yaml")
+
+
+def test_dependabot_configs_are_retired() -> None:
+    assert set(_DEPENDABOT_CONFIGS) <= set(RETIRED_FILES)
+    # Not a workflow, so C002's workflow-directory scan must not list it.
+    assert not {"dependabot.yml", "dependabot.yaml"} & set(RETIRED_WORKFLOWS)
+
+
+@pytest.mark.parametrize("rel", _DEPENDABOT_CONFIGS)
+def test_cmd_bootstrap_removes_a_dependabot_config_and_leaves_renovate(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys, rel: str
+) -> None:
+    """The file is deleted, reported as touched so the resync lane stages the
+    deletion, and the same run leaves renovate.json as the one updater."""
+    dest = tmp_path / rel
+    dest.parent.mkdir(parents=True)
+    dest.write_text("version: 2\nupdates: []\n")
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert not dest.exists()
+    assert rel in payload["touched"]
+    assert (tmp_path / "renovate.json").exists()
+
+
+def test_cmd_bootstrap_without_dependabot_config_reports_nothing(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    for rel in _DEPENDABOT_CONFIGS:
+        assert rel not in payload["touched"]
+        assert rel not in payload["unchanged"]
+        assert not (tmp_path / rel).exists()
 
 
 # ---------------------------------------------------------------------------
