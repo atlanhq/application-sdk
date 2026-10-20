@@ -945,7 +945,10 @@ jobs:
           python3 application-sdk-scripts/.github/scripts/gen_app_api.py build \
             --member "$MEMBER" --out dist-api
           uv venv .venv-api
-          uv pip install --python .venv-api dist-api/*.whl httpx2
+          # httpx2 is starlette's TestClient transport (the probe mounts the app
+          # with it). Pinned exactly so every app's CI runs the same client; bump
+          # to a release public >= 7 days (org dependency cooldown).
+          uv pip install --python .venv-api dist-api/*.whl httpx2==2.13.1
           .venv-api/bin/python application-sdk-scripts/.github/scripts/probe_app_api_member.py \
             --name "$APP_NAME" --package "$PACKAGE" --object "$OBJECT"
 

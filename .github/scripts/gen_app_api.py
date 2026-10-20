@@ -58,7 +58,7 @@ except ModuleNotFoundError:  # Python < 3.11: say so before anything else fails
     sys.exit(
         "gen_app_api.py needs Python 3.11+ (tomllib); run it with `uv run --python 3.11`"
     )
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 SECTION = "atlan-app-api"
@@ -655,16 +655,22 @@ def stage(root: Path, config: Config, where: Path) -> list[str]:
 
 def content_hash(root: Path, config: Config) -> str:
     """sha256 of the package the host would install: every staged file (path and
-    bytes, in path order), the generated ``pyproject.toml`` (its dependencies)
-    included.
+    bytes, in path order), the generated ``pyproject.toml`` (its dependencies,
+    the api floor among them) included.
 
-    A release that changes only worker code leaves it unchanged, so the host's
-    pin bump can skip it instead of rolling every hosted app for nothing.
+    The app's own version is left out: the tree is staged from a copy of
+    *config* with a fixed ``version``, so the generated ``[project]`` table's
+    ``version = ...`` line is the same on every release. Every release bumps
+    it, and hashing it would change the hash even when nothing the host serves
+    did. A release that changes only worker code (or only the version) leaves
+    the hash unchanged, so when common-app-server's Renovate moves the app's
+    tag+SHA pin, its serving-change workflow can label the move
+    ``no-serving-change`` instead of treating it as a change to what it serves.
     """
     digest = hashlib.sha256()
     with tempfile.TemporaryDirectory() as tmp:
         where = Path(tmp) / "src"
-        stage(root, config, where)
+        stage(root, replace(config, version="0"), where)
         for path in sorted(p for p in where.rglob("*") if p.is_file()):
             digest.update(path.relative_to(where).as_posix().encode())
             digest.update(b"\0")

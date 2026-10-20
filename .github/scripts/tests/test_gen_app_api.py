@@ -395,6 +395,19 @@ def test_the_content_hash_moves_only_with_what_the_host_installs(
     assert gen.content_hash(root, config) != before
 
 
+def test_the_content_hash_ignores_the_app_version_but_not_its_dependencies(
+    tmp_path: Path,
+) -> None:
+    root = _app(tmp_path, "from .client import C\n")
+    before = gen.content_hash(root, gen.load(root))
+    pyproject = root / "pyproject.toml"
+    pyproject.write_text(_PYPROJECT.replace('version = "1.4.0"', 'version = "1.5.0"'))
+    assert gen.load(root).version == "1.5.0"
+    assert gen.content_hash(root, gen.load(root)) == before  # a release, nothing served
+    pyproject.write_text(_PYPROJECT.replace('"pymysql>=1.1"', '"pymysql>=1.2"'))
+    assert gen.content_hash(root, gen.load(root)) != before  # the host installs more
+
+
 def test_the_api_floor_is_the_sdk_version_the_app_locks(tmp_path: Path) -> None:
     root = _app(tmp_path, "from .client import C\n")
     (root / "uv.lock").write_text(
