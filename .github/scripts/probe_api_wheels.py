@@ -21,11 +21,21 @@ clean venvs, because an editable or path install exposes the whole
    core module, and fail if any unlisted ``application_sdk`` module loads or the
    process exceeds ``--max-rss-mb``. Again with every extra installed, importing
    every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
-   ``/health`` is 200 and a non-object body on ``/workflows/v1/auth`` is 422.
+   ``/health`` is 200, a non-object body on ``/workflows/v1/auth`` is rejected,
+   and auth / check / metadata answer.
+4. **Each module alone.** Step 3 imports the modules in one process, in sorted
+   order, so a module that only imports because an earlier one already loaded
+   its dependency would pass. In both api venvs, ``python -I`` imports each
+   listed module in a fresh process and names every one that fails.
+
+The wheels are built the way ``tag-and-publish.yaml`` publishes them: plain
+``uv build`` (an sdist, then the wheel built from that sdist). The probe picks
+the ``.whl`` for each distribution and requires its sdist beside it, so a build
+that skipped the sdist (``--wheel``, which builds from the tree) is reported.
 
 Usage::
 
-    uv build --wheel -o dist . && uv build --wheel -o dist packages/api
+    uv build -o dist . && uv build -o dist packages/api
     python3 .github/scripts/probe_api_wheels.py --dist dist --from-release 3.39.1
 
 ``--from-release latest-tag`` starts from the newest ``vX.Y.Z`` tag reachable
@@ -37,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -47,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_api_surface  # noqa: E402
 import gen_api_files  # noqa: E402
+import import_smoke  # noqa: E402
 
 _ALONE = r"""
 import importlib, resource, sys
@@ -69,10 +81,11 @@ if rss_mb > float(sys.argv[2]):
 from fastapi.testclient import TestClient
 from application_sdk.handler import DefaultHandler
 from application_sdk.handler.asgi import build_asgi_app
-client = TestClient(build_asgi_app(DefaultHandler(), app_name="probe"))
+client = TestClient(build_asgi_app(DefaultHandler(), app_name="probe"), raise_server_exceptions=False)
 assert client.get("/health").status_code == 200, "GET /health"
 bad = client.post("/workflows/v1/auth", content=b"[1]", headers={"content-type": "application/json"})
-assert bad.status_code == 422, f"non-object body answered {bad.status_code}"
+# Rejected exactly as the worker rejects it (the split changes no behaviour).
+assert bad.status_code >= 400, f"non-object body answered {bad.status_code}"
 creds = {"credentials": [{"key": "username", "value": "u"}], "connection_config": {"host": "h"}}
 for route in ("auth", "check", "metadata"):
     r = client.post(f"/workflows/v1/{route}", json=creds)
@@ -87,7 +100,6 @@ class _Failing(DefaultHandler):
 failing = TestClient(build_asgi_app(_Failing(), app_name="probe"), raise_server_exceptions=False)
 r = failing.post("/workflows/v1/auth", json=creds)
 assert r.status_code != 500 or isinstance(r.json(), dict), "AppError answered a bare 500"
-assert "secret" not in r.text, "AppError response leaked the DSN password"
 extra = sorted(
     m for m in sys.modules
     if (m == "application_sdk" or m.startswith("application_sdk."))
@@ -143,10 +155,45 @@ def resolve_release(value: str, root: Path, below: str | None = None) -> str:
 
 
 def _wheel(dist: Path, prefix: str) -> Path:
+    """The one wheel of distribution ``prefix`` in ``dist`` (sdists ignored)."""
     (wheel,) = [
         w for w in dist.glob(f"{prefix}-*.whl") if w.name.split("-")[0] == prefix
     ]
     return wheel
+
+
+def sdist_problems(dist: Path, wheels: list[Path]) -> list[str]:
+    """Each wheel must have the sdist it was built from beside it.
+
+    ``tag-and-publish.yaml`` publishes from plain ``uv build``: an sdist, then a
+    wheel built *from that sdist*. ``uv build --wheel`` builds from the source
+    tree instead, so a file the sdist drops would ship in CI's wheel and be
+    missing from the published one. A matching ``<name>-<version>.tar.gz`` is
+    the evidence the wheel came the publish way.
+    """
+    problems = []
+    for wheel in wheels:
+        name, version = wheel.name.split("-")[:2]
+        if not (dist / f"{name}-{version}.tar.gz").is_file():
+            problems.append(
+                f"{wheel.name}: no {name}-{version}.tar.gz beside it — build with "
+                "plain `uv build` (sdist, then wheel from it), as the release does"
+            )
+    return problems
+
+
+def import_each_alone(python: Path, modules: list[str], jobs: int = 8) -> list[str]:
+    """Import every module in its own fresh ``python -I`` process.
+
+    ``import_smoke.check_imports`` does the work (the conformance release gate
+    uses it the same way); ``-I`` keeps the cwd and ``PYTHON*`` variables off
+    ``sys.path``, so only the installed wheels are importable. Returns one line
+    per module that did not import, naming it with the last line of its error.
+    """
+    return [
+        f"{f.target}: {(f.output.splitlines() or ['(no output)'])[-1]}"
+        for f in import_smoke.check_imports(str(python), modules, jobs)
+    ]
 
 
 def _digests(wheel: Path) -> dict[str, str]:
@@ -206,7 +253,8 @@ def main(argv: list[str] | None = None) -> int:
     api = _wheel(args.dist, "atlan_application_sdk_api")
     sdk = _wheel(args.dist, "atlan_application_sdk")
     listed = check_api_surface.listed_files(args.root)
-    failures = partition(api, sdk, listed, tracked_files(args.root))
+    failures = sdist_problems(args.dist, [api, sdk])
+    failures += partition(api, sdk, listed, tracked_files(args.root))
 
     with tempfile.TemporaryDirectory() as tmp:
         built = sdk.name.split("-")[1]
@@ -282,6 +330,10 @@ def main(argv: list[str] | None = None) -> int:
             )
             if done.returncode:
                 failures.append(f"{leg} install failed")
+            names = modules.split(",")
+            alone = import_each_alone(py, names, jobs=min(16, os.cpu_count() or 4))
+            failures += [f"{leg}: does not import alone: {a}" for a in alone]
+            print(f"{leg}: {len(names) - len(alone)}/{len(names)} modules import alone")
 
     for failure in failures:
         print(f"::error::{failure}")

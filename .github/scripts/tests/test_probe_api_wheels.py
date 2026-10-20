@@ -7,6 +7,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import probe_api_wheels as probe  # noqa: E402
@@ -90,3 +92,84 @@ def test_latest_tag_reads_the_newest_reachable_release(tmp_path: Path) -> None:
     # the upgrade from the release before it, never from itself.
     assert probe.resolve_release("latest-tag", tmp_path, below="3.39.1") == "3.39.0"
     assert probe.resolve_release("latest-tag", tmp_path, below="3.40.0") == "3.39.1"
+
+
+def test_wheel_pick_ignores_sdists_and_requires_them(tmp_path: Path) -> None:
+    """Plain `uv build` leaves sdists beside the wheels: the pick ignores them,
+    and a wheel without its sdist (a `--wheel` build) is reported."""
+    for name in (
+        "atlan_application_sdk-3.50.0-py3-none-any.whl",
+        "atlan_application_sdk-3.50.0.tar.gz",
+        "atlan_application_sdk_api-3.50.0-py3-none-any.whl",
+        "atlan_application_sdk_api-3.50.0.tar.gz",
+    ):
+        (tmp_path / name).write_bytes(b"")
+    sdk = probe._wheel(tmp_path, "atlan_application_sdk")
+    api = probe._wheel(tmp_path, "atlan_application_sdk_api")
+    assert sdk.name == "atlan_application_sdk-3.50.0-py3-none-any.whl"
+    assert api.name == "atlan_application_sdk_api-3.50.0-py3-none-any.whl"
+    assert probe.sdist_problems(tmp_path, [api, sdk]) == []
+
+    (tmp_path / "atlan_application_sdk-3.50.0.tar.gz").unlink()
+    (problem,) = probe.sdist_problems(tmp_path, [api, sdk])
+    assert problem.startswith("atlan_application_sdk-3.50.0-py3-none-any.whl: no ")
+
+
+def _venv_with(tmp_path: Path, modules: dict[str, str]) -> Path:
+    """A pip-less venv with ``modules`` written into its site-packages."""
+    where = tmp_path / "venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(where)], check=True
+    )
+    python = where / "bin" / "python"
+    purelib = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    for name, source in modules.items():
+        path = Path(purelib, *name.split(".")).with_suffix(".py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+    return python
+
+
+def test_each_module_imports_in_its_own_process(tmp_path: Path) -> None:
+    """`b` only imports once `a` is loaded: one sorted bulk import passes it,
+    a fresh process per module names it."""
+    python = _venv_with(
+        tmp_path,
+        {
+            "pkg/__init__": "",
+            "pkg/a": "import json\n",
+            # Order-dependent: reads a module an earlier import left behind.
+            "pkg/b": "import sys\nsys.modules['pkg.a'].json\n",
+            "pkg/c": "import pkg.a\n",
+        },
+    )
+    modules = ["pkg", "pkg.a", "pkg.b", "pkg.c"]
+    bulk = subprocess.run(
+        [str(python), "-I", "-c", f"import {', '.join(modules)}"], cwd=tmp_path
+    )
+    assert bulk.returncode == 0  # the sorted single-process walk hides it
+    (failure,) = probe.import_each_alone(python, modules, jobs=2)
+    assert failure.startswith("pkg.b: KeyError")
+
+
+def test_isolated_import_ignores_the_cwd_and_pythonpath(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A module only reachable from the cwd or PYTHONPATH (the source tree)
+    must not count as installed."""
+    python = _venv_with(tmp_path, {})
+    (tmp_path / "only_in_cwd.py").write_text("")
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    failures = probe.import_each_alone(python, ["only_in_cwd", "no_such_module_xyz"])
+    assert [f.split(":")[0] for f in failures] == ["only_in_cwd", "no_such_module_xyz"]
+    assert all("ModuleNotFoundError" in f for f in failures)

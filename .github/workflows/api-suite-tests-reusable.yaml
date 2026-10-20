@@ -12,9 +12,9 @@ name: API package checks (reusable)
 #   * probe_api_wheels.py installs the BUILT wheels (never an editable tree):
 #     each file under application_sdk/ ships in exactly one wheel, a uv upgrade
 #     from the last release keeps every listed file, the documented
-#     `pip install --force-reinstall` recovery works after a pip upgrade, and an
+#     `pip install --force-reinstall` recovery works after a pip upgrade, an
 #     api-only venv imports the listed modules within the RSS budget and serves
-#     its routes.
+#     its routes, and each listed module imports alone in a fresh process.
 #
 # The logic lives in tested scripts (docs/standards/ci.md). SDK-private: no
 # consumer app references this workflow.
@@ -46,10 +46,13 @@ jobs:
       - name: Check the api file set's imports
         run: python3 .github/scripts/check_api_surface.py
 
-      - name: Build both wheels
+      # Plain `uv build`, as tag-and-publish.yaml publishes: an sdist, then the
+      # wheel built from it. `--wheel` would build from the tree and miss a
+      # file the sdist drops. The probe requires each wheel's sdist beside it.
+      - name: Build both distributions (sdist, then wheel from it)
         run: |
           set -euo pipefail
-          uv build --wheel --out-dir dist .
+          uv build --out-dir dist .
           uv build --out-dir dist packages/api
 
       - name: Probe the built wheels
