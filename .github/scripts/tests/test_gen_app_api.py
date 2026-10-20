@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import Path
 
@@ -9,6 +10,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import check_api_surface as surface  # noqa: E402 — the SDK's walker, for parity
 import gen_app_api as gen  # noqa: E402
 
 
@@ -491,3 +493,91 @@ def test_a_logging_import_of_no_loggers_is_left_alone(tmp_path: Path) -> None:
     root = _app(tmp_path, handler)
     assert gen.main(["fix", "--root", str(root)]) == 0
     assert (root / "app/handler.py").read_text() == handler
+
+
+# The app walker reimplements check_api_surface's (gen_app_api.py runs alone in
+# app repos and cannot import it). Hold the two to the same answers.
+_PARITY_TREE = {
+    "app/__init__.py": "",
+    "app/handler.py": (
+        "from .client import C\n"
+        "from . import sub\n"
+        "from .sub import thing, NAME\n"
+        "from .sub.deep import *\n"
+        "import app.models\n"
+        "from app import failures\n"
+        "from application_sdk.handler import Handler\n"
+        "def lazy():\n"
+        "    try:\n"
+        "        from .worker import W\n"
+        "    except ImportError:\n"
+        "        W = None\n"
+    ),
+    # A module and a package of one name: the package is what imports.
+    "app/client.py": "SHADOWED = True\n",
+    "app/client/__init__.py": "from .transport import T\n",
+    "app/client/transport.py": "from ..failures import Boom\n",
+    "app/failures.py": "class Boom(Exception): ...\n",
+    "app/models.py": "",
+    "app/worker.py": "",
+    "app/sub/__init__.py": "NAME = 1\nfrom . import thing\n",
+    "app/sub/thing.py": "from ..models import *\n",
+    "app/sub/deep.py": "from .. import client\nimport app.sub.thing as t\n",
+    # The one known divergence (asserted below): an import only a type checker
+    # runs. check_api_surface skips it; gen_app_api ships its target anyway.
+    "app/typed.py": (
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from .worker import W\n"
+        "else:\n"
+        "    from .models import *\n"
+    ),
+}
+
+#: Files the app walker reaches that check_api_surface does not, and why.
+_KNOWN_DIVERGENCE = {
+    # ``if TYPE_CHECKING:`` bodies: check_api_surface skips them (never run on
+    # the host); gen_app_api's ``ast.walk`` follows them, so the handler wheel
+    # ships the target too. Conservative (an extra file, never a missing one).
+    "app/typed.py": {"app/worker.py"},
+}
+
+
+def _parity_root(tmp_path: Path) -> Path:
+    for rel, text in _PARITY_TREE.items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    return tmp_path
+
+
+def test_module_resolution_matches_check_api_surface(tmp_path: Path) -> None:
+    root = _parity_root(tmp_path)
+    assert gen._module_file(root, "app.client") == "app/client/__init__.py"
+    names = {
+        "app",
+        "app.nope",
+        *(surface.module_of(rel) for rel in _PARITY_TREE),
+        *(f"{surface.module_of(rel)}.x" for rel in _PARITY_TREE),
+    }
+    for name in sorted(names):
+        assert gen._module_file(root, name) == surface.file_of(root, name), name
+
+    for rel in sorted(_PARITY_TREE):
+        if surface.file_of(root, surface.module_of(rel)) != rel:
+            continue  # the shadowed app/client.py never imports
+        module = surface.module_of(rel)
+        is_package = rel.endswith("__init__.py")
+        tree = ast.parse((root / rel).read_text())
+        ours = {
+            gen._module_file(root, target)
+            for _node, target, _relative in gen._app_imports(tree, module, is_package)
+        } - {None}
+        theirs = {
+            surface.file_of(root, name)
+            for _node, name, _top, _guarded, _required in surface._imports(
+                tree, module, is_package
+            )
+            if name.split(".")[0] == gen.APP
+        } - {None}
+        assert ours - theirs == _KNOWN_DIVERGENCE.get(rel, set()), rel
+        assert theirs <= ours, rel

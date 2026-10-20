@@ -167,8 +167,14 @@ def load(root: Path) -> Config | None:
 
 
 def _module_file(root: Path, module: str) -> str | None:
+    """The file ``module`` imports from, or None when it names no module file.
+
+    A package (``x/__init__.py``) wins over a sibling ``x.py``, as in Python's
+    path finder. Keep in step with ``check_api_surface.file_of`` in the SDK repo
+    (a parity test there holds them together); this script stays standalone.
+    """
     base = module.replace(".", "/")
-    for rel in (f"{base}.py", f"{base}/__init__.py"):
+    for rel in (f"{base}/__init__.py", f"{base}.py"):
         if (root / rel).is_file():
             return rel
     return None
