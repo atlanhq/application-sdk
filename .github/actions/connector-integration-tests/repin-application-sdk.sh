@@ -5,6 +5,14 @@
 # action.yaml when `application-sdk-ref` is supplied — i.e. on apps-sdk
 # cross-repo dispatches.
 #
+# It also pins atlan-application-sdk-api to the same ref (subdirectory
+# packages/api). The SDK wheel does not ship the api package's files and pins
+# atlan-application-sdk-api==<its own version>; uv does not read the SDK's own
+# [tool.uv.sources], so without this pin the api package resolves from PyPI —
+# absent before its first release, and the LAST RELEASED handler/errors/contracts
+# files after it, a false green. At an SDK ref older than the split nothing
+# depends on the api package and uv ignores the extra source.
+#
 # Reads:  $SDK_REF (the commit / branch / tag to pin to)
 # Writes: pyproject.toml in CWD (the caller workspace)
 #
@@ -45,6 +53,22 @@ pattern = re.compile(
 )
 replaced, n = pattern.subn(new_line, src)
 
+api_line = (
+    'atlan-application-sdk-api = { git = '
+    f'"https://github.com/atlanhq/application-sdk", rev = "{ref}", '
+    'subdirectory = "packages/api" }'
+)
+api_pattern = re.compile(
+    r'^atlan-application-sdk-api\s*=\s*\{[^}]*\}\s*$',
+    flags=re.MULTILINE,
+)
+replaced, n_api = api_pattern.subn(api_line, replaced)
+if n_api > 1:
+    raise SystemExit(
+        f"::error::Multiple atlan-application-sdk-api source pins matched ({n_api}); "
+        "expected at most one."
+    )
+
 if n > 1:
     # More than one pin is ambiguous — fail loudly rather than rewriting
     # something the user did not intend.
@@ -68,6 +92,10 @@ if n == 0:
     else:
         replaced = replaced.rstrip() + f"\n\n[tool.uv.sources]\n{new_line}\n"
         print(f"No active [tool.uv.sources]; appended a new section for {ref}")
+
+if n_api == 0:
+    # Keep it next to the SDK pin, which is under [tool.uv.sources] by now.
+    replaced = replaced.replace(new_line, f"{new_line}\n{api_line}", 1)
 
 path.write_text(replaced)
 
@@ -102,6 +130,21 @@ if parser is not None:
             f'{{ rev = "{ref}" }} under [tool.uv.sources]; refusing to let the '
             "build silently resolve the released PyPI SDK."
         )
+    api_entry = (
+        parsed.get("tool", {}).get("uv", {}).get("sources", {}).get(
+            "atlan-application-sdk-api"
+        )
+    )
+    if not (
+        isinstance(api_entry, dict)
+        and api_entry.get("rev") == ref
+        and api_entry.get("subdirectory") == "packages/api"
+    ):
+        raise SystemExit(
+            "::error::repin did not place atlan-application-sdk-api = "
+            f'{{ rev = "{ref}", subdirectory = "packages/api" }} under '
+            "[tool.uv.sources]; the build would resolve the released api package."
+        )
 else:
     # No TOML parser available — do NOT skip the guard. Structurally verify the
     # injected pin sits under an ACTIVE [tool.uv.sources] header (the nearest
@@ -129,5 +172,5 @@ else:
             f"(nearest table header: {header!r}); uv would reject it and silently "
             "resolve the released PyPI SDK."
         )
-print(f"Re-pinned application-sdk to {ref}")
+print(f"Re-pinned application-sdk and application-sdk-api to {ref}")
 PYEOF
