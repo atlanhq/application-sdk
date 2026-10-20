@@ -30,7 +30,7 @@ description: >
   adopts typed check errors, and updates tests. Interactive: every
   blocking/advisory/consolidation decision belongs to the developer; the
   skill proposes, never imposes.
-runs_before: [migrate-orchestration, migrate-deprecated-symbols]
+runs_before: [migrate-orchestration, migrate-deprecated-symbols, api-server-consolidation-migration]
 mandatory_triggers:
   - "/adopt-preflight-gate"
   - "adopt the preflight gate"
