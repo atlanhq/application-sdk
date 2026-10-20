@@ -225,9 +225,12 @@ class AzureClient(ClientInterface):
             self._services.clear()
 
             # Shutdown executor
-            if self._executor is not None:
-                self._executor.shutdown(wait=True)
-                self._executor = None
+            # In a thread: wait=True joins the pool's workers, which holds the
+            # loop for as long as any submitted call runs (FND-4084). Detached
+            # first, so a concurrent close() does not shut it down twice.
+            executor, self._executor = self._executor, None
+            if executor is not None:
+                await run_in_thread(executor.shutdown, wait=True)
 
             # Reset connection health
             self._connection_health = False

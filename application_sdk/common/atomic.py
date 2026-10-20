@@ -12,9 +12,12 @@ move). The failure surfaces much later, in a *consuming* app's parser, at a
 byte offset that is identical on every retry.
 
 The SDK already knew the fix and applied it only to its own bookkeeping — the
-resume checkpoint in :mod:`application_sdk.storage.chunked` and the local
-secrets file in :mod:`application_sdk.handler.service` are both written
-temp → fsync → ``os.replace``. Every artifact an *app* produced was written
+resume checkpoint in :mod:`application_sdk.storage.chunked` is written
+temp → ``os.replace``, and the local secrets file in
+:mod:`application_sdk.handler.service` temp → fsync → ``os.replace``. (The
+checkpoint skips the fsync: a torn checkpoint is read as corrupt and the
+download starts fresh, and the data file it describes is fsynced before its
+own publish.) Every artifact an *app* produced was written
 direct-to-final-name. This module inverts that back: the SDK owns the writers
 apps actually use, so an app should have to go out of its way (a raw ``open()``)
 to produce a partial artifact, not go out of its way to avoid one.

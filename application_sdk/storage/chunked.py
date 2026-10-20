@@ -131,13 +131,17 @@ def _load_transfer_state(state_path: Path) -> dict | None:
 
 
 def _save_transfer_state(state_path: Path, state: dict) -> None:
-    """Atomically persist transfer state (write temp + rename, fsync'd).
+    """Atomically persist transfer state (write temp + rename, no fsync).
 
-    fsync on the temp file is enough for the failure mode resume targets:
-    process death (OOMKill / activity retry) preserves the kernel page cache,
-    so data-file writes that precede this checkpoint are visible on retry.
-    Node death loses the local volume entirely — resume is moot there and the
-    etag check makes the resulting fresh download safe.
+    Runs on the event loop after every chunk, so it must not flush: an fsync
+    per chunk held the loop for the disk's flush latency each time (FND-4084).
+    None is needed for the failure mode resume targets: process death
+    (OOMKill / activity retry) preserves the kernel page cache, so both the
+    data-file writes that precede this checkpoint and the checkpoint itself
+    are visible on retry. Node death can tear or empty the checkpoint;
+    :func:`_load_transfer_state` reads that as corrupt and the download starts
+    fresh, which is always correct. ENOSPC on the data file is still reported
+    before publish, by the one fsync of the part file ahead of ``os.replace``.
     """
     tmp = state_path.with_suffix(state_path.suffix + ".tmp")
     # O_BINARY: raw os.write on a Windows text-mode fd would rewrite 0x0A as
@@ -149,7 +153,6 @@ def _save_transfer_state(state_path: Path, state: dict) -> None:
     )
     try:
         os.write(fd, orjson.dumps(state))
-        os.fsync(fd)
     finally:
         os.close(fd)
     os.replace(tmp, state_path)

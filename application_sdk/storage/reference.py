@@ -1037,12 +1037,15 @@ async def materialize_file_reference(
             # ``download()`` returns for an empty prefix — gets it back.
             if ref.file_count > 0:
                 raise _handoff_not_visible(ref, found=0)
+            # Counted in a thread: a directory left by an earlier pass can hold
+            # any number of entries (FND-4084).
+            file_count = await run_in_thread(_count_entries, local)
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
                 "file_ref.materialize.empty_prefix",
                 storage_path=ref.storage_path,
                 local_path=ref.local_path,
-                file_count=sum(1 for _ in local.iterdir()),
+                file_count=file_count,
             )
             return ref
         # Nothing local to hand back, so fall through to the single-file
@@ -1073,6 +1076,11 @@ def _resolve_local_directory(ref: FileReference, local_dir: str | None) -> str:
         local_directory = tempfile.mkdtemp()
     Path(local_directory).mkdir(parents=True, exist_ok=True)
     return local_directory
+
+
+def _count_entries(directory: Path) -> int:
+    """Number of entries directly under *directory*. Blocking: call it through ``run_in_thread``."""
+    return sum(1 for _ in directory.iterdir())
 
 
 def _handoff_not_visible(ref: FileReference, *, found: int) -> Exception:
