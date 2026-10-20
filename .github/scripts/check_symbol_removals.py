@@ -99,6 +99,7 @@ import sys
 import tarfile
 import tempfile
 from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -154,14 +155,30 @@ _PLUMBING = frozenset(
 # ---------------------------------------------------------------------------
 
 
+class SymbolKind(StrEnum):
+    """What binds an importable name. The value is what a snapshot's JSON stores."""
+
+    FUNCTION = "function"
+    """A top-level ``def`` / ``async def``."""
+    CLASS = "class"
+    """A top-level ``class``."""
+    METHOD = "method"
+    """A public method (or ``__init__``) of a top-level class, as ``Cls.name``."""
+    CONSTANT = "constant"
+    """A top-level assignment or annotated assignment."""
+    REEXPORT = "reexport"
+    """A name a module deliberately re-publishes from elsewhere (eager or lazy)."""
+    ALIAS = "alias"
+    """A deprecated name served only by the PEP 562 alias shim."""
+
+
 @dataclass(frozen=True)
 class Symbol:
     """One importable name, keyed in a snapshot by ``module:qualname``."""
 
     module: str
     qualname: str
-    kind: str
-    """``function`` | ``class`` | ``method`` | ``constant`` | ``reexport`` | ``alias``."""
+    kind: SymbolKind
     deprecated: bool
     """True when the name carries ``@deprecated`` or is served by a PEP 562 alias."""
     params: tuple[str, ...] = ()
@@ -213,7 +230,7 @@ class Snapshot:
             key: Symbol(
                 module=rec["module"],
                 qualname=rec["qualname"],
-                kind=rec["kind"],
+                kind=SymbolKind(rec["kind"]),
                 deprecated=rec["deprecated"],
                 params=tuple(rec.get("params", ())),
                 required_params=tuple(rec.get("required_params", ())),
@@ -615,7 +632,11 @@ def extract_module(
     symbols: list[Symbol] = []
 
     def add(
-        qualname: str, kind: str, *, deprecated: bool = False, sig=((), (), ())
+        qualname: str,
+        kind: SymbolKind,
+        *,
+        deprecated: bool = False,
+        sig=((), (), ()),
     ) -> None:
         if qualname in _PLUMBING:
             return
@@ -635,7 +656,7 @@ def extract_module(
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             add(
                 node.name,
-                "function",
+                SymbolKind.FUNCTION,
                 deprecated=any(
                     _is_deprecated_decorator(d) for d in node.decorator_list
                 ),
@@ -645,7 +666,7 @@ def extract_module(
             cls_deprecated = any(
                 _is_deprecated_decorator(d) for d in node.decorator_list
             )
-            add(node.name, "class", deprecated=cls_deprecated)
+            add(node.name, SymbolKind.CLASS, deprecated=cls_deprecated)
             for child in node.body:
                 if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
@@ -653,7 +674,7 @@ def extract_module(
                     continue
                 add(
                     f"{node.name}.{child.name}",
-                    "method",
+                    SymbolKind.METHOD,
                     deprecated=cls_deprecated
                     or any(_is_deprecated_decorator(d) for d in child.decorator_list),
                     sig=_signature(child),
@@ -661,10 +682,10 @@ def extract_module(
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    add(target.id, "constant")
+                    add(target.id, SymbolKind.CONSTANT)
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name):
-                add(node.target.id, "constant")
+                add(node.target.id, SymbolKind.CONSTANT)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             # A top-level import binds a name on this module, which is how every
             # package ``__init__`` publishes its surface. Removing the re-export
@@ -678,25 +699,30 @@ def extract_module(
             # ``__all__``, or re-exported from inside this package (relative
             # import, or an ``application_sdk.*`` absolute one).
             for bound in _reexported_names(node, declared_all, package):
-                add(bound, "reexport")
+                add(bound, SymbolKind.REEXPORT)
 
     bound = {s.qualname for s in symbols}
     for name in _lazy_reexports(tree, declared_all, package):
         if name not in bound:
-            add(name, "reexport")
+            add(name, SymbolKind.REEXPORT)
             bound.add(name)
     # A name a package ``__init__`` serves through a ``_LAZY`` map is surface
     # like an eager re-export; record it so moving it behind ``__getattr__`` is
     # not a removal.
     for name in sorted(set(_lazy_names(tree)) - bound - aliases):
-        add(name, "reexport")
+        add(name, SymbolKind.REEXPORT)
         bound.add(name)
 
     # A name served by the shim need not exist as a real binding; record the
     # remainder so the alias keeps the old name present in the snapshot.
     for name in sorted(aliases - bound):
         symbols.append(
-            Symbol(module=module, qualname=name, kind="alias", deprecated=True)
+            Symbol(
+                module=module,
+                qualname=name,
+                kind=SymbolKind.ALIAS,
+                deprecated=True,
+            )
         )
     return symbols
 
@@ -745,12 +771,14 @@ def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) 
     """
     for key, (src_module, src_name) in sorted(sources.items()):
         symbol = snapshot.symbols.get(key)
-        if symbol is None or symbol.kind != "reexport":
+        if symbol is None or symbol.kind != SymbolKind.REEXPORT:
             continue
         target_module, target_name, seen = src_module, src_name, set()
         target = snapshot.symbols.get(f"{target_module}:{target_name}")
         while (
-            target is not None and target.kind == "reexport" and target.key not in seen
+            target is not None
+            and target.kind == SymbolKind.REEXPORT
+            and target.key not in seen
         ):
             seen.add(target.key)
             nxt = sources.get(target.key)
@@ -758,7 +786,7 @@ def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) 
                 break
             target_module, target_name = nxt
             target = snapshot.symbols.get(f"{target_module}:{target_name}")
-        if target is None or target.kind in ("reexport", "alias"):
+        if target is None or target.kind in (SymbolKind.REEXPORT, SymbolKind.ALIAS):
             continue
         snapshot.symbols[key] = replace(
             target,
@@ -766,7 +794,7 @@ def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) 
             qualname=symbol.qualname,
             deprecated=symbol.deprecated or target.deprecated,
         )
-        if target.kind != "class":
+        if target.kind != SymbolKind.CLASS:
             continue
         prefix = f"{target_module}:{target_name}."
         for member_key, member in list(snapshot.symbols.items()):
@@ -833,7 +861,10 @@ def _narrowing(base: Symbol, head: Symbol) -> str | None:
 
     Adding an optional parameter, or *loosening* a kind, is not narrowing.
     """
-    if base.kind != head.kind or head.kind not in ("function", "method"):
+    if base.kind != head.kind or head.kind not in (
+        SymbolKind.FUNCTION,
+        SymbolKind.METHOD,
+    ):
         return None
     dropped = [p for p in base.params if p not in head.params]
     if dropped:
