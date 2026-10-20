@@ -104,9 +104,17 @@ def _app_error_to_http_status(exc: AppError) -> int:
     return _CATEGORY_TO_HTTP.get(exc.category, 500)
 
 
-def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
-    """Normalize preflight-specific compatibility fields before validation."""
-    normalized = normalize_credentials(lift_agent_json(body))
+def _normalize_preflight_request(
+    body: dict[str, Any],
+    *,
+    normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Normalize preflight-specific compatibility fields before validation.
+
+    ``normalize`` is the credential normalization to apply (``None`` =
+    :func:`normalize_credentials` with the contracts default key set).
+    """
+    normalized = (normalize or normalize_credentials)(lift_agent_json(body))
     # Fold the camelCase spelling onto the field name first: the mirror below
     # decides which block to copy by inspecting the raw body, so a caller that
     # sends only ``connectionConfig`` would otherwise get an empty ``metadata``.
@@ -485,6 +493,7 @@ def register_handler_routes(
     include_app_routers: bool = True,
     warmup_ceiling: float | None = None,
     warmup_probe_timeout: float | None = None,
+    normalize: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> None:
     """Register the auth / check / metadata routes and the 422 contract handler on ``app``.
 
@@ -501,8 +510,17 @@ def register_handler_routes(
         warmup_ceiling: The app's ``preflight_warmup_ceiling_seconds`` (``None``
             for the default). Clamped by the same function the gate uses.
         warmup_probe_timeout: The app's ``preflight_warmup_probe_timeout_seconds``.
+        normalize: The credential normalization every route applies to the
+            request body. ``None`` (the API host) uses
+            :func:`normalize_credentials` with the contracts default key set.
+            The worker passes a callable that resolves
+            ``application_sdk.handler.service._normalize_credentials`` per
+            request, so an app that rebinds that module's ``_CREDENTIAL_KEYS``
+            or ``_normalize_credentials`` at import time keeps changing every
+            route's normalization, as it did when these routes lived there.
     """
     _secret_store = secret_store
+    _normalize = normalize or normalize_credentials
     # The warmup tier's two numbers, clamped by the same functions the gate
     # uses so the route and the gate cannot disagree about them.
     _warmup_ceiling, _ = warmup_ceiling_seconds(warmup_ceiling)
@@ -598,7 +616,7 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/auth")
     async def test_auth(request: Request) -> JSONResponse:
-        body = normalize_credentials(lift_agent_json(await read_json_object(request)))
+        body = _normalize(lift_agent_json(await read_json_object(request)))
         auth_input = validate_request(AuthInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
@@ -697,7 +715,9 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/check")
     async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_preflight_request(await read_json_object(request))
+        body = _normalize_preflight_request(
+            await read_json_object(request), normalize=_normalize
+        )
         preflight_input = validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -855,7 +875,9 @@ def register_handler_routes(
         ``ceiling_seconds`` is the app's warmup ceiling, so the UI has a stop
         condition of its own.
         """
-        body = _normalize_preflight_request(await read_json_object(request))
+        body = _normalize_preflight_request(
+            await read_json_object(request), normalize=_normalize
+        )
         preflight_input = validate_request(PreflightInput, body)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
@@ -917,7 +939,7 @@ def register_handler_routes(
 
     @app.post("/workflows/v1/metadata")
     async def fetch_metadata(request: Request) -> JSONResponse:
-        body = normalize_credentials(lift_agent_json(await read_json_object(request)))
+        body = _normalize(lift_agent_json(await read_json_object(request)))
         metadata_input = validate_request(MetadataInput, body)
         # The widget routing key (``metadataTemplateKey`` / ``type`` on the
         # wire) now lands in its documented home, ``metadata_template_key``,

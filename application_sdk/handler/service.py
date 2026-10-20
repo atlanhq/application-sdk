@@ -121,7 +121,10 @@ from application_sdk.handler.context import bind_handler_context  # noqa: E402,F
 # The handler HTTP surface lives in the api package and is shared with the
 # consolidated API host. These private names are the same objects, kept for the
 # worker-only routes below (and tests) that use them.
-from application_sdk.handler.contracts import (  # noqa: E402,F401; noqa: E402,F401 — re-exported for existing importers
+from application_sdk.handler.contracts import (  # noqa: E402
+    _CREDENTIAL_KEYS as _DEFAULT_CREDENTIAL_KEYS,
+)
+from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported for existing importers
     AuthInput,
     CheckTier,
     HandlerCredential,
@@ -138,9 +141,9 @@ from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-export
     flatten_credentials_to_pairs as _flatten_to_pairs,
 )
 from application_sdk.handler.contracts import (  # noqa: E402
-    normalize_credentials as _normalize_credentials,
+    normalize_credentials as _contracts_normalize_credentials,
 )
-from application_sdk.handler.contracts import (  # noqa: E402,F401; noqa: E402,F401 — re-exported for existing importers
+from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported for existing importers
     unverifiable_preflight_result,
 )
 from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
@@ -153,7 +156,11 @@ from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re
 from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
     _CATEGORY_TO_HTTP,
     _app_error_to_http_status,
-    _normalize_preflight_request,
+)
+from application_sdk.handler.routes import (  # noqa: E402
+    _normalize_preflight_request as _routes_normalize_preflight_request,
+)
+from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
     _preflight_failure_response,
     _preflight_response,
     _preflight_runtime_summary,
@@ -164,6 +171,34 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     include_app_routers_on,
     register_handler_routes,
 )
+
+# The v2 flat top-level keys the worker treats as credential material, and the
+# worker's credential normalization. Both stay THIS module's attributes (not
+# just contracts') because connector apps patch them at import time:
+#   * extending the key set:
+#     ``service._CREDENTIAL_KEYS = service._CREDENTIAL_KEYS | {"kerberos"}``
+#   * wrapping the normalization:
+#     ``service._normalize_credentials = wrapper_calling_the_original``
+# Every worker-side normalization (/start and the auth / check / metadata
+# routes) resolves both names here at call time, so either patch applies
+# everywhere, as it did when those routes lived in this module. The API host
+# does not import this module and keeps the contracts default.
+_CREDENTIAL_KEYS: frozenset[str] = _DEFAULT_CREDENTIAL_KEYS
+
+
+def _normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+    """:func:`~application_sdk.handler.contracts.normalize_credentials` with this module's current ``_CREDENTIAL_KEYS``."""
+    return _contracts_normalize_credentials(body, keys=_CREDENTIAL_KEYS)
+
+
+def _worker_normalize(body: dict[str, Any]) -> dict[str, Any]:
+    """Dispatch to this module's ``_normalize_credentials`` as bound right now."""
+    return _normalize_credentials(body)
+
+
+def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
+    """The shared preflight normalization, through the worker's normalization."""
+    return _routes_normalize_preflight_request(body, normalize=_worker_normalize)
 
 
 class _GatePreflightObserver:
@@ -2027,6 +2062,7 @@ def create_app_handler_service(
         secret_store=_secret_store,
         observer=_GatePreflightObserver(app_name),
         include_app_routers=False,
+        normalize=_worker_normalize,
         warmup_ceiling=getattr(app_class, "preflight_warmup_ceiling_seconds", None),
         warmup_probe_timeout=getattr(
             app_class, "preflight_warmup_probe_timeout_seconds", None

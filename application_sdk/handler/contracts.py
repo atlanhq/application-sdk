@@ -18,7 +18,7 @@ on ingress (``model_validate``), direct JSON serialization on egress
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from pydantic import (
@@ -414,7 +414,9 @@ _CREDENTIAL_KEYS = frozenset(
 )
 
 
-def normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+def normalize_credentials(
+    body: dict[str, Any], *, keys: Collection[str] | None = None
+) -> dict[str, Any]:
     """Normalize any accepted credential shape to v3 ``list[{key, value}]``.
 
     Handles three inbound shapes: a v3 ``credentials`` list (passthrough), a v2
@@ -423,7 +425,14 @@ def normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
     in the body — the flat top-level keys are removed — so a caller that must
     not forward credentials (``/start`` → Temporal history) can strip them by
     deleting that single key.
+
+    ``keys`` is the set of v2 flat top-level keys treated as credential
+    material; ``None`` means :data:`_CREDENTIAL_KEYS`. The worker passes its
+    own ``application_sdk.handler.service._CREDENTIAL_KEYS`` (read per call)
+    because connector apps extend that module attribute at import time
+    (e.g. adding ``kerberos``), and that rebinding must keep taking effect.
     """
+    credential_keys = _CREDENTIAL_KEYS if keys is None else frozenset(keys)
 
     # The remainder, on EVERY path: no credential-shaped key, and no
     # "credentials". Only the flat-only branch used to build it this way, so a
@@ -435,7 +444,7 @@ def normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
         return {
             k: v
             for k, v in body.items()
-            if k not in _CREDENTIAL_KEYS and k != "credentials"
+            if k not in credential_keys and k != "credentials"
         }
 
     creds = body.get("credentials")
@@ -447,8 +456,8 @@ def normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
             list(creds.keys()),
         )
         return {**_rest(), "credentials": flatten_credentials_to_pairs(dict(creds))}
-    if creds is None and _CREDENTIAL_KEYS & body.keys():
-        flat = {k: v for k, v in body.items() if k in _CREDENTIAL_KEYS}
+    if creds is None and credential_keys & body.keys():
+        flat = {k: v for k, v in body.items() if k in credential_keys}
         logger.info(
             "Converting v2 flat top-level credentials to v3 list, keys=%s",
             list(flat.keys()),
