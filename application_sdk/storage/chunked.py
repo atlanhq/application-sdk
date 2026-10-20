@@ -44,6 +44,7 @@ import orjson
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
+from application_sdk.common.atomic import ensure_free_space
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage._locks import PathLockRegistry
@@ -142,6 +143,15 @@ def _save_transfer_state(state_path: Path, state: dict) -> None:
     :func:`_load_transfer_state` reads that as corrupt and the download starts
     fresh, which is always correct. ENOSPC on the data file is still reported
     before publish, by the one fsync of the part file ahead of ``os.replace``.
+
+    Why the FND-318 fsync rule (``common.atomic``) does not apply here: it
+    stops a short write from being *published and trusted* as complete. A
+    short or torn checkpoint is never trusted — it fails validation and the
+    download starts fresh. What the per-chunk fsync did buy, on a filesystem
+    that reports ENOSPC only at flush, was failing a full volume at the first
+    chunk instead of at publish; the free-space check before preallocation in
+    :func:`_download_chunked_locked` does that up front instead (FND-4084,
+    superseding FND-353).
     """
     tmp = state_path.with_suffix(state_path.suffix + ".tmp")
     # O_BINARY: raw os.write on a Windows text-mode fd would rewrite 0x0A as
@@ -788,6 +798,25 @@ async def _download_chunked_locked(
         )
         resuming = bool(done)
 
+        # Fail a volume that plainly cannot hold the rest of the object now, in
+        # seconds, typed as a full disk. The checkpoint is not fsynced (see
+        # _save_transfer_state), so on a filesystem that reports ENOSPC only at
+        # flush nothing else would say so before the publish fsync, after the
+        # whole download. The part file is sparse, so only the chunks still to
+        # fetch need room. A resume state stays on disk for the next attempt.
+        offsets = list(range(0, size, chunk_size_bytes))
+        remaining = size - sum(min(chunk_size_bytes, size - offsets[i]) for i in done)
+        from application_sdk.errors import DiskFullError  # noqa: PLC0415
+
+        try:
+            ensure_free_space(path, remaining, operation="download")
+        except DiskFullError as exc:
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageDiskFullError,
+            )
+
+            raise StorageDiskFullError.from_disk_full(exc, key=key) from exc
+
         # Pre-allocate the in-flight ``.part`` file at the target size so lseek
         # can address any offset; the destination path is only written by the
         # os.replace publish on success (CONNECT-1126). On resume, open WITHOUT
@@ -812,7 +841,6 @@ async def _download_chunked_locked(
             os.close(fd)
             raise
 
-        offsets = list(range(0, size, chunk_size_bytes))
         pending = [(i, off) for i, off in enumerate(offsets) if i not in done]
         state_base = {
             "key": key,

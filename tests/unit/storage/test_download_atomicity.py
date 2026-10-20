@@ -845,6 +845,81 @@ class TestDiskFullDuringDownload:
                     "k", tmp_path / "f.bin", MagicMock(), normalize=False, verify=False
                 )
 
+    async def test_chunked_download_fails_a_full_volume_before_fetching(
+        self, store, tmp_path
+    ) -> None:
+        """The checkpoint is not fsynced, so on a flush-time-ENOSPC filesystem
+        nothing would report a full volume until the publish fsync, after the
+        whole object. The free-space check fails it before the first range GET."""
+        await _put("df/c.bin", bytes(40), store, normalize=False)
+        range_gets: list[object] = []
+        real_get = obstore.get_async
+
+        async def counting_get(st, key, **kw):
+            range_gets.append(kw)
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.common.atomic._free_bytes", return_value=39),
+            patch("application_sdk.storage.ops.obstore.get_async", new=counting_get),
+        ):
+            with pytest.raises(StorageDiskFullError) as caught:
+                await download_file_chunked(
+                    "df/c.bin",
+                    tmp_path / "c.bin",
+                    store,
+                    chunk_size_bytes=10,
+                    normalize=False,
+                    verify=False,
+                    resume=True,
+                )
+
+        assert caught.value.key == "df/c.bin"
+        assert caught.value.required_bytes == 40
+        assert range_gets == []
+
+    async def test_chunked_resume_needs_room_only_for_the_missing_chunks(
+        self, store, tmp_path
+    ) -> None:
+        content = bytes(range(40))
+        await _put("df/r.bin", content, store, normalize=False)
+        path = tmp_path / "r.bin"
+
+        def _download():
+            return download_file_chunked(
+                "df/r.bin",
+                path,
+                store,
+                chunk_size_bytes=10,
+                max_concurrent_chunks=1,
+                normalize=False,
+                verify=False,
+                resume=True,
+            )
+
+        # First attempt checkpoints three chunks, then fails on the fourth's
+        # checkpoint: a resume state with one chunk (10 bytes) left to fetch.
+        import application_sdk.storage.chunked as chunked
+
+        real_save = chunked._save_transfer_state
+        saves = 0
+
+        def save_three(state_path, state):
+            nonlocal saves
+            saves += 1
+            if saves > 3:
+                raise OSError("stop after three chunks")
+            real_save(state_path, state)
+
+        with patch.object(chunked, "_save_transfer_state", save_three):
+            with pytest.raises(StorageError):
+                await _download()
+
+        # 10 bytes free: enough for the one missing chunk, not the object.
+        with patch("application_sdk.common.atomic._free_bytes", return_value=10):
+            await _download()
+        assert path.read_bytes() == content
+
     def test_the_code_is_the_disk_full_code_both_classes_share(self) -> None:
         """Consumers classify a full disk by this code, so the subclass must not drift from it."""
         assert (
