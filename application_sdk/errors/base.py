@@ -5,7 +5,6 @@ from __future__ import annotations
 import dataclasses
 import re
 import traceback
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -37,85 +36,30 @@ _TRACEBACK_MAX_LEN = 8000
 #: Recursion bound for :func:`redact_wire_value`. A pathologically deep
 #: hand-built structure must truncate rather than overflow the stack.
 _REDACT_MAX_DEPTH: int = 32
-# URL userinfo of any shape — ``user:pass@``, a bare token as the whole userinfo
-# (git remotes, registries, webhook URLs), an empty user with a password
-# (``redis://:pw@``) — up to the last ``@`` that comes before any ``/`` or
-# whitespace, so an ``@`` in a path or query string is never userinfo. A
-# password containing ``@`` is taken whole. The one exemption lives in
-# :func:`_redact_url_userinfo`: in the Azure blob schemes ``container@account``
-# is addressing, not a credential, and is left alone while no password is
-# present.
-#
-# Scanned, not matched by a regex. The regex this replaces,
-# ``(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://)((?:[^@\s/]*@)+)``, is quadratic:
-# ``sub`` retries at every position of a long run of scheme-legal characters
-# (a hash, a base64 blob), and the consolidated API host runs this on the
-# shared request path, where a slow redaction stalls every co-hosted app
-# (measured on the fork this replaces: 80k characters took 23s). The scan finds
-# each ``://`` once, walks back over its scheme run once (runs are bounded by
-# the previous ``://``), and walks forward to the ``/`` or whitespace that ends
-# the authority once, so the whole pass is linear.
-#
-# The scheme starts at the first ASCII letter of the scheme-legal run, so
-# ``10.0.0.1postgres://u:p@h`` is redacted too — the old lookbehind form left it
-# alone. Over-redacting a scheme is the safe direction.
-_SCHEME_SEP = "://"
-_SCHEME_CHARS = frozenset(
-    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
+# Matches URL userinfo of any shape — ``user:pass@``, a bare token as the whole
+# userinfo (git remotes, registries, webhook URLs), an empty user with a
+# password (``redis://:pw@``) — up to the ``@`` that ends it, which must come
+# before any ``/`` or whitespace, so an ``@`` in a path or query string is never
+# userinfo. A password containing ``@`` is taken whole: further ``xxx@`` runs
+# before the first ``/`` belong to the same userinfo. The one exemption lives in
+# :func:`_sub_userinfo`: in the Azure blob schemes ``container@account`` is
+# addressing, not a credential, and is left alone while no password is present.
+# The negative lookbehind makes the scheme start at a token boundary — without
+# it the engine, refused at ``abfss://``, retries at ``bfss://`` and redacts the
+# container anyway. (An earlier cut required a ``:`` in the userinfo instead;
+# that dropped the bare-token class the greedy form had always covered.)
+_URL_USERINFO_RE = re.compile(
+    r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://)((?:[^@\s/]*@)+)", re.IGNORECASE
 )
-_ASCII_LETTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-_AUTHORITY_END = frozenset("/ \t\n\r\f\v")
 _STRUCTURAL_USERINFO_SCHEMES = frozenset({"abfss", "abfs", "wasbs", "wasb"})
 
 
-def _redact_url_userinfo(text: str) -> str:
-    """Replace ``scheme://userinfo@`` with ``scheme://***@`` everywhere, in linear time."""
-    out: list[str] = []
-    cursor = 0  # everything before this has been emitted
-    search = 0
-    length = len(text)
-    while True:
-        sep = text.find(_SCHEME_SEP, search)
-        if sep == -1:
-            break
-        search = sep + len(_SCHEME_SEP)
-        if sep < cursor:
-            continue
-        run_start = sep
-        while run_start > cursor and text[run_start - 1] in _SCHEME_CHARS:
-            run_start -= 1
-        scheme_start = run_start
-        while scheme_start < sep and text[scheme_start] not in _ASCII_LETTERS:
-            scheme_start += 1
-        if scheme_start == sep:
-            continue  # a run with no letter in it is not a scheme
-        last_at = -1
-        i = search
-        while i < length and text[i] not in _AUTHORITY_END:
-            if text[i] == "@":
-                last_at = i
-            i += 1
-        if last_at <= search:
-            # ``last_at == search`` is an empty userinfo ("x://@h"): no
-            # credential, nothing to redact.
-            # A later "://" before the authority's end cannot find userinfo
-            # either — resume just before the boundary so a "://" that starts
-            # there is still seen.
-            search = max(search, i - 1)
-            continue
-        scheme = text[scheme_start:sep]
-        if (
-            scheme.lower() in _STRUCTURAL_USERINFO_SCHEMES
-            and ":" not in text[search:last_at]
-        ):
-            search = last_at + 1
-            continue
-        out.append(text[cursor:search])
-        out.append("***@")
-        cursor = last_at + 1
-        search = cursor
-    out.append(text[cursor:])
-    return "".join(out)
+def _sub_userinfo(m: re.Match[str]) -> str:
+    """Replacement for :data:`_URL_USERINFO_RE`: redact, unless it is Azure addressing."""
+    scheme, userinfo = m.group(1), m.group(2)
+    if scheme[:-3].lower() in _STRUCTURAL_USERINFO_SCHEMES and ":" not in userinfo:
+        return m.group(0)
+    return f"{scheme}***@"
 
 
 # Matches secret query params: api_key=value → api_key=***
@@ -237,7 +181,7 @@ _BEARER_TOKEN_RE = re.compile(
 # An absolute URL's query and/or fragment: everything from the first ``?`` or
 # ``#`` up to the end of the URL. The URL ends at whitespace, a quote or an angle
 # bracket, which covers the ways a URL is quoted inside an error message or a
-# traceback source line. The scheme boundary is the one :func:`_redact_url_userinfo`
+# traceback source line. The scheme boundary is the one :data:`_URL_USERINFO_RE`
 # uses.
 _URL_QUERY_FRAGMENT_RE = re.compile(
     r"(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://[^\s?#'\"<>]*)([?#][^\s'\"<>]*)",
@@ -336,7 +280,7 @@ def redact_secrets(text: str) -> str:
     """
     if "\x1b" in text:
         text = _ANSI_ESCAPE_RE.sub("", text)
-    text = _redact_url_userinfo(text)
+    text = _URL_USERINFO_RE.sub(_sub_userinfo, text)
     text = _URL_QUERY_FRAGMENT_RE.sub(_sub_query_fragment, text)
     text = _QUOTED_SECRET_RE.sub(r"\1***\3", text)
     text = _SECRET_HEADER_LINE_RE.sub(r"\1***", text)
@@ -366,10 +310,7 @@ def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) 
     """
     if isinstance(value, str):
         return redact_secrets(value)
-    # Mapping, not dict: a ChainMap or MappingProxyType inside evidence otherwise
-    # reached the wire unredacted. The branch rebuilds a plain dict, so no
-    # Mapping subclass constructor runs.
-    if isinstance(value, Mapping):
+    if isinstance(value, dict):
         if seen is None:
             seen = set()
         # Guard the two ways a hand-built container can crash the walk:
@@ -513,11 +454,6 @@ class AppError(Exception):
     audience: ClassVar[Audience] = Audience.APP_OWNER
 
     def __post_init__(self) -> None:
-        # Redacted once, here: ``str(exc)`` feeds every log line and every HTTP
-        # error detail, and a driver's message embeds its DSN. The envelope
-        # re-redacts idempotently, so nothing downstream changes.
-        if isinstance(self.message, str):
-            self.message = redact_secrets(self.message)
         Exception.__init__(self, self.message)
         if self.cause is not None and self.__cause__ is None:
             self.__cause__ = self.cause
