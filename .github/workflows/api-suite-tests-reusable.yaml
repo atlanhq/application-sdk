@@ -10,9 +10,11 @@ name: API package checks (reusable)
 #     unlisted module or an undeclared package, and lazy worker-only imports have
 #     a stated fallback.
 #   * probe_api_wheels.py installs the BUILT wheels (never an editable tree):
-#     identical bytes in both wheels, a pip upgrade from the last release keeps
-#     every listed file, and an api-only venv imports the listed modules within
-#     the RSS budget and serves auth/check/metadata.
+#     each file under application_sdk/ ships in exactly one wheel, a uv upgrade
+#     from the last release keeps every listed file, the documented
+#     `pip install --force-reinstall` recovery works after a pip upgrade, and an
+#     api-only venv imports the listed modules within the RSS budget and serves
+#     its routes.
 #
 # The logic lives in tested scripts (docs/standards/ci.md). SDK-private: no
 # consumer app references this workflow.

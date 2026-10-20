@@ -1,7 +1,8 @@
 """Package the files listed in ``api-files.txt`` into the api wheel.
 
-The source lives once, under ``application_sdk/`` at the repo root, and ships in
-both distributions. The sdist and a regular wheel copy the listed files in; a
+The source lives once, under ``application_sdk/`` at the repo root. The listed
+files ship in this distribution only (the SDK wheel excludes them and gets them
+through its ``atlan-application-sdk-api`` pin). The sdist and a regular wheel copy the listed files in; a
 wheel built from the unpacked sdist (what ``uv build`` does) finds them next to
 this file, a wheel built in the repo reads them from the repo root. An editable
 build copies nothing: the SDK's dev env already imports the whole tree from

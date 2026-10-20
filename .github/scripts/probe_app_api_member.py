@@ -31,8 +31,8 @@ Fails when:
   answers a 5xx;
 * the config route, with no object store configured, does not answer 503.
 
-The same checks gate the host's own pin bump, so an app PR that would break the
-host fails in the app's CI first.
+common-app-server's image build runs the same probe, so an app PR that would
+break the host fails in the app's CI first.
 """
 
 from __future__ import annotations

@@ -53,9 +53,9 @@ from application_sdk.handler.routes import (
     register_handler_routes,
 )
 
-#: Threads in each app's ``run_in_thread`` pool on the host.
 logger = get_logger(__name__)
 
+#: Threads in each app's ``run_in_thread`` pool on the host.
 DEFAULT_BLOCKING_THREADS = 8
 
 #: The host's per-app environment prefix: ``ai-memory`` → ``ATLAN_APPENV__AI_MEMORY__``.

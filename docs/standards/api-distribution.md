@@ -78,9 +78,9 @@ that needs a declared dependency or a guarded fallback.
 
 ## Dependencies
 
-- **core** (always installed): fastapi, pydantic, orjson, python-multipart. It
-  covers the handler surface, errors, credential specs, the shared routes and
-  `run_in_thread`. Measured at 62 MB on an api-only install.
+- **core** (always installed): fastapi, pydantic, orjson, httpx,
+  python-multipart. It covers the handler surface, errors, credential specs,
+  the shared routes and `run_in_thread`. Measured at 62 MB on an api-only install.
 - **extras**, one per seed group, with the same pins as `atlan-application-sdk`:
   - `sql`: the SQL client base and credential utils;
   - `aws`: the AWS helpers;
@@ -95,8 +95,9 @@ that needs a declared dependency or a guarded fallback.
   the SDK's structured logger on the worker, stdlib logging on the host.
 - **Handler code does not log.** It reports through its return value or a typed
   `AppError`, and the SDK's shared routes log every outcome with the request id.
-  Conformance rule **P060** blocks logging in a hosted app's handler module. The
-  `app/` files it imports also run on the worker, so they may log, through
+  `gen_app_api.py check` fails on logging in a hosted app's handler module
+  (the rule conformance **P060** will carry, added in #4414). The `app/` files
+  it imports also run on the worker, so they may log, through
   `application_sdk.common.logger`.
 
 ## App side
