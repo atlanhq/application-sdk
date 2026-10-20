@@ -202,3 +202,40 @@ def test_the_worker_entry_point_names_the_fix_when_the_api_files_are_missing(
         match="pip install --force-reinstall --no-deps atlan-application-sdk-api",
     ):
         importlib.import_module("application_sdk.main")
+
+
+@pytest.mark.parametrize(
+    "package",
+    [
+        "application_sdk.contracts",
+        "application_sdk.credentials",
+        "application_sdk.handler",
+    ],
+)
+def test_a_lazy_name_defined_in_a_core_file_loads_through_a_core_file(
+    package: str,
+) -> None:
+    """On a core-only api install, ``pkg.name`` must not detour through a file
+    that needs an extra when the object itself is defined in a core file."""
+    import importlib
+    import sys
+
+    sys.path.insert(0, str(ROOT / ".github/scripts"))
+    import gen_api_files  # noqa: PLC0415
+
+    groups = gen_api_files.file_groups(ROOT)
+
+    def group_of(module: str) -> set[str]:
+        base = module.replace(".", "/")
+        for rel in (f"{base}/__init__.py", f"{base}.py"):
+            if rel in groups:
+                return groups[rel]
+        return set()
+
+    pkg = importlib.import_module(package)
+    detours = []
+    for name, (target, _attr) in pkg._LAZY.items():  # noqa: SLF001
+        defined_in = getattr(getattr(pkg, name), "__module__", "") or ""
+        if "core" in group_of(defined_in) and "core" not in group_of(target):
+            detours.append(f"{name}: via {target}, defined in {defined_in}")
+    assert detours == []

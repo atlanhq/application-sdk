@@ -73,6 +73,7 @@ if TYPE_CHECKING:
         AtlanClientMixin,
         create_async_atlan_client,
     )
+    from application_sdk.credentials.extra import parse_credentials_extra
     from application_sdk.credentials.git import GitSshCredential, GitTokenCredential
     from application_sdk.credentials.oauth import OAuthTokenError, OAuthTokenService
     from application_sdk.credentials.ref import (
@@ -104,7 +105,6 @@ if TYPE_CHECKING:
         OAuthClientCredential,
         RawCredential,
     )
-    from application_sdk.credentials.utils import parse_credentials_extra
 
 #: Worker-side names: imported on first access, so the api distribution
 #: (which ships this ``__init__`` without them) imports cleanly.
@@ -195,8 +195,10 @@ _LAZY: dict[str, tuple[str, str]] = {
         "legacy_credential_ref",
     ),
     "oauth_client_ref": ("application_sdk.credentials.ref", "oauth_client_ref"),
+    # Defined in the core ``extra`` module (``utils`` re-exports it but needs
+    # the sql extra), so a core-only api install can read it too.
     "parse_credentials_extra": (
-        "application_sdk.credentials.utils",
+        "application_sdk.credentials.extra",
         "parse_credentials_extra",
     ),
     "register_credential_type": (

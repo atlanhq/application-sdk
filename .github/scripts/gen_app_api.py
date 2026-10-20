@@ -231,8 +231,9 @@ def closure(root: Path, config: Config) -> tuple[list[str], list[str]]:
             if not relative:
                 how = (
                     "rewrite it as a relative `from . import ...` by hand, with "
-                    "its uses (`fix` rewrites only `from app... import`)"
-                    if isinstance(node, ast.Import)
+                    "its uses (`fix` rewrites `import app.x as t`, not a bare "
+                    "`import app.x`, which binds `app` itself)"
+                    if isinstance(node, ast.Import) and not _rewritable_import(node)
                     else "run `fix`"
                 )
                 absolute.append(
@@ -249,33 +250,45 @@ def closure(root: Path, config: Config) -> tuple[list[str], list[str]]:
     return sorted(files), sorted(set(absolute))
 
 
+def _relative_from(rel: str, module: list[str]) -> str:
+    """``from <dots><rest>`` naming *module* (``["app", "sub"]``) from file *rel*."""
+    depth = len(Path(rel).parts) - 1  # app/handler.py → 1, app/a/b.py → 2
+    here = list(Path(rel).parts[:-1])
+    common = 0
+    while common < min(len(here), len(module)) and here[common] == module[common]:
+        common += 1
+    return f"from {'.' * (depth - common + 1)}{'.'.join(module[common:])}"
+
+
+def _rewritable_import(node: ast.Import) -> bool:
+    """``import app.x.y as t`` on one line: ``t`` is its only binding, so
+    ``from .x import y as t`` binds the same object. A plain ``import app.x``
+    binds ``app`` itself; rewriting it would also mean rewriting every use."""
+    return node.lineno == node.end_lineno and all(
+        a.asname and a.name.startswith("app.") for a in node.names
+    )
+
+
 def fix_absolute_imports(root: Path, files: list[str]) -> list[str]:
-    """Rewrite ``from app.x import y`` in listed files to relative imports, and
-    apply :data:`KNOWN_MOVES`."""
+    """Rewrite ``from app.x import y`` and ``import app.x.y as t`` in listed
+    files to relative imports, and apply :data:`KNOWN_MOVES`."""
     changed = []
     for rel in files:
         if not rel.endswith(".py"):
             continue
         path = root / rel
         text = path.read_text(encoding="utf-8")
-        depth = len(Path(rel).parts) - 1  # app/handler.py → 1, app/a/b.py → 2
 
-        def relative(match: re.Match[str]) -> str:
-            target = match.group(2).split(".")
-            here = list(Path(rel).parts[:-1])
-            common = 0
-            while (
-                common < min(len(here), len(target)) and here[common] == target[common]
-            ):
-                common += 1
-            dots = "." * (depth - common + 1)
-            return f"{match.group(1)}from {dots}{'.'.join(target[common:])} import"
+        def relative(match: re.Match[str], rel: str = rel) -> str:
+            prefix = _relative_from(rel, match.group(2).split("."))
+            return f"{match.group(1)}{prefix} import"
 
-        # Only lines where the parser sees an absolute ``from ... import``: the
-        # same text inside a string or docstring (a usage example) is left alone.
+        # Only lines where the parser sees an absolute import: the same text
+        # inside a string or docstring (a usage example) is left alone.
+        tree = ast.parse(text, filename=rel)
         starts = {
             node.lineno
-            for node in ast.walk(ast.parse(text, filename=rel))
+            for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.level == 0
         }
         lines = text.splitlines(keepends=True)
@@ -286,6 +299,18 @@ def fix_absolute_imports(root: Path, files: list[str]) -> list[str]:
             for old, replacement in KNOWN_MOVES.items():
                 line = line.replace(old, replacement)
             lines[number - 1] = line
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Import) or not _rewritable_import(node):
+                continue
+            line = lines[node.lineno - 1]
+            indent, tail = line[: node.col_offset], line[node.end_col_offset :]
+            statements = []
+            for alias in node.names:
+                *module, name = alias.name.split(".")
+                statements.append(
+                    f"{indent}{_relative_from(rel, module)} import {name} as {alias.asname}"
+                )
+            lines[node.lineno - 1] = "\n".join(statements) + tail
         new = "".join(lines)
         if new != text:
             path.write_text(new, encoding="utf-8")

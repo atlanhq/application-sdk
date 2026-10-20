@@ -625,3 +625,34 @@ def test_a_plain_import_of_app_is_reported_as_a_manual_fix(tmp_path: Path) -> No
     assert len(absolute) == 1, problems
     assert "by hand" in absolute[0]
     assert "run `fix`" not in absolute[0]
+
+
+@pytest.mark.parametrize(
+    ("source", "fixed"),
+    [
+        ("import app.client as cl\n", "from . import client as cl\n"),
+        ("import app.sub.thing as t\n", "from .sub import thing as t\n"),
+        (
+            "import app.client as cl, app.sub.thing as t  # both\n",
+            "from . import client as cl\nfrom .sub import thing as t  # both\n",
+        ),
+    ],
+)
+def test_fix_rewrites_an_aliased_import_of_app(
+    tmp_path: Path, source: str, fixed: str
+) -> None:
+    """``import app.x.y as t`` binds only ``t``, so ``from .x import y as t`` is
+    the same binding: ``fix`` rewrites it and ``check`` then passes."""
+    root = _app(tmp_path, source)
+    (root / "app/sub").mkdir()
+    (root / "app/sub/__init__.py").write_text("")
+    (root / "app/sub/thing.py").write_text("")
+    assert gen.main(["fix", "--root", str(root)]) == 0
+    assert (root / "app/handler.py").read_text() == fixed
+    assert gen.main(["check", "--root", str(root)]) == 0
+
+
+def test_fix_leaves_a_plain_import_of_app_for_a_manual_rewrite(tmp_path: Path) -> None:
+    root = _app(tmp_path, "import app.client\n")
+    gen.main(["fix", "--root", str(root)])
+    assert (root / "app/handler.py").read_text() == "import app.client\n"
