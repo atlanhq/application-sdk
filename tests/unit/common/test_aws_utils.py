@@ -4,6 +4,8 @@ import pytest
 
 from application_sdk.common.aws_utils import (
     _normalize_external_id,
+    _sts_client_config,
+    _sts_deadline,
     create_aws_client,
     create_aws_session,
     create_engine_url,
@@ -323,6 +325,41 @@ class TestAWSUtils:
         assert config.connect_timeout == 5
         assert config.read_timeout == 15
         assert config.retries == {"total_max_attempts": 2, "mode": "standard"}
+
+    def test_sts_config_keeps_fixed_bounds_without_a_deadline(self):
+        config = _sts_client_config()
+        assert (config.connect_timeout, config.read_timeout) == (5, 15)
+        assert config.retries == {"total_max_attempts": 2, "mode": "standard"}
+
+    def test_sts_config_keeps_fixed_bounds_when_the_deadline_is_far(self):
+        with _sts_deadline(100):
+            config = _sts_client_config()
+        assert (config.connect_timeout, config.read_timeout) == (5, 15)
+        assert config.retries == {"total_max_attempts": 2, "mode": "standard"}
+
+    def test_sts_config_fits_one_attempt_into_a_near_deadline(self):
+        """A call that would outlive its caller's deadline shrinks to fit it.
+
+        The caller stops waiting at the deadline but cannot stop the worker
+        thread, so the call itself must end by then.
+        """
+        with _sts_deadline(10):
+            config = _sts_client_config()
+        assert config.retries == {"total_max_attempts": 1, "mode": "standard"}
+        assert config.connect_timeout <= 2.5
+        assert config.connect_timeout + config.read_timeout <= 10
+
+    def test_sts_config_floors_an_expired_deadline(self):
+        # Zero would mean "no timeout" to some socket layers.
+        with _sts_deadline(-5):
+            config = _sts_client_config()
+        assert (config.connect_timeout, config.read_timeout) == (1, 1)
+        assert config.retries == {"total_max_attempts": 1, "mode": "standard"}
+
+    def test_sts_deadline_is_scoped_to_its_context(self):
+        with _sts_deadline(10):
+            pass
+        assert _sts_client_config().retries["total_max_attempts"] == 2
 
     def test_generate_aws_rds_token_with_iam_role_raises_when_partial(self):
         """A half-supplied pair must fail closed, not fall through to the default chain.

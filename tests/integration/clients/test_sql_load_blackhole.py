@@ -6,6 +6,7 @@ the shape of a filtered private link or a hung STS endpoint. Two cases:
 * **STS black-holed** (IAM-role auth): the AssumeRole inside
   ``get_sqlalchemy_connection_string`` hangs. It runs off the loop, so the loop
   keeps ticking, and the budget turns the hang into ``SqlClientConnectTimeoutError``.
+  Its timeouts are fitted to the budget, so it hangs up by then too.
 * **DB host black-holed** (psycopg2): the connect hangs in the handshake. The
   driver's ``connect_timeout``, injected by the SDK, ends the attempt and closes
   the socket — the worker thread is freed, not pinned until the OS gives up.
@@ -171,15 +172,19 @@ async def test_black_holed_sts_times_out_without_blocking_the_loop(
         patch(
             "application_sdk.clients.sql.SQL_CLIENT_CONNECT_TIMEOUT_SECONDS", _BUDGET
         ),
-        pytest.raises(SqlClientConnectTimeoutError) as exc_info,
+        pytest.raises(SqlClientConnectTimeoutError),
     ):
         async with _loop_lag() as lag:
             await client.load(credentials)
     elapsed = time.monotonic() - started
 
     assert black_hole.accepted.is_set(), "AssumeRole never reached the black hole"
-    # The budget, not botocore's 15 s read timeout, ended it.
-    assert "within" in exc_info.value.message
+    # Ended inside the budget, not after botocore's fixed 15 s read timeout:
+    # either by the budget or by the STS read timeout fitted to it.
     assert elapsed < _BUDGET + _GRACE
     assert lag[0] < _MAX_LOOP_LAG
+    # The STS call's timeouts were fitted to the budget, so it gave up and
+    # hung up too: its sdk-blocking- thread is free, not held for botocore's
+    # fixed bounds after load() returned.
+    assert await asyncio.to_thread(black_hole.peer_closed.wait, _BUDGET + _GRACE)
     assert client.engine is None

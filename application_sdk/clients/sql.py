@@ -49,6 +49,7 @@ from application_sdk.clients.sql_errors import (
 )
 from application_sdk.clients.sql_typecasters import install_tolerant_text_decoder_hook
 from application_sdk.common.aws_utils import (
+    _sts_deadline,
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
@@ -328,6 +329,11 @@ def _cap_next_connect_timeout(
     event.listen(engine, "do_connect", _cap, once=True)
 
 
+def _budget_left(budget: asyncio.Timeout) -> float:
+    """Seconds until ``budget`` expires, measured on the running loop's clock."""
+    return cast(float, budget.when()) - asyncio.get_running_loop().time()
+
+
 def _load_budget_expired() -> SqlClientConnectTimeoutError:
     """The error for a ``load()`` that outran ``SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``.
 
@@ -437,9 +443,12 @@ class BaseSQLClient(ClientInterface):
             async with budget:
                 # Offloaded: for IAM-role auth this runs an STS AssumeRole,
                 # a network round trip that would otherwise block the loop.
-                connection_string = await run_in_thread(
-                    self.get_sqlalchemy_connection_string
-                )
+                # Cancelling the await does not stop the thread, so the STS
+                # call is fitted into the budget too.
+                with _sts_deadline(_budget_left(budget)):
+                    connection_string = await run_in_thread(
+                        self.get_sqlalchemy_connection_string
+                    )
 
                 # Create engine but no persistent connection
                 self.engine = create_engine(
@@ -476,10 +485,9 @@ class BaseSQLClient(ClientInterface):
 
                 # Cancelling the await does not stop the thread, so the driver
                 # must give up by the deadline on its own.
-                remaining = (
-                    cast(float, budget.when()) - asyncio.get_running_loop().time()
+                _cap_next_connect_timeout(
+                    _engine, connection_string, _budget_left(budget)
                 )
-                _cap_next_connect_timeout(_engine, connection_string, remaining)
                 await run_in_thread(_ping)
 
             # Don't store persistent connection
@@ -1069,9 +1077,12 @@ class AsyncBaseSQLClient(BaseSQLClient):
             async with budget:
                 # Offloaded: for IAM-role auth this runs an STS AssumeRole,
                 # a network round trip that would otherwise block the loop.
-                connection_string = await run_in_thread(
-                    self.get_sqlalchemy_connection_string
-                )
+                # Cancelling the await does not stop the thread, so the STS
+                # call is fitted into the budget too.
+                with _sts_deadline(_budget_left(budget)):
+                    connection_string = await run_in_thread(
+                        self.get_sqlalchemy_connection_string
+                    )
 
                 # Create async engine but no persistent connection
                 self.engine = create_async_engine(

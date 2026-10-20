@@ -188,6 +188,33 @@ class TestCapNextConnectTimeout:
 
 
 class TestSyncLoadBudget:
+    @pytest.mark.parametrize("client_cls", [BaseSQLClient, AsyncBaseSQLClient])
+    async def test_sts_sees_the_load_deadline(self, client_cls: type[BaseSQLClient]) -> None:
+        """The STS call inside get_sqlalchemy_connection_string sees load()'s deadline.
+
+        The worker thread is not stopped when load() gives up, so the call
+        must be told when to stop on its own.
+        """
+        from application_sdk.common import aws_utils
+
+        client = client_cls()
+        client.DB_CONFIG = _config()
+        seen: list[float | None] = []
+
+        def _build() -> str:
+            seen.append(aws_utils._STS_DEADLINE.get())
+            raise _Stop
+
+        client.get_sqlalchemy_connection_string = _build  # type: ignore[method-assign]
+        started = time.monotonic()
+        with _budget(30.0), pytest.raises(Exception):
+            await client.load({})
+        assert len(seen) == 1 and seen[0] is not None
+        # Slack: the budget's clock starts a moment after ``started``.
+        assert 0 < seen[0] - started <= 30.0 + 0.5
+        # Scoped to load(): nothing leaks into the caller's context.
+        assert aws_utils._STS_DEADLINE.get() is None
+
     async def test_ping_gets_only_the_budget_left_after_sts(self) -> None:
         """A slow STS leaves less time for the ping; its driver timeout shrinks to match.
 

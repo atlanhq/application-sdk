@@ -59,7 +59,7 @@ before changing either value.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS` | `60` | Bound on a SQL client's `load()`: building the connection string (including the STS `AssumeRole` for IAM-role auth) plus the first connect. Expiry raises `SqlClientConnectTimeoutError`. Also passed as `connect_timeout` to psycopg2, psycopg and MySQLdb, which have no connect timeout of their own, unless `DB_CONFIG.connect_args` or the URL already sets one. Keep it at 40 or above when using IAM-role auth. The STS `AssumeRole` call has its own fixed limits (5 s connect, 15 s read, 2 attempts, about 40 s worst case). Below that, `load()` still fails at its deadline, but a hung STS call keeps its worker thread until those limits end it. |
+| `ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS` | `60` | Bound on a SQL client's `load()`: building the connection string (including the STS `AssumeRole` for IAM-role auth) plus the first connect. Expiry raises `SqlClientConnectTimeoutError`. Also passed as `connect_timeout` to psycopg2, psycopg and MySQLdb, which have no connect timeout of their own, unless `DB_CONFIG.connect_args` or the URL already sets one. For IAM-role auth, the STS `AssumeRole` call's limits (5 s connect, 15 s read, 2 attempts) shrink to fit the time left, so a hung STS call frees its worker thread by the deadline too. |
 
 ---
 
