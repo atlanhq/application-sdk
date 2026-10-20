@@ -189,7 +189,9 @@ class TestCapNextConnectTimeout:
 
 class TestSyncLoadBudget:
     @pytest.mark.parametrize("client_cls", [BaseSQLClient, AsyncBaseSQLClient])
-    async def test_sts_sees_the_load_deadline(self, client_cls: type[BaseSQLClient]) -> None:
+    async def test_sts_sees_the_load_deadline(
+        self, client_cls: type[BaseSQLClient]
+    ) -> None:
         """The STS call inside get_sqlalchemy_connection_string sees load()'s deadline.
 
         The worker thread is not stopped when load() gives up, so the call
