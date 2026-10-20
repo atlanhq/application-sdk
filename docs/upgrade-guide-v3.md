@@ -1269,7 +1269,7 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 | `application_sdk.activities.common.models.ActivityStatistics` | `application_sdk.common.models.TaskStatistics` |
 | `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` |
 | `application_sdk.activities.common.utils` | `application_sdk.execution` (`build_output_path`, `get_object_store_prefix` are re-exported; direct activity internals should be accessed via `Input.workflow_id` instead) |
-| `application_sdk.activities.metadata_extraction.base` | `application_sdk.templates.BaseMetadataExtractor` |
+| `application_sdk.activities.metadata_extraction.base` | `application_sdk.app.App` (non-SQL source); `application_sdk.templates.SqlApp` (SQL source) |
 | `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
 | `application_sdk.activities.metadata_extraction.incremental` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
 | `application_sdk.activities.query_extraction.sql` | `application_sdk.templates.SqlQueryExtractor` |

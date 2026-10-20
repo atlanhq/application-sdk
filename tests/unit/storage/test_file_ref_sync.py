@@ -108,13 +108,16 @@ class TestHasRefsToMaterialize:
     def test_returns_false_for_durable_ref_with_valid_sidecar(self) -> None:
         import hashlib
 
+        from application_sdk.storage._local_marker import file_fingerprint
+        from application_sdk.storage.reference import _write_local_sidecar
+
         content = b"verified content"
         fd, path = tempfile.mkstemp()
         try:
             os.write(fd, content)
             os.close(fd)
             digest = hashlib.sha256(content).hexdigest()
-            Path(path + ".sha256").write_text(digest)
+            _write_local_sidecar(path, digest, file_fingerprint(path))
             inp = _TaskInput(
                 ref=FileReference(
                     is_durable=True, storage_path="file_refs/abc", local_path=path
@@ -252,11 +255,6 @@ class TestDirectoryPersistMaterialize:
         ).read() == b"x content"
         assert materialised.ref.file_count == 2
 
-    async def test_local_sidecar_ok_returns_false_for_directory(self, tmp_path) -> None:
-        from application_sdk.storage.file_ref_sync import _local_sidecar_ok
-
-        assert _local_sidecar_ok(str(tmp_path)) is False
-
     async def test_needs_materialize_true_for_dir_ref(self, tmp_path) -> None:
         from application_sdk.storage.file_ref_sync import _needs_materialize
 
@@ -265,8 +263,10 @@ class TestDirectoryPersistMaterialize:
             storage_path="file_refs/abc/",
             local_path=str(tmp_path),
         )
-        # Directory always needs materialize (no fast path).
-        assert _needs_materialize(ref) is True
+        # Directory always needs materialize (no fast path), even with a
+        # marker beside it.
+        (tmp_path.parent / (tmp_path.name + ".sha256")).write_text("a" * 64)
+        assert await _needs_materialize(ref) is True
 
 
 # ---------------------------------------------------------------------------

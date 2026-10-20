@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 import traceback as tb_module
-from typing import Any, ClassVar
+from typing import Any, Callable, ClassVar
 
 from loguru import logger
 from opentelemetry import trace as otel_trace
@@ -14,6 +14,7 @@ from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.trace.span import TraceFlags
+from temporalio.exceptions import FailureError
 
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -39,17 +40,22 @@ from application_sdk.constants import (
     OTEL_WORKFLOW_LOGS_ENDPOINT,
     SERVICE_NAME,
 )
+
+# Module level, not lazy: the record patcher runs on whichever thread logs. A
+# background thread logging while the main thread is still initialising the
+# observability package would otherwise import this module mid-boot and deadlock
+# on the module lock (_DeadlockError at startup when the log level is DEBUG).
+from application_sdk.errors.base import redact_secrets
+from application_sdk.observability.console_sink import (
+    console_writer,
+    flush_console_logs,
+)
 from application_sdk.observability.context import (
     correlation_context,
     get_execution_context,
     is_replaying,
     request_context,
 )
-
-# Module level, not lazy: the record patcher runs on whichever thread logs. A
-# background thread logging while the main thread is still initialising the
-# observability package would otherwise import this module mid-boot and deadlock
-# on the module lock (_DeadlockError at startup when the log level is DEBUG).
 from application_sdk.observability.correlation import get_correlation_context
 from application_sdk.observability.logger_adaptor_errors import (
     UnsupportedLogRecordError,
@@ -102,6 +108,11 @@ WARMUP_TRANSITIONS_KEY = "warmup_transitions"
 # "http" (the setup form endpoint) or "sdr" (the interactive test-connection
 # activity). The gate's own rows use their distinct event body instead.
 PREFLIGHT_SURFACE_KEY = "preflight_surface"
+
+# How long an error/critical log on a thread without a running loop waits for
+# the console writer to catch up. It's bounded so a stalled stdout delays each
+# error by at most this much, instead of blocking it indefinitely.
+_CONSOLE_FLUSH_TIMEOUT_SECONDS = 1.0
 
 # Transformed-asset validation outcome-event key, shared with the emitter
 # (``application_sdk.app.base._warn_on_invalid_transformed_assets``) so a rename
@@ -420,7 +431,11 @@ def _make_log_record_dict(message: Any) -> dict[str, Any]:
 
 
 def _format_exception_stacktrace(exception: Any) -> str:
-    """Format a Loguru exception record into a traceback string."""
+    """Format a Loguru exception record into a secret-redacted traceback string.
+
+    The chained ``__cause__`` / ``__context__`` messages and the source lines
+    are part of the text, so all of it goes through ``redact_secrets``.
+    """
     if exception is None:
         return ""
     exc_type = getattr(exception, "type", None)
@@ -428,8 +443,8 @@ def _format_exception_stacktrace(exception: Any) -> str:
     exc_traceback = getattr(exception, "traceback", None)
     if exc_type is None:
         return ""
-    return "".join(
-        tb_module.format_exception(exc_type, exc_value, exc_traceback)
+    return redact_secrets(
+        "".join(tb_module.format_exception(exc_type, exc_value, exc_traceback))
     ).rstrip()
 
 
@@ -448,14 +463,32 @@ def _extract_exception_attributes(exception: Any) -> dict[str, str]:
     type_name = f"{module}.{qualname}" if module and qualname else str(exc_type)
 
     attrs: dict[str, str] = {"exception.type": type_name}
-    if exc_value is not None:
-        attrs["exception.message"] = str(exc_value)
+    if isinstance(exc_value, FailureError) and exc_value.message:
+        attrs["exception.message"] = redact_secrets(exc_value.message)
+    elif exc_value is not None:
+        attrs["exception.message"] = redact_secrets(str(exc_value))
 
     stacktrace = _format_exception_stacktrace(exception)
     if stacktrace:
         attrs["exception.stacktrace"] = stacktrace
 
     return attrs
+
+
+def _redact_exception_records(write: Callable[[str], None]) -> Callable[[Any], None]:
+    """Wrap a console sink so a record carrying an exception is written redacted.
+
+    loguru renders the traceback itself (``{exception}`` in the format), so the
+    only place to redact it is the finished line. Records without an exception
+    pass through untouched, which keeps the per-line cost at one dict lookup.
+    """
+
+    def _sink(message: Any) -> None:
+        if message.record["exception"] is not None:
+            message = redact_secrets(str(message))
+        write(message)
+
+    return _sink
 
 
 def _normalize_log_extra_value(key: str, value: Any) -> Any:
@@ -825,6 +858,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     _flush_task_started: ClassVar[bool] = False
     _flush_task: ClassVar[Any] = None
     _initialized: ClassVar[bool] = False
+    # The adapter whose bound ``_log_sink`` loguru calls. The sink is
+    # registered once, so this adapter's buffer is the only one records land
+    # in; every other adapter's buffer stays empty.
+    _sink_owner: ClassVar["AtlanLoggerAdapter | None"] = None
 
     @classmethod
     def _reset_for_testing(cls) -> None:
@@ -833,13 +870,14 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         Public test hook: any new ClassVar or module-level cache associated
         with logger initialization MUST be reset here so test isolation
         stays correct. Currently resets ``_initialized``, ``_flush_task_started``,
-        and clears the module-level ``_logger_instances`` cache.
+        ``_sink_owner``, and clears the module-level ``_logger_instances`` cache.
 
         This method should only be used in tests to allow fresh sink setup
         for each test case.
         """
         cls._initialized = False
         cls._flush_task_started = False
+        cls._sink_owner = None
         _logger_instances.clear()
         _otlp_shutdown_done.clear()
 
@@ -975,9 +1013,23 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         # fields off the record and builds its own traceback via
         # `_format_exception_stacktrace`, which never carried local values. So this
         # changes console output only; nothing queryable downstream moves.
+        #
+        # Every line that carries an exception is passed through
+        # ``redact_secrets`` before it is queued (``_redact_exception_records``).
+        # That covers the message, the chained causes and the source lines, and
+        # with ``diagnose`` on it also covers the annotated values — but only for
+        # the shapes ``redact_secrets`` knows (URL userinfo/query/fragment, known
+        # ``key=value`` names). A repr like ``{'password': 'x'}`` is not one of
+        # them, so ``diagnose`` stays a leak channel and stays off by default.
+        #
+        # Both sinks are callables from ``console_writer`` (FND-4075). loguru
+        # still renders the format and the traceback on the logging thread, so
+        # context fields and ``diagnose`` behave as they did with a stream
+        # sink. The sink only queues the finished line. A background thread
+        # writes it, so a stalled stdout/stderr pipe can't block the event loop.
         _ERROR_LEVEL_NO = SEVERITY_MAPPING["ERROR"]
         self.logger.add(
-            sys.stdout,
+            _redact_exception_records(console_writer.sink(sys.stdout)),
             format=get_log_format,
             level=SEVERITY_MAPPING[LOG_LEVEL],
             colorize=colorize,
@@ -985,7 +1037,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             filter=lambda record: record["level"].no < _ERROR_LEVEL_NO,
         )
         self.logger.add(
-            sys.stderr,
+            _redact_exception_records(console_writer.sink(sys.stderr)),
             format=get_log_format,
             level=max(SEVERITY_MAPPING[LOG_LEVEL], _ERROR_LEVEL_NO),
             colorize=colorize,
@@ -1058,6 +1110,7 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         _has_otlp = self.logger_provider is not None
         if ENABLE_OBSERVABILITY_STORE_SINK or _has_otlp:
             self.logger.add(self._log_sink, level=SEVERITY_MAPPING[LOG_LEVEL])
+            AtlanLoggerAdapter._sink_owner = self
             # Start the periodic flush task only when the object-store sink is active.
             if (
                 ENABLE_OBSERVABILITY_STORE_SINK
@@ -1502,10 +1555,16 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
     def _sync_flush(self):
         """Flush the log buffer, dispatching appropriately for the current context.
 
-        Called on error/critical logs to force-flush. Works in three contexts:
+        Called on error/critical logs to force-flush. Drains the sink owner's
+        buffer, not this adapter's: records only ever land in the buffer of
+        the adapter whose ``_log_sink`` is registered, so flushing ``self``
+        from any other logger would find nothing to write. Works in three
+        contexts:
 
         - Async context (running event loop in this thread): schedules a task.
-        - Sync context (no running loop): creates a temporary loop to flush.
+        - Sync context (no running loop): creates a temporary loop to flush,
+          then waits up to ``_CONSOLE_FLUSH_TIMEOUT_SECONDS`` for queued
+          console lines to be written.
         - Thread context (loop running in another thread, e.g. Temporal
           activity in ThreadPoolExecutor): skips, periodic flush handles it.
 
@@ -1519,18 +1578,24 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         if in_temporal_workflow():
             return
 
+        owner = AtlanLoggerAdapter._sink_owner or self
         try:
             try:
                 loop = asyncio.get_running_loop()
                 # We're in an async context — schedule non-blocking flush
-                loop.create_task(self._flush_buffer(force=True))
+                loop.create_task(owner._flush_buffer(force=True))
             except RuntimeError:
                 # No running loop in this thread. Safe to create one.
                 loop = asyncio.new_event_loop()
                 try:
-                    loop.run_until_complete(self._flush_buffer(force=True))
+                    loop.run_until_complete(owner._flush_buffer(force=True))
                 finally:
                     loop.close()
+                # Also safe to block here, briefly, so the error line reaches
+                # the console before the caller continues. Async callers skip
+                # this: the writer thread drains the queue without help, and
+                # waiting would stall the loop, which is what FND-4075 removed.
+                flush_console_logs(_CONSOLE_FLUSH_TIMEOUT_SECONDS)
         except Exception:
             logging.error("Error during sync flush", exc_info=True)
 

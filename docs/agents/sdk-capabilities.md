@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.49.1
-source-sha:    2b2dd154231dff018b1e5c5e1433f46712b3cda7
-source-date:   2026-10-14T11:16:33+05:30
+sdk-version:   3.50.0
+source-sha:    7ada10d8c3517269378fd4c0e7de5454ad121fdc
+source-date:   2026-10-16T12:15:10+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,8 +24,8 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 71 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 47 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 74 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 27 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -33,7 +33,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 47 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
@@ -1851,11 +1851,25 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 ### Functions
 
+#### `classify_http_exception`
+
+- **Import:** `from application_sdk.errors import classify_http_exception`
+- **Signature:** `classify_http_exception(exc: BaseException, *, overrides: Mapping[int, type[AppError]] | None = None)`
+- **Summary:** Return the leaf class for the httpx failure behind ``exc``, or ``None``.
+- **Defined in:** `application_sdk/errors/http.py`
+
+#### `classify_http_status`
+
+- **Import:** `from application_sdk.errors import classify_http_status`
+- **Signature:** `classify_http_status(status: int, *, overrides: Mapping[int, type[AppError]] | None = None)`
+- **Summary:** Return the leaf class for an HTTP status, or ``None`` when unmapped.
+- **Defined in:** `application_sdk/errors/http.py`
+
 #### `redact_secrets`
 
 - **Import:** `from application_sdk.errors import redact_secrets`
 - **Signature:** `redact_secrets(text: str)`
-- **Summary:** Redact URL userinfo and known secret query-params from a string.
+- **Summary:** Redact credentials from a string bound for a log or the wire.
 - **Defined in:** `application_sdk/errors/base.py`
 
 #### `redact_wire_value`
@@ -2084,6 +2098,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_GATEWAY_NO_ROUTE`
+
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_NO_ROUTE`
+- **Signature:** `STORAGE_GATEWAY_NO_ROUTE`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_HANDOFF_INCOMPLETE`
 
 - **Import:** `from application_sdk.errors import STORAGE_HANDOFF_INCOMPLETE`
@@ -2243,6 +2264,12 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Import:** `from application_sdk.execution import TemporalActivityError`
 - **Signature:** `class TemporalActivityError(message: str, ...)`
 - **Summary:** Error raised on activity failure. _(re-exported from `temporalio.exceptions.ActivityError`)_
+
+#### `TemporalApplicationError`
+
+- **Import:** `from application_sdk.execution import TemporalApplicationError`
+- **Signature:** `class TemporalApplicationError(message: str, ...)`
+- **Summary:** Error raised during workflow/activity execution. _(re-exported from `temporalio.exceptions.ApplicationError`)_
 
 #### `TemporalAuthConfig`
 
@@ -2914,7 +2941,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `get_deployment_secret`
 
 - **Import:** `from application_sdk.infrastructure import get_deployment_secret`
-- **Signature:** `get_deployment_secret(key: str)`
+- **Signature:** `get_deployment_secret(key: str, *, raise_on_error: bool | None = None)`
 - **Summary:** Get a specific key from deployment configuration in the deployment secret store.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
@@ -3369,6 +3396,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageGatewayAuthUnavailableError`
 - **Signature:** `class StorageGatewayAuthUnavailableError(message: str, ...)`
 - **Summary:** A request was rejected by the object-store gateway's own auth backend.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageGatewayNoRouteError`
+
+- **Import:** `from application_sdk.storage import StorageGatewayNoRouteError`
+- **Signature:** `class StorageGatewayNoRouteError(message: str, ...)`
+- **Summary:** The object-store gateway answered 404 because its route table is not loaded yet.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageIntegrityError`
@@ -7531,6 +7565,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `auto_materialize: bool` `= True`
   - `manifest_path: str | None`
   - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
+  - `size_bytes: int | None` `= Field(default=None, ge=0)`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`

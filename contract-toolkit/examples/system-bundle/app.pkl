@@ -1,0 +1,39 @@
+/// System-bundle example — a system app (`type = "system"`) that exposes more
+/// than one entrypoint, each a UI-less system sub-contract with its own `inputs`.
+///
+/// Like the `system-app` example, nothing here is a marketplace card: the root
+/// renders no `entrypoints` block in `atlan.yaml`, and no entrypoint has a
+/// setup form, manifest or credential config. Each entrypoint's callers declare
+/// its DAG node.
+///
+/// Generated layout:
+///   atlan.yaml                                       ← bundle-level metadata
+///   app.yaml                                         ← SDR CI shim
+///   app/generated/usage_analysis/_input.py           ← snake_case, so importable
+///   app/generated/usage_analysis/_e2e_base.py        ← extends SystemAppE2ETest
+///   app/generated/digest/_input.py
+///   app/generated/digest/_e2e_base.py
+///   contract/generated/usage-analysis/input.pkl      ← caller node, one per entrypoint
+///   contract/generated/digest/input.pkl
+amends "../../src/App.pkl"
+
+import "usage-analysis.pkl" as UsageAnalysis
+import "digest.pkl" as Digest
+
+name = "system-bundle"
+displayName = "System Bundle Example"
+icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
+type = "system"
+
+entrypoints {
+  new Entrypoint {
+    name = "usage-analysis"
+    displayName = "Usage Analysis"
+    contract = UsageAnalysis
+  }
+  new Entrypoint {
+    name = "digest"
+    displayName = "Digest"
+    contract = Digest
+  }
+}

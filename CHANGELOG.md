@@ -1,5 +1,78 @@
 # Changelog
 
+## v3.50.0 (October 19, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.2...v3.50.0
+
+### Features
+
+- add HTTP status-to-leaf classifiers (#3976) (by @fyzanshaik-atlan in [6cb96a8](https://github.com/atlanhq/application-sdk/commit/6cb96a8))
+- add raise_on_error to get_deployment_secret and resolve_credential_file [FND-4078] (#4449) (by @cmgrote in [7b25053](https://github.com/atlanhq/application-sdk/commit/7b25053))
+- FND-4155 re-export Temporal ApplicationError as TemporalApplicationError (#4464) (by @sachi-atlan in [a49e2dd](https://github.com/atlanhq/application-sdk/commit/a49e2dd))
+
+### Bug Fixes
+
+- flush the sink owner's log buffer on error() from any logger [FND-4074] (#4430) (by @cmgrote in [90b5d72](https://github.com/atlanhq/application-sdk/commit/90b5d72))
+- write console logs from a background thread [FND-4075] (#4434) (by @cmgrote in [b77fcd3](https://github.com/atlanhq/application-sdk/commit/b77fcd3))
+- RollingFileWriter heartbeats reach Temporal, batch sizes are accurate [FND-4076] (#4435) (by @cmgrote in [7cc103f](https://github.com/atlanhq/application-sdk/commit/7cc103f))
+- stop treating every Dapr ERR_SECRET_GET as not-found [FND-4077] (#4439) (by @cmgrote in [9dffd66](https://github.com/atlanhq/application-sdk/commit/9dffd66))
+- classify BaseSQLClient.load failures by root cause (#4442) (by @cmgrote in [3410989](https://github.com/atlanhq/application-sdk/commit/3410989))
+- stop upload_prefix uploading local .sha256 markers over store sidecars [CONAT-5039] (#4436) (by @mothership-ai[bot] in [243251a](https://github.com/atlanhq/application-sdk/commit/243251a))
+- retry and classify the blobstorage gateway's transient "no Route matched" 404 (#4303) (by @connectivity-ai[bot] in [cfbfdff](https://github.com/atlanhq/application-sdk/commit/cfbfdff))
+- redact URL query/fragment values and logged exceptions [FND-4149] (#4457) (by @cmgrote in [cc65aec](https://github.com/atlanhq/application-sdk/commit/cc65aec))
+- show the block reason on the gate's ERROR row [CONNECT-3135] (#4463) (by @fyzanshaik-atlan in [9428e09](https://github.com/atlanhq/application-sdk/commit/9428e09))
+- redact HTTP header and dict-repr secret forms [FND-4153] (#4465) (by @cmgrote in [fd3ee98](https://github.com/atlanhq/application-sdk/commit/fd3ee98))
+- FND-4152 BaseMetadataExtractor notice names App for non-SQL sources (#4462) (by @sachi-atlan in [b8257f4](https://github.com/atlanhq/application-sdk/commit/b8257f4))
+- don't retry a missing credential config as a sidecar outage (#4366) (by @connectivity-ai[bot] in [dddb812](https://github.com/atlanhq/application-sdk/commit/dddb812))
+- BaseClient HTTP helpers raise typed errors and retry connect failures [FND-4079] (#4469) (by @cmgrote in [c1b3ef1](https://github.com/atlanhq/application-sdk/commit/c1b3ef1))
+
+### Performance
+
+- FND-4081 stop re-hashing FileReference inputs on the event loop (#4471) (by @cmgrote in [71286fa](https://github.com/atlanhq/application-sdk/commit/71286fa))
+- FND-4082 bound in-flight transfer memory with one process-wide byte budget (#4479) (by @cmgrote in [b657ea6](https://github.com/atlanhq/application-sdk/commit/b657ea6))
+
+### Chores
+
+- lock file maintenance (#4426) (by @renovate[bot] in [2776e76](https://github.com/atlanhq/application-sdk/commit/2776e76))
+- update atlanhq/application-sdk action to v3.49.2 (#4432) (by @renovate[bot] in [1eb6c7e](https://github.com/atlanhq/application-sdk/commit/1eb6c7e))
+- lock file maintenance (#4433) (by @renovate[bot] in [58b36c0](https://github.com/atlanhq/application-sdk/commit/58b36c0))
+- lock file maintenance (#4438) (by @renovate[bot] in [7182802](https://github.com/atlanhq/application-sdk/commit/7182802))
+- update dependency pymdown-extensions to >=12,<12.4 (#4443) (by @renovate[bot] in [88f862a](https://github.com/atlanhq/application-sdk/commit/88f862a))
+- update dependency poethepoet to >=0.49.0,<0.50.0 (#4444) (by @renovate[bot] in [ed680da](https://github.com/atlanhq/application-sdk/commit/ed680da))
+- lock file maintenance (#4441) (by @renovate[bot] in [a2703ba](https://github.com/atlanhq/application-sdk/commit/a2703ba))
+- bound the console-stall heartbeat gap above GIL contention [FND-4075] (#4447) (by @cmgrote in [8caf3c2](https://github.com/atlanhq/application-sdk/commit/8caf3c2))
+- lock file maintenance (#4445) (by @renovate[bot] in [e346253](https://github.com/atlanhq/application-sdk/commit/e346253))
+- lock file maintenance (#4448) (by @renovate[bot] in [e38aca5](https://github.com/atlanhq/application-sdk/commit/e38aca5))
+- update dependency ruff to v0.17.1 (#4451) (by @renovate[bot] in [71c8ac9](https://github.com/atlanhq/application-sdk/commit/71c8ac9))
+- update dependency obstore to >=0.12.0,<0.13.0 (#4452) (by @renovate[bot] in [d275ae1](https://github.com/atlanhq/application-sdk/commit/d275ae1))
+- lock file maintenance (#4453) (by @renovate[bot] in [807346f](https://github.com/atlanhq/application-sdk/commit/807346f))
+- lock file maintenance (#4456) (by @renovate[bot] in [b8a7de8](https://github.com/atlanhq/application-sdk/commit/b8a7de8))
+- lock file maintenance (#4458) (by @renovate[bot] in [2d214bc](https://github.com/atlanhq/application-sdk/commit/2d214bc))
+- lock file maintenance (#4459) (by @renovate[bot] in [ca76f42](https://github.com/atlanhq/application-sdk/commit/ca76f42))
+- lock file maintenance (#4460) (by @renovate[bot] in [4f5ef6c](https://github.com/atlanhq/application-sdk/commit/4f5ef6c))
+- lock file maintenance (#4466) (by @renovate[bot] in [c3d9b8c](https://github.com/atlanhq/application-sdk/commit/c3d9b8c))
+- pin upload_prefix against the marker transfer.upload really writes [FND-4172] (#4480) (by @cmgrote in [65a6af7](https://github.com/atlanhq/application-sdk/commit/65a6af7))
+- lock file maintenance (#4483) (by @renovate[bot] in [e280740](https://github.com/atlanhq/application-sdk/commit/e280740))
+
+
+## v3.49.2 (October 16, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.1...v3.49.2
+
+### Bug Fixes
+
+- a 401/403 listing a bucket raises a non-retryable permission error (#4424) (by @connectivity-ai[bot] in [411ffa8](https://github.com/atlanhq/application-sdk/commit/411ffa8))
+
+### Chores
+
+- lock file maintenance (#4405) (by @renovate[bot] in [b6af691](https://github.com/atlanhq/application-sdk/commit/b6af691))
+- FND-4018 make one-off timing flakes in the unit suite deterministic (#4407) (by @cmgrote in [4e631ab](https://github.com/atlanhq/application-sdk/commit/4e631ab))
+- update atlanhq/application-sdk action to v3.49.1 (#4409) (by @renovate[bot] in [2f82429](https://github.com/atlanhq/application-sdk/commit/2f82429))
+- lock file maintenance (#4410) (by @renovate[bot] in [21029ee](https://github.com/atlanhq/application-sdk/commit/21029ee))
+- lock file maintenance (#4411) (by @renovate[bot] in [5902096](https://github.com/atlanhq/application-sdk/commit/5902096))
+- lock file maintenance (#4425) (by @renovate[bot] in [21b1e6b](https://github.com/atlanhq/application-sdk/commit/21b1e6b))
+
+
 ## v3.49.1 (October 15, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.0...v3.49.1

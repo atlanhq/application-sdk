@@ -3,6 +3,9 @@
     python -m lens review --repo atlanhq/application-sdk --pr 1234 [--force] [--verify-budget] [--dry-run]
     python -m lens review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
 
+Sub-commands of the `/lens` comment (`/lens force`, `/lens verify-budget`,
+`/lens dismiss`, `/lens recheck`) are parsed and documented in lens/event.py.
+
 Run from `.github/scripts` against a checkout of the BASE branch (`--root`).
 `--dry-run` prints the result as JSON and posts nothing — the way to try lens
 on any PR, including a historical one. Exit code is 0 whenever lens ran to a
@@ -19,11 +22,11 @@ from pathlib import Path
 
 from . import approve, report, trace
 from .config import load_config, validate
-from .event import DISMISS_USAGE, decide
+from .event import USAGE_ERRORS, decide
 from .github import GitHub
 from .llm import Client
 from .lock import BUSY_NOTE, WORKFLOW_FILE, older_active_run
-from .review import dismiss, render_summary, run, to_json
+from .review import dismiss, recheck, render_summary, run, to_json
 from .rules import load_rules
 
 
@@ -56,17 +59,19 @@ def main(argv: list[str] | None = None) -> int:
 
     comment_id = 0
     dismissal = None
+    rechecking = None
     if args.event_name:
         event = json.loads(Path(args.event_path).read_text()) if args.event_path else {}
         d = decide(args.event_name, event, args.repo)
         if not d.run:
             print(f"lens: not running — {d.reason}")
-            if d.reason == DISMISS_USAGE and d.comment_id and not args.dry_run:
+            if d.reason in USAGE_ERRORS and d.comment_id and not args.dry_run:
                 gh = GitHub(args.repo)
-                gh.comment(d.pr, f"lens: {DISMISS_USAGE}")
+                gh.comment(d.pr, f"lens: {d.reason}")
                 gh.react(d.comment_id, "confused")
             return 0
         dismissal = d if d.dismiss else None
+        rechecking = d if d.recheck else None
         args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
         args.verify_budget = args.verify_budget or d.verify_budget
         trace.line(
@@ -114,7 +119,42 @@ def main(argv: list[str] | None = None) -> int:
             react("confused")
             return 0
 
+    def client_factory(ledger):  # noqa: ANN001, ANN202
+        client = Client(
+            model=cfg.model,
+            price=cfg.price,
+            ledger=ledger,
+            reasoning_effort=cfg.reasoning_effort,
+            api=cfg.api,
+        )
+        # Every model request is logged live, as it completes (counts only, no content).
+        client.log = lambda event: print(
+            report.call_line(event), file=sys.stderr, flush=True
+        )
+        return client
+
     run_url = _run_url()
+    if rechecking is not None:
+        # One model call at most, and the verdict follows at once: no progress note.
+        res = recheck(
+            gh=gh,
+            number=args.pr,
+            ids=rechecking.recheck,
+            reason=rechecking.recheck_reason,
+            root=root,
+            cfg=cfg,
+            client_factory=client_factory,
+            actor=rechecking.actor,
+            post=live,
+            run_url=run_url,
+        )
+        print(f"lens: {res.action} {res.reason}".strip())
+        if live:
+            approve.write_decision(
+                os.environ.get("LENS_APPROVAL_PATH"), args.pr, approve.decision_for(res)
+            )
+        react("confused" if res.action != "rechecked" or res.incomplete else "rocket")
+        return 1 if res.failed else 0
     if dismissal is not None:
         # No model call and nothing to watch: no progress note.
         res = dismiss(
@@ -138,20 +178,6 @@ def main(argv: list[str] | None = None) -> int:
     # removed once the verdict is posted (the verdict links the run too), and turned into a
     # failure note if lens itself crashes, so it never lingers as a stale "running".
     progress_id = _progress(gh, args.pr, run_url) if live else 0
-
-    def client_factory(ledger):  # noqa: ANN001, ANN202
-        client = Client(
-            model=cfg.model,
-            price=cfg.price,
-            ledger=ledger,
-            reasoning_effort=cfg.reasoning_effort,
-            api=cfg.api,
-        )
-        # Every model request is logged live, as it completes (counts only, no content).
-        client.log = lambda event: print(
-            report.call_line(event), file=sys.stderr, flush=True
-        )
-        return client
 
     try:
         res = run(

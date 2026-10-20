@@ -101,6 +101,14 @@ jobs:
         if: steps.versions.outputs.skip != 'true'
         run: cd packages/conformance && uv build
 
+      # Install that wheel into a clean venv outside the checkout and import
+      # every module first, run every console script and subcommand, and run
+      # a slice of the tests against it. 0.51.0 built fine here and could not
+      # run gen-contract-ledger once installed (FND-4176).
+      - name: Smoke-test built wheel
+        if: steps.versions.outputs.skip != 'true'
+        run: python .github/scripts/conformance_wheel_gate.py
+
       - name: Push bump branch and open or update PR
         if: steps.versions.outputs.skip != 'true'
         env:

@@ -80,6 +80,26 @@ ROOT_FILES = ("atlan.yaml", "app.yaml")
 # the fleet; apps that differ are refused rather than mis-written.
 GENERATED_DIR = "app/generated"
 
+# Where an ``App.pkl`` system app's caller node lands: ``contract/generated/
+# input.pkl``, or ``contract/generated/<entrypoint>/input.pkl`` per entrypoint of
+# a system bundle (FND-3563). Prefixed family only, keyed repo-root-relative like
+# every other ``App.pkl`` output. Never replaced wholesale: ``contract/`` is the
+# app's hand-written source tree. Only a committed caller node
+# (:data:`CALLER_NODE_FILENAME`) the fresh eval no longer emits is removed, so a
+# dropped entrypoint does not leave a stale node that the freshness check passes.
+CONTRACT_GENERATED_DIR = "contract/generated"
+
+# The caller node's file name, at any depth under :data:`CONTRACT_GENERATED_DIR`.
+# Mirrored by the Renovate auto-approve allowlist in
+# ``renovate_approval_conditions.DEP_FILE_RE``.
+CALLER_NODE_FILENAME = "input.pkl"
+
+# Git pathspec for every caller node, at any depth (``**/`` also matches no
+# directory). The sync stages, and the freshness checks compare, only these:
+# other files under :data:`CONTRACT_GENERATED_DIR` are the app's, so a change to
+# one is neither generated output nor drift.
+CALLER_NODE_PATHSPEC = f":(glob){CONTRACT_GENERATED_DIR}/**/{CALLER_NODE_FILENAME}"
+
 # Subdirectory names under the generated dir that NO pkl contract, in any
 # family or toolkit version, ever emits into — so baseline/override detection
 # (which compares what a contract emitted then vs. now) can never see them and
@@ -328,8 +348,9 @@ def plan_swap(
     the working tree — that is what makes override detection possible.
 
     Root files map to the repo root; generated artifacts map under
-    ``generated_dir`` with the family's prefix stripped. An empty mapping means
-    there was nothing to place.
+    ``generated_dir`` with the family's prefix stripped. In the prefixed family
+    a caller node under :data:`CONTRACT_GENERATED_DIR` maps to the same
+    repo-relative path. An empty mapping means there was nothing to place.
     """
     layout = detect_layout(out_dir)
     plan: dict[Path, Path] = {}
@@ -351,6 +372,14 @@ def plan_swap(
             if layout == "native" and len(rel.parts) == 1 and rel.name in ROOT_FILES:
                 continue
             plan[target / rel] = src
+
+    # Without this the caller node was evaluated and then dropped, so a toolkit
+    # bump never refreshed it in the app's repo.
+    callers = out_dir / CONTRACT_GENERATED_DIR
+    if layout == "prefixed" and callers.is_dir():
+        for src in sorted(callers.rglob("*")):
+            if src.is_file():
+                plan[Path(CONTRACT_GENERATED_DIR) / src.relative_to(callers)] = src
 
     return layout, plan
 
@@ -523,6 +552,7 @@ def swap_outputs(
             for dest, content in preserved.items():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
+            _prune_stale_caller_nodes(plan)
         finally:
             # Restore even on a mid-swap failure: the withheld reserved subdirs
             # live in a tempdir, so an exception here would otherwise strand the
@@ -536,6 +566,29 @@ def swap_outputs(
     # orphans. See the module docstring.
     _copy_planned(plan, skip)
     return True
+
+
+def _prune_stale_caller_nodes(plan: dict[Path, Path]) -> None:
+    """Remove committed caller nodes the fresh eval no longer emits.
+
+    A bundle entrypoint that is removed, or stops declaring ``inputs``, stops
+    emitting its ``contract/generated/<entrypoint>/input.pkl``. Overwrite-only
+    placement would leave the old node behind, and the freshness check would
+    find no diff. Only :data:`CALLER_NODE_FILENAME` files are removed: anything
+    else under :data:`CONTRACT_GENERATED_DIR` is the app's. A directory the
+    removal leaves empty is removed too.
+    """
+    root = Path(CONTRACT_GENERATED_DIR)
+    if not root.is_dir():
+        return
+    for node in sorted(root.rglob(CALLER_NODE_FILENAME)):
+        if not node.is_file() or node in plan:
+            continue
+        node.unlink()
+        parent = node.parent
+        while parent != root.parent and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
 
 
 def _copy_planned(plan: dict[Path, Path], skip: set[Path]) -> None:

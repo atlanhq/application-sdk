@@ -58,6 +58,32 @@ def _is_log_call_stmt(stmt: ast.stmt) -> bool:
     return isinstance(func, ast.Attribute) and func.attr in _LOG_METHODS
 
 
+def _is_empty_sentinel(value: ast.expr | None) -> bool:
+    """A return value that reads as "nothing": bare, ``None``, or an empty literal.
+
+    Shared by E007 and the HTTP-failure rule so both agree on what an empty
+    sentinel is.
+    """
+    if value is None:
+        return True  # bare ``return``
+    if isinstance(value, ast.Constant) and value.value in (None, "", b""):
+        return True
+    if isinstance(value, ast.List) and not value.elts:
+        return True
+    if isinstance(value, ast.Dict) and not value.keys:
+        return True
+    if isinstance(value, ast.Tuple) and not value.elts:
+        return True
+    if (
+        isinstance(value, ast.Call)
+        and not value.args
+        and not value.keywords
+        and _get_name(value.func) in ("list", "dict", "set", "tuple")
+    ):
+        return True
+    return False
+
+
 def _any_logging_in(stmts: list[ast.stmt]) -> bool:
     """True if any logging call appears anywhere within *stmts*."""
     for stmt in stmts:

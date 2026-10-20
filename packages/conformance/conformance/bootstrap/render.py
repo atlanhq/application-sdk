@@ -104,13 +104,26 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # workflow, each run spending the ``ORG_PAT_GITHUB`` rate limit. Only
 # application-sdk requires the approval; it keeps its own caller and the
 # reusable, which are not bootstrap-managed.
+#
+# ``.github/dependabot.yml`` / ``.yaml``: never bootstrap-managed, but
+# superseded by it. Some apps hand-added a Dependabot config for ``pip`` and
+# ``github-actions`` before adopting the Renovate preset, which covers both
+# ecosystems, so every action and Python bump arrived twice — once from each
+# bot. Bootstrap always leaves a ``renovate.json`` behind (scaffolded when
+# absent), so removing the Dependabot config here can never leave a repo with
+# no dependency updater. Dependabot *security* updates are a repository
+# setting, not this file, and are unaffected.
+#
 # Retirements are repo-root-relative so the same mechanism can remove a
-# previously-managed hook or script, not only a workflow.
+# previously-managed hook or script, or a config bootstrap supersedes, not
+# only a workflow.
 RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/docstring-coverage.yaml",
     ".github/workflows/auto-fix.yml",
     ".github/workflows/update-dashboard.yml",
     ".github/workflows/renovate-auto-approve.yml",
+    ".github/dependabot.yml",
+    ".github/dependabot.yaml",
 )
 RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     path.removeprefix(".github/workflows/")

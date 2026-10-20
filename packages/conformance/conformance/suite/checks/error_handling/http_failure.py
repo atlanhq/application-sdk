@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import ast
 
-from ._helpers import _get_name
+from ._helpers import _is_empty_sentinel
 
 _HTTP_MARKERS: frozenset[str] = frozenset({"is_success", "ok", "status_code"})
 _FAILURE_COMPARE_OPS = (ast.NotEq, ast.Gt, ast.GtE, ast.Lt, ast.LtE)
@@ -216,27 +216,6 @@ def _is_plain_else(orelse: list[ast.stmt]) -> bool:
     unambiguous; an ``elif`` chain is handled by ``visit_If`` recursing into it.
     """
     return bool(orelse) and not (len(orelse) == 1 and isinstance(orelse[0], ast.If))
-
-
-def _is_empty_sentinel(value: ast.expr | None) -> bool:
-    if value is None:
-        return True  # bare ``return``
-    if isinstance(value, ast.Constant) and value.value in (None, "", b""):
-        return True
-    if isinstance(value, ast.List) and not value.elts:
-        return True
-    if isinstance(value, ast.Dict) and not value.keys:
-        return True
-    if isinstance(value, ast.Tuple) and not value.elts:
-        return True
-    if (
-        isinstance(value, ast.Call)
-        and not value.args
-        and not value.keywords
-        and _get_name(value.func) in ("list", "dict", "set", "tuple")
-    ):
-        return True
-    return False
 
 
 def _branch_returns_empty(body: list[ast.stmt]) -> ast.Return | None:

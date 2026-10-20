@@ -326,7 +326,7 @@ class TestLocalSidecarWrite:
 
         with patch("os.fsync", _enospc):
             # Best-effort by contract: the caller continues without a sidecar.
-            _write_local_sidecar(str(artifact), "a" * 64)
+            _write_local_sidecar(str(artifact), "a" * 64, None)
 
         assert _artifacts(tmp_path) == ["data.parquet"]
 
@@ -338,9 +338,9 @@ class TestLocalSidecarWrite:
         artifact = tmp_path / "data.parquet"
         artifact.write_bytes(b"parquet")
 
-        _write_local_sidecar(str(artifact), "a" * 64)
+        _write_local_sidecar(str(artifact), "a" * 64, None)
 
-        assert (tmp_path / "data.parquet.sha256").read_text() == "a" * 64
+        assert (tmp_path / "data.parquet.sha256").read_text().split()[0] == "a" * 64
 
 
 # ---------------------------------------------------------------------------

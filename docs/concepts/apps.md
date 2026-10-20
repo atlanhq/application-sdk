@@ -198,7 +198,7 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 
 ### BaseMetadataExtractor
 
-Base class for all metadata-extraction Apps. Provides upload, cleanup, and lifecycle plumbing without committing to a SQL-specific task layout. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
+Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp` for a SQL source. It is `App` plus the deprecated `upload_to_atlan` task. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
 
 ## Offloading Blocking Work (`run_in_thread` and auto-holds)
 
@@ -631,6 +631,15 @@ cannot say different things. One gap remains by design: a **soft**-mode gate doe
 `would_block` row has no lifecycle record to carry the sentence and is reachable through
 `failure.message` only.
 
+A `blocked` row from a verdict or an unidentifiable connection also carries the block error as its
+own exception, so its `exception.message` is the raised message (`Preflight failed: …`), with no
+stack frames. The run log panel opens a failed step at ERROR and shows a record's
+`exception.message` next to its `Body`. The row's `Body` is the pinned event name, so this is how
+the reason reaches that default view. A verdict `would_block` row stays INFO and carries no
+exception. An unverifiable source carries the handler's own exception in both modes, because that
+cause is the diagnostic. For any Temporal error, `exception.message` is the error's own message,
+without the `<type>: ` tag that Temporal's `str()` puts in front of it.
+
 `frame_lost` is its own value because the failure chain cannot separate a probe that stalled
 the event loop past the gate's cancel from a worker that died under it. It is a `TIMEOUT`, so
 hard mode reports it as `would_block` rather than blocking, and the classification keeps the two
@@ -999,6 +1008,7 @@ toolkit output actually writes:
 |---|---|
 | One `manifest.json` at the root | `app/generated/artifact_schemas.json` |
 | A `manifest.json` per entry-point subdirectory (a bundle) | `app/generated/{entry-point}/artifact_schemas.json`, one per entry point |
+| A UI-less system entry point in a bundle (no manifest of its own) | `app/generated/{entry_point_snake}/artifact_schemas.json`, the snake_case dir its `_input.py` imports from |
 
 A **route/card-split** app — one marketplace card plus extra `@entrypoint`s the DAG invokes by
 `workflow_type` — has a flat tree, so all of its entry points share the one flat file. That is why
@@ -1285,6 +1295,7 @@ no need to import `temporalio` yourself:
 ```python
 from application_sdk.execution import (
     TemporalActivityError,
+    TemporalApplicationError,
     TemporalCancelledError,
     TemporalWorkflowFailureError,
 )
@@ -1297,20 +1308,29 @@ except TemporalWorkflowFailureError as e:
             ...  # an @task raised
         case TemporalCancelledError():
             ...  # the workflow was cancelled
+        case TemporalApplicationError():
+            ...  # run()/@entrypoint itself raised directly
         case _:
-            ...  # e.g. temporalio.exceptions.ApplicationError when run()/@entrypoint
-            # itself raised directly — still log/handle it, don't ignore silently
+            ...  # any other cause — still log/handle it, don't ignore silently
 ```
 
 `TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — commonly
-one of `TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
-`TemporalTerminatedError`, or `TemporalTimeoutError`, but not limited to those (e.g. a
-direct raise from `run()`/`@entrypoint` surfaces as the unexported
-`temporalio.exceptions.ApplicationError` — always include a catch-all case). These
-five are re-exported (not wrapped) with a `Temporal` prefix so they don't collide with
-unrelated SDK types of the same short name, e.g.
-`application_sdk.common.error_codes.ActivityError` and
-`application_sdk.errors.leaves.CancelledError`.
+one of `TemporalActivityError`, `TemporalApplicationError`, `TemporalCancelledError`,
+`TemporalChildWorkflowError`, `TemporalTerminatedError`, or `TemporalTimeoutError`, but
+not limited to those — always include a catch-all case. Which level holds the error
+depends on where it was raised:
+
+- An `@task` raised: `e.cause` is `TemporalActivityError`, and the task's own error is
+  one level down, at `e.cause.cause` (a `TemporalApplicationError`).
+- `run()`/`@entrypoint` raised: the SDK wraps any non-Temporal exception in an
+  `ApplicationError`, so `e.cause` is a `TemporalApplicationError` directly.
+
+These six are re-exported (not wrapped) with a `Temporal` prefix so they don't collide
+with SDK types of the same short name, e.g.
+`application_sdk.common.error_codes.ActivityError`,
+`application_sdk.errors.leaves.CancelledError` and
+`application_sdk.execution.ApplicationError` (a subclass for raising; a failure read
+back from Temporal is never an instance of it, so match on `TemporalApplicationError`).
 
 This is distinct from error handling *inside* `run()`/`@task` code: there, raise
 and catch `application_sdk.errors.AppError` leaves (`CancelledError`,

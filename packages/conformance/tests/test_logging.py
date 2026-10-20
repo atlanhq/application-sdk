@@ -240,6 +240,134 @@ for item in items:
     assert "L006" in _ids(src)
 
 
+def test_l006_silent_for_terminal_recovery_log_before_return() -> None:
+    src = """
+from loguru import logger
+
+def fetch_with_retries():
+    for attempt in attempts:
+        try:
+            response = fetch()
+            if attempt > 0:
+                logger.info("request recovered on attempt %d", attempt)
+            return response
+        except TransientError:
+            continue
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_page_progress_logs_in_unbounded_loop() -> None:
+    src = """
+from loguru import logger
+
+def read_pages():
+    cursor = None
+    while True:
+        logger.info("fetching page for cursor %s", cursor)
+        page = fetch_page(cursor)
+        cursor = page.next_cursor
+        logger.info("fetched page with %d records", len(page.records))
+        if not cursor:
+            break
+"""
+    findings = scan_text(src, "x.py")
+    assert sum(f.rule_id == "L006" for f in findings) == 2
+
+
+def test_l006_fires_for_per_item_info_before_conditional_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        logger.info("processing item")
+        if is_final(item):
+            return
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def poll():
+    while True:
+        try:
+            if should_log():
+                logger.info("still processing")
+            return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_finally_break_overrides_return_in_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        while True:
+            try:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+            finally:
+                break
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_silent_when_finally_break_exits_outermost_loop() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            if should_log(item):
+                logger.info("processed item")
+            return
+        finally:
+            break
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_when_outer_finally_continue_overrides_return() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        try:
+            for attempt in attempts:
+                if should_log(item):
+                    logger.info("processed item")
+                return
+        finally:
+            continue
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_return_is_in_nested_function() -> None:
+    src = """
+from loguru import logger
+
+def process(items):
+    for item in items:
+        if should_log(item):
+            logger.info("processing item")
+        def finish_item():
+            return
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_terminal_summary_repeated_by_outer_loop() -> None:
     src = """
 from loguru import logger
@@ -519,6 +647,136 @@ def process_items(extra_items):
         logger.info("item %s", item)
 """
     assert "L006" in _ids(src)
+
+
+def test_l006_silent_for_small_literal_mapping_items() -> None:
+    src = """
+from loguru import logger
+
+def transform_entities():
+    entity_folders = {
+        "ENTITY_A": "processed/a",
+        "ENTITY_B": "processed/b",
+        "ENTITY_C": "processed/c",
+        "ENTITY_D": "processed/d",
+        "ENTITY_E": "processed/e",
+        "ENTITY_F": "processed/f",
+    }
+    for entity_type, folder in entity_folders.items():
+        logger.info("Transforming %s", entity_type)
+        transform(folder)
+        logger.info("Transformed %s entities", entity_type)
+
+    for entity_type, folder in {"ENTITY_A": "a", "ENTITY_B": "b"}.items():
+        logger.info("Transforming %s", entity_type)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_mapping_with_more_than_ten_items() -> None:
+    entries = ",\n        ".join(
+        f'"ENTITY_{index}": "processed/{index}"' for index in range(11)
+    )
+    src = f"""
+from loguru import logger
+
+def transform_entities():
+    entity_folders = {{
+        {entries}
+    }}
+    for entity_type, folder in entity_folders.items():
+        logger.info("Transformed %s entities", entity_type)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mutated_local_literal_mapping() -> None:
+    src = """
+from loguru import logger
+
+def transform_entities(extra_folders):
+    entity_folders = {"ENTITY_A": "processed/a"}
+    entity_folders.update(extra_folders)
+    for entity_type, folder in entity_folders.items():
+        logger.info("Transformed %s entities", entity_type)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_global_literal_mapping_rebound_elsewhere() -> None:
+    entries = ", ".join(f'"ENTITY_{index}": "processed/{index}"' for index in range(11))
+    src = f"""
+from loguru import logger
+
+folders = {{}}
+
+def widen():
+    global folders
+    folders = {{{entries}}}
+
+def run():
+    global folders
+    folders = {{"ENTITY_A": "processed/a"}}
+    widen()
+    for entity_type, folder in folders.items():
+        logger.info("Transformed %s entities", entity_type)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_nonlocal_literal_list_rebound_elsewhere() -> None:
+    src = """
+from loguru import logger
+
+def outer(extra):
+    items = []
+
+    def run():
+        nonlocal items
+        items = ["a"]
+        widen()
+        for item in items:
+            logger.info("Processed %s", item)
+
+    def widen():
+        nonlocal items
+        items = extra
+
+    run()
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_producer_progress_in_unbounded_async_for() -> None:
+    src = """
+from loguru import logger
+
+async def list_sources(client, writer, queue):
+    source_count = 0
+    async for source in client.get_sources():
+        await writer.write(source)
+        source_count += 1
+        if source_count % 5000 == 0:
+            logger.info("Producer progress: %s sources listed", source_count)
+        await queue.put(source)
+    logger.info("Producer done: %s sources listed", source_count)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_for_stream_progress_in_unbounded_async_for() -> None:
+    src = """
+from loguru import logger
+
+async def stream_records(records):
+    total_count = 0
+    async for record in records:
+        total_count += 1
+        if total_count % 10000 == 0:
+            logger.info("Streamed %s records so far", total_count)
+    logger.info("Finished streaming %s records", total_count)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
 
 
 # ---------------------------------------------------------------------------

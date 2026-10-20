@@ -2160,6 +2160,202 @@ def get_value():
     )
 
 
+@pytest.mark.parametrize("sentinel", ["None", "[]", "{}", "()", '""', "dict()"])
+def test_p007_broad_catch_that_logs_then_returns_a_sentinel(sentinel: str) -> None:
+    # Logging leaves a trace in the log, not in the result: the caller still
+    # cannot tell the failure from a genuine empty value.
+    src = f"""\
+def get_tables():
+    try:
+        return fetch()
+    except Exception:
+        logger.warning("fetch failed", exc_info=True)
+        return {sentinel}
+"""
+    _single(src, "E007")
+
+
+def test_p007_broad_tuple_catch_that_logs_then_returns_none() -> None:
+    src = """\
+def get_tables():
+    try:
+        return fetch()
+    except (ValueError, Exception) as exc:
+        logger.error("fetch failed: %s", exc, exc_info=True)
+        return None
+"""
+    _single(src, "E007")
+
+
+def test_p007_bare_catch_that_logs_then_returns_none() -> None:
+    src = """\
+def get_tables():
+    try:
+        return fetch()
+    except:
+        logger.error("fetch failed", exc_info=True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_broad_catch_whose_same_class_helper_logs_then_returns_none() -> None:
+    src = """\
+class Probe:
+    def _report(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self):
+        try:
+            return list_keys()
+        except Exception as problem:
+            self._report(problem)
+            return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_logged_sentinel_under_a_narrow_catch_is_not_flagged() -> None:
+    # A narrow lookup miss returning None is usually the lookup's contract.
+    _none(
+        """\
+def get_value():
+    try:
+        return cache[key]
+    except KeyError:
+        logger.debug("cache miss for %s", key)
+        return None
+"""
+    )
+
+
+def test_p007_logged_non_sentinel_return_is_not_flagged() -> None:
+    _none(
+        """\
+def get_label():
+    try:
+        return render()
+    except Exception:
+        logger.warning("render failed", exc_info=True)
+        return "<unrenderable>"
+"""
+    )
+
+
+def test_p007_logged_return_none_in_a_procedure_is_not_flagged() -> None:
+    # In a ``-> None`` function ``return None`` is a plain early exit.
+    _none(
+        """\
+def flush() -> None:
+    try:
+        send()
+    except Exception:
+        logger.warning("flush failed", exc_info=True)
+        return None
+    cleanup()
+"""
+    )
+
+
+def test_p007_logged_empty_container_in_a_procedure_is_still_flagged() -> None:
+    # Only ``return None`` is a procedure's early exit; the annotation does not
+    # make ``[]`` one.
+    src = """\
+def flush() -> None:
+    try:
+        send()
+    except Exception:
+        logger.warning("flush failed", exc_info=True)
+        return []
+"""
+    _single(src, "E007")
+
+
+def test_p007_logged_bare_return_is_not_flagged() -> None:
+    _none(
+        """\
+def flush():
+    try:
+        send()
+    except Exception:
+        logger.warning("flush failed", exc_info=True)
+        return
+    cleanup()
+"""
+    )
+
+
+def test_p007_logged_sentinel_is_suppressible() -> None:
+    _none(
+        """\
+def get_tables():
+    try:
+        return fetch()
+    except Exception:
+        logger.warning("fetch failed", exc_info=True)
+        return None  # conformance: ignore[E007] optional probe; caller treats None as absent
+"""
+    )
+
+
+_LOGGED_SENTINEL_MODULE = """\
+def get_tables():
+    try:
+        return fetch()
+    except Exception:
+        logger.warning("fetch failed", exc_info=True)
+        return None
+"""
+
+_DEPRECATED_PACKAGE_INIT = """\
+import warnings
+
+warnings.warn("legacy is deprecated", DeprecationWarning, stacklevel=2)
+"""
+
+
+def test_p007_logged_sentinel_in_a_deprecated_module_is_not_flagged() -> None:
+    _none(
+        """\
+import warnings
+
+warnings.warn("this module is deprecated", category=DeprecationWarning)
+
+"""
+        + _LOGGED_SENTINEL_MODULE
+    )
+
+
+def test_p007_logged_sentinel_under_a_deprecated_package_is_not_flagged(
+    tmp_path: Path,
+) -> None:
+    files = {
+        "pkg/__init__.py": "",
+        "pkg/legacy/__init__.py": _DEPRECATED_PACKAGE_INIT,
+        "pkg/legacy/sub/__init__.py": "",
+        "pkg/legacy/sub/mod.py": _LOGGED_SENTINEL_MODULE,
+        "pkg/live/__init__.py": "",
+        "pkg/live/mod.py": _LOGGED_SENTINEL_MODULE,
+    }
+    assert _scan_repo(tmp_path, files, "pkg/legacy/sub/mod.py") == []
+    assert _scan_repo(tmp_path, files, "pkg/live/mod.py") == ["E007"]
+
+
+def test_p007_deprecation_marker_outside_the_scan_root_is_ignored(
+    tmp_path: Path,
+) -> None:
+    # The walk stops at the repo root: a deprecated package above it is not
+    # part of the scanned repo.
+    from conformance.suite.checks.error_handling import scan_path
+
+    (tmp_path / "__init__.py").write_text(_DEPRECATED_PACKAGE_INIT)
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    target = repo / "app" / "mod.py"
+    target.write_text(_LOGGED_SENTINEL_MODULE)
+    assert [f.rule_id for f in scan_path(target, repo)] == ["E007"]
+
+
 def test_p007_no_finding_when_same_class_helper_logs_caught_exception() -> None:
     src = """\
 class Probe:
@@ -2199,6 +2395,222 @@ def inspect():
         return None
 """
     _none(src)
+
+
+def test_p007_no_finding_when_module_helper_uses_dynamic_logger_alias() -> None:
+    src = """\
+def _report_problem(operation, problem, level="warning", **metadata):
+    extra = {"detail": str(problem)}
+    for key in ("status", "reason"):
+        extra[key] = metadata.get(key)
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem, level="debug", item="sample")
+        return None
+"""
+    _none(src)
+
+
+def test_p007_broad_catch_whose_module_helper_logs_then_returns_none() -> None:
+    # The delegated-log shape cleared above, under a broad catch. The helper
+    # proof still counts as logging (the unlogged message must not fire), but
+    # under a broad catch a logged empty return is the FND-4080 arm: the
+    # caller gets None with no error code. Pinned so a later false-positive
+    # fix to the helper proof cannot quietly clear it again.
+    src = """\
+def _report_problem(operation, problem, level="warning", **metadata):
+    extra = {"detail": str(problem)}
+    for key in ("status", "reason"):
+        extra[key] = metadata.get(key)
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def fetch_table(table_id):
+    try:
+        return read_table(table_id)
+    except Exception as problem:
+        _report_problem("table fetch", problem, table_id=table_id)
+        return None
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E007"]
+    assert len(findings) == 1
+    assert "logs and then returns an empty sentinel" in findings[0].message
+
+
+def test_p007_still_flags_when_only_a_conditional_exc_info_carries_the_exception() -> (
+    None
+):
+    # exc_info=False on the ExpectedFailure branch records neither the traceback
+    # nor the exception value, so the fallback return is still silent there.
+    src = """\
+def _report_problem(operation, problem):
+    audit.warning(
+        "%s failed",
+        operation,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_entry_for_the_exception_is_overwritten() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra["detail"] = None
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_extra_mapping_is_mutated_by_a_call() -> None:
+    src = """\
+def _report_problem(operation, problem):
+    extra = {"detail": str(problem)}
+    extra.pop("detail")
+    audit.warning(
+        "%s failed",
+        operation,
+        extra=extra,
+        exc_info=not isinstance(problem, ExpectedFailure),
+    )
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem("lookup", problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_uses_an_unresolved_callable_alias() -> (
+    None
+):
+    src = """\
+def _report_problem(problem):
+    log_fn = choose_sink()
+    log_fn("lookup failed", exc_info=problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_a_kwargs_helper_does_not_log() -> None:
+    src = """\
+def _record_problem(problem, **metadata):
+    metadata["detail"] = problem
+    return metadata
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _record_problem(problem, item="sample")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_selector_is_not_a_log_level() -> None:
+    src = """\
+def _report_problem(problem, level):
+    log_fn = getattr(audit, level, audit.warning)
+    log_fn("lookup failed", exc_info=problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, level="isEnabledFor")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_helper_logs_unrelated_data() -> None:
+    src = """\
+def _report_problem(problem, detail):
+    log_fn = getattr(audit, "warning", audit.warning)
+    log_fn("lookup failed: %s", detail)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, "unrelated")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_dynamic_logger_helper_can_skip_its_log() -> None:
+    src = """\
+def _report_problem(problem, enabled):
+    log_fn = getattr(audit, "warning", audit.warning)
+    if enabled:
+        log_fn("lookup failed: %s", problem)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_unlogged_empty_parse_fallback() -> None:
+    src = """\
+def parse_payload(body):
+    try:
+        return decode_payload(body)
+    except (ValueError, TypeError):
+        return {}
+"""
+    _single(src, "E007")
 
 
 def test_p007_no_finding_when_same_class_helper_has_setup_before_log() -> None:
@@ -2876,6 +3288,131 @@ async def run():
     )
 
 
+def test_p010_no_finding_helper_checks_gathered_results() -> None:
+    _none(
+        """\
+import asyncio
+def consume_results(items):
+    for item in items:
+        if isinstance(item, Exception):
+            raise item
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    consume_results(results)
+"""
+    )
+
+
+def test_p010_no_finding_helper_logs_zipped_gather_results() -> None:
+    _none(
+        """\
+import asyncio
+def report_results(keys, outcomes):
+    for key, outcome in zip(keys, outcomes, strict=True):
+        if isinstance(outcome, Exception):
+            logger.error("task failed: %s", outcome)
+async def run():
+    outcomes = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    report_results(keys, outcomes)
+"""
+    )
+
+
+def test_p010_helper_that_only_counts_results_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def count_results(items):
+    return len(items)
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    count_results(results)
+""",
+        "E010",
+    )
+
+
+def test_p010_helper_checking_unrelated_value_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def inspect_unrelated(items, marker):
+    for item in items:
+        if isinstance(marker, Exception):
+            raise marker
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    inspect_unrelated(results, marker)
+""",
+        "E010",
+    )
+
+
+def test_p010_helper_dropping_exception_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def discard_failures(items):
+    for item in items:
+        if isinstance(item, Exception):
+            continue
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    discard_failures(results)
+""",
+        "E010",
+    )
+
+
+def test_p010_helper_non_strict_zip_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def report_results(keys, outcomes):
+    for key, outcome in zip(keys, outcomes, strict=False):
+        if isinstance(outcome, Exception):
+            logger.error("task failed: %s", outcome)
+async def run():
+    outcomes = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    report_results(keys, outcomes)
+""",
+        "E010",
+    )
+
+
+def test_p010_helper_nested_loop_shadowing_item_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def consume_results(items, unrelated):
+    for item in items:
+        for item in unrelated:
+            if isinstance(item, Exception):
+                raise item
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    consume_results(results, unrelated)
+""",
+        "E010",
+    )
+
+
+def test_p010_helper_always_false_test_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+def consume_results(items):
+    for item in items:
+        if isinstance(item, Exception) and False:
+            raise item
+async def run():
+    results = await asyncio.gather(t1(), t2(), return_exceptions=True)
+    consume_results(results)
+""",
+        "E010",
+    )
+
+
 def test_p010_no_finding_isinstance_check() -> None:
     _none(
         """\
@@ -3476,6 +4013,189 @@ async def run():
     assert "inside activity/task" in findings[0].message
 
 
+def test_p012_no_finding_for_sentinel_translated_to_typed_error() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        if not isinstance(payload, dict):
+            raise TypeError
+        label = payload["label"]
+        if not isinstance(label, str):
+            raise ValueError
+        return label
+    except (TypeError, KeyError, ValueError):
+        raise MalformedPayloadError(message="Malformed payload") from None
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        not findings
+    ), f"translated parser sentinels should not raise E012: {findings!r}"
+
+
+def test_p012_still_flags_direct_writer_invariant_raise() -> None:
+    _single(
+        """\
+def write_payload(output_file):
+    if output_file is None:
+        raise RuntimeError("output file was not opened")
+""",
+        "E012",
+    )
+
+
+def test_p012_still_flags_when_handler_raises_an_untyped_error() -> None:
+    src = """\
+def parse_payload(payload):
+    try:
+        if not isinstance(payload, str):
+            raise TypeError("payload must be text")
+    except TypeError:
+        raise RuntimeError("invalid payload")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 2
+    ), f"both untyped raises should remain flagged: {findings!r}"
+
+
+def test_p012_still_flags_conditional_or_reraised_sentinels() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def conditional_translation(payload):
+    try:
+        if not isinstance(payload, str):
+            raise TypeError
+    except TypeError:
+        if payload is None:
+            raise MalformedPayloadError(message="Missing payload")
+        return None
+
+def untyped_reraise(payload):
+    try:
+        if not isinstance(payload, str):
+            raise ValueError
+    except ValueError:
+        raise
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 2
+    ), f"conditional and raw re-raises should remain flagged: {findings!r}"
+
+
+def test_p012_does_not_apply_translation_from_try_else_or_nested_function() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        def deferred_parse():
+            raise ValueError
+        consume(payload)
+    except ValueError:
+        raise MalformedPayloadError(message="Malformed payload")
+    else:
+        raise TypeError
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 2
+    ), f"deferred and try-else raises should remain flagged: {findings!r}"
+
+
+def test_p012_inner_except_star_is_not_skipped_for_outer_translation() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        try:
+            raise TypeError
+        except* TypeError:
+            pass
+    except TypeError:
+        raise MalformedPayloadError(message="Malformed payload")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 1
+    ), f"the inner except* handler swallows the sentinel: {findings!r}"
+
+
+def test_p012_shadowed_builtin_handler_is_no_translation_boundary() -> None:
+    src = """\
+import builtins
+
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+class TypeError(Exception):
+    pass
+
+def parse_payload(payload):
+    try:
+        raise builtins.TypeError
+    except TypeError:
+        raise MalformedPayloadError(message="Malformed payload")
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 1
+    ), f"the shadowed handler does not catch builtins.TypeError: {findings!r}"
+
+
+def test_p012_handler_rebinding_sdk_error_name_is_no_translation_boundary() -> None:
+    src = """\
+from application_sdk.errors import InvalidInputError
+
+def parse_payload(payload):
+    try:
+        raise TypeError
+    except TypeError as InvalidInputError:
+        raise InvalidInputError()
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert (
+        len(findings) == 1
+    ), f"the handler's as-name is the caught TypeError, not the SDK error: {findings!r}"
+
+
+def test_p012_builtins_qualified_sentinel_translated_to_typed_error() -> None:
+    src = """\
+import builtins
+
+from application_sdk.errors import InvalidInputError
+
+class MalformedPayloadError(InvalidInputError):
+    code = "INVALID_INPUT_TEST_PAYLOAD"
+
+def parse_payload(payload):
+    try:
+        raise builtins.TypeError
+    except TypeError:
+        raise MalformedPayloadError(message="Malformed payload") from None
+"""
+    findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
+    assert not findings, f"unshadowed builtin handler translates: {findings!r}"
+
+
 # ── P013 — LegacyAtlanErrorRaise ─────────────────────────────────────────────
 
 
@@ -3867,6 +4587,209 @@ try:
     connect()
 except ValueError:
     raise InternalError(message="connect failed")
+"""
+    )
+
+
+_E016_CLASSIFIER_HELPER = """\
+from application_sdk.errors import AppError, InternalError
+
+
+def classify_problem(problem: Exception, *, operation: str) -> AppError:
+    if isinstance(problem, AppError):
+        return problem
+    return InternalError(message=operation, cause=problem)
+"""
+
+_E016_CLASSIFIER_CALLER = """\
+from sample.errors import classify_problem
+
+
+def perform_operation():
+    try:
+        do_work()
+    except Exception as problem:
+        raise classify_problem(problem, operation="work")
+"""
+
+
+def test_e016_accepts_resolved_sdk_cause_classifier(tmp_path) -> None:
+    """A resolved helper that carries the caught exception into an SDK error preserves its wire cause."""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": _E016_CLASSIFIER_CALLER,
+    }
+    assert "E016" not in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "returned_error",
+    [
+        "InternalError(message=operation)",
+        "InternalError(message=operation, cause=str(problem))",
+        "LocalFailure(message=operation, cause=problem)",
+    ],
+    ids=["no-cause", "stringified-cause", "non-sdk-cause"],
+)
+def test_e016_still_flags_classifier_without_proven_sdk_cause(
+    tmp_path, returned_error: str
+) -> None:
+    helper = f"""\
+from application_sdk.errors import AppError, InternalError
+
+
+class LocalFailure(Exception):
+    pass
+
+
+def classify_problem(problem: Exception, *, operation: str) -> AppError:
+    if isinstance(problem, AppError):
+        return problem
+    return {returned_error}
+"""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": helper,
+        "sample/handler.py": _E016_CLASSIFIER_CALLER,
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+def test_e016_accepts_direct_sdk_error_cause_without_python_chain() -> None:
+    """An SDK-visible cause is sufficient even if the raise omits ``from``."""
+    assert "E016" not in _findings(
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem)
+"""
+    )
+
+
+def test_e016_still_flags_direct_sdk_error_without_cause() -> None:
+    """A fresh SDK error without a cause or Python chain still drops the caught failure."""
+    assert "E016" in _findings(
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed")
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "unrelated_binding",
+    [
+        "def describe(classify_problem):\n    return classify_problem\n",
+        "def describe():\n    classify_problem = None\n    return classify_problem\n",
+        "class Wrapper:\n    classify_problem = None\n",
+    ],
+    ids=["other-function-parameter", "other-function-local", "class-attribute"],
+)
+def test_e016_imported_classifier_survives_unrelated_local_binding(
+    tmp_path, unrelated_binding: str
+) -> None:
+    """A binding in another scope does not shadow the imported helper at the raise."""
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": f"{_E016_CLASSIFIER_CALLER}\n\n{unrelated_binding}",
+    }
+    assert "E016" not in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "shadow",
+    [
+        "classify_problem = str\n",
+        "def refresh():\n    global classify_problem\n",
+    ],
+    ids=["module-rebinding", "global-declaration"],
+)
+def test_e016_still_flags_rebound_imported_classifier(tmp_path, shadow: str) -> None:
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": f"{_E016_CLASSIFIER_CALLER}\n\n{shadow}",
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+def test_e016_still_flags_classifier_shadowed_at_the_raise(tmp_path) -> None:
+    caller = _E016_CLASSIFIER_CALLER.replace(
+        "def perform_operation():", "def perform_operation(classify_problem=str):"
+    )
+    files = {
+        "sample/__init__.py": "",
+        "sample/errors.py": _E016_CLASSIFIER_HELPER,
+        "sample/handler.py": caller,
+    }
+    assert "E016" in _scan_repo(tmp_path, files, "sample/handler.py")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        """\
+from application_sdk.errors import InternalError
+
+InternalError = RuntimeError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+
+def run(InternalError=RuntimeError):
+    try:
+        do_work()
+    except Exception as problem:
+        raise InternalError(message="operation failed", cause=problem)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(message="operation failed", cause=problem, **extra)
+""",
+        """\
+from application_sdk.errors import InternalError
+
+try:
+    do_work()
+except Exception as problem:
+    raise InternalError(*details, cause=problem)
+""",
+    ],
+    ids=["module-rebound", "parameter-shadow", "unpacked-keywords", "unpacked-args"],
+)
+def test_e016_still_flags_unproven_direct_sdk_cause(source: str) -> None:
+    """``cause=`` only counts when the call really builds the proven SDK error."""
+    assert "E016" in _findings(source)
+
+
+def test_e016_accepts_sdk_cause_through_module_alias() -> None:
+    assert "E016" not in _findings(
+        """\
+from application_sdk import errors
+
+try:
+    do_work()
+except Exception as problem:
+    raise errors.InternalError(message="operation failed", cause=problem)
 """
     )
 

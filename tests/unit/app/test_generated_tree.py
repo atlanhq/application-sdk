@@ -26,6 +26,7 @@ from application_sdk.app._generated_tree import (
     names_entrypoint,
     pick_form_configmap,
 )
+from application_sdk.common._generated_tree import entrypoint_dirs
 
 
 def _write(directory: Path, *names: str) -> None:
@@ -237,3 +238,16 @@ class TestFormConfigMapWithArtifactSchemas:
         )
         assert generated_layout(tmp_path) == "multi"
         assert form_configmap(tmp_path, "crawler") == nested / "snowflake-crawler.json"
+
+
+class TestEntrypointDirs:
+    """FND-3563: a UI-less system entry point's dir is snake_case."""
+
+    def test_hyphenated_name_adds_the_snake_case_dir(self, tmp_path: Path) -> None:
+        assert entrypoint_dirs(tmp_path, "usage-analysis") == (
+            tmp_path / "usage-analysis",
+            tmp_path / "usage_analysis",
+        )
+
+    def test_unhyphenated_name_is_one_dir(self, tmp_path: Path) -> None:
+        assert entrypoint_dirs(tmp_path, "crawler") == (tmp_path / "crawler",)

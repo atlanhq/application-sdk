@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "3.49.1"
+version = "3.50.0"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -20,7 +20,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "atlan-application-sdk-api==3.49.1",
+    "atlan-application-sdk-api==3.50.0",
     "aiohttp>=3.10.0,<4.0.0",
     "opentelemetry-exporter-otlp>=1.45.0,<2.0.0",
     "opentelemetry-exporter-prometheus>=0.66b0,<0.67",
@@ -28,6 +28,7 @@ dependencies = [
     "prometheus-client>=0.20.0,<1.0",
     "fastapi[standard]>=0.143.0,<0.144.0",
     "pyatlan>=11.3,<12",
+    "httpx>=0.27.0,<0.29.0",
     "httpx-retries>=0.6.0,<0.7.0",
     "pydantic>=2.10.6,<3.0.0",
     "packaging>=24.0",
@@ -35,7 +36,7 @@ dependencies = [
     "uvloop>=0.23.0,<0.24.0; sys_platform != 'win32'",
     "python-dotenv>=1.1.0,<2.0.0",
     "pyyaml>=6.0.2,<7.0.0",
-    "obstore>=0.11.0,<0.12.0",
+    "obstore>=0.12.0,<0.13.0",
     # Cloud credential libraries — required at runtime for any storage auth mode;
     # connectors don't know which auth mechanism a deployment will choose, so
     # these cannot be optional extras. google-auth powers GCS Application Default
@@ -169,7 +170,7 @@ dev = [
     "pre-commit>=4.2.0,<5.0.0",
     "isort>=9.0.1,<9.1.0",
     "boto3-stubs>=1.38.6,<2.0.0",
-    "poethepoet>=0.48.0,<0.49.0",
+    "poethepoet>=0.49.0,<0.50.0",
     "libcst>=1.4.0,<2.0.0",
     "atlan-application-sdk-conformance",
 ]
@@ -208,7 +209,7 @@ examples = [
 docs = [
     "mkdocs>=1.6.1,<2.0.0",
     "mkdocs-material>=9.6.4,<10.0.0",
-    "pymdown-extensions>=12,<12.3",
+    "pymdown-extensions>=12,<12.4",
     "pydoctor>=24.11.2,<26.0.0",
     "mike>=2.1.3,<3.0.0",
 ]
@@ -309,7 +310,9 @@ exclude = [
     "application_sdk/_runtime/progress.py",
     "application_sdk/clients/__init__.py",
     "application_sdk/clients/_interface.py",
+    "application_sdk/clients/_sql_failure_classifier.py",
     "application_sdk/clients/base.py",
+    "application_sdk/clients/http_errors.py",
     "application_sdk/clients/models.py",
     "application_sdk/clients/sql.py",
     "application_sdk/clients/sql_errors.py",
@@ -348,6 +351,7 @@ exclude = [
     "application_sdk/errors/__init__.py",
     "application_sdk/errors/base.py",
     "application_sdk/errors/categories.py",
+    "application_sdk/errors/http.py",
     "application_sdk/errors/leaves.py",
     "application_sdk/errors/wire.py",
     "application_sdk/handler/__init__.py",

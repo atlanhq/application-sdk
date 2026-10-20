@@ -319,19 +319,26 @@ for human confirmation):
      optional backend, server process), propose a `# conformance: ignore[D003]
      <reason>` comment on the entry line and explain the load mechanism.
 
-  **A `[tool.uv] constraint-dependencies` entry in an app is also D003.**  An
-  app does not carry security floors on transitive packages — neither as a
-  direct dependency nor as a constraint.  **Remove the entry**; do not move a
-  floor from `[project.dependencies]` into `constraint-dependencies` to clear
-  the first form of this finding, which only relocates it.  A needed CVE fix
-  belongs in `atlan-application-sdk`'s dependency ranges and reaches the app
-  through an SDK upgrade.  State in the edit description that the lock's
-  resolved version is at or above the removed floor (prove it: removing a
-  constraint must not change any resolved version), and note that uv does not
-  propagate the SDK's own `[tool.uv]` constraints to dependents, so the lock
-  and CI's vulnerability scan are what hold the line afterwards.  None of the
-  reference apps (`atlan-mysql-app`, `atlan-metabase-app`, `atlan-openapi-app`)
-  declares `constraint-dependencies`.  The SDK's own pyproject is exempt.
+  4. **Retain a documented app-specific minimum**: if a core dependency
+     intentionally enforces a documented app-specific minimum version for an
+     SDK-managed transitive package, compare it with the SDK's declared range.
+     If the SDK's declared range does not guarantee the required minimum, retain
+     the app-local requirement with a reasoned D003 exception.  Name the exact
+     app requirement and the SDK range gap in the reason.  This exception also
+     applies to a `[tool.uv] constraint-dependencies` entry.  Do not use it for
+     a generic transitive floor.  A currently resolved lockfile version alone
+     is not a future guarantee; remove the app-local requirement and exception
+     only after the SDK range guarantees the floor.
+
+  **A `[tool.uv] constraint-dependencies` entry in an app is also D003.**
+  Every entry is surfaced for review.  Generic transitive floors belong in
+  `atlan-application-sdk`'s dependency ranges, not in an app's direct
+  dependencies or constraints; remove a generic app-local floor and move any
+  generally required floor upstream.  Do not move a floor from
+  `[project.dependencies]` into `constraint-dependencies` merely to clear
+  D003, since that only relocates it.  Keep only the narrow, documented
+  app-specific exception in item 4 when the SDK's declared range does not
+  guarantee that minimum.  The SDK's own pyproject is exempt.
 
   Never auto-delete without reading the codebase context — dynamic imports,
   `__import__`, `importlib.import_module`, entry-point declarations in

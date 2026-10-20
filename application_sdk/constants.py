@@ -399,6 +399,18 @@ STORAGE_UPLOAD_MAX_CONCURRENCY = int(
     os.getenv("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", "12")
 )
 
+#: Bytes of transfer buffers the SDK's file transfers in the process may hold
+#: at once: the range GETs, streaming downloads and multipart uploads behind
+#: ``download_file`` / ``upload_file`` / the prefix operations / FileReference
+#: hand-offs all reserve from it (FND-4082). Whole-object byte reads and
+#: writes — ``CloudStore`` among them — do not. The per-call concurrency limits above multiply
+#: with each other; this is the one bound on their product. ``0`` (default)
+#: takes a quarter of the container memory limit, never under 128 MiB, and
+#: 1 GiB when no limit is known.
+STORAGE_TRANSFER_MEMORY_BUDGET_BYTES = int(
+    os.getenv("ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", "0")
+)
+
 #: Kill-switch for resumable chunked downloads (BLDX-1523). When enabled
 #: (default), an interrupted chunked download leaves its partial file plus a
 #: ``.transfer-state`` sidecar on disk, and a retry fetches only the missing
@@ -692,6 +704,9 @@ _HTTP_POOL_LIMITS = httpx.Limits(
     keepalive_expiry=30.0,
 )
 _HTTP_POOL_TIMEOUT_SECONDS = 30.0
+# BaseClient's default transport retries a failed connection setup this many
+# times (httpcore backoff: 0s, 0.5s, 1s) before the request fails.
+_HTTP_CONNECT_RETRIES = 3
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
@@ -838,6 +853,11 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 #: holding a token or a credential dict renders its contents onto a live
 #: worker's stderr. Frames themselves are always kept — ``backtrace`` is
 #: untouched — so only the value annotation is gated.
+#:
+#: A console line carrying an exception goes through ``redact_secrets``, which
+#: masks URL userinfo/query/fragment and known ``key=value`` names in the
+#: annotated values too. It does not mask a repr such as ``{'password': 'x'}``,
+#: so turning this on still exposes credentials held in locals.
 #:
 #: Deliberately its own variable rather than a function of ``LOG_LEVEL``: raising
 #: a tenant's log verbosity to DEBUG must not silently re-enable value rendering.

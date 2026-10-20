@@ -60,11 +60,17 @@ jobs:
           echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Publishing conformance ${tag} from $(git rev-parse HEAD)"
 
-      - name: Build and publish to PyPI
-        run: |
-          cd packages/conformance
-          uv build
-          uv publish --trusted-publishing automatic
+      - name: Build package
+        run: cd packages/conformance && uv build
+
+      # The exact artifacts uv publish uploads, checked as an install: every
+      # module imported first, every console script and subcommand run, a
+      # slice of the tests run against it (FND-4176).
+      - name: Smoke-test built wheel
+        run: python .github/scripts/conformance_wheel_gate.py
+
+      - name: Publish to PyPI
+        run: cd packages/conformance && uv publish --trusted-publishing automatic
 
       - name: Create source tag
         run: |

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 
 from .._ast_common._sanitizers import call_uses_sanitizer, is_sanitizer_call
-from ._constants import _BROAD_EXCEPT_TYPES, _OPTIONAL_IMPORT_TYPES
+from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, _OPTIONAL_IMPORT_TYPES
 from ._helpers import (
     _any_logging_in,
     _body_always_raises,
@@ -20,6 +20,7 @@ from ._helpers import (
     _handler_rebinds_exception,
     _has_exc_info,
     _inherits_logging_filter,
+    _is_empty_sentinel,
     _is_gather_call,
     _is_log_call_stmt,
     _iter_shallow,
@@ -596,9 +597,13 @@ class SilentSwallowMixin:
         return False
 
     def _helper_logs_parameter_before_return(
-        self, helper: ast.FunctionDef, parameter: str
+        self,
+        helper: ast.FunctionDef,
+        parameter: str,
+        *,
+        call: ast.Call | None = None,
     ) -> bool:
-        """Prove a helper logs its un-rebound input on every path before return."""
+        """Prove a helper logs its input or traceback on every path before return."""
         if any(
             isinstance(node, (ast.Yield, ast.YieldFrom))
             for node in _iter_shallow(helper)
@@ -607,10 +612,222 @@ class SilentSwallowMixin:
             for statement in helper.body
         ):
             return False
+
+        def _is_log_level(value: ast.expr | None) -> bool:
+            return (
+                isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+                and value.value in _LOG_METHODS
+            )
+
+        def _parameter_default(name: str) -> ast.expr | None:
+            positional = [*helper.args.posonlyargs, *helper.args.args]
+            offset = len(positional) - len(helper.args.defaults)
+            for index, formal in enumerate(positional):
+                if formal.arg == name and index >= offset:
+                    return helper.args.defaults[index - offset]
+            for formal, default in zip(
+                helper.args.kwonlyargs, helper.args.kw_defaults, strict=True
+            ):
+                if formal.arg == name:
+                    return default
+            return None
+
+        def _selector_is_log_level(selector: ast.expr) -> bool:
+            if _is_log_level(selector):
+                return True
+            if not isinstance(selector, ast.Name) or call is None:
+                return False
+            selected = _call_argument_for_parameter(call, helper, selector.id)
+            if selected is not None:
+                return _is_log_level(selected)
+            positional = [*helper.args.posonlyargs, *helper.args.args]
+            explicitly_bound = selector.id in {
+                formal.arg for formal in positional[: len(call.args)]
+            } or any(keyword.arg == selector.id for keyword in call.keywords)
+            if explicitly_bound:
+                return False
+            return _is_log_level(_parameter_default(selector.id))
+
+        # The alias must be a top-level, unconditional binding to a logger's
+        # recognized fallback method. It cannot be rebound before invocation.
+        logger_alias_lines: dict[str, int] = {}
+        formal_names = {
+            formal.arg
+            for formal in [
+                *helper.args.posonlyargs,
+                *helper.args.args,
+                *helper.args.kwonlyargs,
+            ]
+        }
+        for statement in helper.body:
+            if isinstance(statement, ast.Assign):
+                if len(statement.targets) != 1 or not isinstance(
+                    statement.targets[0], ast.Name
+                ):
+                    continue
+                target = statement.targets[0]
+                expression = statement.value
+            elif isinstance(statement, ast.AnnAssign):
+                if (
+                    not isinstance(statement.target, ast.Name)
+                    or statement.value is None
+                ):
+                    continue
+                target = statement.target
+                expression = statement.value
+            else:
+                continue
+            if not (
+                isinstance(expression, ast.Call)
+                and isinstance(expression.func, ast.Name)
+                and expression.func.id == "getattr"
+                and len(expression.args) == 3
+                and not expression.keywords
+                and not any(isinstance(arg, ast.Starred) for arg in expression.args)
+            ):
+                continue
+            receiver, selector, fallback = expression.args
+            if not (
+                isinstance(receiver, ast.Name)
+                and receiver.id not in formal_names
+                and isinstance(fallback, ast.Attribute)
+                and isinstance(fallback.value, ast.Name)
+                and fallback.value.id == receiver.id
+                and fallback.attr in _LOG_METHODS
+                and _selector_is_log_level(selector)
+                and not any(
+                    self._statement_rebinds_name(item, receiver.id)
+                    for item in helper.body
+                )
+            ):
+                continue
+            alias = target.id
+            writes = [
+                node
+                for node in ast.walk(helper)
+                if isinstance(node, ast.Name)
+                and node.id == alias
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ]
+            if len(writes) != 1 or writes[0] is not target:
+                continue
+            if any(
+                self._statement_rebinds_name(item, alias)
+                for item in helper.body
+                if item is not statement
+            ):
+                continue
+            logger_alias_lines[alias] = statement.lineno
+
+        def _extra_carries_parameter(value: ast.expr, log_line: int) -> bool:
+            """Whether an ``extra=`` mapping holds the input's text on every path.
+
+            A conditional ``exc_info`` drops the traceback on its false branch,
+            so the exception must reach the record some other way. The mapping
+            qualifies only as a single top-level dict literal whose entry for
+            the input is never overwritten or removed, and which is not handed
+            to anything that could mutate it.
+            """
+            if not isinstance(value, ast.Name):
+                return False
+            name = value.id
+            bindings = [
+                statement
+                for statement in helper.body
+                if isinstance(statement, ast.Assign)
+                and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == name
+            ]
+            if len(bindings) != 1 or bindings[0].lineno >= log_line:
+                return False
+            binding = bindings[0]
+            if not isinstance(binding.value, ast.Dict):
+                return False
+            carrying_keys = {
+                key.value
+                for key, entry in zip(
+                    binding.value.keys, binding.value.values, strict=True
+                )
+                if isinstance(key, ast.Constant)
+                and isinstance(key.value, str)
+                and self._expression_represents_parameter(entry, parameter)
+            }
+            if not carrying_keys:
+                return False
+            loop_keys: dict[str, set[object]] = {}
+            for node in ast.walk(helper):
+                if (
+                    isinstance(node, (ast.For, ast.AsyncFor))
+                    and isinstance(node.target, ast.Name)
+                    and isinstance(node.iter, (ast.Tuple, ast.List))
+                    and all(isinstance(item, ast.Constant) for item in node.iter.elts)
+                ):
+                    loop_keys.setdefault(node.target.id, set()).update(
+                        item.value
+                        for item in node.iter.elts
+                        if isinstance(item, ast.Constant)
+                    )
+            allowed: set[int] = {id(binding.targets[0]), id(value)}
+            for node in ast.walk(helper):
+                if not (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == name
+                ):
+                    continue
+                if isinstance(node.ctx, ast.Load):
+                    allowed.add(id(node.value))
+                    continue
+                key = node.slice
+                if isinstance(key, ast.Constant):
+                    written = {key.value}
+                elif isinstance(key, ast.Name) and key.id in loop_keys:
+                    written = loop_keys[key.id]
+                else:
+                    return False
+                if written & carrying_keys:
+                    return False
+                allowed.add(id(node.value))
+            return all(
+                id(node) in allowed
+                for node in ast.walk(helper)
+                if isinstance(node, ast.Name) and node.id == name
+            )
+
+        def _called_logger_alias(statement: ast.stmt) -> ast.Call | None:
+            if not isinstance(statement, ast.Expr):
+                return None
+            expression = statement.value
+            if isinstance(expression, ast.Await):
+                expression = expression.value
+            if not (
+                isinstance(expression, ast.Call)
+                and isinstance(expression.func, ast.Name)
+                and expression.func.id in logger_alias_lines
+                and logger_alias_lines[expression.func.id] < statement.lineno
+            ):
+                return None
+            return expression
+
+        def _loop_setup_is_safe(statements: list[ast.stmt]) -> bool:
+            for statement in statements:
+                if isinstance(
+                    statement,
+                    (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Expr, ast.Pass),
+                ):
+                    continue
+                if isinstance(statement, ast.If):
+                    if not _loop_setup_is_safe(
+                        statement.body
+                    ) or not _loop_setup_is_safe(statement.orelse):
+                        return False
+                    continue
+                return False
+            return True
+
         opaque_control_flow = (
-            ast.For,
-            ast.AsyncFor,
-            ast.While,
             ast.Try,
             ast.TryStar,
             ast.With,
@@ -652,21 +869,37 @@ class SilentSwallowMixin:
                     exited.update(active)
                     active.clear()
                     continue
+                if isinstance(statement, (ast.For, ast.AsyncFor, ast.While)):
+                    if not _loop_setup_is_safe(
+                        statement.body
+                    ) or not _loop_setup_is_safe(statement.orelse):
+                        return None
+                    continue
+                logged_call = None
                 if _is_log_call_stmt(statement):
-                    call = statement.value
-                    if isinstance(call, ast.Await):
-                        call = call.value
-                    if isinstance(call, ast.Call) and any(
+                    logged_call = statement.value
+                    if isinstance(logged_call, ast.Await):
+                        logged_call = logged_call.value
+                else:
+                    logged_call = _called_logger_alias(statement)
+                if isinstance(logged_call, ast.Call):
+                    carries_exception = any(
                         self._expression_represents_parameter(value, parameter)
                         for value in [
-                            *call.args,
-                            *(keyword.value for keyword in call.keywords),
+                            *logged_call.args,
+                            *(keyword.value for keyword in logged_call.keywords),
                         ]
-                    ):
+                    ) or any(
+                        keyword.arg == "extra"
+                        and _extra_carries_parameter(keyword.value, statement.lineno)
+                        for keyword in logged_call.keywords
+                    )
+                    if carries_exception:
                         active = {True}
                     continue
-                # Loops, try/with blocks, match, and jumps cannot prove that all
-                # paths log the input before returning.
+                # Try/with blocks, match, and jumps cannot prove that all paths
+                # log the input before returning. Only simple loop setup without
+                # a function-exiting or bypassing statement is accepted above.
                 if isinstance(statement, opaque_control_flow):
                     return None
                 # Straight-line setup (assignments, metrics calls) neither logs
@@ -721,7 +954,6 @@ class SilentSwallowMixin:
                     helper is None
                     or helper.decorator_list
                     or helper.args.vararg is not None
-                    or helper.args.kwarg is not None
                 ):
                     continue
                 parameters = [
@@ -735,7 +967,7 @@ class SilentSwallowMixin:
                         isinstance(passed, ast.Name)
                         and passed.id == handler.name
                         and self._helper_logs_parameter_before_return(
-                            helper, parameter.arg
+                            helper, parameter.arg, call=call
                         )
                     ):
                         return True
@@ -825,18 +1057,60 @@ class SilentSwallowMixin:
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
-            if _any_logging_in(node.body[:i]) or self._helper_logs_caught_exception(
-                node, node.body[:i]
-            ):
-                continue
             if scope is not None and _return_carries_typed_failure(stmt, scope):
                 continue
-            self._add(
-                "E007",
-                stmt,
-                "except block returns a value without logging — the error is hidden. "
-                "Log before returning or raise a domain-specific exception.",
+            if not (
+                _any_logging_in(node.body[:i])
+                or self._helper_logs_caught_exception(node, node.body[:i])
+            ):
+                self._add(
+                    "E007",
+                    stmt,
+                    "except block returns a value without logging — the error is hidden. "
+                    "Log before returning or raise a domain-specific exception.",
+                )
+            elif self._is_logged_sentinel_return(node, stmt):
+                self._add(
+                    "E007",
+                    stmt,
+                    "broad except block logs and then returns an empty sentinel — the "
+                    "log line is the only trace, and the caller sees a plausible empty "
+                    "result with no error code. Raise a domain-specific exception, or "
+                    "return the failure as typed data.",
+                )
+
+    def _is_logged_sentinel_return(
+        self, handler: ast.ExceptHandler, stmt: ast.Return
+    ) -> bool:
+        # Logging does not make a broad catch's empty return safe: the caller
+        # still cannot tell the failure from a genuine empty result. Narrow
+        # catches stay out — `except KeyError: ...; return None` is usually the
+        # lookup's contract. So do procedures (`-> None`), where `return None`
+        # is a plain early exit, and wholesale-deprecated modules, which are
+        # being removed rather than fixed.
+        if self._deprecated_module or not _is_empty_sentinel(stmt.value):
+            return False
+        if handler.type is None:
+            broad = True
+        elif isinstance(handler.type, ast.Tuple):
+            broad = any(
+                _get_name(element) in _BROAD_EXCEPT_TYPES
+                for element in handler.type.elts
             )
+        else:
+            broad = _get_name(handler.type) in _BROAD_EXCEPT_TYPES
+        if not broad:
+            return False
+        # Only `return None` is a procedure's early exit; `return []` from a
+        # `-> None` function still hands the caller a plausible empty value.
+        function = self._function_stack[-1] if self._function_stack else None
+        returns = function.returns if function is not None else None
+        return not (
+            isinstance(returns, ast.Constant)
+            and returns.value is None
+            and isinstance(stmt.value, ast.Constant)
+            and stmt.value.value is None
+        )
 
     # ── E008 ─────────────────────────────────────────────────────────────────
 
@@ -952,6 +1226,7 @@ class SilentSwallowMixin:
                 "Inspect results: 'for r in results: if isinstance(r, Exception): ...'",
             )
 
+        local_helpers = visible_helpers(self._local_helpers, self._function_stack)
         for var_name, assign_node in gather_vars.items():
             # The results may be inspected under another name: callers routinely
             # copy them into an accumulator (`dest.extend(chunk_results)`) and
@@ -1001,6 +1276,33 @@ class SilentSwallowMixin:
                 ):
                     inspected = True
                     break
+            if not inspected:
+                for call in _iter_shallow(func_node):
+                    if not isinstance(call, ast.Call) or not isinstance(
+                        call.func, ast.Name
+                    ):
+                        continue
+                    helper = local_helpers.get(call.func.id)
+                    if helper is None:
+                        continue
+                    parameters = [
+                        *helper.args.posonlyargs,
+                        *helper.args.args,
+                        *helper.args.kwonlyargs,
+                    ]
+                    if any(
+                        isinstance(
+                            argument := _call_argument_for_parameter(
+                                call, helper, parameter.arg
+                            ),
+                            ast.Name,
+                        )
+                        and argument.id in names
+                        and _helper_handles_gathered_results(helper, parameter.arg)
+                        for parameter in parameters
+                    ):
+                        inspected = True
+                        break
             if not inspected:
                 self._add(
                     "E010",
@@ -1174,10 +1476,14 @@ def _condition_checks_exception(node: ast.AST, item_names: set[str]) -> bool:
             and _is_exception_type(node.args[1])
         )
     if isinstance(node, ast.BoolOp):
-        return any(
-            _condition_checks_exception(value, item_names)
-            for value in _reachable_operands(node)
-        )
+        operands = _reachable_operands(node)
+        # `isinstance(r, Exception) and False` never selects anything, so the
+        # test it contains never takes effect.
+        if isinstance(node.op, ast.And) and any(
+            isinstance(value, ast.Constant) and not value.value for value in operands
+        ):
+            return False
+        return any(_condition_checks_exception(value, item_names) for value in operands)
     if isinstance(node, ast.IfExp):
         return _condition_checks_exception(node.test, item_names)
     return False
@@ -1218,7 +1524,20 @@ def _result_item_names(
         isinstance(iterable, ast.Call)
         and isinstance(iterable.func, ast.Name)
         and iterable.func.id in {"enumerate", "zip"}
-        and not iterable.keywords
+        and (
+            not iterable.keywords
+            # `zip(..., strict=True)` only; `strict=False` silently drops the
+            # results past the shorter partner.
+            or (
+                iterable.func.id == "zip"
+                and all(
+                    keyword.arg == "strict"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                    for keyword in iterable.keywords
+                )
+            )
+        )
         and isinstance(target, (ast.Tuple, ast.List))
         # `zip(*cols, rs)` / `for *a, r in ...` hide the width, so positions
         # cannot be lined up.
@@ -1276,6 +1595,54 @@ def _comprehension_checks_exceptions(
         _condition_checks_exception(expression, item_names)
         for expression in (*conditions, *elements)
     )
+
+
+def _helper_handles_gathered_results(helper: ast.FunctionDef, parameter: str) -> bool:
+    """Whether a local helper handles exception values from its results parameter.
+
+    Only a direct per-item exception test followed by a raise or log is a proven
+    handling boundary. Merely passing the results to an opaque helper, counting
+    them, or continuing past a detected exception does not satisfy E010.
+    """
+    if any(
+        isinstance(node, ast.Name)
+        and node.id == parameter
+        and isinstance(node.ctx, (ast.Store, ast.Del))
+        for node in _iter_shallow(helper)
+    ):
+        return False
+
+    for loop in _iter_shallow(helper):
+        if not isinstance(loop, ast.For):
+            continue
+        item_names = _result_item_names(loop.iter, loop.target, {parameter})
+        if not item_names:
+            continue
+        # The body only: `orelse` runs once after the loop, not per item.
+        body = [
+            *loop.body,
+            *(node for statement in loop.body for node in _iter_shallow(statement)),
+        ]
+        # A nested loop or assignment that rebinds the item name means a later
+        # test may be looking at something other than the gathered result.
+        if any(
+            isinstance(node, ast.Name)
+            and node.id in item_names
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            for node in body
+        ):
+            continue
+        for candidate in body:
+            if not isinstance(candidate, ast.If):
+                continue
+            if not _condition_checks_exception(candidate.test, item_names):
+                continue
+            if any(
+                isinstance(statement, ast.Raise) or _is_log_call_stmt(statement)
+                for statement in candidate.body
+            ):
+                return True
+    return False
 
 
 def _cancelled_task_names(

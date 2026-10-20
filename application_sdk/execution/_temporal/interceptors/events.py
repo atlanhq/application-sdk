@@ -74,8 +74,15 @@ async def _get_event_token_service() -> "OAuthTokenService | None":
             get_deployment_secret,
         )
 
-        client_id = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-        client_secret = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
+        # raise_on_error=False: missing or unfetchable client credentials mean
+        # "no token service" (the None return below), not a failed workflow,
+        # and a cold-start wait here would stall the interceptor.
+        client_id = await get_deployment_secret(
+            WORKFLOW_AUTH_CLIENT_ID_KEY, raise_on_error=False
+        )
+        client_secret = await get_deployment_secret(
+            WORKFLOW_AUTH_CLIENT_SECRET_KEY, raise_on_error=False
+        )
         token_url = AUTH_URL
 
         if not client_id or not client_secret or not token_url:

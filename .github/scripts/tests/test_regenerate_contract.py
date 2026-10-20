@@ -216,6 +216,24 @@ def test_app_level_no_drift_when_fresh(repo, monkeypatch, capsys):
     assert "up to date" in out
 
 
+def test_app_owned_files_beside_caller_nodes_are_not_drift(repo, monkeypatch, capsys):
+    """FND-3563: only caller nodes under `contract/generated/` are generated, so
+    an app-owned file there, edited or new, is not drift."""
+    callers = repo / "contract" / "generated"
+    callers.mkdir(parents=True)
+    (callers / "notes.md").write_text("v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "app notes")
+    (callers / "notes.md").write_text("v2\n")
+    (callers / "helper.pkl").write_text("new\n")
+    monkeypatch.setattr(mod, "run", _make_fake_run(repo, fresh_manifest=STALE_MANIFEST))
+
+    assert mod.main(["--check-drift", "true"]) == 0
+
+    out = capsys.readouterr().out
+    assert "::warning::Committed contract artifacts are stale" not in out
+
+
 def test_sdk_level_overrides_toolkit_and_resolves(repo, monkeypatch, tmp_path, capsys):
     toolkit = tmp_path / "sdk" / "contract-toolkit" / "src"
     toolkit.mkdir(parents=True)

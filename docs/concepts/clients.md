@@ -127,7 +127,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 
 1.  **HTTP Configuration:**
     *   **`http_headers` (HeaderTypes):** HTTP headers for all requests made by this client. Supports dict, Headers object, or list of tuples. GET and POST requests through the `execute_http_get_request` and `execute_http_post_request` methods will use this header and allow for override through the `headers` parameter.
-    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. Uses httpx default transport by default, but can be overridden for custom retry behavior from libraries like `httpx-retries`.
+    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. The default httpx transport retries connection setup (connect errors and connect timeouts) up to 3 times. That retry happens before any request bytes are sent, so it is safe for POST. It does not retry read errors or status codes. Override it for custom retry behavior, for example with `httpx-retries`.
 
 2.  **Loading (`load` method):**
     *   Called with credentials and other configuration parameters.
@@ -137,6 +137,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 3.  **HTTP Request Methods:**
     *   **`execute_http_get_request()`:** Performs HTTP GET requests with configurable headers, parameters, and authentication.
     *   **`execute_http_post_request()`:** Performs HTTP POST requests with support for various data formats (JSON, form data, files, etc.).
+    *   Pass `raise_on_error=True`. A request the source did not answer (network failure, timeout, dropped connection) then raises `HttpClientSourceUnavailableError` (a `SourceUnavailableError`, code `SOURCE_UNAVAILABLE_HTTP_CLIENT`) with the httpx error as `cause`; other errors, such as `httpx.PoolTimeout` (the client's own pool running dry) or an unsupported URL scheme, propagate unchanged, and the return type is `httpx.Response` rather than `httpx.Response | None`. Without it, the helpers log the error and return `None`, and emit a `DeprecationWarning`; the default becomes `True` in v4.0. Either way, any HTTP response, 4xx and 5xx included, is returned for you to check.
 
 4.  **Closing (`close` method):**
     *   All requests on one client share `http_retry_transport` and its connection pool, so concurrent requests (for example under `asyncio.gather`) do not close each other's connections.
@@ -176,9 +177,10 @@ class MyApiClient(BaseClient):
         """Custom method to fetch data from the API."""
         response = await self.execute_http_get_request(
             url=f"https://api.example.com/{endpoint}",
-            params=params
+            params=params,
+            raise_on_error=True,  # an unreachable API raises SourceUnavailableError
         )
-        if response and response.status_code == 200:
+        if response.status_code == 200:
             return response.json()
         return {}
 
@@ -186,9 +188,10 @@ class MyApiClient(BaseClient):
         """Custom method to create a resource via POST."""
         response = await self.execute_http_post_request(
             url=f"https://api.example.com/{endpoint}",
-            json_data=data
+            json_data=data,
+            raise_on_error=True,
         )
-        if response and response.status_code == 201:
+        if response.status_code == 201:
             return response.json()
         return {}
 ```

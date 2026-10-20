@@ -39,7 +39,7 @@ entirely.
 
 from __future__ import annotations
 
-import asyncio
+import itertools
 import os
 import tempfile
 import time
@@ -53,6 +53,16 @@ from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
+from application_sdk.storage._local_marker import (
+    Fingerprint,
+    file_fingerprint,
+    fingerprinted,
+    format_marker,
+    hash_fingerprinted,
+    marker_path,
+    read_local_marker,
+    trusted_digest,
+)
 from application_sdk.storage._locks import PathLockRegistry
 from application_sdk.storage._manifest import (
     MANIFEST_SUFFIX,
@@ -329,8 +339,19 @@ _materialize_lock = _MATERIALIZE_LOCKS.lock
 _materialize_guard = _MATERIALIZE_LOCKS.guard
 
 
-def _write_local_sidecar(local_path: str, sha256: str) -> None:
+def _write_local_sidecar(
+    local_path: str, sha256: str, fingerprint: Fingerprint | None
+) -> None:
     """Write a local ``.sha256`` sidecar next to *local_path*.
+
+    The marker records *sha256* with *fingerprint*, so a later same-pod
+    materialise can trust it on a stat instead of re-reading the file
+    (FND-4081; format in ``_local_marker``). *fingerprint* must be the stat of
+    the bytes *sha256* was computed over — take it with
+    ``_local_marker.fingerprinted`` around the read, never by stat-ing the
+    file here, where a write since the hash would be blessed with the old
+    digest. ``None`` writes a digest-only marker, which is never trusted on
+    stat. Blocking (fsync): call it through ``run_in_thread``.
 
     Atomic even though the write is best-effort, and *because* it is: a
     truncated digest is not a missing sidecar, it is a wrong one. A later
@@ -340,14 +361,27 @@ def _write_local_sidecar(local_path: str, sha256: str) -> None:
     (FND-318).
     """
     try:
+        marker = format_marker(sha256, fingerprint)
         with atomic_write(
-            local_path + ".sha256", operation="local sidecar write"
+            marker_path(local_path), operation="local sidecar write"
         ) as sidecar:
-            sidecar.write(sha256.encode())
+            sidecar.write(marker.encode())
     except Exception:
         logger.warning(
             "Sidecar write failed (best-effort, continuing without)", exc_info=True
         )
+
+
+def _stamp_downloaded(local_path: str, sha256: str) -> None:
+    """Stamp the marker of a file a download just published, with its stat now.
+
+    Unlike a persist or a re-hash there is no earlier stat to bracket with:
+    the file did not exist before the download published it. The stat taken
+    here is of the hashed bytes because the destination is SDK-owned and held
+    under the per-path materialise lock (or is a private temp name) from
+    publish to stamp. Blocking: call it through ``run_in_thread``.
+    """
+    _write_local_sidecar(local_path, sha256, file_fingerprint(local_path))
 
 
 def _list_upload_files(root: Path) -> list[Path]:
@@ -428,19 +462,31 @@ async def _persist_file(
     try:
         # data_present=False: nothing to dedup against, so skip the local hash too.
         if dedup is _Dedup.REMOTE_DIGEST and data_present is not False:
-            local_digest = await integrity.sha256_file(local)
+            hashed = await hash_fingerprinted(str(local))
+            local_digest, local_fp = hashed.value, hashed.fingerprint
             remote_digest = await integrity.read_expected_digest(
                 store, key, sidecar_present=sidecar_present
             )
-            if remote_digest == local_digest and (
-                data_present or await exists(key, store, normalize=False)
+            # Skipping the upload needs the file to have held still while
+            # it was hashed; a write mid-hash makes the digest stale.
+            if (
+                hashed.stable
+                and remote_digest == local_digest
+                and (data_present or await exists(key, store, normalize=False))
             ):
-                await run_in_thread(_write_local_sidecar, str(local), local_digest)
+                await run_in_thread(
+                    _write_local_sidecar, str(local), local_digest, local_fp
+                )
                 return local_digest, False
-        sha256 = await upload_file(key, local, store, normalize=False)
+        # The upload streams and hashes the file; the stat bracket around it
+        # ties the marker's fingerprint to the bytes that were hashed.
+        uploaded = await fingerprinted(
+            str(local), lambda: upload_file(key, local, store, normalize=False)
+        )
+        sha256, uploaded_fp = uploaded.value, uploaded.fingerprint
         # compute_hash defaults to True, so the digest is always returned here.
         assert sha256 is not None
-        await run_in_thread(_write_local_sidecar, str(local), sha256)
+        await run_in_thread(_write_local_sidecar, str(local), sha256, uploaded_fp)
         return sha256, True
     finally:
         # One file resolved — uploaded or deduplicated — is one unit of
@@ -515,7 +561,7 @@ async def _persist_directory(
         prefix: Target prefix, with or without a trailing ``/``.
     """
     from application_sdk.storage._concurrency import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        _gather_with_semaphore,
+        _run_bounded,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _put,
@@ -573,9 +619,11 @@ async def _persist_directory(
         )
         return entry, transferred
 
-    sem = asyncio.Semaphore(max_concurrency)
-    results = await _gather_with_semaphore(
-        [*(_one_local(fp) for fp in files), *(_one_copy(c) for c in copies)], sem
+    results = await _run_bounded(
+        itertools.chain(
+            (_one_local(fp) for fp in files), (_one_copy(c) for c in copies)
+        ),
+        max_concurrency,
     )
     transferred = sum(1 for _, moved in results if moved)
 
@@ -804,6 +852,7 @@ async def persist_file_reference(
             is_durable=True,
             storage_path=storage_path,
             tier=ref.tier,
+            size_bytes=_file_size,
         )
 
 
@@ -1192,12 +1241,33 @@ async def _materialize_single_file(
         and ref.local_path is not None
         and Path(ref.local_path).is_file()
     ):
-        local_hash = await integrity.sha256_file(Path(ref.local_path))
+        # Under VERIFIED a local marker whose stat fingerprint still matches
+        # stands in for re-reading the file (FND-4081): a concurrent waiter on
+        # the same multi-GB ref then pays a stat, not a full hash. The stored
+        # digest still has to agree. REMOTE_DIGEST (``transfer.download``)
+        # never consults the local marker, so it always hashes.
+        local_hash = (
+            await run_in_thread(trusted_digest, ref.local_path)
+            if reuse is _Reuse.VERIFIED
+            else None
+        )
+        # A trusted marker is already current; only a fresh hash re-stamps.
+        restamp = local_hash is None
+        local_fp: Fingerprint | None = None
+        if local_hash is None:
+            hashed = await hash_fingerprinted(ref.local_path)
+            # A write during the hash leaves a digest of bytes the path may no
+            # longer hold: no proof, so the file is downloaded.
+            local_hash = hashed.value if hashed.stable else None
+            local_fp = hashed.fingerprint
         stored_hash = await integrity.read_expected_digest(store, ref.storage_path)
 
         if stored_hash is not None and local_hash == stored_hash:
             # File is intact — stamp local sidecar and reuse.
-            await run_in_thread(_write_local_sidecar, ref.local_path, local_hash)
+            if restamp:
+                await run_in_thread(
+                    _write_local_sidecar, ref.local_path, local_hash, local_fp
+                )
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
                 "file_ref.materialize.skipped",
@@ -1315,7 +1385,7 @@ async def _materialize_single_file(
                 key=ref.storage_path,
             )
 
-        await run_in_thread(_write_local_sidecar, out_path, sha256)
+        await run_in_thread(_stamp_downloaded, out_path, sha256)
     # conformance: ignore[E004] cleanup handler that always re-raises; BaseException so a cancelled transfer strands no owned temp either
     except BaseException as exc:
         if isinstance(exc, Exception):
@@ -1360,6 +1430,7 @@ async def _materialize_single_file(
             storage_path=ref.storage_path,
             tier=ref.tier,
             store=ref.store,
+            size_bytes=remote_size,
         ),
         1,
     )
@@ -1434,7 +1505,6 @@ async def _materialize_directory(
         # Reject keys whose resolved path escapes local_directory.
         dest_path = _safe_join_under(local_directory, rel)
         dest = str(dest_path)
-        dest_sidecar = Path(dest + ".sha256")
         dest_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Per-file sidecar fast-path: skip re-download when the local
@@ -1459,18 +1529,31 @@ async def _materialize_directory(
                     reference = await integrity.read_expected_digest(
                         store, key, sidecar_present=obj.has_sidecar
                     )
-                elif dest_sidecar.exists():
-                    reference = dest_sidecar.read_text(encoding="utf-8").strip()
                 else:
-                    reference = None
+                    marker = await run_in_thread(read_local_marker, dest)
+                    reference = marker.sha256 if marker is not None else None
+                # Under VERIFIED a marker whose stat fingerprint still matches
+                # is the file's digest without a re-read (FND-4081); it is
+                # then compared to the reference like a fresh hash would be.
                 local_hash = (
-                    await integrity.sha256_file(dest_path)
-                    if reference is not None
+                    await run_in_thread(trusted_digest, dest)
+                    if reference is not None and reuse is _Reuse.VERIFIED
                     else None
                 )
+                hashed = reference is not None and local_hash is None
+                local_fp: Fingerprint | None = None
+                if hashed:
+                    bracketed = await hash_fingerprinted(dest)
+                    # A write during the hash proves nothing: download.
+                    local_hash = bracketed.value if bracketed.stable else None
+                    local_fp = bracketed.fingerprint
                 if reference is not None and local_hash == reference:
-                    if reuse is not _Reuse.VERIFIED or expected_sha256 is not None:
-                        await run_in_thread(_write_local_sidecar, dest, local_hash)
+                    # Re-stamp after a full hash, so a digest-only (pre-
+                    # FND-4081) or stale-stat marker is trusted next time.
+                    if hashed:
+                        await run_in_thread(
+                            _write_local_sidecar, dest, local_hash, local_fp
+                        )
                     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.skipped",
@@ -1521,20 +1604,18 @@ async def _materialize_directory(
                 local_path=dest,
             )
         if sha256 is not None:
-            await run_in_thread(_write_local_sidecar, dest, sha256)
+            await run_in_thread(_stamp_downloaded, dest, sha256)
         return False
 
     try:
         from application_sdk.constants import (  # noqa: PLC0415
             MAX_CONCURRENT_STORAGE_TRANSFERS,
         )
-        from application_sdk.storage._concurrency import (  # noqa: PLC0415
-            _gather_with_semaphore,
-        )
+        from application_sdk.storage._concurrency import _run_bounded  # noqa: PLC0415
 
-        sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
-        results = await _gather_with_semaphore(
-            [_download_one(obj, digest) for obj, digest in items], sem
+        results = await _run_bounded(
+            (_download_one(obj, digest) for obj, digest in items),
+            MAX_CONCURRENT_STORAGE_TRANSFERS,
         )
         skipped = sum(results)
     except Exception as exc:
