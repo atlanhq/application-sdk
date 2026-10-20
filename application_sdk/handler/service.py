@@ -84,7 +84,7 @@ from application_sdk.handler.contracts import (  # noqa: F401 — FileUploadResp
     SubscriptionConfig,
 )
 from application_sdk.handler.manifest import AppManifest
-from application_sdk.handler.service_errors import (
+from application_sdk.handler.service_errors import (  # noqa: F401 — re-exported for existing importers (raised in object_routes)
     InvalidConfigIdError,
     InvalidConfigTypeError,
     TempPathEscapeError,
@@ -526,6 +526,7 @@ from application_sdk.handler.metadata_routes import (  # noqa: E402
 from application_sdk.handler.object_routes import (  # noqa: E402
     ObjectRoutesSource,
     register_object_routes,
+    validated_temp_path,
 )
 
 # Allowlist regex for entrypoint names: letter-start, then letters/digits/hyphens/underscores.
@@ -654,17 +655,9 @@ _CONFIG_KEY_RE = re.compile(_CONFIG_KEY_PATTERN)
 _SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
 
 
-def _validated_temp_path(path: str) -> str:
-    """Resolve *path* and require it to lie strictly inside the system temp directory.
-
-    The temp directory itself is rejected; :func:`tempfile.mkstemp` never
-    returns it. Returns the resolved path.
-    """
-    tmp_root = os.path.realpath(tempfile.gettempdir())
-    real = os.path.realpath(path)
-    if not real.startswith(tmp_root + os.sep):
-        raise TempPathEscapeError()
-    return real
+#: The one temp-path guard, shared with the host's routes; the old name is kept
+#: for existing importers.
+_validated_temp_path = validated_temp_path
 
 
 async def _get_temporal_client() -> Client:

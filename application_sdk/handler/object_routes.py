@@ -95,15 +95,17 @@ def config_key(app_name: str, config_id: str, config_type: str = "workflows") ->
 
 
 def validated_temp_path(path: str) -> str:
-    """Resolve *path* and assert it lies within the system temp directory.
+    """Resolve *path* and require it to lie strictly inside the system temp directory.
 
     Every temp path here comes from :func:`tempfile.mkstemp`; this makes the
     invariant explicit so SAST tools can confirm no user-supplied value can
-    escape the temp directory.
+    escape the temp directory. The temp directory itself is rejected;
+    :func:`tempfile.mkstemp` never returns it. Returns the resolved path. The
+    worker's handler service uses this same guard.
     """
     tmp_root = os.path.realpath(tempfile.gettempdir())
     real = os.path.realpath(path)
-    if real != tmp_root and not real.startswith(tmp_root + os.sep):
+    if not real.startswith(tmp_root + os.sep):
         raise TempPathEscapeError()
     return real
 
