@@ -2175,6 +2175,111 @@ def get_tables():
     _single(src, "E007")
 
 
+def test_p007_no_finding_for_logged_empty_cache_with_retrieval_fallback() -> None:
+    # An empty optional cache causes an alternate lookup whose result is used;
+    # the broad-catch return does not become a missing definition.
+    _none(
+        """\
+import asyncio
+
+async def extract_items():
+    async def fetch_items():
+        return ["item"]
+
+    async def fetch_cache():
+        try:
+            return await load_cache()
+        except Exception:
+            logger.warning("cache fetch failed", exc_info=True)
+            return {}
+
+    async def fetch_detail(record, cache):
+        detail = None
+        if "item" not in cache:
+            detail = await load_detail()
+        definition = select_detail(cache, detail)
+        if definition:
+            record["definition"] = definition
+
+    async def collect():
+        items, cache = await asyncio.gather(fetch_items(), fetch_cache())
+        return await asyncio.gather(
+            *(fetch_detail({"item": item}, cache) for item in items)
+        )
+
+    return await collect()
+"""
+    )
+
+
+def test_p007_still_flags_cache_miss_branch_with_unused_retrieval() -> None:
+    # A branch and an awaited call are not enough: the retrieved value must
+    # participate in the result that replaces the failed cache lookup.
+    src = """\
+import asyncio
+
+async def extract_items():
+    async def fetch_items():
+        return ["item"]
+
+    async def fetch_cache():
+        try:
+            return await load_cache()
+        except Exception:
+            logger.warning("cache fetch failed", exc_info=True)
+            return {}
+
+    async def fetch_detail(record, cache):
+        if "item" not in cache:
+            await load_detail()
+        record["definition"] = cache
+
+    async def collect():
+        items, cache = await asyncio.gather(fetch_items(), fetch_cache())
+        return await asyncio.gather(
+            *(fetch_detail({"item": item}, cache) for item in items)
+        )
+
+    return await collect()
+"""
+    _single(src, "E007")
+
+
+def test_p007_no_finding_after_durable_residual_record() -> None:
+    _none(
+        """\
+from service.residuals import record_residual_failure
+
+def fetch_item(output_path, item_id):
+    try:
+        return load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        record_residual_failure(
+            output_path, "item_fetch_failed", record_id=item_id
+        )
+        return None
+"""
+    )
+
+
+def test_p007_still_flags_unrecognized_failure_record_before_sentinel() -> None:
+    src = """\
+from service.telemetry import record_residual_failure
+
+def fetch_item(output_path, item_id):
+    try:
+        return load_item(item_id)
+    except Exception:
+        logger.warning("item fetch failed", exc_info=True)
+        record_residual_failure(
+            output_path, "item_fetch_failed", record_id=item_id
+        )
+        return None
+"""
+    _single(src, "E007")
+
+
 def test_p007_broad_tuple_catch_that_logs_then_returns_none() -> None:
     src = """\
 def get_tables():

@@ -1079,15 +1079,423 @@ class SilentSwallowMixin:
                     "return the failure as typed data.",
                 )
 
+    def _is_residual_failure_record_call(self, call: ast.Call) -> bool:
+        """Whether *call* invokes the imported durable residual-recording API."""
+        if isinstance(call.func, ast.Name):
+            origin = self._import_origins.get(call.func.id, "")
+            imported = origin.split(".")[-2:] == [
+                "residuals",
+                "record_residual_failure",
+            ]
+        elif (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "record_residual_failure"
+        ):
+            module = _get_name(call.func.value)
+            origin = self._import_origins.get(module or "", "")
+            imported = origin.split(".")[-1:] == ["residuals"]
+        else:
+            return False
+        keywords = {keyword.arg for keyword in call.keywords if keyword.arg}
+        has_output_path = bool(call.args) or "output_path" in keywords
+        has_category = len(call.args) >= 2 or "category" in keywords
+        return imported and has_output_path and has_category
+
+    def _has_residual_failure_record(
+        self, handler: ast.ExceptHandler, stmt: ast.Return
+    ) -> bool:
+        """True when the handler writes a residual record before this return."""
+        for previous in handler.body:
+            if previous is stmt:
+                return False
+            if (
+                isinstance(previous, ast.Expr)
+                and isinstance(previous.value, ast.Call)
+                and self._is_residual_failure_record_call(previous.value)
+            ):
+                return True
+        return False
+
+    def _is_asyncio_gather_call(self, call: ast.Call) -> bool:
+        if not isinstance(call.func, ast.Attribute) or call.func.attr != "gather":
+            return False
+        module = _get_name(call.func.value)
+        return bool(module and self._import_origins.get(module) == "asyncio")
+
+    def _assigned_name_for_async_call(
+        self, statement: ast.Assign | ast.AnnAssign, call: ast.Call
+    ) -> ast.Name | None:
+        value = statement.value
+        if not isinstance(value, ast.Await):
+            return None
+        awaited = value.value
+        if awaited is call:
+            position = None
+        elif isinstance(awaited, ast.Call) and self._is_asyncio_gather_call(awaited):
+            positions = [
+                index for index, argument in enumerate(awaited.args) if argument is call
+            ]
+            if len(positions) != 1:
+                return None
+            position = positions[0]
+        else:
+            return None
+
+        targets = (
+            statement.targets
+            if isinstance(statement, ast.Assign)
+            else [statement.target]
+        )
+        if len(targets) != 1:
+            return None
+        target = targets[0]
+        if position is None:
+            return target if isinstance(target, ast.Name) else None
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and len(target.elts) == len(awaited.args)
+            and not any(isinstance(argument, ast.Starred) for argument in awaited.args)
+        ):
+            result = target.elts[position]
+            return result if isinstance(result, ast.Name) else None
+        return None
+
+    @staticmethod
+    def _target_names(target: ast.expr) -> set[str]:
+        names: set[str] = set()
+        pending = [target]
+        while pending:
+            current = pending.pop()
+            if isinstance(current, ast.Name):
+                names.add(current.id)
+            elif isinstance(current, (ast.Tuple, ast.List)):
+                pending.extend(current.elts)
+        return names
+
+    @staticmethod
+    def _target_writes_output(target: ast.expr) -> bool:
+        if isinstance(target, (ast.Attribute, ast.Subscript)):
+            return True
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return any(
+                SilentSwallowMixin._target_writes_output(element)
+                for element in target.elts
+            )
+        return False
+
+    @staticmethod
+    def _loads_any_name(node: ast.AST, names: set[str]) -> bool:
+        return any(
+            isinstance(descendant, ast.Name)
+            and descendant.id in names
+            and isinstance(descendant.ctx, ast.Load)
+            for descendant in ast.walk(node)
+        )
+
+    def _names_reach_output(self, names: set[str], statements: list[ast.stmt]) -> bool:
+        active = set(names)
+        for statement in statements:
+            nodes = [statement, *_iter_shallow(statement)]
+            for node in nodes:
+                if (
+                    isinstance(node, ast.Return)
+                    and node.value is not None
+                    and self._loads_any_name(node.value, active)
+                ):
+                    return True
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = node.value
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                if (
+                    value is not None
+                    and self._loads_any_name(value, active)
+                    and any(self._target_writes_output(target) for target in targets)
+                ):
+                    return True
+            active.difference_update(
+                node.id
+                for node in nodes
+                if isinstance(node, ast.Name)
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            )
+            if not active:
+                return False
+        return False
+
+    def _recovery_result_reaches_output(
+        self,
+        statements: list[ast.stmt],
+        recovery_names: set[str],
+    ) -> bool:
+        for index, statement in enumerate(statements):
+            nodes = [statement, *_iter_shallow(statement)]
+            for node in nodes:
+                if (
+                    isinstance(node, ast.Return)
+                    and node.value is not None
+                    and self._loads_any_name(node.value, recovery_names)
+                ):
+                    return True
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = node.value
+                if value is None or not self._loads_any_name(value, recovery_names):
+                    continue
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                if any(self._target_writes_output(target) for target in targets):
+                    return True
+                assigned_names = set().union(
+                    *(self._target_names(target) for target in targets)
+                )
+                if assigned_names and self._names_reach_output(
+                    assigned_names, statements[index + 1 :]
+                ):
+                    return True
+        return False
+
+    def _miss_branch_uses_retrieval(
+        self, function: ast.FunctionDef | ast.AsyncFunctionDef, parameter: str
+    ) -> bool:
+        for index, statement in enumerate(function.body):
+            if not isinstance(statement, ast.If):
+                continue
+            miss_branches: list[list[ast.stmt]] = []
+            for test in ast.walk(statement.test):
+                if not isinstance(test, ast.Compare):
+                    continue
+                for operator, comparator in zip(
+                    test.ops, test.comparators, strict=False
+                ):
+                    if not (
+                        isinstance(comparator, ast.Name) and comparator.id == parameter
+                    ):
+                        continue
+                    if isinstance(operator, ast.NotIn):
+                        miss_branches.append(statement.body)
+                    elif isinstance(operator, ast.In):
+                        miss_branches.append(statement.orelse)
+            if len(miss_branches) != 1 or not miss_branches[0]:
+                continue
+
+            recovery_names: set[str] = set()
+            for root in miss_branches[0]:
+                for node in [root, *_iter_shallow(root)]:
+                    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                        continue
+                    value = node.value
+                    if not (
+                        isinstance(value, ast.Await)
+                        and isinstance(value.value, ast.Call)
+                    ):
+                        continue
+                    target = (
+                        node.targets[0]
+                        if isinstance(node, ast.Assign) and len(node.targets) == 1
+                        else node.target
+                        if isinstance(node, ast.AnnAssign)
+                        else None
+                    )
+                    if isinstance(target, ast.Name):
+                        recovery_names.add(target.id)
+            if recovery_names and self._recovery_result_reaches_output(
+                function.body[index + 1 :], recovery_names
+            ):
+                return True
+        return False
+
+    def _has_recovered_optional_cache(
+        self, handler: ast.ExceptHandler, stmt: ast.Return
+    ) -> bool:
+        """Prove that an empty mapping is an optional cache with a used fallback."""
+        if not (
+            isinstance(stmt.value, ast.Dict)
+            and not stmt.value.keys
+            or isinstance(stmt.value, ast.Call)
+            and _get_name(stmt.value.func) == "dict"
+            and not stmt.value.args
+            and not stmt.value.keywords
+        ):
+            return False
+        if len(self._function_stack) < 2:
+            return False
+        producer = self._function_stack[-1]
+        enclosing = self._function_stack[-2]
+        if producer not in enclosing.body:
+            return False
+        siblings = [
+            statement
+            for statement in enclosing.body
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        if sum(sibling.name == producer.name for sibling in siblings) != 1:
+            return False
+        scopes = [
+            enclosing,
+            *(sibling for sibling in siblings if sibling is not producer),
+        ]
+        scope_nodes = {scope: list(_iter_shallow(scope)) for scope in scopes}
+        for scope, nodes in scope_nodes.items():
+            if any(
+                isinstance(node, ast.Name)
+                and node.id == producer.name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+                for node in nodes
+            ):
+                return False
+            if scope is not enclosing and any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == producer.name
+                for node in nodes
+            ):
+                return False
+        if any(
+            isinstance(node, ast.Name)
+            and node.id == producer.name
+            and isinstance(node.ctx, ast.Load)
+            for node in _iter_shallow(producer)
+        ):
+            return False
+
+        call_sites = [
+            (scope, node)
+            for scope, nodes in scope_nodes.items()
+            for node in nodes
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == producer.name
+        ]
+        producer_references = [
+            node
+            for nodes in scope_nodes.values()
+            for node in nodes
+            if isinstance(node, ast.Name)
+            and node.id == producer.name
+            and isinstance(node.ctx, ast.Load)
+        ]
+        if (
+            len(call_sites) != 1
+            or len(producer_references) != 1
+            or producer_references[0] is not call_sites[0][1].func
+        ):
+            return False
+
+        orchestrator, producer_call = call_sites[0]
+        assignments = [
+            (node, name)
+            for node in scope_nodes[orchestrator]
+            if isinstance(node, (ast.Assign, ast.AnnAssign))
+            and (name := self._assigned_name_for_async_call(node, producer_call))
+            is not None
+        ]
+        if len(assignments) != 1:
+            return False
+        assignment, cache_binding = assignments[0]
+        cache_name = cache_binding.id
+        nodes = scope_nodes[orchestrator]
+        cache_names = [
+            node
+            for node in nodes
+            if isinstance(node, ast.Name) and node.id == cache_name
+        ]
+        if len(
+            [node for node in cache_names if isinstance(node.ctx, (ast.Store, ast.Del))]
+        ) != 1 or not any(
+            node is cache_binding
+            for node in cache_names
+            if isinstance(node.ctx, ast.Store)
+        ):
+            return False
+        cache_loads = [node for node in cache_names if isinstance(node.ctx, ast.Load)]
+        if len(cache_loads) != 1:
+            return False
+
+        argument_uses = [
+            (node, argument)
+            for node in nodes
+            if isinstance(node, ast.Call)
+            for argument in [
+                *node.args,
+                *(keyword.value for keyword in node.keywords),
+            ]
+            if argument is cache_loads[0]
+        ]
+        if len(argument_uses) != 1:
+            return False
+        consumer_call = argument_uses[0][0]
+        if not isinstance(consumer_call.func, ast.Name):
+            return False
+        consumers = [
+            sibling for sibling in siblings if sibling.name == consumer_call.func.id
+        ]
+        if len(consumers) != 1 or consumers[0] is producer:
+            return False
+        consumer = consumers[0]
+        if any(
+            isinstance(node, ast.Name)
+            and node.id == consumer.name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            for node in nodes
+        ) or any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == consumer.name
+            for node in nodes
+        ):
+            return False
+
+        if any(
+            isinstance(argument, ast.Starred) for argument in consumer_call.args
+        ) or any(keyword.arg is None for keyword in consumer_call.keywords):
+            return False
+        positional = [*consumer.args.posonlyargs, *consumer.args.args]
+        if len(consumer_call.args) > len(positional):
+            return False
+        parameters = [
+            positional[index].arg
+            for index, argument in enumerate(consumer_call.args)
+            if argument is cache_loads[0]
+        ]
+        positional_only = {argument.arg for argument in consumer.args.posonlyargs}
+        keyword_parameters = {
+            argument.arg
+            for argument in [*consumer.args.args, *consumer.args.kwonlyargs]
+        }
+        for keyword in consumer_call.keywords:
+            if keyword.value is not cache_loads[0]:
+                continue
+            if keyword.arg is None or keyword.arg in positional_only:
+                return False
+            if keyword.arg not in keyword_parameters:
+                return False
+            if keyword.arg in {
+                positional[index].arg for index in range(len(consumer_call.args))
+            }:
+                return False
+            parameters.append(keyword.arg)
+        if len(parameters) != 1:
+            return False
+        cache_parameter = parameters[0]
+        if any(
+            isinstance(node, ast.Name)
+            and node.id == cache_parameter
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            for node in _iter_shallow(consumer)
+        ):
+            return False
+        return self._miss_branch_uses_retrieval(consumer, cache_parameter)
+
     def _is_logged_sentinel_return(
         self, handler: ast.ExceptHandler, stmt: ast.Return
     ) -> bool:
-        # Logging does not make a broad catch's empty return safe: the caller
-        # still cannot tell the failure from a genuine empty result. Narrow
-        # catches stay out — `except KeyError: ...; return None` is usually the
-        # lookup's contract. So do procedures (`-> None`), where `return None`
-        # is a plain early exit, and wholesale-deprecated modules, which are
-        # being removed rather than fixed.
+        # Logging alone does not make a broad catch's empty return safe. A
+        # durable per-item residual record or a structurally proven optional
+        # cache fallback is different: the gap is recorded or another lookup
+        # supplies the result. Narrow catches and procedures remain out, as do
+        # wholesale-deprecated modules that are being removed rather than fixed.
         if self._deprecated_module or not _is_empty_sentinel(stmt.value):
             return False
         if handler.type is None:
@@ -1100,6 +1508,10 @@ class SilentSwallowMixin:
         else:
             broad = _get_name(handler.type) in _BROAD_EXCEPT_TYPES
         if not broad:
+            return False
+        if self._has_residual_failure_record(
+            handler, stmt
+        ) or self._has_recovered_optional_cache(handler, stmt):
             return False
         # Only `return None` is a procedure's early exit; `return []` from a
         # `-> None` function still hands the caller a plausible empty value.
