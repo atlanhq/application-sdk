@@ -53,7 +53,10 @@ class TimeoutApp(App):
 async def test_task_timeout_fails_workflow(run_worker, executor, reregister_app):
     """P5.1: @task(timeout_seconds=3) fails when the activity sleeps for 10s."""
     reregister_app(TimeoutApp)
-    async with run_worker():
+    # slow_task outlives its timeout and never heartbeats, so nothing tells it
+    # to stop; a zero grace cancels it at worker exit instead of waiting out
+    # the rest of its 10s sleep (FND-4305).
+    async with run_worker(graceful_shutdown_timeout_seconds=0):
         context = AppContext(app_name=TimeoutApp._app_name, app_version="1.0.0")
         with pytest.raises(Exception):
             await executor.execute(

@@ -538,6 +538,7 @@ def create_worker(
     enable_pushgateway: bool = False,
     on_activity: Callable[[], None] | None = None,
     on_fatal_error: Callable[[BaseException], None] | None = None,
+    shutdown_drain_delay_seconds: float = SHUTDOWN_DRAIN_DELAY_SECONDS,
 ) -> AppWorker:
     """Create a Temporal worker for registered Apps.
 
@@ -591,6 +592,11 @@ def create_worker(
             the only place a fatal is guaranteed to be observed — see
             ``_log_worker_fatal_error``); this callback is additive, and the main
             entry point wires it to ``WorkerHealthServer.record_worker_fatal``.
+        shutdown_drain_delay_seconds: Seconds the worker yields on exit before
+            stopping, so in-flight activity result RPCs land first. Defaults to
+            ``SHUTDOWN_DRAIN_DELAY_SECONDS``. A test whose worker only exits
+            after the workflow result has returned has no such RPC in flight
+            and can pass ``0``.
 
     Returns:
         AppWorker wrapping a configured Temporal Worker (not yet started).
@@ -1128,6 +1134,7 @@ def create_worker(
         enable_pushgateway=enable_pushgateway,
         primary_app_name=primary_app_name,
         task_queue=task_queue,
+        shutdown_drain_delay_seconds=shutdown_drain_delay_seconds,
     )
 
 
