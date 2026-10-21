@@ -106,9 +106,12 @@ def main(
     if code != 0:
         print(
             f"::error file={LOCK}::{LOCK} is not the lock pyproject.toml resolves "
-            "to (`uv lock --check` failed). If Renovate opened this PR, its "
-            "bounded lock step refused the bump on purpose (see the `[options]` "
-            "table's `# refusal:` comment); do not merge it as-is.",
+            "to (`uv lock --check` failed). If uv reported `No solution found`, "
+            "the dependency ranges in pyproject.toml cannot be satisfied — "
+            "the resolver output above names the conflict. Otherwise, if "
+            "Renovate opened this PR, its bounded lock step refused the bump on "
+            "purpose (see the `[options]` table's `# refusal:` comment); do not "
+            "merge it as-is.",
             flush=True,
         )
         return 1
