@@ -49,9 +49,14 @@ def _integration_env_vars():
             os.environ[k] = v
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def task_queue() -> str:
-    """Unique task queue name for this test session."""
+    """Unique task queue name for each test.
+
+    Function-scoped: the Temporal server is shared by the whole session, so a
+    session-wide queue would let a workflow left running by one test (or by an
+    earlier attempt of the same test) be picked up by the next test's worker.
+    """
     return f"integ-test-{uuid4().hex[:8]}"
 
 
@@ -170,7 +175,7 @@ _DAPR_SECRETS_FILE = str(Path(__file__).parent / "secrets.json")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def embedded_dapr_sidecar():
+async def embedded_dapr_sidecar(tmp_path_factory):
     """Embedded ``daprd`` for the module, provisioned in-process by the SDK.
 
     Uses :func:`embedded_dapr` (same code path as local development); the
@@ -182,7 +187,14 @@ async def embedded_dapr_sidecar():
     """
     from application_sdk.dev import embedded_dapr
 
-    async with embedded_dapr(secrets_file=_DAPR_SECRETS_FILE) as dapr:
+    # Per-module object/event roots: the defaults (``./local/dapr/...``) are
+    # relative to the cwd, so every module — and every run — would share them.
+    root = tmp_path_factory.mktemp("dapr")
+    async with embedded_dapr(
+        secrets_file=_DAPR_SECRETS_FILE,
+        objectstore_root=str(root / "objectstore"),
+        eventstore_root=str(root / "eventstore"),
+    ) as dapr:
         yield dapr
 
 

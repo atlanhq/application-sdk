@@ -1,0 +1,51 @@
+name: Warm CI caches
+
+# Seeds main's cache scope with what the SDK Gate's integration, storage-emulator
+# and bats jobs restore. A PR can only restore a cache saved on its own ref or on
+# the base branch, and the SDK Gate never runs on `push: main` — so before this
+# workflow existed nothing was ever saved where a fresh PR could see it, and
+# most PRs re-downloaded the Temporal CLI and daprd and ran a full `uv sync`
+# (measured: embedded-runtimes hit 6/37, integration venv 6/37) (FND-4241).
+#
+# Each job uses the SAME composite actions as the jobs it serves (setup-deps,
+# embedded-runtimes-cache), so the keys cannot drift. On an exact hit every
+# cache step is a no-op and the job finishes in seconds.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: warm-caches-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # setup-deps default (3.11): the venv the storage-emulator and bats jobs use.
+  default-venv:
+    name: Warm default venv
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: "./.github/actions/setup-deps"
+
+  # The integration job's venv (container Python) and the embedded runtimes.
+  integration:
+    name: Warm integration venv + embedded runtimes
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve container Python version
+        id: pyver
+        run: echo "version=$(python3 .github/scripts/container_python_version.py print-version)" >> "$GITHUB_OUTPUT"
+      - uses: "./.github/actions/setup-deps"
+        with:
+          python-version: ${{ steps.pyver.outputs.version }}
+      - uses: "./.github/actions/embedded-runtimes-cache"
+      - name: Fetch and boot embedded Temporal + daprd
+        run: uv run python .github/scripts/warm_embedded_runtimes.py
