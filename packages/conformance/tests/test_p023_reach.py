@@ -560,12 +560,13 @@ def test_rebinding_a_file_handle_in_async_with_clears_it() -> None:
         "engine = create_engine(input.url)",
         "z = zipfile.ZipFile(input.path)",
         "fh = gzip.open(input.path)",
+        "session = botocore.session.get_session()",
     ],
 )
 def test_workflow_client_work_is_p021_not_p023(stmt: str) -> None:
     src = (
-        "import gzip\nimport zipfile\nimport boto3\nimport duckdb\n"
-        "from sqlalchemy import create_engine\n"
+        "import gzip\nimport zipfile\nimport boto3\nimport botocore.session\n"
+        "import duckdb\nfrom sqlalchemy import create_engine\n"
         "from application_sdk.app import App, entrypoint\n"
         "class A(App):\n"
         "    @entrypoint\n"
@@ -597,3 +598,47 @@ def test_workflow_in_memory_builders_are_not_io(stmt: str) -> None:
     )
     findings = scan_text(src, "app/wf.py")
     assert [f for f in findings if f.rule_id in ("P021", "P023")] == [], stmt
+
+
+def test_path_open_read_in_the_sdk_upload_loop_shape() -> None:
+    """The shape application_sdk/storage/ops.py uploads with: a sync read on a
+    `path.open("rb")` handle inside an async writer loop. One finding, on the
+    read, not on the awaited write."""
+    src = (
+        "import obstore\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def upload(self, input):\n"
+        "        path = input.path\n"
+        "        async with obstore.open_writer_async(input.store, input.key) as writer:\n"
+        '            with path.open("rb") as fh:\n'
+        "                while True:\n"
+        "                    chunk = fh.read(input.chunk)\n"
+        "                    if not chunk:\n"
+        "                        break\n"
+        "                    await writer.write(chunk)\n"
+    )
+    (finding,) = _p023(src)
+    assert finding.line == 10
+    assert "'fh.read()'" in finding.message
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        's3 = botocore.session.get_session().create_client("s3")\n'
+        '        s3.get_object(Bucket="b", Key="k")',
+        "session = botocore.session.Session()\n"
+        '        s3 = session.create_client("s3")\n'
+        '        s3.list_objects_v2(Bucket="b")',
+    ],
+)
+def test_botocore_client_is_tracked(stmt: str) -> None:
+    src = (
+        "import botocore.session\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def t(self, input):\n"
+        f"        {stmt}\n"
+    )
+    assert len(_p023(src)) == 1, stmt

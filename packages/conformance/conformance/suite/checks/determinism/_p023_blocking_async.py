@@ -132,7 +132,7 @@ _BLOCKING_EXACT = frozenset({"time.sleep"})
 # Only the calls that send a request. Constructors (`requests.Session`,
 # `requests.adapters.HTTPAdapter`, `urllib.request.Request`, ...) do no I/O:
 # connections open lazily on the first send. Targets resolve against
-# `_module_bindings`, so `import requests.api` does not repeat the submodule.
+# `module_bindings`, so `import requests.api` does not repeat the submodule.
 _REQUESTS_VERBS = frozenset(
     {"get", "post", "put", "patch", "delete", "head", "options", "request"}
 )
@@ -162,7 +162,7 @@ def _is_blocking_network(target: str) -> bool:
     )
 
 
-def _module_bindings(tree: ast.AST) -> dict[str, str]:
+def module_bindings(tree: ast.AST) -> dict[str, str]:
     """Import bindings with a plain ``import a.b`` bound the way Python binds it.
 
     The shared ``collect_import_bindings`` maps ``a`` to ``a.b``, so the call
@@ -552,12 +552,21 @@ _CLIENTS = {
         ),
     ),
 }
+# Factories matched by name, on an exact resolved target. Handle *methods* —
+# `path.open()` on a pathlib.Path (the async upload path in
+# application_sdk/storage/ops.py reads through one), fsspec's `fs.open()` — are
+# called on a local whose type the AST cannot see, so they cannot be keyed
+# here; see _HANDLE_METHODS below.
 _CLIENT_FACTORIES = {
     "httpx.Client": "httpx",
     "boto3.client": "boto3",
     "boto3.resource": "boto3",
     "boto3.Session": "boto3_session",
     "boto3.session.Session": "boto3_session",
+    # boto3's own engine: `get_session().create_client("s3")` is the same
+    # client boto3.client() returns.
+    "botocore.session.get_session": "boto3_session",
+    "botocore.session.Session": "boto3_session",
     "open": "file",
     "io.open": "file",
     "codecs.open": "file",
@@ -584,11 +593,18 @@ _CLIENT_FACTORIES = {
 _DERIVED = {
     ("boto3_session", "client"): "boto3",
     ("boto3_session", "resource"): "boto3",
+    ("boto3_session", "create_client"): "boto3",
     ("executor", "submit"): "future",
     ("sa_engine", "connect"): "sa_conn",
     ("sa_engine", "begin"): "sa_conn",
 }
 _PATH_CONSTRUCTORS = frozenset({"pathlib.Path", "pathlib.PurePath"})
+# Methods that hand back a sync file handle, on a receiver that is not itself a
+# tracked client: `path.open("rb")` (pathlib.Path.open), `Path(p).open()`,
+# fsspec's `fs.open(...)`. An `.open` on a tracked client is decided by that
+# client instead (a urllib opener's `open` is its send), and `self.open` is the
+# class's own method. See Visitor._client_call.
+_HANDLE_METHODS = frozenset({"open"})
 
 
 @dataclass
@@ -609,7 +625,7 @@ class _Module:
         directives: dict[int, _IgnoreDirective],
         path: Path | None,
     ) -> _Module:
-        return cls(filename, tree, directives, _module_bindings(tree), path)
+        return cls(filename, tree, directives, module_bindings(tree), path)
 
     @cached_property
     def functions(self) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
@@ -964,7 +980,7 @@ class _Visitor(ast.NodeVisitor):
         # hands back a sync file handle. An `.open` on a tracked client (a
         # urllib opener's send, a zip member) was decided above; `self.open`
         # is the class's own method.
-        if value.func.attr == "open" and target != "self.open":
+        if value.func.attr in _HANDLE_METHODS and target != f"self.{value.func.attr}":
             return "file"
         return None
 
