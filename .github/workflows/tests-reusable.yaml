@@ -1071,6 +1071,7 @@ jobs:
         with:
           service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
           mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
       - name: Clean up after a stopped Twingate step
         if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
         continue-on-error: true
@@ -2631,11 +2632,12 @@ jobs:
       # egress IPs. Twingate first, then this repo's own globalprotect-connect
       # action as the fallback, both from the job.workflow_sha sparse checkout
       # — same provenance pinning as the scripts. The health probe targets the
-      # dataforge api host — the thing this tunnel actually has to reach. KNOWN LIMIT: the
-      # action derives its GP client identity from run/job/attempt, and
-      # GITHUB_JOB is identical across matrix legs, so concurrent legs can
-      # displace each other's sessions — the fetch then falls back to repo
-      # creds by design. A better run strategy is tracked on FND-279.
+      # dataforge api host — the thing this tunnel actually has to reach.
+      # KNOWN LIMIT (GlobalProtect fallback only): the action derives its GP
+      # client identity from run/job/attempt, and GITHUB_JOB is identical
+      # across matrix legs, so concurrent legs can displace each other's
+      # sessions — the fetch then falls back to repo creds by design. A better
+      # run strategy is tracked on FND-279.
       - name: Connect to Twingate (dataforge path)
         id: twingate
         if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
@@ -2645,6 +2647,7 @@ jobs:
         with:
           service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
           mothership-url: https://api.dataforge.atlan.dev
+          resubnet-docker: "true"
       - name: Clean up after a stopped Twingate step
         if: inputs.dataforge-datasource != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
         continue-on-error: true
