@@ -39,14 +39,15 @@ logger = get_logger(__name__)
 # runtime we fall back to None and raise a clear ImportError in __init__ if
 # the [storage] extra isn't installed.
 if TYPE_CHECKING:
-    from rocksdict import BlockBasedOptions, Options, Rdict
+    from rocksdict import BlockBasedOptions, Options, Rdict, WriteOptions
 else:
     try:
-        from rocksdict import BlockBasedOptions, Options, Rdict
+        from rocksdict import BlockBasedOptions, Options, Rdict, WriteOptions
     except ImportError:  # conformance: ignore[E008,E009] optional dep rocksdict not installed; sentinel fallback
         Rdict = None
         Options = None
         BlockBasedOptions = None
+        WriteOptions = None
 
 # The key types rocksdict itself accepts. Anything outside this union is
 # rejected internally by ``key_may_exist`` / ``__getitem__`` with an
@@ -145,7 +146,7 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
 
     def __init__(self) -> None:
         if Rdict is None:
-            # rocksdict ships Rdict/Options/BlockBasedOptions as a unit;
+            # rocksdict ships Rdict/Options/BlockBasedOptions/WriteOptions as a unit;
             # checking one is sufficient.
             raise ImportError(
                 "rocksdict is required for SpillableDict. It is a core "
@@ -171,6 +172,12 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
             bbo.set_bloom_filter(bits_per_key=10, block_based=False)
             options.set_block_based_table_factory(bbo)
             self._db = Rdict(self._temp_dir, options=options)
+            # No write-ahead log: the store lives in a temp dir that is
+            # removed on close, so there is nothing to recover after a
+            # crash. Skipping the WAL cuts put latency roughly 10x.
+            write_options = WriteOptions()
+            write_options.disable_wal = True
+            self._db.set_write_options(write_options)
         # conformance: ignore[E004] init cleanup guard; cleans temp dir then re-raises so no swallowing occurs
         except BaseException:
             shutil.rmtree(self._temp_dir, ignore_errors=True)
