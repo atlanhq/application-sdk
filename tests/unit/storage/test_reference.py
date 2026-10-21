@@ -654,9 +654,12 @@ class TestMaterializeFileReference:
         real_get_file_meta = ops.get_file_meta
         calls: list[str] = []
 
-        async def _counting_get_file_meta(key, *args, **kwargs):
-            calls.append(key)
-            return await real_get_file_meta(key, *args, **kwargs)
+        async def _counting_get_file_meta(key, store_=None, *args, **kwargs):
+            # The patch is process-wide: a transfer an earlier test on this
+            # worker left running HEADs through it too. Count this store only.
+            if store_ is store:
+                calls.append(key)
+            return await real_get_file_meta(key, store_, *args, **kwargs)
 
         with patch.object(ops, "get_file_meta", _counting_get_file_meta):
             result = await materialize_file_reference(store, ref)
