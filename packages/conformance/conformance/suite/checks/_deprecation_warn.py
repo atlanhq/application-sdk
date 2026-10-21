@@ -14,6 +14,7 @@ into a cycle, and conformance 0.51.0 shipped unable to run
 from __future__ import annotations
 
 import ast
+from collections import deque
 
 _WARN_INIT_METHODS: frozenset[str] = frozenset({"__init__", "__init_subclass__"})
 
@@ -70,17 +71,35 @@ def _class_warn_message(class_node: ast.ClassDef) -> str | None:
     """Return a class's deprecation message if ``__init__`` / ``__init_subclass__``
     directly emits a ``DeprecationWarning``, else ``None``.
 
-    Walks each such method body (so a ``warn`` nested in a guard ``if`` still
-    counts) but does **not** descend into other methods — the warn must belong to
-    construction/subclassing of *this* class for the attribution to be sound.
+    Walks each such method's executable body (so a ``warn`` nested in a guard
+    ``if`` still counts) but does **not** descend into a nested ``def``,
+    ``lambda`` or ``class``, nor into other methods — a warn there does not run
+    at construction, and the warn must belong to construction/subclassing of
+    *this* class for the attribution to be sound.
     """
     for item in class_node.body:
         if (
             isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
             and item.name in _WARN_INIT_METHODS
         ):
-            for sub in ast.walk(item):
+            for sub in _walk_own_scope(item):
                 message = _is_deprecation_warn_call(sub)
                 if message is not None:
                     return message
     return None
+
+
+def _walk_own_scope(function: ast.FunctionDef | ast.AsyncFunctionDef):
+    """``ast.walk`` over *function*'s body that stops at nested scopes.
+
+    Breadth-first, in source order, as ``ast.walk`` is: the first warn found
+    is the message the manifest records, so the order is part of the output.
+    """
+    pending: deque[ast.AST] = deque(function.body)
+    while pending:
+        node = pending.popleft()
+        yield node
+        if not isinstance(
+            node, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef
+        ):
+            pending.extend(ast.iter_child_nodes(node))

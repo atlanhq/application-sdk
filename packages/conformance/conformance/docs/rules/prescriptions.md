@@ -1096,14 +1096,16 @@ whose result is durably recorded in workflow history.
   only the flagged line leaves the non-determinism in place.
 
 Inside an `App` subclass's workflow-context method a call performs side-effecting I/O —
-`open`, `requests`/`httpx`/`urllib`, `socket`, `subprocess`,
-`threading`/`multiprocessing`, `os.getenv` / `os.environ[...]`,
-`application_sdk.storage` object-store calls (`download_file`, `upload_file`, …), and
-the data-scale inventory P023 defers to this rule in workflow context: whole-file
-`Path.read_bytes`/`read_text`/`write_*`, pandas and pyarrow readers/writers,
-`json.load`/`pickle.load`-style file serialization, `shutil` tree ops and
-`glob`/`os.walk` traversal. Move it into a `@task` method: workflow code must be
-deterministic, and activities are where I/O and external state belong.
+`open` (and `io`/`codecs`/`gzip`/ `bz2`/`lzma` `open`), `requests`/`httpx`/`urllib`,
+`socket`, `subprocess`, `threading`/`multiprocessing`, the
+`boto3`/`botocore`/`duckdb`/`sqlalchemy` clients and `zipfile`/`tarfile` archives (P023
+tracks their sends outside workflow context; here the construction is already the
+defect), `os.getenv` / `os.environ[...]`, `application_sdk.storage` object-store calls
+(`download_file`, `upload_file`, …), and the data-scale inventory P023 defers to this
+rule in workflow context: whole-file `Path.read_bytes`/`read_text`/`write_*`, pandas and
+pyarrow readers/writers, `json.load`/`pickle.load`-style file serialization, `shutil`
+tree ops and `glob`/`os.walk` traversal. Move it into a `@task` method: workflow code
+must be deterministic, and activities are where I/O and external state belong.
 
 The detected surface is a curated high-signal subset, not an exhaustive list of every
 I/O API.  Remediation is structural (extract a `@task`), so findings route to residue
@@ -1250,13 +1252,15 @@ likewise out of scope — CPU, not I/O, and used for small payloads everywhere. 
 `yaml.safe_load` and `csv.reader` take a string as readily as a handle, and matching
 them by name would flag the very in-memory parsing `json.loads` is allowed to do.
 
-Across that data-scale inventory and the client work above, a call the source already
-marks as async is never flagged — the operand of `await`, and the iterable of an `async
-for`.  An awaited `path.read_text()` is `anyio.Path`; `async for p in path.glob(...)` is
-an async iterator.  The name alone cannot separate those from their blocking namesakes;
-the async syntax can.  A `lambda` body counts as a sync scope, like a nested `def`, so
-the prescribed offload — `await run_in_thread(lambda: list(path.rglob('*')))` — is
-silent rather than a finding in its own right.
+Across the data-scale inventory, a call the source already marks as async is never
+flagged — the operand of `await`, and the iterable of an `async for`.  An awaited
+`path.read_text()` is `anyio.Path`; `async for p in path.glob(...)` is an async
+iterator.  The name alone cannot separate those from their blocking namesakes; the async
+syntax can.  A send on a tracked client is the exception: the client is already known to
+be sync, so an awaited send still blocks and is still flagged.  A `lambda` body counts
+as a sync scope, like a nested `def`, so the prescribed offload — `await
+run_in_thread(lambda: list(path.rglob('*')))` — is silent rather than a finding in its
+own right.
 
 Blocking sync I/O and filesystem work are reported only **outside** workflow context —
 inside workflow methods the same calls are owned by P020 (sleep) and P021 (file/network

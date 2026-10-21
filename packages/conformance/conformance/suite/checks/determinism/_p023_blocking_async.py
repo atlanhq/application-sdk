@@ -77,14 +77,15 @@ code — the second half of the user's async-correctness ask.  Patterns:
 A wholesale-deprecated module (a top-level ``DeprecationWarning``, on the file
 or an enclosing package) is skipped: it is being removed, not fixed.
 
-Across that whole data-scale inventory, and the client work above, a call the
-source already marks as async is skipped: the direct operand of ``await``, and
-the iterable of an ``async for``.  An ``await``-ed ``path.read_text()`` is ``anyio.Path``, not
+Across that whole data-scale inventory, a call the source already marks as
+async is skipped: the direct operand of ``await``, and the iterable of an
+``async for``.  An ``await``-ed ``path.read_text()`` is ``anyio.Path``, not
 ``pathlib.Path``; ``async for p in path.glob("*")`` is an async iterator.  The
 name alone cannot tell those apart, but the ``await`` / ``async for`` can.
-(The event-loop bridge and the legacy ``requests`` / ``time.sleep`` patterns
-are *not* skipped this way: awaiting them is meaningless, so an ``await`` there
-is a bug rather than a signal.)
+(The event-loop bridge, the ``requests`` / ``time.sleep`` patterns and a send
+on a tracked client are *not* skipped this way: the callee is already known to
+be sync, so the call blocks before ``await`` fails on its result — an
+``await`` there is a bug rather than a signal.)
 
 A ``lambda`` body is treated as a sync scope, exactly as a nested ``def`` is.
 Both are the offload shape this rule prescribes — the callable runs in a
@@ -458,15 +459,14 @@ class _Client:
     ``sends`` of ``None`` means every method except ``exempt`` and the
     capitalised sub-resource constructors (``s3.Bucket(...)``): boto3 builds
     its operations from service models at runtime, so they cannot be listed.
-    ``legacy`` kinds predate the ``await`` exemption and keep their behaviour —
-    awaiting a requests call is a bug, not an async API.
+    A send is reported even when awaited: the receiver is already known to be
+    sync, so the call blocks before ``await`` fails on its result.
     """
 
     label: str
     hint: str
     sends: frozenset[str] | None
     exempt: frozenset[str] = frozenset()
-    legacy: bool = False
 
     def is_send(self, method: str) -> bool:
         if self.sends is not None:
@@ -477,13 +477,12 @@ class _Client:
 _HANDLE_IO = frozenset({"read", "readlines", "write", "writelines"})
 _CLIENTS = {
     "session": _Client(
-        "requests.Session()", _BLOCKING_HINT, _REQUESTS_VERBS | {"send"}, legacy=True
+        "requests.Session()", _BLOCKING_HINT, _REQUESTS_VERBS | {"send"}
     ),
     "opener": _Client(
         "urllib.request.build_opener()",
         _BLOCKING_HINT,
         frozenset({"open"}),
-        legacy=True,
     ),
     "httpx": _Client(
         "httpx.Client()", _BLOCKING_HINT, _REQUESTS_VERBS | {"send", "stream"}
@@ -688,7 +687,11 @@ class _Helpers:
                     tree = ast.parse(text, filename=str(source))
                 except SyntaxError:
                     tree = None
-                if tree is not None:
+                # A helper in a deprecated module is being removed, not fixed —
+                # the same skip the module gets when it is scanned itself.
+                if tree is not None and not module_is_deprecated(
+                    tree, path=source, root=self._root
+                ):
                     root = self._root.resolve() if self._root is not None else None
                     rel = source.relative_to(root) if root is not None else source
                     module = _Module.of(
@@ -950,7 +953,15 @@ class _Visitor(ast.NodeVisitor):
             receiver = self._receiver_kind(target.rpartition(".")[0])
         else:
             receiver = self._client_call(value.func.value)
-        return _DERIVED.get((receiver, value.func.attr)) if receiver else None
+        if receiver:
+            return _DERIVED.get((receiver, value.func.attr))
+        # `path.open()` / `Path(p).open()` — pathlib's open, like fsspec's,
+        # hands back a sync file handle. An `.open` on a tracked client (a
+        # urllib opener's send, a zip member) was decided above; `self.open`
+        # is the class's own method.
+        if value.func.attr == "open" and target != "self.open":
+            return "file"
+        return None
 
     def _binding_key(self, target: ast.expr) -> str | None:
         if not isinstance(target, (ast.Name, ast.Attribute)):
@@ -1033,9 +1044,7 @@ class _Visitor(ast.NodeVisitor):
             send = self._inline_client_send(node)
             if send is not None:
                 label, client = send
-                if self._wf_depth == 0 and (
-                    client.legacy or id(node) not in self._awaited
-                ):
+                if self._wf_depth == 0:
                     self._add(node, label, client.hint)
                 return
             # `Path(p).iterdir()` roots its chain in a call, so it never resolves;
@@ -1049,11 +1058,14 @@ class _Visitor(ast.NodeVisitor):
         client = self._named_client_send(target)
         # Blocking sync I/O — skip inside workflow context (P020/P021 own it).
         if self._wf_depth == 0 and (
-            target in _BLOCKING_EXACT
-            or _is_blocking_network(target)
-            or (client is not None and client.legacy)
+            target in _BLOCKING_EXACT or _is_blocking_network(target)
         ):
             self._add(node, f"{target}()", _BLOCKING_HINT)
+            return
+        # A send on a client already identified as sync. Not exempted when
+        # awaited: the call blocks before `await` fails on its result.
+        if self._wf_depth == 0 and client is not None:
+            self._add(node, f"{target}()", client.hint)
             return
         # Everything below is data-scale work, and all of it is also P021's
         # territory inside workflow context (file I/O belongs in a @task at
@@ -1067,9 +1079,6 @@ class _Visitor(ast.NodeVisitor):
         # blocking namesakes; the await can. Checked here, before the first
         # match, so the exclusion the docstring promises actually holds.
         if id(node) in self._awaited:
-            return
-        if client is not None:
-            self._add(node, f"{target}()", client.hint)
             return
         hint = self._data_scale_hint(target)
         if hint is not None:

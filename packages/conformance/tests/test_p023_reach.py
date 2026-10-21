@@ -47,42 +47,61 @@ class ProbeApp(App):
         self._pool = ThreadPoolExecutor(max_workers=2)
 """
 
-# (case id, @task body) — each body holds exactly one blocking site.
-_PROBE_CASES: list[tuple[str, str]] = [
+# (case id, @task body, the label the one finding must name) — each body holds
+# exactly one blocking site, and the label pins *which* call is reported.
+_PROBE_CASES: list[tuple[str, str, str]] = [
     (
         "boto3",
         's3 = boto3.client("s3")\nreturn s3.get_object(Bucket=input.bucket, Key=input.key)',
+        "'s3.get_object()'",
     ),
     (
         "httpx-client",
         "with httpx.Client() as client:\n    return client.get(input.url)",
+        "'client.get()'",
     ),
-    ("os-listdir", "return os.listdir(input.root)"),
-    ("path-iterdir", "return list(Path(input.root).iterdir())"),
-    ("open-read", "with open(input.path) as fh:\n    return fh.read()"),
-    ("gzip", 'with gzip.open(input.path, "wt") as fh:\n    fh.write(input.text)'),
-    ("copyfile", "shutil.copyfile(input.src, input.dst)"),
+    ("os-listdir", "return os.listdir(input.root)", "'os.listdir()'"),
+    (
+        "path-iterdir",
+        "return list(Path(input.root).iterdir())",
+        "'Path().iterdir()'",
+    ),
+    (
+        "open-read",
+        "with open(input.path) as fh:\n    return fh.read()",
+        "'fh.read()'",
+    ),
+    (
+        "gzip",
+        'with gzip.open(input.path, "wt") as fh:\n    fh.write(input.text)',
+        "'fh.write()'",
+    ),
+    ("copyfile", "shutil.copyfile(input.src, input.dst)", "'shutil.copyfile()'"),
     (
         "zipfile",
         "with zipfile.ZipFile(input.path) as archive:\n    archive.extractall(input.root)",
+        "'archive.extractall()'",
     ),
-    ("fsync", "os.fsync(input.fd)"),
-    ("event-wait", "self._ready.wait(30)"),
+    ("fsync", "os.fsync(input.fd)", "'os.fsync()'"),
+    ("event-wait", "self._ready.wait(30)", "'self._ready.wait()'"),
     (
         "future-result",
         "future = self._pool.submit(sum, input.values)\nreturn future.result()",
+        "'future.result()'",
     ),
     (
         "sqlalchemy",
         "engine = create_engine(input.url)\n"
         "with engine.connect() as conn:\n"
         '    return conn.execute(text("select 1"))',
+        "'conn.execute()'",
     ),
     (
         "duckdb",
         "con = duckdb.connect()\nreturn con.execute(input.query).fetchall()",
+        "'con.execute()'",
     ),
-    ("sync-helper", "_write_rows(input.path, input.rows)"),
+    ("sync-helper", "_write_rows(input.path, input.rows)", "'_write_rows()'"),
 ]
 
 
@@ -96,7 +115,7 @@ def _probe_module() -> tuple[str, dict[str, range]]:
     """The probe source, and the line range each case's task occupies."""
     source = _PROBE_HEADER
     spans: dict[str, range] = {}
-    for name, body in _PROBE_CASES:
+    for name, body, _ in _PROBE_CASES:
         start = source.count("\n") + 1
         source += _probe_task(name, body)
         spans[name] = range(start, source.count("\n") + 1)
@@ -107,11 +126,14 @@ def _p023(source: str, file: str = "app/probe.py") -> list:
     return [f for f in scan_text(source, file) if f.rule_id == "P023"]
 
 
-@pytest.mark.parametrize("case", [name for name, _ in _PROBE_CASES])
-def test_probe_case_is_caught_exactly_once(case: str) -> None:
+@pytest.mark.parametrize(
+    ("case", "label"), [(c, label) for c, _, label in _PROBE_CASES]
+)
+def test_probe_case_is_caught_exactly_once(case: str, label: str) -> None:
     source, spans = _probe_module()
     hits = [f for f in _p023(source) if f.line in spans[case]]
     assert len(hits) == 1, (case, [f.message for f in hits])
+    assert label in hits[0].message, (case, hits[0].message)
 
 
 def test_probe_reports_nothing_outside_the_cases() -> None:
@@ -367,6 +389,44 @@ def test_class_deprecated_at_construction_is_skipped() -> None:
     assert finding.line == 12
 
 
+def test_uncalled_nested_warning_does_not_deprecate_the_class() -> None:
+    """A warn inside a nested def of `__init__` never runs at construction, so
+    it says nothing about the class; its live methods are still scanned."""
+    src = (
+        "import shutil\nimport warnings\nfrom application_sdk.app import App, task\n"
+        "class Live(App):\n"
+        "    def __init__(self):\n"
+        "        def _legacy():\n"
+        '            warnings.warn("old path", DeprecationWarning)\n'
+        "        self._legacy = _legacy\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        shutil.rmtree(input.path)\n"
+    )
+    (finding,) = _p023(src)
+    assert finding.line == 11
+
+
+def test_helper_in_a_deprecated_module_is_not_followed(tmp_path: Path) -> None:
+    _write(tmp_path, "app/__init__.py", "")
+    _write(
+        tmp_path,
+        "app/legacy/__init__.py",
+        'import warnings\nwarnings.warn("gone", DeprecationWarning)\n',
+    )
+    _write(tmp_path, "app/legacy/util.py", _IMPORTED_HELPER)
+    caller = _write(
+        tmp_path,
+        "app/main.py",
+        "from app.legacy.util import purge\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        purge(input.path)\n",
+    )
+    assert [f for f in scan_path(caller, tmp_path) if f.rule_id == "P023"] == []
+
+
 def test_live_module_is_still_flagged(tmp_path: Path) -> None:
     caller = _write(tmp_path, "app/live.py", _DEPRECATED_BODY)
     assert len([f for f in scan_path(caller, tmp_path) if f.rule_id == "P023"]) == 1
@@ -404,6 +464,76 @@ def test_new_inventory_constructors_and_async_forms_are_silent(stmt: str) -> Non
     assert _p023(src) == [], stmt
 
 
+def test_sqlalchemy_connect_alone_is_not_reported() -> None:
+    """The connect pairs with the execute that follows it; reporting both would
+    double-count one block, so a connect with no execute is silent."""
+    src = (
+        "from sqlalchemy import create_engine\n"
+        "from application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def t(self, input):\n"
+        "        engine = create_engine(input.url)\n"
+        "        with engine.connect() as conn:\n"
+        "            pass\n"
+    )
+    assert _p023(src) == []
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        "await httpx.Client().get(input.url)",
+        "with open(input.path) as fh:\n            await fh.read()",
+    ],
+)
+def test_awaiting_a_known_sync_client_is_still_flagged(stmt: str) -> None:
+    """The request runs before `await` raises on its non-awaitable result, so an
+    `await` on a client already identified as sync is a bug, not an async API."""
+    src = (
+        "import httpx\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def t(self, input):\n"
+        f"        {stmt}\n"
+    )
+    assert len(_p023(src)) == 1, stmt
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        'with input.path.open("rb") as fh:\n            fh.read(1024)',
+        "with Path(input.path).open() as fh:\n            fh.read()",
+        "fh = input.path.open()\n        fh.read()",
+    ],
+)
+def test_path_open_handle_is_tracked(stmt: str) -> None:
+    src = (
+        "from pathlib import Path\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def t(self, input):\n"
+        f"        {stmt}\n"
+    )
+    assert len(_p023(src)) == 1, stmt
+
+
+def test_open_on_a_tracked_client_is_not_a_file_handle() -> None:
+    """`o.open(url)` on a urllib opener is the send itself, reported once; its
+    result is a response, not a handle whose `read()` is reported again."""
+    src = (
+        "import urllib.request\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def t(self, input):\n"
+        "        o = urllib.request.build_opener()\n"
+        "        resp = o.open(input.url)\n"
+        "        resp.read()\n"
+    )
+    assert [f.line for f in _p023(src)] == [7]
+
+
 def test_rebinding_a_file_handle_in_async_with_clears_it() -> None:
     src = (
         "import aiofiles\nfrom application_sdk.app import App, task\n"
@@ -416,3 +546,33 @@ def test_rebinding_a_file_handle_in_async_with_clears_it() -> None:
         "            data = fh.read()\n"
     )
     assert _p023(src) == []
+
+
+# ── workflow context: P021 owns it, and must actually see it ─────────────────
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        'boto3.client("s3").get_object(Bucket="b", Key="k")',
+        's3 = boto3.client("s3")',
+        "con = duckdb.connect()",
+        "engine = create_engine(input.url)",
+        "z = zipfile.ZipFile(input.path)",
+        "fh = gzip.open(input.path)",
+    ],
+)
+def test_workflow_client_work_is_p021_not_p023(stmt: str) -> None:
+    src = (
+        "import gzip\nimport zipfile\nimport boto3\nimport duckdb\n"
+        "from sqlalchemy import create_engine\n"
+        "from application_sdk.app import App, entrypoint\n"
+        "class A(App):\n"
+        "    @entrypoint\n"
+        "    async def run(self, input):\n"
+        f"        {stmt}\n"
+    )
+    findings = scan_text(src, "app/wf.py")
+    assert [f.rule_id for f in findings if f.rule_id in ("P021", "P023")] == [
+        "P021"
+    ], stmt

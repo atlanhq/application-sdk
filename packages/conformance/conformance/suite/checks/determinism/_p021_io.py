@@ -41,11 +41,25 @@ _IO_PREFIXES = (
     # also what makes P023's workflow-context skip a real dedup rather than a
     # hole: tree ops in workflow context are reported here, once.
     "shutil.",
+    # The clients P023 tracks outside workflow context. Their sends are found
+    # through bindings P021 does not follow, so the roots are flagged instead —
+    # the construction, which in workflow code is already the defect.
+    "boto3.",
+    "botocore.",
+    "duckdb.",
+    "sqlalchemy.",
+    "zipfile.",
+    "tarfile.",
 )
 # Exact callables (builtins / specific functions) that perform I/O or env reads.
 _IO_EXACT = frozenset(
     {
         "open",
+        "io.open",
+        "codecs.open",
+        "gzip.open",
+        "bz2.open",
+        "lzma.open",
         "os.getenv",
         "os.system",
         "os.popen",
