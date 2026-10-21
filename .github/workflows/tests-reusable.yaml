@@ -930,9 +930,9 @@ jobs:
       - name: Check the handler's files are safe to host
         run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
 
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.17"
+          version: "0.13.4"
       - name: Install the api member alone and mount it like the host
         env:
           MEMBER: ${{ needs.detect-api-member.outputs.member }}
