@@ -47,6 +47,7 @@ from application_sdk.execution.progress import (
     current_progress_tracker,
 )
 from tests.unit.conftest import RecordingProgressTracker
+from tests.unit.private_stdlib import private_stdlib
 
 
 class _ProgIn(Input, allow_unbounded_fields=True):
@@ -429,8 +430,9 @@ class TestActivityBinding:
         before = current_progress_tracker()
 
         with (
+            private_stdlib(activities_module, "asyncio") as local_asyncio,
             mock.patch.object(
-                activities_module.asyncio,
+                local_asyncio,
                 "create_task",
                 side_effect=RuntimeError("event loop is closed"),
             ),

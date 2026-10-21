@@ -42,6 +42,7 @@ from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -1571,9 +1572,15 @@ class TestPython314EventLoopCompat:
                 "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
             ):
-                with mock.patch(
-                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
-                    side_effect=RuntimeError("no running event loop"),
+                with (
+                    private_stdlib(
+                        "application_sdk.observability.logger_adaptor", "asyncio"
+                    ) as local_asyncio,
+                    mock.patch.object(
+                        local_asyncio,
+                        "get_running_loop",
+                        side_effect=RuntimeError("no running event loop"),
+                    ),
                 ):
                     with mock.patch.object(
                         AtlanLoggerAdapter, "_spawn_flush_thread"
@@ -1600,9 +1607,15 @@ class TestPython314EventLoopCompat:
                 "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
             ):
-                with mock.patch(
-                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
-                    return_value=mock_loop,
+                with (
+                    private_stdlib(
+                        "application_sdk.observability.logger_adaptor", "asyncio"
+                    ) as local_asyncio,
+                    mock.patch.object(
+                        local_asyncio,
+                        "get_running_loop",
+                        return_value=mock_loop,
+                    ),
                 ):
                     with mock.patch.object(
                         AtlanLoggerAdapter, "_spawn_flush_thread"

@@ -13,7 +13,10 @@ paths so a renamed symbol fails the test.
 from __future__ import annotations
 
 import socket as _socket
+import urllib.request
+from collections.abc import Iterator
 from datetime import timedelta
+from types import ModuleType
 from typing import Any
 from unittest import mock
 
@@ -35,6 +38,7 @@ from application_sdk.execution._temporal.backend import (
     create_temporal_client,
 )
 from application_sdk.execution.retry import RetryPolicy as SdkRetryPolicy
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture(autouse=True)
@@ -676,8 +680,9 @@ class TestCreateTemporalClient:
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(backend_module.Client, "connect", new=connect_mock),
+            private_stdlib(backend_module, "asyncio") as local_asyncio,
             mock.patch.object(
-                backend_module.asyncio, "sleep", new=mock.AsyncMock()
+                local_asyncio, "sleep", new=mock.AsyncMock()
             ) as sleep_mock,
         ):
             client = await create_temporal_client(
@@ -695,7 +700,8 @@ class TestCreateTemporalClient:
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(backend_module.Client, "connect", new=connect_mock),
-            mock.patch.object(backend_module.asyncio, "sleep", new=mock.AsyncMock()),
+            private_stdlib(backend_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "sleep", new=mock.AsyncMock()),
         ):
             with pytest.raises(TemporalConnectError):
                 await create_temporal_client(
@@ -715,16 +721,34 @@ class TestTemporalProxyConfig:
     proxy_bypass_environment, so tests patch those to stay platform-independent
     (plain proxy_bypass reads system config on macOS)."""
 
+    @pytest.fixture(autouse=True)
+    def _private_urllib_request(self) -> Iterator[None]:
+        """Give ``backend`` its own ``urllib.request``, so a patched resolver
+        answers only the code under test and not another test's thread."""
+        with (
+            private_stdlib(backend_module, "urllib") as local_urllib,
+            private_stdlib(local_urllib, "request"),
+        ):
+            yield
+
+    @staticmethod
+    def _request() -> ModuleType:
+        """The private ``urllib.request`` the autouse fixture bound into ``backend``."""
+        request = backend_module.urllib.request
+        assert request is not urllib.request, "the private-copy fixture is not active"
+        return request
+
     @staticmethod
     def _connect_mock():
         return mock.AsyncMock(return_value=mock.MagicMock())
 
-    @staticmethod
-    def _proxy_env(proxies: dict, bypass: bool = False):
+    @classmethod
+    def _proxy_env(cls, proxies: dict, bypass: bool = False):
         """Patch the stdlib proxy resolver to return *proxies* and *bypass*."""
+        request = cls._request()
         return (
-            mock.patch("urllib.request.getproxies", return_value=proxies),
-            mock.patch("urllib.request.proxy_bypass_environment", return_value=bypass),
+            mock.patch.object(request, "getproxies", return_value=proxies),
+            mock.patch.object(request, "proxy_bypass_environment", return_value=bypass),
         )
 
     @pytest.mark.asyncio
@@ -821,8 +845,9 @@ class TestTemporalProxyConfig:
     def test_no_proxy_matches_on_bare_hostname(self, host: str) -> None:
         """NO_PROXY matches on the hostname regardless of scheme/userinfo/port."""
         # Real proxy_bypass_environment runs against the extracted hostname.
-        with mock.patch(
-            "urllib.request.getproxies",
+        with mock.patch.object(
+            self._request(),
+            "getproxies",
             return_value={"https": "http://proxy.corp:8080", "no": "internal.corp"},
         ):
             cfg = backend_module._build_temporal_proxy_config(host, tls_enabled=True)
@@ -832,10 +857,12 @@ class TestTemporalProxyConfig:
         """A schemeless proxy value (ops typo) is rejected with an error log and
         a direct connection, not a silent empty target_host."""
         with (
-            mock.patch(
-                "urllib.request.getproxies", return_value={"https": "proxy.corp:8080"}
+            mock.patch.object(
+                self._request(), "getproxies", return_value={"https": "proxy.corp:8080"}
             ),
-            mock.patch("urllib.request.proxy_bypass_environment", return_value=False),
+            mock.patch.object(
+                self._request(), "proxy_bypass_environment", return_value=False
+            ),
             mock.patch.object(backend_module.logger, "error") as err,
         ):
             cfg = backend_module._build_temporal_proxy_config(

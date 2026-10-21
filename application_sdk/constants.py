@@ -117,13 +117,22 @@ from application_sdk._build_info import (  # noqa: E402 — public here as befor
 
 _BUILD_INFO = load_build_info()
 
+
+def _load_application_version(build_info: dict[str, str]) -> str:
+    return build_info.get("app_version", "") or os.getenv(
+        "ATLAN_APPLICATION_VERSION", ""
+    )
+
+
+def _load_commit_sha(build_info: dict[str, str]) -> str:
+    return build_info.get("commit_sha", "") or os.getenv("ATLAN_COMMIT_SHA", "")
+
+
 #: Version of the app release exactly as Global Marketplace stores it
 #: (release tag for semver apps, sha7 for CD apps). Baked value first.
-APPLICATION_VERSION = _BUILD_INFO.get("app_version", "") or os.getenv(
-    "ATLAN_APPLICATION_VERSION", ""
-)
+APPLICATION_VERSION = _load_application_version(_BUILD_INFO)
 #: Git commit the image was built from. Baked only — no deployer stamps it.
-COMMIT_SHA = _BUILD_INFO.get("commit_sha", "") or os.getenv("ATLAN_COMMIT_SHA", "")
+COMMIT_SHA = _load_commit_sha(_BUILD_INFO)
 #: Release UUID from Global Marketplace
 RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
 #: Release channel (all, beta, staging, specific)
@@ -351,6 +360,7 @@ STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
     os.getenv("ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", "30")
 )
 
+
 #: Interval (seconds) between progress marks while an activity waits on a
 #: per-destination storage lock (materialise dedupe, chunked-transfer
 #: exclusion). Must stay under the stall watchdog's no-progress budget, or a
@@ -360,13 +370,17 @@ STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
 #: ``max_no_progress_seconds`` below that cap is the operator's explicit
 #: exception and is not defended here). Floored at 1s so a zero cannot turn
 #: the wait into a busy spin. (CONNECT-1126)
-STORAGE_LOCK_WAIT_PROGRESS_SECONDS = max(
-    1.0,
-    min(
-        float(os.getenv("ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS", "30")),
-        float(os.getenv("ATLAN_MAX_NO_PROGRESS_SECONDS", "900")) / 4.0,
-    ),
-)
+def _load_storage_lock_wait_progress_seconds() -> float:
+    return max(
+        1.0,
+        min(
+            float(os.getenv("ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS", "30")),
+            float(os.getenv("ATLAN_MAX_NO_PROGRESS_SECONDS", "900")) / 4.0,
+        ),
+    )
+
+
+STORAGE_LOCK_WAIT_PROGRESS_SECONDS = _load_storage_lock_wait_progress_seconds()
 
 #: Multipart part size for uploads (default 8 MiB). Raise this per deployment
 #: when the destination makes *part count* expensive rather than part size.
@@ -454,13 +468,16 @@ STORAGE_WRITE_SIDECARS = (
     os.getenv("ATLAN_STORAGE_WRITE_SIDECARS", "true").strip().lower() != "false"
 )
 
+
 #: Opt-in for the e2e ``sdk:store-assert`` node (FND-3571). The workflow is
 #: registered on every worker so worker start-up is identical everywhere; with
 #: this unset the node reads nothing and reports itself disabled. Only e2e
 #: installs set it, per tenant, through ``deploy.env_overrides``.
-STORE_ASSERT_ENABLED = (
-    os.getenv("ATLAN_STORE_ASSERT_ENABLED", "false").strip().lower() == "true"
-)
+def _load_store_assert_enabled() -> bool:
+    return os.getenv("ATLAN_STORE_ASSERT_ENABLED", "false").strip().lower() == "true"
+
+
+STORE_ASSERT_ENABLED = _load_store_assert_enabled()
 
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
@@ -660,9 +677,13 @@ OOM_RESTART_CHECK = _load_oom_restart_check()
 #: Whether to use server-side cursors for SQL operations.
 #: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other
 #: than "true" (e.g. "false") to opt out.
-USE_SERVER_SIDE_CURSOR = (
-    os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true").strip().lower() == "true"
-)
+def _load_use_server_side_cursor() -> bool:
+    return (
+        os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true").strip().lower() == "true"
+    )
+
+
+USE_SERVER_SIDE_CURSOR = _load_use_server_side_cursor()
 
 # DAPR Constants
 #: Name of the state store component in DAPR
@@ -839,12 +860,17 @@ LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upp
 #: Used by traces_adaptor.py and metrics_adaptor.py at module level for
 #: tracer/meter initialization. AppConfig.service_name is the runtime equivalent.
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
-#: Service version for OpenTelemetry
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "")
-if not SERVICE_VERSION:
-    from application_sdk.version import __version__
 
-    SERVICE_VERSION = __version__
+
+from application_sdk.version import __version__  # noqa: E402
+
+
+def _load_service_version() -> str:
+    return os.getenv("OTEL_SERVICE_VERSION", "") or __version__
+
+
+#: Service version for OpenTelemetry
+SERVICE_VERSION: str = _load_service_version()
 #: Additional resource attributes for OpenTelemetry
 OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 #: Endpoint for the OpenTelemetry collector

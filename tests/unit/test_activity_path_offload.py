@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.contracts.types import FileReference
 from tests.unit.loop_probe import LoopProbe
+from tests.unit.private_stdlib import private_stdlib
 
 
 class TestChunkedDownloadCheckpoint:
@@ -61,7 +62,8 @@ class TestChunkedDownloadCheckpoint:
 
         real_save = chunked._save_transfer_state
         with (
-            mock.patch("application_sdk.storage.chunked.os.fsync", slow_fsync),
+            private_stdlib(chunked, "os") as local_os,
+            mock.patch.object(local_os, "fsync", slow_fsync),
             mock.patch.object(chunked, "_save_transfer_state", counting_save),
         ):
             with probe.bound():
@@ -295,9 +297,10 @@ class TestSizingInterceptorInputWalk:
             mock.patch(f"{target}.activity") as act,
             mock.patch(f"{target}.track_container_usage", _tracker),
             mock.patch(f"{target}.record_observation") as record,
-            mock.patch(
-                "application_sdk.observability.sizing_inputs.os.walk", slow_walk
-            ),
+            private_stdlib(
+                "application_sdk.observability.sizing_inputs", "os"
+            ) as local_os,
+            mock.patch.object(local_os, "walk", slow_walk),
         ):
             act.info.return_value = _Info()
             with probe.bound():

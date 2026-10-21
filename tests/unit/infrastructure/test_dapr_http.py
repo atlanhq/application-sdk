@@ -31,6 +31,7 @@ from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreUnavailableError,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -434,22 +435,15 @@ class TestSidecarWaitTimeout:
     sidecar (the old 10s let CI proceed before daprd was up)."""
 
     def test_default_timeout_raised_and_env_configurable(self, monkeypatch):
-        import importlib
-
         import application_sdk.infrastructure._dapr.http as http_mod
 
         # Default is generous enough for a CI cold start.
-        assert http_mod._DEFAULT_SIDECAR_WAIT_TIMEOUT >= 60.0
+        monkeypatch.delenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", raising=False)
+        assert http_mod._load_sidecar_wait_timeout() >= 60.0
 
-        # ...and overridable via env. Reload under the patched env, then restore
-        # so the module globals don't leak into other tests.
+        # ...and overridable via env.
         monkeypatch.setenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "123")
-        try:
-            reloaded = importlib.reload(http_mod)
-            assert reloaded._DEFAULT_SIDECAR_WAIT_TIMEOUT == 123.0
-        finally:
-            monkeypatch.delenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", raising=False)
-            importlib.reload(http_mod)
+        assert http_mod._load_sidecar_wait_timeout() == 123.0
 
 
 class TestWaitForDaprSidecar:
@@ -985,8 +979,11 @@ class TestWarmSidecarReadRetry:
             "application_sdk.infrastructure._dapr.http._dapr_component_confirmed_ready",
             {"warm-component"},
         )
-        with patch(
-            "application_sdk.infrastructure._dapr.http.asyncio.sleep", AsyncMock()
+        with (
+            private_stdlib(
+                "application_sdk.infrastructure._dapr.http", "asyncio"
+            ) as local_asyncio,
+            patch.object(local_asyncio, "sleep", AsyncMock()),
         ):
             yield "warm-component"
 

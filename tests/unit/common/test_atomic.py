@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import errno
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import DEFAULT, patch
 
 import pytest
 
+from application_sdk.common import atomic as atomic_mod
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import (
     PARTIAL_DIRNAME,
@@ -40,11 +43,29 @@ from application_sdk.common.atomic import (
     ensure_free_space,
 )
 from application_sdk.errors import DiskFullError, ResourceExhaustedError
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _enospc(*_args: Any, **_kwargs: Any) -> Any:
     """Stand-in for a filesystem with no room left."""
     raise OSError(errno.ENOSPC, "No space left on device")
+
+
+@contextmanager
+def _in_atomic(
+    stdlib: str, name: str, new: Any = DEFAULT, **kwargs: Any
+) -> Iterator[Any]:
+    """Patch ``<stdlib>.<name>`` as :mod:`application_sdk.common.atomic` sees it.
+
+    Every write under test reaches the filesystem through ``atomic``; a global
+    ``patch("os.fsync")`` would also fail the fsync of any thread an earlier
+    test left running on the worker.
+    """
+    with (
+        private_stdlib(atomic_mod, stdlib) as local,
+        patch.object(local, name, new, **kwargs) as patched,
+    ):
+        yield patched
 
 
 class _Usage:
@@ -94,7 +115,7 @@ class TestAtomicWrite:
     def test_enospc_leaves_no_file_at_the_final_path(self, tmp_path: Path) -> None:
         artifact = tmp_path / "artifact.json"
 
-        with patch("os.fsync", _enospc):
+        with _in_atomic("os", "fsync", _enospc):
             with pytest.raises(DiskFullError):
                 with atomic_write(artifact, operation="test write") as handle:
                     handle.write(b"x" * 184)
@@ -115,7 +136,7 @@ class TestAtomicWrite:
         artifact = tmp_path / "artifact.json"
         artifact.write_bytes(b'{"complete": true}')
 
-        with patch("os.fsync", _enospc):
+        with _in_atomic("os", "fsync", _enospc):
             with pytest.raises(DiskFullError):
                 with atomic_write(artifact, operation="test write") as handle:
                     handle.write(b'{"replacement')
@@ -129,7 +150,7 @@ class TestAtomicWrite:
         def _eacces(*_args: Any, **_kwargs: Any) -> Any:
             raise OSError(errno.EACCES, "Permission denied")
 
-        with patch("os.fsync", _eacces):
+        with _in_atomic("os", "fsync", _eacces):
             with pytest.raises(OSError) as caught:
                 with atomic_write(artifact, operation="test write") as handle:
                     handle.write(b"x")
@@ -217,7 +238,10 @@ class TestAtomicWrite:
         ENOSPC must arrive as DiskFullError, not escape as a bare OSError."""
         artifact = tmp_path / "artifact.json"
 
-        with patch("application_sdk.common.atomic.os.makedirs", _enospc):
+        with (
+            private_stdlib("application_sdk.common.atomic", "os") as local_os,
+            patch.object(local_os, "makedirs", _enospc),
+        ):
             with pytest.raises(DiskFullError) as caught:
                 with atomic_write(artifact, operation="test write") as handle:
                     handle.write(b"x")
@@ -235,7 +259,7 @@ class TestAtomicCopy:
         destination = tmp_path / "dest" / "src.json"
         destination.parent.mkdir()
 
-        with patch("application_sdk.common.atomic.shutil.copy2", _enospc):
+        with _in_atomic("shutil", "copy2", _enospc):
             with pytest.raises(DiskFullError):
                 atomic_copy(source, destination, operation="test copy")
 
@@ -262,7 +286,7 @@ class TestDiskFullError:
     def test_it_names_the_path_and_the_step(self, tmp_path: Path) -> None:
         artifact = tmp_path / "column-ancestral-201.json"
 
-        with patch("os.fsync", _enospc):
+        with _in_atomic("os", "fsync", _enospc):
             with pytest.raises(DiskFullError) as caught:
                 with atomic_write(artifact, operation="carry-forward copy") as handle:
                     handle.write(b"x")
@@ -308,7 +332,7 @@ class TestDiskFullError:
         def _over_quota(*_args: Any, **_kwargs: Any) -> Any:
             raise OSError(quota_errno, "Disc quota exceeded")
 
-        with patch("os.fsync", _over_quota):
+        with _in_atomic("os", "fsync", _over_quota):
             with pytest.raises(DiskFullError):
                 with atomic_write(tmp_path / "a.json", operation="t") as handle:
                     handle.write(b"x")
@@ -334,8 +358,9 @@ class TestEnsureFreeSpace:
     def test_a_plainly_impossible_write_fails_before_it_starts(
         self, tmp_path: Path
     ) -> None:
-        with patch(
-            "application_sdk.common.atomic.shutil.disk_usage",
+        with _in_atomic(
+            "shutil",
+            "disk_usage",
             return_value=_Usage(free=1024),
         ):
             with pytest.raises(DiskFullError) as caught:
@@ -357,7 +382,7 @@ class TestEnsureFreeSpace:
         self, tmp_path: Path
     ) -> None:
         """The write's own failure stays the signal; the probe is an optimisation."""
-        with patch("application_sdk.common.atomic.shutil.disk_usage", _enospc):
+        with _in_atomic("shutil", "disk_usage", _enospc):
             ensure_free_space(tmp_path, 8 * 1024**3, operation="t")  # should not raise
 
 

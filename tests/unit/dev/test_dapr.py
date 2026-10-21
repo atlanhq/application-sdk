@@ -27,6 +27,7 @@ from application_sdk.dev._dapr_errors import (
     UnsupportedArchitectureError,
     UnsupportedOsError,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 class TestPlatformTuple:
@@ -201,14 +202,15 @@ class TestEmbeddedDaprLifecycle:
             return fake_proc
 
         monkeypatch.setattr(
-            "asyncio.create_subprocess_exec", _fake_create_subprocess_exec
-        )
-        monkeypatch.setattr(
             "application_sdk.dev._dapr._wait_for_dapr_ready",
             AsyncMock(return_value=None),
         )
 
-        return fake_proc
+        with private_stdlib("application_sdk.dev._dapr", "asyncio") as local_asyncio:
+            monkeypatch.setattr(
+                local_asyncio, "create_subprocess_exec", _fake_create_subprocess_exec
+            )
+            yield fake_proc
 
     @pytest.mark.asyncio
     async def test_yields_embedded_dapr_dataclass(

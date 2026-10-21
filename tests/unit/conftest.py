@@ -1,10 +1,13 @@
 """Unit test configuration and autouse fixtures."""
 
+import importlib.util
+import os
 import time
 from collections.abc import Callable, Iterator
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from hypothesis import settings
 from loguru import logger as _loguru_logger
 
 from application_sdk._runtime.progress import (
@@ -21,6 +24,25 @@ from application_sdk.testing.fixtures import (  # noqa: F401
     clean_task_registry,
     restore_logger_init_flags,
 )
+from tests.unit.private_stdlib import private_stdlib
+
+# One hypothesis profile for the whole unit tree, loaded once at collection. A
+# module-level ``settings.load_profile`` in a test file replaces it for every
+# test the xdist worker runs after that module is imported, so which deadline a
+# property test gets depended on which files shared its worker. No deadline:
+# a single slow example on a loaded runner is not a failure.
+settings.register_profile("unit", deadline=None)
+settings.load_profile("unit")
+
+# Snapshot at conftest import time: collection happens before any test runs, so
+# this is the driver's pristine mapping.
+if importlib.util.find_spec("psycopg2") is not None:
+    import psycopg2.extensions as _psycopg2_ext
+
+    _PRISTINE_PSYCOPG2_ENCODINGS: dict[str, str] | None = dict(_psycopg2_ext.encodings)
+else:  # psycopg2 is a test-only dep; tolerate interpreters without a wheel
+    _psycopg2_ext = None  # type: ignore[assignment]  # — sentinel for "driver not installed": None is not a module
+    _PRISTINE_PSYCOPG2_ENCODINGS = None
 
 
 class RecordingProgressTracker(ProgressTracker):
@@ -190,6 +212,87 @@ def _reset_fetched_binding_secrets_registry():
     _reset_fetched_binding_secrets()
 
 
+@pytest.fixture(autouse=True)
+def _restore_environ() -> Iterator[None]:
+    """Put ``os.environ`` back as the test found it.
+
+    ``monkeypatch.delenv(name, raising=False)`` on an absent variable records
+    nothing, so a variable the code under test then sets with
+    ``os.environ.setdefault`` outlives the test; so does anything set or popped
+    directly. Restoring by difference rather than ``clear()`` + ``update()``
+    means a thread still running from this test never sees an empty
+    environment. Order against ``monkeypatch`` does not matter: each restores
+    only what it recorded.
+    """
+    before = dict(os.environ)
+    yield
+    for name in os.environ.keys() - before.keys():
+        os.environ.pop(name, None)
+    for name, value in before.items():
+        if os.environ.get(name) != value:
+            os.environ[name] = value
+
+
+@pytest.fixture(autouse=True)
+def reset_registries(
+    clean_app_registry,  # noqa: F811 — the imported fixture, requested by name
+    clean_task_registry,  # noqa: F811 — the imported fixture, requested by name
+) -> None:
+    """Reset ``AppRegistry`` and ``TaskRegistry`` around every unit test.
+
+    Both are process-wide. Defining an ``App`` subclass registers it, so
+    without a reset one test's apps and tasks are visible to whichever test
+    the xdist worker runs next. Requests the shared ``clean_*_registry``
+    fixtures rather than repeating their resets, so a test that also asks for
+    one by name gets the same instance.
+    """
+
+
+@pytest.fixture(autouse=True)
+def _clear_infrastructure() -> Iterator[None]:
+    """Clear the process-wide infrastructure context around every unit test.
+
+    ``set_infrastructure`` writes a module global that ``get_infrastructure``
+    reads everywhere; a test that sets it and never clears it hands its mocks
+    to the next test on the worker.
+    """
+    from application_sdk.infrastructure.context import clear_infrastructure
+
+    clear_infrastructure()
+    yield
+    clear_infrastructure()
+
+
+@pytest.fixture(autouse=True)
+def _reset_sizing_sink() -> Iterator[None]:
+    """Drop the lazily built, process-wide sizing sink around every unit test."""
+    from application_sdk.observability import sizing_sink
+
+    sizing_sink._reset_for_testing()
+    yield
+    sizing_sink._reset_for_testing()
+
+
+@pytest.fixture(autouse=True)
+def restore_psycopg2_encodings() -> Iterator[None]:
+    """Undo any process-global rewrite of psycopg2's encodings map.
+
+    ``install_tolerant_connection_decoder`` rewrites
+    ``psycopg2.extensions.encodings`` in place — deliberately, because that dict
+    is the only Python-reachable seam for psycopg2's connection decoder (see
+    ``application_sdk.clients.sql_typecasters``). Any test that builds a SQL
+    engine, in any directory, leaks it into every test that runs afterwards on
+    the worker, which would make ``TestRealPsycopg2Premises`` pass or fail by
+    ordering.
+    """
+    yield
+    if _PRISTINE_PSYCOPG2_ENCODINGS is None or _psycopg2_ext is None:
+        return
+    if _psycopg2_ext.encodings != _PRISTINE_PSYCOPG2_ENCODINGS:
+        _psycopg2_ext.encodings.clear()
+        _psycopg2_ext.encodings.update(_PRISTINE_PSYCOPG2_ENCODINGS)
+
+
 @pytest.fixture
 def fast_dapr_cold_start_retry(monkeypatch):
     """Zero out cold-start retry backoff so a retry-then-succeed test runs
@@ -227,22 +330,24 @@ def deterministic_dapr_cold_start_deadline(monkeypatch):
     ``retry_past_dapr_cold_start`` call site's deadline-exhaustion test;
     previously each duplicated the same fake-clock + mocked-sleep setup.
     """
-    monkeypatch.setattr(
-        "application_sdk.infrastructure._dapr.http.DAPR_COLD_START_MAX_WAIT_SECONDS",
-        10.0,
-    )
-    monkeypatch.setattr(
-        "application_sdk.infrastructure._dapr.http.asyncio.sleep", AsyncMock()
-    )
+    from application_sdk.infrastructure._dapr import http as dapr_http
+
+    monkeypatch.setattr(dapr_http, "DAPR_COLD_START_MAX_WAIT_SECONDS", 10.0)
     fake_now = {"t": 0.0}
 
     def fake_monotonic() -> float:
         fake_now["t"] += 6.0
         return fake_now["t"]
 
-    monkeypatch.setattr(
-        "application_sdk.infrastructure._dapr.http.time.monotonic", fake_monotonic
-    )
+    # Private copies, so the fake clock and the no-op sleep reach only the
+    # retry loop under test, not the event loop or another test's thread.
+    with (
+        private_stdlib(dapr_http, "asyncio") as local_asyncio,
+        private_stdlib(dapr_http, "time") as local_time,
+    ):
+        monkeypatch.setattr(local_asyncio, "sleep", AsyncMock())
+        monkeypatch.setattr(local_time, "monotonic", fake_monotonic)
+        yield
 
 
 @pytest.fixture(autouse=True)
