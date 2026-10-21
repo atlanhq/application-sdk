@@ -1403,19 +1403,25 @@ def test_round_cap_defaults_to_five():
 _NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 
-def _run(i, status="in_progress", pr=7, age_minutes=1):
+def _run(i, status="in_progress", pr=7):
     return {
         "id": i,
         "status": status,
         "display_title": run_name(pr),
         "html_url": f"https://x/runs/{i}",
-        "created_at": (_NOW - timedelta(minutes=age_minutes)).isoformat(),
     }
 
 
-def _jobs(*statuses):
+def _job(status, started_minutes_ago=1):
+    job = {"name": "lens review", "status": status}
+    if status != "queued":
+        job["started_at"] = (_NOW - timedelta(minutes=started_minutes_ago)).isoformat()
+    return job
+
+
+def _jobs(*jobs):
     """A `jobs_of` returning the same jobs for every run."""
-    return lambda run_id: [{"name": "lens review", "status": s} for s in statuses]
+    return lambda run_id: [j if isinstance(j, dict) else _job(j) for j in jobs]
 
 
 _RUNNING = _jobs("in_progress")
@@ -1469,25 +1475,33 @@ def test_jobs_are_only_listed_for_an_older_run_that_claims_to_be_active():
 
     def jobs_of(run_id):
         asked.append(run_id)
-        return [{"status": "in_progress"}]
+        return [_job("in_progress")]
 
     runs = [_run(110), _run(104, status="completed"), _run(103, pr=8), _run(100)]
     assert _older(runs, jobs_of=jobs_of)["id"] == 100
     assert asked == [100]
 
 
-def test_an_older_run_past_the_job_timeout_never_blocks():
-    assert _older([_run(100, age_minutes=46)]) is None
-    assert _older([_run(100, age_minutes=44)])["id"] == 100
+def test_a_job_started_more_than_the_job_timeout_ago_never_blocks():
+    assert _older([_run(100)], jobs_of=_jobs(_job("in_progress", 46))) is None
+    assert _older([_run(100)], jobs_of=_jobs(_job("in_progress", 44)))["id"] == 100
     # A stale run does not hide a live one behind it.
-    assert _older([_run(101, age_minutes=60), _run(100)])["id"] == 100
+    stale = {101: [_job("in_progress", 60)], 100: [_job("in_progress")]}
+    assert _older([_run(101), _run(100)], jobs_of=stale.__getitem__)["id"] == 100
 
 
-def test_a_run_without_a_readable_creation_time_falls_back_to_its_jobs():
-    run = _run(100)
-    del run["created_at"]
-    assert _older([run])["id"] == 100
-    assert _older([run], jobs_of=_jobs("completed")) is None
+def test_a_job_still_queued_blocks_however_long_ago_the_run_was_created():
+    # The job timeout bounds a started job; a queued one can still start and overlap.
+    assert _older([_run(100)], jobs_of=_jobs("queued"))["id"] == 100
+    no_start = {"status": "in_progress", "started_at": None}
+    assert _older([_run(100)], jobs_of=_jobs(no_start))["id"] == 100
+
+
+def test_a_failed_jobs_lookup_yields_rather_than_risk_two_reviews():
+    def jobs_of(run_id):
+        raise GitHubError("GET /jobs: HTTP 403: rate limit exceeded")
+
+    assert _older([_run(100)], jobs_of=jobs_of)["id"] == 100
 
 
 def test_lock_timeout_matches_the_workflow_job_timeout():
@@ -1529,11 +1543,16 @@ def test_cli_drops_a_request_while_another_review_runs(monkeypatch):
             pass
 
         def workflow_runs(self, workflow_file):
-            # The CLI reads the real clock, so the busy run must be fresh by it.
-            return [{**_run(100), "created_at": datetime.now(timezone.utc).isoformat()}]
+            return [_run(100)]
 
         def run_jobs(self, run_id):
-            return [{"status": "in_progress"}]
+            # The CLI reads the real clock, so the job must be fresh by it.
+            return [
+                {
+                    "status": "in_progress",
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
 
         def comment(self, number, body):
             posted.append(body)

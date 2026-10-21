@@ -13,7 +13,8 @@ instant still resolve to exactly one review — never zero, never two.
 A run's status alone is not trusted: GitHub can leave a run `in_progress`
 after its only job has finished, which would refuse every `/lens` until
 GitHub closes it. So an older run that looks active is checked against its
-jobs, and one older than the job timeout is never waited on.
+jobs: it blocks only while one of them is queued, or started no more than the
+job timeout ago.
 """
 
 from __future__ import annotations
@@ -21,6 +22,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any
+
+from .github import GitHubError
 
 WORKFLOW_FILE = "lens.yml"
 ACTIVE = {"queued", "in_progress", "waiting", "requested", "pending"}
@@ -33,11 +36,20 @@ def run_name(pr: int) -> str:
     return f"lens #{pr}"
 
 
-def _created(run: dict[str, Any]) -> datetime | None:
+def _started(job: dict[str, Any]) -> datetime | None:
     try:
-        return datetime.fromisoformat(str(run["created_at"]).replace("Z", "+00:00"))
+        return datetime.fromisoformat(str(job["started_at"]).replace("Z", "+00:00"))
     except (KeyError, ValueError):
         return None
+
+
+def _job_running(job: dict[str, Any], now: datetime) -> bool:
+    if job.get("status") == "completed":
+        return False
+    started = _started(job)
+    # `timeout-minutes` counts from when the job starts, not from when the run
+    # was created: a job still queued for a runner can start at any time.
+    return started is None or now - started <= JOB_TIMEOUT
 
 
 def _still_running(
@@ -45,12 +57,14 @@ def _still_running(
     jobs_of: Callable[[int], list[dict[str, Any]]],
     now: datetime,
 ) -> bool:
-    created = _created(run)
-    if created is not None and now - created > JOB_TIMEOUT:
-        return False  # no review outlives the job timeout
-    jobs = jobs_of(int(run["id"]))
+    try:
+        jobs = jobs_of(int(run["id"]))
+    except GitHubError as e:
+        # Can't tell, so keep the guarantee of one review: yield, as before.
+        print(f"::warning::lens: could not list jobs of run {run['id']}: {e}")
+        return True
     # No jobs yet means the run is still being set up, not that it is done.
-    return not jobs or any(j.get("status") != "completed" for j in jobs)
+    return not jobs or any(_job_running(j, now) for j in jobs)
 
 
 def older_active_run(
