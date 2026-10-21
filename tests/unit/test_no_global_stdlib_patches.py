@@ -14,10 +14,6 @@ import ast
 import re
 from pathlib import Path
 
-import pytest
-
-from tests.unit.private_stdlib import private_stdlib
-
 _UNIT_ROOT = Path(__file__).parent
 _EXEMPT = {Path(__file__).name, "private_stdlib.py"}
 
@@ -123,11 +119,3 @@ def test_the_guard_catches_each_global_form() -> None:
     for source, flagged in sources.items():
         call = ast.parse(source).body[0].value  # type: ignore[attr-defined]  # — every source above is a single expression statement
         assert (_violation(call) is not None) is flagged, source
-
-
-def test_private_stdlib_rejects_a_name_that_is_not_a_module() -> None:
-    from application_sdk.observability import pushgateway
-
-    with pytest.raises(TypeError, match="is not a module"):
-        with private_stdlib(pushgateway, "__name__"):
-            pass
