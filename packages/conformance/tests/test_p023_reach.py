@@ -576,3 +576,24 @@ def test_workflow_client_work_is_p021_not_p023(stmt: str) -> None:
     assert [f.rule_id for f in findings if f.rule_id in ("P021", "P023")] == [
         "P021"
     ], stmt
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        'q = sqlalchemy.text("SELECT 1")',
+        "cfg = botocore.config.Config(connect_timeout=5)",
+        "t = duckdb.typing.VARCHAR",
+    ],
+)
+def test_workflow_in_memory_builders_are_not_io(stmt: str) -> None:
+    src = (
+        "import sqlalchemy\nimport botocore.config\nimport duckdb\n"
+        "from application_sdk.app import App, entrypoint\n"
+        "class A(App):\n"
+        "    @entrypoint\n"
+        "    async def run(self, input):\n"
+        f"        {stmt}\n"
+    )
+    findings = scan_text(src, "app/wf.py")
+    assert [f for f in findings if f.rule_id in ("P021", "P023")] == [], stmt

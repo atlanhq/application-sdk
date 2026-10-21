@@ -364,6 +364,11 @@ _SUBPROCESS_EXACT = frozenset(
 )
 
 
+def is_client_factory(target: str) -> bool:
+    """True if *target* builds a client P023 tracks (P021 flags it in workflow context)."""
+    return target in _CLIENT_FACTORIES
+
+
 def is_data_scale_io(target: str) -> bool:
     """True if *target* is data-scale I/O (P023 outside workflow context, P021 inside)."""
     return (

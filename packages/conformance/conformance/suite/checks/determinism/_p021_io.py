@@ -21,7 +21,7 @@ from conformance.suite.checks.orchestration._temporal_common import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._p023_blocking_async import is_data_scale_io
+from ._p023_blocking_async import is_client_factory, is_data_scale_io
 from ._workflow_methods import resolve_call_target, workflow_method_nodes
 
 RULE_ID = "P021"
@@ -41,25 +41,11 @@ _IO_PREFIXES = (
     # also what makes P023's workflow-context skip a real dedup rather than a
     # hole: tree ops in workflow context are reported here, once.
     "shutil.",
-    # The clients P023 tracks outside workflow context. Their sends are found
-    # through bindings P021 does not follow, so the roots are flagged instead —
-    # the construction, which in workflow code is already the defect.
-    "boto3.",
-    "botocore.",
-    "duckdb.",
-    "sqlalchemy.",
-    "zipfile.",
-    "tarfile.",
 )
 # Exact callables (builtins / specific functions) that perform I/O or env reads.
 _IO_EXACT = frozenset(
     {
         "open",
-        "io.open",
-        "codecs.open",
-        "gzip.open",
-        "bz2.open",
-        "lzma.open",
         "os.getenv",
         "os.system",
         "os.popen",
@@ -119,6 +105,13 @@ def _is_io_target(target: str) -> bool:
     return (
         target in _IO_EXACT
         or any(target.startswith(p) for p in _IO_PREFIXES)
+        # The clients P023 tracks outside workflow context (boto3, duckdb,
+        # sqlalchemy engines, archives, gzip/io handles). Their sends are found
+        # through bindings P021 does not follow, so the factory is flagged
+        # instead — in workflow code the construction is already the defect.
+        # Exact factories, not package roots: `sqlalchemy.text(...)` or
+        # `botocore.config.Config(...)` build values in memory and do no I/O.
+        or is_client_factory(target)
         or (
             not _is_own_method(target)
             and (target.endswith(_IO_SUFFIXES) or is_data_scale_io(target))
