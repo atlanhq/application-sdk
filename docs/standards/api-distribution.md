@@ -64,6 +64,15 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
    dependency — still raises on the host. A new guard over another worker-only
    module adds that module to `_WORKER_ONLY_PREFIXES`. With the full SDK
    installed a missing module always raises.
+4. A **lazy export** of a listed package resolves to a listed module. A
+   PEP 562 `__getattr__` over a `name -> (module, attribute)` map (`_LAZY`,
+   `_module_map`), or over the submodule names passed to `lazy_getattr`, imports
+   its target by string, so the import closure cannot follow it: seed the
+   target in `[tool.atlan-api].seeds`. A target that is deliberately worker-only
+   (`handler.service`, the `templates` extractors, `credentials.resolver`) is
+   named in `_WORKER_ONLY_PREFIXES` as an exact module, never as a package that
+   holds listed files; no guard imports those, so naming them changes nothing at
+   runtime, and on the host the name raises as it always did.
 
 `probe_api_wheels.py` then checks the **built** wheels:
 
@@ -84,7 +93,8 @@ that needs a declared dependency or a guarded fallback.
 ## Dependencies
 
 - **core** (always installed): fastapi, pydantic, orjson, httpx,
-  python-multipart. It covers the handler surface, errors, credential specs,
+  python-multipart, python-dotenv (`application_sdk.constants`, which handlers
+  import directly, loads `.env` at import). It covers the handler surface, errors, credential specs,
   the shared routes and `run_in_thread`. Measured at 62 MB on an api-only install.
 - **extras**, one per seed group, with the same pins as `atlan-application-sdk`:
   - `sql`: the SQL client base and credential utils;

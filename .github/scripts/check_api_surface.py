@@ -20,7 +20,17 @@ file's imports and fails on:
 * a module-level import of a third-party package the api distribution does not
   declare as a dependency (a function-level import of one of its extras is fine:
   the handler that needs it declares the extra, as it does on the worker);
-* an import of an ``application_sdk`` module that does not exist at all.
+* an import of an ``application_sdk`` module that does not exist at all;
+* a **lazy export** of a listed module (a PEP 562 ``__getattr__`` over a
+  ``name -> (module, attribute)`` map such as ``_LAZY``, or over the submodule
+  names passed to ``_install.lazy_getattr``) whose target module is not listed
+  either. Those targets are strings, so the import closure never sees them, and
+  ``from application_sdk.credentials import expand_dotted_keys`` failed on the
+  host because ``common.transforms`` was not shipped. A target that is
+  deliberately worker-only is named in ``_WORKER_ONLY_PREFIXES``
+  (``application_sdk/_install.py``) as an exact module, never a package that
+  holds listed files; there it fails on the host with the ``AttributeError``
+  ``lazy_getattr`` raises for a module that is not installed.
 
 Usage (from the repo root)::
 
@@ -39,6 +49,7 @@ from pathlib import Path
 
 API_DIR = Path("packages/api")
 LIST_FILE = API_DIR / "api-files.txt"
+INSTALL_FILE = Path("application_sdk/_install.py")
 
 #: Import names that a declared requirement provides under another name, or
 #: that come with one (pydantic brings pydantic_core, fastapi brings starlette).
@@ -183,6 +194,142 @@ def _imports(tree: ast.Module, module: str, is_package: bool):
     yield from walk(tree.body, True, False)
 
 
+def worker_only_prefixes(root: Path) -> tuple[str, ...]:
+    """``_WORKER_ONLY_PREFIXES`` from ``application_sdk/_install.py`` (read, not imported)."""
+    path = root / INSTALL_FILE
+    if not path.is_file():
+        return ()
+    for node in ast.parse(path.read_text(encoding="utf-8")).body:
+        target = node.target if isinstance(node, ast.AnnAssign) else None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        if (
+            isinstance(target, ast.Name)
+            and target.id == "_WORKER_ONLY_PREFIXES"
+            and node.value is not None
+        ):
+            return tuple(ast.literal_eval(node.value))
+    return ()
+
+
+def _is_worker_only(module: str, prefixes: tuple[str, ...]) -> bool:
+    return any(module == p or module.startswith(p + ".") for p in prefixes)
+
+
+def _sdk_module(value: ast.expr) -> str | None:
+    """The module of one lazy-map value: ``"mod"`` or ``("mod", "attr")``."""
+    if isinstance(value, ast.Tuple) and value.elts:
+        value = value.elts[0]
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        if value.value == "application_sdk" or value.value.startswith(
+            "application_sdk."
+        ):
+            return value.value
+    return None
+
+
+def lazy_exports(
+    tree: ast.Module, module: str, is_package: bool
+) -> list[tuple[int, str, str]]:
+    """``(line, exported name, target module)`` for each lazy export of a module.
+
+    Only a module that defines a module-level ``__getattr__`` exports lazily. Its
+    targets are (1) every module-level dict whose values name an
+    ``application_sdk`` module, as ``"module"`` or ``("module", "attribute")``,
+    and (2) for a package, the submodule names it passes to
+    ``lazy_getattr(..., submodules)`` (the 5th argument or ``submodules=``).
+    """
+    if not any(
+        isinstance(n, ast.FunctionDef) and n.name == "__getattr__" for n in tree.body
+    ):
+        return []
+    assigned: dict[str, ast.expr] = {}
+    found: list[tuple[int, str, str]] = []
+    for node in tree.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            name, value = node.target.id, node.value
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            name, value = node.targets[0].id, node.value
+        else:
+            continue
+        if value is None:
+            continue
+        assigned[name] = value
+        if isinstance(value, ast.Dict):
+            for key, item in zip(value.keys, value.values):
+                target = _sdk_module(item)
+                if target is not None:
+                    label = (
+                        key.value
+                        if isinstance(key, ast.Constant)
+                        else ast.unparse(key)
+                        if key is not None
+                        else "**"
+                    )
+                    found.append((item.lineno, str(label), target))
+    package = module if is_package else module.rpartition(".")[0]
+    for call in ast.walk(tree):
+        if not (
+            isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "lazy_getattr"
+        ):
+            continue
+        arg = call.args[4] if len(call.args) > 4 else None
+        for kw in call.keywords:
+            if kw.arg == "submodules":
+                arg = kw.value
+        if isinstance(arg, ast.Name):
+            arg = assigned.get(arg.id)
+        if isinstance(arg, ast.Call) and arg.args:  # frozenset({...}) / set([...])
+            arg = arg.args[0]
+        if not isinstance(arg, (ast.Set, ast.List, ast.Tuple)):
+            continue
+        for elt in arg.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                found.append((elt.lineno, elt.value, f"{package}.{elt.value}"))
+    return found
+
+
+def _check_lazy_exports(
+    root: Path,
+    rel: str,
+    tree: ast.Module,
+    listed: set[str],
+    prefixes: tuple[str, ...],
+) -> list[Problem]:
+    problems = []
+    for line, name, target in lazy_exports(
+        tree, module_of(rel), rel.endswith("__init__.py")
+    ):
+        target_file = file_of(root, target)
+        if target_file is None:
+            problems.append(
+                Problem(
+                    rel,
+                    line,
+                    f"lazily exports {name} from {target}, which does not exist",
+                )
+            )
+        elif target_file in listed or _is_worker_only(target, prefixes):
+            continue  # shipped (in some group), or deliberately worker-only
+        else:
+            problems.append(
+                Problem(
+                    rel,
+                    line,
+                    f"lazily exports {name} from {target}, which is not in {LIST_FILE}: "
+                    "seed it in packages/api/pyproject.toml, or, if it is worker-only, "
+                    f"name the module in _WORKER_ONLY_PREFIXES ({INSTALL_FILE})",
+                )
+            )
+    return problems
+
+
 def check(root: Path) -> list[Problem]:
     listed = listed_files(root)
     listed_set = set(listed)
@@ -192,6 +339,7 @@ def check(root: Path) -> list[Problem]:
     import gen_api_files  # noqa: PLC0415 — sibling; imports this module
 
     groups = gen_api_files.file_groups(root)
+    prefixes = worker_only_prefixes(root)
     problems: list[Problem] = []
     for rel in listed:
         path = root / rel
@@ -213,6 +361,7 @@ def check(root: Path) -> list[Problem]:
                     Problem(rel, 1, f"parent package {parent} is not listed")
                 )
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+        problems.extend(_check_lazy_exports(root, rel, tree, listed_set, prefixes))
         reported: set[int] = set()  # one problem per import statement
         for node, name, top, guarded, required in _imports(
             tree, module, rel.endswith("__init__.py")
