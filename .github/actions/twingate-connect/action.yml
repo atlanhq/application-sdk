@@ -29,6 +29,13 @@ inputs:
     description: 'How many times to poll the probe target before giving up.'
     required: false
     default: '6'
+  resubnet-docker:
+    description: >
+      Move Docker's bridge networks off 172.17/16 before dialling the tunnel.
+      Same step as globalprotect-connect's input of this name, so a caller that
+      runs containers gets the same Docker networking whichever VPN connects.
+    required: false
+    default: "false"
 
 outputs:
   connected:
@@ -42,6 +49,17 @@ runs:
     # docs/standards/ci.md requires third-party actions to be SHA-pinned and
     # this is their documented manual recipe, which is the same three commands
     # with no extra supply-chain surface. Kept as shell for that reason.
+    - name: Move docker networks off Atlan's 172.17/16
+      if: inputs.resubnet-docker == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        {
+          sudo mkdir -p /etc/docker &&
+          echo '{"bip": "192.168.49.1/24", "default-address-pools": [{"base": "192.168.128.0/17", "size": 24}]}' | sudo tee /etc/docker/daemon.json &&
+          sudo systemctl restart docker
+        } || echo "::warning::could not move docker off 172.17/16; containers may lose the network once the tunnel is up."
+
     - name: Connect to Twingate and verify reachability
       id: connect
       shell: bash

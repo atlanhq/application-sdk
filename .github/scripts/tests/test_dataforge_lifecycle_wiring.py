@@ -331,11 +331,16 @@ def test_test_jobs_try_twingate_before_globalprotect(jobs: dict) -> None:
         assert not re.search(
             r"^\s*(if|for|while|case)\b", cleanup["run"], re.MULTILINE
         ), job
-        assert "steps.twingate.outputs.connected != 'true'" in globalprotect["if"]
+        assert "steps.twingate.outputs.connected != 'true'" in globalprotect["if"], job
         assert globalprotect["with"]["resubnet-docker"] == "true", job
+        assert twingate["with"]["resubnet-docker"] == "true", job
 
-        assert twingate["with"]["service-key"] == "${{ secrets.TWINGATE_SHARED_KEY }}"
-        assert twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        assert (
+            twingate["with"]["service-key"] == "${{ secrets.TWINGATE_SHARED_KEY }}"
+        ), job
+        assert (
+            twingate["with"]["mothership-url"] == "https://api.dataforge.atlan.dev"
+        ), job
         assert "TWINGATE_SHARED_KEY" not in jobs[job]["env"], job
 
         checkout = next(
@@ -348,7 +353,7 @@ def test_test_jobs_try_twingate_before_globalprotect(jobs: dict) -> None:
 
 def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
     action = yaml.safe_load(_TWINGATE_ACTION.read_text(encoding="utf-8"))
-    script = action["runs"]["steps"][0]["run"]
+    script = next(s for s in action["runs"]["steps"] if s.get("id") == "connect")["run"]
     bounded = sum(
         int(n) + int(k or 0)
         for k, n in re.findall(r"timeout (?:-k (\d+) )?(\d+) ", script)
@@ -395,3 +400,14 @@ def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> 
             with_ = step.get("with") or {}
             if with_.get("mothership-url", "").endswith("dataforge.atlan.dev"):
                 assert with_.get("resubnet-docker") == "true", name
+
+
+def test_both_vpn_actions_resubnet_docker_identically() -> None:
+    def resubnet(path: Path) -> dict:
+        steps = yaml.safe_load(path.read_text(encoding="utf-8"))["runs"]["steps"]
+        step = next(s for s in steps if "default-address-pools" in s.get("run", ""))
+        assert steps.index(step) == 0, path
+        return step
+
+    gp = _WORKFLOW.parents[1] / "actions/globalprotect-connect/action.yml"
+    assert resubnet(_TWINGATE_ACTION) == resubnet(gp)
