@@ -7,12 +7,13 @@ import inspect
 import io
 import json
 import sys
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import renovate_fleet_scan as rfs
+from _frozen_clock import freeze_clock  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Scope resolution + query building
@@ -1379,9 +1380,11 @@ def test_merged_date_windows_never_returns_empty_on_clock_skew():
     assert windows == ["is:merged merged:2026-09-11..2026-09-11"]
 
 
-def test_merged_date_windows_defaults_until_to_today():
+def test_merged_date_windows_defaults_until_to_today(monkeypatch):
+    # Frozen, so "today" is one reading of the clock, not two across midnight.
+    freeze_clock(monkeypatch, rfs, datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc))
     windows = rfs.merged_date_windows("2026-01-01", None, window_days=365_000)
-    assert windows[-1].endswith(date.today().isoformat())
+    assert windows[-1] == "is:merged merged:2026-01-01..2026-09-10"
 
 
 def test_fetch_merged_prs_defaults_to_one_query_per_day():
@@ -1489,10 +1492,15 @@ def test_fetch_merged_prs_still_raises_when_ONE_window_is_truncated():
         assert "1366" in str(exc)
 
 
-def test_run_uses_windowed_merged_queries(tmp_path):
+def test_run_uses_windowed_merged_queries(tmp_path, monkeypatch):
     # The live regression, end to end: before windowing, run() issued
     # `is:merged merged:>=<since>` once per author and the 30-day fleet volume
     # tripped the cap guard, failing every scheduled dashboard run.
+    # Frozen: `since` and run()'s default `until` would otherwise be two clock
+    # readings, and a midnight between them adds a 32nd window.
+    at = freeze_clock(
+        monkeypatch, rfs, datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+    )
     queries = []
 
     def fake_post(token, payload):
@@ -1501,7 +1509,7 @@ def test_run_uses_windowed_merged_queries(tmp_path):
 
     rfs.run(
         scope="org:atlanhq",
-        since=(date.today() - timedelta(days=30)).isoformat(),
+        since=(at.date() - timedelta(days=30)).isoformat(),
         open_dir=tmp_path / "open",
         merged_dir=tmp_path / "merged",
         known_repos=[],

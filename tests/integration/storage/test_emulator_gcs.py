@@ -40,7 +40,10 @@ import pytest
 
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
-from tests.integration.storage.conftest import write_dapr_component
+from tests.integration.storage.conftest import (
+    emulator_unavailable,
+    write_dapr_component,
+)
 
 pytestmark = pytest.mark.storage_emulator
 
@@ -63,18 +66,20 @@ def _anonymous_credential():
 
 @pytest.fixture(scope="module", autouse=True)
 def require_testbench() -> None:
-    """Skip the module when the GCS emulator (proxy) isn't reachable or unhealthy."""
+    """Fail (CI) or skip (local) the module when the GCS emulator (proxy) isn't reachable or unhealthy."""
     import httpx
 
     try:
         with httpx.Client(timeout=3.0) as client:
             resp = client.get(f"{_ENDPOINT}/storage/v1/b?project=test")
     except Exception as exc:  # pragma: no cover — env guard
-        pytest.skip(f"GCS emulator not reachable at {_ENDPOINT}: {exc}")
+        emulator_unavailable(f"GCS emulator not reachable at {_ENDPOINT}: {exc}")
     # Reachable but 5xx means the emulator/proxy is up yet unhealthy — skip with a
     # clear signal rather than letting the round-trip fail with an opaque error.
     if resp.status_code >= 500:  # pragma: no cover — env guard
-        pytest.skip(f"GCS emulator unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
+        emulator_unavailable(
+            f"GCS emulator unhealthy at {_ENDPOINT}: HTTP {resp.status_code}"
+        )
 
 
 @pytest.fixture
