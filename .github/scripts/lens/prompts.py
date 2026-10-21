@@ -41,6 +41,9 @@ Evidence
   state, stored data, wire values) against the base branch and the last release, never against this PR's
   own earlier commits: a failure that needs history, state or data only an intermediate commit of this
   PR could have produced is not a finding.
+- In a re-review the diff covers only the commits since the last review, so its removed lines may be this
+  PR's own earlier code. "Before" means the base branch: a claim that behaviour changed or regressed must
+  hold against it, so quote the base-branch code it changed from.
 - <paths_added_by_this_pr> and <symbols_added_by_this_pr>, when present, list the files and symbols this
   PR adds (against the merge base). They did not exist before the PR, so changing their signature, return
   shape or behaviour breaks no existing caller, stored data or release, even when this round's diff shows
@@ -149,7 +152,10 @@ and the last release, never against this PR's own earlier commits. <at_base_bran
 shows the enclosing function or class of its site as it is on the base branch, or says it is absent
 there. <paths_added_by_this_pr> and <symbols_added_by_this_pr> list what the PR adds against the
 merge base: a compatibility finding about one of them is moot, since nothing before the PR used it. A finding whose failure needs history, state or data that only an intermediate commit of this
-PR could have produced (the base-branch code never did it) is moot. Answer by calling verdicts once,
+PR could have produced (the base-branch code never did it) is moot. A <finding new="true"> was
+raised this round, before publishing, from a diff whose "before" may be this PR's own previous
+commit: it is moot when the behaviour it calls a change or regression is what <at_base_branch>
+already does, since putting base-branch behaviour back is not a regression. Answer by calling verdicts once,
 with one verdict per finding and concern id.
 fixed: the defect can no longer occur. moot: it was never a defect under the rule above.
 open: it still can occur. Do not raise new issues.

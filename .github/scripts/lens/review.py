@@ -77,6 +77,9 @@ class RunResult:
     # Open items (F-… and A…) not re-checked because this round changed none of the
     # PR's own files (e.g. only a merge from the base branch): no verify call ran.
     verify_skipped: list[str] = field(default_factory=list)
+    # New blocking findings this round's base-branch check judged fixed or moot:
+    # dropped before publishing (see _check_new_against_base).
+    new_dropped: list[str] = field(default_factory=list)
     skipped_files: list[tuple[str, str]] = field(default_factory=list)
     bundles: list[BundleResult] = field(default_factory=list)
     ledger: Ledger | None = None
@@ -699,6 +702,19 @@ def run(
             for f in res.unplaced
             if _sev_at_least(f.severity, cfg.later_round_min_severity)
         ]
+    if cfg.verify and round_no > 1:
+        fresh = _check_new_against_base(
+            client,
+            ws,
+            state,
+            fresh,
+            res,
+            changes=all_files if touched else full_files,
+            removed=removed_paths(full_files),
+            released=released,
+            added=added,
+            max_tokens=res.verify_max_tokens or cfg.limits.verify_max_tokens,
+        )
     res.new_findings = merge_new(state, fresh, round_no=round_no)
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
@@ -875,6 +891,76 @@ def dismiss(
     return res
 
 
+def _check_new_against_base(
+    client: Client,
+    ws: Workspace,
+    state: PRState,
+    fresh: list[Finding],
+    res: RunResult,
+    *,
+    changes: list[FileDiff],
+    removed: str,
+    released: str,
+    added: PRAdditions,
+    max_tokens: int,
+) -> list[Finding]:
+    """`fresh` without the new blocking findings that are moot or fixed against
+    the base branch.
+
+    An incremental round's line review sees only the commits since the last
+    review, so its "before" is this PR's own previous commit: a round that puts
+    base-branch behaviour back reads as a regression. Before such a finding is
+    published (and blocks merge), it gets the verify call, with <at_base_branch>
+    and the moot rule. One call per round, only when there is a new blocking
+    finding; past VERIFY_BATCH, or with no verdict, findings publish as raised."""
+    known = {f.id for f in state.findings}
+    new = [f for f in fresh if f.id not in known and f.severity in BLOCKING]
+    if not new:
+        return fresh
+    batch = new[:VERIFY_BATCH]
+    with trace.group(f"6b · base-branch check of {len(batch)} new blocking finding(s)"):
+        got = _verify_batch(
+            client,
+            ws,
+            batch,
+            round_diff(changes, batch),
+            removed=removed,
+            released=released,
+            added=added,
+            max_tokens=max_tokens,
+            new=True,
+        )
+        if len(new) > len(batch):
+            trace.line(
+                f"{len(new) - len(batch)} past the first {VERIFY_BATCH} were not checked"
+            )
+        unchecked = got.cut_off or ([f.id for f in batch] if got.error else [])
+        if unchecked:
+            why = (
+                "the PR budget ran out"
+                if got.error == "budget"
+                else "the check spent its whole output budget"
+                if got.cut_off
+                else "the model call failed"
+            )
+            res.notes.append(
+                f"New blocking finding(s) {', '.join(unchecked)} were published without "
+                f"the base-branch check: {why}."
+            )
+            trace.line(f"not checked ({why}): {', '.join(unchecked)}")
+        drop = set(got.fixed)
+        for f in batch:
+            if f.id in drop:
+                how = "moot" if f.id in got.moot else "fixed"
+                trace.line(
+                    f"dropped {f.id} {f.severity} {f.path}: judged {how} against the base branch"
+                )
+        res.new_dropped = [f.id for f in batch if f.id in drop]
+        if not drop:
+            trace.line("every new blocking finding stands")
+    return [f for f in fresh if f.id not in drop]
+
+
 def _book(ledger: Ledger, spent: Ledger) -> None:
     """Add one run's spend to the PR's ledger."""
     ledger.spent_usd += spent.spent_usd
@@ -967,11 +1053,13 @@ def recheck_evidence(
         if base is not None:
             base_at = locate_in_text(base, f.evidence)
             if base_at:
-                bl = base.splitlines()
-                at_base = "\n".join(
-                    f"{i:>5} {bl[i - 1]}"
-                    for i in range(max(base_at - 15, 1), min(base_at + 15, len(bl)) + 1)
-                )
+                at_base = _numbered(base, base_at - 15, base_at + 15)
+            elif sym is not None:
+                # The quote is new in the PR, but the symbol around it may have
+                # shipped: show that symbol as the merge base has it, so a claim
+                # that the PR changed its behaviour can be checked against it.
+                got = base_symbol_excerpt(ws.root, base_path, base, f, sym, at)
+                at_base = f"{base_path}: {dotted}\n{got}" if got else ""
     module = f.path[:-3].replace("/", ".") if f.path.endswith(".py") else f.path
     private = _private(f.path.removesuffix(".py").split("/")) or _private(
         dotted.split(".") if dotted else []
@@ -1417,19 +1505,34 @@ def at_base_branch(
         ast.parse(text)
     except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
         return f"(the base copy of {rel} could not be read or parsed)"
-    lines = text.splitlines()
-
-    def window(lo: int, hi: int) -> str:
-        return "\n".join(
-            f"{i:>5} {lines[i - 1]}" for i in range(max(lo, 1), min(hi, len(lines)) + 1)
-        )
-
     if head_sym is None:
         # Module level: no symbol to look up, so the quote locates the site.
         at = locate_in_text(text, f.evidence)
         if not at:
             return f"absent on base: the quoted code is not in {rel}"
-        return f"{rel}: module level\n{window(at - 15, at + 15)}"
+        return f"{rel}: module level\n{_numbered(text, at - 15, at + 15)}"
+    dotted = head_sym.qualname.split(":", 1)[1]
+    got = base_symbol_excerpt(root, rel, text, f, head_sym, head_line)
+    return f"{rel}: {dotted}\n{got}" if got else f"absent on base: {dotted} in {rel}"
+
+
+def _numbered(text: str, lo: int, hi: int) -> str:
+    lines = text.splitlines()
+    return "\n".join(
+        f"{i:>5} {lines[i - 1]}" for i in range(max(lo, 1), min(hi, len(lines)) + 1)
+    )
+
+
+def base_symbol_excerpt(
+    root: Path, rel: str, text: str, f: Finding, head_sym: Symbol, head_line: int
+) -> str:
+    """`head_sym`'s counterpart in `text` (a base copy of `rel`), numbered, or ""
+    when the base copy has no symbol of that dotted name.
+
+    The whole symbol when it is under BASE_EXCERPT_LINES, else a window around
+    the finding's site: its quote when the base has it, otherwise the same
+    offset into the symbol as the finding has into the head symbol. Shared by
+    verify (the checkout on disk) and `/lens recheck` (the merge base via the API)."""
     dotted = head_sym.qualname.split(":", 1)[1]
     idx = Index(root=str(root))
     index_source(idx, rel, text)
@@ -1442,7 +1545,7 @@ def at_base_branch(
         None,
     )
     if base_sym is None:
-        return f"absent on base: {dotted} in {rel}"
+        return ""
     lo, hi = base_sym.start, base_sym.end
     if hi - lo >= BASE_EXCERPT_LINES:
         at = locate_in_text(text, f.evidence)
@@ -1452,7 +1555,7 @@ def at_base_branch(
             at = lo + max(head_line - head_sym.start, 0)
         mid = min(at, hi)
         lo, hi = max(mid - 15, lo), min(mid + 15, hi)
-    return f"{rel}: {dotted}\n{window(lo, hi)}"
+    return _numbered(text, lo, hi)
 
 
 VERIFY_BATCH = 20  # findings per verify call; every open finding is checked
@@ -1482,6 +1585,8 @@ class Verified:
     # Of `fixed`, the findings judged moot: never a defect, because the failure
     # needs history only an earlier commit of this PR could have produced.
     moot: list[str] = field(default_factory=list)
+    # Why no verdict came back at all ("budget" or the model error), "" when one did.
+    error: str = ""
 
 
 def _verify(
@@ -1534,7 +1639,10 @@ def _verify_batch(
     released: str = "",
     added: PRAdditions | None = None,
     max_tokens: int = AgentLimits.verify_max_tokens,
+    new: bool = False,
 ) -> Verified:
+    """One verify call. `new` marks the findings as raised this round, not
+    earlier: they are judged against the base branch before being published."""
     items = (
         [f"<paths_removed_by_this_pr>\n{removed}\n</paths_removed_by_this_pr>"]
         if removed
@@ -1551,6 +1659,7 @@ def _verify_batch(
         items.append(
             f'<concern id="{cid}">\n{c.get("title", "")}. {c.get("why", "")}\n</concern>'
         )
+    mark = ' new="true"' if new else ""
     for f in open_:
         text = ws.text(f.path) or ""
         lines = text.splitlines()
@@ -1569,7 +1678,7 @@ def _verify_batch(
             else "(the quoted code is not in this file any more)"
         )
         items.append(
-            f'<finding id="{f.id}" path="{f.path}">\n{f.title}. {f.body}\n'
+            f'<finding id="{f.id}" path="{f.path}"{mark}>\n{f.title}. {f.body}\n'
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
             f"<code_now>\n{code}\n</code_now>\n"
             f"<at_base_branch>\n{at_base_branch(ws, f, sym, at)}\n</at_base_branch>\n</finding>"
@@ -1587,8 +1696,10 @@ def _verify_batch(
             tool_choice="required",
             cache_key="lens-verify",
         )
-    except (BudgetExhausted, LLMError):
-        return Verified()
+    except BudgetExhausted:
+        return Verified(error="budget")
+    except LLMError as e:
+        return Verified(error=str(e)[:200] or "model error")
     if not comp.tool_calls and _out_of_output_budget(comp, max_tokens):
         # No verdict is not "nothing fixed": the model reasoned to the cap and
         # never answered. Keep every item as it was, and say so.

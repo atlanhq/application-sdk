@@ -5702,3 +5702,153 @@ def test_malformed_verdict_items_are_skipped_not_fatal(repo: Path):
     st = PRState.decode(gh.comments[0]["body"])
     assert {x.id: x for x in st.findings}[f.id].status == "open"
     assert st.ledger["spent_usd"] > before.ledger["spent_usd"]  # the call is booked
+
+
+# ---- FND-4230: new findings and recheck evidence are judged against the base branch ------------------------
+
+
+def test_recheck_evidence_shows_the_base_symbol_when_the_quote_is_new_in_the_pr(
+    repo: Path,
+):
+    """The quote is new in the PR, so it is not on the merge base, but `fetch`
+    shipped: <at_merge_base> shows `fetch` as the merge base has it."""
+    ev = _evidence(repo, _compat_on_fetch("data = client.get(key)"), SRC_V1)
+    assert ev.facts[0] == (
+        "present on merge base: fetch in application_sdk/storage/fetch.py"
+    )
+    lines = ev.at_merge_base.splitlines()
+    assert lines[0] == "application_sdk/storage/fetch.py: fetch"
+    assert "def fetch(client, key):" in ev.at_merge_base
+    assert "return client.get(key)" in ev.at_merge_base
+    assert "load_all" not in ev.at_merge_base  # the symbol, not a window
+
+
+# Round 2 of the PR #4518 shape: round 1 changed fetch's result (decode), round 2
+# puts the base-branch result back. Against round 1's commit that reads as a change.
+SRC_RESTORED = SRC_V2.replace("    return data.decode()\n", "    return data\n")
+RESTORE_ROUND_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -3,2 +3,2 @@\n     data = client.get(key)\n-    return data.decode()\n+    return data\n"
+)
+RESTORE_PR_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,3 +1,4 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n-    return client.get(key)\n'
+    "+    data = client.get(key)\n+    return data\n"
+)
+REGRESSION_CLAIM = dict(
+    COMMENT,
+    existing_code="    return data",
+    severity="high",
+    title="fetch now returns raw bytes instead of the decoded string",
+    content="Callers got a str from fetch before; keep the previous behaviour.",
+)
+
+
+def _restoring_round_two(repo: Path, verdict: str) -> tuple[RunResult, Script, str]:
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = RESTORE_ROUND_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_RESTORED
+    fid = Finding(
+        "application_sdk/storage/fetch.py",
+        0,
+        "high",
+        REGRESSION_CLAIM["category"],
+        "t",
+        "b",
+        REGRESSION_CLAIM["existing_code"],
+    ).id
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [REGRESSION_CLAIM]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": verdict}]})]),
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    return res, script, fid
+
+
+def _new_check_request(script: Script) -> str:
+    [user] = [
+        r["messages"][1]["content"]
+        for r in script.requests
+        if 'new="true"' in r["messages"][1]["content"]
+    ]
+    return user
+
+
+def test_a_new_blocking_finding_moot_against_the_base_branch_is_not_published(
+    repo: Path,
+):
+    res, script, fid = _restoring_round_two(repo, "moot")
+
+    assert res.mode == "incremental"
+    assert res.new_findings == [] and res.new_dropped == [fid]
+    assert fid not in {f.id for f in res.state.findings}
+    assert res.state.open_findings(findings_mod.BLOCKING) == []
+    user = _new_check_request(script)
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert block.splitlines()[0] == "application_sdk/storage/fetch.py: fetch"
+    assert "return client.get(key)" in block
+
+
+def test_a_new_blocking_finding_that_stands_is_published(repo: Path):
+    res, script, fid = _restoring_round_two(repo, "open")
+
+    assert [f.id for f in res.new_findings] == [fid] and res.new_dropped == []
+    assert [f.id for f in res.state.open_findings(findings_mod.BLOCKING)] == [fid]
+    assert _new_check_request(script)
+
+
+def test_new_findings_publish_with_a_note_when_their_base_check_gets_no_verdict(
+    repo: Path,
+):
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 4, "high", "bug", "t", "b", "x")
+    res = RunResult("reviewed")
+    client = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(_cut_off_reply()),
+    )
+
+    kept = review_mod._check_new_against_base(
+        client,
+        ws,
+        PRState(),
+        [f],
+        res,
+        changes=[],
+        removed="",
+        released="",
+        added=review_mod.baseline.PRAdditions(),
+        max_tokens=8000,
+    )
+
+    assert kept == [f] and res.new_dropped == []
+    assert f"{f.id} were published without the base-branch check" in res.notes[0]
