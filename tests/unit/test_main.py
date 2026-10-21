@@ -2969,7 +2969,15 @@ class TestRunWorkerWithRestart:
     ) -> None:
         """A shutdown set during the backoff wait ends the loop immediately."""
         # Force a long backoff so the shutdown interrupts it deterministically.
-        monkeypatch.setattr("application_sdk.main.random.uniform", lambda *a: 10.0)
+        # The delay is drawn immediately before the backoff wait, with no await
+        # in between, so once it is drawn the supervisor is about to wait on it.
+        backing_off = asyncio.Event()
+
+        def long_backoff(*_a: Any) -> float:
+            backing_off.set()
+            return 10.0
+
+        monkeypatch.setattr("application_sdk.main.random.uniform", long_backoff)
         shutdown = asyncio.Event()
         calls = {"n": 0}
 
@@ -2980,7 +2988,7 @@ class TestRunWorkerWithRestart:
         task = asyncio.create_task(
             _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
         )
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(backing_off.wait(), timeout=5)
         shutdown.set()
         await asyncio.wait_for(task, timeout=2.0)
 
@@ -3032,6 +3040,30 @@ class _RecordingHealthServer:
 
     def record_poller_counts(self, counts: dict[str, float] | None) -> None:
         self.readings.append(counts)
+
+
+def _reader_that_stops(
+    shutdown: asyncio.Event, outcome: Any, *, after: int = 1
+) -> AsyncMock:
+    """A poller-count reader that sets ``shutdown`` once it has been awaited ``after`` times.
+
+    Event-driven, not wall-clock: the observer stops because the reader has
+    produced the readings the test needs, so a slow runner cannot end the
+    observer before its first tick. ``outcome`` is returned, or raised if it is
+    an exception.
+    """
+    calls = 0
+
+    async def _read() -> Any:
+        nonlocal calls
+        calls += 1
+        if calls >= after:
+            shutdown.set()
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    return AsyncMock(side_effect=_read)
 
 
 class _HungTeardownWorker:
@@ -3139,11 +3171,16 @@ class TestFatalTeardownWatchdog:
 
     def test_disarm_before_expiry_prevents_exit(self) -> None:
         exit_fn = MagicMock()
-        watchdog = _FatalTeardownWatchdog(0.2, exit_fn=exit_fn)
+        watchdog = _FatalTeardownWatchdog(30, exit_fn=exit_fn)
         watchdog.arm()
+        timer = watchdog._timer
+        assert timer is not None
         watchdog.disarm()
 
-        threading.Event().wait(0.4)
+        # A cancelled timer's thread ends without running its callback; one
+        # disarm failed to cancel would still be waiting out its 30s here.
+        timer.join(timeout=5)
+        assert not timer.is_alive()
         exit_fn.assert_not_called()
         assert not watchdog.armed
 
@@ -3294,18 +3331,13 @@ class TestObserveWorkerPollState:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A zero reading is the zombie signature: warn, record, never raise."""
-        monkeypatch.setattr(
-            "application_sdk.execution._temporal.worker.read_core_poller_counts",
-            AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0}),
-        )
         health = _RecordingHealthServer()
         shutdown = asyncio.Event()
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            _reader_that_stops(shutdown, {"workflow_task": 0.0, "activity_task": 0.0}),
+        )
 
-        async def stop_soon() -> None:
-            await asyncio.sleep(0.05)
-            shutdown.set()
-
-        stopper = asyncio.create_task(stop_soon())
         with patch("application_sdk.main.logger") as mock_logger:
             await asyncio.wait_for(
                 _observe_worker_poll_state(
@@ -3313,7 +3345,6 @@ class TestObserveWorkerPollState:
                 ),
                 timeout=2.0,
             )
-        await stopper
 
         assert {"workflow_task": 0.0, "activity_task": 0.0} in health.readings
         assert mock_logger.warning.called
@@ -3372,25 +3403,19 @@ class TestObserveWorkerPollState:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An unreadable gauge records None (unknown), never a zero count."""
-        monkeypatch.setattr(
-            "application_sdk.execution._temporal.worker.read_core_poller_counts",
-            AsyncMock(return_value=None),
-        )
         health = _RecordingHealthServer()
         shutdown = asyncio.Event()
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            _reader_that_stops(shutdown, None, after=2),
+        )
 
-        async def stop_soon() -> None:
-            await asyncio.sleep(0.05)
-            shutdown.set()
-
-        stopper = asyncio.create_task(stop_soon())
         await asyncio.wait_for(
             _observe_worker_poll_state(
                 shutdown_event=shutdown, health_server=health, interval=0.01
             ),
             timeout=2.0,
         )
-        await stopper
 
         assert health.readings
         assert all(reading is None for reading in health.readings)
@@ -3399,17 +3424,13 @@ class TestObserveWorkerPollState:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A raising reader is swallowed — an observer never takes the worker down."""
-        monkeypatch.setattr(
-            "application_sdk.execution._temporal.worker.read_core_poller_counts",
-            AsyncMock(side_effect=RuntimeError("boom")),
-        )
         shutdown = asyncio.Event()
+        # Stops only after a second read: the observer survived the first raise.
+        reader = _reader_that_stops(shutdown, RuntimeError("boom"), after=2)
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts", reader
+        )
 
-        async def stop_soon() -> None:
-            await asyncio.sleep(0.05)
-            shutdown.set()
-
-        stopper = asyncio.create_task(stop_soon())
         # Must return cleanly on shutdown despite every read raising.
         await asyncio.wait_for(
             _observe_worker_poll_state(
@@ -3417,7 +3438,7 @@ class TestObserveWorkerPollState:
             ),
             timeout=2.0,
         )
-        await stopper
+        assert reader.await_count == 2
 
     async def test_supervisor_starts_and_stops_the_observer(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3426,19 +3447,17 @@ class TestObserveWorkerPollState:
         monkeypatch.setattr(
             "application_sdk.main._WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS", 0.01
         )
-        reader = AsyncMock(return_value={"workflow_task": 2.0})
-        monkeypatch.setattr(
-            "application_sdk.execution._temporal.worker.read_core_poller_counts",
-            reader,
-        )
         health = _RecordingHealthServer()
         shutdown = asyncio.Event()
-
-        def _stop_later() -> None:
-            asyncio.get_running_loop().call_later(0.05, shutdown.set)
+        # The observer's own reading ends the run, so the supervisor cannot
+        # stop before the observer has ticked alongside the worker.
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            _reader_that_stops(shutdown, {"workflow_task": 2.0}),
+        )
 
         def build() -> _FakeWorker:
-            return _FakeWorker(fail=False, on_enter=_stop_later)
+            return _FakeWorker(fail=False)
 
         await asyncio.wait_for(
             _run_worker_with_restart(
@@ -3450,10 +3469,12 @@ class TestObserveWorkerPollState:
         )
 
         assert health.readings, "observer never ran alongside the worker"
-        # Stopped with the supervisor: no reading lands after it returned.
-        readings_at_return = len(health.readings)
-        await asyncio.sleep(0.05)
-        assert len(health.readings) == readings_at_return
+        # Stopped with the supervisor: no observer task outlives its return.
+        assert not [
+            task
+            for task in asyncio.all_tasks()
+            if getattr(task.get_coro(), "__name__", "") == "_observe_worker_poll_state"
+        ]
 
 
 class TestObserverFeedsHealthEventGate:
@@ -3467,12 +3488,15 @@ class TestObserverFeedsHealthEventGate:
         yield
         worker_poll_state.reset()
 
-    async def _run_observer(self, shutdown: asyncio.Event) -> None:
-        async def stop_soon() -> None:
-            await asyncio.sleep(0.06)
-            shutdown.set()
-
-        stopper = asyncio.create_task(stop_soon())
+    async def _run_observer(
+        self, monkeypatch: pytest.MonkeyPatch, reading: dict[str, float] | None
+    ) -> None:
+        """Run the observer until it has taken two ``reading``s, then stop."""
+        shutdown = asyncio.Event()
+        monkeypatch.setattr(
+            "application_sdk.execution._temporal.worker.read_core_poller_counts",
+            _reader_that_stops(shutdown, reading, after=2),
+        )
         await asyncio.wait_for(
             _observe_worker_poll_state(
                 shutdown_event=shutdown,
@@ -3481,7 +3505,6 @@ class TestObserverFeedsHealthEventGate:
             ),
             timeout=2.0,
         )
-        await stopper
 
     async def test_sustained_zero_closes_the_gate(
         self, monkeypatch: pytest.MonkeyPatch
@@ -3492,12 +3515,9 @@ class TestObserverFeedsHealthEventGate:
         monkeypatch.setattr(
             "application_sdk.main._WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 1
         )
-        monkeypatch.setattr(
-            "application_sdk.execution._temporal.worker.read_core_poller_counts",
-            AsyncMock(return_value={"workflow_task": 0.0, "activity_task": 0.0}),
+        await self._run_observer(
+            monkeypatch, {"workflow_task": 0.0, "activity_task": 0.0}
         )
-
-        await self._run_observer(asyncio.Event())
 
         assert worker_poll_state.should_emit_health_event() is False
 
@@ -3510,12 +3530,7 @@ class TestObserverFeedsHealthEventGate:
         monkeypatch.setattr(
             "application_sdk.main._WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 1
         )
-        monkeypatch.setattr(
-            "application_sdk.execution._temporal.worker.read_core_poller_counts",
-            AsyncMock(return_value=None),
-        )
-
-        await self._run_observer(asyncio.Event())
+        await self._run_observer(monkeypatch, None)
 
         assert worker_poll_state.should_emit_health_event() is True
 
@@ -3535,12 +3550,15 @@ class TestObserverFeedsHealthEventGate:
         )
 
         calls = 0
+        shutdown = asyncio.Event()
 
         async def _zero_then_raise():
             nonlocal calls
             calls += 1
             if calls == 1:
                 return {"workflow_task": 0.0, "activity_task": 0.0}
+            # The raising path is the one under test: stop once it has run.
+            shutdown.set()
             raise RuntimeError("metrics unavailable")
 
         monkeypatch.setattr(
@@ -3548,19 +3566,6 @@ class TestObserverFeedsHealthEventGate:
             AsyncMock(side_effect=_zero_then_raise),
         )
 
-        shutdown = asyncio.Event()
-        reader_calls_at_stop = {"n": 0}
-
-        async def stop_after_exception() -> None:
-            # Wait until the raising path has run at least once, then stop.
-            for _ in range(50):
-                if calls >= 2:
-                    break
-                await asyncio.sleep(0.02)
-            reader_calls_at_stop["n"] = calls
-            shutdown.set()
-
-        stopper = asyncio.create_task(stop_after_exception())
         await asyncio.wait_for(
             _observe_worker_poll_state(
                 shutdown_event=shutdown,
@@ -3569,9 +3574,8 @@ class TestObserverFeedsHealthEventGate:
             ),
             timeout=2.0,
         )
-        await stopper
 
-        assert reader_calls_at_stop["n"] >= 2
+        assert calls == 2
         assert worker_poll_state.should_emit_health_event() is True
 
     async def test_supervisor_reopens_the_gate_on_shutdown(

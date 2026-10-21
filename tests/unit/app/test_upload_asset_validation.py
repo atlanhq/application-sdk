@@ -485,6 +485,7 @@ class TestWarnOnInvalidTransformedAssets:
             assert any("timed out" in message for message in messages)
             assert len(messages) == 2
 
+    @pytest.mark.perf
     async def test_concurrent_real_decodes_all_succeed_and_worker_survives(
         self, tmp_path: Path
     ) -> None:
