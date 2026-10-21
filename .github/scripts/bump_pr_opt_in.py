@@ -21,13 +21,18 @@ the ``/gate-check`` comment works by re-running the runs that started before it.
 Checks: a ``/e2e`` comment posts an ``e2e-request`` status, and on
 ``bump-version-main`` the ``gate-check`` opt-in implies e2e.
 
+``integration-requested`` answers "does the SDK's integration tier run?" for
+SDK Gate. It always runs in the merge queue and on tags; on a PR only when
+``/e2e`` or ``/gate-check`` asked for the full suite on this commit (FND-4306).
+
 ``clear`` still removes a ``gate-check`` label before a bump push, for connector
 repos whose shims predate FND-3839 and still read the label. It goes once the
 fleet has resynced.
 
 ``check`` fails open towards running CI: a status that cannot be read costs
-runner minutes, never a missed gate. ``e2e-requested`` fails closed: e2e is a
-live-tenant suite, and an unreadable request does not justify one.
+runner minutes, never a missed gate. ``integration-requested`` fails open for
+the same reason. ``e2e-requested`` fails closed: e2e is a live-tenant suite,
+and an unreadable request does not justify one.
 
 Usage::
 
@@ -38,6 +43,8 @@ Usage::
     python3 .github/scripts/bump_pr_opt_in.py e2e-requested \
         --repo owner/name --head-ref "$HEAD_REF" --sha "$HEAD_SHA" \
         --fork "$IS_FORK" --author "$PR_AUTHOR"
+    python3 .github/scripts/bump_pr_opt_in.py integration-requested \
+        --event "$EVENT_NAME" --sha "$HEAD_SHA"
 """
 
 from __future__ import annotations
@@ -219,6 +226,25 @@ def is_e2e_requested(
     return False, "e2e not requested; comment /e2e on the PR to run it"
 
 
+def is_integration_requested(repo: str, event: str, sha: str) -> tuple[bool, str]:
+    """Return (run the integration tier?, reason) for SDK Gate."""
+    if event != "pull_request":
+        return True, f"{event or 'non-PR'} run: the integration tier always runs"
+    if not sha:
+        return False, "no head commit"
+    e2e = commit_status(repo, sha, E2E_REQUEST_CONTEXT)
+    gate_check = commit_status(repo, sha, GATE_CHECK_CONTEXT)
+    if e2e == "success":
+        return True, "full suite requested on this commit (/e2e)"
+    if gate_check in ("success", "pending"):
+        return True, "full suite requested on this commit (/gate-check)"
+    if e2e is None or gate_check is None:
+        return True, "request status unreadable; failing open"
+    return False, (
+        "integration runs in the merge queue; comment /e2e on the PR to run it here"
+    )
+
+
 def emit(**outputs: object) -> None:
     lines = [f"{key}={value}" for key, value in outputs.items()]
     out = os.environ.get("GITHUB_OUTPUT")
@@ -250,6 +276,11 @@ def main(argv: list[str] | None = None) -> int:
     e2e.add_argument("--sha", default="")
     e2e.add_argument("--fork", default="false", help="head.repo.fork")
     e2e.add_argument("--author", default="", help="the PR author login")
+    integration = sub.add_parser(
+        "integration-requested", help="emit requested=<true|false>"
+    )
+    integration.add_argument("--event", required=True, help="github.event_name")
+    integration.add_argument("--sha", default="", help="the PR head SHA; empty off-PR")
     args = parser.parse_args(argv)
     if not args.repo:
         parser.error("--repo is required when $GITHUB_REPOSITORY is unset")
@@ -264,6 +295,11 @@ def main(argv: list[str] | None = None) -> int:
             fork=args.fork.strip().lower() == "true",
             author=args.author,
         )
+        print(reason)
+        emit(requested=str(requested).lower(), reason=reason)
+        return 0
+    if args.mode == "integration-requested":
+        requested, reason = is_integration_requested(args.repo, args.event, args.sha)
         print(reason)
         emit(requested=str(requested).lower(), reason=reason)
         return 0

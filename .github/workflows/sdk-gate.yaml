@@ -308,11 +308,14 @@ jobs:
     if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true')
     uses: ./.github/workflows/sdk-tests-reusable.yaml
     # packages: read lets the Storage Emulator job pull the private MinIO
-    # mirror (ghcr.io/atlanhq/ci-mirror/minio). A called workflow cannot hold
-    # more than its caller grants, so it has to be granted here.
+    # mirror (ghcr.io/atlanhq/ci-mirror/minio); statuses: read lets
+    # "Decide integration request" read the /e2e and /gate-check markers. A
+    # called workflow cannot hold more than its caller grants, so both are
+    # granted here.
     permissions:
       contents: read
       packages: read
+      statuses: read
     secrets: inherit
 
   conformance:

@@ -46,6 +46,8 @@ predates that template is refused with "rebase onto main", for the same reason.
 `rerun` (application-sdk): its PR workflows cannot be dispatched without that
 same collision, so the request is posted as a marker status and the runs on the
 commit that started before the marker are re-run; they read the marker live.
+A `/e2e` there also re-runs SDK Gate, whose integration tier otherwise runs only
+in the merge queue (FND-4306).
 
 Security
 --------
@@ -139,6 +141,16 @@ SDK_GATE_CHECK_WORKFLOWS = ("sdk-gate.yaml", "pull_request.yaml", "codeql.yaml")
 #: a job re-runs its dependents, i.e. the e2e legs and the connector gate.
 SDK_E2E_WORKFLOW = "pull_request.yaml"
 SDK_E2E_REQUEST_JOB = "Decide e2e request"
+#: `/e2e` also re-runs SDK Gate's integration-request job, which reads the
+#: marker and runs the integration tier on the PR. Only the tier and the gate
+#: depend on it, so the unit legs are not re-run (FND-4306).
+SDK_GATE_WORKFLOW = "sdk-gate.yaml"
+SDK_INTEGRATION_REQUEST_JOB = "Decide integration request"
+#: Per workflow, the job a `/e2e` re-runs (its dependents re-run with it).
+SDK_E2E_RERUN_JOBS = {
+    SDK_E2E_WORKFLOW: SDK_E2E_REQUEST_JOB,
+    SDK_GATE_WORKFLOW: SDK_INTEGRATION_REQUEST_JOB,
+}
 
 ACTIVE_RUN_STATES = frozenset(
     {"queued", "in_progress", "waiting", "requested", "pending"}
@@ -507,7 +519,7 @@ def plan_rerun(request: Request, pr: PullRequest, statuses: dict) -> RerunPlan:
                 "success",
                 f"e2e requested by @{request.actor}",
             ),
-            workflows=(SDK_E2E_WORKFLOW,),
+            workflows=tuple(SDK_E2E_RERUN_JOBS),
         )
     if statuses.get(GATE_CHECK_CONTEXT) == "success" and not request.force:
         return RerunPlan(
@@ -978,11 +990,16 @@ def run_rerun(
     marker_at = github.status_created_at(pr.head_sha, context)
     if marker_at is None:
         raise GitHubError(f"the `{context}` marker did not read back on {pr.head_sha}")
-    job_name = SDK_E2E_REQUEST_JOB if request.command == E2E else ""
+    jobs = SDK_E2E_RERUN_JOBS if request.command == E2E else {}
     deadline = clock() + wait_seconds
-    for target in rerun_targets(
-        github, pr.head_sha, plan.workflows, marker_at, job_name
-    ):
+    targets = [
+        target
+        for workflow in plan.workflows
+        for target in rerun_targets(
+            github, pr.head_sha, (workflow,), marker_at, jobs.get(workflow, "")
+        )
+    ]
+    for target in targets:
         if not wait_completed(github, target, pr.head_sha, deadline, sleep, clock):
             raise GitHubError(
                 f"{target.workflow} run {target.run_id} did not finish within "
