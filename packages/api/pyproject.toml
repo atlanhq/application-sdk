@@ -26,6 +26,9 @@ dependencies = [
     # application_sdk.errors maps httpx failures onto the error leaves
     # (errors/http.py); same pin as the SDK's core dependency.
     "httpx>=0.27.0,<0.29.0",
+    # application_sdk.constants (core: handlers import it directly) loads .env
+    # at import; same range as the SDK's core dependency.
+    "python-dotenv>=1.1.0,<2.0.0",
 ]
 
 # Same extras, same pins, as atlan-application-sdk: a handler that uses the SQL
@@ -37,13 +40,11 @@ dependencies = [
 sql = [
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "httpx>=0.27.0,<0.29.0",
-    "python-dotenv>=1.1.0,<2.0.0",
 ]
 pandas = ["pandas>=2.2.3,<3.0.0"]
 aws = [
     "boto3>=1.38.6,<2.0.0",
     "httpx>=0.27.0,<0.29.0",
-    "python-dotenv>=1.1.0,<2.0.0",
 ]
 # Never needed to serve a handler: the input-contract models import pyatlan_v9
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
@@ -93,6 +94,15 @@ core = [
     "application_sdk.common.logger",
     "application_sdk.templates.contracts",
     "application_sdk.handler.metadata_routes",
+    # Public modules a handler imports directly, and the targets of the lazy
+    # exports of listed packages (check_api_surface checks those resolve).
+    "application_sdk.constants",
+    "application_sdk.common.transforms",
+    "application_sdk.contracts.storage",
+    "application_sdk.credentials.atlan",
+    "application_sdk.credentials.git",
+    "application_sdk.credentials.registry",
+    "application_sdk.credentials.oauth",
 ]
 sql = [
     "application_sdk.clients.sql",

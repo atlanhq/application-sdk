@@ -29,11 +29,30 @@ _WORKER_SENTINEL = "application_sdk.main"
 #: (``observability.utils``). A guard falls back only when one of these (or a
 #: submodule of one) is what is missing; anything else is a real error. A new
 #: guard over another worker-only module adds that module here.
+#:
+#: It also names the worker-only targets of listed packages' lazy exports (a
+#: ``_LAZY`` map, or ``lazy_getattr``'s submodules), which ``check_api_surface``
+#: requires to be shipped or named here. Those entries are exact modules, never
+#: a package holding listed files, and no guard imports them, so naming them
+#: changes nothing at runtime: on the host such a name raises the
+#: ``AttributeError`` (or ``ModuleNotFoundError``) it always did.
 _WORKER_ONLY_PREFIXES: tuple[str, ...] = (
     "application_sdk.infrastructure",
     "application_sdk.observability",
     "application_sdk.storage",
     "temporalio",
+    # Lazy-export targets that are worker-only.
+    "application_sdk.clients.azure",
+    "application_sdk.clients.redis",
+    "application_sdk.credentials.atlan_client",
+    "application_sdk.credentials.resolver",
+    "application_sdk.credentials.routing",
+    "application_sdk.handler.service",
+    "application_sdk.templates.base_metadata_extractor",
+    "application_sdk.templates.incremental_sql_metadata_extractor",
+    "application_sdk.templates.sql_app",
+    "application_sdk.templates.sql_metadata_extractor",
+    "application_sdk.templates.sql_query_extractor",
 )
 
 
