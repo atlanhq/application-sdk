@@ -1,4 +1,7 @@
+import os
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,11 +11,33 @@ import pytest
 from hypothesis import given
 
 from application_sdk.common.types import DataframeType
+from application_sdk.storage.formats import utils as _formats_utils
 from application_sdk.storage.formats.parquet import ParquetFileReader
 from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.parquet_input import (
     parquet_input_config_strategy,
 )
+from tests.unit.private_stdlib import private_stdlib
+
+
+@pytest.fixture(autouse=True)
+def _private_os_path() -> Iterator[None]:
+    """Give ``_download_files`` its own ``os.path`` so a patched ``isfile`` or
+    ``isdir`` reaches nothing else on the worker. Copying ``os`` does not copy
+    ``os.path``, hence the second copy."""
+    with (
+        private_stdlib(_formats_utils, "os") as local_os,
+        private_stdlib(local_os, "path"),
+    ):
+        yield
+
+
+def _local_path() -> ModuleType:
+    """``_download_files``' private ``os.path`` copy, the one a test patches."""
+    local = _formats_utils.os.path
+    assert local is not os.path, "the _private_os_path fixture is not active"
+    return local
+
 
 _MOCK_STORE = MagicMock()
 _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
@@ -55,7 +80,7 @@ async def test_not_download_file_that_exists() -> None:
     path = "/data/test.parquet"
 
     with (
-        patch("os.path.isfile", return_value=True),
+        patch.object(_local_path(), "isfile", return_value=True),
         patch(
             "application_sdk.storage.formats.utils._download_one",
             new_callable=AsyncMock,
@@ -80,8 +105,8 @@ async def test_download_file_invoked_for_missing_files() -> None:
     path = "/local/test.parquet"
 
     with (
-        patch("os.path.isfile", return_value=False),
-        patch("os.path.isdir", return_value=False),
+        patch.object(_local_path(), "isfile", return_value=False),
+        patch.object(_local_path(), "isdir", return_value=False),
         patch("glob.glob", return_value=[]),
         patch(
             "application_sdk.storage.formats.utils._resolve_store",
@@ -124,7 +149,7 @@ async def test__download_files_uses_base_class() -> None:
     path = "/data/test.parquet"
     parquet_input = ParquetFileReader(path=path, dataframe_type=DataframeType.pandas)
 
-    with patch("os.path.isfile", return_value=True):
+    with patch.object(_local_path(), "isfile", return_value=True):
         result = await _download_files(
             parquet_input.path, ".parquet", parquet_input.file_names
         )

@@ -180,9 +180,10 @@ class TestSafeListDirectoryErrorSurfacing:
 class TestFlushDirectoryMetadataDarwin:
     def test_calls_f_fullfsync_on_darwin(self, tmp_path: Path) -> None:
         """Darwin path uses ``fcntl(F_FULLFSYNC=51)``, not plain ``fsync``."""
-        import fcntl
-
-        with patch.object(fcntl, "fcntl", return_value=0) as mock_fcntl:
+        with (
+            private_stdlib(_listing, "fcntl") as local_fcntl,
+            patch.object(local_fcntl, "fcntl", return_value=0) as mock_fcntl,
+        ):
             _flush_directory_metadata(tmp_path)
 
         assert mock_fcntl.called
@@ -195,10 +196,9 @@ class TestFlushDirectoryMetadataDarwin:
     ) -> None:
         """If F_FULLFSYNC raises OSError (some devices don't honor it),
         the primitive falls through to portable ``os.fsync``."""
-        import fcntl
-
         with (
-            patch.object(fcntl, "fcntl", side_effect=OSError("unsupported")),
+            private_stdlib(_listing, "fcntl") as local_fcntl,
+            patch.object(local_fcntl, "fcntl", side_effect=OSError("unsupported")),
             patch.object(local_os, "fsync") as mock_fsync,
         ):
             _flush_directory_metadata(tmp_path)

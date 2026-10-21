@@ -234,20 +234,18 @@ def _restore_environ() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def reset_registries() -> Iterator[None]:
+def reset_registries(
+    clean_app_registry,  # noqa: F811 — the imported fixture, requested by name
+    clean_task_registry,  # noqa: F811 — the imported fixture, requested by name
+) -> None:
     """Reset ``AppRegistry`` and ``TaskRegistry`` around every unit test.
 
     Both are process-wide. Defining an ``App`` subclass registers it, so
     without a reset one test's apps and tasks are visible to whichever test
-    the xdist worker runs next.
+    the xdist worker runs next. Requests the shared ``clean_*_registry``
+    fixtures rather than repeating their resets, so a test that also asks for
+    one by name gets the same instance.
     """
-    from application_sdk.app.registry import AppRegistry, TaskRegistry
-
-    AppRegistry.reset()
-    TaskRegistry.reset()
-    yield
-    AppRegistry.reset()
-    TaskRegistry.reset()
 
 
 @pytest.fixture(autouse=True)

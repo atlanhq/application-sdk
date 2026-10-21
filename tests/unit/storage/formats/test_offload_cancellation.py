@@ -848,7 +848,10 @@ class TestWriterOutputIsolation:
             patch.object(
                 local_os, "replace", side_effect=refuse_cross_filesystem_rename
             ),
-            patch("shutil.move", side_effect=no_direct_move),
+            # ``SafeFileOps.move`` is the SDK's only ``shutil.move`` caller, so
+            # spying on its private ``shutil`` sees every move the close makes.
+            private_stdlib("application_sdk.common.file_ops", "shutil") as local_shutil,
+            patch.object(local_shutil, "move", side_effect=no_direct_move),
         ):
             await writer.close()
 

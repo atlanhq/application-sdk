@@ -14,19 +14,34 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
+from tests.unit.private_stdlib import private_stdlib
+
 _UNIT_ROOT = Path(__file__).parent
 _EXEMPT = {Path(__file__).name, "private_stdlib.py"}
 
-#: The stdlib modules whose functions SDK code and the event loop share. ``sys``
-#: is only flagged when reached through an SDK module (``sys.platform``):
-#: ``monkeypatch.setattr(sys, "argv", ...)`` is the standard way to drive a CLI.
-_SHARED = ("time", "asyncio", "os", "sys")
-_SHARED_BY_NAME = ("time", "asyncio", "os")
+#: The stdlib modules whose functions SDK code, the event loop and leftover
+#: threads share. ``sys`` is only flagged when reached through another module
+#: (``mod.sys.platform``): ``monkeypatch.setattr(sys, "argv", ...)`` is the
+#: standard way to drive a CLI.
+_SHARED = (
+    "time",
+    "asyncio",
+    "os",
+    "os.path",
+    "sys",
+    "shutil",
+    "fcntl",
+    "urllib.request",
+)
+_SHARED_BY_NAME = ("time", "asyncio", "os", "shutil", "fcntl")
+_DOTTED = "|".join(re.escape(module) for module in _SHARED)
 
 #: ``"application_sdk.main.time.monotonic"`` and friends.
-_SDK_PATH = re.compile(rf"application_sdk(\.\w+)+\.({'|'.join(_SHARED)})(\.\w+)+")
-#: ``"asyncio.create_task"``, ``"time.monotonic"``.
-_BARE_PATH = re.compile(r"(time|asyncio)(\.\w+)+")
+_SDK_PATH = re.compile(rf"application_sdk(\.\w+)+?\.({_DOTTED})(\.\w+)+")
+#: ``"asyncio.create_task"``, ``"os.path.isfile"``, ``"shutil.move"``.
+_BARE_PATH = re.compile(rf"({_DOTTED.replace('|sys', '')})(\.\w+)+")
 
 
 def _callee(node: ast.Call) -> str:
@@ -53,8 +68,16 @@ def _violation(node: ast.Call) -> str | None:
         return None
     if isinstance(target, ast.Name) and target.id in _SHARED_BY_NAME:
         return target.id
-    if isinstance(target, ast.Attribute) and target.attr in _SHARED:
-        return ast.unparse(target)
+    if isinstance(target, ast.Attribute):
+        # ``local_os.path`` is the real ``posixpath``: copying ``os`` does not
+        # copy the modules it holds, so a dotted module (``os.path``,
+        # ``urllib.request``) matches as a bare suffix of the expression.
+        dotted = ast.unparse(target)
+        if any(
+            dotted.endswith(module if "." in module else f".{module}")
+            for module in _SHARED
+        ):
+            return dotted
     return None
 
 
@@ -85,8 +108,26 @@ def test_the_guard_catches_each_global_form() -> None:
         'patch.object(local_time, "monotonic")': False,
         'monkeypatch.setattr(sys, "argv", [])': False,
         'patch("application_sdk.main.run")': False,
-        'patch("os.path.isfile")': False,
+        'patch("os.path.isfile")': True,
+        'patch("shutil.move")': True,
+        'patch.object(fcntl, "fcntl")': True,
+        'patch.object(local_os.path, "isfile")': True,
+        'monkeypatch.setattr(mod.urllib.request, "urlretrieve", f)': True,
+        'patch("application_sdk.storage.formats.shutil.move")': True,
+        'patch.object(local_path, "isfile")': False,
+        'patch.object(self.request, "url")': False,
+        'patch.object(local_urllib.request, "getproxies")': True,
+        'patch.object(photos, "x")': False,
+        'patch("sys.argv", [])': False,
     }
     for source, flagged in sources.items():
         call = ast.parse(source).body[0].value  # type: ignore[attr-defined]  # — every source above is a single expression statement
         assert (_violation(call) is not None) is flagged, source
+
+
+def test_private_stdlib_rejects_a_name_that_is_not_a_module() -> None:
+    from application_sdk.observability import pushgateway
+
+    with pytest.raises(TypeError, match="is not a module"):
+        with private_stdlib(pushgateway, "__name__"):
+            pass
