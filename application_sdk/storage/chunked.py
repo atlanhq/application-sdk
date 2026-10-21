@@ -73,6 +73,22 @@ _TRANSFER_LOCKS = PathLockRegistry("storage.download.lock_wait")
 _TRANSFER_STATE_SUFFIX = ".transfer-state"
 
 
+def _monotonic() -> float:
+    """Monotonic clock seam for chunked transfers.
+
+    Every clock read in this module goes through this indirection so tests
+    can drive the progress-heartbeat interval deterministically by patching
+    ``application_sdk.storage.chunked._monotonic`` in isolation. Real clock
+    resolution is too coarse to rely on: Windows' ``time.monotonic`` ticks
+    roughly every 15.6ms, so fast chunks can land with a zero delta.
+
+    Patching ``time.monotonic`` instead would be global (``chunked.time`` is
+    the shared module object) and would also intercept asyncio's event-loop
+    clock. Same seam as ``application_sdk.storage.rolling._monotonic``.
+    """
+    return time.monotonic()
+
+
 def _transfer_state_path(path: Path) -> Path:
     """Sidecar path holding resumable-download state for *path*.
 
@@ -427,7 +443,7 @@ async def _fetch_chunk(
         # (ADR-0018).
         current_progress_tracker().mark_progress("storage.download_range")
         if progress_interval > 0:
-            now = time.monotonic()
+            now = _monotonic()
             if now - progress.last_progress >= progress_interval:
                 _log_transfer_progress(
                     "download",
@@ -859,7 +875,7 @@ async def _download_chunked_locked(
         }
 
         sem = asyncio.Semaphore(max_concurrent_chunks)
-        started = time.monotonic()
+        started = _monotonic()
         progress = _ChunkProgress(
             started=started,
             last_progress=started,
@@ -937,7 +953,7 @@ async def _download_chunked_locked(
                 "download",
                 key,
                 outcome="failure",
-                elapsed_ms=(time.monotonic() - started) * 1000.0,
+                elapsed_ms=(_monotonic() - started) * 1000.0,
                 size_bytes=progress.fetched_bytes,
                 error_class=_exc_class_name(exc),
             )
@@ -1011,7 +1027,7 @@ async def _download_chunked_locked(
                     "download",
                     key,
                     outcome="failure",
-                    elapsed_ms=(time.monotonic() - started) * 1000.0,
+                    elapsed_ms=(_monotonic() - started) * 1000.0,
                     size_bytes=progress.fetched_bytes,
                     error_class=_exc_class_name(exc),
                 )
@@ -1031,7 +1047,7 @@ async def _download_chunked_locked(
                 "download",
                 key,
                 outcome="success",
-                elapsed_ms=(time.monotonic() - started) * 1000.0,
+                elapsed_ms=(_monotonic() - started) * 1000.0,
                 size_bytes=progress.fetched_bytes,
             )
 
