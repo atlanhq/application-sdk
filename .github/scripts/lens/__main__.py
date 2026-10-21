@@ -18,6 +18,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import approve, report, trace
@@ -107,7 +108,13 @@ def main(argv: list[str] | None = None) -> int:
 
     own_run = int(os.environ.get("GITHUB_RUN_ID") or 0)
     if own_run and live:
-        busy = older_active_run(gh.workflow_runs(WORKFLOW_FILE), args.pr, own_run)
+        busy = older_active_run(
+            gh.workflow_runs(WORKFLOW_FILE),
+            args.pr,
+            own_run,
+            jobs_of=gh.run_jobs,
+            now=datetime.now(timezone.utc),
+        )
         if busy:
             print(
                 f"lens: not running — review {busy.get('id')} for #{args.pr} is still in progress"
