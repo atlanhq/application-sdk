@@ -6,6 +6,11 @@ import pytest
 
 from application_sdk.common import restart_marker as rm
 
+#: Only turns a hang into a failure. A passing test must never have to beat a
+#: short bound on a loaded runner, so how long a path waits is asserted through
+#: the ``idle`` seam below, not by timing it.
+_HANG = 30
+
 
 @pytest.fixture(autouse=True)
 def marker_dir(tmp_path, monkeypatch):
@@ -60,6 +65,19 @@ async def _until_logged(logs, level, *fragments) -> None:
 def prompt_polling(monkeypatch):
     """Shrink the release-file poll so the wait's exits are testable in real time."""
     monkeypatch.setattr(rm, "RECHECK_SECONDS", 0.02)
+
+
+@pytest.fixture
+def idle(monkeypatch) -> list[int]:
+    """Stand in for the wait itself and record the budget each call was given,
+    so whether a path waits, and for how long, needs no real clock."""
+    budgets: list[int] = []
+
+    async def record(_shutdown_event, budget):
+        budgets.append(budget)
+
+    monkeypatch.setattr(rm, "wait_for_pod_to_get_replaced", record)
+    return budgets
 
 
 @pytest.fixture
@@ -135,7 +153,7 @@ def test_a_non_utf8_marker_counts_as_a_restart_and_is_replaced(marker_dir):
 
 async def test_a_clean_start_does_not_wait(marker_dir, monkeypatch):
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
 
 
 async def test_only_the_first_restart_in_a_pod_waits(marker_dir, monkeypatch, logs):
@@ -144,7 +162,7 @@ async def test_only_the_first_restart_in_a_pod_waits(marker_dir, monkeypatch, lo
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()  # start 1 -> marker says 1 restart
     rm.check_and_update_the_marker()  # start 2 -> marker says 2
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert logs.says(
         "warning", "polls instead of waiting again"
     ), f"a second restart must say why it is not waiting: {logs.rows}"
@@ -155,7 +173,7 @@ async def test_only_the_first_restart_in_a_pod_waits(marker_dir, monkeypatch, lo
 
 async def test_a_restart_does_not_wait_while_waiting_is_switched_off(marker_dir, logs):
     rm.check_and_update_the_marker()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert logs.says(
         "warning", "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS=0"
     ), f"must say it is switched off rather than announce a 0s wait: {logs.rows}"
@@ -171,7 +189,7 @@ async def test_a_restart_waits_out_the_budget_then_proceeds(
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
     loop = asyncio.get_running_loop()
     started = loop.time()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=5)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert loop.time() - started >= 1, "returned before the budget was spent"
 
 
@@ -211,7 +229,7 @@ async def test_shutdown_ends_the_wait(
     )
     assert not task.done()
     shutdown.set()
-    await asyncio.wait_for(task, timeout=5)
+    await asyncio.wait_for(task, timeout=_HANG)
 
 
 async def test_a_failure_setting_up_the_wait_starts_the_worker_anyway(
@@ -224,7 +242,7 @@ async def test_a_failure_setting_up_the_wait_starts_the_worker_anyway(
         raise RuntimeError("no clock")
 
     monkeypatch.setattr(rm, "wait_for_pod_to_get_replaced", boom)
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=1)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
 
 
 # -------------------------------------------------- what this restart earns
@@ -283,7 +301,7 @@ async def test_a_replacement_on_its_way_holds_the_worker_back(
 
     loop = asyncio.get_running_loop()
     started = loop.time()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=5)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert loop.time() - started >= 1, "a scheduled eviction must be waited for"
 
 
@@ -293,7 +311,7 @@ async def test_the_ask_names_this_pod_and_nothing_else(
     advice["body"] = {"wait": False, "reason": "no-eviction-scheduled"}
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
 
     assert len(advice["asked"]) == 1, "exactly one call, on the restart path only"
     url, params = advice["asked"][0]
@@ -305,23 +323,21 @@ async def test_the_ask_names_this_pod_and_nothing_else(
 
 
 async def test_nothing_coming_means_the_worker_polls_now(
-    marker_dir, monkeypatch, advice, logs, prompt_polling
+    marker_dir, monkeypatch, advice, logs, idle
 ):
     advice["body"] = {"wait": False, "reason": "not-vpa-managed"}
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
 
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
-    assert loop.time() - started < 1, "a worker nothing is coming for must not wait"
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
+    assert idle == [], "a worker nothing is coming for must not wait"
     assert logs.says(
         "warning", "not-vpa-managed"
     ), f"the operator has to be told why it did not wait: {logs.rows}"
 
 
 async def test_an_unreachable_endpoint_polls_rather_than_waiting(
-    marker_dir, monkeypatch, advice, logs, prompt_polling
+    marker_dir, monkeypatch, advice, logs, idle
 ):
     """Fail open. A worker that cannot ask is in the same position it was in
     before any of this existed, and waiting on a silent service would spend the
@@ -330,41 +346,31 @@ async def test_an_unreachable_endpoint_polls_rather_than_waiting(
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
 
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
-    assert loop.time() - started < 1, "an unreachable endpoint must not hold a worker"
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
+    assert idle == [], "an unreachable endpoint must not hold a worker"
     assert logs.says("warning", "could not find out what this restart earns"), logs.rows
 
 
 async def test_an_unparsable_answer_polls_rather_than_waiting(
-    marker_dir, monkeypatch, advice, prompt_polling
+    marker_dir, monkeypatch, advice, idle
 ):
     advice["body"] = ["not", "an", "object"]
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
 
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
-    assert (
-        loop.time() - started < 1
-    ), "a body that will not parse must not hold a worker"
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
+    assert idle == [], "a body that will not parse must not hold a worker"
 
 
-async def test_the_budget_bounds_a_long_answer(
-    marker_dir, monkeypatch, advice, prompt_polling
-):
+async def test_the_budget_bounds_a_long_answer(marker_dir, monkeypatch, advice, idle):
     """The endpoint's number is advisory. A wait longer than the budget would
     outlive the retries it exists to protect."""
     advice["body"] = {"wait": True, "reason": "eviction-scheduled", "waitSeconds": 9999}
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
     rm.check_and_update_the_marker()
 
-    loop = asyncio.get_running_loop()
-    started = loop.time()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=5)
-    assert 1 <= loop.time() - started < 4, "the wait must be clamped to the budget"
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
+    assert idle == [1], "the wait must be clamped to the budget"
 
 
 async def test_without_the_check_nothing_is_asked(
@@ -373,7 +379,7 @@ async def test_without_the_check_nothing_is_asked(
     monkeypatch.setattr(rm, "OOM_RESTART_CHECK", "none")
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert advice["asked"] == [], "the check being off must cost no call at all"
 
 
@@ -387,7 +393,7 @@ async def test_hostname_names_the_pod_when_the_variable_is_unset(
     monkeypatch.setenv("HOSTNAME", "athena-worker-9")
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert advice["asked"], "HOSTNAME alone must be enough to name this pod"
     _, params = advice["asked"][0]
     assert params["pod"] == "athena-worker-9"
@@ -401,7 +407,7 @@ async def test_a_pod_that_cannot_name_itself_asks_nothing(
     monkeypatch.delenv("HOSTNAME", raising=False)
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=2)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert advice["asked"] == [], "without its own name it cannot ask about itself"
 
 
@@ -430,7 +436,7 @@ async def test_a_park_that_gets_its_replacement_is_counted_as_such(
         _until_logged(logs, "warning", "not polling for up to"), timeout=5
     )
     shutdown.set()
-    await asyncio.wait_for(task, timeout=5)
+    await asyncio.wait_for(task, timeout=_HANG)
 
     assert [p["labels"]["outcome"] for p in parks] == [
         rm.PARK_REPLACED,
@@ -446,7 +452,7 @@ async def test_a_park_that_buys_nothing_is_counted_separately(
     an eviction that lands late, or never, looks identical from the rerouter."""
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
     rm.check_and_update_the_marker()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=10)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
 
     assert [p["labels"]["outcome"] for p in parks] == [rm.PARK_SPENT, rm.PARK_SPENT]
     seconds = next(p for p in parks if p["name"] == rm.PARK_SECONDS_METRIC)
@@ -468,6 +474,6 @@ async def test_a_broken_metrics_backend_does_not_stop_the_worker(
     monkeypatch.setattr(rm, "get_metrics", explode)
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 1)
     rm.check_and_update_the_marker()
-    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=10)
+    await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
 
     assert logs.says("warning", "could not record the park metric")

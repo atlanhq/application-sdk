@@ -77,12 +77,12 @@ def _matrix(mock_logger) -> list[dict]:
 class TestSelfReportedDurationsAreUnvalidated:
     @pytest.mark.asyncio
     async def test_duration_far_above_the_budget_is_published_verbatim(self):
-        """The mechanism: a claim 1000x the budget reaches ClickHouse intact."""
+        """The mechanism: a claim ~60x the budget reaches ClickHouse intact."""
         gate = build_preflight_gate_activity(
             _MisreportingHandler(_IMPOSSIBLE_DURATION_MS),
             app_name="myapp",
             mode=PreflightGateMode.SOFT,
-            budget_seconds=0.3,
+            budget_seconds=5,
         )
         started = time.monotonic()
         with mock.patch(f"{_GATE}.logger") as m:
@@ -101,7 +101,7 @@ class TestSelfReportedDurationsAreUnvalidated:
             _MisreportingHandler(_IMPOSSIBLE_DURATION_MS),
             app_name="myapp",
             mode=PreflightGateMode.SOFT,
-            budget_seconds=0.3,
+            budget_seconds=5,
         )
         with mock.patch(f"{_GATE}.logger") as m:
             await gate(PreflightGateInput())
