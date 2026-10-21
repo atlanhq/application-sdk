@@ -266,7 +266,12 @@ def parse_config(text: str) -> Config:
         raise ConfigError("schedule must map owner/repo to releases")
     schedule: dict[str, tuple[Entry, ...]] = {}
     for repo, entries in raw.items():
-        if not isinstance(repo, str) or not _REPO_RE.match(repo):
+        # The key goes into GitHub API paths, so `.`/`..` parts are refused too.
+        if (
+            not isinstance(repo, str)
+            or not _REPO_RE.match(repo)
+            or any(part in (".", "..") for part in repo.split("/"))
+        ):
             raise ConfigError(f"schedule: {repo!r} is not owner/repo")
         releases = parse_releases(
             entries, ordered_days, ordered_slots, f"schedule[{repo}]"

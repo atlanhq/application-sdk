@@ -105,6 +105,8 @@ def test_weekend_days_are_rejected(day: str) -> None:
         ({"schema_version": 2}, "schema_version"),
         ({"timezone": "UTC"}, "IST"),
         ({"schedule": {"not-a-repo": [{"day": "mon", "slot": "12:00"}]}}, "owner/repo"),
+        ({"schedule": {"../evil": [{"day": "mon", "slot": "12:00"}]}}, "owner/repo"),
+        ({"schedule": {"atlanhq/..": [{"day": "mon", "slot": "12:00"}]}}, "owner/repo"),
         ({"schedule": [APP]}, "must map owner/repo"),
         ({"schedule": {APP: []}}, "at least one release"),
         ({"schedule": {APP: {"day": "mon"}}}, "must be a list"),
