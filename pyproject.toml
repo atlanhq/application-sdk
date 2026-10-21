@@ -30,6 +30,9 @@ dependencies = [
     "pyatlan>=11.3,<12",
     "httpx>=0.27.0,<0.29.0",
     "httpx-retries>=0.6.0,<0.7.0",
+    # Published floor (not just [tool.uv] constraint-dependencies, which only
+    # pins this repo's own lock) so connector apps inherit it on SDK upgrade.
+    "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
     "pydantic>=2.10.6,<3.0.0",
     "packaging>=24.0",
     "loguru>=0.7.3,<0.8.0",
