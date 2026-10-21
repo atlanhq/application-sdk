@@ -415,7 +415,11 @@ def test_importing_the_workflow_does_not_load_pyarrow() -> None:
         "print('pyarrow' in sys.modules)"
     )
     out = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
     )
     assert out.stdout.strip() == "False"
 

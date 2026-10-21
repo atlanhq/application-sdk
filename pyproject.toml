@@ -412,8 +412,9 @@ reportInvalidTypeForm = "warning"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator and not load'"
+addopts = "-m 'not integration and not e2e and not s3_integration and not azure_integration and not gcs_integration and not storage_emulator and not load and not perf'"
 markers = [
+    "perf: throughput comparisons and large-scale probes (≥10s each); excluded from the unit matrix, run once in the `Unit Perf Tests` job via `pytest tests/unit -m perf`",
     "load: opt-in large-file storage load tests — real bytes at ATLAN_LOAD_TEST_SIZE_MIB (50 GiB-class); run via `poe load-test-storage`, never in CI",
     "integration: tests requiring local Temporal server",
     "e2e: tests requiring a live K8s cluster",

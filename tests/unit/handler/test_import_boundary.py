@@ -18,6 +18,7 @@ handler actually pulls in.
 
 from __future__ import annotations
 
+import functools
 import importlib
 import subprocess
 import sys
@@ -50,8 +51,13 @@ _FORBIDDEN_PREFIXES = (
 _ALLOWED_FOR_START_ROUTE = "temporalio.client"
 
 
-def _loaded_after_importing(*modules: str) -> set[str]:
-    """Import *modules* in a fresh interpreter; return everything in ``sys.modules``."""
+@functools.cache
+def _loaded_after_importing(*modules: str) -> frozenset[str]:
+    """Import *modules* in a fresh interpreter; return everything in ``sys.modules``.
+
+    Cached: three of the five call sites ask for the same two module sets, and
+    each probe is a fresh interpreter importing the SDK — 1-4s on Windows.
+    """
     imports = "".join(f"importlib.import_module({m!r});" for m in modules)
     result = subprocess.run(
         [
@@ -62,11 +68,12 @@ def _loaded_after_importing(*modules: str) -> set[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     assert (
         result.returncode == 0
     ), f"importing {modules} in a fresh interpreter failed:\n{result.stderr}"
-    return {line for line in result.stdout.splitlines() if line}
+    return frozenset(line for line in result.stdout.splitlines() if line)
 
 
 def _is_worker_module(name: str) -> bool:
@@ -115,6 +122,7 @@ def test_creating_the_handler_service_imports_no_worker_code() -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
     loaded = {line for line in result.stdout.splitlines() if line}

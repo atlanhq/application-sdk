@@ -585,6 +585,7 @@ def test_extract_all_from_init_reads_utf8_regardless_of_ambient_encoding(
             "PYTHONUTF8": "0",
             "PYTHONCOERCECLOCALE": "0",
         },
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "['thing']"
