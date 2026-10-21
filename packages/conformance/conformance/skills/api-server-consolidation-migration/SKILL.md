@@ -1,254 +1,229 @@
 ---
 name: api-server-consolidation-migration
 description: >
-  Move an Atlan app onto the shared common-app-server host (API Server
-  Consolidation) by serving the app's REAL handler from app/ through
-  atlan-application-sdk-api. The app commits one [tool.atlan-app-api] block in
-  pyproject.toml and no packaging; application-sdk's gen_app_api.py fixes,
-  checks and stages the handler, and the host pins the app's release in
-  hosted-api-apps.toml. Clears conformance rule P061 (HostedHandlerMigration):
-  an app not yet migrated, a leftover hand-written server/ package on
-  atlan-server-sdk, a [tool.atlan-app-api] handler that is not used the way the
-  host needs, and a request-time compute_manifest hook. Covers which routes the
-  host serves, prerequisites, the step-by-step checklist with a verification
-  per step, host onboarding, local and internal-tenant validation, the
-  routeToCommonAPIServer flip (image before flag), deleting server/ (only after
-  the host's pin moved), rollback and troubleshooting. Use when onboarding an
-  app to the consolidated host, replacing an app's server/ package, when P061
-  fires, or when a hosted app 503s, returns app_not_hosted, is ejected, or
-  fails the api-member CI job.
-mandatory_triggers:
-  - "/api-server-consolidation-migration"
-  - "P061"
-  - "HostedHandlerMigration"
-  - "move this app to the consolidated API host"
-  - "migrate to common-app-server"
-optional_triggers:
-  - "delete the server/ package"
-  - "atlan-app-api block"
-  - "routeToCommonAPIServer"
-  - "app_not_hosted"
-  - "api-member job failing"
-owner: connector-platform-team
-last_updated: "2026-10-16"
-staleness_days: 60
-inputs:
-  - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
-  - sdk_checkout: "an application-sdk checkout at the commit or release the app pins (for .github/scripts/gen_app_api.py)"
-outputs:
-  - pyproject.toml ([tool.atlan-app-api] block; SDK pins)
-  - uv.lock (relocked against pypi.org with the repo's uv version)
-  - app/ handler code (relative imports, moved imports, typed errors instead of handler logging)
-  - a common-app-server PR pinning the app's release in hosted-api-apps.toml
-  - server/ deleted, once the host serves the new package
+  Move an Atlan app's API surface onto the shared common-app-server host (API
+  Server Consolidation) by serving its REAL app/ handler through
+  atlan-application-sdk-api. Refactors the app to the canonical shape (openapi,
+  mysql, metabase) instead of adding SDK or host special cases, adds the one
+  [tool.atlan-app-api] block, runs application-sdk's gen_app_api.py fix and
+  check, proves the handler with the api-only probe, on a host test image and
+  on a tenant, then releases and lets the host's Renovate-managed pin move.
+  Clears conformance rule P061 (HostedHandlerMigration). Use when onboarding an
+  app to the consolidated host, replacing a hand-written server/ package, when
+  P061 or P060 fires, or when a hosted app 503s, returns app_not_hosted, is
+  ejected, or fails the api-member CI job.
+metadata:
+  author: connector-platform-team
+  version: "1.0"
+  category: connector-apps
+  last_updated: "2026-10-21"
+  staleness_days: 60
+  keywords:
+    - /api-server-consolidation-migration
+    - P061
+    - HostedHandlerMigration
+    - move this app to the consolidated API host
+    - migrate to common-app-server
+    - delete the server/ package
+    - atlan-app-api block
+    - routeToCommonAPIServer
+    - app_not_hosted
+    - api-member job failing
 ---
-
-## Conformance rules this skill clears
-
-P061. This rule names this skill as its `remediation_reference`, and
-`/remediate` hands its findings here. When the skill is done, run
-`atlan-application-sdk-conformance detect --rule P061` and confirm it is no
-longer reported. P060 (logging in the handler module) is cleared on the way, by
-step 2, but it has its own guide.
-
-Which part of the checklist each P061 finding needs:
-
-| P061 finding | Steps |
-|---|---|
-| `<Handler> is not served from the consolidated API host yet` | 0 to 9, then 10 if the app has a `server/` package |
-| `server/ is a hand-written handler copy on atlan-server-sdk` | 0 to 9 if the app is not migrated yet, then **10 only after step 6 has merged and the host's pin serves the new package**. Deleting `server/` earlier takes the app's API offline on every tenant that still routes to the old package. |
-| `[tool.atlan-app-api].handler … does not name a class …`, `data pattern … matches nothing` | 1 |
-| `Absolute import …`, `… is absent on the host`, `APPLICATION_NAME is the host's own name …` | 2 (`fix`), then 4 (`check`) |
-| `compute_manifest runs app code per request …` | Not hostable yet. Turn the hook's output into static data in the generated manifest, or leave the app on its own server until the host supports hooks. Do not suppress it. |
 
 # Serve an app's handler from the consolidated API host
 
 `common-app-server` serves many apps' HTTP surfaces from one process per
-tenant, so an app stops running its own always-on API-server pod. Requests are
-routed by the **leading label of the Host header** (`X-Original-Host` wins over
-`Host`), so callers do not change.
+tenant, so an app stops running its own always-on API-server pod. It serves the
+app's **real handler** from `app/`, packaged at build time from one config block.
+The older approach, a hand-written `server/` copy on `atlan-server-sdk`, drifted
+from the real handler and is being removed.
 
-## Why this approach (and what it replaces)
+Reference material, read on demand (paths relative to this skill):
 
-The earlier consolidation made each app keep a **second, hand-written copy** of
-its handler in a `server/` folder built on `atlanhq/server-sdk`. That copy
-drifted from the real handler. The new approach serves the app's **real
-handler** from `app/`. There is no duplicate code and no committed packaging.
+- `references/routes-and-host.md`: every route the host serves, host
+  behaviour, the trust model, onboarding the host pin, rollback.
+- `references/validation.md`: the full local, host and tenant validation
+  recipe, and the relock recipe.
+- `references/troubleshooting.md`: symptom → cause → fix.
 
-| Piece | What it is | Where |
-|---|---|---|
-| `atlan-application-sdk-api` | A listed subset of `application_sdk/` (handler, contracts, errors, credential specs, the shared routes, `run_in_thread`, SQL client base, AWS helpers), published as its own wheel. The two wheels are **disjoint**: `atlan-application-sdk` excludes these files and depends on `atlan-application-sdk-api` at the same version. It uses the **same import paths** (`from application_sdk.handler import Handler`). It has no Temporal, Dapr, object store, loguru or OpenTelemetry. Extras `sql`, `pandas`, `aws` and `pyatlan` use the SDK's own pins. | application-sdk `packages/api/`, `docs/standards/api-distribution.md` |
-| `[tool.atlan-app-api]` | One config block in the app's root `pyproject.toml`. It is the only thing the app adds. | app repo |
-| `gen_app_api.py` | `fix` / `check` / `build` / `stage` / `hash` (Python 3.11+). It turns the config into the package `atlan_<app>_api`. | application-sdk `.github/scripts/` |
-| `hosted-api-apps.toml` | The host's pin of each app's **release tag and that tag's commit**, plus the application-sdk release that stages them. Renovate bumps them. | common-app-server |
-| `api-member` CI job | Proves on every app PR that the handler mounts and serves the way the host serves it. | application-sdk `tests-reusable.yaml` |
+## Conformance rules this skill clears
 
-> **Status (2026-10).** All reference PRs are open drafts, not merged:
-> application-sdk #4058 (the slim package, every host route below, the
-> scripts and the release step), atlan-mysql-app #778 (the reference
-> migration), atlan-metabase-app #721 and atlan-redshift-app #486 (the same
-> migration), and common-app-server #121 (host staging and release pins).
-> `atlan-application-sdk-api` is **not on PyPI yet**. Until #4058 is released,
-> pin it by git (step 3).
+P061. It names this skill as its `remediation_reference`, and `/remediate` hands
+its findings here. When done, run
+`atlan-application-sdk-conformance detect --rule P061` and confirm it is no
+longer reported. P060 (logging in the hosted handler module, tier `block`) has
+its own guide; step 3 clears it on the way.
 
-## Which routes the host serves for an app
-
-Once an app sets `routeToCommonAPIServer: true`, its Service becomes an
-`ExternalName` alias to the host. **Every** Heracles call for that app then
-lands on the host, not only the handler calls. So the host must serve every
-route Heracles uses, or that feature breaks for the app.
-
-| Heracles flow | App route | On the host |
-|---|---|---|
-| Liveness | `GET /health` | ✅ `build_asgi_app` |
-| Test credential | `POST /workflows/v1/auth` | ✅ in #4058 |
-| Preflight | `POST /workflows/v1/check` | ✅ in #4058 |
-| Warmup tier | `POST /workflows/v1/warmup` | ✅ in #4058 |
-| Metadata (filter dropdowns) | `POST /workflows/v1/metadata` | ✅ in #4058 |
-| App-specific endpoints | whatever `Handler.routers()` returns | ✅ in #4058, served after the SDK routes. A router that redefines an SDK path is refused at startup. |
-| Setup form | `/workflows/v1/configmap/{id}`, `/configmaps`. The Local Marketplace cache is used first, with the app as fallback. | ✅ in #4058, from `app/generated/` shipped in the wheel |
-| Run submit | `POST /manifest`, `GET`/`POST /workflows/v1/manifest`. After this, Automation Engine runs the DAG on the worker through Temporal. | ✅ in #4058, from `app/generated/` shipped in the wheel. The task queue is the one the app's worker polls: `ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE` if set (the worker's own override), else derived from the deployment name: `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` if set, else the host's own `ATLAN_DEPLOYMENT_NAME` (the chart gives the host and every worker the same tenant-wide `deploymentName`; Heracles re-stamps SDR runs' agent-side nodes itself). The host never uses its own bare `ATLAN_TASK_QUEUE`. Static manifests only: `check` refuses a `compute_manifest` hook. |
-| Native-app API | `/input-contract` | ✅ in #4058, from the generated `_input.py` |
-| Credential create/update, and every run submit before the manifest fetch | `POST /workflows/v1/config/{guid}?type=credentials` | ✅ in #4058, on S3 from `S3_BUCKET` / `S3_REGION`, keyed by the app's name at the path the worker reads. 503 without `S3_BUCKET` |
-| File fields | `/file` | ✅ in #4058, on the same S3 bucket. The `prefix` is validated (no `..`, no absolute path, 400 otherwise), and on the host every upload lands under `persistent-artifacts/apps/<app>/uploads/`. |
-| Workflow status for a non-Automation-Engine run | `GET /workflows/v1/status/{wf}/{run}` | ⏳ FND-3164. Heracles calls it only when a status request is not `execution_mode=automation-engine`. `/workflows/v1/start` has no Heracles caller left (native creates and delete-user go through Automation Engine), so the host does not serve it. |
-| Publish the handler wheel on app release | (release flow) | ✅ in #4058 + common-app-server #121. The SDK pushes nothing. The host **pulls**: it pins each app's release tag + SHA, Renovate opens the bump PR, and the host's `serving-change` workflow labels it `no-serving-change` when `gen_app_api.py hash` shows the staged handler package is unchanged. |
-| A tests-reusable leg that tests through the host route | (CI) | ✅ in #4058: the `api-member` job probes every route above through the app's own wheel |
-
-**Do not route an app that needs a ⏳ row until that row ships.** A canonical
-connector needs none of them. Before flipping the flag, the host pod also needs
-an S3 role and `S3_BUCKET` / `S3_REGION`; without them config answers 503 and
-every run submit fails.
-
-Runs are started by Automation Engine, not by the app's `/start`. The **worker
-is unchanged** and still runs the handler in-process for the run-start
-preflight gate and for Self-Deployed Runtime (the `sdr:*` workflows). **Never
-delete the handler** because "the host serves it now".
-
-## Who can migrate now
-
-| Fits now | Does not fit yet: first bring it to the canonical shape (the SDK adds no special cases) |
+| P061 finding | Steps |
 |---|---|
-| Connector apps shaped like the reference apps (openapi, mysql, metabase): a `Handler` subclass in `app/`, a contract-generated `app/generated/`, and **no** custom middleware, MCP mounts, lifespan or startup hooks, or `compute_manifest` that must run at request time | Custom middleware or MCP mounts, startup or lifespan hooks, request-time `compute_manifest`, heavy routes outside the handler |
+| `<Handler> is not served from the consolidated API host yet` | 0 to 8, then 9 if the app has `server/` |
+| `server/ is a hand-written handler copy on atlan-server-sdk` | 0 to 8 if not migrated yet, then **9 only after the host's pin serves the new package** (step 7). Deleting `server/` earlier takes the app's API offline on every tenant still routed to it. |
+| `[tool.atlan-app-api].handler … does not name a class …`, `data pattern … matches nothing` | 2 |
+| `Absolute import …`, `… is absent on the host` | 3 (`fix`), then 5 |
+| `APPLICATION_NAME is the host's own name …` | 1 (use `self.context.app_name`), then 5 |
+| `compute_manifest runs app code per request …` | 1: make the manifest static. Do not suppress it. |
 
-Non-connector apps (enrichment studio, governance studio, ai-memory) are
-tracked separately under milestone **M4**.
+## The stance: fix the app, never special-case the SDK or the host
 
-**What a migrated app gets:** no per-tenant API-server pod (saving memory and
-cost), no `server/` copy to keep in sync, one handler for both the worker and
-the host, and CI that proves the host path on every PR.
+**The target is the canonical shape**, the one atlan-openapi-app,
+atlan-mysql-app and atlan-metabase-app have: a `Handler` subclass in `app/`,
+a contract-generated `app/generated/`, static manifests, typed `AppError`
+failures, no custom middleware, lifespan or startup work. When an app uses the
+handler differently or diverges from those apps, **the remedy is to refactor
+the app** until it fits. This is a forced approach: do not add a flag, hook,
+seed, allowlist or per-app branch to `atlan-application-sdk-api`, the SDK's
+routes, `gen_app_api.py`, or common-app-server to accommodate one app.
 
----
+**Decision rule.** Change the SDK or the host only when all three hold:
+
+1. the need is **generic**: openapi, mysql or metabase would need it too, or
+   any app with that kind of source would;
+2. it is **validated**: shown failing on the canonical shape, not only on this
+   app's divergent code;
+3. it lands as an SDK feature on its own PR, reviewed as such, and the app
+   waits for its release.
+
+Otherwise refactor the app. If the app cannot be refactored without a feature
+that does not exist yet, **stop and escalate** (FND, connector-platform-team)
+with the finding and the canonical comparison. Do not work around it.
+
+| Divergence found | Remedy |
+|---|---|
+| Custom HTTP endpoints, or a FastAPI app/router built by hand | Return the routers from `Handler.routers()`, which already exists. Keep router code in the handler's files, imported relatively. A router redefining an SDK path is refused at startup. |
+| Per-request manifest (`compute_manifest` in `app/<entrypoint>/core.py`) | Refactor to static data in the contract-generated manifest. |
+| Logging in the handler module | Report through the return value or a typed `AppError`; the SDK routes log outcomes (step 3). |
+| Handler relies on raw exception text reaching the caller | Raise typed `AppError` leaves (as mysql `app/failures.py`) or return failed checks. Response bodies are redacted on purpose. |
+| Monkeypatching SDK private internals, e.g. `application_sdk.handler.service._CREDENTIAL_KEYS` or `_normalize_credentials` | **Must fix.** The SDK bridges these patches today, temporarily; they will break. Move to a supported, public SDK path (read what the handler needs from `input.credentials`). If no public path covers it, escalate under the decision rule. |
+| Code that detects worker vs host with `import application_sdk` | **Must fix.** The api package provides `application_sdk`, so that import succeeds on the host and the app then loads worker-only code (this is how enrichment-studio was ejected on the host). Prefer code that does not need to know. If it must, use `importlib.util.find_spec("application_sdk.main") is None` (an api-only install). |
+| MCP mounts, custom middleware, lifespan or startup work, heavy routes outside the handler | Out of scope until a generic SDK feature exists. **Stop and escalate**; leave the app on its own server. |
+
+## Facts the steps rely on
+
+- **Lockstep versions.** `atlan-application-sdk-api` is always released at the
+  SDK's version from the same commit, and the SDK depends on it `==` its own
+  version. Apps never declare it directly, **except** to test an unreleased
+  SDK commit: then pin **both** `atlan-application-sdk` and
+  `atlan-application-sdk-api` (subdirectory `packages/api`) to the same git
+  rev, as atlan-mysql-app #778 does (step 4).
+- **Behaviour is the worker's.** The shared routes answer exactly like the
+  worker's handler service did before the split, **except two deliberate
+  fixes**: secrets are redacted from response bodies, and a malformed request
+  body (not JSON, or not an object) answers 422. Never rely on raw error text
+  reaching the caller; the routes log every outcome with the request id.
+- **The worker is unchanged.** It still runs the handler in-process for the
+  run-start preflight gate and for Self-Deployed Runtime. **Never delete the
+  handler** because "the host serves it now".
+- **Hosted-handler rules** (P060, P061 and `gen_app_api.py check` enforce them):
+  - the handler module does not log. Other `app/` files it imports also run on
+    the worker and may log, through `application_sdk.common.logger.get_logger`;
+  - `run_in_thread` comes from `application_sdk.common.concurrency`;
+  - never read `APPLICATION_NAME` / `ATLAN_APPLICATION_NAME` in the handler's
+    files: on the host they name the host. Use `self.context.app_name`;
+  - static manifests only, no `compute_manifest` hook;
+  - the handler's `app/` files import each other relatively
+    (`from .client import SQLClient`).
 
 ## Migration checklist
 
-Work in order. Each step ends in a check that must pass before the next.
-Placeholders: `<sdk>` is an application-sdk checkout at the commit you pin,
-`<app>` is the routing name and `<project>` is the root `[project].name`.
+Work in order; each step ends in a check that must pass. Placeholders: `<sdk>`
+is an application-sdk checkout at the commit or release the app pins, `<app>`
+the routing name, `<project>` the root `[project].name`.
 
-- [ ] **0. Prerequisites**
-- [ ] **1. Add the config block**
-- [ ] **2. `fix`, then review the removals**
-- [ ] **3. Pin both SDK packages to one commit** (before the SDK release)
-- [ ] **4. `check`, `build`, install alone, probe**
-- [ ] **5. After the SDK release: re-pin to the release**
-- [ ] **6. Host PR: add the app to `hosted-api-apps.toml`**
-- [ ] **7. Validate locally against the real host**
-- [ ] **8. Validate on an internal tenant**
-- [ ] **9. Flip `routeToCommonAPIServer` (image before flag)**
-- [ ] **10. Delete the old `server/` folder**
+- [ ] **0. Assess**
+- [ ] **1. Refactor to the canonical shape**
+- [ ] **2. Add `[tool.atlan-app-api]`**
+- [ ] **3. `fix`, then review every removal**
+- [ ] **4. Pin both SDK packages to one commit** (only before the SDK release)
+- [ ] **5. Prove it locally: `check`, `build`, install alone, probe**
+- [ ] **6. Test on a host test image and a tenant**
+- [ ] **7. Release, and let the host pin move**
+- [ ] **8. Flip `routeToCommonAPIServer` (image before flag)**
+- [ ] **9. Delete `server/`** (only after the host pin moved)
 
-### 0. Prerequisites
+### 0. Assess
 
-- The app is in the canonical shape (see "Who can migrate now"), and the
-  handler is a class in `app/`.
-- The SDK includes #4058, either the release that ships it or a git pin (step 3).
-- No handler file reads `APPLICATION_NAME` or `ATLAN_APPLICATION_NAME`. On the
-  host those name the **host**, so use `self.context.app_name` instead:
+```bash
+atlan-application-sdk-conformance detect --rule P061   # what stands between the app and the host
+grep -rnE '\b(ATLAN_)?APPLICATION_NAME\b|compute_manifest|_CREDENTIAL_KEYS|_normalize_credentials|^[[:space:]]*import application_sdk[[:space:]]*$' app/
+```
 
-  ```bash
-  grep -rnE '\b(ATLAN_)?APPLICATION_NAME\b' app/
-  ```
+Diff the handler against mysql `app/handler.py` (SQL) or metabase
+`app/handler.py` (non-SQL), and list each divergence against the stance table.
+Once the block exists, `python3 <sdk>/.github/scripts/gen_app_api.py check`
+lists the rest.
 
-**Verify:** the grep finds nothing in the handler's files (`check` in step 4
-enforces this for exactly the files it ships).
+**Verify:** every finding and divergence has a remedy from the stance table,
+or the work stops at an escalation.
 
-### 1. Add the config block
+### 1. Refactor to the canonical shape
 
-In the root `pyproject.toml`:
+Apply the stance table's remedies in `app/`, with the app's own tests:
+typed `AppError` leaves in a failures module, `self.context.app_name`, static
+manifests, `Handler.routers()`, no private-internals patches, no worker/host
+detection.
+
+**Verify:** the app's unit tests pass, and the grep in step 0 finds none of
+the patterns.
+
+### 2. Add the config block
+
+In the root `pyproject.toml` (mysql #778):
 
 ```toml
 [tool.atlan-app-api]
-handler = "app.handler:MySQLAppHandler"     # must be app.<module>:<Class>
-data = ["app/sql/test_authentication.sql"]  # non-Python files the handler reads (globs ok)
-dependencies = ["aiomysql>=0.3.0"]          # the handler's own third-party deps
-extras = ["sql", "pandas", "aws"]           # atlan-application-sdk-api extras it needs
-# name = "ai-memory"   # only when the Service name is not <project> minus atlan- / -app
+handler = "app.handler:MySQLAppHandler"      # must be app.<module>:<Class>, a Handler subclass
+data = ["app/sql/test_authentication.sql"]   # non-Python files the handler reads (globs ok)
+dependencies = ["aiomysql>=0.3.0"]           # the handler's own third-party deps
+extras = ["sql", "aws"]                      # atlan-application-sdk-api extras: sql, aws, pandas, pyatlan
+# name = "..."   # only when the k8s Service name is not <project> minus atlan- / -app
 ```
 
-How names are derived from `[project].name` (not the repo name). For
-`atlan-mysql-app`:
+The routing key (entry-point name, `app.state.app_name`) is `name`, else
+`<project>` minus `atlan-` and `-app` (`mysql`). The package is `<project>`
+with `-app` → `-api` (`atlan-mysql-api` / `atlan_mysql_api`); `name` does not
+change it. Extras per the api package README: `sql` for the SDK's SQL client,
+`aws` for the SDK's AWS helpers **or the config and file routes** (S3), `pandas`
+for DataFrame results, `pyatlan` for `ConnectionRef`'s Atlas helpers.
 
-| | Value | Source |
-|---|---|---|
-| Routing key, entry-point name, `app.state.app_name` | `mysql` | `name =`, or the project name minus `atlan-` and `-app` |
-| Distribution / package | `atlan-mysql-api` / `atlan_mysql_api` | the project name with `-app` replaced by `-api`. `name =` does **not** change it. |
+**Verify:** the routing key equals the app's Service name; every `data` glob
+matches a file.
 
-**Verify:** the routing key equals the app's k8s Service name and the leading
-Host label. Every `data` glob must match something. `check` fails on an empty
-match.
-
-### 2. `fix`, then review
+### 3. `fix`, then review
 
 ```bash
-python3 <sdk>/.github/scripts/gen_app_api.py fix     # from the app repo root; needs ruff on PATH
+python3 <sdk>/.github/scripts/gen_app_api.py fix   # app repo root, Python 3.11+, ruff on PATH
 ```
 
-What it rewrites, only in the handler's import closure inside `app/`:
+In the handler's import closure inside `app/` it rewrites `from app.x import y`
+to relative imports, and moves `run_in_thread` (from
+`application_sdk.execution.heartbeat`) and `get_logger` (from
+`application_sdk.observability.logger_adaptor`) to their host paths. In the
+**handler module only** it deletes logging (logger binds, `logger.*`,
+`self.context.log_*`, logger-only imports), putting `pass` in an emptied block
+and printing each deletion as `file:line`.
 
-| Change | Scope |
-|---|---|
-| `from app.x import y` → relative (`from .x import y`). The same file is `app.handler` on the worker and `atlan_<app>_api.handler` on the host. | all closure files |
-| `application_sdk.execution.heartbeat.run_in_thread` → `application_sdk.common.concurrency` (same function, no Temporal) | all closure files |
-| `application_sdk.observability.logger_adaptor.get_logger` → `application_sdk.common.logger` (structured on the worker, stdlib on the host) | all closure files |
-| **Deletes logging** (logger binds, `logger.*` calls, `self.context.log_*`, and an import only when every name it imports is a logger). An emptied block gets `pass`. It prints every deletion. | **handler module only** (conformance **P060**, tier `block`) |
+It **refuses, changing nothing,** on a log call sharing a line, a logger on an
+attribute (`self.logger`), a logger import mixed with other names, an `except`
+that would be left as `pass` (raise a typed `AppError` there), or a removed
+logger still used. If its edits introduce ruff F401/F841/F821 it restores
+every file and fails.
 
-Other `app/` files the handler imports (a shared client, for example) also run
-on the worker, so **they keep their logs**. Only their `get_logger` import
-moves.
+**Review every removal.** Where a log line was the only report of a failure,
+raise a typed `AppError` or return a failed check. Remove comments and
+variables that existed only for the deleted lines.
 
-**Review every removal.** A hosted handler reports through its return value
-(`AuthOutput`, `PreflightOutput` and its checks, `MetadataOutput`) or a typed
-`AppError`, and the SDK's shared routes log every outcome with the request id.
-Where a log line was the **only** report of a failure, raise a typed `AppError`
-or return a failed check instead. Also remove comments and variables that only
-existed for the deleted lines.
+**Verify:** unit tests pass (mysql #778 needed no test changes) and
+`gen_app_api.py check` reports no P060 line.
 
-`fix` **refuses** rather than guesses, and then changes nothing. Edit by hand
-and rerun when it reports any of:
+### 4. Pin both SDK packages to one commit (before the SDK release)
 
-- a log call that shares its line with other code;
-- a logger kept on an attribute (`self.logger = ...`);
-- a logger import that also imports other names (`get_logger`, or
-  `getLogger` / `logger` from `logging` / `loguru`);
-- an `except` block that would be left as only `pass` (raise a typed `AppError`
-  from it instead);
-- a removed logger that is still used somewhere other than a log call.
-
-It needs ruff on PATH and fails without it. After rewriting, it runs ruff; if
-its edits **introduced** an F401, F841 or F821 finding it restores every file and
-fails. It rewrites only real import statements, never text inside a
-docstring. `check` also runs P060 on the handler module.
-
-**Verify:** the app's unit tests pass unchanged (mysql #778: 173 passed, no
-test changes), and conformance P060 reports 0 findings.
-
-### 3. Pin both SDK packages to one commit (before the SDK release)
-
-`build` writes the wheel's dependency from `[tool.uv.sources]`. With a git pin
-it copies the pin. Without one it asks PyPI for `atlan-application-sdk-api`,
-which does not exist before the release. So pin **both** packages to the
-**same** commit first, or step 4 cannot install:
+Needed while the SDK version the app needs is not on PyPI as
+`atlan-application-sdk-api` (the package first ships with application-sdk
+#4058's release). Check PyPI; if it is there at that version, skip to step 5.
+Without a git pin, `build` floors the wheel's `atlan-application-sdk-api`
+requirement at the SDK version in `uv.lock`, which cannot install before the
+release. Pin both to the **same** rev:
 
 ```toml
 [tool.uv.sources]
@@ -256,233 +231,96 @@ atlan-application-sdk     = { git = "https://github.com/atlanhq/application-sdk.
 atlan-application-sdk-api = { git = "https://github.com/atlanhq/application-sdk.git", rev = "<sha>", subdirectory = "packages/api" }
 ```
 
-Then run `uv lock`. Read [uv lock rewrites](#troubleshooting) before you commit
-the lock.
+Relock against PyPI (`references/validation.md`, "Relock"). The SDK's
+connector-integration-tests and sdr-e2e actions, dispatched with an
+`application-sdk-ref`, pin both the same way (`repin-application-sdk.sh`).
 
-**Verify:** the `uv.lock` diff changes only the two SDK entries.
+**Verify:** the `uv.lock` diff changes only the SDK entries, and every
+registry source in it is `https://pypi.org/simple`.
 
-### 4. `check`, `build`, install alone, probe
+### 5. Prove it locally
 
 ```bash
-python3 <sdk>/.github/scripts/gen_app_api.py check
-# → "gen_app_api: N app/ files ship as atlan_<app>_api"   (use this package name below)
+python3 <sdk>/.github/scripts/gen_app_api.py check     # → "N app/ files ship as atlan_<app>_api"
 python3 <sdk>/.github/scripts/gen_app_api.py build --out /tmp/dist-api
-uv venv /tmp/api-only && uv pip install --python /tmp/api-only /tmp/dist-api/*.whl httpx2   # test-client dep, as the api-member job installs
-/tmp/api-only/bin/python <sdk>/.github/scripts/probe_app_api_member.py \
-    --name <app> --package atlan_<app>_api
+uv venv /tmp/api-only && uv pip install --python /tmp/api-only /tmp/dist-api/*.whl httpx2==2.13.1
+/tmp/api-only/bin/python <sdk>/.github/scripts/probe_app_api_member.py --name <app> --package atlan_<app>_api
 ```
 
-`check` fails on any of these:
+Install the built wheel **alone** (no full SDK); that is what the host has.
+The probe list is in `references/validation.md`.
 
-- an absolute `from app` import among the shipped files
-- a worker-only import that `fix` would move
-- any line matching `APPLICATION_NAME` or `ATLAN_APPLICATION_NAME`
+**Verify:** the probe prints `passes the host matrix`. CI runs the same in the
+tests-reusable `api-member` job (`check`, then build, install and probe), once
+the SDK's `tests-reusable.yaml` on `main` carries it.
 
-`build` stages the closure plus `data` as `atlan_<app>_api/`. It generates an
-`__init__.py` that exposes `handler` and `get_asgi_app()`, and a
-`pyproject.toml` that registers the entry points `atlan.app_api` and
-`atlan.app_server`. Then it builds the wheel. (`stage --out DIR` does the same
-without building, and is what the host uses.)
+### 6. Test on a host test image and a tenant
 
-The probe mounts the wheel exactly as the host does. It fails on any of these:
+Follow `references/validation.md`: stage the app's commit through
+common-app-server's `hosted-api-apps.overrides.toml` with
+`ATLAN_API_APPS_ALLOW_OVERRIDES=1`, run `stage_api_apps.py probe` and the host
+tests, then a throwaway pod on an internal tenant.
 
-- the full `atlan-application-sdk` is installed
-- the handler is not a `Handler`
-- `app.state.app_name` is not `<app>`
-- `/health` is not 200
-- a malformed `/workflows/v1/auth` body does not return 422
-- an empty-credentials auth call returns a bare 500
-- `/check` or `/metadata` with empty credentials hit an `ImportError`, meaning
-  a worker-only import that only breaks on the host
+**Verify:** the tenant test passes end to end: test credentials, test and
+update (auth plus `POST /workflows/v1/config/{guid}?type=credentials`),
+preflight, metadata, configmaps, `POST /manifest` with the task queue stamped,
+and a workflow run that scales the worker through KEDA and publishes assets.
 
-**Verify:** the probe prints `passes the host matrix`. In CI, `check` runs in
-the `detect-api-member` job and build plus probe run in `api-member`. Both jobs
-exist only once #4058 is on application-sdk `main`, because tests-reusable runs
-from `@main`. Until then, this local run is the only proof.
+### 7. Release, and let the host pin move
 
-### 5. After the SDK release
+1. After the SDK release: remove both git sources, raise the
+   `atlan-application-sdk` floor to that release, relock, rerun step 5.
+2. Release the app.
+3. **First time only:** a common-app-server PR adds `[apps.<app>]` (`repo`,
+   `tag`, `rev` = that tag's full 40-character SHA) to `hosted-api-apps.toml`,
+   the `atlan-<app>-api` path dependency, and removes the app's old
+   `#subdirectory=server` dependency (`references/routes-and-host.md`).
+4. After that, the host **pulls**: Renovate opens the PR moving `tag` and
+   `rev` together (7-day release-age cooldown), labelled `no-serving-change`
+   when the staged package hash is unchanged. Restage and relock on that PR.
+   The SDK pushes nothing to the host.
 
-Remove both git sources, and raise the `atlan-application-sdk` floor in
-`[project].dependencies` to the release. The handler wheel's
-`atlan-application-sdk-api` range is copied from that specifier.
+**Verify:** the overrides file is gone, the host's `release-pins` check is
+green, and its image build's `stage_api_apps.py probe` passes.
 
-**Verify:** run `uv lock` and step 4 again. They must pass with no git sources.
+### 8. Flip the flag (image before flag)
 
-### 6. Host PR (common-app-server)
+Only when every route the app needs is served (`references/routes-and-host.md`)
+and the host pod has its S3 role and `ATLAN_S3_BUCKET` / `ATLAN_S3_REGION`.
 
-1. Add the app to `hosted-api-apps.toml` with **full 40-character SHAs**. Bump
-   `[sdk].rev` if your app needs a newer `gen_app_api.py`.
-   ```toml
-   [apps.<app>]                 # directory name under apps/, a DNS label
-   repo = "atlanhq/<repo>"
-   tag  = "<app release tag>"
-   rev  = "<that tag's commit sha>"
-   ```
-2. In `pyproject.toml`, add `"atlan-<app>-api"` to `dependencies`, and add
-   `atlan-<app>-api = { path = "apps/<app>" }` under `[tool.uv.sources]`.
-   **Remove** the app's old `atlan-<app>-server @ git+…#subdirectory=server`
-   line, if it has one.
-3. Stage, then lock:
-   ```bash
-   python scripts/stage_api_apps.py          # clones each pin, runs gen_app_api.py stage → apps/<name>/
-   UV_NO_CONFIG=1 uv lock --default-index https://pypi.org/simple
-   ```
-4. Add `constraint-dependencies` caps for any new transitive package younger
-   than 7 days. Record the date and reason in a comment so the cap can be
-   lifted. Never bypass the cooldown.
+1. The host image with the app's pin rolls to the tenant. No traffic moves.
+2. On the tenant's host pod: `/server/ready` lists the app with an empty
+   `failed` list, `openapi.json` `info.title` for its Host label is the app,
+   `/workflows/v1/check` against an unreachable source is 200 with a not-ready
+   verdict, and an unknown Host returns `503 app_not_hosted`.
+3. Only then, in the app's `atlan.yaml`, set `routeToCommonAPIServer: true`
+   under `deploy:`. The app's Service becomes an alias to the host and its own
+   server Deployment goes away.
 
-Pin a **release**: `tag` is the app's release tag and `rev` that tag's full
-commit, in this order on consecutive lines (Renovate's regex manager matches
-them as one block). The stage script refuses a tag that no longer points at its
-rev. To validate unreleased code, put the commit in
-`hosted-api-apps.overrides.toml` (`rev` only) and build with
-`--build-arg ATLAN_API_APPS_ALLOW_OVERRIDES=1`. The `release-pins` check fails
-while that file exists, so it never merges.
+**Verify:** the step 6 tenant test passes against the routed app. Rollback is
+in `references/routes-and-host.md`.
 
-The Dockerfile runs `stage_api_apps.py` in the same layer as
-`uv sync --locked`, with the short-lived git token. The staged package
-registers the same `atlan.app_server` entry point as any hosted app, so
-discovery, per-app ejection, readiness and metrics are unchanged. Each app gets
-its own `run_in_thread` pool of 8 threads on the host, so one app's stuck calls
-cannot stall the others (`run_in_thread` and `submit_in_thread` both use it).
-FastAPI's own threadpool is still shared. The image build then runs
-`stage_api_apps.py probe`, which imports and serves every staged app.
+### 9. Delete the old `server/` folder
 
-**Verify:** the host unit tests pass, including `test_stage_api_apps.py`, which
-checks that every pin is a full SHA and that every pinned app is a path
-dependency. The `uv.lock` diff adds your app, removes the old `server/` package
-and keeps every source on `pypi.org`.
+Only after step 7 has merged and the host no longer depends on the app's
+`server/` package. Delete `server/` and any CI, Dockerfile lines or
+`[tool.uv.sources]` entries that existed only for it. **Keep
+`app/handler.py`.**
 
-> After onboarding, the host pulls new releases. Renovate opens a PR moving
-> `tag` and `rev` together. The `serving-change` workflow labels it
-> `no-serving-change` when the staged handler package's hash is unchanged and
-> the SDK pin did not move. Restage and `uv lock` on the PR before merging:
-> Renovate cannot re-lock yet. Release pins inherit the 7-day
-> `minimumReleaseAge`.
+## Done bar
 
-### 7. Validate locally against the real host
-
-Run the real host with the full locked environment (every hosted app), not just
-yours. This catches resolution conflicts and cross-app interference.
-
-```bash
-uv sync --locked && uv run uvicorn common_api_server.main:app --port 8000
-H='Host: <app>.<app>-app.svc.cluster.local:8000'
-curl -s localhost:8000/server/ready                                   # <app> listed, failed list empty
-curl -s -H "$H" -XPOST localhost:8000/workflows/v1/auth  -d @good-creds.json
-curl -s -H "$H" -XPOST localhost:8000/workflows/v1/check -d @check.json
-curl -s -H "$H" -XPOST localhost:8000/workflows/v1/metadata -d @creds.json
-curl -s -H "$H" localhost:8000/openapi.json | jq -r .info.title       # must be <app>: cross-talk check
-curl -s -H 'Host: nope.nope-app.svc.cluster.local' localhost:8000/x   # 503 app_not_hosted
-```
-
-Point the app at a real or containerized source. Use synthetic credentials,
-and never commit or paste them.
-
-**Verify:** the log shows `Hosting N of N app server(s)`. Anything less means
-an app was ejected, and the log names it and the reason. Good credentials
-return 200. Bad credentials return a typed 4xx that **does not echo the
-password**. `/check` returns 200 with a verdict, never a 500.
-
-### 8. Validate on an internal tenant
-
-Do **not** patch the live `common-api-server` Deployment, because it serves
-other apps on that tenant. Use a throwaway pod instead:
-
-- **Namespace:** the app's own (`<app>-app`), where its secret references
-  resolve.
-- **Image:** a host image built from your host branch (build-only, not
-  published to a release channel).
-- **Env:** copy the env **spec** from the host Deployment (references, never
-  values), so the pod reproduces the host condition, with
-  `ATLAN_APPLICATION_NAME` set to the host's name.
-- **Command:** the host's uvicorn entry point.
-
-**Verify:** run the step-7 probes by Host header, and diff status **and body
-shape** against the app's own live server. A 200 with empty data hides a
-broken route. Then check that `kubectl logs <pod> | grep -c ModuleNotFoundError`
-is 0. Delete the pod afterwards and confirm the tenant is as you found it.
-
-### 9. Flip the flag (image before flag)
-
-Do not start this step until every route the app needs is served (see the
-route table).
-
-1. Merge the host PR and let the host image roll to the tenant. **This step
-   ships on its own:** a pin only mounts the app, and no traffic moves yet.
-2. On the tenant's real host pod:
-   - `/server/ready` lists the app with an **empty `failed`** list.
-   - `openapi.json` `info.title` per Host label equals that app.
-   - `/workflows/v1/check` against an unreachable source returns **200 with a
-     not-ready verdict**, not a 500.
-   - an unknown Host still returns `503 app_not_hosted`.
-3. Only then, in the app's `atlan.yaml`:
-   ```yaml
-   deploy:
-     routeToCommonAPIServer: true
-   ```
-   This aliases the app's Service to
-   `common-api-server.common-api-server-app.svc.cluster.local` and **removes
-   the app's server Deployment**. A targeted app release to one tenant then
-   changes only the worker. Serving code reaches the tenant only through the
-   host's pin.
-
-**Rollback:**
-
-| Problem | Action |
-|---|---|
-| One bad app | Set `routeToCommonAPIServer: false`. The app's own image serves the same handler through the SDK service. It takes effect on the next reconcile, so it is not instant. |
-| Bad app code | Move that app's `tag` and `rev` back to the previous release in `hosted-api-apps.toml` and roll the host. Other apps keep their pins. |
-| Bad host | Revert the host image. |
-
-### 10. Delete the old `server/` folder
-
-Do this only after the host serves the new package (step 6 is merged and the
-`server/` line is gone from the host). Delete the app's `server/` package and
-any CI, Dockerfile extras or `[tool.uv.sources]` entries that existed only for
-it. **Keep `app/handler.py`**, because the worker's preflight gate and the SDR
-workflows still call it.
-
----
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `503` with `reason: import_error` | Importing the staged package failed: usually a worker-only import at module level, or a dependency missing from `dependencies`/`extras` | Run step 4 locally. Use the api-shipped path, or ask for the SDK module to be added to `[tool.atlan-api.seeds]` |
-| `503 factory_error` | `get_asgi_app()` raised, for example the handler `__init__` touched config or network | Read the host log. Keep handler construction side-effect free |
-| `503 name_mismatch` / `missing_app_name` | The entry-point name ≠ `app.state.app_name`. This happens with a hand-edited staged package or a wrong `name =` | Fix `name =`. Never edit the generated `__init__.py` |
-| `503 invalid_app`, `lifespan_error`, `lifespan_timeout` | The factory returned a non-ASGI object, or a lifespan raised or hung | The canonical shape has no lifespan. Remove it (see "Who can migrate now") |
-| `503 app_not_hosted` | The flag was flipped before the host image mounted the app, or the Host label ≠ entry-point name | Step 9 ordering, step 1 naming |
-| `/check` or `/metadata` 500 with `ModuleNotFoundError` | A deferred worker-only import on a request path (Temporal, Dapr, `application_sdk.storage`…) | The probe in step 4 catches this. Move the import to the api path |
-| `SecretStoreNotConfiguredError` / `ObjectStoreNotConfiguredError` | The host has no secret store and no object store | Use request credentials. For config and file, set `S3_BUCKET` / `S3_REGION` and give the host pod an S3 role |
-| Another app is ejected once yours is on the host | **Mixed host:** that app treats `import application_sdk` succeeding as "I am on the worker". The api wheel now makes that import work, so it loads worker-only modules | Fix the other app's detection. common-app-server #121 is blocked on exactly this for enrichment-studio |
-| Host `uv lock` fails or moves a shared package | Every hosted app shares **one** environment. Examples: the SDK (3.46.0 and later) needs `fastapi>=0.143.0,<0.144.0`, and the SDK's `pandas<3` moved the host from 3.0.5 to 2.3.3 | Align ranges across apps. Get the affected app owner to confirm a downgrade. Cap with a dated `constraint-dependencies` comment |
-| `uv.lock` diff of thousands of lines with every source rewritten | A managed `~/.config/uv/uv.toml` rewrote indexes to a credentialed proxy that CI cannot reach | `UV_NO_CONFIG=1 uv lock --default-index https://pypi.org/simple` |
-| `check` fails on `APPLICATION_NAME` | A read of the process-wide name. It also matches comments | Use `self.context.app_name`, and reword the comment |
-| `fix` refuses and changes nothing | A case it will not guess at: a shared line, a logger on an attribute, a mixed import, an `except` left as `pass`, or a logger used outside a log call | Edit those lines by hand (see step 2), then rerun |
-| `fix` fails on a ruff finding | Its rewrite would have left an unused import or variable, or an undefined name; it restored every file | Fix the reported line by hand, then rerun. Pre-existing findings are ignored |
-| `fix` says it needs ruff | ruff is not on PATH | `uv tool install ruff`, then rerun. Nothing was changed |
-| App release did not change the host | Renovate has not opened the bump yet (7-day `minimumReleaseAge`), the bump PR is waiting for review or relock, or the host does not pin the app yet | Find the Renovate PR on common-app-server. `no-serving-change` on it means the handler package is unchanged |
-| `pip install -U atlan-application-sdk` from a pre-split release leaves `application_sdk.handler` missing | pip removes files the old wheel owned that now belong to the api wheel | `pip install --force-reinstall --no-deps atlan-application-sdk-api`. uv is not affected |
-
-## Host behaviour worth knowing
-
-- **Degraded mount.** An app that fails to mount is ejected with a 503 naming
-  the reason, and the rest keep serving. Readiness is "routing table built and
-  at least one app mounted", so a broken app is a **silent per-app outage**
-  unless someone alerts on `apps_mounted` versus the expected count.
-- **Fallback paths.** `/server/health`, `/server/ready`, `/health`, `/ready` and
-  `/metrics` answer on the host's own name. An unknown Host gets
-  `503 app_not_hosted`, never the pod's health.
-- **Shared process.** Blocking IO or unbounded memory in one handler hurts
-  every hosted app. Offload blocking calls with `run_in_thread`, which uses the
-  app's own pool. Keep import-time work at zero, because the mount phase is
-  bounded by a timeout.
-- **No Dapr and no secret store** on the host. Handlers work from the
-  credentials in the request.
-- **Trust model.** Hosted apps share one process, one AWS identity and one
-  bucket, and the host trusts the Host header to pick the app. There is no
-  secret isolation between hosted apps: a hosted handler is trusted code. The
-  pod must be reachable only from in-cluster callers (NetworkPolicy). See
-  "Trust model on the host" in `docs/standards/api-distribution.md`.
+- [ ] `atlan-application-sdk-conformance detect --rule P061` reports nothing,
+      and `gen_app_api.py check` passes (so P060 is clear).
+- [ ] No stance-table divergence remains: no private-internals patch, no
+      `import application_sdk` detection, no `compute_manifest`, no handler
+      logging, no `APPLICATION_NAME` read.
+- [ ] No SDK or host change was made for this app alone; any genuine gap was
+      escalated.
+- [ ] The api-only probe passes locally and in the `api-member` job.
+- [ ] Host test image staged the app; `stage_api_apps.py probe` and host
+      tests pass; the tenant test in step 6 passed.
+- [ ] Both SDK packages are on a release (no git sources); `uv.lock` has only
+      pypi.org registry sources.
+- [ ] The host pins the app's release tag and SHA; no overrides file.
+- [ ] Flag flipped only after the image was live; `server/` deleted only after
+      the pin moved; `app/handler.py` kept.
