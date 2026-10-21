@@ -276,8 +276,8 @@ Both are called automatically by the default `on_complete()` implementation. Do 
 | `ATLAN_OBSTORE_TIMEOUT` | `30m` | Overall per-request wall-clock backstop |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Resume interrupted chunked downloads from their checkpoint sidecar |
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Heartbeat log interval during long transfers (`0` disables) |
-| `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Multipart part size for uploads. Raise it when the destination makes part *count* expensive (e.g. an S3 proxy fronting GCS, which emulates multipart with 32-source-capped `compose` round trips) |
-| `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Parts uploaded concurrently. Peak upload memory is roughly part size times this — lower it alongside a larger part size to hold memory steady |
+| `ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES` | `8388608` (8 MiB) | Minimum multipart part size. Without an explicit deployment override, the SDK grows parts to use at most 128 parts, bounding completion work for S3 proxies over GCS. Setting this variable preserves operator sizing, subject to the 9,900-part S3 safety margin, and overrides the caller's `chunk_size` |
+| `ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY` | `12` | Maximum parts uploaded concurrently. The SDK caps this against the transfer memory budget after allowing two working buffers. At least one part remains in flight; for very large parts that minimum can exceed the budget and runs alone |
 | `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Transfer buffer bytes the SDK's file transfers may hold at once across the process; `CloudStore` byte APIs are not covered (see [Memory](#memory-one-transfer-budget-per-process)). `0` takes a quarter of the container memory limit, at least 128 MiB, or 1 GiB when no limit is known |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Validate every transfer's bytes (see [Transfer integrity](#transfer-integrity)) |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Emit the `{key}.sha256` sidecar that downstream verification reads |
