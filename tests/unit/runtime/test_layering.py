@@ -61,6 +61,7 @@ def _loaded_after_importing(module: str) -> set[str]:
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     assert (
         result.returncode == 0

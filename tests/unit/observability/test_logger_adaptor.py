@@ -3604,6 +3604,7 @@ class TestDiagnoseGating:
             text=True,
             env=env,
             cwd=str(Path(__file__).resolve().parents[3]),
+            timeout=120,
         )
         assert "RuntimeError" in result.stderr, (
             f"probe never logged the exception:\nstdout={result.stdout}\n"

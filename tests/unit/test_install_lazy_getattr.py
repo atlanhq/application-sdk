@@ -33,6 +33,7 @@ def _run(code: str) -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
 

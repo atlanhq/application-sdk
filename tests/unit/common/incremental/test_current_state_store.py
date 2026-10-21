@@ -218,6 +218,7 @@ class TestProbe:
         assert MANIFEST_NAME.startswith(".")
         assert not MANIFEST_NAME.endswith(".json")
 
+    @pytest.mark.perf
     async def test_probe_of_100k_keys_is_one_pass_and_never_starves_the_loop(
         self,
     ) -> None:
