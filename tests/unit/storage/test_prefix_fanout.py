@@ -14,7 +14,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -197,15 +197,34 @@ async def _until(condition: Callable[[], bool]) -> None:
         await asyncio.sleep(0.005)
 
 
+@pytest.fixture
+def release() -> Iterator[threading.Event]:
+    """Releases a wedged thread: at teardown, or after ``_SAFETY_RELEASE`` if hung.
+
+    The safety timer is cancelled and joined at teardown. Left running, it
+    outlives the test by ``_SAFETY_RELEASE`` seconds and moves every later
+    thread-count baseline on the same worker.
+    """
+    event = threading.Event()
+    timer = threading.Timer(_SAFETY_RELEASE, event.set)
+    timer.start()
+    try:
+        yield event
+    finally:
+        event.set()
+        timer.cancel()
+        timer.join()
+
+
 def _wedged_volume_fsync(release: threading.Event) -> None:
     """Stands in for an fsync on a wedged volume: blocks until released."""
     release.wait()
 
 
 class TestDrainGivesUpWithoutProgress:
-    async def test_a_wedged_thread_does_not_hold_the_failure(self) -> None:
-        release = threading.Event()
-        threading.Timer(_SAFETY_RELEASE, release.set).start()
+    async def test_a_wedged_thread_does_not_hold_the_failure(
+        self, release: threading.Event
+    ) -> None:
         started = threading.Event()
 
         def wedged() -> None:
@@ -232,9 +251,9 @@ class TestDrainGivesUpWithoutProgress:
         assert warning.call_count == 1
         assert "wedged" in warning.call_args.args[-1], "stuck call not named"
 
-    async def test_a_wedged_thread_does_not_swallow_the_cancellation(self) -> None:
-        release = threading.Event()
-        threading.Timer(_SAFETY_RELEASE, release.set).start()
+    async def test_a_wedged_thread_does_not_swallow_the_cancellation(
+        self, release: threading.Event
+    ) -> None:
         call = _BlockingCall()
 
         def wedged() -> None:
@@ -306,9 +325,9 @@ class TestDrainGivesUpWithoutProgress:
             with pytest.raises(asyncio.CancelledError):
                 await task
 
-    async def test_an_explicit_allowance_overrides_the_attempts(self) -> None:
-        release = threading.Event()
-        threading.Timer(_SAFETY_RELEASE, release.set).start()
+    async def test_an_explicit_allowance_overrides_the_attempts(
+        self, release: threading.Event
+    ) -> None:
         started = threading.Event()
 
         def wedged() -> None:
