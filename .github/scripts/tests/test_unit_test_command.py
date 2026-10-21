@@ -122,3 +122,20 @@ def test_coverage_must_be_the_literal_true_or_false(value: str) -> None:
                 "85",
             ]
         )
+
+
+_ACTION = Path(__file__).parents[2] / "actions" / "unit-tests" / "action.yaml"
+
+
+def _script_call(action_text: str) -> str:
+    import yaml
+
+    steps = yaml.safe_load(action_text)["runs"]["steps"]
+    (run,) = [s["run"] for s in steps if "unit_test_command.py" in s.get("run", "")]
+    return run
+
+
+def test_the_action_passes_inputs_to_the_script_through_env_not_run() -> None:
+    """GitHub expands ``${{ }}`` before bash parses ``run:``, so an input holding
+    a quote would become shell syntax. Inputs reach the script as env vars."""
+    assert "${{" not in _script_call(_ACTION.read_text())

@@ -50,15 +50,21 @@ runs:
       shell: bash
       env:
         ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK: "false"
+        # Inputs reach the shell as env vars, never as `${{ }}` in `run:`:
+        # GitHub expands an expression before bash parses the line, so a
+        # quote in an input would become shell syntax.
+        UNIT_TEST_PYTHON_VERSION: ${{ inputs.python-version }}
+        UNIT_TEST_COVERAGE: ${{ inputs.coverage }}
+        UNIT_TEST_FAIL_UNDER: ${{ inputs.fail-under }}
       # Every per-leg decision (uv groups on 3.14, socket guard, timeout
       # method, coverage) is made by the script, which has tests; see its
       # docstring and docs/standards/ci.md.
       run: >-
         python .github/scripts/unit_test_command.py
-        --python-version "${{ inputs.python-version }}"
-        --runner-os "${RUNNER_OS}"
-        --coverage "${{ inputs.coverage }}"
-        --fail-under "${{ inputs.fail-under }}"
+        --python-version "$UNIT_TEST_PYTHON_VERSION"
+        --runner-os "$RUNNER_OS"
+        --coverage "$UNIT_TEST_COVERAGE"
+        --fail-under "$UNIT_TEST_FAIL_UNDER"
 
     - name: Comment Coverage Report on PR
       if: inputs.coverage == 'true'
