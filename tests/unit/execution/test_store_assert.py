@@ -73,6 +73,7 @@ def _count(n: int, prefix: str = ROOT) -> StoreCount:
         ),
     ],
 )
+@pytest.mark.usefixtures("production_temporary_path")
 def test_allowed_prefixes_resolve_with_a_trailing_slash(
     prefix: str, expected: str
 ) -> None:

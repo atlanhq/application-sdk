@@ -28,6 +28,11 @@ from application_sdk.templates.contracts.sql_metadata import (
 from application_sdk.templates.sql_app import SqlApp
 from application_sdk.templates.sql_app_errors import TransformedFileMissingError
 
+# A workflow path in its production spelling; it normalises to PREFIX only under
+# the default TEMPORARY_PATH, which every test here pins. Nothing is written to
+# it — the activities are stubs.
+pytestmark = pytest.mark.usefixtures("production_temporary_path")
+
 OUTPUT_PATH = "./local/tmp/artifacts/apps/test/workflows/wf-1/run-1"
 PREFIX = "artifacts/apps/test/workflows/wf-1/run-1/transformed"
 

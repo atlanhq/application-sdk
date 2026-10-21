@@ -7,6 +7,7 @@ deadline, so a regression fails the test instead of hanging the suite.
 """
 
 import asyncio
+import concurrent.futures
 import functools
 import threading
 import time
@@ -64,25 +65,39 @@ async def _cancel_and_time(task: "asyncio.Task[object]") -> float:
     return time.monotonic() - start
 
 
+#: Width of the pool :func:`saturated_pool` fills.
+_SATURATED_POOL_WIDTH = 4
+
+
 @pytest.fixture
-def saturated_pool() -> Iterator[int]:
-    """Occupy every ``sdk-blocking-`` slot but one; yields the slots taken."""
+def saturated_pool() -> Iterator[concurrent.futures.ThreadPoolExecutor]:
+    """A private blocking pool with every slot but one occupied.
+
+    Private, bound with :func:`offload.blocking_executor` in the test body,
+    because the process-wide ``sdk-blocking-`` pool is shared with every test
+    on this xdist worker: a thread still draining from an earlier test takes a
+    slot this one needs, and the Barrier below never trips.
+    """
+    pool = concurrent.futures.ThreadPoolExecutor(
+        _SATURATED_POOL_WIDTH, thread_name_prefix="test-saturated-"
+    )
     release = threading.Event()
-    blockers = offload._BLOCKING_EXECUTOR._max_workers - 1
+    blockers = _SATURATED_POOL_WIDTH - 1
     started = threading.Barrier(blockers + 1)
 
     def _block() -> None:
         started.wait(_RELEASE_AFTER)
         release.wait(_RELEASE_AFTER)
 
-    futures = [offload._BLOCKING_EXECUTOR.submit(_block) for _ in range(blockers)]
+    futures = [pool.submit(_block) for _ in range(blockers)]
     started.wait(_RELEASE_AFTER)
     try:
-        yield blockers
+        yield pool
     finally:
         release.set()
         for future in futures:
             future.result(_RELEASE_AFTER)
+        pool.shutdown(wait=True)
 
 
 async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly(
@@ -122,12 +137,15 @@ async def test_set_after_request_fires_immediately() -> None:
     assert fired.wait(_PROMPT), "action set after the request never fired"
 
 
-async def test_action_runs_while_blocking_pool_is_full(saturated_pool: int) -> None:
+async def test_action_runs_while_blocking_pool_is_full(
+    saturated_pool: concurrent.futures.ThreadPoolExecutor,
+) -> None:
     """The cancel must not queue behind the calls it exists to stop."""
     # Take the last free slot, so the pool is wholly occupied by blocked calls.
     handle = CancelHandle()
     driver = _Driver(handle)
-    task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
+    with offload.blocking_executor(saturated_pool):
+        task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
     await _cancel_and_time(task)
@@ -162,11 +180,14 @@ async def test_failing_action_is_logged_not_raised(
     assert isinstance(record["exception"].value, RuntimeError)  # type: ignore[union-attr]
 
 
-async def test_unblocked_call_frees_its_pool_slot(saturated_pool: int) -> None:
+async def test_unblocked_call_frees_its_pool_slot(
+    saturated_pool: concurrent.futures.ThreadPoolExecutor,
+) -> None:
     """Once the action unblocks the driver, its thread exits and the slot is reusable."""
     handle = CancelHandle()
     driver = _Driver(handle)
-    task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
+    with offload.blocking_executor(saturated_pool):
+        task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
     await _cancel_and_time(task)
@@ -174,7 +195,8 @@ async def test_unblocked_call_frees_its_pool_slot(saturated_pool: int) -> None:
     await _wait_for(driver.finished)
     # Every other slot is still blocked, so this runs only on the freed one.
     start = time.monotonic()
-    assert await asyncio.wait_for(run_in_thread(lambda: "ran"), _PROMPT) == "ran"
+    with offload.blocking_executor(saturated_pool):
+        assert await asyncio.wait_for(run_in_thread(lambda: "ran"), _PROMPT) == "ran"
     assert time.monotonic() - start < _PROMPT
 
 

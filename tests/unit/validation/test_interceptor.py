@@ -526,6 +526,8 @@ def _write_assets(base: Path, entity: str, assets: list[Any]) -> str:
     return str(out_dir)
 
 
+# Spawns pool children; see addopts in pyproject.toml.
+@pytest.mark.xdist_group("procpool")
 class TestModelDeclaredFields:
     """A marked field is checked against the model, not against a field map.
 

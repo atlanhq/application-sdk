@@ -46,6 +46,11 @@ runs:
       run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
       id: get_branch
 
+    # Paired with "Check tests wrote nothing into the checkout" below (FND-4237).
+    - name: Snapshot the checkout before tests
+      shell: bash
+      run: python .github/scripts/check_test_write_hygiene.py snapshot "${RUNNER_TEMP}/pre-test-git-status.txt"
+
     - name: Run Unit Tests
       shell: bash
       env:
@@ -65,6 +70,16 @@ runs:
         --runner-os "$RUNNER_OS"
         --coverage "$UNIT_TEST_COVERAGE"
         --fail-under "$UNIT_TEST_FAIL_UNDER"
+
+    # Unit tests write under tmp_path. Everything they would otherwise write into
+    # the repo (./local/, ./.hypothesis/) is gitignored, so this compares
+    # `git status --ignored` against the snapshot rather than trusting a clean
+    # `git status`. Runs after a failed test step too: a leak is worth knowing
+    # about either way.
+    - name: Check tests wrote nothing into the checkout
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: python .github/scripts/check_test_write_hygiene.py check "${RUNNER_TEMP}/pre-test-git-status.txt"
 
     - name: Comment Coverage Report on PR
       if: inputs.coverage == 'true'

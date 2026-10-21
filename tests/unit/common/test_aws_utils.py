@@ -1,7 +1,9 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application_sdk.common import aws_utils
 from application_sdk.common.aws_utils import (
     _normalize_external_id,
     _sts_client_config,
@@ -342,12 +344,15 @@ class TestAWSUtils:
 
         The caller stops waiting at the deadline but cannot stop the worker
         thread, so the call itself must end by then.
+
+        The module's clock is frozen, so "what is left" is exactly the 10s set
+        rather than whatever the runner left of it by the second reading.
         """
-        with _sts_deadline(10):
+        frozen = SimpleNamespace(monotonic=lambda: 1000.0)
+        with patch.object(aws_utils, "time", frozen), _sts_deadline(10):
             config = _sts_client_config()
         assert config.retries == {"total_max_attempts": 1, "mode": "standard"}
-        assert config.connect_timeout <= 2.5
-        assert config.connect_timeout + config.read_timeout <= 10
+        assert (config.connect_timeout, config.read_timeout) == (2.5, 7.5)
 
     def test_sts_config_floors_an_expired_deadline(self):
         # Zero would mean "no timeout" to some socket layers.
