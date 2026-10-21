@@ -15,14 +15,34 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
-from collections.abc import Sequence
+import tempfile
+import time
+import xml.etree.ElementTree as ET
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from pathlib import Path
 
 #: Per-test ceiling. The slowest test left in the unit tier runs ~10s on a
 #: Windows runner; a hang should fail in two minutes with a traceback rather
 #: than run to the job's 15-minute cap and report ``cancelled`` (FND-4238).
 TEST_TIMEOUT_SECONDS = 120
+
+#: What a healthy runner should take for the whole pytest step, start-up
+#: included (FND-4304). Over budget is a warning, never a failure: a slow
+#: runner is not a broken suite, and a red leg for it would be a flake.
+STEP_BUDGET_SECONDS = {"Windows": 180.0}
+DEFAULT_STEP_BUDGET_SECONDS = 120.0
+
+#: A unit test slower than this (setup + call + teardown) is annotated on the
+#: run, so a new slow test shows up on the PR that adds it.
+SLOW_TEST_SECONDS = 5.0
+
+#: Annotate at most this many slow tests, slowest first: GitHub shows only the
+#: first few annotations of a step, and a wall of them is noise.
+MAX_SLOW_TEST_ANNOTATIONS = 10
 
 #: Python 3.14+ legs skip the dev group (libcst has no 3.14 support) and
 #: the tests that need it, or pyatlan's pydantic-v1 compat (upstream fix:
@@ -42,7 +62,12 @@ def _python_minor(python_version: str) -> int:
 
 
 def build_command(
-    *, python_version: str, runner_os: str, coverage: bool, fail_under: str
+    *,
+    python_version: str,
+    runner_os: str,
+    coverage: bool,
+    fail_under: str,
+    junit_xml: str | None = None,
 ) -> list[str]:
     """Return the argv for this leg's unit-test run."""
     py314 = _python_minor(python_version) >= 14
@@ -83,6 +108,11 @@ def build_command(
 
     argv += ["--durations=25", "--durations-min=1.0"]
 
+    # Per-test timings for report_timing(): the durations table above stops at
+    # 25 and is read by people, this is read by the budget check.
+    if junit_xml is not None:
+        argv += [f"--junitxml={junit_xml}"]
+
     # Coverage is measured on one leg: tracing costs ~20-30% of every leg's
     # wall time, and only one leg's report is ever read. --cov rather than
     # `coverage run -m pytest`: coverage only traces the parent process, so
@@ -96,6 +126,76 @@ def build_command(
             f"--cov-fail-under={fail_under}",
         ]
     return argv
+
+
+@dataclass(frozen=True)
+class SlowTest:
+    name: str
+    seconds: float
+
+
+def slow_tests(junit_xml: Path) -> list[SlowTest]:
+    """Every test in *junit_xml* slower than :data:`SLOW_TEST_SECONDS`, slowest first."""
+    found = [
+        SlowTest(
+            f"{case.get('classname')}::{case.get('name')}", float(case.get("time"))
+        )
+        for case in ET.parse(junit_xml).getroot().iter("testcase")
+        if float(case.get("time", "0")) > SLOW_TEST_SECONDS
+    ]
+    return sorted(found, key=lambda t: t.seconds, reverse=True)
+
+
+def report_timing(
+    *,
+    runner_os: str,
+    step_seconds: float,
+    junit_xml: Path,
+    emit: Callable[[str], None],
+    summary: Path | None,
+) -> None:
+    """Annotate an over-budget step and slow tests; never change the outcome.
+
+    *emit* receives GitHub workflow commands (``::warning ...``), one per call.
+    *summary* is ``$GITHUB_STEP_SUMMARY`` when the step has one.
+    """
+    budget = STEP_BUDGET_SECONDS.get(runner_os, DEFAULT_STEP_BUDGET_SECONDS)
+    slow = slow_tests(junit_xml) if junit_xml.is_file() else []
+
+    if step_seconds > budget:
+        emit(
+            f"::warning title=Unit tests over budget::the pytest step took "
+            f"{step_seconds:.0f}s against a {budget:.0f}s budget on {runner_os} "
+            f"(FND-4304)"
+        )
+    for test in slow[:MAX_SLOW_TEST_ANNOTATIONS]:
+        emit(
+            f"::warning title=Slow unit test::{test.name} took {test.seconds:.1f}s "
+            f"(over {SLOW_TEST_SECONDS:.0f}s)"
+        )
+
+    if summary is None:
+        return
+    lines = [
+        "### Unit test timing",
+        "",
+        f"pytest step: **{step_seconds:.0f}s** (budget {budget:.0f}s on {runner_os})",
+        "",
+    ]
+    if not junit_xml.is_file():
+        lines.append("No JUnit report was written, so per-test timings are missing.")
+    elif slow:
+        lines += [
+            f"Tests over {SLOW_TEST_SECONDS:.0f}s:",
+            "",
+            "| seconds | test |",
+            "| --: | -- |",
+        ]
+        lines += [f"| {t.seconds:.1f} | `{t.name}` |" for t in slow]
+    else:
+        lines.append(f"No test took over {SLOW_TEST_SECONDS:.0f}s.")
+    with summary.open("a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def _parse_bool(value: str) -> bool:
@@ -117,14 +217,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--fail-under", required=True)
     args = parser.parse_args(argv)
 
+    junit_xml = Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / (
+        "unit-tests-junit.xml"
+    )
     command = build_command(
         python_version=args.python_version,
         runner_os=args.runner_os,
         coverage=args.coverage,
         fail_under=args.fail_under,
+        junit_xml=str(junit_xml),
     )
+    # A report left by an earlier run on a reused runner would be read as this one's.
+    junit_xml.unlink(missing_ok=True)
     print("+ " + " ".join(command), flush=True)
-    return _run(command)
+    started = time.monotonic()
+    code = _run(command)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    report_timing(
+        runner_os=args.runner_os,
+        step_seconds=time.monotonic() - started,
+        junit_xml=junit_xml,
+        emit=lambda line: print(line, flush=True),
+        summary=Path(summary) if summary else None,
+    )
+    return code
 
 
 if __name__ == "__main__":
