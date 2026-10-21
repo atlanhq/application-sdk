@@ -177,7 +177,9 @@ def _download_daprd(target: Path) -> None:
                 _fetch_archive(url, archive)
                 _extract_daprd(archive, url, staged)
                 break
-            except Exception as exc:
+            except _RETRYABLE_DOWNLOAD_ERRORS as exc:
+                # HTTPError is a URLError, so a 4xx lands here too and is
+                # re-raised at once by the classifier.
                 if attempt == _DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(
                     exc
                 ):
@@ -187,6 +189,7 @@ def _download_daprd(target: Path) -> None:
                     attempt,
                     _DOWNLOAD_ATTEMPTS,
                     type(exc).__name__,
+                    exc_info=True,
                 )
                 time.sleep(_DOWNLOAD_BACKOFF_SECONDS * attempt)
         staged.chmod(staged.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -376,6 +379,7 @@ def _read_log_tail(log_path: Path) -> str:
             fh.seek(max(0, log_path.stat().st_size - _LOG_TAIL_BYTES))
             text = fh.read().decode("utf-8", errors="replace")
     except OSError:
+        logger.debug("Could not read daprd log %s", log_path, exc_info=True)
         return ""
     return "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
 
