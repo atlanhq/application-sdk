@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -91,92 +92,134 @@ def _is_clock_call(node: ast.AST) -> bool:
     return isinstance(func, ast.Name) and func.id in _CLOCK_NAMES
 
 
-def _reads_clock(node: ast.AST, clock_vars: set[str]) -> bool:
-    """``node`` contains a clock call, or a name holding a clock reading."""
-    return any(
-        _is_clock_call(n) or (isinstance(n, ast.Name) and n.id in clock_vars)
-        for n in ast.walk(node)
-    )
+@dataclass(frozen=True)
+class _Reads:
+    """What an expression reads: the bare names in it, and whether it calls a clock.
 
-
-def _is_clock_delta(node: ast.AST, clock_vars: set[str]) -> bool:
-    """``node`` contains a subtraction with a clock reading on one side.
-
-    The reading may be inline (``time.monotonic() - started``) or held in a
-    variable (``end - start`` after ``start = time.monotonic()``).
+    Bare names include subscripted ones (``lag[0]``). An attribute's own name is
+    not a ``Name`` node, so ``attempt.elapsed`` (a fake clock's field) does not
+    count.
     """
-    return any(
-        isinstance(sub, ast.BinOp)
-        and isinstance(sub.op, ast.Sub)
-        and (_reads_clock(sub.left, clock_vars) or _reads_clock(sub.right, clock_vars))
-        for sub in ast.walk(node)
-    )
+
+    names: frozenset[str]
+    calls_clock: bool
+
+    @classmethod
+    def of(cls, node: ast.AST) -> _Reads:
+        names: set[str] = set()
+        calls_clock = False
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name):
+                names.add(sub.id)
+            elif not calls_clock:
+                calls_clock = _is_clock_call(sub)
+        return cls(frozenset(names), calls_clock)
+
+    def reads_clock(self, clock_vars: set[str]) -> bool:
+        return self.calls_clock or not self.names.isdisjoint(clock_vars)
 
 
-def _names_in(node: ast.AST) -> set[str]:
-    """Bare names read in ``node``, including subscripted ones (``lag[0]``).
+@dataclass(frozen=True)
+class _Expr:
+    """An expression summarised once, so the scan walks each node a bounded number of times.
 
-    An attribute's own name is not a ``Name`` node, so ``attempt.elapsed`` (a
-    fake clock's field) does not count.
+    ``subtractions`` holds both sides of every ``a - b`` inside it.
     """
-    return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
+
+    reads: _Reads
+    subtractions: tuple[tuple[_Reads, _Reads], ...]
+
+    @classmethod
+    def of(cls, node: ast.AST) -> _Expr:
+        names: set[str] = set()
+        calls_clock = False
+        subtractions: list[tuple[_Reads, _Reads]] = []
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name):
+                names.add(sub.id)
+            elif isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Sub):
+                subtractions.append((_Reads.of(sub.left), _Reads.of(sub.right)))
+            elif not calls_clock:
+                calls_clock = _is_clock_call(sub)
+        return cls(_Reads(frozenset(names), calls_clock), tuple(subtractions))
+
+    def is_clock_delta(self, clock_vars: set[str]) -> bool:
+        """A subtraction with a clock reading on one side.
+
+        The reading may be inline (``time.monotonic() - started``) or held in a
+        variable (``end - start`` after ``start = time.monotonic()``).
+        """
+        return any(
+            left.reads_clock(clock_vars) or right.reads_clock(clock_vars)
+            for left, right in self.subtractions
+        )
 
 
-def _assignments(tree: ast.AST) -> list[tuple[str, ast.AST]]:
+def _assignments(nodes: list[ast.AST]) -> list[tuple[str, _Expr]]:
     """Every ``name = value`` in the module, as (name, value)."""
-    pairs: list[tuple[str, ast.AST]] = []
-    for node in ast.walk(tree):
+    pairs: list[tuple[str, _Expr]] = []
+    for node in nodes:
         if isinstance(node, ast.Assign):
-            pairs.extend(
-                (t.id, node.value) for t in node.targets if isinstance(t, ast.Name)
-            )
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if targets:
+                value = _Expr.of(node.value)
+                pairs.extend((name, value) for name in targets)
         elif (
             isinstance(node, ast.AnnAssign | ast.AugAssign)
             and node.value is not None
             and isinstance(node.target, ast.Name)
         ):
-            pairs.append((node.target.id, node.value))
+            pairs.append((node.target.id, _Expr.of(node.value)))
     return pairs
 
 
-def _clock_variables(pairs: list[tuple[str, ast.AST]]) -> set[str]:
+def _clock_variables(pairs: list[tuple[str, _Expr]]) -> set[str]:
     """Names holding a clock reading, followed through plain reassignment."""
     found: set[str] = set()
     while True:
         more = {
             name
             for name, value in pairs
-            if name not in found and _reads_clock(value, found)
+            if name not in found and value.reads.reads_clock(found)
         }
         if not more:
             return found
         found |= more
 
 
-def _delta_variables(
-    pairs: list[tuple[str, ast.AST]], clock_vars: set[str]
-) -> set[str]:
-    """Names assigned from a clock delta."""
-    return {name for name, value in pairs if _is_clock_delta(value, clock_vars)}
+#: A module can only hold a finding if its text names a clock or a timing.
+_MENTIONS_TIMING = re.compile(
+    r"monotonic|perf_counter|\.time\(\)|\b(?:"
+    + "|".join(sorted(_TIMING_NAMES))
+    + r")\b"
+)
 
 
 def _scan(path: Path, root: Path = _UNIT_ROOT) -> list[_Finding]:
     source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
-    pairs = _assignments(tree)
+    if not _MENTIONS_TIMING.search(source):
+        return []
+    nodes = list(ast.walk(ast.parse(source, filename=str(path))))
+    asserts = [n for n in nodes if isinstance(n, ast.Assert)]
+    if not asserts:
+        return []
+    pairs = _assignments(nodes)
     clock_vars = _clock_variables(pairs)
-    suspects = _TIMING_NAMES | _delta_variables(pairs, clock_vars)
+    suspects = _TIMING_NAMES | {
+        name for name, value in pairs if value.is_clock_delta(clock_vars)
+    }
     rel = path.relative_to(root).as_posix()
     findings = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assert):
-            continue
+    for node in asserts:
         for compare in ast.walk(node.test):
             if not isinstance(compare, ast.Compare):
                 continue
             if not any(isinstance(op, _ORDERING) for op in compare.ops):
                 continue
-            if _is_clock_delta(compare, clock_vars) or _names_in(compare) & suspects:
+            expr = _Expr.of(compare)
+            if expr.is_clock_delta(clock_vars) or not expr.reads.names.isdisjoint(
+                suspects
+            ):
                 findings.append(
                     _Finding(
                         rel, node.lineno, ast.get_source_segment(source, node) or ""
