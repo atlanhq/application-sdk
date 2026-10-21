@@ -35,6 +35,7 @@ from application_sdk.execution._temporal.backend import (
     create_temporal_client,
 )
 from application_sdk.execution.retry import RetryPolicy as SdkRetryPolicy
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture(autouse=True)
@@ -676,8 +677,9 @@ class TestCreateTemporalClient:
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(backend_module.Client, "connect", new=connect_mock),
+            private_stdlib(backend_module, "asyncio") as local_asyncio,
             mock.patch.object(
-                backend_module.asyncio, "sleep", new=mock.AsyncMock()
+                local_asyncio, "sleep", new=mock.AsyncMock()
             ) as sleep_mock,
         ):
             client = await create_temporal_client(
@@ -695,7 +697,8 @@ class TestCreateTemporalClient:
         with (
             mock.patch.object(backend_module, "_get_or_create_runtime"),
             mock.patch.object(backend_module.Client, "connect", new=connect_mock),
-            mock.patch.object(backend_module.asyncio, "sleep", new=mock.AsyncMock()),
+            private_stdlib(backend_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "sleep", new=mock.AsyncMock()),
         ):
             with pytest.raises(TemporalConnectError):
                 await create_temporal_client(

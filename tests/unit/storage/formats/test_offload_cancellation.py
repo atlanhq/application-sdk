@@ -45,6 +45,7 @@ from application_sdk.storage.formats.parquet import (
     ParquetFileWriter,
     _ThreadConfinedParquetReader,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -841,7 +842,12 @@ class TestWriterOutputIsolation:
             return real_replace(src, dst, **kwargs)
 
         with (
-            patch.object(os, "replace", side_effect=refuse_cross_filesystem_rename),
+            # The staging → output publish is ``storage.formats``' own rename;
+            # its private ``os`` keeps the refusal off every other thread.
+            private_stdlib("application_sdk.storage.formats", "os") as local_os,
+            patch.object(
+                local_os, "replace", side_effect=refuse_cross_filesystem_rename
+            ),
             patch("shutil.move", side_effect=no_direct_move),
         ):
             await writer.close()

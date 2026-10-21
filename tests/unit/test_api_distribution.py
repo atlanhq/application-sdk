@@ -213,14 +213,18 @@ def test_the_worker_entry_point_names_the_fix_when_the_api_files_are_missing(
     ],
 )
 def test_a_lazy_name_defined_in_a_core_file_loads_through_a_core_file(
-    package: str,
+    package: str, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
 ) -> None:
     """On a core-only api install, ``pkg.name`` must not detour through a file
     that needs an extra when the object itself is defined in a core file."""
     import importlib
     import sys
 
-    sys.path.insert(0, str(ROOT / ".github/scripts"))
+    # The script puts its own directory on sys.path and imports a sibling, so
+    # give it a private copy of the path and drop what it registered after.
+    monkeypatch.setattr(sys, "path", [str(ROOT / ".github/scripts"), *sys.path])
+    for name in {"gen_api_files", "check_api_surface"} - sys.modules.keys():
+        request.addfinalizer(lambda name=name: sys.modules.pop(name, None))
     import gen_api_files  # noqa: PLC0415
 
     groups = gen_api_files.file_groups(ROOT)

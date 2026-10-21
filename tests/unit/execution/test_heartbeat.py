@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from application_sdk._runtime.progress import ProgressTracker
+from application_sdk.execution import heartbeat as heartbeat_mod
 from application_sdk.execution.heartbeat import (
     NoopHeartbeatController,
     TemporalHeartbeatController,
@@ -30,6 +31,7 @@ from application_sdk.execution.heartbeat import (
     stop_heartbeat_task,
 )
 from application_sdk.execution.progress import ProgressWatchdogMode
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # NoopHeartbeatController
@@ -224,9 +226,9 @@ class TestAutoHeartbeatLoop:
             stop.set()
             return None  # no TimeoutError → break
 
-        with patch(
-            "application_sdk.execution.heartbeat.asyncio.wait_for",
-            side_effect=fake_wait_for,
+        with (
+            private_stdlib(heartbeat_mod, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "wait_for", side_effect=fake_wait_for),
         ):
             await auto_heartbeat_loop(
                 interval_seconds=0.5, heartbeat_fn=hb, stop_event=stop, task_name="t"
@@ -266,14 +268,10 @@ class TestAutoHeartbeatLoop:
             return 0.0 if state["n"] == 1 else 100.0
 
         with (
-            patch(
-                "application_sdk.execution.heartbeat.asyncio.wait_for",
-                side_effect=fake_wait_for,
-            ),
-            patch(
-                "application_sdk.execution.heartbeat.time.monotonic",
-                side_effect=fake_monotonic,
-            ),
+            private_stdlib(heartbeat_mod, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "wait_for", side_effect=fake_wait_for),
+            private_stdlib(heartbeat_mod, "time") as local_time,
+            patch.object(local_time, "monotonic", side_effect=fake_monotonic),
             caplog.at_level(logging.WARNING),
         ):
             await auto_heartbeat_loop(

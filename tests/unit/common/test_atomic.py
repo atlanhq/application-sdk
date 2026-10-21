@@ -40,6 +40,7 @@ from application_sdk.common.atomic import (
     ensure_free_space,
 )
 from application_sdk.errors import DiskFullError, ResourceExhaustedError
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _enospc(*_args: Any, **_kwargs: Any) -> Any:
@@ -217,7 +218,10 @@ class TestAtomicWrite:
         ENOSPC must arrive as DiskFullError, not escape as a bare OSError."""
         artifact = tmp_path / "artifact.json"
 
-        with patch("application_sdk.common.atomic.os.makedirs", _enospc):
+        with (
+            private_stdlib("application_sdk.common.atomic", "os") as local_os,
+            patch.object(local_os, "makedirs", _enospc),
+        ):
             with pytest.raises(DiskFullError) as caught:
                 with atomic_write(artifact, operation="test write") as handle:
                     handle.write(b"x")

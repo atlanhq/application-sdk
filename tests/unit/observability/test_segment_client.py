@@ -26,6 +26,7 @@ from application_sdk.observability.segment_client import (
     SegmentClient,
     SegmentTrackEvent,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -361,7 +362,10 @@ class TestSendMetricEnabled:
         touching the worker thread or asyncio.run_coroutine_threadsafe."""
         client = _enabled_client_no_thread()
         record = _make_record(labels={})  # no send_to_segment label
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             client.send_metric(record)
         mrun.assert_not_called()
 
@@ -379,7 +383,10 @@ class TestSendMetricEnabled:
         fake_event.wait.return_value = False
         client._initialized_event = fake_event
         record = _make_record(labels={"send_to_segment": "true"})
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             client.send_metric(record)
         mrun.assert_not_called()
 
@@ -404,7 +411,10 @@ class TestSendMetricEnabled:
         client._queue.put = _put
 
         record = _make_record(labels={"send_to_segment": "true"})
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             # capture the coroutine handed to run_coroutine_threadsafe so we can close it
             captured = {}
 
@@ -437,10 +447,13 @@ class TestSendMetricEnabled:
         client._queue = mock.MagicMock()
         client._queue.put = _put
 
-        with mock.patch.object(
-            sc_module.asyncio,
-            "run_coroutine_threadsafe",
-            side_effect=RuntimeError("boom"),
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(
+                local_asyncio,
+                "run_coroutine_threadsafe",
+                side_effect=RuntimeError("boom"),
+            ),
         ):
             # Must not raise.
             client.send_metric(_make_record(labels={"send_to_segment": "true"}))
@@ -571,7 +584,8 @@ class TestProcessQueue:
 
         with (
             mock.patch.object(client, "_send_batch_to_segment", side_effect=_capture),
-            mock.patch.object(sc_module.asyncio, "wait_for", _fake_wait_for),
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "wait_for", _fake_wait_for),
         ):
             # Mark the seeded record as task_done-able by first putting it.
             await client._queue.put(record)
@@ -713,7 +727,10 @@ class TestFlush:
         fake_loop.is_running.return_value = False
         client._loop = fake_loop
         client._queue = asyncio.Queue()
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             await client.flush()
         mrun.assert_not_called()
 
@@ -740,8 +757,11 @@ class TestFlush:
             captured["loop"] = loop
             return cf_future
 
-        with mock.patch.object(
-            sc_module.asyncio, "run_coroutine_threadsafe", side_effect=_capture
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(
+                local_asyncio, "run_coroutine_threadsafe", side_effect=_capture
+            ),
         ):
             await client.flush()
 
@@ -768,11 +788,12 @@ class TestFlush:
             return cf_future
 
         with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
             mock.patch.object(
-                sc_module.asyncio, "run_coroutine_threadsafe", side_effect=_stub
+                local_asyncio, "run_coroutine_threadsafe", side_effect=_stub
             ),
             mock.patch.object(
-                sc_module.asyncio, "wait_for", side_effect=asyncio.TimeoutError
+                local_asyncio, "wait_for", side_effect=asyncio.TimeoutError
             ),
         ):
             await client.flush()  # must not raise
@@ -794,7 +815,8 @@ class TestFlush:
 
         with (
             mock.patch.object(sc_module, "in_temporal_workflow", return_value=True),
-            mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun,
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
         ):
             await client.flush()
 

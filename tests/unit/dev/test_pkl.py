@@ -19,6 +19,7 @@ from application_sdk.dev._pkl_errors import (
     UnsupportedPklPlatformError,
 )
 from application_sdk.pkl_version import PKL_VERSION
+from tests.unit.private_stdlib import private_stdlib
 
 
 class TestPlatformKey:
@@ -177,7 +178,6 @@ class TestDownload:
     def test_retries_then_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(pkl_mod.time, "sleep", lambda *_a: None)
         attempts = {"n": 0}
 
         def flaky(url: str, filename: str) -> None:
@@ -187,19 +187,24 @@ class TestDownload:
             Path(filename).write_text("binary", encoding="utf-8")
 
         monkeypatch.setattr(pkl_mod.urllib.request, "urlretrieve", flaky)
-        pkl_mod._download("https://example.invalid/pkl", tmp_path / "pkl")
+        with private_stdlib(pkl_mod, "time") as local_time:
+            monkeypatch.setattr(local_time, "sleep", lambda *_a: None)
+            pkl_mod._download("https://example.invalid/pkl", tmp_path / "pkl")
         assert attempts["n"] == 3
 
     def test_raises_typed_error_when_retries_exhaust(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(pkl_mod.time, "sleep", lambda *_a: None)
         monkeypatch.setattr(
             pkl_mod.urllib.request,
             "urlretrieve",
             MagicMock(side_effect=OSError("503")),
         )
-        with pytest.raises(PklDownloadError) as exc:
+        with (
+            private_stdlib(pkl_mod, "time") as local_time,
+            pytest.raises(PklDownloadError) as exc,
+        ):
+            monkeypatch.setattr(local_time, "sleep", lambda *_a: None)
             pkl_mod._download("https://example.invalid/pkl", tmp_path / "pkl")
         assert exc.value.attempts == pkl_mod._DOWNLOAD_MAX_ATTEMPTS
         assert not (tmp_path / "pkl").exists()

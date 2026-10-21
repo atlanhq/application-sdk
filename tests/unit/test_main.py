@@ -44,6 +44,7 @@ from application_sdk.main_errors import (
     MultiAppModuleError,
     UnknownModeError,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 class TestDeriveServiceName:
@@ -425,7 +426,10 @@ class TestRunMain:
 
     def test_worker_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="worker", app_module="pkg:App")
-        with mock.patch("application_sdk.main.asyncio.run") as mock_run:
+        with (
+            private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run") as mock_run,
+        ):
             with mock.patch("application_sdk.main.run_worker_mode") as mode:
                 mock_run.side_effect = lambda coro: None
                 run_main(config)
@@ -440,7 +444,10 @@ class TestRunMain:
 
     def test_combined_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="combined", app_module="pkg:App")
-        with mock.patch("application_sdk.main.asyncio.run") as mock_run:
+        with (
+            private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run") as mock_run,
+        ):
             with mock.patch("application_sdk.main.run_combined_mode") as mode:
                 mock_run.side_effect = lambda coro: None
                 run_main(config)
@@ -1325,7 +1332,8 @@ class TestInstallExcepthook:
             assert installed is not original_hook
             with (
                 patch("application_sdk.main.logger") as mock_log,
-                patch("application_sdk.main.asyncio.run") as mock_async_run,
+                private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+                patch.object(local_asyncio, "run") as mock_async_run,
             ):
                 exc_type = RuntimeError
                 exc_value = RuntimeError("bad")
@@ -1342,8 +1350,10 @@ class TestInstallExcepthook:
             installed = sys.excepthook
             with (
                 patch("application_sdk.main.logger"),
-                patch(
-                    "application_sdk.main.asyncio.run",
+                private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+                patch.object(
+                    local_asyncio,
+                    "run",
                     side_effect=RuntimeError("loop already running"),
                 ),
             ):
@@ -1418,7 +1428,8 @@ class TestMainEntryPoint:
                 "application_sdk.main.run_main",
                 side_effect=RuntimeError("kaboom"),
             ),
-            patch("application_sdk.main.asyncio.run") as mock_async_run,
+            private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "run") as mock_async_run,
         ):
             with pytest.raises(SystemExit) as exc:
                 main()
@@ -2165,7 +2176,8 @@ class TestRunDevCombined:
                 "application_sdk.main.run_combined_mode",
                 new_callable=AsyncMock,
             ),
-            patch("asyncio.create_task", side_effect=_capture_task),
+            private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_task", side_effect=_capture_task),
         ):
             await run_dev_combined(
                 _fake_app_class(),
@@ -2407,7 +2419,8 @@ class TestRunDevCombinedProvisioning:
                 "application_sdk.main.run_combined_mode",
                 new_callable=AsyncMock,
             ),
-            patch("asyncio.create_task", side_effect=_capture_task),
+            private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_task", side_effect=_capture_task),
             patch("httpx.AsyncClient", return_value=fake_client),
             patch("application_sdk.main.logger"),
         ):
@@ -2470,10 +2483,11 @@ class TestRunDevCombinedProvisioning:
                 "application_sdk.main.run_combined_mode",
                 new_callable=AsyncMock,
             ),
-            patch("asyncio.create_task", side_effect=_capture_task),
+            private_stdlib("application_sdk.main", "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_task", side_effect=_capture_task),
             patch("httpx.AsyncClient", return_value=fake_client),
             # Make asyncio.sleep instant
-            patch("application_sdk.main.asyncio.sleep", new_callable=AsyncMock),
+            patch.object(local_asyncio, "sleep", new_callable=AsyncMock),
             patch("application_sdk.main.logger"),
         ):
             await run_dev_combined(
@@ -3007,8 +3021,6 @@ class TestRunWorkerWithRestart:
             counter["t"] += 5.0
             return counter["t"]
 
-        monkeypatch.setattr("application_sdk.main.time.monotonic", fake_monotonic)
-
         shutdown = asyncio.Event()
         calls = {"n": 0}
 
@@ -3018,8 +3030,10 @@ class TestRunWorkerWithRestart:
                 return _FakeWorker(fail=True)
             return _FakeWorker(fail=False, on_enter=shutdown.set)
 
-        # Must not raise despite 4 failures (cap is 2) because each resets.
-        await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
+        with private_stdlib("application_sdk.main", "time") as local_time:
+            monkeypatch.setattr(local_time, "monotonic", fake_monotonic)
+            # Must not raise despite 4 failures (cap is 2) because each resets.
+            await _run_worker_with_restart(build_worker=build, shutdown_event=shutdown)
 
         assert calls["n"] == 5
 
@@ -3096,10 +3110,11 @@ class TestPostDrainExitDeadline:
         def closed_stderr(fd: int, data: bytes) -> int:
             raise OSError(9, "Bad file descriptor")
 
-        monkeypatch.setattr("application_sdk.main.os.write", closed_stderr)
-        _start_post_drain_exit_deadline(exit_fn=exit_fn)
+        with private_stdlib("application_sdk.main", "os") as local_os:
+            monkeypatch.setattr(local_os, "write", closed_stderr)
+            _start_post_drain_exit_deadline(exit_fn=exit_fn)
 
-        assert exited.wait(timeout=5)
+            assert exited.wait(timeout=5)
         assert codes == [3]
 
     def test_non_positive_timeout_disables(

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats.parquet import ParquetFileReader
@@ -18,12 +18,6 @@ _MOCK_STORE = MagicMock()
 _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 _DL_ID = _FIXED_HEX[:12]
 _EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
-
-# Configure Hypothesis settings at the module level
-settings.register_profile(
-    "parquet_input_tests", suppress_health_check=[HealthCheck.function_scoped_fixture]
-)
-settings.load_profile("parquet_input_tests")
 
 
 @given(config=parquet_input_config_strategy)

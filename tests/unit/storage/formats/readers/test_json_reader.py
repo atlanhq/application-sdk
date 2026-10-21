@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import orjson
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats.json import JsonFileReader
@@ -17,12 +17,6 @@ _MOCK_STORE = MagicMock()
 _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 _DL_ID = _FIXED_HEX[:12]
 _EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
-
-# Configure Hypothesis settings at the module level
-settings.register_profile(
-    "json_input_tests", suppress_health_check=[HealthCheck.function_scoped_fixture]
-)
-settings.load_profile("json_input_tests")
 
 
 @given(config=json_input_config_strategy)
