@@ -45,10 +45,6 @@ outputs:
 runs:
   using: composite
   steps:
-    # Twingate publish an official GitHub Action (twingate/github-action), but
-    # docs/standards/ci.md requires third-party actions to be SHA-pinned and
-    # this is their documented manual recipe, which is the same three commands
-    # with no extra supply-chain surface. Kept as shell for that reason.
     - name: Move docker networks off Atlan's 172.17/16
       if: inputs.resubnet-docker == 'true'
       shell: bash
@@ -60,6 +56,10 @@ runs:
           sudo systemctl restart docker
         } || echo "::warning::could not move docker off 172.17/16; containers may lose the network once the tunnel is up."
 
+    # Twingate publish an official GitHub Action (twingate/github-action), but
+    # docs/standards/ci.md requires third-party actions to be SHA-pinned and
+    # this is their documented manual recipe, which is the same three commands
+    # with no extra supply-chain surface. Kept as shell for that reason.
     - name: Connect to Twingate and verify reachability
       id: connect
       shell: bash

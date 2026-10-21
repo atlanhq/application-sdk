@@ -382,7 +382,7 @@ def test_twingate_inner_limits_fit_the_step_limit(jobs: dict) -> None:
 
 
 def test_docker_resubnet_is_not_copy_pasted_back(workflow: dict, jobs: dict) -> None:
-    """The 172.17/16 re-subnet lives in globalprotect-connect, not at call sites.
+    """The 172.17/16 re-subnet lives in the VPN connect actions, not at call sites.
 
     Atlan's internal ELBs share Docker's default bridge subnet, so it has to move
     before the tunnel routes 172.17/16 via tun0. That was four byte-identical
