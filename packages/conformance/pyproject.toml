@@ -95,3 +95,11 @@ exclude = ["conformance/bootstrap/templates/renovate.json"]
 name = "pypi"
 url = "https://pypi.org/simple"
 default = true
+
+[tool.uv]
+# Pins this package's own lock only. certifi is not a runtime dependency of
+# conformance (it arrives via the `test` extra's atlan-application-sdk), so no
+# published floor: the SDK already publishes one for its consumers.
+constraint-dependencies = [
+    "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
+]
