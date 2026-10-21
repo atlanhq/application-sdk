@@ -47,8 +47,8 @@ jobs:
   analyze:
     needs: opt-in
     # `always()` because opt-in is skipped off bump PRs, and a skipped need
-    # would otherwise skip this job. SDK Gate and Connector Tests Gate fail
-    # closed on an un-opted bump PR.
+    # would otherwise skip this job. SDK Gate fails closed on an un-opted bump
+    # PR.
     if: >-
       always() && github.event_name != 'merge_group' &&
       (!startsWith(github.head_ref, 'bump-version') || needs.opt-in.outputs.opted_in == 'true')
