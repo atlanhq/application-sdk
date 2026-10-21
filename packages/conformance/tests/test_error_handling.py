@@ -5978,7 +5978,7 @@ def test_e020_no_finding_on_logged_404_equality_skip_in_failure_branch() -> None
 def fetch(resp, name):
     if not resp.ok:
         if resp.status_code == 404:
-            logger.error(f"{name} vanished: HTTP {resp.status_code}")
+            logger.error(f"Skipping {name}: HTTP {resp.status_code}")
             return None
         raise SourceApiUnavailableError(name)
     return resp.json()
@@ -6820,3 +6820,79 @@ def probe(previous):
         return Check(name="store", passed=False, error=failure.to_failure_details())
 """
     assert "E007" in _findings(src)
+
+
+# ── E020 per-object skip: the guard, the logged value and the explicit contract ──
+
+
+def test_e020_fires_when_the_404_guard_tests_a_different_response() -> None:
+    # The primary request failed (it may be a 500); a 404 on another response must
+    # not exempt the empty return that hides the primary failure.
+    src = """
+def fetch(primary, secondary, name):
+    if not primary.is_success:
+        if secondary.status_code == 404:
+            logger.warning("Skipping %s: HTTP %s", name, secondary.status_code)
+            return {}
+        raise SourceApiUnavailableError(name)
+    return primary.json()
+"""
+    assert "E020" in _findings(src)
+
+
+def test_e020_fires_when_the_log_records_a_boolean_not_the_status() -> None:
+    src = """
+def fetch(response, name):
+    if not response.is_success:
+        if response.status_code == 404:
+            logger.warning("Skipping %s, is 404? %s", name, response.status_code == 404)
+            return {}
+        raise SourceApiUnavailableError(name)
+    return response.json()
+"""
+    assert "E020" in _findings(src)
+
+
+def test_e020_fires_when_the_status_alias_is_rebound_before_the_log() -> None:
+    src = """
+def fetch(response, name):
+    if not response or not response.is_success:
+        status = response.status_code if response is not None else None
+        if status in (400, 404):
+            status = "rejected"
+            logger.warning("Skipping %s: HTTP %s", name, status)
+            return {}
+        raise SourceApiUnavailableError(name)
+    return response.json()
+"""
+    assert "E020" in _findings(src)
+
+
+def test_e020_fires_when_the_log_does_not_say_the_object_is_skipped() -> None:
+    # A status code alone cannot tell a per-object fetch from a whole-request one;
+    # the warning has to state the skip.
+    src = """
+def fetch(response, name):
+    if not response.is_success:
+        if response.status_code == 404:
+            logger.warning("Endpoint %s returned HTTP %s", name, response.status_code)
+            return {}
+        raise SourceApiUnavailableError(name)
+    return response.json()
+"""
+    assert "E020" in _findings(src)
+
+
+def test_e020_no_finding_when_the_status_is_an_fstring_field_of_a_skip_message() -> (
+    None
+):
+    src = """
+def fetch(response, name):
+    if not response.is_success:
+        if response.status_code in (400, 404):
+            logger.warning(f"Skipping rejected {name}: HTTP {response.status_code}")
+            return {}
+        raise SourceApiUnavailableError(name)
+    return response.json()
+"""
+    assert "E020" not in _findings(src)

@@ -515,11 +515,17 @@ outcome mirroring the error-handling shape in the reference app named by
 
   The exemption needs the empty return directly under an `if` that pins
   `<response>.status_code` to codes from {400, 404, 410} (`in (...)` or
-  `==`, `and`-ed terms allowed), and a warning/error log earlier in that same
-  body that includes the same status expression.  A local alias counts when
+  `==`, `and`-ed terms allowed) on the same response the failure test is
+  about, and a warning/error log earlier in that same body whose message says
+  the object is skipped ("Skipping …") and that passes the status itself as an
+  argument (or an f-string field) — a status inside another expression
+  (`response.status_code == 404`) does not count.  The "skip" wording is the
+  explicit per-object contract: a status code alone cannot tell a per-object
+  fetch from a whole-request one.  A local alias counts when
   its last binding among the guard's earlier siblings is
   `status = response.status_code` (or `... if response is not None else
-  None`); a named code constant (`in PERMANENT_CODES`) is not followed.  A
+  None`) and it is not rebound before the log; a named code constant
+  (`in PERMANENT_CODES`) is not followed.  A
   site that carries an `ignore[E020]` on such a skip can drop the directive.
   So when an E020
   fires on a per-object fetch, split the branch into that shape: the

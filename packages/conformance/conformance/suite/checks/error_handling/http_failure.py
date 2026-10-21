@@ -23,11 +23,13 @@ Exempt: a per-object skip on a *permanent* client rejection.  An empty return
 is not reported when the ``if`` whose body directly holds it tests the status
 against an allowlist of permanent per-object rejections
 (``r.status_code in (400, 404)`` or ``r.status_code == 404``, optionally
-``and``-ed with other terms, which only narrow the branch), and a
-warning/error-level log call earlier in that same body references the same
-``status_code`` expression.  Everything else keeps firing: a bare
+``and``-ed with other terms, which only narrow the branch) on the same response
+the failure test is about, and a warning/error-level log call earlier in that
+same body says the object is skipped and passes that status as a value of its
+own.  Everything else keeps firing: a bare
 ``if not r.is_success: return {}``, transient outcomes (no response, 408, 429,
-5xx), a skip with no log or a debug/info log, a log that omits the status, an
+5xx), a skip with no log or a debug/info log, a log that omits the status or
+does not say it skips, a guard on another response than the failed one, an
 ``or``-ed guard (``r is None or r.status_code == 404``), and a range form such
 as ``400 <= r.status_code < 500`` (it would also cover 401/403/408/429).
 401/407 are left out because a credential rejection hits every object, so a
@@ -318,8 +320,19 @@ def _binds(stmt: ast.stmt, name: str) -> bool:
     return False
 
 
-def _aliases_status_code(name: str, preceding: list[ast.stmt]) -> bool:
-    """Whether *name* provably holds a ``status_code`` at the guard.
+def _status_code_owner(value: ast.expr) -> ast.expr | None:
+    """The response a ``status_code`` read is taken from (``<x>`` in ``<x>.status_code``)."""
+    if isinstance(value, ast.Attribute) and value.attr == "status_code":
+        return value.value
+    if isinstance(value, ast.IfExp) and _is_status_code_read(value):
+        for arm in (value.body, value.orelse):
+            if isinstance(arm, ast.Attribute) and arm.attr == "status_code":
+                return arm.value
+    return None
+
+
+def _aliased_status_owner(name: str, preceding: list[ast.stmt]) -> ast.expr | None:
+    """The response whose ``status_code`` *name* provably holds at the guard, or None.
 
     The last statement in *preceding* (the guard's earlier siblings) that
     binds *name* must be a plain ``name = <x>.status_code`` (or the
@@ -328,18 +341,66 @@ def _aliases_status_code(name: str, preceding: list[ast.stmt]) -> bool:
     for stmt in reversed(preceding):
         if not _binds(stmt, name):
             continue
-        return (
+        if (
             isinstance(stmt, ast.Assign)
             and len(stmt.targets) == 1
             and isinstance(stmt.targets[0], ast.Name)
             and stmt.targets[0].id == name
             and _is_status_code_read(stmt.value)
+        ):
+            return _status_code_owner(stmt.value)
+        return None
+    return None
+
+
+def _failed_responses(test: ast.expr) -> set[str]:
+    """The responses an HTTP-failure test is about (``resp`` in ``not resp.is_success``).
+
+    Every ``<x>.is_success`` / ``<x>.ok`` / ``<x>.status_code`` in the test,
+    plus a bare ``not <x>`` (the no-response arm).  Compared by AST dump, so the
+    exemption only applies to a guard on the very response that failed.
+    """
+    out: set[str] = set()
+    for n in ast.walk(test):
+        if isinstance(n, ast.Attribute) and n.attr in _HTTP_MARKERS:
+            out.add(ast.dump(n.value))
+        elif (
+            isinstance(n, ast.UnaryOp)
+            and isinstance(n.op, ast.Not)
+            and isinstance(n.operand, (ast.Name, ast.Attribute))
+        ):
+            out.add(ast.dump(n.operand))
+    return out
+
+
+def _message_says_skip(call: ast.Call) -> bool:
+    """The log message (first argument) states the object is skipped."""
+    if not call.args:
+        return False
+    first = call.args[0]
+    parts: list[str] = []
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        parts.append(first.value)
+    elif isinstance(first, ast.JoinedStr):
+        parts.extend(
+            v.value
+            for v in first.values
+            if isinstance(v, ast.Constant) and isinstance(v.value, str)
         )
-    return False
+    return "skip" in "".join(parts).lower()
 
 
-def _log_references_status(stmt: ast.stmt, status: ast.Attribute | ast.Name) -> bool:
-    """*stmt* is a warning/error log call whose arguments include *status*."""
+def _log_carries_status(stmt: ast.stmt, status: ast.Attribute | ast.Name) -> bool:
+    """*stmt* is a warning/error log that records *status* and says the object is skipped.
+
+    The status must be passed as a value of its own — a positional or keyword
+    argument that *is* the status expression, or an f-string field holding it.
+    A status buried in another expression (``status_code == 404``) records
+    something else and does not count.  The message must say the object is
+    skipped: that is the explicit per-object contract the exemption relies on,
+    since a status code alone cannot tell a per-object fetch from a
+    whole-request one.
+    """
     if not (_is_log_call_stmt(stmt) and isinstance(stmt, ast.Expr)):
         return False
     call = stmt.value.value if isinstance(stmt.value, ast.Await) else stmt.value
@@ -349,36 +410,49 @@ def _log_references_status(stmt: ast.stmt, status: ast.Attribute | ast.Name) -> 
         and call.func.attr in _WARN_OR_ERROR_LOG_METHODS
     ):
         return False
+    if not _message_says_skip(call):
+        return False
     wanted = ast.dump(status)
-    args = [*call.args, *(kw.value for kw in call.keywords)]
-    return any(
-        isinstance(n, type(status)) and ast.dump(n) == wanted
-        for arg in args
-        for n in ast.walk(arg)
-    )
+    values: list[ast.expr] = [*call.args, *(kw.value for kw in call.keywords)]
+    for arg in call.args:
+        if isinstance(arg, ast.JoinedStr):
+            values.extend(
+                v.value for v in arg.values if isinstance(v, ast.FormattedValue)
+            )
+    return any(ast.dump(v) == wanted for v in values)
 
 
 def _is_logged_permanent_rejection_skip(
-    guard: ast.If, ret: ast.Return, preceding: list[ast.stmt]
+    guard: ast.If, ret: ast.Return, preceding: list[ast.stmt], failed: set[str]
 ) -> bool:
     """Whether *ret* is the compliant per-object skip directly under *guard*.
 
     *ret* is a direct statement of ``guard.body`` (``_empty_returns`` only
-    pairs a return with the ``if`` whose body list holds it).  The guard must
-    pin the status to permanent per-object rejections, and a warning/error log
-    that includes that status must precede *ret* in the same body.  A status
-    held in a local must be proven an alias of ``status_code`` from the
-    guard's earlier siblings (*preceding*).
+    pairs a return with the ``if`` whose body list holds it).  All of:
+
+    - the guard pins the status of one of the *failed* responses (the ones the
+      enclosing HTTP-failure test is about) to permanent per-object rejections;
+      a status held in a local must be proven an alias of that response's
+      ``status_code`` from the guard's earlier siblings (*preceding*);
+    - a warning/error log before *ret* in the same body passes that status as a
+      value and says the object is skipped, with the alias not rebound between
+      the guard and the log.
     """
     status = _permanent_rejection_target(guard.test)
     if status is None:
         return False
-    if isinstance(status, ast.Name) and not _aliases_status_code(status.id, preceding):
+    if isinstance(status, ast.Name):
+        owner = _aliased_status_owner(status.id, preceding)
+    else:
+        owner = status.value
+    if owner is None or ast.dump(owner) not in failed:
         return False
     for stmt in guard.body:
         if stmt is ret:
             return False
-        if _log_references_status(stmt, status):
+        if isinstance(status, ast.Name) and _binds(stmt, status.id):
+            return False
+        if _log_carries_status(stmt, status):
             return True
     return False
 
@@ -415,17 +489,19 @@ def _empty_returns(
 
 
 def _branch_returns_empty(
-    body: list[ast.stmt], guard: ast.If | None = None
+    body: list[ast.stmt], failed: set[str], guard: ast.If | None = None
 ) -> ast.Return | None:
     """The first empty-sentinel return in *body* that is not an exempt skip.
 
-    *guard* is the ``if`` that owns *body* when *body* is its own ``body``
-    list (the failure polarity), so a failure test that is itself an
-    ``and``-ed permanent-rejection guard is judged too.
+    *failed* is the set of responses the enclosing failure test is about, so a
+    skip is only exempt when it guards one of those.  *guard* is the ``if``
+    that owns *body* when *body* is its own ``body`` list (the failure
+    polarity), so a failure test that is itself an ``and``-ed
+    permanent-rejection guard is judged too.
     """
     for ret, owner, preceding in _empty_returns(body, guard, []):
         if owner is not None and _is_logged_permanent_rejection_skip(
-            owner, ret, preceding
+            owner, ret, preceding, failed
         ):
             continue
         return ret
@@ -438,14 +514,14 @@ class HttpFailureMixin:
     def _check_e020(self, node: ast.If) -> None:
         # Failure in the if-test → the body is the failure branch.
         if _is_http_failure_predicate(node.test):
-            ret = _branch_returns_empty(node.body, node)
+            ret = _branch_returns_empty(node.body, _failed_responses(node.test), node)
             if ret is not None:
                 self._emit_e020(ret)
             return
         # Success in the if-test → the else is the failure branch (polarity mirror):
         #   if resp.is_success: ...success... else: return []
         if _is_http_success_predicate(node.test) and _is_plain_else(node.orelse):
-            ret = _branch_returns_empty(node.orelse)
+            ret = _branch_returns_empty(node.orelse, _failed_responses(node.test))
             if ret is not None:
                 self._emit_e020(ret)
 
