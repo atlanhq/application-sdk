@@ -3039,7 +3039,9 @@ class _HungTeardownWorker:
 class TestPostDrainExitDeadline:
     """The bound on shutdown steps that run after the worker has drained."""
 
-    def test_expiry_exits_with_code_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_expiry_exits_with_distinct_nonzero_code(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "1")
         exited = threading.Event()
         codes: list[int] = []
@@ -3052,7 +3054,7 @@ class TestPostDrainExitDeadline:
 
         assert timer is not None and timer.daemon
         assert exited.wait(timeout=5)
-        assert codes == [0]
+        assert codes == [3]
 
     def test_non_positive_timeout_disables(
         self, monkeypatch: pytest.MonkeyPatch

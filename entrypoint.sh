@@ -72,8 +72,9 @@ APP_PID=""
 # ---------------------------------------------------------------------------
 # Signal handling — forward SIGTERM to Python first, stop daprd after it exits
 # ---------------------------------------------------------------------------
-# The app is daprd's only caller, so once it has exited there is nothing left
-# for daprd to drain; its graceful window must not keep the pod up.
+# Once the app has exited, daprd has nothing left to do: inbound pub/sub and
+# bindings have no app to deliver to, and the app has no outbound call in
+# flight. Its graceful window must not keep the pod up.
 stop_daprd() {
     kill -TERM "${DAPRD_PID}" 2>/dev/null || true
     waited=0

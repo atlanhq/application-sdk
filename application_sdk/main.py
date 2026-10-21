@@ -1161,9 +1161,12 @@ class _FatalTeardownWatchdog:
 # No activity is in flight by then, yet these steps have been seen to block for
 # the whole pod grace period when a telemetry endpoint is unreachable, holding
 # the pod's requests and its node. 0 or negative disables the bound.
+# The exit code is non-zero and distinct (1 is the fatal-teardown watchdog, 2 is
+# argparse) so a cut-short shutdown shows in the container's last exit code
+# instead of passing as a clean stop.
 _POST_DRAIN_EXIT_TIMEOUT_ENV = "ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS"
 _POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS = 120
-_POST_DRAIN_EXIT_CODE = 0
+_POST_DRAIN_EXIT_CODE = 3
 
 
 def _start_post_drain_exit_deadline(
