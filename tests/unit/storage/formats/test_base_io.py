@@ -17,6 +17,7 @@ threads or loops beyond pytest-asyncio.
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -400,17 +401,20 @@ class TestWriterUploadFile:
     @pytest.mark.asyncio
     async def test_upload_file_propagates_retain_local_copy(self) -> None:
         writer = _StubWriter()
+        # Under writer.path: the upload key is its path relative to that root,
+        # which on Windows cannot span drives.
+        local = os.path.join(writer.path, "foo.parquet")
         writer.retain_local_copy = False  # type: ignore[attr-defined]
         writer.current_buffer_size_bytes = 999
 
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            await writer._upload_file("/tmp/out/foo.parquet")
+            await writer._upload_file(local)
 
         mock_upload.assert_awaited_once_with(
-            "/tmp/out/foo.parquet",
-            "/tmp/out/foo.parquet",
+            local,
+            local,
             retain_local_copy=False,
         )
         assert writer.current_buffer_size_bytes == 0
@@ -419,13 +423,16 @@ class TestWriterUploadFile:
     async def test_upload_file_default_retain_is_false_when_attr_missing(self) -> None:
         """Default for ``retain_local_copy`` is False if the attribute is unset."""
         writer = _StubWriter()
+        # Under writer.path: the upload key is its path relative to that root,
+        # which on Windows cannot span drives.
+        local = os.path.join(writer.path, "foo.parquet")
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            await writer._upload_file("/tmp/out/foo.parquet")
+            await writer._upload_file(local)
         mock_upload.assert_awaited_once_with(
-            "/tmp/out/foo.parquet",
-            "/tmp/out/foo.parquet",
+            local,
+            local,
             retain_local_copy=False,
         )
 
