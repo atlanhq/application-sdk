@@ -8,11 +8,12 @@ name: SDK tests (reusable)
 # `if:` guards — when the SDK area is untouched the orchestrator skips this
 # entire reusable and the composing gate counts a skipped area as a pass.
 #
-# The integration tier (Integration Tests, Storage Emulator Tests) skips on
-# `pull_request` and runs in the merge queue and on v* tags, the same split
-# connectors use (tests-reusable.yaml, docs/standards/ci.md). The queue runs
-# the full suite on the exact merged state before anything lands, so a PR-side
-# run only repeated it on every push (FND-4306).
+# The integration tier (Integration Tests, Storage Emulator Tests) runs only
+# when the caller passes `run-integration`: in the merge queue, on v* tags, and
+# on a PR commit someone asked for with `/e2e` or `/gate-check`. That is the
+# split connectors use (tests-reusable.yaml, docs/standards/ci.md). The queue
+# runs the full suite on the exact merged state before anything lands, so a
+# PR-side run on every push only repeated it (FND-4306).
 #
 # Deliberately NOT built on tests-reusable.yaml: that workflow is
 # connector-shaped (app-name required, e2e scaffold, no OS matrix).  The SDK's
@@ -20,7 +21,12 @@ name: SDK tests (reusable)
 # here as a dedicated SDK reusable.
 
 on:
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      run-integration:
+        description: Run the integration tier (Integration Tests, Storage Emulator Tests).
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -132,8 +138,8 @@ jobs:
 
   integration:
     name: Integration Tests
-    # Merge queue and tags only; see the header (FND-4306).
-    if: github.event_name != 'pull_request'
+    # Queue, tags and on-demand PR runs only; see the header (FND-4306).
+    if: inputs.run-integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -176,8 +182,8 @@ jobs:
 
   storage-emulator:
     name: Storage Emulator Tests
-    # Merge queue and tags only; see the header (FND-4306).
-    if: github.event_name != 'pull_request'
+    # Queue, tags and on-demand PR runs only; see the header (FND-4306).
+    if: inputs.run-integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

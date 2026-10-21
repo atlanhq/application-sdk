@@ -465,7 +465,7 @@ class TestPlanRerun:
         plan = ptc.plan_rerun(_request(), _pr(), {})
         assert plan.act is True
         assert plan.marker == ("e2e-request", "success", "e2e requested by @a-human")
-        assert plan.workflows == ("pull_request.yaml",)
+        assert plan.workflows == ("pull_request.yaml", "sdk-gate.yaml")
 
     def test_e2e_already_requested(self) -> None:
         plan = ptc.plan_rerun(_request(), _pr(), {"e2e-request": "success"})
@@ -1126,9 +1126,11 @@ class TestRunRerun:
         assert api.writes[0][1]["state"] == "success"
         assert clock.sleeps == []
 
-    def test_e2e_reruns_the_request_job(self) -> None:
+    def test_e2e_reruns_the_request_job_and_sdk_gate_detection(self) -> None:
+        """SDK Gate re-runs from detection, which reads the marker and runs the
+        integration tier on the PR (FND-4306)."""
         api = self._api(
-            runs={"pull_request.yaml": [_run(9)]},
+            runs={"pull_request.yaml": [_run(9)], "sdk-gate.yaml": [_run(5)]},
             jobs={
                 9: [
                     {
@@ -1137,7 +1139,15 @@ class TestRunRerun:
                         "status": "completed",
                         "started_at": _iso(12),
                     }
-                ]
+                ],
+                5: [
+                    {
+                        "id": 55,
+                        "name": ptc.SDK_GATE_CHANGES_JOB,
+                        "status": "completed",
+                        "started_at": _iso(12),
+                    }
+                ],
             },
         )
         clock = FakeClock()
@@ -1149,7 +1159,10 @@ class TestRunRerun:
             sleep=clock.sleep,
             clock=clock.clock,
         )
-        assert [p for p, _ in api.writes][1:] == [f"repos/{REPO}/actions/jobs/77/rerun"]
+        assert [p for p, _ in api.writes][1:] == [
+            f"repos/{REPO}/actions/jobs/77/rerun",
+            f"repos/{REPO}/actions/jobs/55/rerun",
+        ]
         assert api.writes[0][1]["context"] == "e2e-request"
 
     def test_waits_for_an_in_flight_run_before_rerunning(self) -> None:
@@ -1753,8 +1766,14 @@ class TestContracts:
         )
         assert doc["jobs"]["e2e-request"]["name"] == ptc.SDK_E2E_REQUEST_JOB
 
+    def test_sdk_gate_changes_job_name(self) -> None:
+        doc = yaml.safe_load(
+            (WORKFLOWS / ptc.SDK_GATE_WORKFLOW).read_text(encoding="utf-8")
+        )
+        assert doc["jobs"]["changes"]["name"] == ptc.SDK_GATE_CHANGES_JOB
+
     @pytest.mark.parametrize(
-        "workflow", (*ptc.SDK_GATE_CHECK_WORKFLOWS, ptc.SDK_E2E_WORKFLOW)
+        "workflow", (*ptc.SDK_GATE_CHECK_WORKFLOWS, *ptc.SDK_E2E_RERUN_JOBS)
     )
     def test_sdk_rerun_workflows_exist(self, workflow: str) -> None:
         assert (WORKFLOWS / workflow).is_file()
