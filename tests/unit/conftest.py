@@ -115,6 +115,17 @@ def _safe_patch(target, side_effect=None, mock_obj=None):
 
 
 @pytest.fixture(autouse=True)
+def _no_post_drain_exit_deadline(monkeypatch):
+    """Disable the post-drain exit deadline unless a test turns it on.
+
+    Run modes start it after the worker drains, and its expiry calls
+    ``os._exit``: left on, a test that runs a mode would end the pytest
+    process two minutes later.
+    """
+    monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "0")
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_memory_limit(monkeypatch):
     """Keep the host's cgroup limit out of every unit test, and reset the
     process-wide memory-pressure throttle.

@@ -26,6 +26,9 @@ dependencies = [
     # application_sdk.errors maps httpx failures onto the error leaves
     # (errors/http.py); same pin as the SDK's core dependency.
     "httpx>=0.27.0,<0.29.0",
+    # application_sdk/clients/ssl_utils.py imports certifi; the host installs
+    # this wheel without the SDK, so it needs the SDK's published floor too.
+    "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
 ]
 
 # Same extras, same pins, as atlan-application-sdk: a handler that uses the SQL

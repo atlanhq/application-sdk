@@ -60,13 +60,13 @@ import re
 from dataclasses import dataclass
 
 from conformance.suite.checks._deprecation_warn import (
+    _class_warn_message,
     _is_deprecation_warn_call,
     _static_str,
 )
 
 # Decorator / call names we recognise.
 _DEPRECATED_DECORATORS: frozenset[str] = frozenset({"deprecated"})
-_WARN_INIT_METHODS: frozenset[str] = frozenset({"__init__", "__init_subclass__"})
 # Decorators that turn a class-body def into an attribute read, not a call.
 _PROPERTY_DECORATORS: frozenset[str] = frozenset({"property", "cached_property"})
 
@@ -224,26 +224,6 @@ def _deprecated_decorator_message(node: ast.AST) -> str | None:
             name = None
         if name in _DEPRECATED_DECORATORS:
             return _static_str(args[0]) if args else ""
-    return None
-
-
-def _class_warn_message(class_node: ast.ClassDef) -> str | None:
-    """Return a class's deprecation message if ``__init__`` / ``__init_subclass__``
-    directly emits a ``DeprecationWarning``, else ``None``.
-
-    Walks each such method body (so a ``warn`` nested in a guard ``if`` still
-    counts) but does **not** descend into other methods — the warn must belong to
-    construction/subclassing of *this* class for the attribution to be sound.
-    """
-    for item in class_node.body:
-        if (
-            isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
-            and item.name in _WARN_INIT_METHODS
-        ):
-            for sub in ast.walk(item):
-                message = _is_deprecation_warn_call(sub)
-                if message is not None:
-                    return message
     return None
 
 

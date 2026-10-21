@@ -29,6 +29,7 @@ from application_sdk.main import (
     _parse_all_component_yamls,
     _parse_workflow_max_timeout_hours,
     _run_worker_with_restart,
+    _start_post_drain_exit_deadline,
     main,
     parse_args,
     run_combined_mode,
@@ -425,10 +426,11 @@ class TestRunMain:
     def test_worker_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="worker", app_module="pkg:App")
         with mock.patch("application_sdk.main.asyncio.run") as mock_run:
-            with mock.patch("application_sdk.main.run_worker_mode"):
+            with mock.patch("application_sdk.main.run_worker_mode") as mode:
                 mock_run.side_effect = lambda coro: None
                 run_main(config)
                 mock_run.assert_called_once()
+                mode.assert_called_once_with(config, bound_post_drain_exit=True)
 
     def test_handler_mode_calls_run_handler_mode(self) -> None:
         config = AppConfig(mode="handler", app_module="pkg:App")
@@ -439,10 +441,11 @@ class TestRunMain:
     def test_combined_mode_calls_asyncio_run(self) -> None:
         config = AppConfig(mode="combined", app_module="pkg:App")
         with mock.patch("application_sdk.main.asyncio.run") as mock_run:
-            with mock.patch("application_sdk.main.run_combined_mode"):
+            with mock.patch("application_sdk.main.run_combined_mode") as mode:
                 mock_run.side_effect = lambda coro: None
                 run_main(config)
                 mock_run.assert_called_once()
+                mode.assert_called_once_with(config, bound_post_drain_exit=True)
 
 
 class TestParseArgs:
@@ -1551,6 +1554,34 @@ class TestRunWorkerMode:
         worker_patches["close_infra"].assert_awaited_once()
         worker_patches["health"].assert_called_once()
 
+    async def test_exit_deadline_starts_after_drain_before_teardown(
+        self, worker_patches, wait_patch
+    ) -> None:
+        order: list[str] = []
+        health_cm = worker_patches["health"].return_value
+        health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
+        worker_patches["close_infra"].side_effect = lambda: order.append("teardown")
+
+        with patch(
+            "application_sdk.main._start_post_drain_exit_deadline",
+            side_effect=lambda: order.append("deadline"),
+        ):
+            await run_worker_mode(
+                AppConfig(mode="worker", app_module="pkg:FakeApp"),
+                bound_post_drain_exit=True,
+            )
+
+        assert order == ["drained", "deadline", "teardown"]
+
+    async def test_exit_deadline_off_when_awaited_directly(
+        self, worker_patches, wait_patch
+    ) -> None:
+        """A caller that awaits the mode and keeps the process gets no timer."""
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            await run_worker_mode(AppConfig(mode="worker", app_module="pkg:FakeApp"))
+
+        start.assert_not_called()
+
     async def test_auth_enabled_acquires_token(
         self, worker_patches, auth_manager, wait_patch
     ) -> None:
@@ -1970,6 +2001,36 @@ class TestRunCombinedMode:
         assert kwargs["prometheus_bind_address"] == "127.0.0.1:9464"
         combined_patches["uvicorn_server"].serve.assert_awaited()
         combined_patches["close_infra"].assert_awaited_once()
+
+    async def test_exit_deadline_starts_after_drain_before_teardown(
+        self, combined_patches
+    ) -> None:
+        order: list[str] = []
+        health_cm = combined_patches["health"].return_value
+        health_cm.__aexit__.side_effect = lambda *_: order.append("drained")
+        combined_patches["close_infra"].side_effect = lambda: order.append("teardown")
+
+        with patch(
+            "application_sdk.main._start_post_drain_exit_deadline",
+            side_effect=lambda: order.append("deadline"),
+        ):
+            await run_combined_mode(
+                AppConfig(mode="combined", app_module="pkg:FakeApp"),
+                bound_post_drain_exit=True,
+            )
+
+        assert order == ["drained", "deadline", "teardown"]
+
+    async def test_exit_deadline_off_when_awaited_directly(
+        self, combined_patches
+    ) -> None:
+        """A caller that awaits the mode and keeps the process gets no timer."""
+        with patch("application_sdk.main._start_post_drain_exit_deadline") as start:
+            await run_combined_mode(
+                AppConfig(mode="combined", app_module="pkg:FakeApp")
+            )
+
+        start.assert_not_called()
 
     async def test_reuses_existing_infrastructure(self, combined_patches) -> None:
         """If infra is already set, _create_infrastructure must NOT be called."""
@@ -2999,6 +3060,64 @@ class _HungTeardownWorker:
             # What temporalio re-raises if its teardown ever does return.
             raise RuntimeError("Activity worker failed")
         return False
+
+
+class TestPostDrainExitDeadline:
+    """The bound on shutdown steps that run after the worker has drained."""
+
+    def test_expiry_exits_with_distinct_nonzero_code(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "1")
+        exited = threading.Event()
+        codes: list[int] = []
+
+        def exit_fn(code: int) -> None:
+            codes.append(code)
+            exited.set()
+
+        timer = _start_post_drain_exit_deadline(exit_fn=exit_fn)
+
+        assert timer is not None and timer.daemon
+        assert exited.wait(timeout=5)
+        assert codes == [3]
+
+    def test_expiry_exits_even_when_stderr_is_closed(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "1")
+        exited = threading.Event()
+        codes: list[int] = []
+
+        def exit_fn(code: int) -> None:
+            codes.append(code)
+            exited.set()
+
+        def closed_stderr(fd: int, data: bytes) -> int:
+            raise OSError(9, "Bad file descriptor")
+
+        monkeypatch.setattr("application_sdk.main.os.write", closed_stderr)
+        _start_post_drain_exit_deadline(exit_fn=exit_fn)
+
+        assert exited.wait(timeout=5)
+        assert codes == [3]
+
+    def test_non_positive_timeout_disables(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", "0")
+        assert _start_post_drain_exit_deadline(exit_fn=MagicMock()) is None
+
+    def test_default_bound_is_two_minutes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS", raising=False)
+        timer = _start_post_drain_exit_deadline(exit_fn=MagicMock())
+        try:
+            assert timer is not None and timer.interval == 120
+        finally:
+            assert timer is not None
+            timer.cancel()
 
 
 class TestFatalTeardownWatchdog:
