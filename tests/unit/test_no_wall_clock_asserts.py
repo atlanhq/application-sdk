@@ -24,6 +24,7 @@ named like one (``elapsed``, ``lag``, ``ticks``, ``gap``/``gaps``, ``took``).
 from __future__ import annotations
 
 import ast
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -42,15 +43,30 @@ _CLOCK_NAMES = frozenset({"monotonic", "monotonic_ns", "perf_counter"})
 #: Names that hold a timing however they were computed.
 _TIMING_NAMES = frozenset({"elapsed", "lag", "ticks", "gap", "gaps", "took"})
 
-#: Files whose remaining sites were kept deliberately, with the issue that kept
-#: them. The test fails if an entry finds nothing, so the list only ever shrinks.
-_KNOWN = {
+_CANCEL_UNWIND = 'assert elapsed < _PROMPT, f"loop blocked {elapsed:.2f}s on cancel"'
+
+#: Assertions kept deliberately, by file and exact source, with how many times
+#: each occurs and the issue that kept it. Matched exactly: one more copy, or a
+#: new assertion in the same file, is a finding; one fewer fails as stale, so
+#: the list only ever shrinks.
+_KNOWN: dict[tuple[str, str], tuple[int, str]] = {
     # Cancel-unwind upper bounds, widened to ``_PROMPT = 3.0`` against a 10s
     # self-release rather than made structural.
-    "clients/test_sql_client_cancellation.py": "FND-4234",
-    # Lower bounds (``>= 1``) that the budget was waited out; an upper bound is
-    # what measures load, so these were kept.
-    "common/test_restart_marker.py": "FND-4234",
+    ("clients/test_sql_client_cancellation.py", _CANCEL_UNWIND): (5, "FND-4234"),
+    (
+        "clients/test_sql_client_cancellation.py",
+        'assert ticks > before, "loop did not run other tasks after the cancel"',
+    ): (1, "FND-4234"),
+    # Lower bounds that the budget was waited out; an upper bound is what
+    # measures load, so these were kept.
+    (
+        "common/test_restart_marker.py",
+        'assert loop.time() - started >= 1, "returned before the budget was spent"',
+    ): (1, "FND-4234"),
+    (
+        "common/test_restart_marker.py",
+        'assert loop.time() - started >= 1, "a scheduled eviction must be waited for"',
+    ): (1, "FND-4234"),
 }
 
 _ORDERING = (ast.Lt, ast.LtE, ast.Gt, ast.GtE)
@@ -75,14 +91,24 @@ def _is_clock_call(node: ast.AST) -> bool:
     return isinstance(func, ast.Name) and func.id in _CLOCK_NAMES
 
 
-def _is_clock_delta(node: ast.AST) -> bool:
-    """``node`` contains a subtraction with a clock reading on one side."""
+def _reads_clock(node: ast.AST, clock_vars: set[str]) -> bool:
+    """``node`` contains a clock call, or a name holding a clock reading."""
+    return any(
+        _is_clock_call(n) or (isinstance(n, ast.Name) and n.id in clock_vars)
+        for n in ast.walk(node)
+    )
+
+
+def _is_clock_delta(node: ast.AST, clock_vars: set[str]) -> bool:
+    """``node`` contains a subtraction with a clock reading on one side.
+
+    The reading may be inline (``time.monotonic() - started``) or held in a
+    variable (``end - start`` after ``start = time.monotonic()``).
+    """
     return any(
         isinstance(sub, ast.BinOp)
         and isinstance(sub.op, ast.Sub)
-        and any(
-            _is_clock_call(n) for side in (sub.left, sub.right) for n in ast.walk(side)
-        )
+        and (_reads_clock(sub.left, clock_vars) or _reads_clock(sub.right, clock_vars))
         for sub in ast.walk(node)
     )
 
@@ -96,26 +122,50 @@ def _names_in(node: ast.AST) -> set[str]:
     return {sub.id for sub in ast.walk(node) if isinstance(sub, ast.Name)}
 
 
-def _delta_variables(tree: ast.AST) -> set[str]:
-    """Names assigned anywhere in the module from a clock delta."""
-    found: set[str] = set()
+def _assignments(tree: ast.AST) -> list[tuple[str, ast.AST]]:
+    """Every ``name = value`` in the module, as (name, value)."""
+    pairs: list[tuple[str, ast.AST]] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and _is_clock_delta(node.value):
-            found.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        if isinstance(node, ast.Assign):
+            pairs.extend(
+                (t.id, node.value) for t in node.targets if isinstance(t, ast.Name)
+            )
         elif (
             isinstance(node, ast.AnnAssign | ast.AugAssign)
             and node.value is not None
             and isinstance(node.target, ast.Name)
-            and _is_clock_delta(node.value)
         ):
-            found.add(node.target.id)
-    return found
+            pairs.append((node.target.id, node.value))
+    return pairs
+
+
+def _clock_variables(pairs: list[tuple[str, ast.AST]]) -> set[str]:
+    """Names holding a clock reading, followed through plain reassignment."""
+    found: set[str] = set()
+    while True:
+        more = {
+            name
+            for name, value in pairs
+            if name not in found and _reads_clock(value, found)
+        }
+        if not more:
+            return found
+        found |= more
+
+
+def _delta_variables(
+    pairs: list[tuple[str, ast.AST]], clock_vars: set[str]
+) -> set[str]:
+    """Names assigned from a clock delta."""
+    return {name for name, value in pairs if _is_clock_delta(value, clock_vars)}
 
 
 def _scan(path: Path, root: Path = _UNIT_ROOT) -> list[_Finding]:
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
-    suspects = _TIMING_NAMES | _delta_variables(tree)
+    pairs = _assignments(tree)
+    clock_vars = _clock_variables(pairs)
+    suspects = _TIMING_NAMES | _delta_variables(pairs, clock_vars)
     rel = path.relative_to(root).as_posix()
     findings = []
     for node in ast.walk(tree):
@@ -126,7 +176,7 @@ def _scan(path: Path, root: Path = _UNIT_ROOT) -> list[_Finding]:
                 continue
             if not any(isinstance(op, _ORDERING) for op in compare.ops):
                 continue
-            if _is_clock_delta(compare) or _names_in(compare) & suspects:
+            if _is_clock_delta(compare, clock_vars) or _names_in(compare) & suspects:
                 findings.append(
                     _Finding(
                         rel, node.lineno, ast.get_source_segment(source, node) or ""
@@ -146,9 +196,22 @@ def _test_modules() -> list[Path]:
     )
 
 
+@functools.cache
+def _findings_by_site() -> dict[tuple[str, str], list[_Finding]]:
+    """Every finding in the suite, by (file, source); scanned once per worker."""
+    sites: dict[tuple[str, str], list[_Finding]] = {}
+    for path in _test_modules():
+        for f in _scan(path):
+            sites.setdefault((f.path, f.source), []).append(f)
+    return sites
+
+
 def test_no_unit_test_asserts_on_elapsed_wall_clock_time() -> None:
     findings = [
-        f for path in _test_modules() for f in _scan(path) if f.path not in _KNOWN
+        f
+        for site, found in _findings_by_site().items()
+        if len(found) > _KNOWN.get(site, (0, ""))[0]
+        for f in found
     ]
     assert not findings, (
         "These assertions order a wall-clock timing, so they fail on a loaded "
@@ -157,12 +220,14 @@ def test_no_unit_test_asserts_on_elapsed_wall_clock_time() -> None:
     )
 
 
-@pytest.mark.parametrize("path", sorted(_KNOWN))
-def test_every_known_exemption_still_has_a_site(path: str) -> None:
-    """A stale entry would let a new site in that file through unseen."""
-    assert _scan(_UNIT_ROOT / path), (
-        f"tests/unit/{path} has no wall-clock assertion left; remove it from "
-        f"_KNOWN (kept by {_KNOWN[path]})"
+@pytest.mark.parametrize("site", sorted(_KNOWN), ids=lambda site: site[0])
+def test_every_known_exemption_still_matches_exactly(site: tuple[str, str]) -> None:
+    """A stale count would leave room for a new copy of the site to slip in."""
+    count, issue = _KNOWN[site]
+    found = len(_findings_by_site().get(site, []))
+    assert found == count, (
+        f"tests/unit/{site[0]} now has {found} of {site[1]!r}, not {count}; "
+        f"update _KNOWN (kept by {issue})"
     )
 
 
@@ -176,6 +241,9 @@ def test_every_known_exemption_still_has_a_site(path: str) -> None:
         "assert max(gaps) < 3.0",
         "assert ticks >= expected / 2",
         "start = monotonic()\nwork()\nassert monotonic() - start <= 0.5",
+        "start = time.monotonic()\nend = time.monotonic()\nassert end - start < 1",
+        "t0 = time.perf_counter()\nt1 = time.perf_counter()\nduration = t1 - t0\nassert duration < 1",
+        "begin = time.monotonic()\nstart = begin\nassert time.monotonic() - start < 1",
     ],
 )
 def test_the_scan_catches_each_shape(tmp_path: Path, snippet: str) -> None:

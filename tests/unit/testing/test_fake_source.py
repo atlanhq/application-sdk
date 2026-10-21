@@ -972,10 +972,22 @@ class TestThreadTeardown:
             # waited on the handshake could not return inside the join. The
             # bound only decides how long that regression takes to fail; an
             # elapsed-time bar measured the runner instead (FND-4233).
-            stopper = threading.Thread(target=source.stop, daemon=True)
+            # join() swallows the target's exception, and a second stop() in
+            # the finally is a no-op once the first cleared the server, so the
+            # target records it.
+            raised: list[BaseException] = []
+
+            def _stop() -> None:
+                try:
+                    source.stop()
+                except BaseException as e:
+                    raised.append(e)
+
+            stopper = threading.Thread(target=_stop, daemon=True)
             stopper.start()
             stopper.join(30)
             assert not stopper.is_alive(), "stop() waited on a silent TLS peer"
+            assert raised == [], f"stop() raised: {raised!r}"
         finally:
             peer.close()
             source.stop()

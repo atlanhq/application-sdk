@@ -222,14 +222,25 @@ def test_redaction_is_linear_not_quadratic() -> None:
     fail. An earlier version compared the timings of two input sizes; at
     milliseconds a preemption swung the ratio past its bar on a loaded runner
     (FND-4233).
-    """
-    import threading
 
-    text = "warehouse://" + "a" * 400_000
-    redactor = threading.Thread(target=redact_secrets, args=(text,), daemon=True)
-    redactor.start()
-    redactor.join(30)
-    assert not redactor.is_alive(), "redacting 400k characters looks superlinear"
+    It runs in a child process, which the timeout kills: a regression must not
+    leave a thread scanning for minutes in the worker that runs later tests.
+    The bound includes interpreter start-up, so it is generous.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "from application_sdk.errors.base import redact_secrets\n"
+        "redact_secrets('warehouse://' + 'a' * 400_000)\n"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, timeout=60
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("redacting 400k characters looks superlinear")
+    assert proc.returncode == 0, proc.stderr
 
 
 # ── the log is a SECOND sink, and it is not the response body ───────────────

@@ -3397,13 +3397,21 @@ class TestOtlpShutdownFlush:
         provider = mock.MagicMock()
         provider.force_flush.side_effect = lambda **_: release.wait()
         adapter.logger_provider = provider
-        flusher = threading.Thread(
-            target=la.flush_otlp_logs, kwargs={"timeout_millis": 200}, daemon=True
-        )
+        # join() swallows the target's exception, so the target records it.
+        raised: list[BaseException] = []
+
+        def _flush() -> None:
+            try:
+                la.flush_otlp_logs(timeout_millis=200)
+            except BaseException as e:
+                raised.append(e)
+
+        flusher = threading.Thread(target=_flush, daemon=True)
         try:
             flusher.start()
             flusher.join(30)
             assert not flusher.is_alive(), "flush waited on a blocked force_flush"
+            assert raised == [], f"flush raised instead of returning: {raised!r}"
             provider.force_flush.assert_called_once_with(timeout_millis=200)
         finally:
             release.set()
