@@ -815,7 +815,7 @@ def test_retries_past_a_502_and_succeeds(monkeypatch):
 
     assert result == {"data": {"ok": True}}
     assert post.calls == 3
-    assert slept == [1.0, 2.0]  # exponential, and it really did back off
+    assert slept == [15.0, 30.0]  # exponential, and it really did back off
 
 
 def test_retry_gives_up_at_the_attempt_cap(monkeypatch):
@@ -1096,6 +1096,85 @@ def test_retries_a_truncated_response(monkeypatch):
 
     assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
     assert post.calls == 2
+
+
+class _Body:
+    """A urlopen response whose body is ``payload`` as JSON."""
+
+    def __init__(self, payload):
+        self.raw = json.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.raw
+
+
+# The 2026-10-21 16:32 run: HTTP 200, and the failure in the body (FND-4240).
+_SERVER_ERROR = {
+    "errors": [
+        {
+            "message": "Something went wrong while executing your query on "
+            "2026-10-21T16:34:12Z. Please include `0000:0000:0000000:0000000:"
+            "00000000` when reporting this issue."
+        }
+    ]
+}
+
+
+def test_retries_a_server_error_delivered_in_the_body(monkeypatch):
+    bodies = [_SERVER_ERROR, {"data": {"ok": True}}]
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Body(bodies.pop(0))
+    )
+    slept = []
+
+    assert rfs._post_graphql("tok", {}, sleep=slept.append) == {"data": {"ok": True}}
+    assert slept == [rfs._BACKOFF_BASE_SECONDS]
+
+
+def test_a_server_error_in_the_body_still_fails_at_the_attempt_cap(monkeypatch):
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Body(_SERVER_ERROR)
+    )
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "Something went wrong" in str(exc)
+
+
+def test_a_query_error_in_the_body_is_not_retried(monkeypatch):
+    # A field that does not exist fails identically every attempt; it reaches
+    # fetch_all_prs, which raises on it as before.
+    calls = []
+    query_error = {
+        "errors": [{"message": "Field 'nope' doesn't exist on type 'PullRequest'"}]
+    }
+
+    def urlopen(req, timeout=None):
+        calls.append(req)
+        return _Body(query_error)
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == query_error
+    assert len(calls) == 1
+
+
+def test_a_mixed_error_body_is_not_retried(monkeypatch):
+    # Only an all-server-error body is GitHub's fault; one query error in the
+    # list means the query is wrong too.
+    mixed = {
+        "errors": [*_SERVER_ERROR["errors"], {"message": "Field 'nope' doesn't exist"}]
+    }
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Body(mixed)
+    )
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == mixed
 
 
 def test_a_successful_first_attempt_never_sleeps(monkeypatch):
