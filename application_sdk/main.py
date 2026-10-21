@@ -931,8 +931,8 @@ async def _flush_observability() -> None:
     # path is still up, and there is grace-period budget left. ``flush_all`` only
     # drains the object-store buffer; the OTLP BatchLogRecordProcessor queue is
     # separate. ``atexit.register(shutdown_otlp_logs)`` remains the last-resort
-    # backstop (interpreter exit), not the primary channel. ``force_flush`` is
-    # synchronous and blocking (up to timeout_millis), so offload it to a thread:
+    # backstop (interpreter exit), not the primary channel. ``flush_otlp_logs``
+    # blocks (up to its own timeout bound), so offload it to a thread:
     # this coroutine is also reached via ``loop.create_task`` from
     # ``_loop_exception_handler`` with the loop still live, where a bare blocking
     # call would stall it. Do NOT call ``shutdown_otlp_logs`` here — its one-shot
