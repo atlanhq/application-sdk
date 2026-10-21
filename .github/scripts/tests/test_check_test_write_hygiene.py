@@ -87,8 +87,23 @@ def test_a_write_into_the_checkout_fails(
         target.write_text("{}", encoding="utf-8")
 
     assert _round_trip(repo, write) == 1
-    out = capsys.readouterr().out
-    assert relative.split("/")[0] in out
+    assert relative in capsys.readouterr().out
+
+
+@needs_git
+@pytest.mark.parametrize("root", ["local", ".hypothesis"])
+def test_a_write_under_an_ignored_dir_that_already_existed_fails(
+    repo: Path, root: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Collapsed, git would print ``!! local/`` both before and after."""
+    (repo / root / "old").mkdir(parents=True)
+    (repo / root / "old" / "seed.json").write_text("{}", encoding="utf-8")
+
+    def write(root_dir: Path) -> None:
+        (root_dir / root / "old" / "new.json").write_text("{}", encoding="utf-8")
+
+    assert _round_trip(repo, write) == 1
+    assert f"{root}/old/new.json" in capsys.readouterr().out
 
 
 @needs_git
@@ -100,7 +115,7 @@ def test_a_modified_tracked_file_fails(repo: Path) -> None:
 
 
 @needs_git
-def test_pytest_outputs_and_writes_inside_existing_ignored_dirs_pass(
+def test_pytest_outputs_and_bytecode_pass(
     repo: Path,
 ) -> None:
     def write(root: Path) -> None:
@@ -111,7 +126,7 @@ def test_pytest_outputs_and_writes_inside_existing_ignored_dirs_pass(
             "htmlcov/index.html",
             ".pytest_cache/v/cache/nodeids",
             "pkg/__pycache__/mod.cpython-312.pyc",
-            ".venv/lib/new.py",
+            ".venv/lib/site-packages/pkg/__pycache__/mod.cpython-312.pyc",
         ):
             target = root / relative
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -130,6 +145,19 @@ def test_git_failure_fails_the_check(tmp_path: Path) -> None:
 
     with pytest.raises(subprocess.CalledProcessError):
         hygiene.check(snap, status=broken)
+
+
+def test_a_long_leak_list_is_truncated(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    snap = tmp_path / "snapshot.txt"
+    snap.write_text("", encoding="utf-8")
+    leaked = "".join(f"!! local/f{i}.json\0" for i in range(hygiene.REPORT_LIMIT + 3))
+
+    assert hygiene.check(snap, status=lambda: leaked) == 1
+    out = capsys.readouterr().out
+    assert out.count("!! local/") == hygiene.REPORT_LIMIT
+    assert "... and 3 more" in out
 
 
 def test_entries_keep_their_status_code() -> None:

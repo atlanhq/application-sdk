@@ -12,9 +12,13 @@ stays clean while it happens. This compares ``git status --porcelain
     pytest ...
     python3 .github/scripts/check_test_write_hygiene.py check "$SNAPSHOT"
 
-Untracked and ignored directories are reported collapsed (``local/``), so a
-new directory is one entry and nothing inside one that already existed — the
-virtualenv, say — is listed. A tracked file a test modified shows up too.
+Every untracked and ignored *file* is listed (``--untracked-files=all``), not
+the collapsed directory git shows by default: collapsed, a ``local/`` that
+already existed at snapshot time reads ``!! local/`` before and after, and
+anything a test adds beneath it goes unseen. That lists the virtualenv too —
+tens of thousands of entries, under a second — which is the price of seeing a
+file land in a directory that was already there. A tracked file a test
+modified shows up as well.
 
 Only what pytest itself is asked to produce is allowed: the coverage reports
 and bytecode caches. Anything else fails the check, naming the paths.
@@ -28,8 +32,13 @@ import sys
 from pathlib import Path
 from typing import Callable
 
-#: Paths the test step writes on purpose. Matched against the path git prints.
-ALLOWED_PATHS = frozenset({"coverage.xml", "htmlcov/", ".coverage", ".pytest_cache/"})
+#: Files the test step writes on purpose, matched against the path git prints.
+ALLOWED_PATHS = frozenset({"coverage.xml", ".coverage"})
+#: Directories it writes on purpose; anything beneath them is allowed.
+ALLOWED_DIRS = ("htmlcov/", ".pytest_cache/")
+
+#: How many leaked paths to print before summarising the rest.
+REPORT_LIMIT = 50
 
 Runner = Callable[[], str]
 
@@ -40,7 +49,14 @@ def _git_status() -> str:
     ``check=True``: a git failure must fail the step, not read as "no changes".
     """
     return subprocess.run(
-        ["git", "status", "--porcelain=v1", "-z", "--ignored"],
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--ignored",
+            "--untracked-files=all",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -64,7 +80,9 @@ def is_allowed(entry: str) -> bool:
     path = _path(entry)
     if path in ALLOWED_PATHS or path.startswith(".coverage."):
         return True
-    return path.rstrip("/").rsplit("/", 1)[-1] == "__pycache__"
+    if path.startswith(ALLOWED_DIRS):
+        return True
+    return "__pycache__" in path.split("/")[:-1]
 
 
 def new_entries(before: set[str], after: set[str]) -> list[str]:
@@ -87,8 +105,10 @@ def check(snapshot_file: Path, status: Runner = _git_status) -> int:
         "::error::Unit tests wrote into the checkout. Root these writes under "
         "tmp_path (see local_writes_stay_out_of_the_repo in tests/unit/conftest.py):"
     )
-    for entry in leaked:
+    for entry in leaked[:REPORT_LIMIT]:
         print(f"  {entry}")
+    if len(leaked) > REPORT_LIMIT:
+        print(f"  ... and {len(leaked) - REPORT_LIMIT} more")
     return 1
 
 
