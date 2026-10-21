@@ -195,6 +195,7 @@ constraint-dependencies = [
     "pyjwt>=2.12.0",             # CVE-2026-32597
     "simpleeval>=1.0.5",         # CVE-2026-32640
     "pyarrow>=23.0.1",           # CVE-2026-25087
+    "certifi>=2026.10.19",       # GHSA-6q48-6c7w-9gw2
 ]
 
 # Uncomment the following section in case you want to publish to testpypi
