@@ -46,6 +46,16 @@ def logs(monkeypatch):
     return recorder
 
 
+async def _until_logged(logs, level, *fragments) -> None:
+    """Return once the module has logged ``fragments`` at ``level``.
+
+    Bounded by the caller's ``wait_for``. Lets a test act at a known point in
+    the wait — parked, or several passes in — rather than after a guessed delay.
+    """
+    while not logs.says(level, *fragments):
+        await asyncio.sleep(0)
+
+
 @pytest.fixture
 def prompt_polling(monkeypatch):
     """Shrink the release-file poll so the wait's exits are testable in real time."""
@@ -166,14 +176,22 @@ async def test_a_restart_waits_out_the_budget_then_proceeds(
 
 
 async def test_the_wait_holds_until_something_ends_it(
-    marker_dir, monkeypatch, prompt_polling, told_to_wait
+    marker_dir, monkeypatch, prompt_polling, told_to_wait, logs
 ):
     """The point of the wait: with a long budget and nothing to release it, the
     worker is still not polling."""
     rm.check_and_update_the_marker()
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
+    # A heartbeat row on every pass, so the test can count passes the wait
+    # survived instead of sleeping and hoping some happened.
+    monkeypatch.setattr(rm, "HEARTBEAT_SECONDS", 0)
     task = asyncio.ensure_future(rm.wait_if_pod_restarted(asyncio.Event()))
-    await asyncio.sleep(0.1)
+
+    async def _passes(count: int) -> None:
+        while sum("still not polling" in text for _, text in logs.rows) < count:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_passes(3), timeout=5)
     assert not task.done(), "the wait returned without being released"
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -181,13 +199,16 @@ async def test_the_wait_holds_until_something_ends_it(
 
 
 async def test_shutdown_ends_the_wait(
-    marker_dir, monkeypatch, prompt_polling, told_to_wait
+    marker_dir, monkeypatch, prompt_polling, told_to_wait, logs
 ):
     rm.check_and_update_the_marker()
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     shutdown = asyncio.Event()
     task = asyncio.ensure_future(rm.wait_if_pod_restarted(shutdown))
-    await asyncio.sleep(0.05)
+    # Parked in the wait, so the shutdown below ends the wait itself.
+    await asyncio.wait_for(
+        _until_logged(logs, "warning", "not polling for up to"), timeout=5
+    )
     assert not task.done()
     shutdown.set()
     await asyncio.wait_for(task, timeout=5)
@@ -398,14 +419,16 @@ def parks(monkeypatch):
 
 
 async def test_a_park_that_gets_its_replacement_is_counted_as_such(
-    marker_dir, monkeypatch, told_to_wait, prompt_polling, parks
+    marker_dir, monkeypatch, told_to_wait, prompt_polling, parks, logs
 ):
     """Shutdown is the pod going away, which is the replacement arriving."""
     monkeypatch.setattr(rm, "DIRTY_RESTART_IDLE_MAX_SECONDS", 300)
     rm.check_and_update_the_marker()
     shutdown = asyncio.Event()
     task = asyncio.ensure_future(rm.wait_if_pod_restarted(shutdown))
-    await asyncio.sleep(0.05)
+    await asyncio.wait_for(
+        _until_logged(logs, "warning", "not polling for up to"), timeout=5
+    )
     shutdown.set()
     await asyncio.wait_for(task, timeout=5)
 

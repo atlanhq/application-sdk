@@ -85,7 +85,9 @@ def saturated_pool() -> Iterator[int]:
             future.result(_RELEASE_AFTER)
 
 
-async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly() -> None:
+async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     handle = CancelHandle()
     driver = _Driver(handle)
     task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
@@ -101,8 +103,12 @@ async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly() -> N
     assert driver.cancel_threads[0].startswith("sdk-cancel-")
 
     # A second request (a retry of the unwind, a second cancel) does not re-fire.
+    # request() hands an action to the cancel pool before it returns, so an
+    # empty spy afterwards means nothing can fire later — no wait needed.
+    submitted: list[object] = []
+    monkeypatch.setattr(offload, "_fire_cancel_action", submitted.append)
     handle.request()
-    await asyncio.sleep(0.05)
+    assert submitted == []
     assert len(driver.cancel_threads) == 1
 
 
@@ -172,9 +178,16 @@ async def test_unblocked_call_frees_its_pool_slot(saturated_pool: int) -> None:
     assert time.monotonic() - start < _PROMPT
 
 
-async def test_completed_call_never_fires_the_action() -> None:
+async def test_completed_call_never_fires_the_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     handle = CancelHandle()
     fired = threading.Event()
+    # Every fire goes through this hand-off, synchronously with the request
+    # or set() that causes it; nothing recorded by the time the call returns
+    # means nothing is queued to fire later either.
+    submitted: list[object] = []
+    monkeypatch.setattr(offload, "_fire_cancel_action", submitted.append)
 
     def _work() -> int:
         handle.set(fired.set)
@@ -182,7 +195,7 @@ async def test_completed_call_never_fires_the_action() -> None:
 
     assert await run_in_thread(handle.bind(_work)) == 42
     assert not handle.requested
-    await asyncio.sleep(0.05)
+    assert submitted == []
     assert not fired.is_set()
 
 

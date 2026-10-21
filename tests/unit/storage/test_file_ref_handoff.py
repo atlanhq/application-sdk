@@ -490,7 +490,15 @@ class TestInOrderHasher:
         with pytest.raises(asyncio.CancelledError):
             await waiter
         aborting = asyncio.ensure_future(hasher.abort())
-        await asyncio.sleep(0.05)
+
+        # abort() sets _stop and then awaits the feeder in the same step, so
+        # once _stop is set it is parked on the thread — checked from there,
+        # not after a guessed delay.
+        async def _parked() -> None:
+            while not hasher._stop:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(_parked(), 5)
         assert not aborting.done()  # still waiting for the thread
 
         release.set()
