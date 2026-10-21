@@ -1,7 +1,7 @@
 """P023 — BlockingCallInAsyncDef.
 
 Enforces "use ``await``, not a sync bridge or blocking lib" inside ``async def``
-code — the second half of the user's async-correctness ask.  Two patterns:
+code — the second half of the user's async-correctness ask.  Patterns:
 
 * **Event-loop re-entry bridge** — ``asyncio.run(...)`` or any
   ``*.run_until_complete(...)`` (incl. ``loop.run_until_complete`` /
@@ -52,14 +52,40 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   absent for that same reason: they have no ``load``/``loads`` split, so
   matching them by name would flag string parsing, not file work.
 
+* **Client and handle work** — the same client tracking as ``requests.Session()``
+  extended to the clients connector code actually holds: a sync
+  ``httpx.Client()``, a ``boto3`` client or resource (every operation —
+  boto3 generates them from service models, so only the no-I/O ones such as
+  ``generate_presigned_url`` are exempt), a handle from ``open()`` /
+  ``gzip.open()`` (its ``read`` / ``write``), a ``zipfile.ZipFile`` /
+  ``tarfile`` archive, a ``threading.Event`` / ``Thread`` wait, a
+  ``Future.result()`` from ``executor.submit``, a sqlalchemy engine or
+  connection ``execute``, and a DuckDB connection. Plus the module-level
+  calls: ``httpx.get`` / …, ``os.listdir`` / ``Path.iterdir``,
+  ``shutil.copyfile`` / ``copy`` / ``copy2``, ``gzip.compress`` /
+  ``decompress``, ``os.fsync``, ``concurrent.futures.wait``, ``duckdb.sql``.
+
+* **One hop into a sync helper** — a call from an ``async def`` to a sync
+  function this repo defines (a top-level function in the same module, a sync
+  method of the same class called through ``self``, or a function imported
+  from a module under the scanned root) is reported when that function's own
+  body makes a call this rule flags. Exactly one hop: a helper's helpers are
+  not followed, which keeps the rule linear in file size and the finding
+  pointed at a call the reader can see. A suppression inside the helper
+  counts, and passing the helper to ``run_in_thread`` is not a call.
+
+A wholesale-deprecated module (a top-level ``DeprecationWarning``, on the file
+or an enclosing package) is skipped: it is being removed, not fixed.
+
 Across that whole data-scale inventory, a call the source already marks as
 async is skipped: the direct operand of ``await``, and the iterable of an
 ``async for``.  An ``await``-ed ``path.read_text()`` is ``anyio.Path``, not
 ``pathlib.Path``; ``async for p in path.glob("*")`` is an async iterator.  The
 name alone cannot tell those apart, but the ``await`` / ``async for`` can.
-(The event-loop bridge and the legacy ``requests`` / ``time.sleep`` patterns
-are *not* skipped this way: awaiting them is meaningless, so an ``await`` there
-is a bug rather than a signal.)
+(The event-loop bridge, the ``requests`` / ``time.sleep`` patterns and a send
+on a tracked client are *not* skipped this way: the callee is already known to
+be sync, so the call blocks before ``await`` fails on its result — an
+``await`` there is a bug rather than a signal.)
 
 A ``lambda`` body is treated as a sync scope, exactly as a nested ``def`` is.
 Both are the offload shape this rule prescribes — the callable runs in a
@@ -70,14 +96,27 @@ Remediation is a restructure (await / run_in_thread), so findings route to resid
 
 The inventory below was assembled from an AST sweep of the connector fleet for
 blocking calls reachable from an ``async def`` without an offload hop — every
-pattern listed here had at least one real occurrence.
+pattern listed here had at least one real occurrence. The client/handle work
+and the helper hop came from the FND-3936 SDK audit, which found the
+name-only inventory missing most activity-path blocking sites.
 """
 
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
+from functools import cached_property
+from pathlib import Path
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    _parse_directives,
+    make_finding,
+    repo_module_file,
+    safe_read_text,
+)
+from conformance.suite.checks._deprecated_module import module_is_deprecated
+from conformance.suite.checks._deprecation_warn import _class_warn_message
 from conformance.suite.checks.orchestration._temporal_common import (
     collect_import_bindings,
 )
@@ -93,7 +132,7 @@ _BLOCKING_EXACT = frozenset({"time.sleep"})
 # Only the calls that send a request. Constructors (`requests.Session`,
 # `requests.adapters.HTTPAdapter`, `urllib.request.Request`, ...) do no I/O:
 # connections open lazily on the first send. Targets resolve against
-# `_module_bindings`, so `import requests.api` does not repeat the submodule.
+# `module_bindings`, so `import requests.api` does not repeat the submodule.
 _REQUESTS_VERBS = frozenset(
     {"get", "post", "put", "patch", "delete", "head", "options", "request"}
 )
@@ -103,27 +142,27 @@ _REQUESTS_VERB_TARGETS = frozenset(
     for verb in _REQUESTS_VERBS
 )
 _URLLIB_BLOCKING = frozenset({"urlopen", "urlretrieve"})
+# httpx's module-level helpers each build a throwaway sync Client and send.
+_HTTPX_VERB_TARGETS = frozenset(
+    f"httpx.{verb}" for verb in (*_REQUESTS_VERBS, "stream")
+)
 # A client whose construction does no I/O, and the methods that send on it.
 _SESSION_FACTORIES = frozenset({"Session", "session"})
 _OPENER_FACTORIES = frozenset({"build_opener", "OpenerDirector"})
-_CLIENT_SENDS = {
-    "session": _REQUESTS_VERBS | {"send"},
-    "opener": frozenset({"open"}),
-}
-_CLIENT_LABEL = {
-    "session": "requests.Session()",
-    "opener": "urllib.request.build_opener()",
-}
 
 
 def _is_blocking_network(target: str) -> bool:
-    return target in _REQUESTS_VERB_TARGETS or (
-        target.startswith("urllib.request.")
-        and target.rsplit(".", 1)[-1] in _URLLIB_BLOCKING
+    return (
+        target in _REQUESTS_VERB_TARGETS
+        or target in _HTTPX_VERB_TARGETS
+        or (
+            target.startswith("urllib.request.")
+            and target.rsplit(".", 1)[-1] in _URLLIB_BLOCKING
+        )
     )
 
 
-def _module_bindings(tree: ast.AST) -> dict[str, str]:
+def module_bindings(tree: ast.AST) -> dict[str, str]:
     """Import bindings with a plain ``import a.b`` bound the way Python binds it.
 
     The shared ``collect_import_bindings`` maps ``a`` to ``a.b``, so the call
@@ -145,11 +184,15 @@ def _module_bindings(tree: ast.AST) -> dict[str, str]:
 def _client_kind(target: str | None) -> str | None:
     if target is None:
         return None
+    if target in _CLIENT_FACTORIES:
+        return _CLIENT_FACTORIES[target]
     last = target.rsplit(".", 1)[-1]
     if target.startswith("requests.") and last in _SESSION_FACTORIES:
         return "session"
     if target.startswith("urllib.request.") and last in _OPENER_FACTORIES:
         return "opener"
+    if _safe_file_op(target) == "open":
+        return "file"
     return None
 
 
@@ -183,24 +226,74 @@ def _walk_same_class(node: ast.AST):
 # intentionally absent — see the module docstring.
 _TREE_FS_OPS = frozenset({"rmtree", "copytree", "move"})
 _TREE_FS_EXACT = frozenset(f"shutil.{op}" for op in _TREE_FS_OPS)
-# The SDK's own wrappers over the same calls, so routing through SafeFileOps is
-# not a way around this rule. SafeFileOps wraps only rmtree and move (its `copy`
-# is single-file, and there is no `copytree` wrapper) — so the wrapper set is a
-# strict subset of _TREE_FS_OPS. Patterns are anchored on the segment boundary
-# (a leading dot, or the bare name) so a look-alike class such as
+# The SDK's own wrappers over the calls this rule flags, so routing through
+# SafeFileOps is not a way around it. Each wrapped op maps to the inventory it
+# wraps: rmtree/move are tree-scale, copy is a whole-file copy (as
+# shutil.copyfile is), listdir is a traversal, and open hands back a file
+# handle. There is no `copytree` wrapper. Matching is anchored on the segment
+# boundary (a leading dot, or the bare name) so a look-alike class such as
 # `MySafeFileOps` does not match.
-_SAFE_FILE_OPS_WRAPPED = frozenset({"rmtree", "move"})
-_TREE_FS_WRAPPER_SUFFIXES = tuple(f".SafeFileOps.{op}" for op in _SAFE_FILE_OPS_WRAPPED)
-_TREE_FS_WRAPPER_BARE = frozenset(f"SafeFileOps.{op}" for op in _SAFE_FILE_OPS_WRAPPED)
+_SAFE_FILE_OPS = {
+    "rmtree": "tree",
+    "move": "tree",
+    "copy": "file",
+    "listdir": "traversal",
+    "open": "handle",
+}
+
+
+def _safe_file_op(target: str) -> str | None:
+    owner, _, op = target.rpartition(".")
+    if op in _SAFE_FILE_OPS and (
+        owner == "SafeFileOps" or owner.endswith(".SafeFileOps")
+    ):
+        return op
+    return None
+
 
 # Tree traversal: the sweep this module's docstring previously deferred. Cost
 # scales with the number of entries walked, so it belongs with the tree-scale
 # set rather than with single-inode ops.
-_TRAVERSAL_EXACT = frozenset({"os.walk", "os.scandir", "glob.glob", "glob.iglob"})
-# `Path.glob` / `Path.rglob` are called on a local, so `resolve_call_target`
-# yields `<local>.glob` -- matched on the trailing segment. `ast.walk` is the
-# reason a bare `walk` is NOT in this set: it is not I/O and it is everywhere.
-_TRAVERSAL_SUFFIXES = (".glob", ".rglob")
+_TRAVERSAL_EXACT = frozenset(
+    {"os.walk", "os.scandir", "os.listdir", "glob.glob", "glob.iglob"}
+)
+# `Path.glob` / `Path.rglob` / `Path.iterdir` are called on a local, so
+# `resolve_call_target` yields `<local>.glob` -- matched on the trailing
+# segment. `ast.walk` is the reason a bare `walk` is NOT in this set: it is not
+# I/O and it is everywhere.
+_TRAVERSAL_SUFFIXES = (".glob", ".rglob", ".iterdir")
+
+# Whole-file and whole-buffer work: one call copies, (de)compresses or archives
+# the entire input, so its cost scales with the input like a whole-file read.
+_FILE_SCALE_EXACT = frozenset(
+    {
+        "shutil.copyfile",
+        "shutil.copy",
+        "shutil.copy2",
+        "shutil.copyfileobj",
+        "shutil.make_archive",
+        "shutil.unpack_archive",
+    }
+    | {
+        f"{codec}.{fn}"
+        for codec in ("gzip", "bz2", "lzma")
+        for fn in ("compress", "decompress")
+    }
+)
+
+# Durability barriers: they return when the device acknowledges the write, which
+# on a busy or network volume is seconds, not a fixed syscall cost.
+_FSYNC_EXACT = frozenset({"os.fsync", "os.fdatasync", "os.sync"})
+
+# Waiting on another thread's work by module function. The method forms
+# (`Event.wait`, `Future.result`, `Thread.join`) are client sends below.
+_WAIT_EXACT = frozenset({"concurrent.futures.wait", "concurrent.futures.as_completed"})
+
+# DuckDB's module-level API runs on a process-default connection.
+_QUERY_EXACT = frozenset(
+    f"duckdb.{fn}"
+    for fn in ("sql", "query", "execute", "read_parquet", "read_csv", "read_json")
+)
 
 # Data-scale I/O: pandas/pyarrow readers and writers. Module-qualified, so the
 # import bindings resolve them (`import pandas as pd` -> `pandas.read_sql`).
@@ -271,15 +364,22 @@ _SUBPROCESS_EXACT = frozenset(
 )
 
 
+def is_client_factory(target: str) -> bool:
+    """True if *target* builds a client P023 tracks (P021 flags it in workflow context)."""
+    return target in _CLIENT_FACTORIES
+
+
 def is_data_scale_io(target: str) -> bool:
     """True if *target* is data-scale I/O (P023 outside workflow context, P021 inside)."""
     return (
         target in _TREE_FS_EXACT
-        or target.endswith(_TREE_FS_WRAPPER_SUFFIXES)
-        or target in _TREE_FS_WRAPPER_BARE
+        or _safe_file_op(target) not in (None, "open")
         or target in _SERIALIZE_EXACT
         or target in _DATA_IO_EXACT
         or target in _TRAVERSAL_EXACT
+        or target in _FILE_SCALE_EXACT
+        or target in _FSYNC_EXACT
+        or target in _QUERY_EXACT
         or target.endswith(_DATA_IO_SUFFIXES)
         or target.endswith(_WHOLE_FILE_SUFFIXES)
         or target.endswith(_TRAVERSAL_SUFFIXES)
@@ -333,29 +433,357 @@ _SUBPROCESS_HINT = (
     "Use asyncio.create_subprocess_exec/_shell and await it, or offload the "
     "blocking call with run_in_thread (application_sdk.execution.heartbeat)."
 )
+_FILE_SCALE_HINT = (
+    "This copies, (de)compresses or archives a whole file or buffer in one "
+    "blocking call, so it stalls the event loop in proportion to its size. "
+    "Offload it with run_in_thread (application_sdk.execution.heartbeat)."
+)
+_FSYNC_HINT = (
+    "fsync returns when the device acknowledges the write — seconds on a busy or "
+    "network volume — and blocks the event loop until then. Offload it with "
+    "run_in_thread (application_sdk.execution.heartbeat), together with the "
+    "write it makes durable."
+)
+_WAIT_HINT = (
+    "This parks the calling thread until another thread finishes — on the event "
+    "loop, that stops every coroutine, including a @task's auto-heartbeat. Use "
+    "the asyncio equivalent (asyncio.Event, await asyncio.wrap_future(future)), "
+    "or offload the wait with run_in_thread (application_sdk.execution.heartbeat)."
+)
+_QUERY_HINT = (
+    "This runs a query synchronously, so it blocks the event loop for as long as "
+    "the database takes. Offload the connect-and-query block with run_in_thread "
+    "(application_sdk.execution.heartbeat), or use the driver's async API."
+)
+
+
+@dataclass(frozen=True)
+class _Client:
+    """A client whose construction does no I/O, and the methods that do.
+
+    ``sends`` of ``None`` means every method except ``exempt`` and the
+    capitalised sub-resource constructors (``s3.Bucket(...)``): boto3 builds
+    its operations from service models at runtime, so they cannot be listed.
+    A send is reported even when awaited: the receiver is already known to be
+    sync, so the call blocks before ``await`` fails on its result.
+    """
+
+    label: str
+    hint: str
+    sends: frozenset[str] | None
+    exempt: frozenset[str] = frozenset()
+
+    def is_send(self, method: str) -> bool:
+        if self.sends is not None:
+            return method in self.sends
+        return method not in self.exempt and not method[:1].isupper()
+
+
+_HANDLE_IO = frozenset({"read", "readlines", "write", "writelines"})
+_CLIENTS = {
+    "session": _Client(
+        "requests.Session()", _BLOCKING_HINT, _REQUESTS_VERBS | {"send"}
+    ),
+    "opener": _Client(
+        "urllib.request.build_opener()",
+        _BLOCKING_HINT,
+        frozenset({"open"}),
+    ),
+    "httpx": _Client(
+        "httpx.Client()", _BLOCKING_HINT, _REQUESTS_VERBS | {"send", "stream"}
+    ),
+    "boto3": _Client(
+        "boto3.client()",
+        _BLOCKING_HINT,
+        None,
+        exempt=frozenset(
+            {
+                "can_paginate",
+                "close",
+                "generate_presigned_post",
+                "generate_presigned_url",
+                "get_paginator",
+                "get_waiter",
+            }
+        ),
+    ),
+    # Only hands out clients (see _DERIVED); sends nothing itself.
+    "boto3_session": _Client("boto3.Session()", _BLOCKING_HINT, frozenset()),
+    "file": _Client("open()", _WHOLE_FILE_HINT, _HANDLE_IO),
+    "archive": _Client(
+        "zipfile.ZipFile()",
+        _FILE_SCALE_HINT,
+        frozenset(
+            {"extractall", "extract", "write", "writestr", "read", "add", "testzip"}
+        ),
+    ),
+    "event": _Client("threading.Event()", _WAIT_HINT, frozenset({"wait", "wait_for"})),
+    "thread": _Client("threading.Thread()", _WAIT_HINT, frozenset({"join"})),
+    "executor": _Client("ThreadPoolExecutor()", _WAIT_HINT, frozenset()),
+    "future": _Client("Future", _WAIT_HINT, frozenset({"result", "exception"})),
+    "sa_engine": _Client("create_engine()", _QUERY_HINT, frozenset({"execute"})),
+    "sa_conn": _Client(
+        "Connection",
+        _QUERY_HINT,
+        frozenset({"execute", "exec_driver_sql", "scalar", "scalars", "commit"}),
+    ),
+    "duckdb": _Client(
+        "duckdb.connect()",
+        _QUERY_HINT,
+        frozenset(
+            {
+                "execute",
+                "executemany",
+                "sql",
+                "query",
+                "fetchall",
+                "fetchone",
+                "fetchmany",
+                "fetchdf",
+                "fetch_df",
+                "df",
+                "arrow",
+                "fetch_arrow_table",
+                "pl",
+                "read_parquet",
+                "read_csv",
+                "read_json",
+            }
+        ),
+    ),
+}
+# Factories matched by name, on an exact resolved target. Handle *methods* —
+# `path.open()` on a pathlib.Path (the async upload path in
+# application_sdk/storage/ops.py reads through one), fsspec's `fs.open()` — are
+# called on a local whose type the AST cannot see, so they cannot be keyed
+# here; see _HANDLE_METHODS below.
+_CLIENT_FACTORIES = {
+    "httpx.Client": "httpx",
+    "boto3.client": "boto3",
+    "boto3.resource": "boto3",
+    "boto3.Session": "boto3_session",
+    "boto3.session.Session": "boto3_session",
+    # boto3's own engine: `get_session().create_client("s3")` is the same
+    # client boto3.client() returns.
+    "botocore.session.get_session": "boto3_session",
+    "botocore.session.Session": "boto3_session",
+    "open": "file",
+    "io.open": "file",
+    "codecs.open": "file",
+    "gzip.open": "file",
+    "bz2.open": "file",
+    "lzma.open": "file",
+    "zipfile.ZipFile": "archive",
+    "tarfile.open": "archive",
+    "tarfile.TarFile": "archive",
+    "threading.Event": "event",
+    "threading.Condition": "event",
+    "threading.Barrier": "event",
+    "threading.Thread": "thread",
+    "concurrent.futures.ThreadPoolExecutor": "executor",
+    "concurrent.futures.ProcessPoolExecutor": "executor",
+    "asyncio.run_coroutine_threadsafe": "future",
+    "sqlalchemy.create_engine": "sa_engine",
+    "sqlalchemy.engine.create_engine": "sa_engine",
+    "duckdb.connect": "duckdb",
+}
+# A method that hands back another client rather than doing the I/O itself.
+# Not a send: `engine.connect()` pairs with the `execute` that follows it, and
+# reporting both would double-count one block.
+_DERIVED = {
+    ("boto3_session", "client"): "boto3",
+    ("boto3_session", "resource"): "boto3",
+    ("boto3_session", "create_client"): "boto3",
+    ("executor", "submit"): "future",
+    ("sa_engine", "connect"): "sa_conn",
+    ("sa_engine", "begin"): "sa_conn",
+}
+_PATH_CONSTRUCTORS = frozenset({"pathlib.Path", "pathlib.PurePath"})
+# Methods that hand back a sync file handle, on a receiver that is not itself a
+# tracked client: `path.open("rb")` (pathlib.Path.open), `Path(p).open()`,
+# fsspec's `fs.open(...)`. An `.open` on a tracked client is decided by that
+# client instead (a urllib opener's `open` is its send), and `self.open` is the
+# class's own method. See Visitor._client_call.
+_HANDLE_METHODS = frozenset({"open"})
+
+
+@dataclass
+class _Module:
+    """What a visitor needs to scan one source file."""
+
+    filename: str
+    tree: ast.Module
+    directives: dict[int, _IgnoreDirective]
+    bindings: dict[str, str]
+    path: Path | None
+
+    @classmethod
+    def of(
+        cls,
+        tree: ast.Module,
+        filename: str,
+        directives: dict[int, _IgnoreDirective],
+        path: Path | None,
+    ) -> _Module:
+        return cls(filename, tree, directives, module_bindings(tree), path)
+
+    @cached_property
+    def functions(self) -> dict[str, ast.FunctionDef | ast.AsyncFunctionDef]:
+        return {
+            node.name: node
+            for node in self.tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+    @cached_property
+    def imports(self) -> dict[str, ast.ImportFrom]:
+        return {
+            alias.asname or alias.name: node
+            for node in self.tree.body
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+
+
+@dataclass(frozen=True)
+class _Reached:
+    """The first unsuppressed call a sync helper's body makes that P023 flags."""
+
+    label: str
+    hint: str
+    filename: str
+    line: int
+
+
+class _Helpers:
+    """One-hop helper resolution, shared by every visitor of one scan."""
+
+    def __init__(self, module: _Module, root: Path | None) -> None:
+        self._module = module
+        self._root = root
+        self._loaded: dict[Path, _Module | None] = {}
+        self._reached: dict[int, _Reached | None] = {}
+
+    def by_name(self, name: str) -> _Reached | None:
+        """A top-level function of this module, or one imported from the repo."""
+        function = self._module.functions.get(name)
+        if function is not None:
+            return self._reach(self._module, function, None)
+        node = self._module.imports.get(name)
+        if node is None:
+            return None
+        source = repo_module_file(
+            self._root, node.module, node.level, self._module.path
+        )
+        imported = self._load(source) if source is not None else None
+        if imported is None:
+            return None
+        original = next(
+            alias.name for alias in node.names if (alias.asname or alias.name) == name
+        )
+        function = imported.functions.get(original)
+        return self._reach(imported, function, None) if function is not None else None
+
+    def by_method(self, cls: ast.ClassDef, name: str) -> _Reached | None:
+        """A method of *cls* called through ``self``."""
+        function = next(
+            (
+                node
+                for node in cls.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == name
+            ),
+            None,
+        )
+        return (
+            self._reach(self._module, function, cls) if function is not None else None
+        )
+
+    def _load(self, source: Path) -> _Module | None:
+        if source not in self._loaded:
+            text = safe_read_text(source)
+            module: _Module | None = None
+            if text is not None:
+                try:
+                    tree = ast.parse(text, filename=str(source))
+                except SyntaxError:
+                    tree = None
+                # A helper in a deprecated module is being removed, not fixed —
+                # the same skip the module gets when it is scanned itself.
+                if tree is not None and not module_is_deprecated(
+                    tree, path=source, root=self._root
+                ):
+                    root = self._root.resolve() if self._root is not None else None
+                    rel = source.relative_to(root) if root is not None else source
+                    module = _Module.of(
+                        tree, rel.as_posix(), _parse_directives(text), source
+                    )
+            self._loaded[source] = module
+        return self._loaded[source]
+
+    def _reach(
+        self,
+        module: _Module,
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+        cls: ast.ClassDef | None,
+    ) -> _Reached | None:
+        # An async helper is not a hop: calling it un-awaited runs nothing, and
+        # its own body is scanned as an async def where it is defined.
+        if isinstance(function, ast.AsyncFunctionDef):
+            return None
+        if id(function) not in self._reached:
+            # No `helpers`: the scan of a helper never follows a further hop.
+            visitor = _Visitor(module, frozenset(), helpers=None)
+            visitor.scan_helper(function, cls)
+            self._reached[id(function)] = next(
+                (
+                    _Reached(label, hint, module.filename, finding.line)
+                    for finding, label, hint in visitor.hits
+                    if not finding.suppressed
+                ),
+                None,
+            )
+        return self._reached[id(function)]
 
 
 class _Visitor(ast.NodeVisitor):
     def __init__(
         self,
-        filename: str,
-        directives: dict[int, _IgnoreDirective],
-        bindings: dict[str, str],
+        module: _Module,
         workflow_ids: frozenset[int],
+        *,
+        helpers: _Helpers | None,
     ) -> None:
-        self.filename = filename
-        self.directives = directives
-        self.bindings = bindings
+        self.filename = module.filename
+        self.directives = module.directives
+        self.bindings = module.bindings
         self.workflow_ids = workflow_ids
+        self.helpers = helpers
         self._async_stack: list[bool] = []
         self._scopes: list[dict[str, str | None]] = []
         self._class_clients: list[dict[str, str]] = []
         self._class_floors: list[int] = []
+        self._class_nodes: list[ast.ClassDef] = []
         self._class_bodies: set[int] = set()
         self._comprehensions: set[int] = set()
         self._wf_depth = 0
         self._awaited: set[int] = set()
-        self.findings: list[Finding] = []
+        # Each finding with the label and hint it was raised for, so a helper
+        # scan can report what it reached without re-parsing the message.
+        self.hits: list[tuple[Finding, str, str]] = []
+
+    @property
+    def findings(self) -> list[Finding]:
+        return [finding for finding, _, _ in self.hits]
+
+    def scan_helper(self, function: ast.FunctionDef, cls: ast.ClassDef | None) -> None:
+        """Scan a sync helper's body as if it ran on the loop, which it does when
+        an ``async def`` calls it."""
+        if cls is not None:
+            self._enter_class(cls)
+        self._visit_func(function, is_async=True)
+        if cls is not None:
+            self._leave_class()
 
     def visit_Await(self, node: ast.Await) -> None:
         # An awaited call is an async API wearing a sync-looking name:
@@ -391,12 +819,19 @@ class _Visitor(ast.NodeVisitor):
         for condition in node.ifs:
             self.visit(condition)
 
-    # No `visit_AsyncWith`: nothing in the inventory is plausible as an async
-    # context expression. The idiom that would need one is
-    # `async with aiofiles.open(p)`, and `.open` is deliberately absent from
-    # _WHOLE_FILE_SUFFIXES (opening is a single syscall; it is the read that
-    # scales). A guard with no matchable witness can only be tested vacuously,
-    # so it is left out until an inventory entry earns it.
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        # `async with aiofiles.open(p) as fh` binds an async handle: it shadows
+        # any earlier `with open(p) as fh`, so `fh.read()` after it is not a
+        # sync file read. Nothing an `async with` yields is a tracked client.
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self.visit(item.optional_vars)
+                key = self._binding_key(item.optional_vars)
+                if self._scopes and key is not None:
+                    self._scopes[-1][key] = None
+        for stmt in node.body:
+            self.visit(stmt)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
         # A lambda body is a separate function scope that runs when the lambda
@@ -428,14 +863,27 @@ class _Visitor(ast.NodeVisitor):
         self._async_stack.pop()
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self._class_clients.append(self._self_clients(node))
-        self._class_floors.append(len(self._scopes))
+        # A class whose construction warns DeprecationWarning is on its removal
+        # path — the same marker the deprecated-symbol manifest reads — so its
+        # methods get no findings, exactly as a deprecated module gets none.
+        if _class_warn_message(node) is not None:
+            return
+        self._enter_class(node)
         body_scope: dict[str, str | None] = {}
         self._class_bodies.add(id(body_scope))
         self._scopes.append(body_scope)
         self.generic_visit(node)
         self._scopes.pop()
         self._class_bodies.discard(id(body_scope))
+        self._leave_class()
+
+    def _enter_class(self, node: ast.ClassDef) -> None:
+        self._class_clients.append(self._self_clients(node))
+        self._class_floors.append(len(self._scopes))
+        self._class_nodes.append(node)
+
+    def _leave_class(self) -> None:
+        self._class_nodes.pop()
         self._class_floors.pop()
         self._class_clients.pop()
 
@@ -515,9 +963,26 @@ class _Visitor(ast.NodeVisitor):
         self._visit_func(node, is_async=True)
 
     def _client_call(self, value: ast.expr | None) -> str | None:
+        """The client kind *value* builds: a factory, or a method that derives one."""
         if not isinstance(value, ast.Call):
             return None
-        return _client_kind(resolve_call_target(value.func, self.bindings))
+        target = resolve_call_target(value.func, self.bindings)
+        kind = _client_kind(target)
+        if kind is not None or not isinstance(value.func, ast.Attribute):
+            return kind
+        if target is not None:
+            receiver = self._receiver_kind(target.rpartition(".")[0])
+        else:
+            receiver = self._client_call(value.func.value)
+        if receiver:
+            return _DERIVED.get((receiver, value.func.attr))
+        # `path.open()` / `Path(p).open()` — pathlib's open, like fsspec's,
+        # hands back a sync file handle. An `.open` on a tracked client (a
+        # urllib opener's send, a zip member) was decided above; `self.open`
+        # is the class's own method.
+        if value.func.attr in _HANDLE_METHODS and target != f"self.{value.func.attr}":
+            return "file"
+        return None
 
     def _binding_key(self, target: ast.expr) -> str | None:
         if not isinstance(target, (ast.Name, ast.Attribute)):
@@ -574,10 +1039,13 @@ class _Visitor(ast.NodeVisitor):
             return self._class_clients[-1].get(receiver)
         return None
 
-    def _is_named_client_send(self, target: str) -> bool:
+    def _named_client_send(self, target: str) -> _Client | None:
         receiver, _, attr = target.rpartition(".")
+        if not receiver:
+            return None
         kind = self._receiver_kind(receiver)
-        return kind is not None and attr in _CLIENT_SENDS[kind]
+        client = _CLIENTS[kind] if kind is not None else None
+        return client if client is not None and client.is_send(attr) else None
 
     def _in_async(self) -> bool:
         return bool(self._async_stack) and self._async_stack[-1]
@@ -594,20 +1062,31 @@ class _Visitor(ast.NodeVisitor):
             return
         target = resolve_call_target(node.func, self.bindings)
         if target is None:
-            label = self._inline_client_send(node)
-            if self._wf_depth == 0 and label is not None:
-                self._add(node, label, _BLOCKING_HINT)
-            return
+            send = self._inline_client_send(node)
+            if send is not None:
+                label, client = send
+                if self._wf_depth == 0:
+                    self._add(node, label, client.hint)
+                return
+            # `Path(p).iterdir()` roots its chain in a call, so it never resolves;
+            # name the constructor so the pathlib suffixes below can match it.
+            target = self._inline_path_target(node)
+            if target is None:
+                return
         if target in _BRIDGE_EXACT:
             self._add(node, f"{target}()", _BRIDGE_HINT)
             return
+        client = self._named_client_send(target)
         # Blocking sync I/O — skip inside workflow context (P020/P021 own it).
         if self._wf_depth == 0 and (
-            target in _BLOCKING_EXACT
-            or _is_blocking_network(target)
-            or self._is_named_client_send(target)
+            target in _BLOCKING_EXACT or _is_blocking_network(target)
         ):
             self._add(node, f"{target}()", _BLOCKING_HINT)
+            return
+        # A send on a client already identified as sync. Not exempted when
+        # awaited: the call blocks before `await` fails on its result.
+        if self._wf_depth == 0 and client is not None:
+            self._add(node, f"{target}()", client.hint)
             return
         # Everything below is data-scale work, and all of it is also P021's
         # territory inside workflow context (file I/O belongs in a @task at
@@ -622,66 +1101,129 @@ class _Visitor(ast.NodeVisitor):
         # match, so the exclusion the docstring promises actually holds.
         if id(node) in self._awaited:
             return
+        hint = self._data_scale_hint(target)
+        if hint is not None:
+            self._add(node, f"{target}()", hint)
+            return
+        reached = self._helper_reach(node.func)
+        if reached is not None:
+            self._add(
+                node,
+                f"{target}()",
+                f"It is a sync helper that calls '{reached.label}' at "
+                f"{reached.filename}:{reached.line}. {reached.hint}",
+            )
+
+    def _data_scale_hint(self, target: str) -> str | None:
+        """The hint for *target* if it is in the data-scale inventory."""
+        safe_op = _safe_file_op(target)
         # Tree-scale filesystem work.
-        if (
-            target in _TREE_FS_EXACT
-            or target.endswith(_TREE_FS_WRAPPER_SUFFIXES)
-            or target in _TREE_FS_WRAPPER_BARE
-        ):
-            self._add(node, f"{target}()", _TREE_FS_HINT)
-            return
+        if target in _TREE_FS_EXACT or _SAFE_FILE_OPS.get(safe_op or "") == "tree":
+            return _TREE_FS_HINT
         if target in _SUBPROCESS_EXACT:
-            self._add(node, f"{target}()", _SUBPROCESS_HINT)
-            return
+            return _SUBPROCESS_HINT
         if target in _SERIALIZE_EXACT:
-            self._add(node, f"{target}()", _SERIALIZE_HINT)
-            return
+            return _SERIALIZE_HINT
         if target in _DATA_IO_EXACT:
-            self._add(node, f"{target}()", _DATA_IO_HINT)
-            return
+            return _DATA_IO_HINT
+        if target in _FILE_SCALE_EXACT or _SAFE_FILE_OPS.get(safe_op or "") == "file":
+            return _FILE_SCALE_HINT
+        if target in _FSYNC_EXACT:
+            return _FSYNC_HINT
+        if target in _WAIT_EXACT:
+            return _WAIT_HINT
+        if target in _QUERY_EXACT:
+            return _QUERY_HINT
         # Exact matches are checked first so `glob.glob` is not also caught by
         # the `.glob` suffix and reported twice.
-        if target in _TRAVERSAL_EXACT:
-            self._add(node, f"{target}()", _TRAVERSAL_HINT)
-            return
+        if (
+            target in _TRAVERSAL_EXACT
+            or _SAFE_FILE_OPS.get(safe_op or "") == "traversal"
+        ):
+            return _TRAVERSAL_HINT
         # Instance-method forms, matched on the trailing segment because the
         # receiver is a local (`df.to_parquet()`, `path.read_text()`).
         if target.endswith(_DATA_IO_SUFFIXES):
-            self._add(node, f"{target}()", _DATA_IO_HINT)
-            return
+            return _DATA_IO_HINT
         if target.endswith(_WHOLE_FILE_SUFFIXES):
-            self._add(node, f"{target}()", _WHOLE_FILE_HINT)
-            return
+            return _WHOLE_FILE_HINT
         if target.endswith(_TRAVERSAL_SUFFIXES):
-            self._add(node, f"{target}()", _TRAVERSAL_HINT)
+            return _TRAVERSAL_HINT
+        return None
 
-    def _inline_client_send(self, node: ast.Call) -> str | None:
+    def _helper_reach(self, func: ast.expr) -> _Reached | None:
+        """What a call to a repo-defined sync helper reaches, one hop deep.
+
+        Keyed on the call's syntax, not its resolved target: an imported
+        ``purge`` resolves to ``app.util.purge``, and the bare name is what
+        the module's imports map.
+        """
+        if self.helpers is None:
+            return None
+        if isinstance(func, ast.Name):
+            # A parameter or local of that name is not the module's function.
+            if any(func.id in scope for scope in self._scopes):
+                return None
+            return self.helpers.by_name(func.id)
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "self"
+            and self._class_nodes
+        ):
+            return self.helpers.by_method(self._class_nodes[-1], func.attr)
+        return None
+
+    def _inline_path_target(self, node: ast.Call) -> str | None:
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Call)):
+            return None
+        constructor = resolve_call_target(func.value.func, self.bindings)
+        if constructor not in _PATH_CONSTRUCTORS:
+            return None
+        return f"Path().{func.attr}"
+
+    def _inline_client_send(self, node: ast.Call) -> tuple[str, _Client] | None:
         func = node.func
         if not isinstance(func, ast.Attribute):
             return None
         kind = self._client_call(func.value)
-        if kind is None or func.attr not in _CLIENT_SENDS[kind]:
+        client = _CLIENTS[kind] if kind is not None else None
+        if client is None or not client.is_send(func.attr):
             return None
-        return f"{_CLIENT_LABEL[kind]}.{func.attr}()"
+        return f"{client.label}.{func.attr}()", client
 
     def _add(self, node: ast.Call, label: str, hint: str) -> None:
-        self.findings.append(
-            make_finding(
-                filename=self.filename,
-                rule_id=RULE_ID,
-                node=node,
-                message=f"Blocking call '{label}' in an async function. {hint}",
-                directives=self.directives,
-            )
+        finding = make_finding(
+            filename=self.filename,
+            rule_id=RULE_ID,
+            node=node,
+            message=f"Blocking call '{label}' in an async function. {hint}",
+            directives=self.directives,
         )
+        self.hits.append((finding, label, hint))
 
 
 def check_p023(
-    tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
+    tree: ast.AST,
+    filename: str,
+    directives: dict[int, _IgnoreDirective],
+    *,
+    path: Path | None = None,
+    root: Path | None = None,
 ) -> list[Finding]:
-    """Emit P023 findings for event-loop bridges and blocking sync I/O in async defs."""
-    bindings = _module_bindings(tree)
+    """Emit P023 findings for event-loop bridges and blocking sync I/O in async defs.
+
+    *path* and *root* let the helper hop follow a ``from … import`` into the
+    scanned repo, and let a deprecation marker on an enclosing package skip the
+    file. Without them, only the file itself is consulted.
+    """
+    if not isinstance(tree, ast.Module):
+        return []
+    if module_is_deprecated(tree, path=path, root=root):
+        return []
+    module = _Module.of(tree, filename, directives, path)
     workflow_ids = frozenset(id(n) for n in workflow_method_nodes(tree))
-    visitor = _Visitor(filename, directives, bindings, workflow_ids)
+    visitor = _Visitor(module, workflow_ids, helpers=_Helpers(module, root))
     visitor.visit(tree)
     return visitor.findings
