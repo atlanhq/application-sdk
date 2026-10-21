@@ -19,6 +19,7 @@ import pytest
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.errors import STORAGE_DISK_FULL, DiskFullError
+from application_sdk.storage import chunked as chunked_module
 from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.chunked import (
@@ -532,8 +533,20 @@ class TestTransferLockRegistry:
             task_a = asyncio.create_task(_download())
             await second_chunk_requested.wait()
             gets_before_b = len(gets)
-            task_b = asyncio.create_task(_download())
-            await asyncio.sleep(0.05)
+            # The destination lock task_a holds. Once task_b calls its acquire
+            # it is parked there until task_a lets go, so the check below runs
+            # at a known point instead of after a guessed delay.
+            lock = chunked_module._TRANSFER_LOCKS.lock(str(path))
+            real_acquire = lock.acquire
+            b_queued = asyncio.Event()
+
+            async def queued_acquire() -> bool:
+                b_queued.set()
+                return await real_acquire()
+
+            with patch.object(lock, "acquire", new=queued_acquire):
+                task_b = asyncio.create_task(_download())
+                await asyncio.wait_for(b_queued.wait(), timeout=5)
             assert len(gets) == gets_before_b, (
                 "second download reached the store while the first still "
                 "held the shared staging file"

@@ -1032,7 +1032,9 @@ class TestStopHeartbeatTask:
             return "completed"
 
         caller_task = asyncio.ensure_future(caller())
-        await asyncio.sleep(0.05)
+        # stop_heartbeat_task sets the event and goes straight into its bounded
+        # wait, so the cancel below lands in that wait, not before it starts.
+        await asyncio.wait_for(stop.wait(), timeout=5)
         caller_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await caller_task

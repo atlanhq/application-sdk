@@ -8,6 +8,7 @@ mocked.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import threading
 import time
@@ -27,6 +28,7 @@ from application_sdk.app.context import AppContext
 from application_sdk.app.task import task
 from application_sdk.common._listing import has_internal_component
 from application_sdk.common.incremental import helpers
+from application_sdk.common.incremental import marker as marker_module
 from application_sdk.common.incremental.incremental_errors import (
     CurrentStateManifestError,
 )
@@ -658,6 +660,24 @@ with warnings.catch_warnings():
             return len(rows)
 
 
+class _SteppingDatetime(datetime.datetime):
+    """A ``datetime`` whose ``now()`` moves one second per call.
+
+    The marker has one-second resolution, so two runs inside the same wall
+    second would write the same marker. Stepping the marker module's clock
+    makes every run's marker distinct without sleeping out the second.
+    """
+
+    _ticks = 0
+
+    @classmethod
+    def now(cls, tz: datetime.tzinfo | None = None) -> _SteppingDatetime:
+        cls._ticks += 1
+        start = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+        stepped = start + datetime.timedelta(seconds=cls._ticks)
+        return cls.fromtimestamp(stepped.timestamp(), tz)
+
+
 class TestTwoRunsEndToEnd:
     """Run 1 full; run 2 incremental with one table dropped and one added."""
 
@@ -666,6 +686,8 @@ class TestTwoRunsEndToEnd:
         self, tmp_path, local, monkeypatch, clean_app_registry, clean_task_registry
     ):
         monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path / "staging"))
+        monkeypatch.setattr(_SteppingDatetime, "_ticks", 0)
+        monkeypatch.setattr(marker_module, "datetime", _SteppingDatetime)
         monkeypatch.setenv("ATLAN_APPLICATION_NAME", APP)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -732,7 +754,6 @@ class TestTwoRunsEndToEnd:
         env.tables = {"KEEP": "NO CHANGE", "ADD": "NO CHANGE"}
         marker, _ = await fetch_marker_from_storage(CONN_QN, APP)
         assert marker == marker_after_run_1
-        await asyncio.sleep(1.1)  # the marker has one-second resolution
         second = await self._run(env, tmp_path, "run-2")
 
         # current-state holds exactly run 2's keys, plus the manifest.
@@ -785,7 +806,6 @@ class TestTwoRunsEndToEnd:
             await CurrentStateStore(PREFIX).probe()
 
         env.tables = {"KEEP": "NO CHANGE"}
-        await asyncio.sleep(1.1)
         second = await self._run(env, tmp_path, "run-2")
 
         # A full extraction: no previous state was read, so there is no diff
@@ -815,7 +835,6 @@ class TestTwoRunsEndToEnd:
         committed = await CurrentStateStore(PREFIX).probe()
 
         env.tables = {"KEEP": "NO CHANGE", "ADD": "NO CHANGE"}
-        await asyncio.sleep(1.1)
         real_put = store_module._put
 
         async def _fail_manifest(key, *args, **kwargs):
