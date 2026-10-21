@@ -26,6 +26,7 @@ import pytest
 from application_sdk.observability import traces_adaptor as tracer_mod
 from application_sdk.observability.models import TraceRecord
 from application_sdk.observability.traces_adaptor import AtlanTracesAdapter, get_traces
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _adapter_with_otel_disabled() -> AtlanTracesAdapter:
@@ -168,7 +169,8 @@ class TestStartAsyncioFlush:
         sync_periodic = mock.MagicMock(return_value=sentinel)
 
         with (
-            mock.patch.object(tracer_mod.asyncio, "run") as mock_run,
+            private_stdlib(tracer_mod, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run") as mock_run,
             mock.patch.object(adapter, "_periodic_flush", new=sync_periodic),
         ):
             adapter._start_asyncio_flush()

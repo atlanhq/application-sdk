@@ -4906,10 +4906,10 @@ class TestProvisionLocalVault:
         svc_module.DEPLOYMENT_NAME = restore["dep"]  # type: ignore[attr-defined]
         svc_module.LOCAL_ENVIRONMENT = restore["local"]  # type: ignore[attr-defined]
 
-    def test_happy_path_returns_200_with_credential_guid(self, tmp_path: Path) -> None:
+    def test_happy_path_returns_200_with_credential_guid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """POST full credential body returns 200 with credential_guid, writes secrets.json."""
-        import os
-
         # storage=None means objectstore save is a no-op (returns False)
         client, restore = self._make_local_vault_client(storage=None)
 
@@ -4923,12 +4923,8 @@ class TestProvisionLocalVault:
         }
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post("/workflows/v1/dev/local-vault", json=body)
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post("/workflows/v1/dev/local-vault", json=body)
 
             assert response.status_code == 200
             resp_body = response.json()
@@ -4970,9 +4966,10 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_sensitive_nonsensitive_split(self, tmp_path: Path) -> None:
+    def test_sensitive_nonsensitive_split(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Verify SENSITIVE_FIELDS go to secrets.json, everything else to object storage."""
-        import os
         from unittest.mock import MagicMock, patch
 
         mock_storage = MagicMock()  # non-None so objectstore save runs
@@ -5000,12 +4997,8 @@ class TestProvisionLocalVault:
                 "application_sdk.storage.ops.put_json",
                 side_effect=capture_put_json,
             ):
-                original_cwd = os.getcwd()
-                os.chdir(tmp_path)
-                try:
-                    response = client.post("/workflows/v1/dev/local-vault", json=body)
-                finally:
-                    os.chdir(original_cwd)
+                monkeypatch.chdir(tmp_path)
+                response = client.post("/workflows/v1/dev/local-vault", json=body)
 
             assert response.status_code == 200
             guid = response.json()["data"]["credential_guid"]
@@ -5036,21 +5029,17 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_auto_generates_uuid_hex(self, tmp_path: Path) -> None:
+    def test_auto_generates_uuid_hex(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Verify the returned guid is a valid 32-char hex string."""
-        import os
-
         client, restore = self._make_local_vault_client(storage=None)
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post(
-                    "/workflows/v1/dev/local-vault", json={"host": "example.com"}
-                )
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post(
+                "/workflows/v1/dev/local-vault", json={"host": "example.com"}
+            )
 
             assert response.status_code == 200
             guid = response.json()["data"]["credential_guid"]
@@ -5061,19 +5050,15 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_empty_body_succeeds(self, tmp_path: Path) -> None:
+    def test_empty_body_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Empty body should still work — empty secrets + empty config."""
-        import os
-
         client, restore = self._make_local_vault_client(storage=None)
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post("/workflows/v1/dev/local-vault", json={})
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post("/workflows/v1/dev/local-vault", json={})
 
             assert response.status_code == 200
             guid = response.json()["data"]["credential_guid"]
@@ -5087,22 +5072,18 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_no_storage_still_writes_secrets(self, tmp_path: Path) -> None:
+    def test_no_storage_still_writes_secrets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """When storage is None, secrets are written but objectstore save is a no-op."""
-        import os
-
         client, restore = self._make_local_vault_client(storage=None)
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post(
-                    "/workflows/v1/dev/local-vault",
-                    json={"username": "u", "host": "h"},
-                )
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post(
+                "/workflows/v1/dev/local-vault",
+                json={"username": "u", "host": "h"},
+            )
 
             # The endpoint still succeeds because _config_save_to_objectstore
             # returns False (no-op) when storage is None, but doesn't raise.

@@ -28,6 +28,7 @@ import pytest
 
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats import Reader, WriteMode, Writer
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # Concrete stubs so we can instantiate the abstract classes.
@@ -139,8 +140,9 @@ class TestReaderClose:
                 raise OSError("permission")
             return original_remove(path)
 
-        with patch(
-            "application_sdk.storage.formats.os.remove", side_effect=_flaky_remove
+        with (
+            private_stdlib("application_sdk.storage.formats", "os") as local_os,
+            patch.object(local_os, "remove", side_effect=_flaky_remove),
         ):
             await reader._cleanup_downloaded_files()
 

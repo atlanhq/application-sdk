@@ -11,21 +11,21 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import sys
 from pathlib import Path
 
 import pytest
 import yaml
 
 # Load the script as a module without forcing a package layout under .github.
+# Not registered in sys.modules: nothing looks the script up by name, and a
+# registration would outlive this file for the rest of the xdist worker.
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[2] / ".github" / "scripts" / "parse_atlan_yaml.py"
 )
 _spec = importlib.util.spec_from_file_location("parse_atlan_yaml", _SCRIPT_PATH)
-parse_atlan_yaml = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
-sys.modules["parse_atlan_yaml"] = parse_atlan_yaml
 assert _spec and _spec.loader
-_spec.loader.exec_module(parse_atlan_yaml)  # type: ignore[union-attr]
+parse_atlan_yaml = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(parse_atlan_yaml)
 
 AtlanYamlError = parse_atlan_yaml.AtlanYamlError
 

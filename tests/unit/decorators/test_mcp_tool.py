@@ -30,8 +30,9 @@ Key Test Areas:
 • Type safety and structure validation
 """
 
-import os
 from typing import Any, Dict, List, Optional
+
+import pytest
 
 from application_sdk.constants import MCP_METADATA_KEY
 from application_sdk.server.mcp.decorators import mcp_tool
@@ -403,39 +404,29 @@ class TestMCPToolDecorator:
         metadata = getattr(inner_func, MCP_METADATA_KEY)
         assert metadata.name == "nested_tool"
 
-    def test_mcp_metadata_key_constant(self):
+    def test_mcp_metadata_key_constant(self, monkeypatch: pytest.MonkeyPatch):
         """Test that MCP_METADATA_KEY is constant and not affected by environment variables."""
+        # Test that MCP_METADATA_KEY is a constant string
+        expected_key = "__atlan_application_sdk_mcp_metadata"
+        assert MCP_METADATA_KEY == expected_key
 
-        # Store original environment
-        original_env = os.environ.copy()
+        # Test that it doesn't change when environment variables change
+        monkeypatch.setenv("ENABLE_MCP", "true")
+        monkeypatch.setenv("APPLICATION_NAME", "test_app")
 
-        try:
-            # Test that MCP_METADATA_KEY is a constant string
-            expected_key = "__atlan_application_sdk_mcp_metadata"
-            assert MCP_METADATA_KEY == expected_key
+        # Re-import to ensure the constant is still the same
+        from application_sdk.constants import MCP_METADATA_KEY as MCP_METADATA_KEY_2
 
-            # Test that it doesn't change when environment variables change
-            os.environ["ENABLE_MCP"] = "true"
-            os.environ["APPLICATION_NAME"] = "test_app"
+        assert MCP_METADATA_KEY_2 == expected_key
+        assert MCP_METADATA_KEY_2 == MCP_METADATA_KEY
 
-            # Re-import to ensure the constant is still the same
-            from application_sdk.constants import MCP_METADATA_KEY as MCP_METADATA_KEY_2
+        # Test that the decorator still works with the constant key
+        @mcp_tool(name="test_constant_key")
+        def test_function() -> str:
+            """Test function for constant key."""
+            return "test"
 
-            assert MCP_METADATA_KEY_2 == expected_key
-            assert MCP_METADATA_KEY_2 == MCP_METADATA_KEY
-
-            # Test that the decorator still works with the constant key
-            @mcp_tool(name="test_constant_key")
-            def test_function() -> str:
-                """Test function for constant key."""
-                return "test"
-
-            # Verify the metadata is attached with the correct key
-            assert hasattr(test_function, MCP_METADATA_KEY)
-            metadata = getattr(test_function, MCP_METADATA_KEY)
-            assert metadata.name == "test_constant_key"
-
-        finally:
-            # Restore original environment
-            os.environ.clear()
-            os.environ.update(original_env)
+        # Verify the metadata is attached with the correct key
+        assert hasattr(test_function, MCP_METADATA_KEY)
+        metadata = getattr(test_function, MCP_METADATA_KEY)
+        assert metadata.name == "test_constant_key"

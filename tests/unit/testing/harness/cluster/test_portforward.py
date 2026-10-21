@@ -8,18 +8,22 @@ everything below the "one tunnel per session" divider is new behaviour.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
+from application_sdk.testing.harness.cluster import _portforward
 from application_sdk.testing.harness.cluster._portforward import (
     PortForward,
     _wait_for_port,
     kube_http_call,
     port_forward,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 # test_find_free_port_returns_integer lives in
 # tests/integration/testing/test_portforward.py (_find_free_port binds a real
@@ -28,6 +32,21 @@ from application_sdk.testing.harness.cluster._portforward import (
 _MODULE = "application_sdk.testing.harness.cluster._portforward"
 _STUB_PORT = f"{_MODULE}._find_free_port"
 _STUB_WAIT = f"{_MODULE}._wait_for_port"
+
+
+@pytest.fixture(autouse=True)
+def _private_asyncio() -> Iterator[None]:
+    """Give the transport its own ``asyncio`` so a patched ``open_connection`` or
+    ``create_subprocess_exec`` reaches nothing else on the worker."""
+    with private_stdlib(_portforward, "asyncio"):
+        yield
+
+
+def _local_asyncio() -> ModuleType:
+    """The transport's private ``asyncio`` copy, the one a test patches."""
+    local = _portforward.asyncio
+    assert local is not asyncio, "the _private_asyncio fixture is not active"
+    return local
 
 
 def _kubectl_proc() -> MagicMock:
@@ -46,7 +65,9 @@ async def test_wait_for_port_success():
     writer.close = MagicMock()
     writer.wait_closed = AsyncMock()
 
-    with patch("asyncio.open_connection", return_value=(reader, writer)):
+    with patch.object(
+        _local_asyncio(), "open_connection", return_value=(reader, writer)
+    ):
         # Should not raise
         await _wait_for_port(9999, timeout=1.0)
 
@@ -54,7 +75,9 @@ async def test_wait_for_port_success():
 @pytest.mark.asyncio
 async def test_wait_for_port_timeout():
     """_wait_for_port raises TimeoutError when port never opens."""
-    with patch("asyncio.open_connection", side_effect=ConnectionRefusedError):
+    with patch.object(
+        _local_asyncio(), "open_connection", side_effect=ConnectionRefusedError
+    ):
         with pytest.raises(TimeoutError):
             await _wait_for_port(9999, timeout=0.2)
 
@@ -69,7 +92,9 @@ async def test_kube_http_call_starts_port_forward():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=pf_proc
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
         patch(
             "httpx.AsyncClient.request",
@@ -102,7 +127,7 @@ async def test_kube_http_call_terminates_port_forward_on_success():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch.object(_local_asyncio(), "create_subprocess_exec", return_value=pf_proc),
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=AsyncMock(return_value=mock_response)),
     ):
@@ -118,7 +143,7 @@ async def test_kube_http_call_terminates_port_forward_on_error():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch.object(_local_asyncio(), "create_subprocess_exec", return_value=pf_proc),
         patch(_STUB_WAIT, new=AsyncMock()),
         patch(
             "httpx.AsyncClient.request",
@@ -149,7 +174,9 @@ async def test_one_tunnel_serves_a_whole_session():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=pf_proc
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=AsyncMock(return_value=mock_response)),
     ):
@@ -166,7 +193,7 @@ async def test_a_session_that_makes_no_call_opens_no_tunnel():
     """The tunnel opens on first use, so an unused session costs nothing."""
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec") as mock_exec,
+        patch.object(_local_asyncio(), "create_subprocess_exec") as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
     ):
         async with port_forward("ns", "svc", 8080):
@@ -187,7 +214,9 @@ async def test_a_transport_error_rebuilds_the_tunnel_and_re_attempts():
 
     with (
         patch(_STUB_PORT, side_effect=[54321, 54322]),
-        patch("asyncio.create_subprocess_exec", side_effect=procs) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", side_effect=procs
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
         patch(
             "httpx.AsyncClient.request",
@@ -211,8 +240,9 @@ async def test_two_consecutive_transport_errors_propagate():
     """Rebuilt and still failing is a Service that is genuinely unreachable."""
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch(
-            "asyncio.create_subprocess_exec",
+        patch.object(
+            _local_asyncio(),
+            "create_subprocess_exec",
             side_effect=lambda *a, **k: _kubectl_proc(),
         ),
         patch(_STUB_WAIT, new=AsyncMock()),
@@ -233,7 +263,9 @@ async def test_a_non_transport_failure_is_not_retried():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=pf_proc
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
         patch(
             "httpx.AsyncClient.request",
@@ -254,7 +286,7 @@ async def test_a_tunnel_that_never_opens_does_not_leak_the_process():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch.object(_local_asyncio(), "create_subprocess_exec", return_value=pf_proc),
         patch(_STUB_WAIT, new=AsyncMock(side_effect=TimeoutError("never opened"))),
         pytest.raises(TimeoutError),
     ):
@@ -272,7 +304,7 @@ async def test_a_kubectl_that_ignores_terminate_is_killed():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch.object(_local_asyncio(), "create_subprocess_exec", return_value=pf_proc),
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=AsyncMock(return_value=mock_response)),
     ):
@@ -302,7 +334,9 @@ async def test_the_tunnel_pins_the_kube_context_it_was_given():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=pf_proc
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=AsyncMock()),
     ):
@@ -321,7 +355,9 @@ async def test_no_context_named_means_no_context_flag():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=pf_proc
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=AsyncMock()),
     ):
@@ -351,7 +387,7 @@ async def test_concurrent_requests_open_exactly_one_tunnel():
 
     with (
         patch(_STUB_PORT, side_effect=[54321, 54322, 54323, 54324]),
-        patch("asyncio.create_subprocess_exec", new=_spawn),
+        patch.object(_local_asyncio(), "create_subprocess_exec", new=_spawn),
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=AsyncMock()),
     ):
@@ -383,7 +419,7 @@ async def test_a_request_timeout_override_reaches_the_client():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch.object(_local_asyncio(), "create_subprocess_exec", return_value=pf_proc),
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=request),
     ):
@@ -407,7 +443,7 @@ async def test_no_override_leaves_the_sessions_own_timeout_in_place():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch.object(_local_asyncio(), "create_subprocess_exec", return_value=pf_proc),
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=request),
     ):
@@ -432,7 +468,9 @@ async def test_the_address_opens_the_tunnel_and_names_its_near_end():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=pf_proc
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
     ):
         async with port_forward("ns", "svc", 7233) as session:
@@ -452,7 +490,9 @@ async def test_the_address_and_a_request_share_one_tunnel():
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=pf_proc
+        ) as mock_exec,
         patch(_STUB_WAIT, new=AsyncMock()),
         patch("httpx.AsyncClient.request", new=AsyncMock(return_value=mock_response)),
     ):
@@ -472,7 +512,7 @@ async def test_a_closed_session_reopens_on_the_next_address_call():
 
     with (
         patch(_STUB_PORT, side_effect=[54321, 54322]),
-        patch("asyncio.create_subprocess_exec", side_effect=procs),
+        patch.object(_local_asyncio(), "create_subprocess_exec", side_effect=procs),
         patch(_STUB_WAIT, new=AsyncMock()),
     ):
         async with port_forward("ns", "svc", 7233) as session:
@@ -489,7 +529,7 @@ async def test_an_address_on_a_tunnel_that_never_opens_does_not_leak_the_process
 
     with (
         patch(_STUB_PORT, return_value=54321),
-        patch("asyncio.create_subprocess_exec", return_value=pf_proc),
+        patch.object(_local_asyncio(), "create_subprocess_exec", return_value=pf_proc),
         patch(_STUB_WAIT, new=AsyncMock(side_effect=TimeoutError("never ready"))),
         pytest.raises(TimeoutError),
     ):
@@ -523,7 +563,9 @@ async def test_concurrent_first_calls_spawn_exactly_one_tunnel():
 
     with (
         patch(_STUB_PORT, side_effect=[54321, 54322, 54323, 54324]),
-        patch("asyncio.create_subprocess_exec", side_effect=procs) as mock_exec,
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", side_effect=procs
+        ) as mock_exec,
         patch(_STUB_WAIT, new=_yielding_wait),
         patch("httpx.AsyncClient.request", new=AsyncMock(return_value=mock_response)),
     ):
@@ -555,7 +597,7 @@ async def test_aclose_clears_both_fields_so_the_next_open_rebuilds():
 
     with (
         patch(_STUB_PORT, side_effect=[54321, 54322]),
-        patch("asyncio.create_subprocess_exec", side_effect=procs),
+        patch.object(_local_asyncio(), "create_subprocess_exec", side_effect=procs),
         patch(_STUB_WAIT, new=AsyncMock()),
     ):
         session = PortForward("ns", "svc", 7233)

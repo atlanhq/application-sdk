@@ -116,6 +116,8 @@ METADATA_PATH = f"{_API_PREFIX}/metadata"
 
 
 _HEALTHZ_PATH = "/v1.0/healthz"
+
+
 # How long to wait at startup for the Dapr sidecar's HTTP server to start
 # accepting connections. The old 10s was too short for cold starts (image
 # pull + daprd boot on a fresh CI runner routinely exceed it); when we
@@ -126,9 +128,11 @@ _HEALTHZ_PATH = "/v1.0/healthz"
 # connection race is over, and per-component readiness is covered by each call
 # site's retry_past_dapr_cold_start budget. Overridable via env for
 # pathologically slow (or fast) environments.
-_DEFAULT_SIDECAR_WAIT_TIMEOUT = float(
-    os.environ.get("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "60")
-)
+def _load_sidecar_wait_timeout() -> float:
+    return float(os.environ.get("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "60"))
+
+
+_DEFAULT_SIDECAR_WAIT_TIMEOUT = _load_sidecar_wait_timeout()
 _DEFAULT_SIDECAR_POLL_INTERVAL = 0.5
 
 

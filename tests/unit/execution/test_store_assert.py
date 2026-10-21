@@ -279,16 +279,10 @@ async def test_disabled_tenant_reads_nothing(monkeypatch) -> None:
 
 
 def test_gate_defaults_off(monkeypatch) -> None:
-    import importlib
-
     monkeypatch.delenv("ATLAN_STORE_ASSERT_ENABLED", raising=False)
-    try:
-        assert importlib.reload(constants).STORE_ASSERT_ENABLED is False
-        monkeypatch.setenv("ATLAN_STORE_ASSERT_ENABLED", "TRUE ")
-        assert importlib.reload(constants).STORE_ASSERT_ENABLED is True
-    finally:
-        monkeypatch.undo()
-        importlib.reload(constants)
+    assert constants._load_store_assert_enabled() is False
+    monkeypatch.setenv("ATLAN_STORE_ASSERT_ENABLED", "TRUE ")
+    assert constants._load_store_assert_enabled() is True
 
 
 @pytest.mark.usefixtures("enabled")

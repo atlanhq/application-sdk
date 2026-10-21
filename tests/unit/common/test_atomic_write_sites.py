@@ -29,20 +29,41 @@ which its test asserts explicitly rather than leaving as an omission.
 from __future__ import annotations
 
 import errno
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import DEFAULT, AsyncMock, patch
 
 import pandas as pd
 import pytest
 
+from application_sdk.common import atomic as atomic_mod
 from application_sdk.common.atomic import PARTIAL_DIRNAME
 from application_sdk.common.incremental.helpers import copy_directory_parallel
 from application_sdk.errors import DiskFullError
+from tests.unit.private_stdlib import private_stdlib
 
 
 def _enospc(*_args: Any, **_kwargs: Any) -> Any:
     raise OSError(errno.ENOSPC, "No space left on device")
+
+
+@contextmanager
+def _in_atomic(
+    stdlib: str, name: str, new: Any = DEFAULT, **kwargs: Any
+) -> Iterator[Any]:
+    """Patch ``<stdlib>.<name>`` as :mod:`application_sdk.common.atomic` sees it.
+
+    Every write under test reaches the filesystem through ``atomic``; a global
+    ``patch("os.fsync")`` would also fail the fsync of any thread an earlier
+    test left running on the worker.
+    """
+    with (
+        private_stdlib(atomic_mod, stdlib) as local,
+        patch.object(local, name, new, **kwargs) as patched,
+    ):
+        yield patched
 
 
 class _Usage:
@@ -83,7 +104,7 @@ class TestCarryForwardCopy:
             Path(dst).write_bytes(Path(src).read_bytes()[:184])
             _enospc()
 
-        with patch("application_sdk.common.atomic.shutil.copy2", _truncating_copy2):
+        with _in_atomic("shutil", "copy2", _truncating_copy2):
             with pytest.raises(DiskFullError) as caught:
                 copy_directory_parallel(source, destination)
 
@@ -107,11 +128,12 @@ class TestCarryForwardCopy:
         def _record(*args: Any, **kwargs: Any) -> Any:
             copied.append(args)
 
-        with patch(
-            "application_sdk.common.atomic.shutil.disk_usage",
+        with _in_atomic(
+            "shutil",
+            "disk_usage",
             return_value=_Usage(free=512),
         ):
-            with patch("application_sdk.common.atomic.shutil.copy2", _record):
+            with _in_atomic("shutil", "copy2", _record):
                 with pytest.raises(DiskFullError) as caught:
                     copy_directory_parallel(source, destination)
 
@@ -184,7 +206,7 @@ class TestDiffMetadataWrite:
 
         result = IncrementalDiffResult(is_incremental=True)
 
-        with patch("os.fsync", _enospc):
+        with _in_atomic("os", "fsync", _enospc):
             with pytest.raises(DiskFullError) as caught:
                 _write_metadata(tmp_path, result)
 
@@ -225,7 +247,7 @@ class TestWriterStatistics:
         writer = JsonFileWriter(path=str(tmp_path / "out"))
         writer.total_record_count = 4000
 
-        with patch("os.fsync", _enospc):
+        with _in_atomic("os", "fsync", _enospc):
             with pytest.raises(FormatStatisticsWriteError) as caught:
                 await writer._write_statistics()
 
@@ -250,7 +272,7 @@ class TestParquetChunkWrite:
         chunk = pd.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]})
         target = output / "chunk-0-part0.parquet"
 
-        with patch("os.fsync", _enospc):
+        with _in_atomic("os", "fsync", _enospc):
             with pytest.raises(DiskFullError) as caught:
                 await writer._write_chunk(chunk, str(target))
 
@@ -324,7 +346,7 @@ class TestLocalSidecarWrite:
         artifact = tmp_path / "data.parquet"
         artifact.write_bytes(b"parquet")
 
-        with patch("os.fsync", _enospc):
+        with _in_atomic("os", "fsync", _enospc):
             # Best-effort by contract: the caller continues without a sidecar.
             _write_local_sidecar(str(artifact), "a" * 64, None)
 
