@@ -715,6 +715,7 @@ def run(
             added=added,
             max_tokens=res.verify_max_tokens or cfg.limits.verify_max_tokens,
         )
+        res.calls = list(getattr(client, "calls", []))  # the check's call too
     res.new_findings = merge_new(state, fresh, round_no=round_no)
     res.unplaced = [f for f in res.new_findings if not f.line]
     res.spiral = spiral_paths(state, res.new_findings, round_no)
@@ -911,52 +912,60 @@ def _check_new_against_base(
     review, so its "before" is this PR's own previous commit: a round that puts
     base-branch behaviour back reads as a regression. Before such a finding is
     published (and blocks merge), it gets the verify call, with <at_base_branch>
-    and the moot rule. One call per round, only when there is a new blocking
-    finding; past VERIFY_BATCH, or with no verdict, findings publish as raised."""
+    and the moot rule. Only a round with a new blocking finding pays for it:
+    one call per VERIFY_BATCH findings. A finding no verdict came back for
+    publishes as raised, and the summary names it."""
     known = {f.id for f in state.findings}
     new = [f for f in fresh if f.id not in known and f.severity in BLOCKING]
     if not new:
         return fresh
-    batch = new[:VERIFY_BATCH]
-    with trace.group(f"6b · base-branch check of {len(batch)} new blocking finding(s)"):
-        got = _verify_batch(
-            client,
-            ws,
-            batch,
-            round_diff(changes, batch),
-            removed=removed,
-            released=released,
-            added=added,
-            max_tokens=max_tokens,
-            new=True,
-        )
-        if len(new) > len(batch):
-            trace.line(
-                f"{len(new) - len(batch)} past the first {VERIFY_BATCH} were not checked"
+    drop: set[str] = set()
+    moot: set[str] = set()
+    unchecked: dict[str, list[str]] = {}  # why -> ids that got no verdict
+    with trace.group(f"6b · base-branch check of {len(new)} new blocking finding(s)"):
+        for i in range(0, len(new), VERIFY_BATCH):
+            batch = new[i : i + VERIFY_BATCH]
+            got = _verify_batch(
+                client,
+                ws,
+                batch,
+                round_diff(changes, batch),
+                removed=removed,
+                released=released,
+                added=added,
+                max_tokens=max_tokens,
+                new=True,
             )
-        unchecked = got.cut_off or ([f.id for f in batch] if got.error else [])
-        if unchecked:
+            drop |= set(got.fixed)
+            moot |= set(got.moot)
             why = (
                 "the PR budget ran out"
                 if got.error == "budget"
+                else "the model call failed"
+                if got.error
                 else "the check spent its whole output budget"
                 if got.cut_off
-                else "the model call failed"
+                else "no verdict came back for it"
             )
-            res.notes.append(
-                f"New blocking finding(s) {', '.join(unchecked)} were published without "
-                f"the base-branch check: {why}."
-            )
-            trace.line(f"not checked ({why}): {', '.join(unchecked)}")
-        drop = set(got.fixed)
-        for f in batch:
+            # A finding the reply did not judge (an empty or partial reply, as
+            # much as a failed call) was not checked: it publishes as raised.
+            for f in batch:
+                if f.id not in got.judged:
+                    unchecked.setdefault(why, []).append(f.id)
+        for f in new:
             if f.id in drop:
-                how = "moot" if f.id in got.moot else "fixed"
+                how = "moot" if f.id in moot else "fixed"
                 trace.line(
                     f"dropped {f.id} {f.severity} {f.path}: judged {how} against the base branch"
                 )
-        res.new_dropped = [f.id for f in batch if f.id in drop]
-        if not drop:
+        for why, ids in unchecked.items():
+            res.notes.append(
+                f"New blocking finding(s) {', '.join(ids)} were published without "
+                f"the base-branch check: {why}."
+            )
+            trace.line(f"not checked ({why}): {', '.join(ids)}")
+        res.new_dropped = [f.id for f in new if f.id in drop]
+        if not drop and not unchecked:
             trace.line("every new blocking finding stands")
     return [f for f in fresh if f.id not in drop]
 
@@ -1587,6 +1596,8 @@ class Verified:
     moot: list[str] = field(default_factory=list)
     # Why no verdict came back at all ("budget" or the model error), "" when one did.
     error: str = ""
+    # Every id the reply gave a verdict for (fixed, moot or open).
+    judged: list[str] = field(default_factory=list)
 
 
 def _verify(
@@ -1625,6 +1636,8 @@ def _verify(
         out.fixed += got.fixed
         out.cut_off += got.cut_off
         out.moot += got.moot
+        out.judged += got.judged
+        out.error = out.error or got.error
     return out
 
 
@@ -1708,12 +1721,15 @@ def _verify_batch(
         )
     fixed: list[str] = []
     moot: list[str] = []
+    judged: list[str] = []
     by_id = {f.id: f for f in open_}
     concern_ids = {cid for cid, _ in concerns or []}
     for it in verdict_items(comp.tool_calls):
         verdict = it.get("status")
         iid, ok = str(it.get("id")), verdict in ("fixed", "moot")
         f = by_id.get(iid)
+        if f and verdict in ("fixed", "moot", "open"):
+            judged.append(f.id)
         if f and ok:
             f.status = "fixed"
             fixed.append(f.id)
@@ -1721,7 +1737,7 @@ def _verify_batch(
                 moot.append(f.id)
         elif iid in concern_ids and ok:
             fixed.append(iid)
-    return Verified(fixed=fixed, moot=moot)
+    return Verified(fixed=fixed, moot=moot, judged=judged)
 
 
 def verdict_items(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:

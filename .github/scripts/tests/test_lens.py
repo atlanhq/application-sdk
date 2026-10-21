@@ -5824,24 +5824,21 @@ def test_a_new_blocking_finding_that_stands_is_published(repo: Path):
     assert _new_check_request(script)
 
 
-def test_new_findings_publish_with_a_note_when_their_base_check_gets_no_verdict(
-    repo: Path,
-):
+def _check_new(repo: Path, transport, findings: list[Finding], cap: float = 1.0):
     ws, _ = _ws(repo)
-    f = Finding("application_sdk/storage/fetch.py", 4, "high", "bug", "t", "b", "x")
     res = RunResult("reviewed")
     client = Client(
         model="m",
         price=PRICE,
-        ledger=Ledger(cap_usd=1),
-        transport=Script(_cut_off_reply()),
+        ledger=Ledger(cap_usd=cap),
+        transport=transport,
+        max_retries=0,
     )
-
     kept = review_mod._check_new_against_base(
         client,
         ws,
         PRState(),
-        [f],
+        findings,
         res,
         changes=[],
         removed="",
@@ -5849,6 +5846,68 @@ def test_new_findings_publish_with_a_note_when_their_base_check_gets_no_verdict(
         added=review_mod.baseline.PRAdditions(),
         max_tokens=8000,
     )
+    return kept, res
+
+
+def _new_high(n: int = 0) -> Finding:
+    return Finding(
+        "application_sdk/storage/fetch.py", 4, "high", "bug", f"t{n}", "b", f"x{n}"
+    )
+
+
+@pytest.mark.parametrize(
+    "reply, cap, why",
+    [
+        (_cut_off_reply(), 1.0, "the check spent its whole output budget"),
+        (response(), 1.0, "no verdict came back for it"),  # stop, no tool call
+        (response([tool_call("verdicts", {"items": []})]), 1.0, "no verdict came back"),
+        (response(), 0.0, "the PR budget ran out"),  # BudgetExhausted before sending
+        ((400, {}, "bad request"), 1.0, "the model call failed"),  # LLMError
+    ],
+    ids=["cut-off", "empty-reply", "no-item", "budget", "llm-error"],
+)
+def test_a_new_finding_with_no_base_verdict_publishes_with_a_note(
+    repo: Path, reply, cap, why
+):
+    f = _new_high()
+    kept, res = _check_new(repo, Script(reply), [f], cap=cap)
 
     assert kept == [f] and res.new_dropped == []
-    assert f"{f.id} were published without the base-branch check" in res.notes[0]
+    [note] = res.notes
+    assert note.startswith(f"New blocking finding(s) {f.id} were published without")
+    assert why in note
+
+
+def test_every_new_blocking_finding_is_checked_past_one_batch(repo: Path):
+    """More than VERIFY_BATCH new findings: each batch gets its own call, so
+    none is published unchecked."""
+    found = [_new_high(i) for i in range(review_mod.VERIFY_BATCH + 1)]
+    last = found[-1]
+    script = Script(
+        response(
+            [
+                tool_call(
+                    "verdicts",
+                    {"items": [{"id": f.id, "status": "open"} for f in found[:-1]]},
+                )
+            ]
+        ),
+        response(
+            [tool_call("verdicts", {"items": [{"id": last.id, "status": "moot"}]})]
+        ),
+    )
+    kept, res = _check_new(repo, script, found)
+
+    assert len(script.requests) == 2
+    assert kept == found[:-1] and res.new_dropped == [last.id]
+    assert res.notes == []
+
+
+def test_the_base_check_call_is_in_the_run_report(repo: Path):
+    res, script, _ = _restoring_round_two(repo, "moot")
+    check = [
+        i
+        for i, r in enumerate(script.requests)
+        if 'new="true"' in r["messages"][1]["content"]
+    ]
+    assert check and len(res.calls) == len(script.requests)
