@@ -38,7 +38,15 @@ from application_sdk.handler.source_probes import (
 
 _HOST = "warehouse.customer-example.test"
 _PUBLIC = "203.0.113.10"  # TEST-NET-3: not reserved by ipaddress, never routed
-_FAST = NetworkProbeTimeouts(dns_seconds=0.2, tcp_seconds=0.2, tls_seconds=0.2)
+# Even the fake resolver hops through the probe's DNS thread pool, so a passing
+# probe must never have to beat a short bound on a loaded runner. Only the
+# step a test makes hang gets one: see ``_cut_off``.
+_GENEROUS = NetworkProbeTimeouts(dns_seconds=5, tcp_seconds=5, tls_seconds=5)
+
+
+def _cut_off(step: str) -> NetworkProbeTimeouts:
+    """Generous bounds, except a short one on the *step* a test makes hang."""
+    return _GENEROUS.model_copy(update={f"{step}_seconds": 0.2})
 
 
 def _resolves_to(*addresses: str) -> Callable[..., list[Any]]:
@@ -123,10 +131,12 @@ def connections(monkeypatch: pytest.MonkeyPatch) -> _Connections:
     return fake
 
 
-async def _probe(host: str = _HOST, **endpoint: Any) -> SourceProbeReport:
+async def _probe(
+    host: str = _HOST, *, timeouts: NetworkProbeTimeouts = _GENEROUS, **endpoint: Any
+) -> SourceProbeReport:
     endpoint.setdefault("port", 443)
     return await probe_source_network(
-        [SourceEndpoint(host=host, **endpoint)], timeouts=_FAST
+        [SourceEndpoint(host=host, **endpoint)], timeouts=timeouts
     )
 
 
@@ -227,7 +237,7 @@ async def test_hung_resolver_is_cut_off_at_the_dns_bound(
 
     monkeypatch.setattr(source_probes, "_getaddrinfo", hang)
     try:
-        report = await asyncio.wait_for(_probe(), timeout=2)
+        report = await asyncio.wait_for(_probe(timeouts=_cut_off("dns")), timeout=2)
     finally:
         release.set()
     assert _only_failure(report)[1] == "SOURCE_UNAVAILABLE_DNS"
@@ -313,7 +323,9 @@ async def test_tcp_failures_are_told_apart(
     network_error: str | None,
 ):
     connections.plain = error
-    report = await _probe()
+    report = await _probe(
+        timeouts=_cut_off("tcp") if isinstance(error, _Hang) else _GENEROUS
+    )
     name, got, category = _only_failure(report)
     assert (name, got, category) == (
         SOURCE_TCP_CHECK,
@@ -366,7 +378,8 @@ async def test_a_refusal_outranks_a_timeout_when_every_address_fails(
         _PUBLIC: _Hang(),
         _SECOND: ConnectionRefusedError(errno.ECONNREFUSED, "refused"),
     }
-    assert _only_failure(await _probe())[1] == "SOURCE_UNAVAILABLE_TCP_REFUSED"
+    report = await _probe(timeouts=_cut_off("tcp"))
+    assert _only_failure(report)[1] == "SOURCE_UNAVAILABLE_TCP_REFUSED"
 
 
 @pytest.mark.parametrize(
@@ -385,7 +398,9 @@ async def test_a_failed_reconnect_in_the_tls_probe_is_not_a_tls_precondition(
     # The source restarted between sourceTcp and sourceTls: no handshake ever
     # started, so this is reachability, retryable, not a certificate problem.
     connections.reconnect = error
-    report = await _probe()
+    report = await _probe(
+        timeouts=_cut_off("tls") if isinstance(error, _Hang) else _GENEROUS
+    )
     name, got, category = _only_failure(report)
     assert (name, got, category) == (
         SOURCE_TLS_CHECK,
@@ -429,7 +444,9 @@ async def test_tls_failures_are_told_apart(
     category: FailureCategory,
 ):
     connections.tls = error
-    report = await _probe()
+    report = await _probe(
+        timeouts=_cut_off("tls") if isinstance(error, _Hang) else _GENEROUS
+    )
     assert _only_failure(report) == (SOURCE_TLS_CHECK, code, category)
 
 
@@ -511,7 +528,7 @@ async def test_several_endpoints_are_labelled_and_independent(
             SourceEndpoint(host=_HOST, port=443, label="api"),
             SourceEndpoint(host="auth.example.test", port=443, label="oauth"),
         ],
-        timeouts=_FAST,
+        timeouts=_GENEROUS,
     )
     assert [(c.name, c.passed) for c in report.checks] == [
         ("sourceDns.api", True),
