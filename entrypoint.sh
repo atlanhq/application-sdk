@@ -172,7 +172,21 @@ uv run --no-sync python -m application_sdk.main "$@" &
 APP_PID=$!
 echo "[entrypoint] App started with PID ${APP_PID}"
 
-# Wait for the app to exit
+# Wait for the app to exit. A daprd that dies after the startup check (e.g. a
+# component init fatal) leaves the app running with nothing on the Dapr port,
+# and every Dapr call fails until the pod is replaced. Poll both PIDs (`wait -n`
+# is not POSIX sh) and exit non-zero when daprd goes first so Kubernetes
+# restarts the container with a fresh sidecar.
+while kill -0 "${APP_PID}" 2>/dev/null; do
+    if ! kill -0 "${DAPRD_PID}" 2>/dev/null; then
+        echo "[entrypoint] ERROR: daprd exited while the app was running; stopping the app so the container restarts" >&2
+        kill -TERM "${APP_PID}" 2>/dev/null || true
+        wait "${APP_PID}" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+done
+
 wait "${APP_PID}"
 EXIT_CODE=$?
 

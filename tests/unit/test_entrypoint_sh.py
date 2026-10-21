@@ -88,3 +88,35 @@ def test_refuses_internal_grpc_port_clash(tmp_path: Path, env: dict[str, str]) -
     assert result.returncode == 1
     assert "clashes with another daprd port" in result.stderr
     assert not args_file.exists(), "daprd must not start with a clashing port"
+
+
+def test_entrypoint_exits_when_the_sidecar_dies_after_startup(tmp_path: Path) -> None:
+    """daprd dying after the startup check must not leave the app running."""
+    app_signalled = tmp_path / "app-signalled"
+    (tmp_path / "daprd").write_text("#!/bin/sh\nsleep 1\nexit 1\n")
+    (tmp_path / "uv").write_text(
+        "#!/bin/sh\n"
+        f"trap 'touch \"{app_signalled}\"; exit 143' TERM\n"
+        "sleep 30 &\nwait\n"
+    )
+    for name in ("daprd", "uv"):
+        (tmp_path / name).chmod(0o755)
+
+    proc = subprocess.Popen(
+        ["bash", str(ENTRYPOINT)],
+        env={"PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        returncode = proc.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        returncode = None
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, 9)
+            proc.wait()
+
+    assert returncode not in (None, 0), "entrypoint kept running without its sidecar"
+    assert app_signalled.exists(), "the app was not told to stop"
