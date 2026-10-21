@@ -7,6 +7,31 @@
 - When a fixture stands in for a **generated artifact** (`app/generated/**`, `atlan.yaml`, a served API envelope), build it from a real one and say in a comment which repo it was read from. A fixture with the shape inverted still passes — for a reason unrelated to its claim — and it flatters the code under test, which is APP-TESTS-001's self-certifying PR arriving through the fixture rather than the assertion. FND-1667 shipped one: a credential template written as `{"id": ...}` with no `config`, where the toolkit emits `config` and no `id`. Nothing caught it until someone ran the selector against a real tree.
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
 
+## Timeouts a Passing Test Must Beat
+
+A healthy test must never have to *finish* inside a timeout that exists to prove
+the *failure* path. On a loaded 4-vCPU runner — Windows especially, where
+`Event.wait(0.001)` rounds to ~15.6 ms and thread-pool spin-up is slow — the
+success path misses a short bar and reads as a TIMEOUT, an unverifiable source,
+or a hang.
+
+- Any timeout a **passing** test must beat is **≥5s**; **≥30s** when it covers
+  subprocess or pool spin-up. This includes `pytest.mark.timeout`, the bound you
+  give `asyncio.wait_for`, and every budget or deadline handed to the code under
+  test.
+- Short timeouts are only for tests whose subject *is* the timeout, and only on
+  the step that hangs: `test_source_probes.py`'s `_cut_off("tcp")` keeps DNS and
+  TLS generous while cutting TCP short.
+- `pytest.mark.timeout` counts fixture setup too, and on Windows its thread
+  method calls `os._exit`, killing the whole xdist worker — a "worker crashed"
+  red with no FAILED line. Use it only as a hang guard (`timeout(30)`).
+- Prove "did not wait" or "did not block the loop" structurally, not with a
+  wall-clock upper bound: record the budget at the seam that would wait
+  (`test_restart_marker.py`'s `idle` fixture), or assert that a blocked call has
+  not finished when the loop observes it (`test_sql_client_cancellation.py`).
+  A lower bound (`elapsed >= budget`) is safe; an upper bound measures runner
+  load.
+
 ## Never Assert on Elapsed Wall-Clock Time
 
 `assert elapsed < 1.0`, `assert lag < 0.1`, `assert ticks >= n` measure the CI

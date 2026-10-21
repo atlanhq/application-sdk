@@ -127,7 +127,9 @@ class _RecordingHandler(DefaultHandler):
         return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
 
-def _gate(handler, *, mode: PreflightGateMode, budget: float = 0.3):
+def _gate(handler, *, mode: PreflightGateMode, budget: float = 5):
+    # A fast handler must never have to beat the budget on a loaded runner;
+    # only the overrun tests pass a short one, because the overrun is the subject.
     return build_preflight_gate_activity(
         handler, app_name="myapp", mode=mode, budget_seconds=budget
     )
@@ -288,7 +290,7 @@ class TestSourceUnverifiableAppliesMode:
 
     async def test_budget_overrun_is_reported_not_blocked_in_hard_mode(self) -> None:
         handler = _SlowHandler()
-        gate = _gate(handler, mode=PreflightGateMode.HARD)
+        gate = _gate(handler, mode=PreflightGateMode.HARD, budget=0.3)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
 
@@ -315,7 +317,7 @@ class TestSourceUnverifiableAppliesMode:
 
     async def test_budget_overrun_reports_and_proceeds_in_soft_mode(self) -> None:
         handler = _SlowHandler()
-        gate = _gate(handler, mode=PreflightGateMode.SOFT)
+        gate = _gate(handler, mode=PreflightGateMode.SOFT, budget=0.3)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
 
@@ -753,7 +755,7 @@ class TestVerdictOnAnyAttempt:
     ) -> None:
         # Still a verdict on attempt 1 (no retry marker), but TIMEOUT is one a
         # hard gate reports rather than blocks on (FND-3040).
-        gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD)
+        gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD, budget=0.3)
         with _non_final_attempt(), mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY

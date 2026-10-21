@@ -42,14 +42,14 @@ _CLOCK_NAMES = frozenset({"monotonic", "monotonic_ns", "perf_counter"})
 #: Names that hold a timing however they were computed.
 _TIMING_NAMES = frozenset({"elapsed", "lag", "ticks", "gap", "gaps", "took"})
 
-#: Files with sites another issue owns, each removed when that issue lands. The
-#: test fails if an entry finds nothing, so the list only ever shrinks.
+#: Files whose remaining sites were kept deliberately, with the issue that kept
+#: them. The test fails if an entry finds nothing, so the list only ever shrinks.
 _KNOWN = {
-    # The ``_PROMPT = 1.0`` cancel-unwind bounds; FND-4234 replaces them with
-    # event waits bounded by ``_RELEASE_AFTER``.
+    # Cancel-unwind upper bounds, widened to ``_PROMPT = 3.0`` against a 10s
+    # self-release rather than made structural.
     "clients/test_sql_client_cancellation.py": "FND-4234",
-    # Real-clock bounds around ``DIRTY_RESTART_IDLE_MAX_SECONDS``; FND-4234
-    # moves them onto an injected clock and sleep.
+    # Lower bounds (``>= 1``) that the budget was waited out; an upper bound is
+    # what measures load, so these were kept.
     "common/test_restart_marker.py": "FND-4234",
 }
 
@@ -162,7 +162,7 @@ def test_every_known_exemption_still_has_a_site(path: str) -> None:
     """A stale entry would let a new site in that file through unseen."""
     assert _scan(_UNIT_ROOT / path), (
         f"tests/unit/{path} has no wall-clock assertion left; remove it from "
-        f"_KNOWN (it was waiting on {_KNOWN[path]})"
+        f"_KNOWN (kept by {_KNOWN[path]})"
     )
 
 
