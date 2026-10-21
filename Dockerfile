@@ -1,13 +1,15 @@
 FROM cgr.dev/atlan.com/app-framework-golden:3.13
 
-# Dapr runtime package from Chainguard APK
-ARG DAPR_RUNTIME_PACKAGE=dapr-daprd-1.17
-
-# Switch to root for installation
+# Switch to root for setup
 USER root
 
-# Install Dapr runtime from Chainguard APK and remove attack-surface tools
-RUN apk add --no-cache ${DAPR_RUNTIME_PACKAGE} && \
+# The golden image now ships the Dapr runtime (dapr-daprd-1.18), which
+# conflicts with installing dapr-daprd-1.17 on top. Use the golden image's
+# daprd, as main does, and remove attack-surface tools. ca-certificates-bundle
+# is raised in place because the golden image pins 20260909-r2 in
+# /etc/apk/world (so a plain `apk upgrade` is a no-op) and lags the fix for
+# CVE-2026-111943 (20260909-r3); the build gate blocks on HIGH.
+RUN apk add --no-cache "ca-certificates-bundle>=20260909-r3" && \
     apk del curl bash && \
     rm -rf /var/cache/apk/*
 
