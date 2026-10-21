@@ -89,17 +89,26 @@ stop_daprd() {
     wait "${DAPRD_PID}" 2>/dev/null || true
 }
 
+# A graceful stop exits 0. Exit code 3 is the app's post-drain deadline cutting
+# a hung shutdown short; pass it through so it shows as the container's exit code.
+POST_DRAIN_EXIT_CODE=3
+
 forward_signal() {
+    signal_exit=0
     if [ -n "${APP_PID}" ]; then
         echo "[entrypoint] Forwarding SIGTERM to Python app PID ${APP_PID}"
         kill -TERM "${APP_PID}" 2>/dev/null || true
-        wait "${APP_PID}" 2>/dev/null || true
+        app_status=0
+        wait "${APP_PID}" 2>/dev/null || app_status=$?
+        if [ "${app_status}" -eq "${POST_DRAIN_EXIT_CODE}" ]; then
+            signal_exit=${POST_DRAIN_EXIT_CODE}
+        fi
     fi
     if [ -n "${DAPRD_PID}" ]; then
         echo "[entrypoint] Python exited, stopping daprd PID ${DAPRD_PID}"
         stop_daprd
     fi
-    exit 0
+    exit ${signal_exit}
 }
 
 trap forward_signal SIGTERM SIGINT

@@ -1175,7 +1175,10 @@ def _start_post_drain_exit_deadline(
     """Exit the process if shutdown has not finished soon after the worker drained.
 
     Started only once the worker has returned from its drain, so cutting the
-    remaining teardown short cannot interrupt an activity. The timer is never
+    remaining teardown short cannot interrupt an activity. It ends the whole
+    process, so only the process-owning entry point (``run_main``) turns it on;
+    a caller that awaits a run mode directly and keeps the process gets no
+    timer. The timer is never
     cancelled: it also bounds the interpreter's exit hooks, and on a normal exit
     it dies with the process. It writes to stderr directly because the logging
     pipeline is one of the things that can be stuck.
@@ -1187,11 +1190,13 @@ def _start_post_drain_exit_deadline(
         return None
 
     def _expire() -> None:
-        os.write(
-            2,
-            f"Shutdown did not finish within {timeout}s of the worker draining; "
-            f"exiting with code {_POST_DRAIN_EXIT_CODE}\n".encode(),
-        )
+        # Best effort: a closed or broken stderr must not stop the exit.
+        with contextlib.suppress(OSError):
+            os.write(
+                2,
+                f"Shutdown did not finish within {timeout}s of the worker draining; "
+                f"exiting with code {_POST_DRAIN_EXIT_CODE}\n".encode(),
+            )
         exit_fn(_POST_DRAIN_EXIT_CODE)
 
     timer = threading.Timer(timeout, _expire)
@@ -1498,11 +1503,16 @@ async def _supervise_worker(
                 logger.debug("Restart backoff elapsed; rebuilding worker")
 
 
-async def run_worker_mode(config: AppConfig) -> None:
+async def run_worker_mode(
+    config: AppConfig, *, bound_post_drain_exit: bool = False
+) -> None:
     """Run in worker mode (Temporal workflow execution).
 
     Loads the app class, connects to Temporal, creates a worker, and
     runs until a shutdown signal is received.
+    ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
+    the whole process if teardown hangs. Only the process-owning entry point
+    sets it; leave it off when awaiting this from code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -1710,7 +1720,8 @@ async def run_worker_mode(config: AppConfig) -> None:
         # leaves the marker in place, which is what makes the next start a restart.
         restart_marker.clear()
 
-    _start_post_drain_exit_deadline()
+    if bound_post_drain_exit:
+        _start_post_drain_exit_deadline()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -1817,12 +1828,17 @@ def run_handler_mode(config: AppConfig) -> None:
     asyncio.run(_flush_observability())
 
 
-async def run_combined_mode(config: AppConfig) -> None:
+async def run_combined_mode(
+    config: AppConfig, *, bound_post_drain_exit: bool = False
+) -> None:
     """Run worker + handler in a single process (SDR / docker-compose mode).
 
     Combines Temporal worker execution with the HTTP handler service,
     enabling single-container deployment. Both components share the same
     event loop and shut down together on SIGINT/SIGTERM.
+    ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
+    the whole process if teardown hangs. Only the process-owning entry point
+    sets it; leave it off when awaiting this from code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -2075,7 +2091,8 @@ async def run_combined_mode(config: AppConfig) -> None:
             ),
         )
 
-    _start_post_drain_exit_deadline()
+    if bound_post_drain_exit:
+        _start_post_drain_exit_deadline()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -2387,11 +2404,11 @@ def run_main(config: AppConfig) -> None:
     get_metrics()
 
     if config.mode == "worker":
-        asyncio.run(run_worker_mode(config))
+        asyncio.run(run_worker_mode(config, bound_post_drain_exit=True))
     elif config.mode == "handler":
         run_handler_mode(config)
     elif config.mode == "combined":
-        asyncio.run(run_combined_mode(config))
+        asyncio.run(run_combined_mode(config, bound_post_drain_exit=True))
     else:
         raise UnknownModeError(received_mode=config.mode)
 
