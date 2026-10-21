@@ -46,6 +46,7 @@ from conformance.suite.checks._ast_common import (
 )
 from conformance.suite.schema.findings import Finding
 
+from .._deprecated_module import module_is_deprecated
 from ._checker import Checker
 from ._collect import _collect_imports, _collect_legacy_aliases
 from ._constants import (
@@ -59,7 +60,6 @@ from ._constants import (
     SERIES,
 )
 from ._dependency_category import dependency_unavailable_classes
-from ._deprecated_module import module_is_deprecated
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
 from .exception_chaining import exception_helpers
@@ -97,7 +97,7 @@ def scan_text(
     *path* and *root* let E004 and E021 follow the scanned repo's own imports
     when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
     and :mod:`._dependency_category`), and let E007 see a deprecation marker
-    on an enclosing package (see :mod:`._deprecated_module`).
+    on an enclosing package (see :mod:`.._deprecated_module`).
     """
     try:
         tree = ast.parse(text, filename=file)

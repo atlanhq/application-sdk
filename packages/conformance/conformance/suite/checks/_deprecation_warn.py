@@ -1,9 +1,10 @@
 """Recognise a ``warnings.warn(..., DeprecationWarning)`` call in an AST.
 
-A leaf: it imports nothing from ``conformance``. Two rule families read it —
-the B-series deprecation extractor and E007's wholesale-deprecated-module skip
-(``error_handling._deprecated_module``) — and those packages sit on opposite
-sides of an import chain (``_entrypoint_contract_fields`` → ``prescriptions``
+A leaf: it imports nothing from ``conformance``. Three readers use it — the
+B-series deprecation extractor, the wholesale-deprecated-module skip
+(``checks._deprecated_module``, used by E007 and P023), and P023's
+deprecated-class skip (:func:`_class_warn_message`) — and those packages sit
+on opposite sides of an import chain (``_entrypoint_contract_fields`` → ``prescriptions``
 → ``error_handling``, ``deprecation`` → ``_entrypoint_contract_fields``).
 When E007 imported this from ``deprecation._extractor`` it closed that chain
 into a cycle, and conformance 0.51.0 shipped unable to run
@@ -13,6 +14,8 @@ into a cycle, and conformance 0.51.0 shipped unable to run
 from __future__ import annotations
 
 import ast
+
+_WARN_INIT_METHODS: frozenset[str] = frozenset({"__init__", "__init_subclass__"})
 
 
 def _static_str(node: ast.expr | None) -> str:
@@ -61,3 +64,23 @@ def _is_deprecation_warn_call(node: ast.AST) -> str | None:
     if not (positional or keyword):
         return None
     return _static_str(node.args[0]) if node.args else ""
+
+
+def _class_warn_message(class_node: ast.ClassDef) -> str | None:
+    """Return a class's deprecation message if ``__init__`` / ``__init_subclass__``
+    directly emits a ``DeprecationWarning``, else ``None``.
+
+    Walks each such method body (so a ``warn`` nested in a guard ``if`` still
+    counts) but does **not** descend into other methods — the warn must belong to
+    construction/subclassing of *this* class for the attribution to be sound.
+    """
+    for item in class_node.body:
+        if (
+            isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef)
+            and item.name in _WARN_INIT_METHODS
+        ):
+            for sub in ast.walk(item):
+                message = _is_deprecation_warn_call(sub)
+                if message is not None:
+                    return message
+    return None

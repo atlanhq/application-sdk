@@ -29,6 +29,7 @@ from ._pytest_collection import (
     is_test_class,
     is_test_function,
 )
+from ._repo_modules import repo_module_file
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
 from ._sdk_app import (
     SDK_APP_BASE_NAMES,
@@ -74,6 +75,7 @@ __all__ = [
     "parse_toml_suppressions",
     "qualify_chained_attr_call",
     "register_alias_records",
+    "repo_module_file",
     "module_shadowing_bindings",
     "non_sdk_import_bindings",
     "non_sdk_import_roots",

@@ -1,0 +1,418 @@
+"""P023's reach: the blocking calls a fleet app makes that the name-only inventory missed.
+
+The probe is one app module with one ``@task`` per blocking pattern, written the
+way connector code writes it — a client bound to a local or to ``self``, a
+handle from ``with open(...)``, work hidden in a sync helper. Before FND-4085
+P023 caught one of these fourteen; each case is pinned separately so a
+regression names the pattern it dropped.
+
+The second half pins the one-hop rule: a sync helper is scanned exactly once,
+whether it sits in the same module, on the same class, or in a repo module the
+caller imports, and the shapes that keep blocking work off the loop stay silent.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+from conformance.suite.checks.determinism import scan_path, scan_text
+
+_PROBE_HEADER = """\
+import gzip
+import json
+import os
+import shutil
+import threading
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import boto3
+import duckdb
+import httpx
+from sqlalchemy import create_engine, text
+
+from application_sdk.app import App, task
+
+
+def _write_rows(path, rows):
+    with open(path, "w") as fh:
+        json.dump(rows, fh)
+
+
+class ProbeApp(App):
+    def __init__(self):
+        self._ready = threading.Event()
+        self._pool = ThreadPoolExecutor(max_workers=2)
+"""
+
+# (case id, @task body) — each body holds exactly one blocking site.
+_PROBE_CASES: list[tuple[str, str]] = [
+    (
+        "boto3",
+        's3 = boto3.client("s3")\nreturn s3.get_object(Bucket=input.bucket, Key=input.key)',
+    ),
+    (
+        "httpx-client",
+        "with httpx.Client() as client:\n    return client.get(input.url)",
+    ),
+    ("os-listdir", "return os.listdir(input.root)"),
+    ("path-iterdir", "return list(Path(input.root).iterdir())"),
+    ("open-read", "with open(input.path) as fh:\n    return fh.read()"),
+    ("gzip", 'with gzip.open(input.path, "wt") as fh:\n    fh.write(input.text)'),
+    ("copyfile", "shutil.copyfile(input.src, input.dst)"),
+    (
+        "zipfile",
+        "with zipfile.ZipFile(input.path) as archive:\n    archive.extractall(input.root)",
+    ),
+    ("fsync", "os.fsync(input.fd)"),
+    ("event-wait", "self._ready.wait(30)"),
+    (
+        "future-result",
+        "future = self._pool.submit(sum, input.values)\nreturn future.result()",
+    ),
+    (
+        "sqlalchemy",
+        "engine = create_engine(input.url)\n"
+        "with engine.connect() as conn:\n"
+        '    return conn.execute(text("select 1"))',
+    ),
+    (
+        "duckdb",
+        "con = duckdb.connect()\nreturn con.execute(input.query).fetchall()",
+    ),
+    ("sync-helper", "_write_rows(input.path, input.rows)"),
+]
+
+
+def _probe_task(name: str, body: str) -> str:
+    method = name.replace("-", "_")
+    lines = "\n".join("        " + line for line in body.splitlines())
+    return f"\n    @task\n    async def probe_{method}(self, input):\n{lines}\n"
+
+
+def _probe_module() -> tuple[str, dict[str, range]]:
+    """The probe source, and the line range each case's task occupies."""
+    source = _PROBE_HEADER
+    spans: dict[str, range] = {}
+    for name, body in _PROBE_CASES:
+        start = source.count("\n") + 1
+        source += _probe_task(name, body)
+        spans[name] = range(start, source.count("\n") + 1)
+    return source, spans
+
+
+def _p023(source: str, file: str = "app/probe.py") -> list:
+    return [f for f in scan_text(source, file) if f.rule_id == "P023"]
+
+
+@pytest.mark.parametrize("case", [name for name, _ in _PROBE_CASES])
+def test_probe_case_is_caught_exactly_once(case: str) -> None:
+    source, spans = _probe_module()
+    hits = [f for f in _p023(source) if f.line in spans[case]]
+    assert len(hits) == 1, (case, [f.message for f in hits])
+
+
+def test_probe_reports_nothing_outside_the_cases() -> None:
+    source, spans = _probe_module()
+    covered = {line for span in spans.values() for line in span}
+    assert [f for f in _p023(source) if f.line not in covered] == []
+
+
+# ── one hop into sync helpers ────────────────────────────────────────────────
+
+
+_TASK_HEADER = "import shutil\nfrom application_sdk.app import App, task\n"
+
+
+def test_helper_finding_names_the_call_it_reaches() -> None:
+    src = (
+        _TASK_HEADER + "def _purge(path):\n"
+        "    shutil.rmtree(path)\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        _purge(input.path)\n"
+    )
+    (finding,) = _p023(src)
+    assert finding.line == 8
+    assert "'_purge()'" in finding.message
+    assert "shutil.rmtree()" in finding.message
+    assert "app/probe.py:4" in finding.message
+
+
+def test_helper_reached_through_a_sync_self_method() -> None:
+    src = (
+        _TASK_HEADER + "class A(App):\n"
+        "    def _purge(self, path):\n"
+        "        shutil.rmtree(path)\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        self._purge(input.path)\n"
+    )
+    (finding,) = _p023(src)
+    assert finding.line == 8
+
+
+def test_helper_sees_its_own_self_clients() -> None:
+    src = (
+        "import requests\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    def __init__(self):\n"
+        "        self._http = requests.Session()\n"
+        "    def _fetch(self, url):\n"
+        "        return self._http.get(url)\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self._fetch(input.url)\n"
+    )
+    (finding,) = _p023(src)
+    assert finding.line == 10
+
+
+def test_offloaded_helper_is_silent() -> None:
+    src = (
+        _TASK_HEADER + "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "def _purge(path):\n"
+        "    shutil.rmtree(path)\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        await run_in_thread(_purge, input.path)\n"
+        "        await run_in_thread(lambda: _purge(input.path))\n"
+    )
+    assert _p023(src) == []
+
+
+def test_helper_without_blocking_work_is_silent() -> None:
+    src = (
+        _TASK_HEADER + "def _name(path):\n"
+        "    return str(path).upper()\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        return _name(input.path)\n"
+    )
+    assert _p023(src) == []
+
+
+def test_async_helper_is_not_a_hop() -> None:
+    src = (
+        _TASK_HEADER + "async def _purge(path):\n"
+        "    shutil.rmtree(path)\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        await _purge(input.path)\n"
+    )
+    # The rmtree is reported once, inside the async helper itself.
+    (finding,) = _p023(src)
+    assert finding.line == 4
+
+
+def test_only_one_hop_is_followed() -> None:
+    src = (
+        _TASK_HEADER + "def _inner(path):\n"
+        "    shutil.rmtree(path)\n"
+        "def _outer(path):\n"
+        "    _inner(path)\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        _outer(input.path)\n"
+    )
+    assert _p023(src) == []
+
+
+def test_recursive_helper_terminates() -> None:
+    src = (
+        _TASK_HEADER + "def _walk(path):\n"
+        "    return _walk(path)\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        _walk(input.path)\n"
+    )
+    assert _p023(src) == []
+
+
+def test_suppression_inside_the_helper_is_honoured() -> None:
+    src = (
+        _TASK_HEADER + "def _purge(path):\n"
+        "    # conformance: ignore[P023] tiny fixed-size scratch dir\n"
+        "    shutil.rmtree(path)\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        _purge(input.path)\n"
+    )
+    assert _p023(src) == []
+
+
+def test_local_name_shadowing_a_helper_is_not_followed() -> None:
+    src = (
+        _TASK_HEADER + "def _purge(path):\n"
+        "    shutil.rmtree(path)\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input, _purge):\n"
+        "        _purge(input.path)\n"
+    )
+    assert _p023(src) == []
+
+
+def test_helper_call_in_workflow_context_is_left_to_p021() -> None:
+    src = (
+        "import shutil\nfrom application_sdk.app import App, task, entrypoint\n"
+        "def _purge(path):\n"
+        "    shutil.rmtree(path)\n"
+        "class A(App):\n"
+        "    @entrypoint\n"
+        "    async def run(self, input):\n"
+        "        _purge(input.path)\n"
+    )
+    assert _p023(src) == []
+
+
+def _write(root: Path, rel: str, text: str) -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+_IMPORTED_HELPER = "import shutil\ndef purge(path):\n    shutil.rmtree(path)\n"
+
+
+@pytest.mark.parametrize(
+    "import_line",
+    ["from app.util import purge", "from .util import purge"],
+)
+def test_helper_imported_from_a_repo_module(tmp_path: Path, import_line: str) -> None:
+    _write(tmp_path, "app/__init__.py", "")
+    _write(tmp_path, "app/util.py", _IMPORTED_HELPER)
+    caller = _write(
+        tmp_path,
+        "app/main.py",
+        f"{import_line}\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        purge(input.path)\n",
+    )
+    (finding,) = [f for f in scan_path(caller, tmp_path) if f.rule_id == "P023"]
+    assert finding.line == 6
+    assert "app/util.py:3" in finding.message
+
+
+def test_helper_from_a_third_party_module_is_not_followed(tmp_path: Path) -> None:
+    caller = _write(
+        tmp_path,
+        "app/main.py",
+        "from somelib.util import purge\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        purge(input.path)\n",
+    )
+    assert [f for f in scan_path(caller, tmp_path) if f.rule_id == "P023"] == []
+
+
+# ── deprecated modules ───────────────────────────────────────────────────────
+
+
+_DEPRECATED_BODY = (
+    "import shutil\nfrom application_sdk.app import App, task\n"
+    "class A(App):\n"
+    "    @task\n"
+    "    async def clean(self, input):\n"
+    "        shutil.rmtree(input.path)\n"
+)
+
+
+def test_deprecated_module_is_skipped() -> None:
+    src = (
+        "import warnings\n"
+        'warnings.warn("gone in v4", DeprecationWarning, stacklevel=2)\n'
+        + _DEPRECATED_BODY
+    )
+    assert _p023(src) == []
+
+
+def test_module_under_a_deprecated_package_is_skipped(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        "app/legacy/__init__.py",
+        'import warnings\nwarnings.warn("gone", DeprecationWarning)\n',
+    )
+    caller = _write(tmp_path, "app/legacy/io.py", _DEPRECATED_BODY)
+    assert [f for f in scan_path(caller, tmp_path) if f.rule_id == "P023"] == []
+
+
+def test_class_deprecated_at_construction_is_skipped() -> None:
+    src = (
+        "import shutil\nimport warnings\nfrom application_sdk.app import App, task\n"
+        "class OldWriter:\n"
+        "    def __init__(self):\n"
+        '        warnings.warn("gone in v4", DeprecationWarning, stacklevel=2)\n'
+        "    async def close(self, path):\n"
+        "        shutil.rmtree(path)\n"
+        "class Live(App):\n"
+        "    @task\n"
+        "    async def clean(self, input):\n"
+        "        shutil.rmtree(input.path)\n"
+    )
+    (finding,) = _p023(src)
+    assert finding.line == 12
+
+
+def test_live_module_is_still_flagged(tmp_path: Path) -> None:
+    caller = _write(tmp_path, "app/live.py", _DEPRECATED_BODY)
+    assert len([f for f in scan_path(caller, tmp_path) if f.rule_id == "P023"]) == 1
+
+
+# ── new callables: the silent side ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        # Constructors and lookups that do no I/O.
+        'boto3.client("s3").generate_presigned_url("get_object")',
+        'boto3.resource("s3").Bucket("b")',
+        "httpx.Client()",
+        "open(input.path)",
+        "threading.Event().set()",
+        "create_engine(input.url)",
+        # Awaited: an async object wearing a sync name.
+        "await input.client.get(input.url)",
+        # The handle comes from an async context manager, not builtin open().
+        "async with aiofiles.open(input.path) as fh:\n            await fh.read()",
+    ],
+)
+def test_new_inventory_constructors_and_async_forms_are_silent(stmt: str) -> None:
+    src = (
+        "import threading\nimport aiofiles\nimport boto3\nimport httpx\n"
+        "from sqlalchemy import create_engine\n"
+        "from application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def t(self, input):\n"
+        f"        {stmt}\n"
+    )
+    assert _p023(src) == [], stmt
+
+
+def test_rebinding_a_file_handle_in_async_with_clears_it() -> None:
+    src = (
+        "import aiofiles\nfrom application_sdk.app import App, task\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def t(self, input):\n"
+        "        with open(input.a) as fh:\n"
+        "            pass\n"
+        "        async with aiofiles.open(input.b) as fh:\n"
+        "            data = fh.read()\n"
+    )
+    assert _p023(src) == []
