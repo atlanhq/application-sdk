@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.51.1 (October 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.0...v3.51.1
+
+### Bug Fixes
+
+- point grpcio at the system CA bundle in the base image (#4509) (by @vaibhavatlan in [756cd6c](https://github.com/atlanhq/application-sdk/commit/756cd6c))
+- make chunked download heartbeat test deterministic on Windows (#4514) (by @cmgrote in [28fe257](https://github.com/atlanhq/application-sdk/commit/28fe257))
+
+### Chores
+
+- bump certifi to 2026.10.19 (GHSA-6q48-6c7w-9gw2) (#4506) (by @atlan-app-fleet[bot] in [6256a3b](https://github.com/atlanhq/application-sdk/commit/6256a3b))
+- update github-actions (#4504) (by @renovate[bot] in [350dcbe](https://github.com/atlanhq/application-sdk/commit/350dcbe))
+- lock file maintenance (#4503) (by @renovate[bot] in [793218c](https://github.com/atlanhq/application-sdk/commit/793218c))
+- publish certifi>=2026.10.19 floor as an SDK dependency (GHSA-6q48-6c7w-9gw2) (#4513) (by @cmgrote in [4569658](https://github.com/atlanhq/application-sdk/commit/4569658))
+
+
 ## v3.51.0 (October 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.50.0...v3.51.0
