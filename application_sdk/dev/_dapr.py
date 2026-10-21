@@ -19,6 +19,7 @@ import platform
 import shutil
 import socket
 import stat
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -200,9 +201,34 @@ def _download_daprd(target: Path) -> None:
     logger.info("daprd cached at %s", target)
 
 
+def _daprd_runs(binary: Path) -> bool:
+    """True when *binary* executes and reports the pinned version."""
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed argv, our own cached binary
+            [str(binary), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("daprd --version failed for %s", binary, exc_info=True)
+        return False
+    return result.returncode == 0 and _DAPRD_VERSION in result.stdout
+
+
 def _ensure_daprd_binary() -> Path:
-    """Return path to the daprd binary, downloading if absent."""
+    """Return path to the daprd binary, downloading if absent or broken.
+
+    New downloads are published atomically, but a cache written before that —
+    or damaged since — can still hold a truncated binary at this path. An
+    existing file is therefore trusted only if it runs and reports the pinned
+    version; otherwise it is replaced.
+    """
     binary = _CACHE_DIR / _daprd_binary_name()
+    if binary.exists() and not _daprd_runs(binary):
+        logger.warning("Cached daprd at %s does not run; re-downloading", binary)
+        binary.unlink(missing_ok=True)
     if not binary.exists():
         _download_daprd(binary)
     return binary
@@ -534,6 +560,10 @@ async def embedded_dapr(
             stdout=log_fd,
             stderr=asyncio.subprocess.STDOUT,
         )
+    except BaseException:
+        # Nothing was spawned, so the cleanup below is never reached.
+        log_path.unlink(missing_ok=True)
+        raise
     finally:
         # The child holds its own copy of the descriptor.
         os.close(log_fd)

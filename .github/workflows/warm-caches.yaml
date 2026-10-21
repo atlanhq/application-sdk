@@ -23,10 +23,13 @@ concurrency:
   group: warm-caches-${{ github.ref }}
   cancel-in-progress: true
 
+# Caches are scoped to the run's ref, and only main's scope is visible to every
+# PR — a dispatch from another branch would warm a scope no PR restores from.
 jobs:
   # setup-deps default (3.11): the venv the storage-emulator and bats jobs use.
   default-venv:
     name: Warm default venv
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -36,6 +39,7 @@ jobs:
   # The integration job's venv (container Python) and the embedded runtimes.
   integration:
     name: Warm integration venv + embedded runtimes
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

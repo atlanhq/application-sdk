@@ -548,3 +548,98 @@ class TestEmbeddedDaprLog:
             async with embedded_dapr():
                 pass
         assert [p for p in self.log_dir.iterdir() if p.suffix == ".log"]
+
+
+class TestEnsureDaprdBinary:
+    """An existing cached binary is trusted only if it runs."""
+
+    @pytest.fixture
+    def cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        monkeypatch.setattr(_dapr, "_CACHE_DIR", tmp_path)
+        self.downloads: list[Path] = []
+
+        def _fake_download(target: Path) -> None:
+            self.downloads.append(target)
+            target.write_bytes(_BINARY_BYTES)
+
+        monkeypatch.setattr(_dapr, "_download_daprd", _fake_download)
+        return tmp_path / _daprd_binary_name()
+
+    def test_working_cached_binary_is_reused(
+        self, cache: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cache.write_bytes(b"ok")
+        monkeypatch.setattr(_dapr, "_daprd_runs", lambda _b: True)
+        assert _dapr._ensure_daprd_binary() == cache
+        assert self.downloads == []
+
+    def test_broken_cached_binary_is_replaced(
+        self, cache: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A truncated binary left by the pre-atomic download path is not
+        accepted just because it exists."""
+        cache.write_bytes(b"trunc")
+        monkeypatch.setattr(_dapr, "_daprd_runs", lambda _b: False)
+        assert _dapr._ensure_daprd_binary() == cache
+        assert self.downloads == [cache]
+        assert cache.read_bytes() == _BINARY_BYTES
+
+    def test_missing_binary_is_downloaded(self, cache: Path) -> None:
+        assert _dapr._ensure_daprd_binary() == cache
+        assert self.downloads == [cache]
+
+    @pytest.mark.parametrize(
+        ("returncode", "stdout", "expected"),
+        [(0, f"{_dapr._DAPRD_VERSION}\n", True), (0, "0.0.1\n", False), (1, "", False)],
+    )
+    def test_daprd_runs_checks_exit_and_version(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        returncode: int,
+        stdout: str,
+        expected: bool,
+    ) -> None:
+        monkeypatch.setattr(
+            _dapr.subprocess,
+            "run",
+            lambda *_a, **_k: MagicMock(returncode=returncode, stdout=stdout),
+        )
+        assert _dapr._daprd_runs(tmp_path / "daprd") is expected
+
+    def test_daprd_runs_false_when_not_executable(self, tmp_path: Path) -> None:
+        garbage = tmp_path / "daprd"
+        garbage.write_bytes(b"not a binary")
+        assert _dapr._daprd_runs(garbage) is False
+
+
+class TestSpawnFailureCleanup:
+    @pytest.mark.asyncio
+    async def test_log_removed_when_spawn_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        # embedded_dapr sets these before spawning; register them so monkeypatch
+        # restores them after this test.
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setattr(
+            "application_sdk.dev._dapr._ensure_daprd_binary", lambda: tmp_path / "d"
+        )
+        monkeypatch.setattr(
+            "application_sdk.dev._dapr._pick_free_ports",
+            lambda count: [13500, 15001][:count],
+        )
+
+        async def _spawn_fails(*_a, **_k):
+            raise PermissionError("cannot execute")
+
+        monkeypatch.setattr("asyncio.create_subprocess_exec", _spawn_fails)
+        log_dir = tmp_path / "logs"
+        log_dir.mkdir()
+        monkeypatch.setattr(_dapr.tempfile, "tempdir", str(log_dir))
+
+        with pytest.raises(PermissionError):
+            async with embedded_dapr():
+                pass
+        assert not [p for p in log_dir.iterdir() if p.suffix == ".log"]
