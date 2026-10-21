@@ -1,7 +1,8 @@
 """P2: Error handling and retry tests.
 
-Verifies that NonRetryableError stops immediately, retryable errors are
-retried correctly, and custom RetryPolicy settings are honoured.
+Verifies that NonRetryableError stops immediately — no task retry and no
+workflow retry — retryable errors are retried correctly, and custom
+RetryPolicy settings are honoured.
 
 Requires a running Temporal dev server (see conftest.py).
 """
@@ -10,6 +11,8 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from temporalio.client import WorkflowFailureError
+from temporalio.exceptions import ApplicationError
 
 from application_sdk.app.base import App, NonRetryableError
 from application_sdk.app.context import AppContext
@@ -27,7 +30,7 @@ _attempt_counters: dict[str, int] = {}
 
 
 class NRInput(Input):
-    pass
+    test_id: str = ""
 
 
 class NROutput(Output):
@@ -37,6 +40,7 @@ class NROutput(Output):
 class NonRetryableApp(App):
     @task
     async def do_work(self, input: NRInput) -> NROutput:
+        _attempt_counters[input.test_id] = _attempt_counters.get(input.test_id, 0) + 1
         raise NonRetryableError("Deterministic failure — do not retry")
 
     async def run(self, input: NRInput) -> NROutput:
@@ -99,14 +103,19 @@ class CustomRetryApp(App):
 async def test_non_retryable_error_stops_immediately(
     run_worker, executor, reregister_app
 ):
-    """P2.1: NonRetryableError propagates as non-retryable ApplicationError."""
+    """P2.1: NonRetryableError ends the run after one attempt, even under a
+    workflow-level RetryPolicy: the failure is non-retryable at the top level,
+    so Temporal neither retries the task nor re-runs the workflow."""
+    test_id = uuid4().hex
+    _attempt_counters[test_id] = 0
+
     reregister_app(NonRetryableApp)
     async with run_worker():
         context = AppContext(app_name=NonRetryableApp._app_name, app_version="1.0.0")
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(WorkflowFailureError) as exc_info:
             await executor.execute(
                 NonRetryableApp,
-                NRInput(),
+                NRInput(test_id=test_id),
                 context=context,
                 retry_policy=RetryPolicy(max_attempts=5),
             )
@@ -119,6 +128,14 @@ async def test_non_retryable_error_stops_immediately(
             break
         cause = getattr(cause, "cause", None) or cause.__cause__
     assert cause is not None, "Expected 'Deterministic failure' in exception chain"
+
+    top = exc_info.value.cause
+    assert (
+        isinstance(top, ApplicationError) and top.non_retryable
+    ), f"workflow failure must be non-retryable at the top level, got {top!r}"
+    # One task run per workflow attempt (the task itself is never retried), so
+    # this counts workflow attempts: 1, not the policy's max_attempts=5.
+    assert _attempt_counters[test_id] == 1
 
 
 @pytest.mark.integration
