@@ -1,23 +1,22 @@
 """The activity path keeps the event loop free at each site FND-4084 offloaded.
 
-Each test makes one blocking primitive slow (``_STALL`` seconds) and checks
-two things while the call that uses it runs:
+Each test routes one blocking primitive through a
+:class:`~tests.unit.loop_probe.LoopProbe` and checks two things while the call
+that uses it runs:
 
-* **Which thread ran it** (deterministic): never the loop's. This is the proof.
-* **The worst loop stall**: under ``_MAX_LOOP_LAG``. Inline on the loop, the
-  stall is at least ``_STALL``, so the bar sits at half of it. A tighter bar
-  measures the runner instead: a loaded Windows CI runner stalled an
-  offloaded run by 276 ms (GC, antivirus on file close), which failed a
-  100 ms bar with nothing on the loop.
+* **Which thread ran it**: never the loop's.
+* **The loop stayed free**: the probe's callback ran on the loop while the
+  primitive was blocked. An earlier version measured the worst loop stall
+  against a wall-clock bar; that measured the runner instead (a loaded
+  Windows runner stalled an offloaded run past the bar with nothing on the
+  loop) and failed one matrix cell at random (FND-4233).
 """
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import os
 import threading
-import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -27,36 +26,13 @@ from pydantic import BaseModel
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.contracts.types import FileReference
-
-_STALL = 1.0
-_MAX_LOOP_LAG = _STALL / 2
-
-
-@contextlib.asynccontextmanager
-async def _loop_lag() -> AsyncIterator[list[float]]:
-    """Yield a one-item list holding the worst loop stall seen inside the block."""
-    worst = [0.0]
-    stop = asyncio.Event()
-
-    async def _tick() -> None:
-        while not stop.is_set():
-            started = time.monotonic()
-            await asyncio.sleep(0.01)
-            worst[0] = max(worst[0], time.monotonic() - started - 0.01)
-
-    ticker = asyncio.create_task(_tick())
-    # One tick first, so the ticker is running before the block starts.
-    await asyncio.sleep(0)
-    try:
-        yield worst
-    finally:
-        stop.set()
-        await ticker
+from tests.unit.loop_probe import LoopProbe
 
 
 class TestChunkedDownloadCheckpoint:
     async def test_checkpoints_do_not_fsync_on_the_loop(self, tmp_path: Path) -> None:
         """Each chunk's resume checkpoint is written on the loop; it used to fsync."""
+        probe = LoopProbe()
         from application_sdk.storage.chunked import _transfer_state_path
         from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.ops import _put, download_file_chunked
@@ -70,7 +46,7 @@ class TestChunkedDownloadCheckpoint:
 
         def slow_fsync(fd: int) -> None:
             fsyncs.append(threading.get_ident())
-            time.sleep(_STALL)
+            probe.block()
             real_fsync(fd)
 
         real_save = None
@@ -88,7 +64,7 @@ class TestChunkedDownloadCheckpoint:
             mock.patch("application_sdk.storage.chunked.os.fsync", slow_fsync),
             mock.patch.object(chunked, "_save_transfer_state", counting_save),
         ):
-            async with _loop_lag() as lag:
+            with probe.bound():
                 await download_file_chunked(
                     "lag/c.bin",
                     path,
@@ -106,26 +82,27 @@ class TestChunkedDownloadCheckpoint:
         # ...and the only fsync left is the part file's, once, before publish.
         assert len(fsyncs) == 1
         assert threading.get_ident() not in fsyncs, "fsync ran on the loop thread"
-        assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
+        probe.assert_loop_stayed_free("download_file_chunked checkpoints")
 
 
 class _SlowListStream:
     """obstore's ListStream: iterated synchronously, each page blocks the caller
     for its round trip; iterated with ``async for``, the wait is off the loop."""
 
-    def __init__(self, batches: list[list[dict[str, str]]]) -> None:
+    def __init__(self, batches: list[list[dict[str, str]]], probe: LoopProbe) -> None:
         self._batches = batches
+        self._probe = probe
         self.iterated_synchronously = False
 
     def __iter__(self) -> Iterator[list[dict[str, str]]]:
         self.iterated_synchronously = True
         for batch in self._batches:
-            time.sleep(_STALL)
+            self._probe.block()
             yield batch
 
     async def __aiter__(self) -> AsyncIterator[list[dict[str, str]]]:
         for batch in self._batches:
-            await run_in_thread(time.sleep, _STALL)
+            await run_in_thread(self._probe.block)
             yield batch
 
 
@@ -133,6 +110,7 @@ class TestCleanupStorageListing:
     async def test_listing_pages_do_not_block_the_loop(
         self, clean_app_registry: object, clean_task_registry: object
     ) -> None:
+        probe = LoopProbe()
         from application_sdk.app.base import App, TaskStateAccessor
         from application_sdk.app.context import AppContext
         from application_sdk.constants import TRACKED_FILE_REFS_KEY
@@ -167,7 +145,7 @@ class TestCleanupStorageListing:
         streams: list[_SlowListStream] = []
 
         def _list(*_: Any, **__: Any) -> _SlowListStream:
-            streams.append(_SlowListStream(listing))
+            streams.append(_SlowListStream(listing, probe))
             return streams[-1]
 
         with mock.patch(
@@ -186,7 +164,7 @@ class TestCleanupStorageListing:
                     mock.patch("application_sdk.storage.ops.delete", _delete),
                     mock.patch("obstore.list", side_effect=_list),
                 ):
-                    async with _loop_lag() as lag:
+                    with probe.bound():
                         result = await app.cleanup_storage(StorageCleanupInput())
             finally:
                 from application_sdk.app.base import _app_state, _app_state_lock
@@ -200,13 +178,14 @@ class TestCleanupStorageListing:
         ]
         assert result.deleted_count == 2
         assert streams and not any(s.iterated_synchronously for s in streams)
-        assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
+        probe.assert_loop_stayed_free("cleanup_storage listing")
 
 
 class TestMaterializeEmptyPrefix:
     async def test_counting_the_local_directory_does_not_block_the_loop(
         self, tmp_path: Path
     ) -> None:
+        probe = LoopProbe()
         from application_sdk.storage.factory import create_memory_store
         from application_sdk.storage.reference import materialize_file_reference
 
@@ -225,21 +204,22 @@ class TestMaterializeEmptyPrefix:
         def slow_iterdir(self: Path) -> Iterator[Path]:
             if self == dest:
                 counted.append(threading.get_ident())
-                time.sleep(_STALL)
+                probe.block()
             return real_iterdir(self)
 
         with mock.patch.object(Path, "iterdir", slow_iterdir):
-            async with _loop_lag() as lag:
+            with probe.bound():
                 result = await materialize_file_reference(create_memory_store(), ref)
 
         assert result is ref
         assert len(counted) == 1
         assert threading.get_ident() not in counted, "counted on the loop thread"
-        assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
+        probe.assert_loop_stayed_free("materialize_file_reference")
 
 
 class TestAzureClientClose:
     async def test_executor_shutdown_does_not_block_the_loop(self) -> None:
+        probe = LoopProbe()
         from application_sdk.clients.azure.client import AzureClient
 
         client = AzureClient()
@@ -251,18 +231,18 @@ class TestAzureClientClose:
 
         def slow_shutdown(wait: bool = True) -> None:
             shutdowns.append(threading.get_ident())
-            time.sleep(_STALL)
+            probe.block()
 
         executor.shutdown.side_effect = slow_shutdown
         client._executor = executor
 
-        async with _loop_lag() as lag:
+        with probe.bound():
             await client.close()
 
         executor.shutdown.assert_called_once_with(wait=True)
         assert client._executor is None
         assert threading.get_ident() not in shutdowns, "shut down on the loop thread"
-        assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
+        probe.assert_loop_stayed_free("AzureClient.close")
 
 
 class _SizedInput(BaseModel):
@@ -273,6 +253,7 @@ class TestSizingInterceptorInputWalk:
     async def test_walking_file_references_does_not_block_the_loop(
         self, tmp_path: Path
     ) -> None:
+        probe = LoopProbe()
         from dataclasses import dataclass, field
 
         from application_sdk.execution._temporal.interceptors.sizing import (
@@ -288,7 +269,7 @@ class TestSizingInterceptorInputWalk:
 
         def slow_walk(top: Any, *args: Any, **kwargs: Any) -> Any:
             walks.append(threading.get_ident())
-            time.sleep(_STALL)
+            probe.block()
             return real_walk(top, *args, **kwargs)
 
         @dataclass
@@ -319,7 +300,7 @@ class TestSizingInterceptorInputWalk:
             ),
         ):
             act.info.return_value = _Info()
-            async with _loop_lag() as lag:
+            with probe.bound():
                 got = await interceptor.execute_activity(
                     _ExecInput(
                         args=[
@@ -333,4 +314,4 @@ class TestSizingInterceptorInputWalk:
         size = record.call_args[0][0].input_bytes
         assert size == 100
         assert walks and threading.get_ident() not in walks, "walked on the loop thread"
-        assert lag[0] < _MAX_LOOP_LAG, f"loop stalled {lag[0]:.3f}s"
+        probe.assert_loop_stayed_free("the sizing interceptor's input walk")

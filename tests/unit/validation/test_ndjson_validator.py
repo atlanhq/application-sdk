@@ -594,6 +594,10 @@ def _fat_directory(root: Path, *, files: int, per_file: int) -> int:
     return sum(p.stat().st_size for p in root.rglob("*.json"))
 
 
+#: Runs per side of the memory comparison; see the test's docstring.
+_PEAK_RUNS = 3
+
+
 def test_memory_does_not_scale_with_the_artifact(tmp_path: Path) -> None:
     """Constant memory, asserted of ``validate`` — not of the iterator.
 
@@ -603,6 +607,12 @@ def test_memory_does_not_scale_with_the_artifact(tmp_path: Path) -> None:
     that materialised the artifact could not satisfy: peak allocation stays a small
     fraction of the bytes on disk, and growing the artifact 100x does not grow the
     peak.
+
+    tracemalloc traces every thread in the process, so one window can catch a
+    burst from a thread an earlier test on this worker left running (a log
+    flush, say) and read it as the scan's peak. That burst is transient and the
+    scan's own peak is not, so each side takes the lowest of a few runs
+    (FND-4233).
     """
     small = tmp_path / "small"
     large = tmp_path / "large"
@@ -611,12 +621,15 @@ def test_memory_does_not_scale_with_the_artifact(tmp_path: Path) -> None:
 
     peaks: dict[str, int] = {}
     for name, root in (("small", small), ("large", large)):
-        tracemalloc.start()
-        tracemalloc.reset_peak()
-        report = _validate(root, DECLARATION)
-        peaks[name] = tracemalloc.get_traced_memory()[1]
-        tracemalloc.stop()
-        assert report.outcome == OUTCOME_CLEAN
+        runs: list[int] = []
+        for _ in range(_PEAK_RUNS):
+            tracemalloc.start()
+            tracemalloc.reset_peak()
+            report = _validate(root, DECLARATION)
+            runs.append(tracemalloc.get_traced_memory()[1])
+            tracemalloc.stop()
+            assert report.outcome == OUTCOME_CLEAN
+        peaks[name] = min(runs)
 
     assert large_bytes > 4_000_000, "the large artifact must dwarf the peak to matter"
     assert peaks["large"] < large_bytes // 10, (

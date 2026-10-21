@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -988,17 +990,22 @@ class TestTheCheckActivity:
         self, capture_preflight_outcomes
     ) -> None:
         """A warmup that would hang is never awaited by the check activity, so
-        the handler is told (nearly) the whole budget and the call is quick."""
+        the handler is told the whole budget.
+
+        The gate's clock is frozen, so "the whole budget" is exact: with a real
+        clock the runner's own delay before the handler call came off it, and
+        the bar had to leave slack for that (FND-4233)."""
         handler = _HangingWarmupHandler(WarmingSource([WarmupState.READY]))
         gate = build_preflight_gate_activity(handler, "myapp", budget_seconds=20)
-        loop = asyncio.get_running_loop()
-        started = loop.time()
-        await gate(PreflightGateInput(entrypoint="crawl"))
-        assert loop.time() - started < 5
+        frozen = SimpleNamespace(
+            monotonic=lambda: 1000.0, get_clock_info=time.get_clock_info
+        )
+        with mock.patch.object(preflight_gate, "time", frozen):
+            await gate(PreflightGateInput(entrypoint="crawl"))
         assert handler.warmup_inputs == []
         assert "probe" not in handler.calls
         (seen,) = handler.check_inputs
-        assert seen.timeout_seconds >= 19
+        assert seen.timeout_seconds == 20
 
     async def test_the_warmup_dispatch_row_carries_the_wait(
         self, capture_preflight_outcomes
@@ -1170,12 +1177,11 @@ class TestThePollActivity:
 
     async def test_a_probe_that_overruns_is_warming(self) -> None:
         handler = _HangingWarmupHandler(WarmingSource([WarmupState.READY]))
-        loop = asyncio.get_running_loop()
-        started = loop.time()
         result = await _poll_activity(handler, probe_timeout_seconds=1)(
             PreflightGateInput()
         )
-        assert loop.time() - started < 5
+        # WARMING, not the probe's eventual READY: the poll stopped at the
+        # probe timeout instead of waiting the 30s probe out.
         assert result == WarmupPoll(
             observation=WarmupObservation(state=WarmupState.WARMING)
         )

@@ -17,11 +17,15 @@ import pytest
 from application_sdk._runtime import offload
 from application_sdk._runtime.offload import CancelHandle, run_in_thread
 
-#: How long a blocked call waits before releasing itself.
-_RELEASE_AFTER = 5.0
+#: How long a blocked call waits before releasing itself. Only a regression
+#: ever waits this long.
+_RELEASE_AFTER = 30.0
 
-#: How quickly a cancel must take effect.
-_PROMPT = 1.0
+#: How long to wait for something a healthy run does at once (a cancel taking
+#: effect, a thread starting). Generous: it decides how long a regression takes
+#: to fail, never whether a healthy run passes. A tighter, elapsed-time bar
+#: measured thread-pool spin-up on loaded runners instead (FND-4233).
+_PROMPT = 10.0
 
 
 class _Driver:
@@ -56,12 +60,13 @@ async def _wait_for(event: threading.Event) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _cancel_and_time(task: "asyncio.Task[object]") -> float:
-    start = time.monotonic()
+async def _cancel(task: "asyncio.Task[object]") -> None:
+    """Cancel *task* and require its unwind to finish, not wait out the driver."""
     task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=_PROMPT)
+    assert task in done, f"cancelled task still unwinding after {_PROMPT}s"
     with pytest.raises(asyncio.CancelledError):
         await task
-    return time.monotonic() - start
 
 
 @pytest.fixture
@@ -91,9 +96,8 @@ async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly() -> N
     task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
-    elapsed = await _cancel_and_time(task)
+    await _cancel(task)
 
-    assert elapsed < _PROMPT, f"loop blocked {elapsed:.2f}s on cancel"
     await _wait_for(driver.finished)
     assert handle.requested
     assert len(driver.cancel_threads) == 1
@@ -124,7 +128,7 @@ async def test_action_runs_while_blocking_pool_is_full(saturated_pool: int) -> N
     task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
-    await _cancel_and_time(task)
+    await _cancel(task)
 
     assert driver.cancelled.wait(_PROMPT), "cancel queued behind a full pool"
 
@@ -163,13 +167,11 @@ async def test_unblocked_call_frees_its_pool_slot(saturated_pool: int) -> None:
     task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
-    await _cancel_and_time(task)
+    await _cancel(task)
 
     await _wait_for(driver.finished)
     # Every other slot is still blocked, so this runs only on the freed one.
-    start = time.monotonic()
     assert await asyncio.wait_for(run_in_thread(lambda: "ran"), _PROMPT) == "ran"
-    assert time.monotonic() - start < _PROMPT
 
 
 async def test_completed_call_never_fires_the_action() -> None:

@@ -24,8 +24,9 @@ no part in whether a healthy run passes.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -46,9 +47,15 @@ class LoopProbe:
 
     async def run(self, work: Callable[[], Awaitable[T]]) -> T:
         """Await *work* with this probe bound to the running loop."""
+        with self.bound():
+            return await work()
+
+    @contextlib.contextmanager
+    def bound(self) -> Iterator[None]:
+        """Bind this probe to the running loop for the body of the ``with``."""
         self._loop = asyncio.get_running_loop()
         try:
-            return await work()
+            yield
         finally:
             self._loop = None
 

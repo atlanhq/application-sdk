@@ -218,7 +218,7 @@ class TestProbe:
         assert MANIFEST_NAME.startswith(".")
         assert not MANIFEST_NAME.endswith(".json")
 
-    async def test_probe_of_100k_keys_is_fast_and_never_starves_the_loop(
+    async def test_probe_of_100k_keys_is_one_pass_and_never_starves_the_loop(
         self,
     ) -> None:
         memory = MemoryStore()
@@ -235,23 +235,39 @@ class TestProbe:
             memory, f"{PREFIX}/{MANIFEST_NAME}", orjson.dumps(manifest)
         )
 
-        # Structural, not a loop-gap timer: at this size the reconcile held
-        # inline blocks the loop for ~50ms, well under any threshold a shared CI
-        # runner's GIL contention stays below, so a timer could only flake.
+        # Structural, not timers: at this size the reconcile held inline
+        # blocks the loop for ~50ms, well under any threshold a shared CI
+        # runner's GIL contention stays below, and a wall-clock bound on the
+        # whole probe measured the runner and failed at random (FND-4233).
+        # "Fast" is the request count: one listing and one manifest read,
+        # never a request per key.
         offloaded: list[str] = []
+        requests: list[str] = []
         real_run_in_thread = store_module.run_in_thread
+        real_list = store_module.list_data_objects
+        real_get = store_module._get_bytes
 
         async def _spy(fn, *args, **kwargs):
             offloaded.append(fn.__name__)
             return await real_run_in_thread(fn, *args, **kwargs)
 
-        started = time.perf_counter()
-        with patch.object(store_module, "run_in_thread", _spy):
+        async def _counted_list(*args, **kwargs):
+            requests.append("list")
+            return await real_list(*args, **kwargs)
+
+        async def _counted_get(*args, **kwargs):
+            requests.append("get")
+            return await real_get(*args, **kwargs)
+
+        with (
+            patch.object(store_module, "run_in_thread", _spy),
+            patch.object(store_module, "list_data_objects", _counted_list),
+            patch.object(store_module, "_get_bytes", _counted_get),
+        ):
             snapshot = await CurrentStateStore(PREFIX, memory).probe()
-        elapsed = time.perf_counter() - started
 
         assert snapshot.json_count == 100_000
-        assert elapsed < 10, f"probe of 100k keys took {elapsed:.1f}s"
+        assert requests == ["list", "get"]
         # The one pass over the whole snapshot (manifest decode + reconcile)
         # runs off the loop, so an activity's auto-heartbeat keeps beating.
         assert offloaded == ["_reconcile"]

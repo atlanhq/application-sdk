@@ -216,21 +216,20 @@ def test_redaction_is_linear_not_quadratic() -> None:
     the event loop for every co-hosted app.
 
     The scheme prefix used to be scanned from every start position, which is
-    O(n^2) and needs no URL to trigger: 200k characters took ~125 seconds.
+    O(n^2) and needs no URL to trigger: 200k characters took ~125 seconds, so
+    the 400k here would take minutes. Linear, it takes milliseconds. The bound
+    sits far from both, so it only decides how long that regression takes to
+    fail. An earlier version compared the timings of two input sizes; at
+    milliseconds a preemption swung the ratio past its bar on a loaded runner
+    (FND-4233).
     """
-    import time
+    import threading
 
-    def elapsed(n: int) -> float:
-        text = "warehouse://" + "a" * n
-        start = time.perf_counter()
-        redact_secrets(text)
-        return time.perf_counter() - start
-
-    elapsed(20_000)  # warm
-    small, large = elapsed(50_000), elapsed(400_000)
-    # 8x the input must not cost anything like 64x the time.
-    assert large < small * 20, f"{small:.4f}s -> {large:.4f}s looks superlinear"
-    assert large < 2.0, f"400k chars took {large:.2f}s"
+    text = "warehouse://" + "a" * 400_000
+    redactor = threading.Thread(target=redact_secrets, args=(text,), daemon=True)
+    redactor.start()
+    redactor.join(30)
+    assert not redactor.is_alive(), "redacting 400k characters looks superlinear"
 
 
 # ── the log is a SECOND sink, and it is not the response body ───────────────

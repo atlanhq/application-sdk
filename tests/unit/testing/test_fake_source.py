@@ -963,11 +963,14 @@ class TestThreadTeardown:
             # Let serve_forever accept and enter the TLS handshake so this
             # actually covers the hang, not just an idle accept loop.
             time.sleep(0.05)
-            started = time.monotonic()
-            source.stop()
-            elapsed = time.monotonic() - started
-            budget = 0.2 + fake_source._JOIN_GRACE_SECONDS
-            assert elapsed <= budget
+            # The peer stays silent until stop() has returned, so a stop() that
+            # waited on the handshake could not return inside the join. The
+            # bound only decides how long that regression takes to fail; an
+            # elapsed-time bar measured the runner instead (FND-4233).
+            stopper = threading.Thread(target=source.stop, daemon=True)
+            stopper.start()
+            stopper.join(30)
+            assert not stopper.is_alive(), "stop() waited on a silent TLS peer"
         finally:
             peer.close()
             source.stop()

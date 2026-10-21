@@ -5,6 +5,11 @@ first connect can hang on a black-holed host. Both run off the loop under one
 budget (``SQL_CLIENT_CONNECT_TIMEOUT_SECONDS``); expiry is a typed
 ``SqlClientConnectTimeoutError``. No sockets here: a hang is a thread parked on
 an event. The real-socket version is ``tests/integration/clients/test_sql_load_blackhole.py``.
+
+No assertion here reads a wall-clock delta. "The loop stayed free" is a
+:class:`~tests.unit.loop_probe.LoopProbe` callback; "load() gave up at the
+budget" is the hung thread still being parked when ``load()`` raised; the
+budget arithmetic runs on a stepped loop clock.
 """
 
 from __future__ import annotations
@@ -27,10 +32,12 @@ from application_sdk.clients.sql import (
     _with_connect_timeout,
 )
 from application_sdk.clients.sql_errors import SqlClientConnectTimeoutError
+from tests.unit.loop_probe import LoopProbe
 
 _BUDGET = 0.3
-#: The FND-4083 bar: the loop never stalls this long while load() waits.
-_MAX_LOOP_LAG = 0.1
+#: How long a hung step stays parked unless released. Far past ``_BUDGET``: a
+#: load() that waited for the step instead of giving up would see it return.
+_HANG_SECONDS = 30.0
 
 
 def _config() -> DatabaseConfig:
@@ -45,32 +52,40 @@ def _budget(seconds: float) -> Iterator[None]:
         yield
 
 
-@contextlib.asynccontextmanager
-async def _loop_lag() -> AsyncIterator[list[float]]:
-    """Yield a one-item list holding the worst loop stall seen inside the block."""
-    worst = [0.0]
-    stop = asyncio.Event()
+class _Hang:
+    """A blocking step that parks its worker thread until released.
 
-    async def _tick() -> None:
-        while not stop.is_set():
-            started = time.monotonic()
-            await asyncio.sleep(0.01)
-            worst[0] = max(worst[0], time.monotonic() - started - 0.01)
+    ``block`` pays the probe's toll first, so the probe sees whether the loop
+    ran while the step was in progress. ``returned`` is set only when the park
+    ends, so a ``load()`` that raised while it is unset gave up on its own
+    budget rather than waiting for the step.
+    """
 
-    ticker = asyncio.create_task(_tick())
-    try:
-        yield worst
-    finally:
-        stop.set()
-        await ticker
+    def __init__(self, probe: LoopProbe) -> None:
+        self.probe = probe
+        self.release = threading.Event()
+        self.returned = threading.Event()
+
+    def block(self) -> None:
+        self.probe.block()
+        self.release.wait(_HANG_SECONDS)
+        self.returned.set()
 
 
 @pytest.fixture
-def release() -> Iterator[threading.Event]:
-    """Set at teardown so a parked worker thread always exits."""
-    event = threading.Event()
-    yield event
-    event.set()
+def hang() -> Iterator[_Hang]:
+    """Released at teardown so a parked worker thread always exits."""
+    step = _Hang(LoopProbe())
+    yield step
+    step.release.set()
+
+
+def _assert_gave_up_on_the_budget(step: _Hang) -> None:
+    assert not step.returned.is_set(), (
+        "load() raised only after the hung step returned: it waited for the "
+        "worker thread instead of giving up at its own budget"
+    )
+    step.probe.assert_loop_stayed_free("load()")
 
 
 class TestWithConnectTimeout:
@@ -211,9 +226,11 @@ class TestSyncLoadBudget:
         started = time.monotonic()
         with _budget(30.0), pytest.raises(Exception):
             await client.load({})
+        ended = time.monotonic()
         assert len(seen) == 1 and seen[0] is not None
-        # Slack: the budget's clock starts a moment after ``started``.
-        assert 0 < seen[0] - started <= 30.0 + 0.5
+        # The deadline is the budget measured from when load() began, which
+        # falls between the two readings. Bracketed, not a delta: no slack.
+        assert started + 30.0 <= seen[0] <= ended + 30.0
         # Scoped to load(): nothing leaks into the caller's context.
         assert aws_utils._STS_DEADLINE.get() is None
 
@@ -225,9 +242,13 @@ class TestSyncLoadBudget:
         """
         client = BaseSQLClient()
         client.DB_CONFIG = _config()
+        # The budget is measured on the loop's clock. Stepped by hand here, it
+        # reads exactly what STS cost, however long the runner took.
+        loop = asyncio.get_running_loop()
+        now = [loop.time()]
 
         def _slow_sts() -> str:
-            time.sleep(1.2)
+            now[0] += 1.2
             return "postgresql+psycopg2://u:p@127.0.0.1:1/d"
 
         client.get_sqlalchemy_connection_string = _slow_sts  # type: ignore[method-assign]
@@ -235,6 +256,7 @@ class TestSyncLoadBudget:
         engine = MagicMock()
         with (
             _budget(3.0),
+            patch.object(loop, "time", lambda: now[0]),
             patch("sqlalchemy.create_engine", return_value=engine),
             patch(
                 "application_sdk.clients.sql._cap_next_connect_timeout",
@@ -242,53 +264,42 @@ class TestSyncLoadBudget:
             ),
         ):
             await client.load({})
-        assert len(caps) == 1
-        assert 1.0 < caps[0] <= 3.0 - 1.2
+        assert caps == [pytest.approx(3.0 - 1.2)]
 
-    async def test_hung_connection_string_is_typed_timeout(
-        self, release: threading.Event
-    ) -> None:
+    async def test_hung_connection_string_is_typed_timeout(self, hang: _Hang) -> None:
         """A hung STS AssumeRole (inside get_sqlalchemy_connection_string)."""
         client = BaseSQLClient()
         client.DB_CONFIG = _config()
 
         def _hung_sts() -> str:
-            release.wait(10)
+            hang.block()
             return "test://h"
 
         client.get_sqlalchemy_connection_string = _hung_sts  # type: ignore[method-assign]
-        started = time.monotonic()
         with _budget(_BUDGET), pytest.raises(SqlClientConnectTimeoutError) as exc_info:
-            async with _loop_lag() as lag:
-                await client.load({})
-        assert time.monotonic() - started < _BUDGET + 0.5
-        assert lag[0] < _MAX_LOOP_LAG
+            await hang.probe.run(lambda: client.load({}))
+        _assert_gave_up_on_the_budget(hang)
         assert "within" in exc_info.value.message
         assert client.engine is None
 
-    async def test_hung_ping_is_typed_timeout_and_disposes(
-        self, release: threading.Event
-    ) -> None:
+    async def test_hung_ping_is_typed_timeout_and_disposes(self, hang: _Hang) -> None:
         client = BaseSQLClient()
         client.DB_CONFIG = _config()
         client.get_sqlalchemy_connection_string = lambda: "test://h"  # type: ignore[method-assign]
         engine = MagicMock()
 
         def _hung_connect() -> MagicMock:
-            release.wait(10)
+            hang.block()
             return MagicMock()
 
         engine.connect.side_effect = _hung_connect
-        started = time.monotonic()
         with (
             _budget(_BUDGET),
             patch("sqlalchemy.create_engine", return_value=engine),
             pytest.raises(SqlClientConnectTimeoutError),
         ):
-            async with _loop_lag() as lag:
-                await client.load({})
-        assert time.monotonic() - started < _BUDGET + 0.5
-        assert lag[0] < _MAX_LOOP_LAG
+            await hang.probe.run(lambda: client.load({}))
+        _assert_gave_up_on_the_budget(hang)
         engine.dispose.assert_called_once()
         assert client.engine is None
 
@@ -308,23 +319,18 @@ class TestSyncLoadBudget:
 
 
 class TestAsyncLoadBudget:
-    async def test_hung_connection_string_is_typed_timeout(
-        self, release: threading.Event
-    ) -> None:
+    async def test_hung_connection_string_is_typed_timeout(self, hang: _Hang) -> None:
         client = AsyncBaseSQLClient()
         client.DB_CONFIG = _config()
 
         def _hung_sts() -> str:
-            release.wait(10)
+            hang.block()
             return "test://h"
 
         client.get_sqlalchemy_connection_string = _hung_sts  # type: ignore[method-assign]
-        started = time.monotonic()
         with _budget(_BUDGET), pytest.raises(SqlClientConnectTimeoutError):
-            async with _loop_lag() as lag:
-                await client.load({})
-        assert time.monotonic() - started < _BUDGET + 0.5
-        assert lag[0] < _MAX_LOOP_LAG
+            await hang.probe.run(lambda: client.load({}))
+        _assert_gave_up_on_the_budget(hang)
 
     async def test_hung_ping_is_typed_timeout_and_disposes(self) -> None:
         client = AsyncBaseSQLClient()

@@ -391,6 +391,7 @@ class _CancellationSwallowingHandler(DefaultHandler):
 
     def __init__(self, *, then_return: bool) -> None:
         self._then_return = then_return
+        self.finished = False
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         try:
@@ -400,6 +401,7 @@ class _CancellationSwallowingHandler(DefaultHandler):
                 # wait_for would hand this straight back as a real verdict.
                 return PreflightOutput(status=PreflightStatus.READY, checks=[])
             await asyncio.sleep(5)  # ignores the cancel and keeps working
+        self.finished = True
         return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
 
@@ -434,19 +436,16 @@ class TestUncooperativeHandlerCannotDefeatTheBudget:
     async def test_ignoring_the_cancel_does_not_hold_the_activity_open(self) -> None:
         # The gate must classify at the deadline, not wait for the handler to
         # unwind — otherwise it blows start_to_close and loses the verdict.
-        gate = _gate(
-            _CancellationSwallowingHandler(then_return=False),
-            mode=PreflightGateMode.HARD,
-            budget=0.3,
-        )
-        loop = asyncio.get_running_loop()
-        started = loop.time()
+        handler = _CancellationSwallowingHandler(then_return=False)
+        gate = _gate(handler, mode=PreflightGateMode.HARD, budget=0.3)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
-        elapsed = loop.time() - started
         assert result.status is PreflightStatus.NOT_READY
         assert _outcome(mock_logger)["reason"] == "TIMEOUT"
-        assert elapsed < 2.0, f"gate waited {elapsed:.1f}s for an uncooperative handler"
+        # The handler is still working off the cancel it swallowed: the gate
+        # returned without waiting for it. Asserted on the handler, not on
+        # elapsed time, which measured the runner (FND-4233).
+        assert not handler.finished, "gate waited for an uncooperative handler"
 
 
 class TestCollapsedPlumbingIsNotACredentialProblem:
@@ -1076,12 +1075,11 @@ class TestResolutionRunsUnderTheBudget:
             _patched_resolution(sleep=60),
             mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
-            started = asyncio.get_running_loop().time()
             with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-            elapsed = asyncio.get_running_loop().time() - started
+                # Resolution hangs for 60s; a gate that waited on it past its
+                # own budget could not finish inside this bound.
+                await asyncio.wait_for(gate(PreflightGateInput()), 30)
 
-        assert elapsed < 2.0, "the gate waited on resolution past its own budget"
         assert excinfo.value.type == "DependencyUnavailableError"
         details = _primary_details(excinfo.value)
         assert details.category is FailureCategory.DEPENDENCY_UNAVAILABLE
@@ -1281,12 +1279,11 @@ class TestHandlerIsCancelledAtTheAdvertisedBudget:
             verify_storage=True,
         )
         with mock.patch(f"{_GATE}.logger") as mock_logger:
-            started = asyncio.get_running_loop().time()
             result = await gate(PreflightGateInput())
-            elapsed = asyncio.get_running_loop().time() - started
         assert result.status is PreflightStatus.NOT_READY
+        # Cancelled before its 3s of work completed, so at the advertised 2s,
+        # not at the 5s budget the reserve was carved from.
         assert handler.completed is False
-        assert elapsed < 2.9
         row = _outcome(mock_logger)
         assert row["outcome"] == "would_block"
         assert "2s budget" in result.checks[0].resolved_message
