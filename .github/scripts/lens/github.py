@@ -168,6 +168,13 @@ class GitHub:
         )
         return list((data or {}).get("workflow_runs") or [])
 
+    def run_jobs(self, run_id: int) -> list[dict[str, Any]]:
+        """Jobs of a run's latest attempt (lens has one job, so one page)."""
+        data = self._call(
+            "GET", f"/repos/{self.repo}/actions/runs/{run_id}/jobs?per_page=100"
+        )
+        return list((data or {}).get("jobs") or [])
+
     # ---- writes --------------------------------------------------------
     def set_status(
         self, sha: str, state: str, description: str, target_url: str = ""

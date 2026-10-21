@@ -9,14 +9,23 @@ straight away: no model calls, no state change, a one-line note on the PR.
 
 Only the younger of two runs yields, so two requests landing at the same
 instant still resolve to exactly one review — never zero, never two.
+
+A run's status alone is not trusted: GitHub can leave a run `in_progress`
+after its only job has finished, which would refuse every `/lens` until
+GitHub closes it. So an older run that looks active is checked against its
+jobs, and one older than the job timeout is never waited on.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 
 WORKFLOW_FILE = "lens.yml"
 ACTIVE = {"queued", "in_progress", "waiting", "requested", "pending"}
+# Must match `timeout-minutes:` of the review job in .github/workflows/lens.yml.
+JOB_TIMEOUT = timedelta(minutes=45)
 
 
 def run_name(pr: int) -> str:
@@ -24,17 +33,46 @@ def run_name(pr: int) -> str:
     return f"lens #{pr}"
 
 
+def _created(run: dict[str, Any]) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(run["created_at"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        return None
+
+
+def _still_running(
+    run: dict[str, Any],
+    jobs_of: Callable[[int], list[dict[str, Any]]],
+    now: datetime,
+) -> bool:
+    created = _created(run)
+    if created is not None and now - created > JOB_TIMEOUT:
+        return False  # no review outlives the job timeout
+    jobs = jobs_of(int(run["id"]))
+    # No jobs yet means the run is still being set up, not that it is done.
+    return not jobs or any(j.get("status") != "completed" for j in jobs)
+
+
 def older_active_run(
-    runs: list[dict[str, Any]], pr: int, own_run_id: int
+    runs: list[dict[str, Any]],
+    pr: int,
+    own_run_id: int,
+    jobs_of: Callable[[int], list[dict[str, Any]]],
+    now: datetime,
 ) -> dict[str, Any] | None:
-    """The run this one must yield to, or None when it may proceed."""
+    """The run this one must yield to, or None when it may proceed.
+
+    `jobs_of` lists a run's jobs; it is only called for an older run that
+    claims to be active."""
     name = run_name(pr)
     for r in runs:
         if r.get("id") == own_run_id or r.get("status") not in ACTIVE:
             continue
         if (r.get("display_title") or r.get("name")) != name:
             continue
-        if int(r.get("id") or 0) < own_run_id:  # run ids increase monotonically
+        if int(r.get("id") or 0) >= own_run_id:  # run ids increase monotonically
+            continue
+        if _still_running(r, jobs_of, now):
             return r
     return None
 

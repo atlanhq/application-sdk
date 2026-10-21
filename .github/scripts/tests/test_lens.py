@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,7 @@ from lens.holistic import build_input  # noqa: E402
 from lens.index import build_index  # noqa: E402
 from lens.llm import FatalRequestError  # noqa: E402
 from lens.llm import BudgetExhausted, Client, Ledger, LLMError, Price  # noqa: E402
-from lens.lock import BUSY_NOTE, older_active_run, run_name  # noqa: E402
+from lens.lock import BUSY_NOTE, JOB_TIMEOUT, older_active_run, run_name  # noqa: E402
 from lens.review import (  # noqa: E402
     SUMMARY_MARKER,
     RunResult,
@@ -1399,18 +1400,36 @@ def test_round_cap_defaults_to_five():
 # ---- one review per PR at a time -------------------------------------------------------------------------------
 
 
-def _run(i, status="in_progress", pr=7):
+_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+
+def _run(i, status="in_progress", pr=7, age_minutes=1):
     return {
         "id": i,
         "status": status,
         "display_title": run_name(pr),
         "html_url": f"https://x/runs/{i}",
+        "created_at": (_NOW - timedelta(minutes=age_minutes)).isoformat(),
     }
 
 
+def _jobs(*statuses):
+    """A `jobs_of` returning the same jobs for every run."""
+    return lambda run_id: [{"name": "lens review", "status": s} for s in statuses]
+
+
+_RUNNING = _jobs("in_progress")
+
+
+def _older(runs, own_run_id=105, jobs_of=_RUNNING):
+    return older_active_run(
+        runs, pr=7, own_run_id=own_run_id, jobs_of=jobs_of, now=_NOW
+    )
+
+
 def test_a_newer_request_yields_to_an_older_active_review():
-    assert older_active_run([_run(100)], pr=7, own_run_id=105)["id"] == 100
-    assert older_active_run([_run(100, status="queued")], pr=7, own_run_id=105)
+    assert _older([_run(100)])["id"] == 100
+    assert _older([_run(100, status="queued")])
 
 
 @pytest.mark.parametrize(
@@ -1424,17 +1443,69 @@ def test_a_newer_request_yields_to_an_older_active_review():
     ],
 )
 def test_a_review_proceeds_when_no_older_review_of_this_pr_is_active(runs):
-    assert older_active_run(runs, pr=7, own_run_id=105) is None
+    assert _older(runs) is None
+
+
+def test_a_run_left_in_progress_after_its_jobs_finished_does_not_block():
+    # GitHub can leave a run `in_progress` minutes after its only job ended.
+    assert _older([_run(100)], jobs_of=_jobs("completed")) is None
+    assert _older([_run(100)], jobs_of=_jobs("completed", "completed")) is None
+
+
+@pytest.mark.parametrize(
+    "jobs_of",
+    [
+        _jobs("in_progress"),
+        _jobs("completed", "queued"),  # one job still to run
+        _jobs(),  # no jobs yet: the run is still being set up
+    ],
+)
+def test_an_older_run_with_work_left_blocks(jobs_of):
+    assert _older([_run(100)], jobs_of=jobs_of)["id"] == 100
+
+
+def test_jobs_are_only_listed_for_an_older_run_that_claims_to_be_active():
+    asked: list[int] = []
+
+    def jobs_of(run_id):
+        asked.append(run_id)
+        return [{"status": "in_progress"}]
+
+    runs = [_run(110), _run(104, status="completed"), _run(103, pr=8), _run(100)]
+    assert _older(runs, jobs_of=jobs_of)["id"] == 100
+    assert asked == [100]
+
+
+def test_an_older_run_past_the_job_timeout_never_blocks():
+    assert _older([_run(100, age_minutes=46)]) is None
+    assert _older([_run(100, age_minutes=44)])["id"] == 100
+    # A stale run does not hide a live one behind it.
+    assert _older([_run(101, age_minutes=60), _run(100)])["id"] == 100
+
+
+def test_a_run_without_a_readable_creation_time_falls_back_to_its_jobs():
+    run = _run(100)
+    del run["created_at"]
+    assert _older([run])["id"] == 100
+    assert _older([run], jobs_of=_jobs("completed")) is None
+
+
+def test_lock_timeout_matches_the_workflow_job_timeout():
+    wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
+    assert re.findall(r"timeout-minutes: (\d+)", wf) == [
+        str(int(JOB_TIMEOUT.total_seconds() // 60))
+    ]
 
 
 def test_two_simultaneous_requests_resolve_to_exactly_one_review():
     runs = [_run(200), _run(201)]
-    proceeding = [
-        rid
-        for rid in (200, 201)
-        if older_active_run(runs, pr=7, own_run_id=rid) is None
-    ]
-    assert proceeding == [200]
+    for jobs_of in (_RUNNING, _jobs()):  # also before either run has a job
+        proceeding = [
+            rid
+            for rid in (200, 201)
+            if _older(runs, own_run_id=rid, jobs_of=jobs_of) is None
+        ]
+        assert proceeding == [200]
 
 
 def test_workflow_names_runs_for_the_guard_and_has_no_queueing_concurrency():
@@ -1458,7 +1529,11 @@ def test_cli_drops_a_request_while_another_review_runs(monkeypatch):
             pass
 
         def workflow_runs(self, workflow_file):
-            return [_run(100)]
+            # The CLI reads the real clock, so the busy run must be fresh by it.
+            return [{**_run(100), "created_at": datetime.now(timezone.utc).isoformat()}]
+
+        def run_jobs(self, run_id):
+            return [{"status": "in_progress"}]
 
         def comment(self, number, body):
             posted.append(body)
@@ -2013,6 +2088,9 @@ class _CliGitHub:
         del _CliGitHub.live[comment_id]
 
     def workflow_runs(self, workflow_file):
+        return []
+
+    def run_jobs(self, run_id):  # pragma: no cover - no runs, so never asked
         return []
 
 
