@@ -8,11 +8,15 @@ real ``daprd``.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import io
 import os
 import tarfile
+import tempfile
 import urllib.error
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -451,11 +455,12 @@ class TestDownloadDaprd:
         def _short_copy(src, dst, *args) -> None:
             real_copy(io.BytesIO(src.read()[:10]), dst)
 
-        monkeypatch.setattr(_dapr.shutil, "copyfileobj", _short_copy)
         target = tmp_path / _daprd_binary_name()
 
-        with pytest.raises(DaprdDownloadIncompleteError):
-            _download_daprd(target)
+        with private_stdlib(_dapr, "shutil") as local_shutil:
+            monkeypatch.setattr(local_shutil, "copyfileobj", _short_copy)
+            with pytest.raises(DaprdDownloadIncompleteError):
+                _download_daprd(target)
         assert not target.exists()
 
     def test_client_error_is_not_retried(
@@ -499,11 +504,32 @@ class TestWaitForDaprReady:
         assert "failed to listen" in exc_info.value.log_tail
 
 
+@contextlib.contextmanager
+def _private_spawn_and_log_dir(
+    monkeypatch: pytest.MonkeyPatch, spawn, log_dir: Path
+) -> Iterator[None]:
+    """Route ``_dapr``'s subprocess spawn to *spawn* and its temp log into
+    *log_dir*, on private copies of ``asyncio`` / ``tempfile`` so no other
+    caller in the worker sees either patch."""
+    real_mkstemp = tempfile.mkstemp
+    with (
+        private_stdlib(_dapr, "asyncio") as local_asyncio,
+        private_stdlib(_dapr, "tempfile") as local_tempfile,
+    ):
+        monkeypatch.setattr(local_asyncio, "create_subprocess_exec", spawn)
+        monkeypatch.setattr(
+            local_tempfile,
+            "mkstemp",
+            lambda **kw: real_mkstemp(**{**kw, "dir": str(log_dir)}),
+        )
+        yield
+
+
 class TestEmbeddedDaprLog:
     """daprd output goes to a temp log that is kept only when daprd died."""
 
     @pytest.fixture(autouse=True)
-    def _stub(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _stub(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(
             "application_sdk.dev._dapr._ensure_daprd_binary", lambda: tmp_path / "d"
@@ -521,10 +547,10 @@ class TestEmbeddedDaprLog:
             self.spawn_kwargs = kwargs
             return proc
 
-        monkeypatch.setattr("asyncio.create_subprocess_exec", _spawn)
         self.log_dir = tmp_path / "logs"
         self.log_dir.mkdir()
-        monkeypatch.setattr(_dapr.tempfile, "tempdir", str(self.log_dir))
+        with _private_spawn_and_log_dir(monkeypatch, _spawn, self.log_dir):
+            yield
 
     @pytest.mark.asyncio
     async def test_log_removed_after_clean_run(
@@ -535,7 +561,7 @@ class TestEmbeddedDaprLog:
         )
         async with embedded_dapr():
             pass
-        assert self.spawn_kwargs["stdout"] is not _dapr.asyncio.subprocess.DEVNULL
+        assert self.spawn_kwargs["stdout"] is not asyncio.subprocess.DEVNULL
         assert not [p for p in self.log_dir.iterdir() if p.suffix == ".log"]
 
     @pytest.mark.asyncio
@@ -602,12 +628,13 @@ class TestEnsureDaprdBinary:
         stdout: str,
         expected: bool,
     ) -> None:
-        monkeypatch.setattr(
-            _dapr.subprocess,
-            "run",
-            lambda *_a, **_k: MagicMock(returncode=returncode, stdout=stdout),
-        )
-        assert _dapr._daprd_runs(tmp_path / "daprd") is expected
+        with private_stdlib(_dapr, "subprocess") as local_subprocess:
+            monkeypatch.setattr(
+                local_subprocess,
+                "run",
+                lambda *_a, **_k: MagicMock(returncode=returncode, stdout=stdout),
+            )
+            assert _dapr._daprd_runs(tmp_path / "daprd") is expected
 
     def test_daprd_runs_false_when_not_executable(self, tmp_path: Path) -> None:
         garbage = tmp_path / "daprd"
@@ -636,12 +663,13 @@ class TestSpawnFailureCleanup:
         async def _spawn_fails(*_a, **_k):
             raise PermissionError("cannot execute")
 
-        monkeypatch.setattr("asyncio.create_subprocess_exec", _spawn_fails)
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
-        monkeypatch.setattr(_dapr.tempfile, "tempdir", str(log_dir))
 
-        with pytest.raises(PermissionError):
+        with (
+            _private_spawn_and_log_dir(monkeypatch, _spawn_fails, log_dir),
+            pytest.raises(PermissionError),
+        ):
             async with embedded_dapr():
                 pass
         assert not [p for p in log_dir.iterdir() if p.suffix == ".log"]
