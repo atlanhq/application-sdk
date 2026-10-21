@@ -3397,9 +3397,12 @@ class TestOtlpShutdownFlush:
 
     def test_flush_returns_within_bound_when_force_flush_blocks(self):
         """OTel 1.45.1 ``BatchProcessor.force_flush`` ignores ``timeout_millis``
-        (opentelemetry-python#4568), so ``flush_otlp_logs`` must enforce it."""
-        import time
+        (opentelemetry-python#4568), so ``flush_otlp_logs`` must enforce it.
 
+        ``force_flush`` here blocks until the test releases it, and the test
+        releases it only after the flush has returned, so a flush that waited
+        on it could not return at all. The join bound only decides how long
+        that regression takes to fail."""
         from application_sdk.observability import logger_adaptor as la
 
         adapter = get_logger("app.flush_block_test")
@@ -3407,10 +3410,21 @@ class TestOtlpShutdownFlush:
         provider = mock.MagicMock()
         provider.force_flush.side_effect = lambda **_: release.wait()
         adapter.logger_provider = provider
+        # join() swallows the target's exception, so the target records it.
+        raised: list[BaseException] = []
+
+        def _flush() -> None:
+            try:
+                la.flush_otlp_logs(timeout_millis=200)
+            except BaseException as e:
+                raised.append(e)
+
+        flusher = threading.Thread(target=_flush, daemon=True)
         try:
-            started = time.monotonic()
-            la.flush_otlp_logs(timeout_millis=200)
-            assert time.monotonic() - started < 2.0
+            flusher.start()
+            flusher.join(30)
+            assert not flusher.is_alive(), "flush waited on a blocked force_flush"
+            assert raised == [], f"flush raised instead of returning: {raised!r}"
             provider.force_flush.assert_called_once_with(timeout_millis=200)
         finally:
             release.set()

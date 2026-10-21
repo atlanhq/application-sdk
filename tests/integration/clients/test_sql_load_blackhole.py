@@ -1,17 +1,25 @@
-"""``load()`` against black-holed endpoints: a typed error inside the budget, loop free.
+"""``load()`` against black-holed endpoints: a typed error, and the thread let go.
 
 A black hole is a local TCP listener that accepts and then never sends a byte —
 the shape of a filtered private link or a hung STS endpoint. Two cases:
 
 * **STS black-holed** (IAM-role auth): the AssumeRole inside
-  ``get_sqlalchemy_connection_string`` hangs. It runs off the loop, so the loop
-  keeps ticking, and the budget turns the hang into ``SqlClientConnectTimeoutError``.
-  Its timeouts are fitted to the budget, so it hangs up by then too.
+  ``get_sqlalchemy_connection_string`` hangs, and the budget turns the hang into
+  ``SqlClientConnectTimeoutError``. Its timeouts are fitted to the budget, so it
+  hangs up by then too.
 * **DB host black-holed** (psycopg2): the connect hangs in the handshake. The
   driver's ``connect_timeout``, injected by the SDK, ends the attempt and closes
   the socket — the worker thread is freed, not pinned until the OS gives up.
 
 Real sockets, so this is the integration tier.
+
+That the loop stays free while ``load()`` waits is proven in the unit tier
+(``tests/unit/clients/test_sql_load_budget.py``) with a ``LoopProbe``, which
+needs no threshold. Here a real socket is in the way, so a loop-stall bar
+could only measure the runner: this test's first run in a session absorbed
+the cold botocore and psycopg2 imports and stalled the loop past one
+(FND-4233). Every bound below sits between the budget and the failure it
+guards against, far from both.
 """
 
 from __future__ import annotations
@@ -20,8 +28,7 @@ import asyncio
 import contextlib
 import socket
 import threading
-import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from unittest.mock import patch
 
 import pytest
@@ -34,10 +41,10 @@ pytestmark = pytest.mark.integration
 
 #: libpq rounds a connect_timeout below 2 s up to 2 s.
 _BUDGET = 2.0
-#: The FND-4083 bar: the loop never stalls this long while load() waits.
-_MAX_LOOP_LAG = 0.1
-#: Slack for scheduling between the budget expiring and load() returning.
-_GRACE = 1.0
+#: How long load() and its worker thread get to give up. Well past the budget,
+#: and well short of what a regression costs: botocore's fixed 15 s STS read
+#: timeout, or a psycopg2 connect with no timeout that never ends at all.
+_GIVE_UP_WITHIN = 10.0
 
 
 class _BlackHole:
@@ -80,26 +87,6 @@ def black_hole() -> Iterator[_BlackHole]:
     hole.close()
 
 
-@contextlib.asynccontextmanager
-async def _loop_lag() -> AsyncIterator[list[float]]:
-    """Yield a one-item list holding the worst loop stall seen inside the block."""
-    worst = [0.0]
-    stop = asyncio.Event()
-
-    async def _tick() -> None:
-        while not stop.is_set():
-            started = time.monotonic()
-            await asyncio.sleep(0.01)
-            worst[0] = max(worst[0], time.monotonic() - started - 0.01)
-
-    ticker = asyncio.create_task(_tick())
-    try:
-        yield worst
-    finally:
-        stop.set()
-        await ticker
-
-
 class _PostgresClient(BaseSQLClient):
     DB_CONFIG = DatabaseConfig(
         template="postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}",
@@ -120,23 +107,18 @@ async def test_black_holed_db_host_times_out_and_frees_the_thread(
         "extra": {"database": "example_db"},
     }
 
-    started = time.monotonic()
     with (
         patch(
             "application_sdk.clients.sql.SQL_CLIENT_CONNECT_TIMEOUT_SECONDS", _BUDGET
         ),
         pytest.raises(SqlClientConnectTimeoutError),
     ):
-        async with _loop_lag() as lag:
-            await client.load(credentials)
-    elapsed = time.monotonic() - started
+        await asyncio.wait_for(client.load(credentials), _GIVE_UP_WITHIN)
 
     assert black_hole.accepted.is_set(), "the client never reached the black hole"
-    assert elapsed < _BUDGET + _GRACE
-    assert lag[0] < _MAX_LOOP_LAG
     # The driver's own connect_timeout gave up and closed the socket: the
     # sdk-blocking- thread is free, not parked until the OS TCP timeout.
-    assert await asyncio.to_thread(black_hole.peer_closed.wait, _BUDGET + _GRACE)
+    assert await asyncio.to_thread(black_hole.peer_closed.wait, _GIVE_UP_WITHIN)
     assert client.engine is None
 
 
@@ -155,10 +137,10 @@ async def test_black_holed_sts_times_out_without_blocking_the_loop(
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
 
     # Warm boto3 first. A process's first boto3 client loads botocore's JSON
-    # models in C calls that hold the GIL. On the worker thread that stalls the
-    # loop for a one-off ~35 ms locally (over 200 ms on a CI runner), which would
-    # drown out what this test measures: the loop while AssumeRole hangs.
-    # Built with no network call, against the default session load() also uses.
+    # models, which on a cold CI runner spends a share of the 2 s budget before
+    # AssumeRole is even sent, and the test needs the call to reach the black
+    # hole. Built with no network call, against the default session load()
+    # also uses.
     boto3 = pytest.importorskip("boto3")
     # A fresh default session, restored at teardown: it caches the synthetic
     # credentials above, which must not leak into later tests in this process.
@@ -178,24 +160,17 @@ async def test_black_holed_sts_times_out_without_blocking_the_loop(
         },
     }
 
-    started = time.monotonic()
     with (
         patch(
             "application_sdk.clients.sql.SQL_CLIENT_CONNECT_TIMEOUT_SECONDS", _BUDGET
         ),
         pytest.raises(SqlClientConnectTimeoutError),
     ):
-        async with _loop_lag() as lag:
-            await client.load(credentials)
-    elapsed = time.monotonic() - started
+        await asyncio.wait_for(client.load(credentials), _GIVE_UP_WITHIN)
 
     assert black_hole.accepted.is_set(), "AssumeRole never reached the black hole"
-    # Ended inside the budget, not after botocore's fixed 15 s read timeout:
-    # either by the budget or by the STS read timeout fitted to it.
-    assert elapsed < _BUDGET + _GRACE
-    assert lag[0] < _MAX_LOOP_LAG
     # The STS call's timeouts were fitted to the budget, so it gave up and
     # hung up too: its sdk-blocking- thread is free, not held for botocore's
     # fixed bounds after load() returned.
-    assert await asyncio.to_thread(black_hole.peer_closed.wait, _BUDGET + _GRACE)
+    assert await asyncio.to_thread(black_hole.peer_closed.wait, _GIVE_UP_WITHIN)
     assert client.engine is None

@@ -14,7 +14,7 @@ exist, so the fix has something to break.
 
 from __future__ import annotations
 
-import time
+import asyncio
 from unittest import mock
 
 import orjson
@@ -84,15 +84,18 @@ class TestSelfReportedDurationsAreUnvalidated:
             mode=PreflightGateMode.SOFT,
             budget_seconds=5,
         )
-        started = time.monotonic()
+        # Bounded well inside the claim, so finishing at all proves the
+        # activity lived far less than it reports.
+        lived_at_most_ms = 30_000
+        assert lived_at_most_ms < _IMPOSSIBLE_DURATION_MS
         with mock.patch(f"{_GATE}.logger") as m:
-            await gate(PreflightGateInput())
-        elapsed_ms = (time.monotonic() - started) * 1000
+            await asyncio.wait_for(
+                gate(PreflightGateInput()), timeout=lived_at_most_ms / 1000
+            )
 
         assert _matrix(m)[0]["duration_ms"] == _IMPOSSIBLE_DURATION_MS
         # The row asserts 292.8s of work inside an activity that lived
         # milliseconds. Nothing in the gate objects.
-        assert elapsed_ms < _IMPOSSIBLE_DURATION_MS
 
     @pytest.mark.asyncio
     async def test_no_warning_is_emitted_for_an_impossible_duration(self):
@@ -122,12 +125,12 @@ class TestSelfReportedDurationsAreUnvalidated:
             mode=PreflightGateMode.SOFT,
             budget_seconds=GATE_TIMEOUT_DEFAULT_SECONDS,
         )
-        started = time.monotonic()
         with mock.patch(f"{_GATE}.logger") as m:
-            await gate(PreflightGateInput())
-        elapsed_seconds = time.monotonic() - started
+            # Finishing inside the budget is what a completed row means.
+            await asyncio.wait_for(
+                gate(PreflightGateInput()), timeout=GATE_TIMEOUT_DEFAULT_SECONDS
+            )
 
-        assert elapsed_seconds < GATE_TIMEOUT_DEFAULT_SECONDS
         reported_seconds = _matrix(m)[0]["duration_ms"] / 1000
         assert reported_seconds > GATE_TIMEOUT_DEFAULT_SECONDS
 
