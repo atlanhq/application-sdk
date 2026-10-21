@@ -63,13 +63,13 @@ jobs:
         with:
           version: "0.13.4"
 
-      # pytest comes from the locked `test` group. `--with pytest` resolved the
-      # newest pytest from PyPI on every run: unpinned, and outside the
-      # release-age cooldown the lock is held to. `--no-default-groups` skips
-      # the `dev` group (pre-commit, libcst, the conformance workspace), which
-      # these tests never import.
+      # pytest comes from the locked `test` group (a default group, as is
+      # `dev`, which carries the conformance workspace package several of these
+      # tests import). `--with pytest` resolved the newest pytest from PyPI on
+      # every run: unpinned, and outside the release-age cooldown the lock is
+      # held to.
       - name: Run script tests
-        run: uv run --frozen --no-default-groups --group test --extra workflows python -m pytest .github/scripts/tests -q
+        run: uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 
       # Plain bash, no uv — the script under test is bash + perl and the harness
       # asserts on its output, so keeping it dependency-free keeps it runnable
