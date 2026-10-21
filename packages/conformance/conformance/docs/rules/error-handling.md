@@ -352,7 +352,11 @@ unrelated, making the original failure invisible.
   return typed data, never to add or move a log line. Only a per-item `return None`
   after the imported `residuals.record_residual_failure` clears it (FND-4199). E004
   still applies to the same handler independently, so its exc_info requirement holds
-  whichever way the E007 is fixed.
+  whichever way the E007 is fixed. E020 is the response-guard variant of the same advice
+  and shares its per-object caveat: inside a batch or per-item loop, raising where one
+  object was skipped turns that object's failure into a run-wide one. Keep the per-item
+  skip (record it with record_residual_failure, or catch the typed error at the loop),
+  and keep tests that assert the skip passing.
 - **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
   the sentinel genuinely IS the function's contract — the caller is documented to treat
   the empty/None return as a normal outcome rather than as success. The reason must say
@@ -361,7 +365,10 @@ unrelated, making the original failure invisible.
   contract named; the detector does not try to prove it. Where the sentinel instead
   stands in for a failure the caller cannot distinguish from success, the directive is
   unremediated: either raise, or record the failure to a durable evidence trail and
-  declare the gap (see E020).
+  declare the gap (see E020). A per-item skip inside a batch whose empty aggregate
+  (`{}`, `[]`) tests assert is such a contract when no clearing shape keeps it: suppress
+  it with the per-item skip contract named rather than raising, which would fail the
+  whole run.
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
@@ -380,6 +387,15 @@ category, ...)` call is not flagged: the failure is recorded as durable data. A 
 catch, a bare `return`, a `return None` inside a `-> None` function, and any file in a
 wholesale-deprecated module (one whose own top level, or an enclosing package
 `__init__.py`, emits a module-level `DeprecationWarning`) are left out of this arm.
+
+Per-object skips.  Inside a batch or per-item loop, replacing one item's empty return
+with a raise is a behaviour change: one bad item then fails the whole run.  It is never
+the default fix.  Keep the skip and make the failure durable instead (the per-item
+`record_residual_failure` shape above), or raise the typed error and catch it at the
+loop.  Tests that assert the skip keep passing unchanged.  When the per-item value is an
+empty aggregate (`{}`, `[]`) and no clearing shape keeps the tested skip, the end state
+is a justified `# conformance: ignore[E007] <per-item skip contract>` or a judgment
+residue, never a raise.  E020 gives the same advice for HTTP response guards.
 
 ---
 
@@ -782,16 +798,28 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
   records a residual and returns [], and the run declares the gap as PARTIAL_SUCCESS. No
   site needs a suppression.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+- **Interacts with:** E007 gives the same advice for the except-shaped variant (a broad catch that logs and
+  returns an empty sentinel) and carries the same per-object caveat: inside a batch, a
+  raise in place of one object's skip fails the whole extraction. For both rules, raise
+  for a failure of the whole request or a transient outcome. A permanent per-object
+  rejection stays a logged skip, and tests that assert the skip (`== {}`) keep passing
+  unchanged. A lane fix that turned a per-object skip into a raise converted one bad
+  object into a run-wide failure in production.
 - **Already correct when:** The failed response raises a typed AppError at the guard. That is the whole fix where
-  the failure should abort the run. Where the app must degrade instead, the end state
-  keeps the raise and adds an explicit `except <ThatTypedError>` at the tolerating
-  function. That handler logs with exc_info=True, records the failure to a durable
-  evidence trail (a residual file), returns the empty sentinel, and the run declares the
-  gap (e.g. OutputStatus.PARTIAL_SUCCESS) rather than reporting a complete crawl. Do NOT
-  apply a raise-only edit to a site that already records and declares its gap: that
-  deletes the app's ability to degrade, so a single flaky endpoint aborts the entire
-  crawl. Convert it to the typed catch instead. An inline ignore[E020] is not the end
-  state, because the typed catch keeps the same degradation with nothing suppressed.
+  the failure of the whole request, or a transient outcome, should abort the run. A
+  permanent per-object rejection inside a batch (HTTP 400/404/410 on one object's detail
+  fetch) is a different end state: a warning that carries the status and the source's
+  error reason (never the body), then the skip, and the batch continues. The detector
+  does not report that shape, and turning it into a raise is a behaviour change, never
+  the default fix. Where the app must degrade instead, the end state keeps the raise and
+  adds an explicit `except <ThatTypedError>` at the tolerating function. That handler
+  logs with exc_info=True, records the failure to a durable evidence trail (a residual
+  file), returns the empty sentinel, and the run declares the gap (e.g.
+  OutputStatus.PARTIAL_SUCCESS) rather than reporting a complete crawl. Do NOT apply a
+  raise-only edit to a site that already records and declares its gap: that deletes the
+  app's ability to degrade, so a single flaky endpoint aborts the entire crawl. Convert
+  it to the typed catch instead. An inline ignore[E020] is not the end state, because
+  the typed catch keeps the same degradation with nothing suppressed.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
@@ -812,6 +840,31 @@ typed error in the tolerating function.  The handler logs with `exc_info=True`, 
 a residual and returns the empty sentinel, and the run declares the gap as
 `PARTIAL_SUCCESS`.  Anchored on HTTP-response markers and a failure-shaped test to avoid
 flagging ordinary `if x is None: return None` guards.
+
+Raise versus skip.  Raise the typed error for a failure of the whole request, and for
+transient outcomes (no response, 408, 429, 5xx).  A permanent rejection of ONE object
+inside a batch or iteration (its detail fetch answers 400/404/410 because the object was
+dropped between listing and fetch, or is invalid) is a skip: log the status and the
+source's error reason at WARNING, never the response body, and continue. Converting such
+a skip into a raise is a behaviour change: one bad object then fails the whole
+extraction.  It is never the default fix, and existing tests that assert the skip (`==
+{}`) must keep passing unchanged.
+
+Exempt: an empty return directly in the body of an `if` that pins the status to
+permanent per-object rejections (`r.status_code in (400, 404)`, `r.status_code == 404`;
+codes from {400, 404, 410}; `and`-ed terms allowed) on the response the failure test is
+about, when a warning/error-level log call earlier in that body says the object is
+skipped and passes the status itself as an argument (a status inside another expression
+does not count).  A local (`status = r.status_code`, or `... if r is not None else
+None`) counts when that is its last binding among the guard's earlier siblings and it is
+not rebound before the log. Still reported: a bare `if not r.is_success: return {}`;
+transient codes or a missing response returning empty; a skip with no log, a debug/info
+log, a log without the status or without saying it skips; a guard on a different
+response than the one that failed; an `or`-ed guard; a range such as `400 <=
+r.status_code < 500`; a named code constant (`in PERMANENT_CODES`); and 401/407 (a
+credential rejection hits every object).  A 403 skip also still reports: whether a
+permission denial should skip or raise is a site-level judgment that this rule does not
+make.
 
 ---
 

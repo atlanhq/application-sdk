@@ -315,6 +315,48 @@ def test_exc_info_prescriptions_carry_the_credential_contraindication(
     ), f"{area}'s credential-safe form drops the traceback; name safe_traceback"
 
 
+def test_e020_and_e007_prose_separate_a_per_object_skip_from_a_raise() -> None:
+    """Raising is not the default fix for a per-object skip inside a batch.
+
+    A lane fix followed E020's "raise a typed error" literally at a per-object
+    detail fetcher: one object the source permanently rejected (404) then
+    failed the whole extraction.  Both the prose entries and the catalog text
+    must state the distinction, and the E020 prose must show the exempt skip
+    shape the checker accepts (pinned by
+    ``test_e020_no_finding_on_logged_permanent_4xx_per_object_skip``).
+    """
+    from conformance.suite.rules import load_catalog
+
+    text = " ".join(_read("areas/error-handling.prose.md").split())
+    e020 = text.split("**E020 HttpFailureToEmptyReturn**", 1)[1].split("- **E021", 1)[0]
+    e007 = text.split("**E007 ErrorToReturnValue**", 1)[1].split("- **E0", 1)[0]
+
+    assert "Raise versus skip" in e020
+    assert "transient outcomes" in e020
+    assert "never the response body" in e020
+    assert "behaviour change" in e020
+    assert "never the default fix" in e020
+    assert "must keep passing unchanged" in e020
+    assert "response.status_code in (400, 404)" in e020
+    assert "Per-object skips" in e007
+    assert "behaviour change" in e007
+    assert "never the default fix" in e007
+    assert "must keep passing unchanged" in e007
+    assert "ignore[E007] <per-item skip contract>" in e007
+
+    rules = {r.id: r for r in load_catalog()}
+    e020_rule, e007_rule = rules["E020"], rules["E007"]
+    full = " ".join(e020_rule.full_description.split())
+    assert "Raise versus skip" in full
+    assert "never the default fix" in full
+    assert "E007" in (e020_rule.rule_interactions or "")
+    assert "E020" in (e007_rule.rule_interactions or "")
+    assert "never the default fix" in " ".join(e007_rule.full_description.split())
+    assert "per-item skip contract" in " ".join(
+        (e007_rule.terminal_state or "").split()
+    )
+
+
 def test_e004_prose_states_the_sanitizer_level_and_the_inline_row() -> None:
     """The prose must not promise more than `_check_p004` accepts.
 
