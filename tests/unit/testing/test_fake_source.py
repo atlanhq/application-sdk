@@ -199,6 +199,36 @@ def fake() -> Iterator[HttpFakeSource]:
         yield source
 
 
+_PROBE_ATTEMPTS = 5
+
+
+def _probe_free_port() -> int:
+    """A loopback port that was free a moment ago — and may not be by bind time."""
+    probe = socket.socket()
+    try:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+    finally:
+        probe.close()
+
+
+def _start_on_a_probed_port(**kwargs: Any) -> tuple[HttpFakeSource, int]:
+    """Start a fake on a probed port, probing again if the port was taken.
+
+    Between the probe closing its socket and the fake binding, another xdist
+    worker can take the port. That bind fails with ``OSError`` and the right
+    answer is a fresh probe, not a failed test.
+    """
+    for _attempt in range(_PROBE_ATTEMPTS - 1):
+        chosen = _probe_free_port()
+        try:
+            return HttpFakeSource(port=chosen, **kwargs).start(), chosen
+        except OSError:
+            continue
+    chosen = _probe_free_port()
+    return HttpFakeSource(port=chosen, **kwargs).start(), chosen
+
+
 class TestLifecycle:
     def test_binds_loopback_on_ephemeral_port(self, fake: HttpFakeSource) -> None:
         assert fake.base_url.startswith("http://127.0.0.1:")
@@ -215,15 +245,28 @@ class TestLifecycle:
 
     def test_serves_a_requested_port_when_one_is_given(self) -> None:
         """A fixed port is what a peer reaching the fake by name must dial."""
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        chosen = probe.getsockname()[1]
-        probe.close()
-
-        source = HttpFakeSource(port=chosen)
+        source, chosen = _start_on_a_probed_port()
         with source:
             assert source.port == chosen
             assert source.base_url == f"http://127.0.0.1:{chosen}"
+
+    def test_a_second_listener_cannot_bind_the_port_it_serves(self) -> None:
+        """No other socket may share the port, or connections split between them.
+
+        Windows grants a second SO_REUSEADDR bind on a listening port and then
+        hands each incoming connection to either socket; a TLS client that
+        lands on another worker's plain-HTTP fake dies in ``do_handshake`` with
+        WinError 10053. The fake claims its port exclusively, so this bind —
+        reuse flag and all — is refused on every platform.
+        """
+        with HttpFakeSource(name="exclusive") as source:
+            intruder = socket.socket()
+            try:
+                intruder.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                with pytest.raises(OSError):
+                    intruder.bind(("127.0.0.1", source.port))
+            finally:
+                intruder.close()
 
     def test_wildcard_bind_reports_a_dialable_base_url(self) -> None:
         """A wildcard listens everywhere, so base_url must not echo it back.
@@ -292,18 +335,24 @@ class TestLifecycle:
         is never stored and ``stop()`` cannot close the port — unless start()
         closes the server on the way out.
         """
-        probe = socket.socket()
-        probe.bind(("127.0.0.1", 0))
-        chosen = probe.getsockname()[1]
-        probe.close()
-
-        # PROTOCOL_TLS_CLIENT raises after bind: check_hostname needs a hostname
-        # that a server-side wrap never has.
-        source = HttpFakeSource(
-            port=chosen, ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        )
-        with pytest.raises(ValueError, match="check_hostname"):
-            source.start()
+        for _attempt in range(_PROBE_ATTEMPTS):
+            chosen = _probe_free_port()
+            # PROTOCOL_TLS_CLIENT raises after bind: check_hostname needs a
+            # hostname that a server-side wrap never has.
+            source = HttpFakeSource(
+                port=chosen, ssl_context=ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            )
+            try:
+                source.start()
+            except ValueError as exc:
+                assert "check_hostname" in str(exc)
+                break
+            except OSError:
+                continue  # another worker took the port between probe and bind
+            source.stop()
+            pytest.fail("start() wrapped a client-side context without raising")
+        else:
+            pytest.fail(f"no probed port stayed free in {_PROBE_ATTEMPTS} attempts")
 
         rebound = socket.socket()
         try:
@@ -836,21 +885,18 @@ class TestSessionScopedFixtureShape:
         assert len(fake.requests) == 8
 
 
-def _settled_thread_count(timeout: float = 2.0) -> int:
-    """The live thread count once two consecutive samples agree.
+def _threads_of(name: str) -> list[str]:
+    """Names of the live threads a fake called ``name`` started.
 
-    An unrelated pool spinning up mid-measurement would otherwise make the
-    thread-baseline assertions flaky.
+    Scoped to the source by its thread-name prefix rather than read off
+    ``threading.active_count()``: the process count also moves when a thread an
+    earlier test left behind exits mid-test, which says nothing about this fake.
     """
-    deadline = time.monotonic() + timeout
-    previous = threading.active_count()
-    while time.monotonic() < deadline:
-        time.sleep(0.05)
-        current = threading.active_count()
-        if current == previous:
-            return current
-        previous = current
-    return previous
+    return sorted(
+        thread.name
+        for thread in threading.enumerate()
+        if thread.name.startswith(f"{name}-")
+    )
 
 
 class TestTrailingSlash:
@@ -889,32 +935,30 @@ class TestTrailingSlash:
 class TestThreadTeardown:
     """stop() must join the per-connection handler threads, not just the accept loop."""
 
-    def test_stop_returns_to_the_thread_baseline(self) -> None:
-        baseline = _settled_thread_count()
-        source = HttpFakeSource(connection_timeout=0.2)
+    def test_stop_leaves_none_of_its_threads_running(self) -> None:
+        source = HttpFakeSource(name="baseline", connection_timeout=0.2)
         source.route(r"/ping", lambda _r: {"ok": True})
         source.start()
         try:
             assert _json(f"{source.base_url}/ping")[0] == 200
         finally:
             source.stop()
-        assert threading.active_count() == baseline
+        assert _threads_of("baseline") == []
 
     def test_stop_joins_a_handler_blocked_on_an_idle_keep_alive_connection(
         self,
     ) -> None:
         """The case that slipped through: the thread survived stop() in readline."""
-        baseline = _settled_thread_count()
-        source = HttpFakeSource(connection_timeout=0.2)
+        source = HttpFakeSource(name="keep-alive", connection_timeout=0.2)
         source.route(r"/ping", lambda _r: {"ok": True})
         source.start()
         connection = _connect(source)
         try:
             connection.request("GET", "/ping")
             assert connection.getresponse().read()
-            assert threading.active_count() > baseline
+            assert "keep-alive-handler" in _threads_of("keep-alive")
             source.stop()
-            assert threading.active_count() == baseline
+            assert _threads_of("keep-alive") == []
         finally:
             connection.close()
             source.stop()
@@ -1021,7 +1065,6 @@ class TestHyphenatedResponseHeaders:
 
 class TestHttpFakeSourceFactory:
     def test_builds_started_sources_and_stops_them_all(self) -> None:
-        baseline = _settled_thread_count()
         factory = HttpFakeSourceFactory()
         first = factory(name="first", connection_timeout=0.2)
         second = factory(name="second", connection_timeout=0.2)
@@ -1032,7 +1075,8 @@ class TestHttpFakeSourceFactory:
         finally:
             factory.stop_all()
         assert list(factory.sources) == []
-        assert threading.active_count() == baseline
+        assert _threads_of("first") == []
+        assert _threads_of("second") == []
         with pytest.raises(FakeSourceNotRunningError, match="not running"):
             _ = first.base_url
 
