@@ -475,6 +475,22 @@ under the required `tests / …` checks and override the PR's real results
 (FND-3839). Renaming a context or the dispatch inputs needs the old name
 accepted until every repo has resynced.
 
+## The release train schedule list (`data/release_train.yaml`)
+
+| | |
+|---|---|
+| **Produced by** | Hand-edited by PR in the private `atlanhq/connector-pulse` repo, `data/release_train.yaml` |
+| **Served at** | connector-pulse `main`, read through the contents API with the `atlan-app-fleet` App token |
+| **Key** | `schema_version: 1`, `timezone: IST`, `days`, `slots`, `per_slot_cap`, `per_day_cap`, `max_regate_per_pr`, `schedule` (`owner/repo` → `[{day, slot}]`) |
+| **Read by** | `.github/scripts/release_train.py` (`parse_config`), every run; also connector-pulse's own refresh |
+| **Pinned by** | `test_the_pilot_list_parses` and the config tests in `.github/scripts/tests/test_release_train.py`; connector-pulse's test of the checked-in file |
+
+Both sides enforce the same rules: connector-pulse so a bad edit fails its PR,
+this job so it never acts on a list it does not understand (it fails the run
+before any write). A slot must be one this repo's slot cron fires for, so
+adding a slot needs a cron here first. A new key or shape bumps
+`schema_version`, and this job must learn it before the file uses it.
+
 ## The release train record (bump PR status comment)
 
 | | |

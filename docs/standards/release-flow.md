@@ -360,13 +360,13 @@ design FND-3529). It does the two human steps of Stage 1: it comments
 |---|---|
 | Workflow | `.github/workflows/release-train.yml` |
 | Script | `.github/scripts/release_train.py` (tests: `.github/scripts/tests/test_release_train.py`) |
-| Config and schedule | `.github/release-train.yaml` — days, slots, caps, and `schedule`: the one list of apps on the train and when each releases. Reviewed like code. |
+| Config and schedule | `data/release_train.yaml` in the private `atlanhq/connector-pulse` repo — days, slots, caps, and `schedule`: the one list of apps on the train and when each releases. Fetched from connector-pulse `main` every run with the fleet App token. Reviewed like code. |
 | Identity | The `atlan-app-fleet` App (`FLEET_APP_ID` / `FLEET_APP_PRIVATE_KEY`). The workflow asserts the minted slug. |
 
 ### The schedule list
 
-`schedule` in `.github/release-train.yaml` maps each `owner/repo` to one to
-four releases a week, each `{day, slot}` with at most one a day:
+`schedule` in connector-pulse `data/release_train.yaml` maps each `owner/repo`
+to one to four releases a week, each `{day, slot}` with at most one a day:
 
 ```yaml
 schedule:
@@ -377,22 +377,25 @@ schedule:
 - Being listed is what puts an app on the train. An unlisted app is never read
   or touched, and an empty list releases nothing: the job never falls back to
   discovering the fleet.
-- To add, move or remove an app, open a PR that edits the list. The CI script
-  tests parse the checked-in file, so a bad day, an unquoted or unknown slot, a
-  second release on one day or an unknown key fails the PR, not the 08:00 run.
-- The 08:00 `sync` re-reads the list every morning, so a merged edit takes
-  effect the next day.
-- This repository is public. Listing an app publishes its repo name and slot.
+- To add, move or remove an app, open a PR on connector-pulse that edits the
+  list. connector-pulse's test of the file applies the same rules as this job,
+  so a bad day, an unquoted or unknown slot, a second release on one day or an
+  unknown key fails that PR, not the 08:00 run.
+- Every run re-reads the list, so a merged edit takes effect at the next run.
+  An invalid or unreadable list fails the run before any write.
+- The list lives in a private repo so that this public repo never names the
+  apps on it. The Pulse Release Train tab reads the same file.
 
 ### Public logs
 
 Run logs and job summaries of a public repository are public, so they carry
-repo names (already public in the list), states, slot times and counts only.
-They never carry a reason, a PR title, comment text, a login or a raw API
-error: an error shows as its HTTP status. The reason and the full error go to
-the bump PR's status comment, visible only to people who can read the app
-repo. Configuration errors are printed in full, since they only describe the
-public config file.
+counts only: apps listed, apps per state, writes per kind, and errors per kind
+(an error shows as its HTTP status). They never name a repo, and never carry a
+reason, a PR title, comment text, a login or a raw API error. An invalid list
+is reported as invalid without quoting it; connector-pulse's test names the
+problem. Per-app detail goes to each bump PR's status comment, visible only to
+people who can read the app repo, and to Pulse. `--verbose` prints the per-app
+table and full errors, for local runs only; the workflow never passes it.
 
 ### Phases
 
@@ -517,8 +520,7 @@ later, plus the skip history.
 ### Safety
 
 - **Dry run by default.** The script makes no write unless `--mode live`. A dry
-  run prints every write it would make (action and PR only, never its text) and
-  lists them in the job summary.
+  run counts the writes it would make, by kind, in the job summary.
 - **Live** needs `vars.RELEASE_TRAIN_LIVE == 'true'` and either a scheduled
   run or a dispatch with `dry_run: false`.
 - **Kill switch.** If `vars.RELEASE_TRAIN_ENABLED` is not `'true'`, the job

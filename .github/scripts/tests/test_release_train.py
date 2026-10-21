@@ -24,7 +24,21 @@ from _gha_expr import evaluate_operand  # noqa: E402
 
 REPO_ROOT = SCRIPTS.parents[1]
 WORKFLOW = REPO_ROOT / ".github/workflows/release-train.yml"
-CONFIG_FILE = REPO_ROOT / ".github/release-train.yaml"
+# The shape of connector-pulse's data/release_train.yaml (the real file is
+# validated by connector-pulse's own test; this job re-validates it every run).
+PILOT_LIST = """\
+schema_version: 1
+timezone: IST
+days: [mon, tue, wed, thu]
+slots: ["09:00", "12:00", "15:00", "18:00", "21:00"]
+per_slot_cap: 10
+per_day_cap: 40
+max_regate_per_pr: 2
+schedule:
+  atlanhq/atlan-openapi-app: [{day: mon, slot: "12:00"}]
+  atlanhq/atlan-mysql-app: [{day: mon, slot: "12:00"}]
+  atlanhq/atlan-metabase-app: [{day: mon, slot: "12:00"}]
+"""
 
 APP = "atlanhq/atlan-example-app"
 BOT = "atlan-app-fleet[bot]"
@@ -54,8 +68,8 @@ def _config(**overrides) -> rt.Config:
 # ── Config ───────────────────────────────────────────────────────────────
 
 
-def test_the_checked_in_config_is_valid() -> None:
-    config = rt.parse_config(CONFIG_FILE.read_text())
+def test_the_pilot_list_parses() -> None:
+    config = rt.parse_config(PILOT_LIST)
     assert config.days == ("mon", "tue", "wed", "thu")
     assert config.slots == rt.CRON_SLOTS
     # The pilot: the three canonical apps. Widening the train is an edit here.
@@ -136,7 +150,7 @@ def test_schedule_entries_are_sorted_by_day_then_slot() -> None:
 
 def test_an_unquoted_slot_is_rejected_not_guessed() -> None:
     # Unquoted 12:00 is YAML 1.1 sexagesimal (720); it must fail, not shift.
-    text = CONFIG_FILE.read_text().replace('slot: "12:00"', "slot: 12:00")
+    text = PILOT_LIST.replace('slot: "12:00"', "slot: 12:00")
     with pytest.raises(rt.ConfigError, match="train slot"):
         rt.parse_config(text)
 
@@ -997,9 +1011,17 @@ def test_the_public_summary_never_carries_a_reason_or_title(capsys) -> None:
     fake.files["atlan.yaml"] = "name: example\nrelease_model: cd\n"
     train = _train(fake, MON_1210, live=False)
     text = train.summary("slot", "dry-run") + capsys.readouterr().out
-    assert APP in text and rt.NOT_ON_TRAIN in text
+    assert rt.NOT_ON_TRAIN in text and "1 app(s) on the train" in text
+    assert APP not in text and "example" not in text  # the list is private
     assert "release_model" not in text  # the reason stays on the bump PR
     assert "Bump version" not in text  # titles stay on the bump PR
+    # --verbose (local runs only) shows the per-app table.
+    assert APP in train.summary("slot", "dry-run", verbose=True)
+
+
+def test_public_error_counts_drop_the_repo() -> None:
+    errors = [f"{APP}: GitHub API error (HTTP 502)", "a/b: GitHub API error (HTTP 502)"]
+    assert rt.public_error_counts(errors) == "GitHub API error (HTTP 502) ×2"
 
 
 def test_a_failed_write_is_public_as_a_status_and_private_in_full() -> None:
@@ -1073,7 +1095,8 @@ def test_close_disarms_expires_skips_and_summarises(
     assert record is not None and rt.pending_skips(record) == set()
     assert any(e["action"] == "expired" for e in record.events)
     text = train.summary("close", "live")
-    assert "weekly summary" in text and APP in text
+    assert "weekly summary" in text and APP not in text
+    assert APP in train.summary("close", "live", verbose=True)
 
 
 def test_close_notes_two_weeks_of_skips() -> None:
@@ -1113,14 +1136,11 @@ def test_main_dry_run_end_to_end(
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     monkeypatch.setenv("APP_SLUG", "atlan-app-fleet")
-    config = tmp_path / "train.yaml"
-    config.write_text(
-        CONFIG_FILE.read_text().replace("atlan-openapi-app", "atlan-example-app")
+    fake.files[rt.CONFIG_PATH] = PILOT_LIST.replace(
+        "atlan-openapi-app", "atlan-example-app"
     )
     code = rt.main(
         [
-            "--config",
-            str(config),
             "--cron",
             "30 3,6,9,12,15 * * 1-4",
             "--repos",
@@ -1132,21 +1152,42 @@ def test_main_dry_run_end_to_end(
     assert code == 0
     assert fake.writes == [] and _mutations(fake) == []
     assert "Would perform" in summary.read_text()
+    assert APP not in summary.read_text()
+    # With no --config, the list is read from connector-pulse main.
+    assert any(
+        f"repos/{rt.CONFIG_REPO}/contents/{rt.CONFIG_PATH}?ref=main" in " ".join(c)
+        for c in fake.calls
+    )
+
+
+def test_main_fails_closed_and_quietly_on_a_bad_list(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeGitHub()
+    fake.files[rt.CONFIG_PATH] = PILOT_LIST.replace("day: mon", "day: fri")
+    assert rt.main(["--phase", "sync"], runner=fake) == 2
+    err = capsys.readouterr().err
+    assert "is invalid" in err and "atlan-openapi-app" not in err
+    assert _mutations(fake) == []
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(PILOT_LIST.replace("day: mon", "day: fri"))
+    assert rt.main(["--config", str(bad), "--verbose"], runner=fake) == 2
+    assert "atlan-openapi-app" in capsys.readouterr().err  # --verbose: local only
 
 
 def test_main_rejects_bad_arguments(tmp_path: Path) -> None:
     fake = FakeGitHub()
+    pilot = tmp_path / "pilot.yaml"
+    pilot.write_text(PILOT_LIST)
     assert rt.main(["--mode", "yolo"], runner=fake) == 2
     assert (
         rt.main(
-            ["--config", str(CONFIG_FILE), "--repos", '["atlanhq/elsewhere"]'],
+            ["--config", str(pilot), "--repos", '["atlanhq/elsewhere"]'],
             runner=fake,
         )
         == 2
     )
-    assert (
-        rt.main(["--config", str(CONFIG_FILE), "--cron", "1 1 * * *"], runner=fake) == 2
-    )
+    assert rt.main(["--config", str(pilot), "--cron", "1 1 * * *"], runner=fake) == 2
     assert fake.calls == []
 
 

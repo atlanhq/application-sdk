@@ -3,7 +3,9 @@ name: Release Train
 # Releases each app at its slot (FND-4036, design FND-3529). Every app repo
 # keeps one bump-version PR open; releasing it means commenting `/gate-check`
 # and merging. .github/scripts/release_train.py does that on a schedule, for
-# the apps and slots listed in .github/release-train.yaml (the only list). See
+# the apps and slots listed in connector-pulse data/release_train.yaml (the only
+# list; private, fetched with the fleet App token every run). Logs are public, so
+# the script prints counts only, never a repo name. See
 # docs/standards/release-flow.md#release-train-scheduler.
 #
 # Phases (IST = UTC+05:30):
@@ -22,7 +24,7 @@ name: Release Train
 # Safety:
 #   * vars.RELEASE_TRAIN_ENABLED != 'true' → report-only (the kill switch).
 #   * Live only when vars.RELEASE_TRAIN_LIVE == 'true' AND (a scheduled run OR
-#     a dispatch with dry_run false). Anything else is a dry run that prints
+#     a dispatch with dry_run false). Anything else is a dry run that counts
 #     every write it would make. A dispatch's boolean input arrives in
 #     github.event.inputs as the string 'false'; comparing to that string fails
 #     closed if it ever arrives in another shape.
@@ -46,7 +48,7 @@ on:
         options: [auto, sync, slot, close]
         default: auto
       dry_run:
-        description: "Dry run: read everything, print every intended write, perform none."
+        description: "Dry run: read everything, count every intended write, perform none."
         type: boolean
         default: true
       repos:

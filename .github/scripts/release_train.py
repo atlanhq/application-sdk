@@ -32,19 +32,23 @@ next slot and ``/release-resume`` cancels a pending skip. Only commenters with
 Write/Maintain/Admin (collaborator-permission API, as ``pr_test_command`` does)
 count; bots never do.
 
-The schedule is one central list
---------------------------------
-``.github/release-train.yaml`` maps each ``owner/repo`` to its releases
+The schedule is one central list, kept private
+----------------------------------------------
+``data/release_train.yaml`` in the private ``atlanhq/connector-pulse`` repo holds
+the slot grid, the caps and ``schedule``: each ``owner/repo`` and its releases
 (``{day, slot}``, at most one a day). Being listed is what puts an app on the
-train; an unlisted app is never read or touched. The 08:00 sync re-reads it, so
-a merged edit takes effect the next morning.
+train; an unlisted app is never read or touched. Every run fetches it from
+connector-pulse ``main`` with the fleet App token, so a merged edit takes effect
+at the next run. ``--config`` reads a local file instead (local runs, tests).
 
 Public logs
 -----------
-This repo is public, so its run logs are too. They carry repo names (already
-public in the list), states and counts only: never a reason, title, comment
-text, login or raw API error. Those go to the bump PR's status comment, which
-only people who can read the app repo see.
+This repo is public, so its run logs are too. They carry counts only: how many
+apps are listed, in each state, and how many writes and errors of each kind.
+Never a repo name, reason, title, comment text, login or raw API error, and a
+config error says only that the list is invalid (connector-pulse's own test
+names the problem). Per-app detail goes to each bump PR's status comment and to
+Pulse. ``--verbose`` prints the per-app table, for local runs only.
 
 Safety
 ------
@@ -110,7 +114,10 @@ TITLE_SEP = " · "
 ATLAN_YAML = "atlan.yaml"
 RELEASE_GATE_SCRIPT = ".github/scripts/release_gate.py"
 CODEOWNERS_PATH = ".github/CODEOWNERS"
-SCHEDULE_SOURCE = "application-sdk `.github/release-train.yaml`"
+#: The one schedule list. Private, so the list never appears in this public repo.
+CONFIG_REPO = "atlanhq/connector-pulse"
+CONFIG_PATH = "data/release_train.yaml"
+SCHEDULE_SOURCE = f"connector-pulse `{CONFIG_PATH}`"
 #: The app's bump workflow (bootstrap template ``release.yaml``).
 BUMP_WORKFLOW = "release.yaml"
 #: Required on main. A ruleset context is the check-run name, so a reusable's
@@ -138,7 +145,7 @@ Entry = tuple[str, str]  # (day, "HH:MM")
 
 
 class ConfigError(ValueError):
-    """``.github/release-train.yaml`` or a release_schedule.yaml is invalid."""
+    """The schedule list (connector-pulse ``data/release_train.yaml``) is invalid."""
 
 
 class GhError(RuntimeError):
@@ -1055,22 +1062,35 @@ query($owner: String!, $name: String!, $number: Int!) {
 class Writer:
     """The only path to a mutation. Not live: print the intent, do nothing."""
 
-    def __init__(self, gh: Gh, *, live: bool, log: Callable[[str], None] = print):
+    def __init__(
+        self,
+        gh: Gh,
+        *,
+        live: bool,
+        log: Callable[[str], None] = print,
+        verbose: bool = False,
+    ):
         self.gh = gh
         self.live = live
         self.log = log
+        self.verbose = verbose
         self.intended: list[str] = []
+        self.kinds: dict[str, int] = {}
 
-    def _do(self, what: str, action: Callable[[], Any]) -> Any:
+    def _do(self, kind: str, what: str, action: Callable[[], Any]) -> Any:
+        # `what` names the repo, so it is logged only with --verbose (local runs);
+        # the public log gets the per-kind counts in the summary.
         self.intended.append(what)
+        self.kinds[kind] = self.kinds.get(kind, 0) + 1
+        if self.verbose:
+            self.log(f"  {'' if self.live else '[dry-run] would '}{what}")
         if not self.live:
-            self.log(f"  [dry-run] would {what}")
             return None
-        self.log(f"  {what}")
         return action()
 
     def comment(self, repo: str, number: int, body: str) -> Any:
         return self._do(
+            "comment",
             f"comment on {repo}#{number}",
             lambda: self.gh.write(
                 "POST", f"repos/{repo}/issues/{number}/comments", {"body": body}
@@ -1079,6 +1099,7 @@ class Writer:
 
     def edit_comment(self, repo: str, comment_id: int, body: str) -> Any:
         return self._do(
+            "edit status comment",
             f"edit status comment {comment_id} on {repo}",
             lambda: self.gh.write(
                 "PATCH", f"repos/{repo}/issues/comments/{comment_id}", {"body": body}
@@ -1087,6 +1108,7 @@ class Writer:
 
     def set_title(self, repo: str, number: int, title: str) -> Any:
         return self._do(
+            "retitle",
             f"retitle {repo}#{number}",
             lambda: self.gh.write(
                 "PATCH", f"repos/{repo}/pulls/{number}", {"title": title}
@@ -1095,6 +1117,7 @@ class Writer:
 
     def react(self, repo: str, comment_id: int) -> Any:
         return self._do(
+            "react",
             f"react +1 to comment {comment_id} on {repo}",
             lambda: self.gh.write(
                 "POST",
@@ -1107,6 +1130,7 @@ class Writer:
         self, repo: str, number: int, node_id: str, method: str, sha: str
     ) -> Any:
         return self._do(
+            "enable auto-merge",
             f"enable auto-merge ({method}) on {repo}#{number}",
             lambda: self.gh.mutate(
                 _ENABLE_AUTOMERGE, {"id": node_id, "method": method, "sha": sha}
@@ -1115,12 +1139,14 @@ class Writer:
 
     def disable_automerge(self, repo: str, number: int, node_id: str) -> Any:
         return self._do(
+            "disable auto-merge",
             f"disable auto-merge on {repo}#{number}",
             lambda: self.gh.mutate(_DISABLE_AUTOMERGE, {"id": node_id}),
         )
 
     def dispatch(self, repo: str, workflow: str, ref: str) -> Any:
         return self._do(
+            "dispatch",
             f"dispatch {workflow} on {repo}@{ref}",
             lambda: self.gh.write(
                 "POST",
@@ -1770,16 +1796,17 @@ class Train:
 
     # ― summary ―
 
-    def summary(self, phase: str, mode: str) -> str:
+    def summary(self, phase: str, mode: str, *, verbose: bool = False) -> str:
         title = "Release train — weekly summary" if phase == CLOSE else "Release train"
         lines = [
             f"## {title} ({self.week}, {phase}, {mode})",
             "",
             f"Run at {self.now:%a %d %b %H:%M} IST.",
             "",
-            "| App | State | Detail |",
-            "|---|---|---|",
         ]
+        if not verbose:
+            return "\n".join(lines + self._public_summary()) + "\n"
+        lines += ["| App | State | Detail |", "|---|---|---|"]
         lines += [
             f"| `{r.repo}` | {r.state} | {_inert(r.detail, 160)} |" for r in self.rows
         ]
@@ -1794,6 +1821,39 @@ class Train:
             lines += ["", f"### {verb} {len(self.writer.intended)} write(s)", ""]
             lines += [f"- {_inert(w, 200)}" for w in self.writer.intended]
         return "\n".join(lines) + "\n"
+
+    def _public_summary(self) -> list[str]:
+        """Counts only: this repo is public and the list is not (see module doc)."""
+        states: dict[str, int] = {}
+        for row in self.rows:
+            states[row.state] = states.get(row.state, 0) + 1
+        lines = [f"{len(self.rows)} app(s) on the train.", "", "| State | Apps |"]
+        lines += ["|---|---|"] + [f"| {k} | {v} |" for k, v in sorted(states.items())]
+        if self.writer.kinds:
+            verb = "Performed" if self.writer.live else "Would perform"
+            kinds = ", ".join(f"{v} {k}" for k, v in sorted(self.writer.kinds.items()))
+            lines += ["", f"{verb} {len(self.writer.intended)} write(s): {kinds}."]
+        if self.notes:
+            lines += [
+                "",
+                f"{len(self.notes)} note(s); see the bump PR status comments.",
+            ]
+        if self.errors:
+            lines += [
+                "",
+                f"{len(self.errors)} error(s): {public_error_counts(self.errors)}.",
+            ]
+            lines += ["Detail is on each app's bump PR status comment and in Pulse."]
+        return lines
+
+
+def public_error_counts(errors: Iterable[str]) -> str:
+    """``repo: kind`` errors → ``kind ×n``, dropping the repo."""
+    counts: dict[str, int] = {}
+    for error in errors:
+        kind = error.split(": ", 1)[-1]
+        counts[kind] = counts.get(kind, 0) + 1
+    return ", ".join(f"{k} ×{v}" for k, v in sorted(counts.items()))
 
 
 # ── Entry point ──────────────────────────────────────────────────────────
@@ -1832,8 +1892,9 @@ def run(
     mode: str,
     now: datetime,
     bot_login: str,
+    verbose: bool = False,
 ) -> Train:
-    writer = Writer(gh, live=mode == "live")
+    writer = Writer(gh, live=mode == "live", verbose=verbose)
     train = Train(
         config, gh, writer, now=now, bot_login=bot_login, report_only=mode == "report"
     )
@@ -1856,6 +1917,30 @@ def run(
     return train
 
 
+def load_config(gh: Gh, local: str) -> Config:
+    """The local file when given, else the list on connector-pulse ``main``."""
+    if local:
+        return parse_config(pathlib.Path(local).read_text(encoding="utf-8"))
+    text = gh.file(CONFIG_REPO, CONFIG_PATH)
+    if text is None:
+        raise ConfigError(f"{CONFIG_REPO}:{CONFIG_PATH} not found on {BASE_BRANCH}")
+    return parse_config(text)
+
+
+def config_error_text(exc: BaseException, *, verbose: bool) -> str:
+    """A ConfigError can quote a listed repo, so the public log names none."""
+    if verbose:
+        return str(exc)
+    if isinstance(exc, GhError):
+        return f"could not read the schedule list: {public_error(exc)}"
+    if isinstance(exc, ConfigError) and "not found on" in str(exc):
+        return str(exc)
+    return (
+        f"the schedule list ({SCHEDULE_SOURCE}) is invalid; connector-pulse's "
+        "test of that file names the problem (or re-run locally with --verbose)"
+    )
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -1863,7 +1948,16 @@ def main(
     now: datetime | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description="Release the app fleet on schedule.")
-    parser.add_argument("--config", default=".github/release-train.yaml")
+    parser.add_argument(
+        "--config",
+        default="",
+        help=f"a local list instead of {CONFIG_REPO}:{CONFIG_PATH} (local runs)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="print per-app detail; never in CI (this repo's logs are public)",
+    )
     parser.add_argument("--phase", default="auto", help="auto|sync|slot|close")
     parser.add_argument("--cron", default="", help="github.event.schedule, if any")
     parser.add_argument("--repos", default="", help="JSON list of owner/repo")
@@ -1878,13 +1972,19 @@ def main(
         return 2
     try:
         phase = resolve_phase(args.phase, args.cron)
-        config = parse_config(pathlib.Path(args.config).read_text(encoding="utf-8"))
         requested = parse_repos(args.repos)
-    except (ValueError, OSError) as exc:
+    except ValueError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 2
 
     gh = Gh(runner)
+    try:
+        config = load_config(gh, args.config)
+    except (ConfigError, GhError, OSError) as exc:
+        print(
+            f"::error::{config_error_text(exc, verbose=args.verbose)}", file=sys.stderr
+        )
+        return 2
     slug = os.environ.get("APP_SLUG") or DEFAULT_APP_SLUG
     try:
         repos = roster(config, requested)
@@ -1900,15 +2000,18 @@ def main(
         mode=args.mode,
         now=now or datetime.now(UTC),
         bot_login=f"{slug}[bot]",
+        verbose=args.verbose,
     )
-    text = train.summary(phase, args.mode)
+    text = train.summary(phase, args.mode, verbose=args.verbose)
     print(text)
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as handle:
             handle.write(text)
-    for error in train.errors:
-        print(f"::error::{_inert(error, 300)}", file=sys.stderr)
+    if train.errors:
+        shown = train.errors if args.verbose else [public_error_counts(train.errors)]
+        for error in shown:
+            print(f"::error::{_inert(error, 300)}", file=sys.stderr)
     return 1 if train.errors else 0
 
 
