@@ -8,6 +8,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.common.types import DataframeType
+from application_sdk.storage.formats import utils as formats_utils
 from application_sdk.storage.formats.parquet import ParquetFileReader
 from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.parquet_input import (
@@ -17,7 +18,16 @@ from application_sdk.testing.hypothesis.strategies.inputs.parquet_input import (
 _MOCK_STORE = MagicMock()
 _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 _DL_ID = _FIXED_HEX[:12]
-_EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
+
+
+def _expected_tmp() -> Path:
+    """Where ``_download_files`` stages a download with the fixed id.
+
+    Read at call time: the unit conftest roots ``TEMPORARY_PATH`` under the
+    session's tmp dir after this module is imported.
+    """
+    return Path(formats_utils.TEMPORARY_PATH) / _DL_ID
+
 
 # Configure Hypothesis settings at the module level
 settings.register_profile(
@@ -109,7 +119,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
             parquet_input.path, ".parquet", parquet_input.file_names
         )
 
-        expected_local = Path(_EXPECTED_TMP) / "local/test.parquet"
+        expected_local = _expected_tmp() / "local/test.parquet"
         mock_download_one.assert_called_once_with(
             _MOCK_STORE,
             "local/test.parquet",

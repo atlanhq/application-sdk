@@ -142,6 +142,8 @@ def _outcome_event(logger: MagicMock) -> dict:
     return calls[0].kwargs
 
 
+# Spawns pool children; see addopts in pyproject.toml.
+@pytest.mark.xdist_group("procpool")
 class TestWarnOnInvalidTransformedAssets:
     @pytest.fixture(autouse=True)
     def _enable_validation(self):

@@ -7,6 +7,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.common.types import DataframeType
+from application_sdk.storage.formats import utils as formats_utils
 from application_sdk.storage.formats.json import JsonFileReader
 from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.json_input import (
@@ -16,7 +17,16 @@ from application_sdk.testing.hypothesis.strategies.inputs.json_input import (
 _MOCK_STORE = MagicMock()
 _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 _DL_ID = _FIXED_HEX[:12]
-_EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
+
+
+def _expected_tmp() -> Path:
+    """Where ``_download_files`` stages a download with the fixed id.
+
+    Read at call time: the unit conftest roots ``TEMPORARY_PATH`` under the
+    session's tmp dir after this module is imported.
+    """
+    return Path(formats_utils.TEMPORARY_PATH) / _DL_ID
+
 
 # Configure Hypothesis settings at the module level
 settings.register_profile(
@@ -100,21 +110,21 @@ async def test_download_file_invoked_for_missing_files() -> None:
                 call(
                     _MOCK_STORE,
                     "local/a.json",
-                    Path(_EXPECTED_TMP) / "local/a.json",
+                    _expected_tmp() / "local/a.json",
                     skip_if_exists=False,
                 ),
                 call(
                     _MOCK_STORE,
                     "local/b.json",
-                    Path(_EXPECTED_TMP) / "local/b.json",
+                    _expected_tmp() / "local/b.json",
                     skip_if_exists=False,
                 ),
             ],
             any_order=True,
         )
         assert result == [
-            str(Path(_EXPECTED_TMP) / "local/a.json"),
-            str(Path(_EXPECTED_TMP) / "local/b.json"),
+            str(_expected_tmp() / "local/a.json"),
+            str(_expected_tmp() / "local/b.json"),
         ]
 
 

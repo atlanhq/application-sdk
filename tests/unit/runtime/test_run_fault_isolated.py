@@ -15,6 +15,9 @@ import pytest
 
 from application_sdk._runtime.offload import run_best_effort, run_fault_isolated
 
+# Every test here spawns pool children; see addopts in pyproject.toml.
+pytestmark = pytest.mark.xdist_group("procpool")
+
 
 def _echo(value: str) -> str:
     return f"echo:{value}"

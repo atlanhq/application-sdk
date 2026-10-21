@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import shutil
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -50,10 +51,15 @@ class _StubReader(Reader):
 class _StubWriter(Writer):
     """Minimal concrete Writer used to exercise the base methods."""
 
+    #: Set per test by :func:`_stub_writer_root`. A writer creates its staging
+    #: tree beside ``path`` on first write, so a fixed default (``/tmp/out``
+    #: once) shares that tree across xdist workers and leaves it behind.
+    default_path: str
+
     def __init__(
-        self, path: str = "/tmp/out", dataframe_type=DataframeType.pandas
+        self, path: str | None = None, dataframe_type=DataframeType.pandas
     ) -> None:
-        self.path = path
+        self.path = path if path is not None else self.default_path
         self.output_prefix = "out"
         self.total_record_count = 0
         self.chunk_count = 0
@@ -74,6 +80,13 @@ class _StubWriter(Writer):
 
     async def _write_chunk(self, chunk: Any, output_file_name: str) -> None:
         return None
+
+
+@pytest.fixture(autouse=True)
+def _stub_writer_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _StubWriter, "default_path", str(tmp_path / "out"), raising=False
+    )
 
 
 # ---------------------------------------------------------------------------

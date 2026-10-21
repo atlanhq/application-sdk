@@ -284,6 +284,90 @@ def mock_dapr_client():
         ctx.__exit__(None, None, None)
 
 
+#: Mirrors ``components/objectstore.yaml`` except for the root, which the
+#: fixture below fills in.
+_LOCAL_OBJECTSTORE_COMPONENT = """\
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+spec:
+  version: v1
+  type: bindings.localstorage
+  ignoreErrors: true
+  metadata:
+    - name: rootPath
+      value: "{root}"
+"""
+
+
+@pytest.fixture(scope="session", autouse=True)
+def local_writes_stay_out_of_the_repo(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[None]:
+    """Root every default-located write a unit test can make under ``tmp_path``.
+
+    Left alone, two defaults resolve against the working directory — the repo
+    — and are shared by every xdist worker at once:
+
+    - ``TEMPORARY_PATH`` (``./local/tmp/``): run scratch trees and the
+      observability sinks' data dirs. Redirected through the env var as well as
+      the module bindings, because the env var is the only thing a subprocess
+      or spawn-pool child sees — ``testing/integration/test_fixtures.py`` runs
+      fresh interpreters that import the SDK.
+    - ``DAPR_COMPONENTS_PATH`` (``./components``): the observability sinks
+      resolve the deployment object store from it, and the repo's
+      ``objectstore.yaml`` roots that store at ``./local/dapr/objectstore``.
+
+    Session-scoped, so it is in place before the first test builds a
+    process-wide sink or store, and one directory per xdist worker, because
+    ``tmp_path_factory`` already is. ``.github/scripts/check_test_write_hygiene.py``
+    fails the CI leg if any write still lands in the checkout. Hypothesis's
+    storage is moved in ``tests/conftest.py`` instead: it is written before any
+    fixture runs.
+
+    What no fixture can reach: importing the SDK builds the default logger,
+    whose constructor creates its (empty) observability directory under
+    ``./local/tmp/``. Git does not report an empty directory, so the check above
+    stays green; a file written there would not.
+    """
+    from application_sdk.testing.fixtures import _redirect_temporary_path
+
+    root = tmp_path_factory.mktemp("sdk-local")
+    temporary = root / "tmp"
+    components = root / "components"
+    components.mkdir()
+    (components / "objectstore.yaml").write_text(
+        _LOCAL_OBJECTSTORE_COMPONENT.format(root=(root / "objectstore").as_posix()),
+        encoding="utf-8",
+    )
+
+    patcher = pytest.MonkeyPatch()
+    patcher.setenv("ATLAN_TEMPORARY_PATH", str(temporary))
+    patcher.setenv("DAPR_COMPONENTS_PATH", str(components))
+    _redirect_temporary_path(patcher, str(temporary))
+    try:
+        yield
+    finally:
+        patcher.undo()
+
+
+@pytest.fixture
+def production_temporary_path(monkeypatch: pytest.MonkeyPatch) -> str:
+    """Pin ``TEMPORARY_PATH`` back to its production default, ``./local/tmp/``.
+
+    For a test about that spelling — a ``./local/tmp/...`` workflow path
+    normalising to its object-store key — which the session-wide redirect above
+    would otherwise turn into a path outside the root. A test that writes files
+    should build them under the live constant instead; this one would put them
+    in the repo.
+    """
+    from application_sdk.testing.fixtures import _redirect_temporary_path
+
+    _redirect_temporary_path(monkeypatch, "./local/tmp/")
+    return "./local/tmp/"
+
+
 @pytest.fixture(autouse=True)
 def e2e_evidence_stays_out_of_the_repo(tmp_path_factory, monkeypatch):
     """Point the e2e evidence bundle at a temp directory for every unit test.

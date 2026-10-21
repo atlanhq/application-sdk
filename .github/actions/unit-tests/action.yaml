@@ -36,6 +36,11 @@ runs:
       run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
       id: get_branch
 
+    # Paired with "Check tests wrote nothing into the checkout" below (FND-4237).
+    - name: Snapshot the checkout before tests
+      shell: bash
+      run: python .github/scripts/check_test_write_hygiene.py snapshot "${RUNNER_TEMP}/pre-test-git-status.txt"
+
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
       env:
@@ -83,6 +88,16 @@ runs:
           --durations=25 --durations-min=1.0 \
           --cov=application_sdk --cov-report=xml --cov-report=html \
           --cov-report=term --cov-fail-under=${{ inputs.fail-under }}
+
+    # Unit tests write under tmp_path. Everything they would otherwise write into
+    # the repo (./local/, ./.hypothesis/) is gitignored, so this compares
+    # `git status --ignored` against the snapshot rather than trusting a clean
+    # `git status`. Runs after a failed test step too: a leak is worth knowing
+    # about either way.
+    - name: Check tests wrote nothing into the checkout
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: python .github/scripts/check_test_write_hygiene.py check "${RUNNER_TEMP}/pre-test-git-status.txt"
 
     - name: Comment Coverage Report on PR
       uses: orgoro/coverage@ca0c362dc1a4f100447309405e6dfea47e251495 # v3.3.1

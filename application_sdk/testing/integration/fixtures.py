@@ -149,7 +149,6 @@ reference for that hand-written shape.
 from __future__ import annotations
 
 import os
-import sys
 from collections.abc import AsyncIterator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -700,15 +699,10 @@ def temporary_path(
     does not still litters the working tree.
 
     Not autouse: requesting it is what opts a suite in, exactly as
-    ``store_root`` works. Most consumers bind the constant at import time
-    (``from application_sdk.constants import TEMPORARY_PATH`` at module top);
-    patching ``constants`` alone would miss every one of them already imported.
-    The fixture therefore patches ``constants.TEMPORARY_PATH`` — which covers
-    modules imported after it runs — and then every already-imported
-    ``application_sdk`` module carrying its own binding of the old value. All
-    patches are undone on teardown rather than left set. The scan matches by
-    value, so a module that stored a *derived* path at import time (say, a
-    pre-computed abspath) would be missed — no current consumer does that.
+    ``store_root`` works. The redirect reaches every module that bound the
+    constant at import, not just ``constants`` — see
+    :func:`~application_sdk.testing.fixtures._redirect_temporary_path`. All
+    patches are undone on teardown rather than left set.
 
     **The redirect is session-wide, and that reaches other tiers.** Scope is
     ``session`` because the consumers are class-scoped run fixtures, which
@@ -728,22 +722,13 @@ def temporary_path(
     consuming the fixture — they drive ``__wrapped__`` function-scoped — for the
     same reason.
     """
-    from application_sdk import (  # noqa: PLC0415 — deferred by convention only; sibling fixtures import it the same way
-        constants,
+    from application_sdk.testing.fixtures import (  # noqa: PLC0415 — deferred by convention only; sibling fixtures import the SDK the same way
+        _redirect_temporary_path,
     )
 
     path = tmp_path_factory.mktemp(integration_options.temporary_path_prefix)
-    previous = constants.TEMPORARY_PATH
     patcher = pytest.MonkeyPatch()
-    patcher.setattr(constants, "TEMPORARY_PATH", str(path))
-    for name, module in list(sys.modules.items()):
-        if (
-            name.startswith("application_sdk")
-            and module is not None
-            and module is not constants
-            and getattr(module, "TEMPORARY_PATH", None) == previous
-        ):
-            patcher.setattr(module, "TEMPORARY_PATH", str(path))
+    _redirect_temporary_path(patcher, str(path))
     logger.info(
         "TEMPORARY_PATH redirected to %s for the rest of this session; a later "
         "test asserting on a default-rooted path must pin the constant itself",
