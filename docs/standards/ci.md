@@ -476,6 +476,23 @@ surface.
   but they feed `Tests Gate` with the integration tier, so they were left
   alone.
 
+### The SDK's own integration tier runs in the queue only (FND-4306)
+
+application-sdk follows the connector split. In `sdk-tests-reusable.yaml`,
+Integration Tests and Storage Emulator Tests skip on `pull_request` and run on
+`merge_group` and on `v*` tag pushes. Unit legs, Unit Perf Tests and the
+script tests still run on every PR push. The skipped jobs report `skipped`,
+`SDK Tests` concludes `success`, and `SDK Gate` reads that as a pass, so the
+required check still concludes on the PR. Every queue entry that touches SDK
+code escalates to the full suite (`sdk-gate.yaml`, "Synthesize final force
+flags"), so nothing lands on `main` without integration passing.
+
+Measured before the change (2026-10-13 → 2026-10-21, 1000 SDK Gate runs): PRs
+averaged 5.8 pushes, and integration ran 8.9 minutes p50 on each, about 50
+runner-minutes per PR. Over the same window, three PR-side integration failures
+came from one PR, and no queue failure was an integration break the PR run had
+missed. The cost of the move is about one extra queue ejection in that window.
+
 ### The vulnerability scan gates the bump PR, not every PR (FND-3328)
 
 Since FND-3327 the only image a release-flow app ships is the release image,

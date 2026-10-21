@@ -8,6 +8,12 @@ name: SDK tests (reusable)
 # `if:` guards — when the SDK area is untouched the orchestrator skips this
 # entire reusable and the composing gate counts a skipped area as a pass.
 #
+# The integration tier (Integration Tests, Storage Emulator Tests) skips on
+# `pull_request` and runs in the merge queue and on v* tags, the same split
+# connectors use (tests-reusable.yaml, docs/standards/ci.md). The queue runs
+# the full suite on the exact merged state before anything lands, so a PR-side
+# run only repeated it on every push (FND-4306).
+#
 # Deliberately NOT built on tests-reusable.yaml: that workflow is
 # connector-shaped (app-name required, e2e scaffold, no OS matrix).  The SDK's
 # own tests need the OS x Python matrix + object-store emulators, so they live
@@ -126,6 +132,8 @@ jobs:
 
   integration:
     name: Integration Tests
+    # Merge queue and tags only; see the header (FND-4306).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -168,6 +176,8 @@ jobs:
 
   storage-emulator:
     name: Storage Emulator Tests
+    # Merge queue and tags only; see the header (FND-4306).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
