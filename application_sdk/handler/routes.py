@@ -32,11 +32,9 @@ The other differences are the seams a thin package needs:
 
 from __future__ import annotations
 
-import inspect
-import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
-from types import ModuleType
 from typing import Any, Protocol, cast
 from uuid import uuid4
 
@@ -54,6 +52,15 @@ from application_sdk.errors.base import (
     sanitize_cause_repr,
 )
 from application_sdk.errors.leaves import InternalError
+from application_sdk.handler._dispatch import (  # noqa: F401 — re-exported for existing importers
+    _ENTRYPOINT_NAME_RE,
+    HandlerFn,
+    _discover_handler_fn,
+    _import_optional_app_module,
+    entrypoint_module_segment,
+    mirror_template_key,
+    resolve_handler_op,
+)
 from application_sdk.handler._warmup import (
     bounded_warmup_probe,
     rows_outside_tiers,
@@ -94,14 +101,6 @@ from application_sdk.handler.request_contract import (
 logger = get_logger("application_sdk.handler.service")
 
 
-def entrypoint_module_segment(name: str) -> str:
-    """Kebab-case entry-point name → its Python module segment (``a-b`` → ``a_b``).
-
-    Same conversion as ``application_sdk.app.entrypoint.entrypoint_module_segment``.
-    """
-    return name.replace("-", "_")
-
-
 _CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
     FailureCategory.AUTH: 401,
     FailureCategory.PERMISSION: 403,
@@ -123,6 +122,73 @@ _CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
 
 def _app_error_to_http_status(exc: AppError) -> int:
     return _CATEGORY_TO_HTTP.get(exc.category, 500)
+
+
+def _route_failure(e: Exception, what: str, app_name: str, request_id: str) -> int:
+    """Log a route's failure once and return the HTTP status it answers with.
+
+    The one error boundary every route shares. ``what`` names the operation
+    (``"Auth test"``, ``"Metadata fetch"``, ...) and leads the log line:
+
+    - ``HandlerError`` keeps its own ``http_status``.
+      TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
+      AppError subclass, so it is matched first to preserve http_status.
+      Remove once all connector subclasses raise typed AppError leaves.
+      See typed-error-prescription.md §5 (HandlerError row).
+    - Any other ``AppError`` maps through its ``category``
+      (:data:`_CATEGORY_TO_HTTP`).
+    - Anything else is unexpected: 500.
+
+    Callers let a deliberate ``HTTPException`` (e.g. a 400 for a malformed
+    entrypoint name) pass through before calling this.
+    """
+    if isinstance(e, AppError):
+        # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then answers with a sanitized response; the log is the only server-side record.
+        logger.error(
+            "%s failed for app %s (request %s): %s\n%s",
+            what,
+            app_name,
+            request_id,
+            sanitize_cause_repr(e),
+            safe_traceback(e),
+        )
+        if isinstance(e, HandlerError):
+            return e.http_status
+        return _app_error_to_http_status(e)
+    # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then answers with a fixed message, never the exception text.
+    logger.error(
+        "%s failed unexpectedly for app %s (request %s): %s\n%s",
+        what,
+        app_name,
+        request_id,
+        sanitize_cause_repr(e),
+        safe_traceback(e),
+    )
+    return 500
+
+
+@contextmanager
+def _http_error_boundary(what: str, app_name: str, request_id: str) -> Iterator[None]:
+    """Turn a raise inside the block into a sanitized ``HTTPException``.
+
+    Status from :func:`_route_failure`. The detail is the redacted error text
+    for an ``AppError`` and a fixed ``"Internal server error"`` for anything
+    else, so an unexpected exception's text never reaches the caller. An
+    ``HTTPException`` raised inside the block is already client-facing and
+    passes through unchanged.
+    """
+    try:
+        yield
+    except HTTPException:
+        raise
+    except Exception as e:
+        status = _route_failure(e, what, app_name, request_id)
+        detail = (
+            redact_secrets(str(e))
+            if isinstance(e, AppError)
+            else "Internal server error"
+        )
+        raise HTTPException(status_code=status, detail=detail) from None
 
 
 def _normalize_preflight_request(
@@ -350,35 +416,6 @@ def _wrap_response(
     return result
 
 
-_ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
-
-HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
-
-
-def _import_optional_app_module(dotted: str) -> ModuleType | None:
-    """Import an optional consumer-owned module by dotted path.
-
-    Returns ``None`` only when the module *itself* (or one of its parent
-    packages) is absent — the expected "this app ships no such hook" case.
-    Re-raises when the module exists but fails to import: a transitive
-    ``ModuleNotFoundError`` (a missing dependency named somewhere other than the
-    target's own dotted path) or any other ``ImportError`` is a real bug in the
-    connector's code and must surface, not be silently swallowed into a
-    fall-through.
-    """
-    import importlib  # noqa: PLC0415 — cold path: per-entrypoint discovery only
-
-    try:
-        return importlib.import_module(dotted)
-    except ModuleNotFoundError as exc:  # conformance: ignore[E008] re-raises if missing dep is not the target module itself
-        missing = exc.name or ""
-        # Swallow only if what's missing is the target or one of its parents
-        # (e.g. ``app``, ``app.<segment>``, ``app.<segment>.core``).
-        if missing == dotted or dotted.startswith(f"{missing}."):
-            return None
-        raise
-
-
 def _validated_entrypoint(name: str) -> str:
     """Return the per-entrypoint name to dispatch to, or ``""`` when none is sent.
 
@@ -404,62 +441,6 @@ def _validated_entrypoint(name: str) -> str:
     if not _ENTRYPOINT_NAME_RE.match(name):
         raise HTTPException(status_code=400, detail="Invalid entrypoint name")
     return name
-
-
-def _discover_handler_fn(
-    entrypoint: str, app_package: str, fn_name: str
-) -> HandlerFn | None:
-    """Look for a per-entrypoint handler function.
-
-    Convention: ``app.<segment>.handler.<fn_name>`` where ``segment`` is
-    :func:`~application_sdk.app.entrypoint.entrypoint_module_segment` of the
-    entry-point name and ``fn_name`` is one of ``"test_auth"``,
-    ``"preflight_check"``, ``"fetch_metadata"``, ``"warmup"``. Multi-entrypoint apps that
-    need *per-entrypoint* lifecycle hooks drop a ``handler.py`` next to their
-    package's hand-written code with::
-
-        async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
-        async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
-        async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
-        async def warmup(input: WarmupInput, ctx: HandlerContext) -> WarmupObservation: ...
-
-    The dispatch is best-effort: if the per-entrypoint module / attribute
-    is absent, the route falls through to the app-level ``Handler`` instance
-    (``DefaultHandler`` if no custom handler is configured), preserving
-    today's single-entrypoint behavior 1:1.
-
-    Precedence & silent fall-through — important when reasoning about which
-    code actually runs (mirrored in ``docs/concepts/handlers.md``):
-
-    - When a per-entrypoint ``<fn_name>`` exists, it **pre-empts** the
-      app-level ``Handler.<fn_name>`` for that entry point. Defining both
-      silently runs the module one; the class method never executes.
-    - Resolution is per-op: a module that defines only ``fetch_metadata``
-      leaves ``test_auth`` / ``preflight_check`` falling back to the
-      app-level ``Handler`` — one entry point can be split across two files.
-    - A wrong name or a non-``async`` ``def`` does not match (see the
-      ``iscoroutinefunction`` check below) and **silently** falls through
-      rather than erroring — so a typo'd hook quietly does nothing.
-
-    Returns the callable or ``None`` if absent.
-    """
-
-    segment = entrypoint_module_segment(entrypoint)
-    module = _import_optional_app_module(f"{app_package}.{segment}.handler")
-    if module is None:
-        return None
-    fn = getattr(module, fn_name, None)
-    # The dispatch ``await``s the result, so require a coroutine function — a
-    # sync ``def`` falls through to the app-level Handler rather than blowing up
-    # with a TypeError at request time.
-    if fn is not None and not inspect.iscoroutinefunction(fn):
-        logger.debug(
-            "%s.%s.%s found but not async; falling through to app-level Handler",
-            app_package,
-            segment,
-            fn_name,
-        )
-    return cast("HandlerFn | None", fn if inspect.iscoroutinefunction(fn) else None)
 
 
 class PreflightObserver(Protocol):
@@ -654,98 +635,47 @@ def register_handler_routes(
             HandlerCredential(key=c.key, value=c.value) for c in auth_input.credentials
         ]
         context = _create_context(credentials)
-        with bind_handler_context(context):
-            try:
-                logger.info(
-                    "Auth test started: app=%s request=%s",
-                    app_name,
-                    context.request_id_str,
-                )
-                # Per-entrypoint dispatch: multi-entrypoint apps may ship
-                # `app.<segment>.handler.test_auth`. The orchestrator sends the
-                # exact entry-point name (resolved from the marketplace
-                # catalog), so this is a direct lookup — when it maps to a
-                # per-entrypoint module, route to it; else (empty/single-
-                # entrypoint) fall through to the app-level `Handler` instance.
-                entrypoint = _validated_entrypoint(auth_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, app_package, "test_auth")
-                    if entrypoint
-                    else None
-                )
-                if ep_fn is not None:
-                    result = await ep_fn(auth_input, context)
-                else:
-                    result = await handler.test_auth(auth_input)
-                logger.info(
-                    "Auth test completed: app=%s request=%s status=%s",
-                    app_name,
-                    context.request_id_str,
-                    result.status.value,
-                )
-                data = result.model_dump(mode="json", exclude={"error": {"cause_repr"}})
-                data["message"] = redact_secrets(data["message"])
-                if data.get("error") is not None:
-                    data["error"] = _redacted_error(data["error"])
-                return JSONResponse(
-                    status_code=result.status.http_status,
-                    content=_wrap_response(
-                        data,
-                        message=redact_secrets(
-                            result.message or f"Authentication {result.status.value}"
-                        ),
-                        success=result.status.is_success,
+        with (
+            bind_handler_context(context),
+            _http_error_boundary("Auth test", app_name, context.request_id_str),
+        ):
+            logger.info(
+                "Auth test started: app=%s request=%s",
+                app_name,
+                context.request_id_str,
+            )
+            # Per-entrypoint dispatch: multi-entrypoint apps may ship
+            # `app.<segment>.handler.test_auth`. The orchestrator sends the
+            # exact entry-point name (resolved from the marketplace catalog),
+            # so this is a direct lookup — when it maps to a per-entrypoint
+            # module, route to it; else (empty/single-entrypoint) fall through
+            # to the app-level `Handler` instance. The SDR activity resolves
+            # through the same helper.
+            entrypoint = _validated_entrypoint(auth_input.entrypoint)
+            run_test_auth = resolve_handler_op(
+                handler, "test_auth", entrypoint, app_package=app_package
+            )
+            result = await run_test_auth(auth_input, context)
+            logger.info(
+                "Auth test completed: app=%s request=%s status=%s",
+                app_name,
+                context.request_id_str,
+                result.status.value,
+            )
+            data = result.model_dump(mode="json", exclude={"error": {"cause_repr"}})
+            data["message"] = redact_secrets(data["message"])
+            if data.get("error") is not None:
+                data["error"] = _redacted_error(data["error"])
+            return JSONResponse(
+                status_code=result.status.http_status,
+                content=_wrap_response(
+                    data,
+                    message=redact_secrets(
+                        result.message or f"Authentication {result.status.value}"
                     ),
-                )
-            except HandlerError as e:
-                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
-                # AppError subclass caught here first so http_status is preserved.
-                # Remove once all connector subclasses raise typed AppError leaves.
-                # Tracked alongside the Handler abstract-method contract migration.
-                # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Auth test failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=e.http_status, detail=redact_secrets(str(e))
-                ) from None
-            except AppError as e:
-                # Forward-looking: typed AppError leaves from connectors that raise
-                # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Auth test failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=_app_error_to_http_status(e),
-                    detail=redact_secrets(str(e)),
-                ) from None
-            except HTTPException:
-                # Deliberate HTTP responses (e.g. 400 from a malformed
-                # entrypoint name) are already client-facing — pass them
-                # through rather than masking them as a generic 500.
-                raise
-            except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Auth test failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
+                    success=result.status.is_success,
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Preflight
@@ -836,33 +766,6 @@ def register_handler_routes(
                     result, entrypoint=entrypoint, request_id=context.request_id_str
                 )
                 return JSONResponse(content=_preflight_response(result))
-            except HandlerError as e:
-                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
-                # AppError subclass caught here first so http_status is preserved.
-                # Remove once all connector subclasses raise typed AppError leaves.
-                # Tracked alongside the Handler abstract-method contract migration.
-                # See typed-error-prescription.md §5 (HandlerError row).
-                logger.error(
-                    "Preflight check failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                _crash_row(e)
-                return _preflight_failure_response(e, app_name, e.http_status)
-            except AppError as e:
-                logger.error(
-                    "Preflight check failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                _crash_row(e)
-                return _preflight_failure_response(
-                    e, app_name, _app_error_to_http_status(e)
-                )
             except HTTPException as e:
                 # Deliberate client-facing responses (e.g. 400 from a malformed
                 # entrypoint name) pass through unrecorded — the response *is*
@@ -876,15 +779,12 @@ def register_handler_routes(
                     _crash_row(e)
                 raise
             except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the real exception plus request_id (exc_info); the response carries a fixed message, never the exception text.
-                logger.error(
-                    "Preflight check failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
+                status = _route_failure(
+                    e, "Preflight check", app_name, context.request_id_str
                 )
                 _crash_row(e)
+                if isinstance(e, AppError):
+                    return _preflight_failure_response(e, app_name, status)
                 return _preflight_failure_response(
                     InternalError(
                         message="Preflight could not be verified due to an internal error.",
@@ -895,7 +795,7 @@ def register_handler_routes(
                         classification_pending=True,
                     ),
                     app_name,
-                    500,
+                    status,
                     "Internal server error",
                 )
 
@@ -922,55 +822,28 @@ def register_handler_routes(
             for c in preflight_input.credentials
         ]
         context = _create_context(credentials)
-        with bind_handler_context(context):
-            try:
-                entrypoint = _validated_entrypoint(preflight_input.entrypoint)
-                observation = await _probe_warmup(entrypoint, preflight_input, context)
-                logger.info(
-                    "Warmup probed: app=%s request=%s state=%s",
-                    app_name,
-                    context.request_id_str,
-                    observation.state.value,
-                )
-                return JSONResponse(
-                    content=_wrap_response(
-                        {
-                            **_warmup_body(observation),
-                            "ceiling_seconds": _warmup_ceiling,
-                        },
-                        message=f"Warmup {observation.state.value}",
-                        success=observation.state is not WarmupState.UNAVAILABLE,
-                    ),
-                )
-            except AppError as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Warmup failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=_app_error_to_http_status(e),
-                    detail=redact_secrets(e.message),
-                ) from None
-            except HTTPException:
-                # Deliberate client-facing responses (e.g. 400 from a
-                # malformed entrypoint name) pass through.
-                raise
-            except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Warmup failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
+        with (
+            bind_handler_context(context),
+            _http_error_boundary("Warmup", app_name, context.request_id_str),
+        ):
+            entrypoint = _validated_entrypoint(preflight_input.entrypoint)
+            observation = await _probe_warmup(entrypoint, preflight_input, context)
+            logger.info(
+                "Warmup probed: app=%s request=%s state=%s",
+                app_name,
+                context.request_id_str,
+                observation.state.value,
+            )
+            return JSONResponse(
+                content=_wrap_response(
+                    {
+                        **_warmup_body(observation),
+                        "ceiling_seconds": _warmup_ceiling,
+                    },
+                    message=f"Warmup {observation.state.value}",
+                    success=observation.state is not WarmupState.UNAVAILABLE,
+                ),
+            )
 
     # ------------------------------------------------------------------
     # Metadata
@@ -980,107 +853,46 @@ def register_handler_routes(
     async def fetch_metadata(request: Request) -> JSONResponse:
         body = _normalize(lift_agent_json(await read_json_object(request)))
         metadata_input = validate_request(MetadataInput, body)
-        # The widget routing key (``metadataTemplateKey`` / ``type`` on the
-        # wire) now lands in its documented home, ``metadata_template_key``,
-        # via the field's validation alias. Mirror it onto ``object_filter``
-        # when that's empty so per-entrypoint hooks reading the legacy field
-        # (e.g. asset-export-advanced's tags vs connectors vs typenames widgets)
-        # keep working. New hooks can read ``metadata_template_key`` directly.
-        if not metadata_input.object_filter and metadata_input.metadata_template_key:
-            metadata_input = metadata_input.model_copy(
-                update={"object_filter": metadata_input.metadata_template_key}
-            )
+        metadata_input = mirror_template_key(metadata_input)
         credentials = [
             HandlerCredential(key=c.key, value=c.value)
             for c in metadata_input.credentials
         ]
         context = _create_context(credentials)
-        with bind_handler_context(context):
-            try:
-                logger.info(
-                    "Metadata fetch started: app=%s request=%s",
-                    app_name,
-                    context.request_id_str,
-                )
-                # Per-entrypoint dispatch (see test_auth above for rationale).
-                entrypoint = _validated_entrypoint(metadata_input.entrypoint)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, app_package, "fetch_metadata")
-                    if entrypoint
-                    else None
-                )
-                if ep_fn is not None:
-                    result = await ep_fn(metadata_input, context)
-                else:
-                    result = await handler.fetch_metadata(metadata_input)
+        with (
+            bind_handler_context(context),
+            _http_error_boundary("Metadata fetch", app_name, context.request_id_str),
+        ):
+            logger.info(
+                "Metadata fetch started: app=%s request=%s",
+                app_name,
+                context.request_id_str,
+            )
+            # Per-entrypoint dispatch (see test_auth above for rationale).
+            entrypoint = _validated_entrypoint(metadata_input.entrypoint)
+            run_fetch_metadata = resolve_handler_op(
+                handler, "fetch_metadata", entrypoint, app_package=app_package
+            )
+            result = await run_fetch_metadata(metadata_input, context)
 
-                # Both SqlMetadataOutput and ApiMetadataOutput expose
-                # .objects — model_dump() produces the correct shape for
-                # the corresponding frontend widget (sqltree / apitree).
-                data = [
-                    obj.model_dump() if hasattr(obj, "model_dump") else obj
-                    for obj in result.objects
-                ]
-                count = len(result.objects)
-                logger.info(
-                    "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
-                    app_name,
-                    context.request_id_str,
-                    type(result).__name__,
-                    count,
-                )
-                # message omitted: a non-empty message field caused the
-                # frontend filter widgets to render empty dropdowns
-                return JSONResponse(content=_wrap_response(data))
-            except HandlerError as e:
-                # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
-                # AppError subclass caught here first so http_status is preserved.
-                # Remove once all connector subclasses raise typed AppError leaves.
-                # Tracked alongside the Handler abstract-method contract migration.
-                # See typed-error-prescription.md §5 (HandlerError row).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=e.http_status, detail=redact_secrets(str(e))
-                ) from None
-            except AppError as e:
-                # Forward-looking: typed AppError leaves from connectors that raise
-                # non-HandlerError typed errors (already migrated).
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Metadata fetch failed for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=_app_error_to_http_status(e),
-                    detail=redact_secrets(str(e)),
-                ) from None
-            except HTTPException:
-                # Deliberate HTTP responses (e.g. 400 from a malformed
-                # entrypoint name) are already client-facing — pass them
-                # through rather than masking them as a generic 500.
-                raise
-            except Exception as e:
-                # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
-                logger.error(
-                    "Metadata fetch failed unexpectedly for app %s (request %s): %s\n%s",
-                    app_name,
-                    context.request_id_str,
-                    sanitize_cause_repr(e),
-                    safe_traceback(e),
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
+            # Both SqlMetadataOutput and ApiMetadataOutput expose
+            # .objects — model_dump() produces the correct shape for
+            # the corresponding frontend widget (sqltree / apitree).
+            data = [
+                obj.model_dump() if hasattr(obj, "model_dump") else obj
+                for obj in result.objects
+            ]
+            count = len(result.objects)
+            logger.info(
+                "Metadata fetch completed: app=%s request=%s type=%s objects=%d",
+                app_name,
+                context.request_id_str,
+                type(result).__name__,
+                count,
+            )
+            # message omitted: a non-empty message field caused the
+            # frontend filter widgets to render empty dropdowns
+            return JSONResponse(content=_wrap_response(data))
 
     if include_app_routers:
         include_app_routers_on(app, handler, app_name)
