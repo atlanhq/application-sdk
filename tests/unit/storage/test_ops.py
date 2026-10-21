@@ -31,6 +31,7 @@ from application_sdk.storage.ops import (
     put_json,
     upload_file,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -1425,8 +1426,10 @@ class TestResumableChunkedDownload:
 
         with (
             patch("application_sdk.storage.ops.obstore.get_async", new=hanging_get),
-            patch("os.open", new=recording_open),
-            patch("os.close", new=recording_close),
+            # The part file's fd is opened and closed in ``storage.chunked``.
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "open", new=recording_open),
+            patch.object(local_os, "close", new=recording_close),
         ):
             task = asyncio.create_task(
                 download_file_chunked(

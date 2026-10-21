@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.common.incremental.models import TableScope
+from application_sdk.common.incremental.state import state_writer as state_writer_mod
 from application_sdk.common.incremental.state.state_writer import (
     CurrentStateResult,
     _copy_columns_from_transformed,
@@ -35,6 +36,7 @@ from application_sdk.common.incremental.state.store import CurrentStateStore
 from application_sdk.common.incremental.state.table_scope import add_table_to_scope
 from application_sdk.storage.errors import StorageError
 from application_sdk.storage.ops import _put
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # copy_non_column_entities
@@ -132,7 +134,12 @@ class TestCleanupPreviousState:
             prev_dir = Path(temp_dir) / "previous"
             prev_dir.mkdir()
 
-            with patch("shutil.rmtree", side_effect=PermissionError("denied")):
+            with (
+                private_stdlib(state_writer_mod, "shutil") as local_shutil,
+                patch.object(
+                    local_shutil, "rmtree", side_effect=PermissionError("denied")
+                ),
+            ):
                 # Should not raise
                 cleanup_previous_state(prev_dir)
 

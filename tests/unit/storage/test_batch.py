@@ -21,6 +21,7 @@ from application_sdk.storage.batch import (
 from application_sdk.storage.errors import StorageError
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -814,7 +815,10 @@ class TestUploadFileFromBytes:
             return original_unlink(path)
 
         _flaky_unlink.calls = 0
-        with patch("application_sdk.storage.batch.os.unlink", _flaky_unlink):
+        with (
+            private_stdlib("application_sdk.storage.batch", "os") as local_os,
+            patch.object(local_os, "unlink", _flaky_unlink),
+        ):
             sha = await upload_file_from_bytes(
                 "k/quiet.bin", b"data", store, normalize=False
             )

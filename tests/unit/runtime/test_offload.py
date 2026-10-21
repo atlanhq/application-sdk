@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk._runtime.offload import run_in_thread
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # run_in_thread — must NOT use real threads in tests
@@ -41,7 +42,10 @@ class TestRunInThread:
         fake_loop = MagicMock()
         fake_loop.run_in_executor = AsyncMock(return_value=sentinel)
 
-        with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
+        with (
+            private_stdlib(hb_mod, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "get_running_loop", return_value=fake_loop),
+        ):
             result = await run_in_thread(lambda x: x, "ignored")
 
         assert result is sentinel
@@ -69,7 +73,10 @@ class TestRunInThread:
         def adder(a, b, c=0):
             return a + b + c
 
-        with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
+        with (
+            private_stdlib(hb_mod, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "get_running_loop", return_value=fake_loop),
+        ):
             result = await run_in_thread(adder, 1, 2, c=10)
 
         assert result == 13
@@ -89,7 +96,10 @@ class TestRunInThread:
         def bad():
             raise ValueError("nope")
 
-        with patch.object(hb_mod.asyncio, "get_running_loop", return_value=fake_loop):
+        with (
+            private_stdlib(hb_mod, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "get_running_loop", return_value=fake_loop),
+        ):
             with pytest.raises(ValueError):
                 await run_in_thread(bad)
 

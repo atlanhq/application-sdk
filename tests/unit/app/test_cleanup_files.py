@@ -18,6 +18,7 @@ from application_sdk.app.task import get_task_metadata
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.types import FileReference
+from tests.unit.private_stdlib import private_stdlib
 
 
 @dataclass
@@ -162,7 +163,12 @@ class TestCleanupFiles:
             "application_sdk.app.base.TaskStateAccessor.get",
             return_value={ref},
         ):
-            with mock.patch("os.remove", side_effect=OSError("permission denied")):
+            with (
+                private_stdlib("application_sdk.app.base", "os") as local_os,
+                mock.patch.object(
+                    local_os, "remove", side_effect=OSError("permission denied")
+                ),
+            ):
                 result = await app.cleanup_files(
                     CleanupInput(extra_paths=["nonexistent-dir"])
                 )

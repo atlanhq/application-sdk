@@ -8,6 +8,26 @@
 - When a fixture stands in for a **generated artifact** (`app/generated/**`, `atlan.yaml`, a served API envelope), build it from a real one and say in a comment which repo it was read from. A fixture with the shape inverted still passes — for a reason unrelated to its claim — and it flatters the code under test, which is APP-TESTS-001's self-certifying PR arriving through the fixture rather than the assertion. FND-1667 shipped one: a credential template written as `{"id": ...}` with no `config`, where the toolkit emits `config` and no `id`. Nothing caught it until someone ran the selector against a real tree.
 - For consumer apps built on this SDK, the conformance suite's T-series (`packages/conformance/conformance/docs/rules/tests.md`) enforces the agreed per-connector testing-tier architecture (unit + integration required, e2e recommended, UI optional except for top connectors) plus test-quality checks — assertion-free tests, uncollectable test files, disabled coverage gates, and more. Run it with `/remediate` or `uv run atlan-application-sdk-conformance detect --series T`.
 
+## Shared State Under xdist
+
+An xdist worker runs many tests in one process, and threads from earlier tests
+(offloads, log flushes) are still running. Keep every test's changes local:
+
+- **Never patch a stdlib function through an SDK module path.**
+  `patch("application_sdk.X.time.monotonic")` patches the one global `time`
+  module, so the event loop and every thread see the fake. Use
+  `tests.unit.private_stdlib.private_stdlib(X, "time")` and patch the copy it
+  yields. `tests/unit/test_no_global_stdlib_patches.py` fails the global forms.
+- **Never `importlib.reload` an SDK module.** A reload makes new class and enum
+  objects that earlier importers do not see. Put import-time env parsing in a
+  `_load_*()` function and test that.
+- Use `monkeypatch.setenv` / `delenv` / `chdir` / `syspath_prepend`, not
+  `os.environ` / `os.chdir` / `sys.path` directly.
+- `tests/unit/conftest.py` already resets, around every unit test: the App and
+  Task registries, the infrastructure context, the sizing sink, psycopg2's
+  encodings map, and `os.environ`. It also loads the hypothesis `unit` profile
+  (`deadline=None`); do not call `settings.load_profile` in a test module.
+
 ## Timeouts a Passing Test Must Beat
 
 A healthy test must never have to *finish* inside a timeout that exists to prove

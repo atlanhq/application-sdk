@@ -13,6 +13,7 @@ from application_sdk.testing.hypothesis.strategies.outputs.json_output import (
     dataframe_strategy,
     json_output_config_strategy,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture(scope="module")
@@ -215,7 +216,10 @@ async def test_write_chunk_surfaces_a_delayed_allocation_enospc_typed(
     def _enospc(*_args: Any, **_kwargs: Any) -> None:
         raise OSError(errno.ENOSPC, "No space left on device")
 
-    with patch("os.fsync", _enospc):
+    with (
+        private_stdlib("application_sdk.storage.formats.json", "os") as local_os,
+        patch.object(local_os, "fsync", _enospc),
+    ):
         with pytest.raises(DiskFullError) as caught:
             await writer._write_chunk(df, out_file)
 

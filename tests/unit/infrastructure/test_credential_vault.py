@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,6 +21,7 @@ from application_sdk.infrastructure._secret_utils import (
     process_secret_data as _process_secret_data,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # _process_secret_data
@@ -151,7 +154,7 @@ class TestDaprCredentialVaultGetCredentials:
         )
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
-            patch(_VAULT_SLEEP, new_callable=AsyncMock),
+            _vault_sleep(),
         ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError):
@@ -656,9 +659,10 @@ class TestFetchCredentialConfigColdStartRetry:
 
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
-            patch(
-                "application_sdk.infrastructure._dapr.http.asyncio.sleep", AsyncMock()
-            ),
+            private_stdlib(
+                "application_sdk.infrastructure._dapr.http", "asyncio"
+            ) as local_asyncio,
+            patch.object(local_asyncio, "sleep", AsyncMock()),
         ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError) as exc_info:
@@ -685,10 +689,8 @@ class TestGetLocalSecret:
             secret_store_name="secretstore",
         )
 
-    def test_happy_path_returns_secret_dict(self, tmp_path):
+    def test_happy_path_returns_secret_dict(self, tmp_path, monkeypatch):
         """Create secrets.json with a key, verify _get_local_secret returns it."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
@@ -699,71 +701,49 @@ class TestGetLocalSecret:
         secrets_file.write_text(json.dumps(secrets_data))
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("my-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("my-guid")
 
         assert result == {"username": "admin", "password": "secret"}
 
-    def test_missing_key_returns_empty_dict(self, tmp_path):
+    def test_missing_key_returns_empty_dict(self, tmp_path, monkeypatch):
         """Key not in secrets.json returns {}."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
         secrets_file.write_text(json.dumps({"other-guid": {"key": "val"}}))
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("nonexistent-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("nonexistent-guid")
 
         assert result == {}
 
-    def test_missing_file_returns_empty_dict(self, tmp_path):
+    def test_missing_file_returns_empty_dict(self, tmp_path, monkeypatch):
         """secrets.json doesn't exist returns {}."""
-        import os
-
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("any-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("any-guid")
 
         assert result == {}
 
-    def test_malformed_json_returns_empty_dict(self, tmp_path):
+    def test_malformed_json_returns_empty_dict(self, tmp_path, monkeypatch):
         """secrets.json has invalid JSON returns {}."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
         secrets_file.write_text("NOT VALID JSON {{{")
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("my-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("my-guid")
 
         assert result == {}
 
-    async def test_get_secret_uses_local_secret_in_local_env(self, tmp_path):
+    async def test_get_secret_uses_local_secret_in_local_env(
+        self, tmp_path, monkeypatch
+    ):
         """When DEPLOYMENT_NAME == LOCAL_ENVIRONMENT, _get_secret calls _get_local_secret."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
@@ -774,13 +754,9 @@ class TestGetLocalSecret:
         )
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            with patch("application_sdk.constants.DEPLOYMENT_NAME", "local"):
-                result = await vault._get_secret("my-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "local"):
+            result = await vault._get_secret("my-guid")
 
         assert result == {"username": "local-user", "password": "local-pass"}
 
@@ -1001,7 +977,16 @@ def test_outage_types_stay_importable_from_this_module() -> None:
     assert credential_vault.SecretStoreUnreachableError is SecretStoreUnreachableError
 
 
-_VAULT_SLEEP = "application_sdk.infrastructure._dapr.credential_vault.asyncio.sleep"
+@contextmanager
+def _vault_sleep() -> Iterator[AsyncMock]:
+    """No-op the vault's own ``asyncio.sleep``, and only the vault's."""
+    with (
+        private_stdlib(
+            "application_sdk.infrastructure._dapr.credential_vault", "asyncio"
+        ) as local_asyncio,
+        patch.object(local_asyncio, "sleep", new_callable=AsyncMock) as sleep,
+    ):
+        yield sleep
 
 
 def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
@@ -1050,7 +1035,7 @@ class TestDaprCredentialVaultMissingConfigBlob:
 
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
-            patch(_VAULT_SLEEP, new_callable=AsyncMock) as sleep,
+            _vault_sleep() as sleep,
         ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError) as exc_info:
@@ -1078,7 +1063,7 @@ class TestDaprCredentialVaultMissingConfigBlob:
 
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
-            patch(_VAULT_SLEEP, new_callable=AsyncMock),
+            _vault_sleep(),
         ):
             vault = self._make_vault(mock_client)
             result = await vault.get_credentials("example-credential")
@@ -1096,7 +1081,7 @@ class TestDaprCredentialVaultMissingConfigBlob:
 
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
-            patch(_VAULT_SLEEP, new_callable=AsyncMock),
+            _vault_sleep(),
         ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError) as exc_info:
