@@ -13,6 +13,8 @@ name: Release Train
 #                           disarm what an earlier day left armed
 #   slot   09/12/15/18/21 Mon-Thu — /gate-check + auto-merge the apps due now
 #   close  23:00 Thu      — disarm what did not merge, expire skips, summary
+#   roll   dispatch only  — fleet-wide roll for a critical fix: every listed
+#                           app now, ignoring slots, caps and skips (needs reason)
 # The crons must match release_train.CRON_PHASES exactly (tested). Each fires
 # once per phase boundary and no more: a slot is a release window, so a slot
 # cron cannot be less frequent than the slots it serves, and the script
@@ -43,9 +45,9 @@ on:
   workflow_dispatch:
     inputs:
       phase:
-        description: "Phase to run. auto = from the cron (a manual auto run is a sync)."
+        description: "Phase to run. auto = from the cron (a manual auto run is a sync). roll = fleet-wide roll: release every listed app now (critical fixes)."
         type: choice
-        options: [auto, sync, slot, close]
+        options: [auto, sync, slot, close, roll]
         default: auto
       dry_run:
         description: "Dry run: read everything, count every intended write, perform none."
@@ -53,6 +55,10 @@ on:
         default: true
       repos:
         description: 'Optional JSON list of "owner/repo" within the schedule list.'
+        type: string
+        default: ""
+      reason:
+        description: "Required for roll: the critical fix (e.g. a GHSA id). Goes to each bump PR's status comment. Dispatch inputs are public: no customer or tenant names."
         type: string
         default: ""
 
@@ -95,6 +101,7 @@ jobs:
           PHASE: ${{ github.event.inputs.phase || 'auto' }}
           SCHEDULE_CRON: ${{ github.event.schedule }}
           REPOS: ${{ github.event.inputs.repos }}
+          REASON: ${{ github.event.inputs.reason }}
           MODE: >-
             ${{ vars.RELEASE_TRAIN_ENABLED != 'true' && 'report' || ((vars.RELEASE_TRAIN_LIVE == 'true' && (github.event_name == 'schedule' || github.event.inputs.dry_run == 'false')) && 'live' || 'dry-run') }}
-        run: python3 .github/scripts/release_train.py --phase "$PHASE" --cron "$SCHEDULE_CRON" --repos "$REPOS" --mode "$MODE"
+        run: python3 .github/scripts/release_train.py --phase "$PHASE" --cron "$SCHEDULE_CRON" --repos "$REPOS" --reason "$REASON" --mode "$MODE"

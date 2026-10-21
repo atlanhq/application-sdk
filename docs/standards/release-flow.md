@@ -407,10 +407,24 @@ the config rejects `fri`, `sat` and `sun`.
 | `sync` | `30 2 * * 1-5` | 08:00 Mon–Fri | Re-reads the list, checks eligibility. Sets the bump PR title suffix and status comment. Disarms auto-merge the job armed on an earlier day that did not merge. On a release day, posts a new comment that mentions the app's CODEOWNERS: `Releasing today at HH:MM IST. To skip: /release-skip <reason>`. |
 | `slot` | `30 3,6,9,12,15 * * 1-4` | 09/12/15/18/21 Mon–Thu | For each app due by now, runs pre-flight, then comments `/gate-check` (the bare command, nothing else), sets the plain title and arms auto-merge. Also re-gates apps armed this week whose head moved. |
 | `close` | `30 17 * * 4` | 23:00 Thu | Disarms everything still armed, expires this week's skips, and writes the weekly summary to the job summary. |
+| `roll` | none (dispatch only) | any time | **Fleet-wide roll** for a critical fix. Releases every listed app, or the dispatch's `repos` subset, now: `/gate-check` and auto-merge, exactly as a slot does. |
 
 The current slot comes from the wall clock, not the cron. A scheduled run that
 starts late still works on the slot it falls in. Apps due in an earlier slot
 that a missed run never reached are released by the next run.
+
+**Fleet-wide roll.** For a fix that cannot wait for each app's slot (a CVE,
+a revoked CA), dispatch the workflow with phase `roll`, a `reason` such as the
+advisory id, and `dry_run: false` (live also needs `RELEASE_TRAIN_LIVE`). It
+ignores each app's day and slot, the caps and pending `/release-skip`s, and
+runs on any day. It does not bypass anything that decides whether a release is
+safe: eligibility, pre-flight (a branch behind `main` is deferred to the next
+slot), `/gate-check` and the merge queue all still apply. An app already
+gate-requested today or in flight is not gated twice; only a moved head is
+re-gated. The reason is recorded as a `rolled` event in each status comment and
+kept off the public log. Dispatch inputs on this public repo are visible, so
+the reason must never name a customer or tenant. Run it dry first: the summary
+counts what it would release.
 
 **Caps.** At most `per_slot_cap` apps start per slot. Overflow moves to the
 next slot that day with room. At most `per_day_cap` apps start per day. An app

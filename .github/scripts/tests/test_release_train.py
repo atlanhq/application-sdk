@@ -999,6 +999,99 @@ def test_same_login_bridges_rest_graphql_and_gh_shapes() -> None:
     assert not rt.same_login(None, BOT)
 
 
+# ── Fleet-wide roll ──────────────────────────────────────────────────────
+
+WED_1437 = datetime(2026, 10, 28, 9, 7, tzinfo=UTC)  # Wed 14:37 IST, no slot
+
+
+def test_roll_is_never_a_cron_phase() -> None:
+    assert rt.ROLL in rt.PHASES and rt.ROLL not in rt.CRON_PHASES.values()
+    assert rt.resolve_phase("roll", "") == rt.ROLL
+
+
+def test_roll_releases_now_ignoring_the_schedule() -> None:
+    fake = FakeGitHub()
+    train = rt.run(
+        rt.ROLL,
+        _config(),  # the app is scheduled Mon 12:00, not Wed
+        [APP],
+        rt.Gh(fake),
+        mode="live",
+        now=WED_1437,
+        bot_login=BOT,
+        reason="GHSA-0000-0000-0000",
+    )
+    assert not train.errors
+    assert fake.bot_comments().count("/gate-check") == 1
+    assert fake.auto_merge_by == "atlan-app-fleet"
+    status = next(b for b in fake.bot_comments() if rt.STATUS_MARKER in b)
+    record = rt.parse_record(status)
+    assert record is not None
+    rolled = [e for e in record.events if e["action"] == "rolled"]
+    assert rolled and rolled[0]["reason"] == "GHSA-0000-0000-0000"
+    assert "GHSA-0000" not in train.summary(rt.ROLL, "live")  # reason off the log
+
+
+def test_roll_ignores_a_pending_skip() -> None:
+    fake = FakeGitHub()
+    fake.add_comment("/release-skip flaky e2e", "writer")
+    _train(fake, MON_0800, phase="sync")  # honours the skip of Mon 12:00
+    status = next(b for b in fake.bot_comments() if rt.STATUS_MARKER in b)
+    record = rt.parse_record(status)
+    assert record is not None and rt.pending_skips(record)
+    rt.run(
+        rt.ROLL,
+        _config(),
+        [APP],
+        rt.Gh(fake),
+        mode="live",
+        now=datetime(2026, 10, 26, 4, 0, tzinfo=UTC),  # Mon 09:30 IST
+        bot_login=BOT,
+        reason="critical",
+    )
+    assert fake.bot_comments().count("/gate-check") == 1
+
+
+def test_a_second_roll_does_not_gate_twice() -> None:
+    fake = FakeGitHub()
+    for _ in range(2):
+        rt.run(
+            rt.ROLL,
+            _config(),
+            [APP],
+            rt.Gh(fake),
+            mode="live",
+            now=WED_1437,
+            bot_login=BOT,
+            reason="critical",
+        )
+    assert fake.bot_comments().count("/gate-check") == 1
+
+
+def test_roll_still_refuses_an_ineligible_app() -> None:
+    fake = FakeGitHub()
+    fake.files["atlan.yaml"] = "name: example\nrelease_model: cd\n"
+    rt.run(
+        rt.ROLL,
+        _config(),
+        [APP],
+        rt.Gh(fake),
+        mode="live",
+        now=WED_1437,
+        bot_login=BOT,
+        reason="critical",
+    )
+    assert "/gate-check" not in fake.bot_comments()
+
+
+def test_roll_needs_a_reason(tmp_path: Path) -> None:
+    pilot = tmp_path / "pilot.yaml"
+    pilot.write_text(PILOT_LIST)
+    fake = FakeGitHub()
+    assert rt.main(["--phase", "roll", "--config", str(pilot)], runner=fake) == 2
+    assert fake.calls == []
+
+
 # ── Public logs (this repo is public) ────────────────────────────────────
 
 
@@ -1240,7 +1333,8 @@ def test_workflow_shape() -> None:
     on = doc.get("on", doc.get(True))
     inputs = on["workflow_dispatch"]["inputs"]
     assert inputs["phase"]["default"] == "auto"
-    assert inputs["phase"]["options"] == ["auto", "sync", "slot", "close"]
+    assert inputs["phase"]["options"] == ["auto", "sync", "slot", "close", "roll"]
+    assert inputs["reason"]["type"] == "string"
     assert inputs["dry_run"] == {
         **inputs["dry_run"],
         "type": "boolean",

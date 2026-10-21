@@ -18,6 +18,11 @@ Phases (all times IST, a fixed UTC+05:30)
           Re-gates apps armed this week whose head moved.
 ``close`` 23:00 Thu. Disarms everything still armed, expires this week's skips,
           writes the weekly summary.
+``roll``  Manual dispatch only, never a cron: the fleet-wide roll for a critical
+          fix. Releases every listed app (or the ``--repos`` subset) now, any
+          day and time, ignoring its slot, the caps and pending skips. A
+          ``--reason`` is required and goes to each status comment only.
+          Eligibility, pre-flight, the gate and the merge queue still apply.
 
 State lives on the bump PR itself
 ---------------------------------
@@ -91,8 +96,9 @@ TRAIN_DAYS = ("mon", "tue", "wed", "thu")
 #: set would never run, so the config check rejects it.
 CRON_SLOTS = ("09:00", "12:00", "15:00", "18:00", "21:00")
 
-SYNC, SLOT, CLOSE = "sync", "slot", "close"
-PHASES = (SYNC, SLOT, CLOSE)
+SYNC, SLOT, CLOSE, ROLL = "sync", "slot", "close", "roll"
+#: ROLL is never mapped from a cron: only an explicit dispatch runs it.
+PHASES = (SYNC, SLOT, CLOSE, ROLL)
 #: Must equal the workflow's ``schedule`` crons exactly (a test enforces it).
 CRON_PHASES = {
     "30 2 * * 1-5": SYNC,  # 08:00 IST Mon-Fri
@@ -1659,6 +1665,34 @@ class Train:
 
         self._each(pairs, step)
 
+    def roll(self, apps: list[App], reason: str) -> None:
+        """Fleet-wide roll: release every app passed in now. Its schedule, the
+        caps and pending skips are ignored, because a critical fix must not wait
+        for a slot; eligibility, pre-flight, ``/gate-check`` and the merge queue
+        are not, so nothing ships that the gate has not passed."""
+        now_slot = f"{to_ist(self.now):%H:%M}"
+        key = slot_key(slot_at(self.today, now_slot))
+
+        def step(app: App, record: Record) -> None:
+            next_at: datetime | None = None
+            if in_flight(record) or self._released_today(record):
+                # Already on its way: only a moved head needs a fresh gate.
+                self._regate(app, record, now_slot)
+            else:
+                add_event(
+                    record,
+                    "rolled",
+                    slot=key,
+                    sha=app.pr.head_sha if app.pr else None,
+                    at=self.now,
+                    reason=_inert(reason, REASON_MAX),
+                )
+                next_at = self._release(app, record, now_slot)
+            self._publish(app, record, next_at)
+            self._row(app, record, format_slot(next_at) if next_at else "")
+
+        self._each(self._prepare(apps), step)
+
     def _release(self, app: App, record: Record, slot: str) -> datetime | None:
         """Pre-flight, then ``/gate-check`` and auto-merge. Returns the next
         slot to show when the app does not ship now."""
@@ -1802,7 +1836,10 @@ class Train:
     # ― summary ―
 
     def summary(self, phase: str, mode: str, *, verbose: bool = False) -> str:
-        title = "Release train — weekly summary" if phase == CLOSE else "Release train"
+        title = {
+            CLOSE: "Release train — weekly summary",
+            ROLL: "Release train — fleet-wide roll",
+        }.get(phase, "Release train")
         lines = [
             f"## {title} ({self.week}, {phase}, {mode})",
             "",
@@ -1898,6 +1935,7 @@ def run(
     now: datetime,
     bot_login: str,
     verbose: bool = False,
+    reason: str = "",
 ) -> Train:
     writer = Writer(gh, live=mode == "live", verbose=verbose)
     train = Train(
@@ -1918,7 +1956,10 @@ def run(
             )
         except (GhError, ptc.GitHubError, ValueError) as exc:
             train.errors.append(f"{repo}: {public_error(exc)}")
-    {SYNC: train.sync, SLOT: train.slot, CLOSE: train.close}[phase](apps)
+    if phase == ROLL:
+        train.roll(apps, reason)
+    else:
+        {SYNC: train.sync, SLOT: train.slot, CLOSE: train.close}[phase](apps)
     return train
 
 
@@ -1966,6 +2007,11 @@ def main(
     parser.add_argument("--phase", default="auto", help="auto|sync|slot|close")
     parser.add_argument("--cron", default="", help="github.event.schedule, if any")
     parser.add_argument("--repos", default="", help="JSON list of owner/repo")
+    parser.add_argument(
+        "--reason",
+        default="",
+        help="why a roll is needed; required for --phase roll, kept off the logs",
+    )
     parser.add_argument("--mode", default="dry-run", help="dry-run|live|report")
     parser.add_argument(
         "--live", action="store_const", const="live", dest="mode", help="= --mode live"
@@ -1978,6 +2024,8 @@ def main(
     try:
         phase = resolve_phase(args.phase, args.cron)
         requested = parse_repos(args.repos)
+        if phase == ROLL and not args.reason.strip():
+            raise ValueError("--phase roll needs a --reason (the critical fix)")
     except ValueError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 2
@@ -2006,6 +2054,7 @@ def main(
         now=now or datetime.now(UTC),
         bot_login=f"{slug}[bot]",
         verbose=args.verbose,
+        reason=args.reason,
     )
     text = train.summary(phase, args.mode, verbose=args.verbose)
     print(text)
