@@ -1,5 +1,32 @@
 # Changelog
 
+## v3.51.0 (October 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.50.0...v3.51.0
+
+### Features
+
+- serve an app's real handler and metadata, config and file routes from the consolidated host (atlan-application-sdk-api) (#4058) (by @vaibhavatlan in [e563097](https://github.com/atlanhq/application-sdk/commit/e563097))
+
+### Bug Fixes
+
+- move STS AssumeRole off the loop and bound load() with a connect budget [FND-4083] (#4482) (by @cmgrote in [55100f9](https://github.com/atlanhq/application-sdk/commit/55100f9))
+- offload the remaining blocking calls on the activity path [FND-4084] (#4501) (by @cmgrote in [2c7fc89](https://github.com/atlanhq/application-sdk/commit/2c7fc89))
+
+### Chores
+
+- update atlanhq/application-sdk action to v3.50.0 (#4485) (by @renovate[bot] in [4e3bb71](https://github.com/atlanhq/application-sdk/commit/4e3bb71))
+- lock file maintenance (#4484) (by @renovate[bot] in [f6ebb5d](https://github.com/atlanhq/application-sdk/commit/f6ebb5d))
+- lock file maintenance (#4488) (by @renovate[bot] in [992f579](https://github.com/atlanhq/application-sdk/commit/992f579))
+- lock file maintenance (#4494) (by @renovate[bot] in [21e6e12](https://github.com/atlanhq/application-sdk/commit/21e6e12))
+- lock file maintenance (#4496) (by @renovate[bot] in [973cd52](https://github.com/atlanhq/application-sdk/commit/973cd52))
+- lock file maintenance (#4497) (by @renovate[bot] in [9b56d56](https://github.com/atlanhq/application-sdk/commit/9b56d56))
+- lock file maintenance (#4499) (by @renovate[bot] in [918e02e](https://github.com/atlanhq/application-sdk/commit/918e02e))
+- update dependency astral-sh/uv to v0.13.4 (#4490) (by @renovate[bot] in [bc31fdf](https://github.com/atlanhq/application-sdk/commit/bc31fdf))
+- lock file maintenance (#4502) (by @renovate[bot] in [24afe06](https://github.com/atlanhq/application-sdk/commit/24afe06))
+- allowlist GHSA-6q48-6c7w-9gw2 (CRITICAL 7d SLA) (#4505) (by @atlan-app-fleet[bot] in [5c1f13b](https://github.com/atlanhq/application-sdk/commit/5c1f13b))
+
+
 ## v3.50.0 (October 19, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.49.2...v3.50.0
