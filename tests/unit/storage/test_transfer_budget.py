@@ -430,6 +430,7 @@ class TestFourDirectoryRefs:
 
 
 class TestFlatFanOut:
+    @pytest.mark.perf
     async def test_100k_keys_hold_a_bounded_number_of_tasks(self) -> None:
         bound = 4
         peak_tasks = 0

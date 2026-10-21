@@ -18,6 +18,10 @@ production-heap microbenchmark). The replacement side takes the best of a few
 runs, so a noisy runner can only make the guard more lenient, never fail it
 spuriously. Measured figures are recorded in
 ``docs/agents/coding-standards.md``.
+
+Marked ``perf``: at ~35 s per format on a CI runner it ran on every matrix leg,
+timed beside xdist neighbours on the same cores. It now runs once per CI run in
+the single-process ``Unit Perf Tests`` job.
 """
 
 from __future__ import annotations
@@ -40,6 +44,8 @@ from application_sdk.storage.rolling import RollingFileWriter  # noqa: E402
 ROWS = 200_000
 BATCH_ROWS = 10_000
 ROLLING_RUNS = 3
+
+pytestmark = pytest.mark.perf
 
 
 def _frames() -> Iterator[pd.DataFrame]:

@@ -683,6 +683,7 @@ def test_a_json_only_caller_never_loads_a_dataframe_library(tmp_path: Path) -> N
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
 
     assert result.returncode == 0, result.stderr
