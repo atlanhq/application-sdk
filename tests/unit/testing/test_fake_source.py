@@ -891,7 +891,9 @@ class TestThreadTeardown:
 
     def test_stop_returns_to_the_thread_baseline(self) -> None:
         baseline = _settled_thread_count()
-        source = HttpFakeSource(connection_timeout=0.2)
+        # urllib closes its connection, so the handler ends without the read
+        # timeout and the default bound costs nothing here.
+        source = HttpFakeSource()
         source.route(r"/ping", lambda _r: {"ok": True})
         source.start()
         try:
@@ -905,6 +907,9 @@ class TestThreadTeardown:
     ) -> None:
         """The case that slipped through: the thread survived stop() in readline."""
         baseline = _settled_thread_count()
+        # The read timeout is the subject: it is what wakes the idle handler.
+        # The request is written straight after the connect, so its first read
+        # finds the bytes already buffered rather than racing the bound.
         source = HttpFakeSource(connection_timeout=0.2)
         source.route(r"/ping", lambda _r: {"ok": True})
         source.start()
@@ -1023,8 +1028,8 @@ class TestHttpFakeSourceFactory:
     def test_builds_started_sources_and_stops_them_all(self) -> None:
         baseline = _settled_thread_count()
         factory = HttpFakeSourceFactory()
-        first = factory(name="first", connection_timeout=0.2)
-        second = factory(name="second", connection_timeout=0.2)
+        first = factory(name="first")
+        second = factory(name="second")
         first.route(r"/ping", lambda _r: {"which": "first"})
         try:
             assert _json(f"{first.base_url}/ping")[1] == {"which": "first"}
@@ -1038,7 +1043,7 @@ class TestHttpFakeSourceFactory:
 
     def test_reset_all_clears_every_source(self) -> None:
         factory = HttpFakeSourceFactory()
-        source = factory(name="resettable", connection_timeout=0.2)
+        source = factory(name="resettable")
         source.route(r"/ping", lambda _r: {"ok": True})
         try:
             _json(f"{source.base_url}/ping")
