@@ -40,11 +40,33 @@ GCS tests (``gcs_integration`` marker) — Application Default Credentials:
 from __future__ import annotations
 
 import os
+from typing import NoReturn
 
 import pytest
 
 from application_sdk import constants
 from application_sdk.storage.factory import create_local_store
+
+# ---------------------------------------------------------------------------
+# Emulator availability (``storage_emulator`` marker)
+# ---------------------------------------------------------------------------
+
+# CI sets this: the job started the emulators, so an unreachable one is a broken
+# harness, not a missing local sidecar. Skipping there turned a dead emulator
+# into a green job made entirely of skips.
+_EMULATOR_REQUIRED = os.environ.get("STORAGE_EMULATOR_REQUIRED") == "1"
+
+
+def emulator_unavailable(reason: str) -> NoReturn:
+    """Fail when ``STORAGE_EMULATOR_REQUIRED=1`` (CI), otherwise skip.
+
+    Every emulator reachability guard routes through here so local runs without
+    a sidecar still skip, while CI cannot pass on skips.
+    """
+    if _EMULATOR_REQUIRED:
+        pytest.fail(f"{reason} (STORAGE_EMULATOR_REQUIRED=1)", pytrace=False)
+    pytest.skip(reason)
+
 
 # ---------------------------------------------------------------------------
 # Local-filesystem fixtures (no cloud credentials needed)

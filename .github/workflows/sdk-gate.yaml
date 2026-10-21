@@ -56,6 +56,9 @@ jobs:
   changes:
     name: Detect Changes (SDK Gate)
     runs-on: ubuntu-latest
+    # Seconds of work; without a cap a hung step holds the gate for the
+    # 360-minute default.
+    timeout-minutes: 10
     outputs:
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
       toolkit: ${{ steps.filter.outputs.toolkit }}
@@ -401,6 +404,11 @@ jobs:
     needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests, api-suite-tests]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # flag_job_timeouts.py lists this run's jobs.
+      actions: read
     steps:
       # An un-opted bump PR skipped every area; without this the gate would
       # read success|skipped as a pass and the PR could merge with nothing run.
@@ -446,3 +454,28 @@ jobs:
             exit 1
           fi
           echo "SDK gate passed."
+
+      # Only the timeout flag below reads the checkout, so it is advisory too.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: always()
+        continue-on-error: true
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      # A job killed by its timeout-minutes concludes `cancelled`, the same as
+      # one superseded by a newer push, so timeouts vanish into CI noise. This
+      # annotates any job that ran to within 30s of its cap. Advisory: it runs
+      # after the verdict steps (always(), so even when they failed) and never
+      # decides the gate, hence continue-on-error.
+      - name: Flag jobs that hit their timeout
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/flag_job_timeouts.py
+          --repo "${{ github.repository }}"
+          --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}"
+          --workflow .github/workflows/sdk-gate.yaml
