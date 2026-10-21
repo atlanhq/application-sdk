@@ -320,6 +320,19 @@ outcome mirroring the error-handling shape in the reference app named by
   or an enclosing package's `__init__.py`), which are being removed rather
   than fixed.
 
+  **Per-object skips — raising is a behaviour change:** when the handler sits
+  in a batch or per-item loop (one object's fetch or parse), "raise a domain
+  error" changes the loop's contract: one bad item then fails the whole run.
+  It is never the default fix there.  Keep the skip and make the failure
+  durable with the per-item `record_residual_failure` shape above, or raise
+  the typed error and catch it at the loop.  Existing tests that assert the
+  skip (`is None`, `== {}`) must keep passing unchanged.  The residual shape
+  only clears a per-item `return None`; when the per-item value is an empty
+  aggregate (`{}`, `[]`) and no clearing shape keeps the tested skip, the end
+  state is a justified `# conformance: ignore[E007] <per-item skip contract>`
+  or a judgment residue — never a raise.  E020 carries the same distinction
+  for HTTP response guards.
+
   **Already-clearing shape — do not "fix" it:** a `return` that hands the
   caught exception back as **typed data** is not flagged.  E007 uses the same
   typed-failure predicate as E004's already-clearing list above, so the two
@@ -477,6 +490,47 @@ outcome mirroring the error-handling shape in the reference app named by
   and declares its gap under an `ignore[E020]` is converted to that typed
   catch.  Never give it a raise-only edit, which deletes the degradation.
 
+  **Raise versus skip — read before editing a per-object fetch.**  Raise the
+  typed error for a failure of the whole request, and for transient outcomes
+  (no response, 408, 429, 5xx).  A permanent per-object rejection inside a
+  batch or iteration is a **skip**, not a failure: when one object's detail
+  fetch (a table, routine or dataset looked up inside a loop) answers 400, 404
+  or 410 because the object was dropped between listing and fetch, or is
+  invalid, log a WARNING with the status and the source's error *reason*
+  (never the response body), return the empty value and let the batch
+  continue.  Converting a per-object skip into a raise is a behaviour change:
+  one bad object then fails the whole extraction, which is how a lane fix
+  turned a per-object skip into a run-wide production failure.  It is never
+  the default fix, and existing tests that assert the skip (`== {}`) must keep
+  passing unchanged; if they fail, the edit is wrong, not the test.  The
+  compliant skip is already exempt, so no suppression is needed:
+
+  ```python
+  if not response.is_success:
+      if response.status_code in (400, 404):
+          logger.warning("Skipping %s: HTTP %s (%s)", name, response.status_code, reason)
+          return {}
+      raise SourceUnavailableError(...)  # transient / whole-request failure
+  ```
+
+  The exemption needs the empty return directly under an `if` that pins
+  `<response>.status_code` to codes from {400, 404, 410} (`in (...)` or
+  `==`, `and`-ed terms allowed), and a warning/error log earlier in that same
+  body that includes the same status expression.  A local alias counts when
+  its last binding among the guard's earlier siblings is
+  `status = response.status_code` (or `... if response is not None else
+  None`); a named code constant (`in PERMANENT_CODES`) is not followed.  A
+  site that carries an `ignore[E020]` on such a skip can drop the directive.
+  So when an E020
+  fires on a per-object fetch, split the branch into that shape: the
+  permanent codes skip with the log, everything else raises.  A bare
+  `if not response.is_success: return {}`, a transient or missing-response
+  empty return, a skip with no log (or a debug/info log, or one without the
+  status), an `or`-ed or range guard, and 401/407 still report.  A 403 skip
+  also still reports; whether a permission denial should skip or raise is a
+  site-level judgment this prescription does not make — leave the site's
+  existing 403 behaviour as it is.
+
 - **E021 DependencyUnavailableOverriddenToUser** — an error class whose
   category is DEPENDENCY_UNAVAILABLE overrides `audience` to `USER`, so it says
   "the customer's own system is down" under a category that means "an Atlan
@@ -509,7 +563,8 @@ outcome mirroring the error-handling shape in the reference app named by
   a checked HTTP-failure branch with a raised typed `AppError` so the failure
   propagates instead of publishing an empty success.  Where the site degrades
   deliberately, catch that typed error at the tolerating function rather
-  than suppressing.)
+  than suppressing.  A permanent per-object 400/404/410 inside a batch is a
+  logged skip, never a raise; see the E020 entry above.)
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 

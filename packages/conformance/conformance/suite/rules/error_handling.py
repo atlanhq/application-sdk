@@ -375,7 +375,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "sentinel instead stands in "
             "for a failure the caller cannot distinguish from success, the directive "
             "is unremediated: either raise, or record the failure to a durable "
-            "evidence trail and declare the gap (see E020)."
+            "evidence trail and declare the gap (see E020). A per-item skip inside a "
+            "batch whose empty aggregate (`{}`, `[]`) tests assert is such a contract "
+            "when no clearing shape keeps it: suppress it with the per-item skip "
+            "contract named rather than raising, which would fail the whole run."
         ),
         rule_interactions=(
             "E007 and E004 judge the same handler shape with one shared predicate "
@@ -397,7 +400,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "per-item `return None` after the imported `residuals."
             "record_residual_failure` clears it (FND-4199). E004 "
             "still applies to the same handler independently, so its exc_info "
-            "requirement holds whichever way the E007 is fixed."
+            "requirement holds whichever way the E007 is fixed. E020 is the "
+            "response-guard variant of the same advice and shares its per-object "
+            "caveat: inside a batch or per-item loop, raising where one object was "
+            "skipped turns that object's failure into a run-wide one. Keep the "
+            "per-item skip (record it with record_residual_failure, or catch the "
+            "typed error at the loop), and keep tests that assert the skip passing."
         ),
         scope=RuleScope.BOTH,
         name="ErrorToReturnValue",
@@ -434,6 +442,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "`-> None` function, and any file in a wholesale-deprecated module (one\n"
             "whose own top level, or an enclosing package `__init__.py`, emits a\n"
             "module-level `DeprecationWarning`) are left out of this arm.\n"
+            "\n"
+            "Per-object skips.  Inside a batch or per-item loop, replacing one\n"
+            "item's empty return with a raise is a behaviour change: one bad item\n"
+            "then fails the whole run.  It is never the default fix.  Keep the skip\n"
+            "and make the failure durable instead (the per-item\n"
+            "`record_residual_failure` shape above), or raise the typed error and\n"
+            "catch it at the loop.  Tests that assert the skip keep passing\n"
+            "unchanged.  When the per-item value is an empty aggregate (`{}`, `[]`)\n"
+            "and no clearing shape keeps the tested skip, the end state is a\n"
+            "justified `# conformance: ignore[E007] <per-item skip contract>` or a\n"
+            "judgment residue, never a raise.  E020 gives the same advice for HTTP\n"
+            "response guards.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
         remediation_reference=RemediationReference(
@@ -972,7 +992,13 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         terminal_state=(
             "The failed response raises a typed AppError at the guard. That is the whole "
-            "fix where the failure should abort the run. Where the app must degrade "
+            "fix where the failure of the whole request, or a transient outcome, should "
+            "abort the run. A permanent per-object rejection inside a batch (HTTP "
+            "400/404/410 on one object's detail fetch) is a different end state: a "
+            "warning that carries the status and the source's error reason (never the "
+            "body), then the skip, and the batch continues. The detector does not report "
+            "that shape, and turning it into a raise is a behaviour change, never the "
+            "default fix. Where the app must degrade "
             "instead, the end state keeps the raise and adds an explicit `except "
             "<ThatTypedError>` at the tolerating function. That handler logs with "
             "exc_info=True, records the failure to a durable evidence trail (a residual "
@@ -983,6 +1009,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "endpoint aborts the entire crawl. Convert it to the typed catch instead. "
             "An inline ignore[E020] is not the end state, because the typed catch keeps "
             "the same degradation with nothing suppressed."
+        ),
+        rule_interactions=(
+            "E007 gives the same advice for the except-shaped variant (a broad catch "
+            "that logs and returns an empty sentinel) and carries the same per-object "
+            "caveat: inside a batch, a raise in place of one object's skip fails the "
+            "whole extraction. For both rules, raise for a failure of the whole "
+            "request or a transient outcome. A permanent per-object rejection stays a "
+            "logged skip, and tests that assert the skip (`== {}`) keep passing "
+            "unchanged. A lane fix that turned a per-object skip into a raise "
+            "converted one bad object into a run-wide failure in production."
         ),
         scope=RuleScope.APP,
         name="HttpFailureToEmptyReturn",
@@ -1026,6 +1062,33 @@ RULES: tuple[RuleDefinition, ...] = (
             "the run declares the gap as ``PARTIAL_SUCCESS``.  Anchored on HTTP-response\n"
             "markers and a failure-shaped test to avoid flagging ordinary\n"
             "``if x is None: return None`` guards.\n"
+            "\n"
+            "Raise versus skip.  Raise the typed error for a failure of the whole\n"
+            "request, and for transient outcomes (no response, 408, 429, 5xx).  A\n"
+            "permanent rejection of ONE object inside a batch or iteration (its\n"
+            "detail fetch answers 400/404/410 because the object was dropped between\n"
+            "listing and fetch, or is invalid) is a skip: log the status and the\n"
+            "source's error reason at WARNING, never the response body, and continue.\n"
+            "Converting such a skip into a raise is a behaviour change: one bad\n"
+            "object then fails the whole extraction.  It is never the default fix,\n"
+            "and existing tests that assert the skip (``== {}``) must keep passing\n"
+            "unchanged.\n"
+            "\n"
+            "Exempt: an empty return directly in the body of an ``if`` that pins the\n"
+            "status to permanent per-object rejections\n"
+            "(``r.status_code in (400, 404)``, ``r.status_code == 404``; codes from\n"
+            "{400, 404, 410}; ``and``-ed terms allowed) when a warning/error-level log\n"
+            "call earlier in that body includes the same status expression.  A local\n"
+            "(``status = r.status_code``, or ``... if r is not None else None``)\n"
+            "counts when that is its last binding among the guard's earlier siblings.\n"
+            "Still reported: a bare ``if not r.is_success: return {}``; transient\n"
+            "codes or a missing response returning empty; a skip with no log, a\n"
+            "debug/info log, or a log without the status; an ``or``-ed guard; a range\n"
+            "such as ``400 <= r.status_code < 500``; a named code constant\n"
+            "(``in PERMANENT_CODES``); and 401/407 (a credential rejection hits every\n"
+            "object).  A 403\n"
+            "skip also still reports: whether a permission denial should skip or\n"
+            "raise is a site-level judgment that this rule does not make.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e020",
         remediation_reference=RemediationReference(
