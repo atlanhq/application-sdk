@@ -29,7 +29,10 @@ import pytest
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.errors import ObjectStorePreflightError
 from application_sdk.storage.preflight import verify_object_store_access
-from tests.integration.storage.conftest import write_dapr_component
+from tests.integration.storage.conftest import (
+    emulator_unavailable,
+    write_dapr_component,
+)
 
 pytestmark = pytest.mark.storage_emulator
 
@@ -44,16 +47,16 @@ _ATLAN_BUCKET = os.environ.get("ATLAN_OBJECT_STORE_BUCKET", "sdk-atlan-objectsto
 
 @pytest.fixture(scope="module", autouse=True)
 def require_minio() -> None:
-    """Skip the module when MinIO isn't reachable or unhealthy."""
+    """Fail (CI) or skip (local) the module when MinIO isn't reachable or unhealthy."""
     import httpx
 
     try:
         with httpx.Client(timeout=3.0) as client:
             resp = client.get(f"{_ENDPOINT}/minio/health/live")
     except Exception as exc:  # pragma: no cover — env guard
-        pytest.skip(f"MinIO not reachable at {_ENDPOINT}: {exc}")
+        emulator_unavailable(f"MinIO not reachable at {_ENDPOINT}: {exc}")
     if resp.status_code >= 500:  # pragma: no cover — env guard
-        pytest.skip(f"MinIO unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
+        emulator_unavailable(f"MinIO unhealthy at {_ENDPOINT}: HTTP {resp.status_code}")
 
 
 def _s3_store(

@@ -36,6 +36,19 @@
       "packageNameTemplate": "apple/pkl",
       "datasourceTemplate": "github-tags",
       "versioningTemplate": "semver"
+    },
+    {
+      "description": "uv binary cache key in setup-deps (FND-4242). The github-actions manager bumps astral-sh/setup-uv's `version:` input (dep astral-sh/uv) but cannot see the same version inside the actions/cache key one step earlier, so the key drifted (0.11.21 against an installed 0.13.4) and the cache restored a uv nobody used. This manager tracks the key literal under the same depName, so both land in one Renovate branch. If it ever stops matching, .github/scripts/tests/test_setup_deps_uv_cache_key.py fails on the bump PR instead of the drift going silent.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/actions/setup-deps/action\\.yaml$/"
+      ],
+      "matchStrings": [
+        "key: uv-bin-\\$\\{\\{ runner\\.os \\}\\}-\\$\\{\\{ runner\\.arch \\}\\}-(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "astral-sh/uv",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [

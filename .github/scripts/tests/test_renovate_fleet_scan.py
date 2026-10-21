@@ -7,12 +7,13 @@ import inspect
 import io
 import json
 import sys
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import renovate_fleet_scan as rfs
+from _frozen_clock import freeze_clock  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Scope resolution + query building
@@ -815,7 +816,7 @@ def test_retries_past_a_502_and_succeeds(monkeypatch):
 
     assert result == {"data": {"ok": True}}
     assert post.calls == 3
-    assert slept == [1.0, 2.0]  # exponential, and it really did back off
+    assert slept == [15.0, 30.0]  # exponential, and it really did back off
 
 
 def test_retry_gives_up_at_the_attempt_cap(monkeypatch):
@@ -1096,6 +1097,85 @@ def test_retries_a_truncated_response(monkeypatch):
 
     assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
     assert post.calls == 2
+
+
+class _Body:
+    """A urlopen response whose body is ``payload`` as JSON."""
+
+    def __init__(self, payload):
+        self.raw = json.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.raw
+
+
+# The 2026-10-21 16:32 run: HTTP 200, and the failure in the body (FND-4240).
+_SERVER_ERROR = {
+    "errors": [
+        {
+            "message": "Something went wrong while executing your query on "
+            "2026-10-21T16:34:12Z. Please include `0000:0000:0000000:0000000:"
+            "00000000` when reporting this issue."
+        }
+    ]
+}
+
+
+def test_retries_a_server_error_delivered_in_the_body(monkeypatch):
+    bodies = [_SERVER_ERROR, {"data": {"ok": True}}]
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Body(bodies.pop(0))
+    )
+    slept = []
+
+    assert rfs._post_graphql("tok", {}, sleep=slept.append) == {"data": {"ok": True}}
+    assert slept == [rfs._BACKOFF_BASE_SECONDS]
+
+
+def test_a_server_error_in_the_body_still_fails_at_the_attempt_cap(monkeypatch):
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Body(_SERVER_ERROR)
+    )
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "Something went wrong" in str(exc)
+
+
+def test_a_query_error_in_the_body_is_not_retried(monkeypatch):
+    # A field that does not exist fails identically every attempt; it reaches
+    # fetch_all_prs, which raises on it as before.
+    calls = []
+    query_error = {
+        "errors": [{"message": "Field 'nope' doesn't exist on type 'PullRequest'"}]
+    }
+
+    def urlopen(req, timeout=None):
+        calls.append(req)
+        return _Body(query_error)
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == query_error
+    assert len(calls) == 1
+
+
+def test_a_mixed_error_body_is_not_retried(monkeypatch):
+    # Only an all-server-error body is GitHub's fault; one query error in the
+    # list means the query is wrong too.
+    mixed = {
+        "errors": [*_SERVER_ERROR["errors"], {"message": "Field 'nope' doesn't exist"}]
+    }
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Body(mixed)
+    )
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == mixed
 
 
 def test_a_successful_first_attempt_never_sleeps(monkeypatch):
@@ -1379,9 +1459,11 @@ def test_merged_date_windows_never_returns_empty_on_clock_skew():
     assert windows == ["is:merged merged:2026-09-11..2026-09-11"]
 
 
-def test_merged_date_windows_defaults_until_to_today():
+def test_merged_date_windows_defaults_until_to_today(monkeypatch):
+    # Frozen, so "today" is one reading of the clock, not two across midnight.
+    freeze_clock(monkeypatch, rfs, datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc))
     windows = rfs.merged_date_windows("2026-01-01", None, window_days=365_000)
-    assert windows[-1].endswith(date.today().isoformat())
+    assert windows[-1] == "is:merged merged:2026-01-01..2026-09-10"
 
 
 def test_fetch_merged_prs_defaults_to_one_query_per_day():
@@ -1489,10 +1571,15 @@ def test_fetch_merged_prs_still_raises_when_ONE_window_is_truncated():
         assert "1366" in str(exc)
 
 
-def test_run_uses_windowed_merged_queries(tmp_path):
+def test_run_uses_windowed_merged_queries(tmp_path, monkeypatch):
     # The live regression, end to end: before windowing, run() issued
     # `is:merged merged:>=<since>` once per author and the 30-day fleet volume
     # tripped the cap guard, failing every scheduled dashboard run.
+    # Frozen: `since` and run()'s default `until` would otherwise be two clock
+    # readings, and a midnight between them adds a 32nd window.
+    at = freeze_clock(
+        monkeypatch, rfs, datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+    )
     queries = []
 
     def fake_post(token, payload):
@@ -1501,7 +1588,7 @@ def test_run_uses_windowed_merged_queries(tmp_path):
 
     rfs.run(
         scope="org:atlanhq",
-        since=(date.today() - timedelta(days=30)).isoformat(),
+        since=(at.date() - timedelta(days=30)).isoformat(),
         open_dir=tmp_path / "open",
         merged_dir=tmp_path / "merged",
         known_repos=[],
