@@ -143,11 +143,18 @@ def run_worker(temporal_client, task_queue):
 
         async with run_worker():
             result = await executor.execute(MyApp, ...)
+
+    The shutdown drain delay defaults to zero here. Every test exits the
+    worker after awaiting the workflow result, so the activity result RPCs
+    the delay waits for have already landed; the production default was
+    five idle seconds per test, about half the suite's wall time (FND-4305).
+    A test that wants the delay can pass ``shutdown_drain_delay_seconds``.
     """
     from application_sdk.execution._temporal.worker import create_worker
 
     @asynccontextmanager
     async def _ctx(**kwargs):
+        kwargs.setdefault("shutdown_drain_delay_seconds", 0)
         worker = create_worker(
             temporal_client,
             task_queue,
