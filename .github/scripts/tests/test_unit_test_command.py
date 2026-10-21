@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -128,8 +129,6 @@ _ACTION = Path(__file__).parents[2] / "actions" / "unit-tests" / "action.yaml"
 
 
 def _script_call(action_text: str) -> str:
-    import yaml
-
     steps = yaml.safe_load(action_text)["runs"]["steps"]
     (run,) = [s["run"] for s in steps if "unit_test_command.py" in s.get("run", "")]
     return run
