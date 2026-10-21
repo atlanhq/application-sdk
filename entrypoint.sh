@@ -27,6 +27,8 @@
 #   DAPR_GRACEFUL_SHUTDOWN_SECONDS  - How long daprd waits for in-flight requests after
 #                                     receiving SIGTERM (default: 3600). Must be >=
 #                                     APP_GRACEFUL_SHUTDOWN_TIMEOUT.
+#   DAPR_STOP_TIMEOUT_SECONDS       - How long to wait for daprd to exit once the Python
+#                                     app has exited, before killing it (default: 30)
 
 set -eu
 
@@ -52,6 +54,7 @@ export DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
 # Must be >= APP_GRACEFUL_SHUTDOWN_TIMEOUT and < terminationGracePeriodSeconds
 # so Kubernetes always gets the last word.
 export DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-3600}"
+DAPR_STOP_TIMEOUT_SECONDS="${DAPR_STOP_TIMEOUT_SECONDS:-30}"
 
 # daprd binds the internal port first, so a clash kills its API server ~10s
 # later while the app keeps running. Fail here instead, with the cause.
@@ -69,6 +72,22 @@ APP_PID=""
 # ---------------------------------------------------------------------------
 # Signal handling — forward SIGTERM to Python first, stop daprd after it exits
 # ---------------------------------------------------------------------------
+# The app is daprd's only caller, so once it has exited there is nothing left
+# for daprd to drain; its graceful window must not keep the pod up.
+stop_daprd() {
+    kill -TERM "${DAPRD_PID}" 2>/dev/null || true
+    waited=0
+    while kill -0 "${DAPRD_PID}" 2>/dev/null && [ "${waited}" -lt "${DAPR_STOP_TIMEOUT_SECONDS}" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if kill -0 "${DAPRD_PID}" 2>/dev/null; then
+        echo "[entrypoint] daprd still running after ${DAPR_STOP_TIMEOUT_SECONDS}s, killing it"
+        kill -KILL "${DAPRD_PID}" 2>/dev/null || true
+    fi
+    wait "${DAPRD_PID}" 2>/dev/null || true
+}
+
 forward_signal() {
     if [ -n "${APP_PID}" ]; then
         echo "[entrypoint] Forwarding SIGTERM to Python app PID ${APP_PID}"
@@ -77,8 +96,7 @@ forward_signal() {
     fi
     if [ -n "${DAPRD_PID}" ]; then
         echo "[entrypoint] Python exited, stopping daprd PID ${DAPRD_PID}"
-        kill -TERM "${DAPRD_PID}" 2>/dev/null || true
-        wait "${DAPRD_PID}" 2>/dev/null || true
+        stop_daprd
     fi
     exit 0
 }
@@ -184,8 +202,7 @@ fi
 # Stop daprd after the app exits (normal path — signal handler covers SIGTERM path)
 if kill -0 "${DAPRD_PID}" 2>/dev/null; then
     echo "[entrypoint] Stopping daprd"
-    kill -TERM "${DAPRD_PID}" 2>/dev/null || true
-    wait "${DAPRD_PID}" 2>/dev/null || true
+    stop_daprd
 fi
 
 exit ${EXIT_CODE}

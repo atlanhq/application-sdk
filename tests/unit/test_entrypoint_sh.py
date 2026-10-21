@@ -88,3 +88,27 @@ def test_refuses_internal_grpc_port_clash(tmp_path: Path, env: dict[str, str]) -
     assert result.returncode == 1
     assert "clashes with another daprd port" in result.stderr
     assert not args_file.exists(), "daprd must not start with a clashing port"
+
+
+def test_kills_daprd_that_ignores_sigterm_after_app_exits(tmp_path: Path) -> None:
+    """A daprd that outlives the app must not hold the container up."""
+    daprd = tmp_path / "daprd"
+    daprd.write_text("#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n")
+    daprd.chmod(0o755)
+    uv = tmp_path / "uv"
+    uv.write_text("#!/bin/sh\nexit 0\n")
+    uv.chmod(0o755)
+
+    result = subprocess.run(
+        ["bash", str(ENTRYPOINT)],
+        env={
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "DAPR_STOP_TIMEOUT_SECONDS": "1",
+        },
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "daprd still running after 1s, killing it" in result.stdout

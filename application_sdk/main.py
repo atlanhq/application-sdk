@@ -1156,6 +1156,47 @@ class _FatalTeardownWatchdog:
             self._exit_fn(_WORKER_FATAL_TEARDOWN_EXIT_CODE)
 
 
+# Upper bound on what runs after the worker has drained on a shutdown signal:
+# closing infrastructure, flushing telemetry and the interpreter's exit hooks.
+# No activity is in flight by then, yet these steps have been seen to block for
+# the whole pod grace period when a telemetry endpoint is unreachable, holding
+# the pod's requests and its node. 0 or negative disables the bound.
+_POST_DRAIN_EXIT_TIMEOUT_ENV = "ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS"
+_POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS = 120
+_POST_DRAIN_EXIT_CODE = 0
+
+
+def _start_post_drain_exit_deadline(
+    exit_fn: Callable[[int], Any] = os._exit,
+) -> threading.Timer | None:
+    """Exit the process if shutdown has not finished soon after the worker drained.
+
+    Started only once the worker has returned from its drain, so cutting the
+    remaining teardown short cannot interrupt an activity. The timer is never
+    cancelled: it also bounds the interpreter's exit hooks, and on a normal exit
+    it dies with the process. It writes to stderr directly because the logging
+    pipeline is one of the things that can be stuck.
+    """
+    timeout = _env_int(
+        _POST_DRAIN_EXIT_TIMEOUT_ENV, _POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS
+    )
+    if timeout <= 0:
+        return None
+
+    def _expire() -> None:
+        os.write(
+            2,
+            f"Shutdown did not finish within {timeout}s of the worker draining; "
+            f"exiting with code {_POST_DRAIN_EXIT_CODE}\n".encode(),
+        )
+        exit_fn(_POST_DRAIN_EXIT_CODE)
+
+    timer = threading.Timer(timeout, _expire)
+    timer.daemon = True
+    timer.start()
+    return timer
+
+
 async def _observe_worker_poll_state(
     *,
     shutdown_event: asyncio.Event,
@@ -1666,6 +1707,8 @@ async def run_worker_mode(config: AppConfig) -> None:
         # leaves the marker in place, which is what makes the next start a restart.
         restart_marker.clear()
 
+    _start_post_drain_exit_deadline()
+
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
     )
@@ -2028,6 +2071,8 @@ async def run_combined_mode(config: AppConfig) -> None:
                 teardown_watchdog=teardown_watchdog,
             ),
         )
+
+    _start_post_drain_exit_deadline()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
