@@ -152,19 +152,18 @@ jobs:
       # is no separate CLI version pin to keep in sync.
       #
       # Both helpers fetch their binary to ~/.cache on first use; cache those
-      # paths across runs so we don't re-download every time.
+      # paths across runs so we don't re-download every time. warm-caches.yaml
+      # seeds this cache (same composite, same key) on every push to main, so a
+      # fresh PR restores it instead of downloading.
       - name: Cache embedded runtime binaries
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cache/atlan-sdk/temporal
-            ~/.cache/atlan-sdk/dapr
-          key: embedded-runtimes-${{ runner.os }}-${{ hashFiles('uv.lock', 'application_sdk/version.py') }}
-          restore-keys: |
-            embedded-runtimes-${{ runner.os }}-
+        uses: "./.github/actions/embedded-runtimes-cache"
 
+      # No --reruns: the old --only-rerun filter matched failure *text*, so it
+      # retried real regressions in timeout behaviour (any message containing
+      # "TimeoutError") while never retrying a pytest-timeout kill — and it
+      # fired 0 times in 101 logs (FND-4241). A failure here is a failure.
       - name: Run integration tests
-        run: uv run pytest tests/integration/ -m integration -v --timeout=120 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
+        run: uv run pytest tests/integration/ -m integration -v --timeout=120
 
   storage-emulator:
     name: Storage Emulator Tests
@@ -243,7 +242,8 @@ jobs:
           # The emulators were started above: an unreachable one fails its
           # tests instead of skipping them (tests/integration/storage/conftest.py).
           STORAGE_EMULATOR_REQUIRED: "1"
-        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
+        # No --reruns, for the same reason as the integration job (FND-4241).
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300
 
       - name: Teardown emulators
         if: always()

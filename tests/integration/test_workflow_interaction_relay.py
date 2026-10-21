@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from temporalio.client import WorkflowQueryFailedError, WorkflowUpdateFailedError
@@ -127,19 +128,21 @@ _WF_CLS = generate_workflow_class(
 # ---------------------------------------------------------------------------
 
 
-async def test_update_interaction_mutates_run_state(temporal_client) -> None:
+async def test_update_interaction_mutates_run_state(
+    temporal_client, task_queue
+) -> None:
     """Update fired mid-run reaches the same App instance ``run`` observes."""
     async with Worker(
         temporal_client,
-        task_queue="interaction-relay-queue",
+        task_queue=task_queue,
         workflows=[_WF_CLS],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
-            id="interaction-relay-update",
-            task_queue="interaction-relay-queue",
+            id=f"interaction-relay-update-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_InteractionOutput,
         )
 
@@ -154,19 +157,19 @@ async def test_update_interaction_mutates_run_state(temporal_client) -> None:
     assert result.final_state == "stopped:operator-request"
 
 
-async def test_signal_interaction_increments_state(temporal_client) -> None:
+async def test_signal_interaction_increments_state(temporal_client, task_queue) -> None:
     """Multiple signals accumulate on the same per-run App instance."""
     async with Worker(
         temporal_client,
-        task_queue="interaction-relay-queue-2",
+        task_queue=task_queue,
         workflows=[_WF_CLS],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
-            id="interaction-relay-signal",
-            task_queue="interaction-relay-queue-2",
+            id=f"interaction-relay-signal-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_InteractionOutput,
         )
         await asyncio.sleep(0.2)
@@ -182,19 +185,21 @@ async def test_signal_interaction_increments_state(temporal_client) -> None:
 _QUERY_DEADLINE_SECONDS = 30.0
 
 
-async def test_query_interaction_returns_live_state(temporal_client) -> None:
+async def test_query_interaction_returns_live_state(
+    temporal_client, task_queue
+) -> None:
     """Query reads state from the same instance ``run`` is mutating."""
     async with Worker(
         temporal_client,
-        task_queue="interaction-relay-queue-3",
+        task_queue=task_queue,
         workflows=[_WF_CLS],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
-            id="interaction-relay-query",
-            task_queue="interaction-relay-queue-3",
+            id=f"interaction-relay-query-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_InteractionOutput,
         )
         # Polled with a deadline, not read once after a fixed delay: a query
@@ -215,20 +220,20 @@ async def test_query_interaction_returns_live_state(temporal_client) -> None:
         await handle.result()
 
 
-async def test_validator_rejects_invalid_update(temporal_client) -> None:
+async def test_validator_rejects_invalid_update(temporal_client, task_queue) -> None:
     """Validator decorated on the App method propagates through the relay,
     causing the runtime to reject the update before it reaches the interaction body."""
     async with Worker(
         temporal_client,
-        task_queue="interaction-relay-queue-4",
+        task_queue=task_queue,
         workflows=[_WF_CLS],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _WF_CLS.run,
             _InteractionInput(timeout_seconds=5.0),
-            id="interaction-relay-validator",
-            task_queue="interaction-relay-queue-4",
+            id=f"interaction-relay-validator-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_InteractionOutput,
         )
         await asyncio.sleep(0.2)
