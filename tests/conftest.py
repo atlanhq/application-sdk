@@ -24,3 +24,25 @@ os.environ.setdefault("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false")
 # The SDK itself imports pyatlan lazily (inside functions) and must keep doing so
 # — this is a test-session concern only.
 import pyatlan.model.fluent_search  # noqa: E402, F401
+import pytest  # noqa: E402
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_configure(config):
+    """Keep Hypothesis's storage out of the checkout.
+
+    Its home defaults to ``./.hypothesis``: the repo, shared by every xdist
+    worker. It is written before any fixture runs — the pytest plugin caches
+    local constants in ``pytest_collection_modifyitems`` — and failure patches
+    are saved by the xdist controller, which runs no tests and so no fixtures.
+    A hook in this conftest runs in both, ahead of collection.
+
+    Under pytest's basetemp (one per xdist worker), which pytest keeps for the
+    last few runs, so a failure's ``git apply`` patch path stays readable.
+    ``_tmp_path_factory`` is how xdist itself finds the basetemp. See FND-4237.
+    """
+    from hypothesis import configuration as hypothesis_configuration
+
+    hypothesis_configuration.set_hypothesis_home_dir(
+        config._tmp_path_factory.getbasetemp() / "hypothesis"
+    )

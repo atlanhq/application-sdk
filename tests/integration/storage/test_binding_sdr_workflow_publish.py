@@ -57,6 +57,7 @@ from tests.integration.storage.conftest import (
     GCS_PROJECT_ID,
     S3_BUCKET,
     S3_REGION,
+    emulator_unavailable,
     write_dapr_component,
 )
 
@@ -371,7 +372,7 @@ async def test_emulator_sdr_workflow_publish_lands_assets(tmp_path):
     Same connector-agnostic harness as the real-cloud tests, on an emulator, so
     it can run on every connector PR without real-cloud creds or cost."""
     if not _minio_reachable():
-        pytest.skip(f"MinIO not reachable at {_MINIO_ENDPOINT}")
+        emulator_unavailable(f"MinIO not reachable at {_MINIO_ENDPOINT}")
     write_dapr_component(
         tmp_path / "components",
         name="minio-sdr-wf-store",

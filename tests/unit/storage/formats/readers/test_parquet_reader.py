@@ -42,7 +42,15 @@ def _local_path() -> ModuleType:
 _MOCK_STORE = MagicMock()
 _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 _DL_ID = _FIXED_HEX[:12]
-_EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
+
+
+def _expected_tmp() -> Path:
+    """Where ``_download_files`` stages a download with the fixed id.
+
+    Read at call time: the unit conftest roots ``TEMPORARY_PATH`` under the
+    session's tmp dir after this module is imported.
+    """
+    return Path(_formats_utils.TEMPORARY_PATH) / _DL_ID
 
 
 @given(config=parquet_input_config_strategy)
@@ -128,7 +136,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
             parquet_input.path, ".parquet", parquet_input.file_names
         )
 
-        expected_local = Path(_EXPECTED_TMP) / "local/test.parquet"
+        expected_local = _expected_tmp() / "local/test.parquet"
         mock_download_one.assert_called_once_with(
             _MOCK_STORE,
             "local/test.parquet",

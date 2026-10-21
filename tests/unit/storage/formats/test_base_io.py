@@ -17,8 +17,10 @@ threads or loops beyond pytest-asyncio.
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -51,10 +53,15 @@ class _StubReader(Reader):
 class _StubWriter(Writer):
     """Minimal concrete Writer used to exercise the base methods."""
 
+    #: Set per test by :func:`_stub_writer_root`. A writer creates its staging
+    #: tree beside ``path`` on first write, so a fixed default (``/tmp/out``
+    #: once) shares that tree across xdist workers and leaves it behind.
+    default_path: str
+
     def __init__(
-        self, path: str = "/tmp/out", dataframe_type=DataframeType.pandas
+        self, path: str | None = None, dataframe_type=DataframeType.pandas
     ) -> None:
-        self.path = path
+        self.path = path if path is not None else self.default_path
         self.output_prefix = "out"
         self.total_record_count = 0
         self.chunk_count = 0
@@ -75,6 +82,13 @@ class _StubWriter(Writer):
 
     async def _write_chunk(self, chunk: Any, output_file_name: str) -> None:
         return None
+
+
+@pytest.fixture(autouse=True)
+def _stub_writer_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _StubWriter, "default_path", str(tmp_path / "out"), raising=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -389,17 +403,20 @@ class TestWriterUploadFile:
     @pytest.mark.asyncio
     async def test_upload_file_propagates_retain_local_copy(self) -> None:
         writer = _StubWriter()
+        # Under writer.path: the upload key is its path relative to that root,
+        # which on Windows cannot span drives.
+        local = os.path.join(writer.path, "foo.parquet")
         writer.retain_local_copy = False  # type: ignore[attr-defined]
         writer.current_buffer_size_bytes = 999
 
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            await writer._upload_file("/tmp/out/foo.parquet")
+            await writer._upload_file(local)
 
         mock_upload.assert_awaited_once_with(
-            "/tmp/out/foo.parquet",
-            "/tmp/out/foo.parquet",
+            local,
+            local,
             retain_local_copy=False,
         )
         assert writer.current_buffer_size_bytes == 0
@@ -408,13 +425,16 @@ class TestWriterUploadFile:
     async def test_upload_file_default_retain_is_false_when_attr_missing(self) -> None:
         """Default for ``retain_local_copy`` is False if the attribute is unset."""
         writer = _StubWriter()
+        # Under writer.path: the upload key is its path relative to that root,
+        # which on Windows cannot span drives.
+        local = os.path.join(writer.path, "foo.parquet")
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            await writer._upload_file("/tmp/out/foo.parquet")
+            await writer._upload_file(local)
         mock_upload.assert_awaited_once_with(
-            "/tmp/out/foo.parquet",
-            "/tmp/out/foo.parquet",
+            local,
+            local,
             retain_local_copy=False,
         )
 
