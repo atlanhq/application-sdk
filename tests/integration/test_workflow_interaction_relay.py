@@ -15,10 +15,12 @@ instance.
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import timedelta
 
 import pytest
-from temporalio.client import WorkflowUpdateFailedError
+from temporalio.client import WorkflowQueryFailedError, WorkflowUpdateFailedError
+from temporalio.service import RPCError
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
 
@@ -177,6 +179,9 @@ async def test_signal_interaction_increments_state(temporal_client) -> None:
     assert result.signals_received == 3
 
 
+_QUERY_DEADLINE_SECONDS = 30.0
+
+
 async def test_query_interaction_returns_live_state(temporal_client) -> None:
     """Query reads state from the same instance ``run`` is mutating."""
     async with Worker(
@@ -192,8 +197,20 @@ async def test_query_interaction_returns_live_state(temporal_client) -> None:
             task_queue="interaction-relay-queue-3",
             result_type=_InteractionOutput,
         )
-        await asyncio.sleep(0.2)
-        assert (await handle.query("get_state"))["state"] == "running"
+        # Polled with a deadline, not read once after a fixed delay: a query
+        # sent before the first workflow task completes can fail, and how long
+        # that takes depends on the box.
+        state = None
+        deadline = time.monotonic() + _QUERY_DEADLINE_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                state = (await handle.query("get_state"))["state"]
+            except (RPCError, WorkflowQueryFailedError):
+                state = None
+            if state == "running":
+                break
+            await asyncio.sleep(0.1)
+        assert state == "running"
         await handle.execute_update("stop", _StopInput(reason="done"))
         await handle.result()
 
