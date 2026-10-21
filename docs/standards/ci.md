@@ -484,14 +484,15 @@ tag pushes, and on a PR only when someone asks for the full suite. Unit legs,
 Unit Perf Tests and the script tests still run on every PR push.
 
 **On demand.** A `/e2e` or `/gate-check` comment runs the integration tier on
-that PR commit too. SDK Gate's `changes` job reads the `e2e-request` and
-`gate-check` statuses live (`bump_pr_opt_in.py integration-requested`) and
-passes `run-integration` to the reusable. `/gate-check` already re-runs SDK
-Gate. `/e2e` re-runs it from `Detect Changes (SDK Gate)`, which re-runs every
-area, unit legs included (`pr_test_command.py`, `SDK_E2E_RERUN_JOBS`). A
-status that cannot be read runs the tier: that costs runner minutes, never a
-lost request. A new push is a new commit with no marker, so the tier skips on
-it again.
+that PR commit too. The reusable's `Decide integration request` job reads the
+`e2e-request` and `gate-check` statuses live
+(`bump_pr_opt_in.py integration-requested`), and only the two tier jobs need
+it. `/e2e` re-runs that one job (`pr_test_command.py`, `SDK_E2E_RERUN_JOBS`):
+GitHub re-runs it, the tier and `SDK Gate`'s verdict, and keeps the unit legs'
+result from the first attempt, so `/e2e` never runs or cancels the unit legs.
+`/gate-check` re-runs the whole run, as before. A status that cannot be read
+runs the tier: that costs runner minutes, never a lost request. A new push is
+a new commit with no marker, so the tier skips on it again.
 
 On a PR without a request the skipped jobs report `skipped`,
 `SDK Tests` concludes `success`, and `SDK Gate` reads that as a pass, so the

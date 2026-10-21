@@ -141,14 +141,15 @@ SDK_GATE_CHECK_WORKFLOWS = ("sdk-gate.yaml", "pull_request.yaml", "codeql.yaml")
 #: a job re-runs its dependents, i.e. the e2e legs and the connector gate.
 SDK_E2E_WORKFLOW = "pull_request.yaml"
 SDK_E2E_REQUEST_JOB = "Decide e2e request"
-#: `/e2e` also re-runs SDK Gate from its detection job, which reads the marker
-#: and runs the integration tier on the PR (FND-4306).
+#: `/e2e` also re-runs SDK Gate's integration-request job, which reads the
+#: marker and runs the integration tier on the PR. Only the tier and the gate
+#: depend on it, so the unit legs are not re-run (FND-4306).
 SDK_GATE_WORKFLOW = "sdk-gate.yaml"
-SDK_GATE_CHANGES_JOB = "Detect Changes (SDK Gate)"
+SDK_INTEGRATION_REQUEST_JOB = "Decide integration request"
 #: Per workflow, the job a `/e2e` re-runs (its dependents re-run with it).
 SDK_E2E_RERUN_JOBS = {
     SDK_E2E_WORKFLOW: SDK_E2E_REQUEST_JOB,
-    SDK_GATE_WORKFLOW: SDK_GATE_CHANGES_JOB,
+    SDK_GATE_WORKFLOW: SDK_INTEGRATION_REQUEST_JOB,
 }
 
 ACTIVE_RUN_STATES = frozenset(

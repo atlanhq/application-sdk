@@ -71,7 +71,6 @@ jobs:
       force_conformance: ${{ steps.final-force.outputs.force_conformance }}
       force_toolkit: ${{ steps.final-force.outputs.force_toolkit }}
       opted_in: ${{ steps.opt-in.outputs.opted_in }}
-      run_integration: ${{ steps.integration.outputs.requested }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -87,18 +86,6 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --sha "$HEAD_SHA"
-
-      # The integration tier runs in the merge queue and on tags. On a PR it
-      # runs only when `/e2e` or `/gate-check` asked for the full suite on this
-      # commit (FND-4306). Read live for the same reason as the opt-in above:
-      # `/e2e` re-runs this job, and a re-run replays the original payload.
-      - name: Check for an on-demand integration request
-        id: integration
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: python3 .github/scripts/bump_pr_opt_in.py integration-requested --event "$EVENT_NAME" --sha "$HEAD_SHA"
 
       # Compute force-all FIRST — it needs no diff base, only the ref/head_ref.
       - name: Compute force flags
@@ -320,10 +307,6 @@ jobs:
     needs: changes
     if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true')
     uses: ./.github/workflows/sdk-tests-reusable.yaml
-    with:
-      # Anything but an explicit `false` runs the tier: an empty output must
-      # not skip it.
-      run-integration: ${{ needs.changes.outputs.run_integration != 'false' }}
     # packages: read lets the Storage Emulator job pull the private MinIO
     # mirror (ghcr.io/atlanhq/ci-mirror/minio). A called workflow cannot hold
     # more than its caller grants, so it has to be granted here.

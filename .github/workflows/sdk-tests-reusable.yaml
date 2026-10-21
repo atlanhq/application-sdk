@@ -8,12 +8,12 @@ name: SDK tests (reusable)
 # `if:` guards — when the SDK area is untouched the orchestrator skips this
 # entire reusable and the composing gate counts a skipped area as a pass.
 #
-# The integration tier (Integration Tests, Storage Emulator Tests) runs only
-# when the caller passes `run-integration`: in the merge queue, on v* tags, and
-# on a PR commit someone asked for with `/e2e` or `/gate-check`. That is the
-# split connectors use (tests-reusable.yaml, docs/standards/ci.md). The queue
-# runs the full suite on the exact merged state before anything lands, so a
-# PR-side run on every push only repeated it (FND-4306).
+# The integration tier (Integration Tests, Storage Emulator Tests) runs in the
+# merge queue, on v* tags, and on a PR commit someone asked for with `/e2e` or
+# `/gate-check`; `integration-request` below decides. That is the split
+# connectors use (tests-reusable.yaml, docs/standards/ci.md). The queue runs
+# the full suite on the exact merged state before anything lands, so a PR-side
+# run on every push only repeated it (FND-4306).
 #
 # Deliberately NOT built on tests-reusable.yaml: that workflow is
 # connector-shaped (app-name required, e2e scaffold, no OS matrix).  The SDK's
@@ -21,12 +21,7 @@ name: SDK tests (reusable)
 # here as a dedicated SDK reusable.
 
 on:
-  workflow_call:
-    inputs:
-      run-integration:
-        description: Run the integration tier (Integration Tests, Storage Emulator Tests).
-        type: boolean
-        default: true
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -136,10 +131,35 @@ jobs:
       - name: Run shell script tests
         run: uv run poe test-scripts
 
+  # Decides whether the integration tier runs (FND-4306). Only the two tier
+  # jobs need it, so `/e2e` re-runs this job alone (pr_test_command.py,
+  # SDK_E2E_RERUN_JOBS) and the tier and SDK Gate's verdict re-run with it,
+  # while the unit legs keep their result. It reads the `/e2e` and
+  # `/gate-check` markers live because a re-run replays the original payload.
+  integration-request:
+    name: Decide integration request
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    outputs:
+      requested: ${{ steps.decide.outputs.requested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/bump_pr_opt_in.py integration-requested --event "$EVENT_NAME" --sha "$HEAD_SHA"
+
   integration:
     name: Integration Tests
     # Queue, tags and on-demand PR runs only; see the header (FND-4306).
-    if: inputs.run-integration
+    needs: integration-request
+    if: needs.integration-request.outputs.requested == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -183,7 +203,8 @@ jobs:
   storage-emulator:
     name: Storage Emulator Tests
     # Queue, tags and on-demand PR runs only; see the header (FND-4306).
-    if: inputs.run-integration
+    needs: integration-request
+    if: needs.integration-request.outputs.requested == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

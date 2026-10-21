@@ -1126,9 +1126,9 @@ class TestRunRerun:
         assert api.writes[0][1]["state"] == "success"
         assert clock.sleeps == []
 
-    def test_e2e_reruns_the_request_job_and_sdk_gate_detection(self) -> None:
-        """SDK Gate re-runs from detection, which reads the marker and runs the
-        integration tier on the PR (FND-4306)."""
+    def test_e2e_reruns_the_request_job_and_the_integration_request(self) -> None:
+        """SDK Gate re-runs only its integration-request job, so the unit legs
+        keep their result (FND-4306)."""
         api = self._api(
             runs={"pull_request.yaml": [_run(9)], "sdk-gate.yaml": [_run(5)]},
             jobs={
@@ -1143,7 +1143,7 @@ class TestRunRerun:
                 5: [
                     {
                         "id": 55,
-                        "name": ptc.SDK_GATE_CHANGES_JOB,
+                        "name": f"SDK Tests / {ptc.SDK_INTEGRATION_REQUEST_JOB}",
                         "status": "completed",
                         "started_at": _iso(12),
                     }
@@ -1766,11 +1766,21 @@ class TestContracts:
         )
         assert doc["jobs"]["e2e-request"]["name"] == ptc.SDK_E2E_REQUEST_JOB
 
-    def test_sdk_gate_changes_job_name(self) -> None:
+    def test_sdk_integration_request_job(self) -> None:
+        """The job `/e2e` re-runs exists, and only the integration tier needs it,
+        so re-running it leaves the unit legs alone."""
         doc = yaml.safe_load(
-            (WORKFLOWS / ptc.SDK_GATE_WORKFLOW).read_text(encoding="utf-8")
+            (WORKFLOWS / "sdk-tests-reusable.yaml").read_text(encoding="utf-8")
         )
-        assert doc["jobs"]["changes"]["name"] == ptc.SDK_GATE_CHANGES_JOB
+        jobs = doc["jobs"]
+        assert jobs["integration-request"]["name"] == ptc.SDK_INTEGRATION_REQUEST_JOB
+        dependents = {
+            key
+            for key, job in jobs.items()
+            if "integration-request" in (job.get("needs") or [])
+            or job.get("needs") == "integration-request"
+        }
+        assert dependents == {"integration", "storage-emulator"}
 
     @pytest.mark.parametrize(
         "workflow", (*ptc.SDK_GATE_CHECK_WORKFLOWS, *ptc.SDK_E2E_RERUN_JOBS)
