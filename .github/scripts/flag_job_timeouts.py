@@ -12,8 +12,8 @@ job's cap from the workflow YAML (following local reusable-workflow calls, so
 sdk-tests-reusable.yaml), and emits a ``::warning::`` plus a step-summary line
 for any job whose duration came within ``--margin-seconds`` of that cap.
 
-Advisory only: it always exits 0 once it has a job list, so it can never be the
-reason a gate fails.
+Advisory only: it always exits 0 once it has a job list, and the gate step runs
+with continue-on-error, so it can never be the reason a gate fails.
 """
 
 from __future__ import annotations
@@ -32,6 +32,9 @@ import yaml
 
 # GitHub's default when a job sets no timeout-minutes.
 DEFAULT_TIMEOUT_MINUTES = 360
+API_TIMEOUT_SECONDS = 120
+# Conclusions a timeout kill can produce; a near-cap `success` only ran close.
+_KILLED = ("cancelled", "failure", "timed_out")
 
 _EXPR = re.compile(r"\$\{\{.*?\}\}")
 
@@ -93,22 +96,31 @@ def collect_caps(
 
 
 def list_jobs(repo: str, run_id: str, attempt: str) -> list[dict]:
-    result = run(
-        [
-            "gh",
-            "api",
-            "--paginate",
-            f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
-            "--jq",
-            ".jobs[] | tojson",
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    cmd = [
+        "gh",
+        "api",
+        "--paginate",
+        f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100",
+        "--jq",
+        ".jobs[] | tojson",
+    ]
+    try:
+        result = run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+            # A stalled request must not hold the gate until its own timeout.
+            timeout=API_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise SystemExit(
+            f"::warning::listing jobs for run {run_id} timed out after "
+            f"{API_TIMEOUT_SECONDS}s; no timeout report for this run"
+        ) from None
     if result.returncode != 0:
         raise SystemExit(
-            f"::error::failed to list jobs for run {run_id}: {result.stderr}"
+            f"::warning::failed to list jobs for run {run_id}: {result.stderr}"
         )
     return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
 
@@ -160,12 +172,17 @@ def main(argv: list[str] | None = None) -> int:
 
     lines = []
     for name, duration, minutes, conclusion in flagged:
-        msg = (
+        near = (
             f"{name} ran {duration:.0f}s, within {args.margin_seconds}s of its "
-            f"{minutes}-minute timeout-minutes cap (concluded {conclusion}): "
-            "treat this as a job timeout, not a superseded-push cancellation."
+            f"{minutes}-minute timeout-minutes cap (concluded {conclusion})"
         )
-        print(f"::warning title=Job timeout::{msg}")
+        if conclusion in _KILLED:
+            title = "Job timeout"
+            msg = f"{near}: treat this as a job timeout, not a superseded-push cancellation."
+        else:
+            title = "Job near its timeout"
+            msg = f"{near}: it finished, but the next slow runner will time out."
+        print(f"::warning title={title}::{msg}")
         lines.append(f"- {msg}")
     if not flagged:
         print(f"No job ran within {args.margin_seconds}s of its timeout cap.")

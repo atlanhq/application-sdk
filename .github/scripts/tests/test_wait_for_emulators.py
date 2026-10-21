@@ -243,3 +243,32 @@ def test_main_succeeds(monkeypatch):
     monkeypatch.setattr(mod, "wait_for", lambda *a, **k: [])
     monkeypatch.setattr(mod, "provision", lambda: True)
     assert mod.main([]) == 0
+
+
+def test_answer_after_the_deadline_does_not_count():
+    # The last probe answers 200, but its request returns past the deadline:
+    # the timeout must bound readiness, not just the polling loop.
+    clock = _FakeClock()
+    p = _probes()
+
+    def status(url: str) -> int | None:
+        if url == p["GCS proxy"].url:
+            clock.now = 11  # a slow request straddling the 10s deadline
+        return {p["MinIO"].url: 200, p["Azurite"].url: 400}.get(url, 200)
+
+    assert mod.wait_for(
+        mod.PROBES, 10, 2, status=status, sleep=clock.sleep, clock=clock
+    ) == ["GCS proxy"]
+
+
+def test_hung_cli_becomes_a_failed_call(monkeypatch):
+    def hang(cmd, **kwargs):
+        assert kwargs["timeout"] == mod.CLI_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(mod.subprocess, "run", hang)
+    result = mod.run(["aws", "s3api"], capture_output=True, text=True, check=False)
+    assert result.returncode == 124
+    assert "timed out" in result.stderr
+    monkeypatch.setattr(mod, "run", lambda cmd, **kw: result)
+    assert mod.create_s3_bucket("b1") is False

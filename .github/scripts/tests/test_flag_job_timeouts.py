@@ -8,6 +8,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import flag_job_timeouts as mod
@@ -230,3 +232,57 @@ def test_main_quiet_when_nothing_timed_out(tmp_path, monkeypatch, capsys):
     )
     assert rc == 0
     assert "::warning" not in capsys.readouterr().out
+
+
+def test_list_jobs_surfaces_an_api_error(monkeypatch):
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(
+            args=cmd, returncode=1, stdout="", stderr="HTTP 403"
+        ),
+    )
+    with pytest.raises(SystemExit, match="HTTP 403"):
+        mod.list_jobs("o/r", "1", "1")
+
+
+def test_list_jobs_is_bounded_and_a_stall_is_reported(monkeypatch):
+    def hang(cmd, **kwargs):
+        assert kwargs["timeout"] == mod.API_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(mod, "run", hang)
+    with pytest.raises(SystemExit, match="timed out"):
+        mod.list_jobs("o/r", "1", "1")
+
+
+def _main(tmp_path: Path) -> int:
+    return mod.main(
+        [
+            "--repo",
+            "o/r",
+            "--run-id",
+            "1",
+            "--run-attempt",
+            "1",
+            "--workflow",
+            str(_workflows(tmp_path)),
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+
+
+def test_successful_near_cap_job_is_a_risk_not_a_timeout(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda cmd, **kw: _ndjson(
+            [_job("SDK Tests / Unit Tests (a)", 15 * 60 - 10, conclusion="success")]
+        ),
+    )
+    assert _main(tmp_path) == 0
+    out = capsys.readouterr().out
+    assert "::warning title=Job near its timeout::" in out
+    assert "title=Job timeout::" not in out

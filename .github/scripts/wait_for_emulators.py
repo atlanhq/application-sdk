@@ -46,6 +46,8 @@ S3_BUCKETS = (
 AZURE_CONTAINER = "sdk-emulator-test"
 GCS_BUCKET = "sdk-emulator-test"
 GCS_PROJECT = "test"
+# Bound each aws / az call: a hung CLI must fail this step, not the job timeout.
+CLI_TIMEOUT_SECONDS = 60
 
 MINIO_ENV = {
     "AWS_ACCESS_KEY_ID": "minioadmin",
@@ -96,8 +98,17 @@ def http_status(
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the ``aws`` / ``az`` CLIs."""
-    return subprocess.run(cmd, **kwargs)
+    """Single seam so tests can stub the ``aws`` / ``az`` CLIs.
+
+    Bounded by ``CLI_TIMEOUT_SECONDS``: a hung CLI comes back as a failed call
+    (exit 124, like ``timeout(1)``) instead of hanging until the job timeout.
+    """
+    try:
+        return subprocess.run(cmd, timeout=CLI_TIMEOUT_SECONDS, **kwargs)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            cmd, 124, "", f"{cmd[0]} timed out after {CLI_TIMEOUT_SECONDS}s"
+        )
 
 
 def wait_for(
@@ -121,7 +132,9 @@ def wait_for(
         for probe in pending:
             code = status(probe.url)
             last[probe.name] = code
-            if code is None or not probe.ready(code):
+            # A request can take seconds; an answer that lands after the
+            # deadline does not count, so the deadline really bounds the wait.
+            if code is None or not probe.ready(code) or clock() > deadline:
                 still.append(probe)
         pending = still
         if not pending or clock() >= deadline:
