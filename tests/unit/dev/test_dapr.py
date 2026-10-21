@@ -660,15 +660,17 @@ class TestSpawnFailureCleanup:
             lambda count: [13500, 15001][:count],
         )
 
+        # Not an OSError: a failed unlink (PermissionError on Windows when the
+        # log is still open) must not be able to stand in for this error.
         async def _spawn_fails(*_a, **_k):
-            raise PermissionError("cannot execute")
+            raise RuntimeError("cannot execute")
 
         log_dir = tmp_path / "logs"
         log_dir.mkdir()
 
         with (
             _private_spawn_and_log_dir(monkeypatch, _spawn_fails, log_dir),
-            pytest.raises(PermissionError),
+            pytest.raises(RuntimeError, match="cannot execute"),
         ):
             async with embedded_dapr():
                 pass

@@ -561,12 +561,13 @@ async def embedded_dapr(
             stderr=asyncio.subprocess.STDOUT,
         )
     except BaseException:
-        # Nothing was spawned, so the cleanup below is never reached.
+        # Nothing was spawned, so the cleanup below is never reached. Close
+        # before unlinking: Windows refuses to delete a file that is still open.
+        os.close(log_fd)
         log_path.unlink(missing_ok=True)
         raise
-    finally:
-        # The child holds its own copy of the descriptor.
-        os.close(log_fd)
+    # The child holds its own copy of the descriptor.
+    os.close(log_fd)
     try:
         try:
             await _wait_for_dapr_ready(http_port, proc=proc, log_path=log_path)
