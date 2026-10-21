@@ -58,12 +58,15 @@ jobs:
         id: get_sha
         run: echo "sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
-      - name: Log in to Atlan Harbor Registry
+      # Harbor no longer answers at registry.atlan.com: the registry gateway
+      # serves registry.atlan.com/public/app-runtime-base from
+      # ghcr.io/atlanhq/app-runtime-base, so push there (same as main).
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: registry.atlan.com
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Log in to Chainguard Container Registry
         uses: docker/login-action@v3
@@ -87,8 +90,8 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            registry.atlan.com/public/app-runtime-base:${{ steps.tag_prefix.outputs.value }}
-            registry.atlan.com/public/app-runtime-base:sha-${{ steps.get_sha.outputs.sha }}
+            ghcr.io/atlanhq/app-runtime-base:${{ steps.tag_prefix.outputs.value }}
+            ghcr.io/atlanhq/app-runtime-base:sha-${{ steps.get_sha.outputs.sha }}
           build-args: |
             ACCESS_TOKEN_USR=$GITHUB_ACTOR
             ACCESS_TOKEN_PWD=${{ secrets.ORG_PAT_GITHUB }}
