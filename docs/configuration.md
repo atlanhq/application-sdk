@@ -142,6 +142,12 @@ unavailable the poll state is reported as *unknown*, never as zero.
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
 | `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Event-loop yield (seconds) before tearing down the worker transport, giving in-flight activity completion RPCs a chance to flush. Distinct from `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`. |
 
+## Blocking offload (`run_in_thread`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` | _(unset: no cap)_ | Most `run_in_thread` calls one app may have in flight (running or queued). A call past it fails at once with a retryable `ResourceExhaustedError` (`resource="offload_threads"`) instead of queueing. A call counts until its thread finishes, not until its caller stops waiting. On the consolidated API host, keep it at or below the app's `blocking_threads` pool width. A value that isn't a positive integer is ignored, with one warning. See [ADR-0010](adr/0010-async-first-blocking-code.md#addendum-containing-stranded-threads-per-app-fnd-2973). |
+
 ---
 
 ## Authentication (Temporal)
