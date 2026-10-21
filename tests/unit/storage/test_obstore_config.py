@@ -10,11 +10,15 @@ timeout.
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from application_sdk.storage import _obstore_config
 from application_sdk.storage._obstore_config import (
     _azure_config_has_explicit_credential,
     log_obstore_config,
@@ -22,6 +26,19 @@ from application_sdk.storage._obstore_config import (
     obstore_client_options,
     obstore_retry_config,
 )
+from tests.unit.private_stdlib import private_stdlib
+
+
+@contextmanager
+def _getproxies(**kwargs: Any) -> Iterator[MagicMock]:
+    """Patch ``urllib.request.getproxies`` for ``_obstore_config`` alone."""
+    with (
+        private_stdlib(_obstore_config, "urllib") as local_urllib,
+        private_stdlib(local_urllib, "request") as local_request,
+        patch.object(local_request, "getproxies", **kwargs) as mock_getproxies,
+    ):
+        yield mock_getproxies
+
 
 # ---------------------------------------------------------------------------
 # obstore_client_options()
@@ -78,7 +95,7 @@ class TestClientOptionsOverrides:
         # Pin no proxy and no custom CA so the exact-dict assertion is
         # deterministic regardless of the host's proxy env / SSL_CERT_DIR.
         with (
-            patch("urllib.request.getproxies", return_value={}),
+            _getproxies(return_value={}),
             patch(
                 "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,
@@ -107,29 +124,26 @@ class TestClientOptionsProxy:
     macOS)."""
 
     def test_no_proxy_url_when_env_unset(self) -> None:
-        with patch("urllib.request.getproxies", return_value={}):
+        with _getproxies(return_value={}):
             opts = obstore_client_options()
         assert "proxy_url" not in opts
 
     def test_https_proxy_is_used(self) -> None:
-        with patch(
-            "urllib.request.getproxies",
+        with _getproxies(
             return_value={"https": "http://proxy.corp:8080"},
         ):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://proxy.corp:8080"
 
     def test_http_proxy_used_as_fallback(self) -> None:
-        with patch(
-            "urllib.request.getproxies",
+        with _getproxies(
             return_value={"http": "http://proxy.corp:3128"},
         ):
             opts = obstore_client_options()
         assert opts["proxy_url"] == "http://proxy.corp:3128"
 
     def test_https_preferred_over_http(self) -> None:
-        with patch(
-            "urllib.request.getproxies",
+        with _getproxies(
             return_value={
                 "https": "http://secure.corp:8080",
                 "http": "http://plain.corp:3128",
@@ -145,8 +159,7 @@ class TestClientOptionsProxyExcludes:
 
     def test_no_proxy_excludes_forwarded_when_proxy_set(self, monkeypatch) -> None:
         monkeypatch.setenv("NO_PROXY", "localhost,.svc.cluster.local,10.0.0.0/8")
-        with patch(
-            "urllib.request.getproxies",
+        with _getproxies(
             return_value={"https": "http://proxy.corp:8080"},
         ):
             opts = obstore_client_options()
@@ -155,8 +168,7 @@ class TestClientOptionsProxyExcludes:
     def test_lowercase_no_proxy_is_honored(self, monkeypatch) -> None:
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.setenv("no_proxy", "internal.example.com")
-        with patch(
-            "urllib.request.getproxies",
+        with _getproxies(
             return_value={"https": "http://proxy.corp:8080"},
         ):
             opts = obstore_client_options()
@@ -166,15 +178,14 @@ class TestClientOptionsProxyExcludes:
         # obstore only consults proxy_excludes when proxy_url is set, so don't
         # emit a dangling exclude list when there's no proxy.
         monkeypatch.setenv("NO_PROXY", "localhost")
-        with patch("urllib.request.getproxies", return_value={}):
+        with _getproxies(return_value={}):
             opts = obstore_client_options()
         assert "proxy_excludes" not in opts
 
     def test_excludes_omitted_when_no_proxy_unset(self, monkeypatch) -> None:
         monkeypatch.delenv("NO_PROXY", raising=False)
         monkeypatch.delenv("no_proxy", raising=False)
-        with patch(
-            "urllib.request.getproxies",
+        with _getproxies(
             return_value={"https": "http://proxy.corp:8080"},
         ):
             opts = obstore_client_options()
@@ -192,7 +203,7 @@ class TestClientOptionsRootCertificate:
     def test_root_certificate_set_when_custom_ca_present(self) -> None:
         pem = b"-----BEGIN CERTIFICATE-----\nabc\n-----END CERTIFICATE-----"
         with (
-            patch("urllib.request.getproxies", return_value={}),
+            _getproxies(return_value={}),
             patch(
                 "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=pem,
@@ -203,7 +214,7 @@ class TestClientOptionsRootCertificate:
 
     def test_root_certificate_omitted_without_custom_ca(self) -> None:
         with (
-            patch("urllib.request.getproxies", return_value={}),
+            _getproxies(return_value={}),
             patch(
                 "application_sdk.clients.ssl_utils.get_custom_ca_cert_bytes",
                 return_value=None,

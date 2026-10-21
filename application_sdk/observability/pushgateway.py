@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import re
 import socket
+import time
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 from urllib.error import HTTPError
@@ -321,7 +322,6 @@ class PushGatewayClient:
         never block the worker — they only mean the leak persists until
         the next pod's sweep.
         """
-        import time  # noqa: PLC0415 — cold path: only on worker startup
 
         # 1. Fetch the gateway's exposition. push_time_seconds is the
         # bookkeeping series the gateway emits per group; we use it to

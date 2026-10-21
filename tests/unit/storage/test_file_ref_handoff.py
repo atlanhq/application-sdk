@@ -45,6 +45,7 @@ from application_sdk.storage.reference import (
     persist_file_reference,
 )
 from tests.unit.loop_probe import LoopProbe
+from tests.unit.private_stdlib import private_stdlib
 
 pytestmark = pytest.mark.asyncio
 
@@ -533,8 +534,9 @@ class TestInOrderHasher:
 
         with (
             patch.object(_InOrderHasher, "finish", _cancelled),
-            patch("application_sdk.storage.chunked.os.open", _tracking_open),
-            patch("application_sdk.storage.chunked.os.close", _tracking_close),
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "open", _tracking_open),
+            patch.object(local_os, "close", _tracking_close),
             pytest.raises(asyncio.CancelledError),
         ):
             await download_file_chunked(

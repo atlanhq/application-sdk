@@ -19,6 +19,7 @@ file path (same pattern used for .github/scripts/*.py in
 .github/scripts/tests/).
 """
 
+import importlib.util
 import inspect
 import os
 import subprocess
@@ -36,9 +37,15 @@ _EXTRACTOR_DIR = (
     / "references"
 )
 
-sys.path.insert(0, str(_EXTRACTOR_DIR))
-
-import extractor  # noqa: E402
+# Loaded by path rather than through ``sys.path``: an insert here, or a
+# ``sys.modules["extractor"]`` entry, would outlive this file for the rest of the
+# xdist worker. The extractor imports only the stdlib, so nothing needs either.
+_spec = importlib.util.spec_from_file_location(
+    "extractor", _EXTRACTOR_DIR / "extractor.py"
+)
+assert _spec and _spec.loader
+extractor = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(extractor)
 
 # ---------------------------------------------------------------------------
 # Fixtures used as re-export targets for _import_external_target /

@@ -279,55 +279,40 @@ def _env_seconds(name: str, default: int) -> int:
 # activity.heartbeat(), so setting a heartbeat_timeout would hard-cap runtime at
 # that interval and fail any real source check that runs longer than it —
 # start_to_close is the correct in-flight bound here.
-_AUTH_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 300)
-)
-_PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 300)
-)
-_METADATA_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 300)
-)
+def _load_timeout_pair(op: str, env_label: str) -> tuple[timedelta, timedelta]:
+    """Read one activity's ``(start_to_close, schedule_to_close)`` from env.
 
-_AUTH_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", 300)
-)
-_PREFLIGHT_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 300)
-)
-_METADATA_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", 300)
-)
-
-# The default pairs are equal (flat 300s cap), but an operator can override
-# either half independently. Warn (don't raise) at module load only if a pair is
-# truly *inverted* — start_to_close > schedule_to_close — which Temporal rejects
-# at schedule time; equal pairs are a valid flat cap and stay silent.
-for _op, _env_label, _start, _schedule in (
-    ("test_auth", "AUTH", _AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE),
-    (
-        "preflight_check",
-        "PREFLIGHT",
-        _PREFLIGHT_START_TO_CLOSE,
-        _PREFLIGHT_SCHEDULE_TO_CLOSE,
-    ),
-    (
-        "fetch_metadata",
-        "METADATA",
-        _METADATA_START_TO_CLOSE,
-        _METADATA_SCHEDULE_TO_CLOSE,
-    ),
-):
-    if _start > _schedule:
+    The default pairs are equal (flat 300s cap), but an operator can override
+    either half independently. Warn (don't raise) only if the pair is truly
+    *inverted* — start_to_close > schedule_to_close — which Temporal rejects at
+    schedule time; equal pairs are a valid flat cap and stay silent.
+    """
+    start = timedelta(
+        seconds=_env_seconds(f"ATLAN_SDR_{env_label}_START_TO_CLOSE_SECONDS", 300)
+    )
+    schedule = timedelta(
+        seconds=_env_seconds(f"ATLAN_SDR_{env_label}_SCHEDULE_TO_CLOSE_SECONDS", 300)
+    )
+    if start > schedule:
         logger.warning(
             "SDR %s: start_to_close (%.0fs) > schedule_to_close (%.0fs); Temporal "
             "rejects a start_to_close larger than schedule_to_close. Check the "
             "ATLAN_SDR_%s_{START,SCHEDULE}_TO_CLOSE_SECONDS overrides.",
-            _op,
-            _start.total_seconds(),
-            _schedule.total_seconds(),
-            _env_label,
+            op,
+            start.total_seconds(),
+            schedule.total_seconds(),
+            env_label,
         )
+    return start, schedule
+
+
+_AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE = _load_timeout_pair("test_auth", "AUTH")
+_PREFLIGHT_START_TO_CLOSE, _PREFLIGHT_SCHEDULE_TO_CLOSE = _load_timeout_pair(
+    "preflight_check", "PREFLIGHT"
+)
+_METADATA_START_TO_CLOSE, _METADATA_SCHEDULE_TO_CLOSE = _load_timeout_pair(
+    "fetch_metadata", "METADATA"
+)
 
 # test_auth: fail-fast. A wrong password should not retry; transient network
 # errors get one extra attempt only because the user is sitting on the UI.
