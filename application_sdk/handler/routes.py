@@ -124,13 +124,21 @@ def _app_error_to_http_status(exc: AppError) -> int:
     return _CATEGORY_TO_HTTP.get(exc.category, 500)
 
 
-def _route_failure(e: Exception, what: str, app_name: str, request_id: str) -> int:
+def _route_failure(
+    e: Exception,
+    what: str,
+    app_name: str,
+    request_id: str,
+    *,
+    honor_handler_error_status: bool = True,
+) -> int:
     """Log a route's failure once and return the HTTP status it answers with.
 
     The one error boundary every route shares. ``what`` names the operation
     (``"Auth test"``, ``"Metadata fetch"``, ...) and leads the log line:
 
-    - ``HandlerError`` keeps its own ``http_status``.
+    - ``HandlerError`` keeps its own ``http_status`` (unless
+      ``honor_handler_error_status`` is false; ``/warmup`` never honoured it).
       TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
       AppError subclass, so it is matched first to preserve http_status.
       Remove once all connector subclasses raise typed AppError leaves.
@@ -152,7 +160,7 @@ def _route_failure(e: Exception, what: str, app_name: str, request_id: str) -> i
             sanitize_cause_repr(e),
             safe_traceback(e),
         )
-        if isinstance(e, HandlerError):
+        if honor_handler_error_status and isinstance(e, HandlerError):
             return e.http_status
         return _app_error_to_http_status(e)
     # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then answers with a fixed message, never the exception text.
@@ -168,26 +176,45 @@ def _route_failure(e: Exception, what: str, app_name: str, request_id: str) -> i
 
 
 @contextmanager
-def _http_error_boundary(what: str, app_name: str, request_id: str) -> Iterator[None]:
+def _http_error_boundary(
+    what: str,
+    app_name: str,
+    request_id: str,
+    *,
+    honor_handler_error_status: bool = True,
+) -> Iterator[None]:
     """Turn a raise inside the block into a sanitized ``HTTPException``.
 
-    Status from :func:`_route_failure`. The detail is the redacted error text
+    Status from :func:`_route_failure`. The detail is the redacted error message
     for an ``AppError`` and a fixed ``"Internal server error"`` for anything
     else, so an unexpected exception's text never reaches the caller. An
     ``HTTPException`` raised inside the block is already client-facing and
     passes through unchanged.
+
+    ``honor_handler_error_status`` keeps a route's existing contract for the
+    deprecated ``HandlerError``: when true (auth, metadata) it answers with the
+    error's own ``http_status`` and ``str(e)`` (``[CODE] message | ...``); when
+    false (warmup) it is treated like any ``AppError``: category status and
+    ``e.message``.
     """
     try:
         yield
     except HTTPException:
         raise
     except Exception as e:
-        status = _route_failure(e, what, app_name, request_id)
-        detail = (
-            redact_secrets(str(e))
-            if isinstance(e, AppError)
-            else "Internal server error"
+        status = _route_failure(
+            e,
+            what,
+            app_name,
+            request_id,
+            honor_handler_error_status=honor_handler_error_status,
         )
+        if not isinstance(e, AppError):
+            detail = "Internal server error"
+        elif honor_handler_error_status and isinstance(e, HandlerError):
+            detail = redact_secrets(str(e))
+        else:
+            detail = redact_secrets(e.message)
         raise HTTPException(status_code=status, detail=detail) from None
 
 
@@ -824,7 +851,12 @@ def register_handler_routes(
         context = _create_context(credentials)
         with (
             bind_handler_context(context),
-            _http_error_boundary("Warmup", app_name, context.request_id_str),
+            _http_error_boundary(
+                "Warmup",
+                app_name,
+                context.request_id_str,
+                honor_handler_error_status=False,
+            ),
         ):
             entrypoint = _validated_entrypoint(preflight_input.entrypoint)
             observation = await _probe_warmup(entrypoint, preflight_input, context)

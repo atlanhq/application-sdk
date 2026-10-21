@@ -402,6 +402,7 @@ SDR_WORKFLOWS: tuple[type, ...] = (
 class _SdrBinding:
     handler: Handler
     app_name: str
+    app_package: str = "app"
 
 
 async def _resolve_agent_credentials(
@@ -582,6 +583,8 @@ def _secret_store_check_row(result: SecretStoreCheckResult) -> PreflightCheck:
 def build_sdr_activities(
     handler: Handler,
     app_name: str,
+    *,
+    app_package: str = "app",
 ) -> list[Callable[..., Awaitable[Any]]]:
     """Build three Temporal activity callables bound to a Handler instance.
 
@@ -594,8 +597,10 @@ def build_sdr_activities(
     :func:`~application_sdk.handler._dispatch.resolve_handler_op`, the same
     helper the HTTP routes use, so a per-entrypoint
     ``app.<segment>.handler.<op>`` hook answers for ``input.entrypoint`` over SDR
-    exactly as it does over HTTP. ``preflight_check`` still calls the app-level
-    ``Handler`` directly.
+    exactly as it does over HTTP. ``app_package`` names the package holding those
+    modules, as it does for :func:`~application_sdk.handler.routes.register_handler_routes`;
+    the worker uses the default ``app`` for both. ``preflight_check`` still calls
+    the app-level ``Handler`` directly.
 
     When the input carries an ``agent_json`` reference (SDR / customer-infra
     connections, where the credential is a ``secret-path`` reference the worker
@@ -608,14 +613,17 @@ def build_sdr_activities(
     Activities registered here have closure access to ``handler``; they
     are resolved by name from the workflows in :data:`SDR_WORKFLOWS`.
     """
-    binding = _SdrBinding(handler=handler, app_name=app_name)
+    binding = _SdrBinding(handler=handler, app_name=app_name, app_package=app_package)
 
     @activity.defn(name=SDR_TEST_AUTH_ACTIVITY)
     async def test_auth(input: AuthInput) -> AuthOutput:
         if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         run_test_auth = resolve_handler_op(
-            binding.handler, "test_auth", input.entrypoint
+            binding.handler,
+            "test_auth",
+            input.entrypoint,
+            app_package=binding.app_package,
         )
         with bind_invocation_context(binding.app_name, input.credentials) as context:
             return await run_test_auth(input, context)
@@ -708,7 +716,10 @@ def build_sdr_activities(
             input.credentials = await _resolve_agent_credentials(input.agent_json)
         input = mirror_template_key(input)
         run_fetch_metadata = resolve_handler_op(
-            binding.handler, "fetch_metadata", input.entrypoint
+            binding.handler,
+            "fetch_metadata",
+            input.entrypoint,
+            app_package=binding.app_package,
         )
         with bind_invocation_context(binding.app_name, input.credentials) as context:
             return await run_fetch_metadata(input, context)

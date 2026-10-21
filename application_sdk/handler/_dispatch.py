@@ -39,7 +39,9 @@ from application_sdk.handler.contracts import (
 # routes.py) and keeps its logger name, so its debug line is unchanged.
 logger = get_logger("application_sdk.handler.service")
 
-_ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
+# ``\Z``, not ``$``: ``$`` also matches before a trailing newline, so
+# ``"export\n"`` would pass and then miss discovery instead of being refused.
+_ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*\Z")
 
 HandlerFn = Callable[[Any, HandlerContext], Awaitable[Any]]
 

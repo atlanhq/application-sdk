@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sys
 import types
+import warnings
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,7 +25,7 @@ from application_sdk.execution._temporal.sdr import (
     build_sdr_activities,
 )
 from application_sdk.handler._dispatch import mirror_template_key, resolve_handler_op
-from application_sdk.handler.base import Handler
+from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
     AuthInput,
@@ -37,11 +38,15 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
     SqlMetadataOutput,
+    WarmupInput,
+    WarmupObservation,
 )
 from application_sdk.handler.routes import register_handler_routes
 
 _APP_NAME = "dispatch-app"
 _ENTRYPOINT = "asset-export"
+# ``"export\n"``: ``$`` would match before the newline; the regex uses ``\Z``.
+_MALFORMED = ["../evil", "export\n"]
 _CREDENTIALS = [
     {"key": "username", "value": "u"},
     {"key": "password", "value": "p"},
@@ -78,9 +83,8 @@ class _AppLevelHandler(Handler):
         raise AssertionError("app-level fetch_metadata ran instead of the hook")
 
 
-@pytest.fixture
-def hook_calls(monkeypatch: pytest.MonkeyPatch) -> list[_Call]:
-    """Install ``app.asset_export.handler`` with recording hooks."""
+def _install_hooks(monkeypatch: pytest.MonkeyPatch, package: str) -> list[_Call]:
+    """Install ``<package>.asset_export.handler`` with recording hooks."""
     calls: list[_Call] = []
 
     def _record(op: str, input: AuthInput | MetadataInput, ctx: HandlerContext) -> None:
@@ -106,21 +110,28 @@ def hook_calls(monkeypatch: pytest.MonkeyPatch) -> list[_Call]:
         _record("fetch_metadata", input, ctx)
         return SqlMetadataOutput(objects=[])
 
-    for parent in ("app", "app.asset_export"):
+    for parent in (package, f"{package}.asset_export"):
         if parent not in sys.modules:
             pkg = types.ModuleType(parent)
             pkg.__path__ = []  # type: ignore[attr-defined]
             monkeypatch.setitem(sys.modules, parent, pkg)
-    module = types.ModuleType("app.asset_export.handler")
+    module = types.ModuleType(f"{package}.asset_export.handler")
     module.test_auth = test_auth  # type: ignore[attr-defined]
     module.fetch_metadata = fetch_metadata  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "app.asset_export.handler", module)
+    monkeypatch.setitem(sys.modules, f"{package}.asset_export.handler", module)
     return calls
 
 
-def _over_http(op: str) -> None:
+@pytest.fixture
+def hook_calls(monkeypatch: pytest.MonkeyPatch) -> list[_Call]:
+    return _install_hooks(monkeypatch, "app")
+
+
+def _over_http(op: str, app_package: str = "app") -> None:
     app = FastAPI()
-    register_handler_routes(app, _AppLevelHandler(), app_name=_APP_NAME)
+    register_handler_routes(
+        app, _AppLevelHandler(), app_name=_APP_NAME, app_package=app_package
+    )
     path = {
         "test_auth": "/workflows/v1/auth",
         "fetch_metadata": "/workflows/v1/metadata",
@@ -132,8 +143,10 @@ def _over_http(op: str) -> None:
     assert resp.status_code == 200, resp.text
 
 
-async def _over_sdr(op: str) -> None:
-    activities = build_sdr_activities(_AppLevelHandler(), app_name=_APP_NAME)
+async def _over_sdr(op: str, app_package: str = "app") -> None:
+    activities = build_sdr_activities(
+        _AppLevelHandler(), app_name=_APP_NAME, app_package=app_package
+    )
     by_name = {getattr(a, "__temporal_activity_definition").name: a for a in activities}
     credentials = [HandlerCredential(**c) for c in _CREDENTIALS]
     if op == "test_auth":
@@ -171,6 +184,17 @@ async def test_per_entrypoint_hook_fires_identically_over_http_and_sdr(
         assert http_call.object_filter == "tags"
 
 
+@pytest.mark.parametrize("op", ["test_auth", "fetch_metadata"])
+async def test_sdr_honours_a_configured_app_package(
+    op: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _install_hooks(monkeypatch, "connector_pkg")
+    _over_http(op, app_package="connector_pkg")
+    await _over_sdr(op, app_package="connector_pkg")
+    assert [c.op for c in calls] == [op, op]
+    assert calls[0] == calls[1]
+
+
 class TestResolveHandlerOp:
     async def test_empty_entrypoint_answers_with_the_handler(
         self, hook_calls: list[_Call]
@@ -195,17 +219,72 @@ class TestResolveHandlerOp:
         result = await run(MetadataInput(), _ctx())
         assert result.objects == []
 
-    def test_malformed_entrypoint_is_refused(self) -> None:
+    @pytest.mark.parametrize("name", _MALFORMED)
+    def test_malformed_entrypoint_is_refused(self, name: str) -> None:
         with pytest.raises(InvalidInputError):
-            resolve_handler_op(_AppLevelHandler(), "test_auth", "../evil")
+            resolve_handler_op(_AppLevelHandler(), "test_auth", name)
 
-    async def test_sdr_refuses_a_malformed_entrypoint(self) -> None:
+    @pytest.mark.parametrize("name", _MALFORMED)
+    async def test_sdr_refuses_a_malformed_entrypoint(self, name: str) -> None:
         activities = build_sdr_activities(_AppLevelHandler(), app_name=_APP_NAME)
         by_name = {
             getattr(a, "__temporal_activity_definition").name: a for a in activities
         }
         with pytest.raises(InvalidInputError):
-            await by_name[SDR_TEST_AUTH_ACTIVITY](AuthInput(entrypoint="../evil"))
+            await by_name[SDR_TEST_AUTH_ACTIVITY](AuthInput(entrypoint=name))
+
+    @pytest.mark.parametrize("name", _MALFORMED)
+    def test_http_refuses_a_malformed_entrypoint(self, name: str) -> None:
+        app = FastAPI()
+        register_handler_routes(app, _AppLevelHandler(), app_name=_APP_NAME)
+        resp = TestClient(app).post(
+            "/workflows/v1/auth",
+            json={"credentials": _CREDENTIALS, "entrypoint": name},
+        )
+        assert resp.status_code == 400, resp.text
+
+
+class TestWarmupKeepsItsHandlerErrorContract:
+    """``/warmup`` never honoured ``HandlerError.http_status`` or its ``[CODE]``
+    prefix; sharing the error boundary must not change that, while auth keeps
+    its own (``http_status`` and ``str(e)``)."""
+
+    @staticmethod
+    def _client() -> TestClient:
+        class _Raising(_AppLevelHandler):
+            async def test_auth(self, input: AuthInput) -> AuthOutput:
+                raise _handler_error()
+
+            async def warmup(self, input: WarmupInput) -> WarmupObservation:
+                raise _handler_error()
+
+        app = FastAPI()
+        register_handler_routes(app, _Raising(), app_name=_APP_NAME)
+        return TestClient(app)
+
+    def test_warmup_answers_with_category_status_and_bare_message(self) -> None:
+        resp = self._client().post(
+            "/workflows/v1/warmup", json={"credentials": _CREDENTIALS}
+        )
+        assert resp.status_code == 500, resp.text
+        assert "source down" in resp.text
+        assert "[" not in resp.json()["detail"]
+        assert "handler=" not in resp.text
+
+    def test_auth_keeps_http_status_and_coded_text(self) -> None:
+        resp = self._client().post(
+            "/workflows/v1/auth", json={"credentials": _CREDENTIALS}
+        )
+        assert resp.status_code == 418, resp.text
+        assert "handler=probe" in resp.text
+
+
+def _handler_error() -> HandlerError:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return HandlerError(
+            "source down", handler_name="probe", app_name="a", http_status=418
+        )
 
 
 class TestMirrorTemplateKey:
