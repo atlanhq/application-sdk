@@ -33,6 +33,9 @@ dependencies = [
     # Published floor (not just [tool.uv] constraint-dependencies, which only
     # pins this repo's own lock) so connector apps inherit it on SDK upgrade.
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
+    # Arrives via pyatlan (~=1.9.1 on Python >=3.10). Published as well so the
+    # api wheel's pyatlan extra can carry the same pin (test_api_distribution).
+    "authlib>=1.9.1,<2",  # CVE-2026-96760
     "pydantic>=2.10.6,<3.0.0",
     "packaging>=24.0",
     "loguru>=0.7.3,<0.8.0",

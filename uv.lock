@@ -281,6 +281,7 @@ default-groups = ["dev", "test"]
 dependencies = [
     { name = "aiohttp" },
     { name = "atlan-application-sdk-api" },
+    { name = "authlib" },
     { name = "azure-identity" },
     { name = "boto3" },
     { name = "certifi" },
@@ -408,6 +409,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
     { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
     { name = "atlan-application-sdk-api", editable = "packages/api" },
+    { name = "authlib", specifier = ">=1.9.1,<2" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
@@ -510,6 +512,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "authlib", marker = "extra == 'pyatlan'", specifier = ">=1.9.1,<2" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.38.6,<2.0.0" },
     { name = "certifi", specifier = ">=2026.10.19" },
     { name = "fastapi", specifier = ">=0.143.0,<0.144.0" },
