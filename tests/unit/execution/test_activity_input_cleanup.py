@@ -546,6 +546,16 @@ class TestLeftoversAndWarnings:
         assert used == ["_remove_owned"]
         assert not Path(owned.path).exists()
 
+    async def test_same_object_in_two_task_folders_warns_once(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        root = tmp_path / "work" / ".sdk-task-inputs"
+        with patch.object(ops.logger, "warning") as warning:
+            ops.normalize_key(str(root / "aaa" / "0" / "run" / "k.json"))
+            ops.normalize_key(str(root / "bbb" / "2" / "run" / "k.json"))
+
+        warning.assert_called_once()
+
     async def test_ordinary_key_does_not_warn(
         self, tmp_path: Path, store: Any
     ) -> None:
@@ -573,6 +583,141 @@ class TestLeftoversAndWarnings:
 
         warning.assert_not_called()
         shutil.rmtree(tmp_path / "work" / ".sdk-task-inputs" / "id")
+
+
+class TestFolderLifecycle:
+    async def test_sweep_between_lock_file_and_lock_cannot_delete_a_new_folder(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        real_flock = file_ref_sync.fcntl.flock
+        swept: list[bool] = []
+
+        def flock_after_a_sweep(fd: int, op: int) -> None:
+            if op == file_ref_sync.fcntl.LOCK_EX and not swept:
+                swept.append(True)
+                file_ref_sync._sweep_dead_task_inputs()
+            real_flock(fd, op)
+
+        with patch.object(file_ref_sync.fcntl, "flock", flock_after_a_sweep):
+            owned = await file_ref_sync.open_task_input_dir()
+
+        assert swept
+        assert (Path(owned.path) / file_ref_sync._LOCK_NAME).exists()
+        file_ref_sync.remove_task_input_dir(owned)
+
+    async def test_folder_without_lock_file_is_swept_but_creating_one_is_not(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        root = tmp_path / "work" / ".sdk-task-inputs"
+        lockless = root / "lockless"
+        (lockless / "0").mkdir(parents=True)
+        creating = root / ".abc.creating"
+        creating.mkdir()
+
+        await file_ref_sync.sweep_dead_task_inputs()
+
+        assert not lockless.exists()
+        assert creating.exists()
+        creating.rmdir()
+
+    async def test_lock_is_released_when_the_delete_cannot_start(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        owned = await file_ref_sync.open_task_input_dir()
+
+        class _Closed:
+            def run_in_executor(self, *_: Any) -> Any:
+                raise RuntimeError("executor shut down")
+
+        with patch.object(
+            file_ref_sync.asyncio, "get_running_loop", return_value=_Closed()
+        ):
+            file_ref_sync.remove_task_input_dir(owned)
+
+        with pytest.raises(OSError):
+            os.fstat(owned.lock_fd)
+        await file_ref_sync.sweep_dead_task_inputs()
+        assert not Path(owned.path).exists()
+
+    async def test_cancel_during_creation_still_deletes_the_folder(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        import threading
+
+        gate = threading.Event()
+        entered = threading.Event()
+        created: list[int] = []
+        real_create = file_ref_sync._create_owned_dir
+
+        def slow_create(path: str) -> int:
+            entered.set()
+            gate.wait(10)
+            fd = real_create(path)
+            created.append(fd)
+            return fd
+
+        with patch.object(file_ref_sync, "_create_owned_dir", slow_create):
+            opening = asyncio.create_task(file_ref_sync.open_task_input_dir())
+            while not entered.is_set():
+                await asyncio.sleep(0.001)
+            opening.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await opening
+            gate.set()
+            while not created:
+                await asyncio.sleep(0.001)
+        for _ in range(500):
+            if not file_ref_sync._pending_removals and not _task_folders(tmp_path):
+                break
+            await asyncio.sleep(0.01)
+
+        assert _task_folders(tmp_path) == []
+        with pytest.raises(OSError):
+            os.fstat(created[0])
+
+    async def test_forked_child_closes_inherited_locks(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        owned = await file_ref_sync.open_task_input_dir()
+        assert owned.lock_fd in file_ref_sync._held_lock_fds
+
+        file_ref_sync._close_held_locks_in_child()
+
+        assert owned.lock_fd not in file_ref_sync._held_lock_fds
+        with pytest.raises(OSError):
+            os.fstat(owned.lock_fd)
+        await file_ref_sync.sweep_dead_task_inputs()
+
+    async def test_no_folder_for_inputs_that_are_never_downloaded(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        ref = await _remote_file_ref(store, tmp_path)
+
+        assert file_ref_sync.needs_task_input_dir(_RefIn(ref=ref))
+        assert not file_ref_sync.needs_task_input_dir(_RefIn(lazy_ref=ref))
+        assert not file_ref_sync.needs_task_input_dir(
+            _RefIn(ref=ref.model_copy(update={"auto_materialize": False}))
+        )
+
+    async def test_shutdown_wait_is_bounded(self, tmp_path: Path, store: Any) -> None:
+        import threading
+
+        owned = await file_ref_sync.open_task_input_dir()
+        gate = threading.Event()
+        real_remove = file_ref_sync._remove_owned
+
+        def slow_remove(path: str, fd: int | None) -> None:
+            gate.wait(10)
+            real_remove(path, fd)
+
+        with patch.object(file_ref_sync, "_remove_owned", slow_remove):
+            file_ref_sync.remove_task_input_dir(owned)
+            with patch.object(file_ref_sync.logger, "warning") as warning:
+                await file_ref_sync.wait_for_task_input_removals(0.05)
+            gate.set()
+            await asyncio.gather(*list(file_ref_sync._pending_removals))
+
+        warning.assert_called_once()
 
 
 class TestFailedTransfersLeaveNothing:

@@ -180,16 +180,15 @@ def normalize_key(key: str) -> str:
         normalized = key.strip("/")
 
     normalized = normalized.replace("\\", "/").replace(os.sep, "/").strip("/")
-    if (
-        normalized.startswith(TASK_INPUTS_DIRNAME + "/")
-        and normalized not in _warned_task_input_keys
-    ):
-        _warned_task_input_keys.add(normalized)
-        logger.warning(
-            "Store key %s derived from a task's downloaded input path; pass the "
-            "FileReference as ref= instead of its local_path",
-            normalized,
-        )
+    if normalized.startswith(TASK_INPUTS_DIRNAME + "/"):
+        object_key = "/".join(normalized.split("/")[3:])
+        if object_key not in _warned_task_input_keys:
+            _warned_task_input_keys.add(object_key)
+            logger.warning(
+                "Store key %s derived from a task's downloaded input path; pass "
+                "the FileReference as ref= instead of its local_path",
+                normalized,
+            )
     # os.path.relpath resolves the staging root itself to "."; treat as store root.
     return "" if normalized == "." else normalized
 

@@ -409,6 +409,7 @@ class AppWorker:
         finally:
             await self._drain_sizing()
             await self._stop_metrics_push()
+            await _stop_task_input_cleanup()
 
     async def run(self) -> None:
         """For callers that use worker.run() directly."""
@@ -427,9 +428,11 @@ class AppWorker:
         finally:
             await self._drain_sizing()
             await self._stop_metrics_push()
+            await _stop_task_input_cleanup()
 
 
 _background_sweeps: set[asyncio.Task[None]] = set()
+_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS = 10.0
 
 
 def _start_dead_task_inputs_sweep() -> None:
@@ -441,6 +444,29 @@ def _start_dead_task_inputs_sweep() -> None:
     sweep = asyncio.ensure_future(sweep_dead_task_inputs())
     _background_sweeps.add(sweep)
     sweep.add_done_callback(_background_sweeps.discard)
+
+
+async def _stop_task_input_cleanup() -> None:
+    """Give task download cleanup a bounded time at shutdown (FND-4310).
+
+    What does not finish is logged and left to the next worker's sweep, so a
+    large delete never holds the process past its shutdown grace period.
+    """
+    from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage imports execution
+        wait_for_task_input_removals,
+    )
+
+    try:
+        if _background_sweeps:
+            _, unfinished = await asyncio.wait(
+                list(_background_sweeps),
+                timeout=_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS,
+            )
+            if unfinished:
+                logger.warning("Shutdown left the task download sweep unfinished")
+        await wait_for_task_input_removals(_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS)
+    except Exception:
+        logger.warning("Task download cleanup at shutdown failed", exc_info=True)
 
 
 async def _emit_worker_start_event(

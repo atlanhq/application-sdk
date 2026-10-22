@@ -570,6 +570,7 @@ def create_activity_from_task(
                     has_refs_to_materialize,
                     has_refs_to_persist,
                     materialize_file_refs,
+                    needs_task_input_dir,
                     open_task_input_dir,
                     persist_file_refs,
                 )
@@ -597,14 +598,15 @@ def create_activity_from_task(
 
                 # Materialise any durable FileReferences in the input before the task runs.
                 if store is not None and has_refs_to_materialize(input_data):
-                    input_dir = await open_task_input_dir()
+                    if needs_task_input_dir(input_data):
+                        input_dir = await open_task_input_dir()
                     input_data = await materialize_file_refs(
                         store,
                         input_data,
                         upstream_store=(
                             infra.upstream_storage if infra is not None else None
                         ),
-                        download_dir=input_dir.path,
+                        download_dir=input_dir.path if input_dir else None,
                     )
 
                 # Consumer side, after materialise: the bytes this task is about to

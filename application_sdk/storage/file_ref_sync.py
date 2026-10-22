@@ -655,8 +655,10 @@ async def materialize_file_refs(
 
 
 _LOCK_NAME = ".owner.lock"
+_CREATING_SUFFIX = ".creating"
 
 _pending_removals: set[asyncio.Future[None]] = set()
+_held_lock_fds: set[int] = set()
 
 
 @dataclass(frozen=True)
@@ -678,11 +680,44 @@ def _task_inputs_root() -> str:
     return os.path.abspath(os.path.join(TEMPORARY_PATH, TASK_INPUTS_DIRNAME))
 
 
+def _close_lock(fd: int) -> None:
+    _held_lock_fds.discard(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
+def _close_held_locks_in_child() -> None:
+    for fd in list(_held_lock_fds):
+        _close_lock(fd)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_close_held_locks_in_child)
+
+
 def _create_owned_dir(path: str) -> int:
-    os.makedirs(path)
-    fd = os.open(os.path.join(path, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
-    if fcntl is not None:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    """Create *path* with its owner lock already held, then make it visible.
+
+    The folder is built under a hidden ``.<id>.creating`` name, which the
+    sweep never touches, and renamed into place only once its lock is held:
+    a visible folder therefore always has a held lock until its owner
+    deletes it.
+    """
+    parent, name = os.path.split(path)
+    staging = os.path.join(parent, f".{name}{_CREATING_SUFFIX}")
+    os.makedirs(staging)
+    fd = os.open(os.path.join(staging, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        os.rename(staging, path)
+    except BaseException:
+        os.close(fd)
+        _remove_tree(staging)
+        raise
+    _held_lock_fds.add(fd)
     return fd
 
 
@@ -694,9 +729,21 @@ async def open_task_input_dir() -> TaskInputDir:
     downloads into it; :func:`remove_task_input_dir` deletes it when the task
     ends. The exclusive ``flock`` on its lock file lasts as long as the task,
     so :func:`sweep_dead_task_inputs` can tell a live folder from a dead one.
+    A cancel while the folder is being created still deletes it once the
+    creation finishes.
     """
     path = os.path.join(_task_inputs_root(), uuid.uuid4().hex)
-    fd = await run_in_thread(_create_owned_dir, path)
+    creating = asyncio.ensure_future(run_in_thread(_create_owned_dir, path))
+    try:
+        fd = await asyncio.shield(creating)
+    except asyncio.CancelledError:
+
+        def _discard(done: asyncio.Future[int]) -> None:
+            if not done.cancelled() and done.exception() is None:
+                remove_task_input_dir(TaskInputDir(path=path, lock_fd=done.result()))
+
+        creating.add_done_callback(_discard)
+        raise
     return TaskInputDir(path=path, lock_fd=fd)
 
 
@@ -730,12 +777,41 @@ def _remove_tree(path: str) -> None:
         logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
 
 
-def _remove_owned(path: str, lock_fd: int) -> None:
-    _remove_tree(path)
+def _remove_owned(path: str, lock_fd: int | None) -> None:
+    """Delete *path*'s content first and its lock file last, then release the lock.
+
+    If the content cannot all be deleted, the lock file stays: once the lock
+    is released, the next sweep finds the folder dead and retries.
+    """
     try:
-        os.close(lock_fd)
-    except OSError:
-        pass
+        try:
+            entries = list(os.scandir(path))
+        except FileNotFoundError:
+            return
+        except OSError:
+            logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
+            return
+        complete = True
+        for entry in entries:
+            if entry.name == _LOCK_NAME:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    shutil.rmtree(entry.path)
+                else:
+                    os.remove(entry.path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                complete = False
+                logger.warning(
+                    "Could not delete a task's downloaded inputs", exc_info=True
+                )
+        if complete:
+            _remove_tree(path)
+    finally:
+        if lock_fd is not None:
+            _close_lock(lock_fd)
 
 
 def remove_task_input_dir(owned: TaskInputDir) -> None:
@@ -744,7 +820,8 @@ def remove_task_input_dir(owned: TaskInputDir) -> None:
     Runs on the SDK's blocking pool (never the loop's default executor, which
     Temporal uses) and is not awaited, so the wrapper's ``finally`` has no
     cancellation point here and never replaces the error the task ends with.
-    The owner lock is released after the folder is gone.
+    The owner lock is released after the folder is gone. If the removal cannot
+    be started, the lock is released at once, so the next sweep deletes it.
     """
     try:
         executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
@@ -752,10 +829,28 @@ def remove_task_input_dir(owned: TaskInputDir) -> None:
             executor, _remove_owned, owned.path, owned.lock_fd
         )
     except Exception:
+        _close_lock(owned.lock_fd)
         logger.warning("Could not start deleting a task's downloaded inputs", exc_info=True)
         return
     _pending_removals.add(future)
     future.add_done_callback(_pending_removals.discard)
+
+
+async def wait_for_task_input_removals(timeout: float) -> None:
+    """Wait up to *timeout* seconds for started folder deletions. Never raises.
+
+    For worker shutdown: an unfinished deletion is logged and left to the next
+    worker's sweep.
+    """
+    pending = list(_pending_removals)
+    if not pending:
+        return
+    _, unfinished = await asyncio.wait(pending, timeout=timeout)
+    if unfinished:
+        logger.warning(
+            "Shutdown left %d task download folders to the next sweep",
+            len(unfinished),
+        )
 
 
 def _sweep_dead_task_inputs() -> None:
@@ -770,10 +865,15 @@ def _sweep_dead_task_inputs() -> None:
         logger.warning("Could not list leftover task downloads", exc_info=True)
         return
     for entry in entries:
+        if entry.name.startswith("."):
+            continue
         try:
             if not entry.is_dir(follow_symlinks=False):
                 continue
             fd = os.open(os.path.join(entry.path, _LOCK_NAME), os.O_RDWR)
+        except FileNotFoundError:
+            _remove_owned(entry.path, None)
+            continue
         except OSError:
             continue
         try:
@@ -788,8 +888,22 @@ async def sweep_dead_task_inputs() -> None:
     """Delete task download folders whose owner is dead. Never raises.
 
     A worker killed mid-task (OOM, SIGKILL) never reaches its ``finally``; the
-    kernel drops its ``flock`` when the process dies. A folder whose lock this
-    sweep can take has no live owner in any process on the node, so it goes;
-    a folder whose lock is held belongs to a running task and is skipped.
+    kernel drops its ``flock`` when the process dies. A visible folder whose
+    lock this sweep can take, or that has no lock file at all, has no live
+    owner in any process on the node, so it goes; a folder whose lock is held
+    belongs to a running task and is skipped. Folders still being created
+    (``.<id>.creating``) are never touched.
     """
     await run_in_thread(_sweep_dead_task_inputs)
+
+
+def needs_task_input_dir(data: Any) -> bool:
+    """True when materialise may download something for *data*.
+
+    Same walk as materialise (``Lazy`` and ``auto_materialize=False`` refs are
+    never downloaded), so a task with nothing to download gets no folder.
+    """
+    return any(
+        _local_copy(ref) is not _LocalCopy.CURRENT
+        for ref in _materialize_candidates(data)
+    )
