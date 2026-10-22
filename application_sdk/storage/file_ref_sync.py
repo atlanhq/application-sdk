@@ -48,16 +48,22 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import (
+    drain_offloads,
+    run_in_thread,
+    tracking_offloads,
+)
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.contracts.types import FileReference, Lazy, StoreTarget
 from application_sdk.observability.logger_adaptor import get_logger
@@ -360,7 +366,7 @@ async def _replace_refs(
     output_path: str | None = None,
     *,
     upstream_store: ObjectStore | None = None,
-    on_materialized: Callable[[FileReference, FileReference], None] | None = None,
+    unnamed_dir: str | None = None,
 ) -> Any:
     """Replace FileReference instances in a data tree using concurrent execution.
 
@@ -386,16 +392,18 @@ async def _replace_refs(
             ``persist_file_reference`` for ``RETAINED``-tier refs.
         upstream_store: Store a ref with ``store=UPSTREAM`` materialises
             from. ``None`` falls back to *store*.
-        on_materialized: Called with ``(ref, local_ref)`` as each download
-            finishes, before the others do — so a caller learns of every copy
-            even when a later download fails.
+        unnamed_dir: Directory a ref with no ``local_path`` materialises
+            under (each in its own subdirectory), instead of a system temp
+            name — so the caller can delete every such copy, finished or not,
+            by deleting one directory.
 
     Returns:
         A new object tree with replaced FileReference instances (original
         objects are never mutated).
 
-    If one operation fails, the others are cancelled and awaited before the
-    error propagates, so nothing keeps writing after the caller has moved on.
+    If one operation fails, the others are cancelled, and they and the
+    threads they started have finished before the error propagates, so
+    nothing keeps writing after the caller has moved on.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
         MAX_CONCURRENT_STORAGE_TRANSFERS,
@@ -460,9 +468,16 @@ async def _replace_refs(
                 continue
             key = _materialize_key(node)
             if key not in _factories:
-                _factories[key] = lambda r=node: materialize_file_reference(
-                    _resolve_ref_store(r, store, upstream_store), r
-                )
+                if node.local_path is None and unnamed_dir is not None:
+                    _factories[key] = lambda r=node: materialize_file_reference(
+                        _resolve_ref_store(r, store, upstream_store),
+                        r,
+                        local_dir=os.path.join(unnamed_dir, uuid.uuid4().hex),
+                    )
+                else:
+                    _factories[key] = lambda r=node: materialize_file_reference(
+                        _resolve_ref_store(r, store, upstream_store), r
+                    )
                 _winners[key] = node
 
     if not _factories:
@@ -476,8 +491,6 @@ async def _replace_refs(
     ) -> tuple[str, FileReference]:
         async with sem:
             result = await factory()
-        if on_materialized is not None and mode == "materialize":
-            on_materialized(_winners[key], result)
         # One ref persisted or materialised is one unit of work (ADR-0018).
         # The per-file and per-part marks inside transfer/ops already keep a
         # single large ref visible; this coarser mark exists for the label,
@@ -486,14 +499,16 @@ async def _replace_refs(
         current_progress_tracker().mark_progress(f"file_ref.{mode}")
         return key, result
 
-    runs = [asyncio.ensure_future(_run(k, f)) for k, f in _factories.items()]
-    try:
-        pairs = await asyncio.gather(*runs)
-    except BaseException:
-        for run in runs:
-            run.cancel()
-        await asyncio.gather(*runs, return_exceptions=True)
-        raise
+    with tracking_offloads() as offloads:
+        runs = [asyncio.ensure_future(_run(k, f)) for k, f in _factories.items()]
+        try:
+            pairs = await asyncio.gather(*runs)
+        except BaseException:
+            for run in runs:
+                run.cancel()
+            await asyncio.gather(*runs, return_exceptions=True)
+            await drain_offloads(offloads)
+            raise
     _results: dict[str, FileReference] = dict(pairs)
 
     # ── Pass 3: scatter results back through the tree ─────────────────────────
@@ -577,7 +592,7 @@ async def materialize_file_refs(
     data: Any,
     *,
     upstream_store: ObjectStore | None = None,
-    on_materialized: Callable[[FileReference, FileReference], None] | None = None,
+    unnamed_dir: str | None = None,
 ) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
@@ -602,18 +617,19 @@ async def materialize_file_refs(
         store,
         "materialize",
         upstream_store=upstream_store,
-        on_materialized=on_materialized,
+        unnamed_dir=unnamed_dir,
     )
 
 
 _input_leases: dict[str, int] = {}
-"""Local copies the task wrapper downloaded on this process, by real path, with
-how many running tasks hold each one."""
+"""Local copies the task wrapper downloaded on this process, by absolute path
+(symlinks not resolved), with how many running tasks hold each one."""
 _leased_ancestors: dict[str, int] = {}
 """How many leased paths sit under each directory, so a release can tell in
-O(depth) whether a copy contains, or sits inside, another task's live copy."""
+O(depth) whether a copy contains another task's live copy."""
 _deferred_deletes: set[str] = set()
-"""Released copies kept because an overlapping copy was still leased."""
+"""Released copies not deleted yet: an overlapping copy was still leased, or
+the delete failed and is retried on the next release."""
 _input_leases_lock = threading.Lock()
 
 
@@ -649,6 +665,14 @@ def _unlease(path: str) -> bool:
     return True
 
 
+def _inside_wrapper_copy(path: str) -> bool:
+    """*path* sits inside a copy the wrapper downloaded (leased or pending delete)."""
+    return any(
+        parent in _input_leases or parent in _deferred_deletes
+        for parent in _parents(path)
+    )
+
+
 def _overlaps_live_lease(path: str) -> bool:
     return path in _leased_ancestors or any(
         parent in _input_leases for parent in _parents(path)
@@ -660,11 +684,12 @@ def lease_task_inputs(data: Any) -> list[str]:
 
     Call before ``materialize_file_refs``, with no ``await`` in between. A
     durable ref's ``local_path`` is leased when another task on this process
-    already leased it, when it contains or sits inside a leased copy (bytes the
-    wrapper downloaded for another task), when its delete was deferred, or when
-    nothing exists there yet — materialise will download it. Any other path that
-    already exists was not downloaded by the wrapper (a producer's own copy, an
-    app's file) and is never leased, so it is never deleted.
+    already leased it, when its delete is pending, when it sits inside a copy
+    the wrapper downloaded (leased or pending delete), or when nothing exists
+    there yet — materialise will download it. Any other path that already
+    exists was not downloaded by the wrapper (a producer's own copy, an app's
+    file, or a directory that only holds a downloaded file) and is never
+    leased, so it is never deleted.
 
     Returns:
         The leased paths; hand them to :func:`release_task_inputs` when the
@@ -676,14 +701,14 @@ def lease_task_inputs(data: Any) -> list[str]:
         for ref in _materialize_candidates(data):
             if not ref.is_durable or ref.storage_path is None or ref.local_path is None:
                 continue
-            path = os.path.realpath(ref.local_path)
+            path = os.path.abspath(ref.local_path)
             if path in seen:
                 continue
             seen.add(path)
             if (
                 path in _input_leases
                 or path in _deferred_deletes
-                or _overlaps_live_lease(path)
+                or _inside_wrapper_copy(path)
                 or not os.path.lexists(path)
             ):
                 _lease(path)
@@ -691,20 +716,25 @@ def lease_task_inputs(data: Any) -> list[str]:
     return paths
 
 
-def lease_materialized(ref: FileReference, local: FileReference) -> list[str]:
-    """Lease the private temp copy materialise made for a ref with no ``local_path``.
+def lease_unnamed_inputs_dir(data: Any) -> str | None:
+    """Create and lease the directory refs with no ``local_path`` materialise under.
 
-    Pass it as ``materialize_file_refs(..., on_materialized=...)``: it runs as
-    each download finishes, so a copy is leased even when a later download in
-    the same task fails. A ref that named its ``local_path`` is
-    :func:`lease_task_inputs`'s to decide.
+    Pass it as ``materialize_file_refs(..., unnamed_dir=...)``. Every copy and
+    partial download for such refs lands inside it, so releasing it deletes
+    them all — including those of a download that was stopped.
+
+    Returns:
+        The leased directory, or ``None`` when *data* has no such ref.
     """
-    if ref.local_path is not None or local.local_path is None:
-        return []
-    path = os.path.realpath(local.local_path)
+    if not any(
+        ref.is_durable and ref.local_path is None
+        for ref in _materialize_candidates(data)
+    ):
+        return None
+    path = os.path.abspath(tempfile.mkdtemp(prefix="sdk-task-inputs-"))
     with _input_leases_lock:
         _lease(path)
-    return [path]
+    return path
 
 
 def _remove_tombstones(paths: list[str]) -> None:
@@ -714,13 +744,25 @@ def _remove_tombstones(paths: list[str]) -> None:
                 shutil.rmtree(path)
             else:
                 os.remove(path)
+        except FileNotFoundError:
+            pass
         except OSError:
             logger.warning("Could not delete a downloaded task input", exc_info=True)
 
 
 def _tombstone(path: str) -> str | None:
-    if os.path.lexists(marker_path(path)):
-        os.remove(marker_path(path))
+    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _part_path,
+        _transfer_state_path,
+    )
+
+    for staged in (
+        marker_path(path),
+        str(_part_path(Path(path))),
+        str(_transfer_state_path(Path(path))),
+    ):
+        if os.path.lexists(staged):
+            os.remove(staged)
     if not os.path.lexists(path):
         return None
     tombstone = f"{path}.{uuid.uuid4().hex}.deleting"
@@ -732,18 +774,20 @@ async def release_task_inputs(paths: list[str]) -> None:
     """Drop one task's leases; delete each copy whose last lease this was.
 
     A copy that contains, or sits inside, another task's live copy is kept
-    until that lease ends too. The copy is renamed aside under the lease lock,
-    so a task that starts now finds nothing there and downloads afresh rather
-    than reading a file being deleted; the renamed copies are then removed off
-    the event loop in one thread call, which a cancel does not stop, so a
-    second cancel cannot leave them behind. Best-effort: a failure is logged,
-    never raised.
+    until that lease ends too; a copy whose delete fails is retried on the
+    next release. The copy is renamed aside under the lease lock, so a task
+    that starts now finds nothing there and downloads afresh rather than
+    reading a file being deleted; the renamed copies are then removed off the
+    event loop in one thread call, which a cancel does not stop, so a second
+    cancel cannot leave them behind. Best-effort: a failure is logged, never
+    raised.
     """
     doomed: list[str] = []
     with _input_leases_lock:
         released = [path for path in paths if _unlease(path)]
+        released_set = set(released)
         candidates = released + [
-            path for path in _deferred_deletes if path not in released
+            path for path in _deferred_deletes if path not in released_set
         ]
         for path in candidates:
             if path in _input_leases:
@@ -751,14 +795,15 @@ async def release_task_inputs(paths: list[str]) -> None:
             if _overlaps_live_lease(path):
                 _deferred_deletes.add(path)
                 continue
-            _deferred_deletes.discard(path)
             try:
                 tombstone = _tombstone(path)
             except OSError:
+                _deferred_deletes.add(path)
                 logger.warning(
                     "Could not delete a downloaded task input", exc_info=True
                 )
                 continue
+            _deferred_deletes.discard(path)
             if tombstone is not None:
                 doomed.append(tombstone)
     if doomed:
