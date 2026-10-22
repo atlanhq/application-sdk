@@ -204,9 +204,9 @@ test = [
     # a driver upgrade that moves that seam must fail loudly in CI. See
     # CONAT-767. Never add this to [project.dependencies].
     "psycopg2-binary>=2.9.12,<3.0.0",
-]
-examples = [
-    "snowflake-sqlalchemy>=1.7.0,<2.0.0",
+    # Test-only, for the same reason: TestAttachPsycopg3 in
+    # tests/unit/clients/test_sql_typecasters.py runs against the real driver
+    # and skips without it.
     "psycopg[binary]>=3.2.7,<4.0.0",
 ]
 docs = [
@@ -526,6 +526,7 @@ constraint-dependencies = [
     "simpleeval>=1.0.5",         # CVE-2026-32640
     "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
+    "filelock>=4.2.1",           # ReadWriteLock SQLite symlink/journal overwrite (dev/test only)
 ]
 
 [tool.uv.sources]
