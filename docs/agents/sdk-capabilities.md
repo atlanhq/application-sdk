@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.50.0
-source-sha:    7ada10d8c3517269378fd4c0e7de5454ad121fdc
-source-date:   2026-10-16T12:15:10+05:30
+sdk-version:   3.51.2
+source-sha:    47e3bf0aaa797cbaf151f3b1d8a270daa29924d0
+source-date:   2026-10-23T10:14:29+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 47 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
 
@@ -6443,7 +6443,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `validate_asset`
 
 - **Import:** `from application_sdk.testing.integration import validate_asset`
-- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True, creation_rules: frozenset[AssetCreationRules] = frozenset())`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -6859,6 +6859,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** How one validated hand-off was assembled — context the report cannot know.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `AssetCreationRules`
+
+- **Import:** `from application_sdk.validation import AssetCreationRules`
+- **Signature:** `class AssetCreationRules`
+- **Summary:** Named sets of extra create-time checks, each off unless an app asks for it.
+- **Defined in:** `application_sdk/validation/asset_rules.py`
+
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.validation import AssetValidationFailure`
@@ -7119,7 +7126,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_asset`
 
 - **Import:** `from application_sdk.validation import validate_asset`
-- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True, creation_rules: frozenset[AssetCreationRules] = frozenset())`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
