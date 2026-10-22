@@ -1,5 +1,42 @@
 # Changelog
 
+## v3.51.2 (October 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.1...v3.51.2
+
+### Bug Fixes
+
+- bound teardown after the worker drains (#4516) (by @sriram-atlan in [ce36273](https://github.com/atlanhq/application-sdk/commit/ce36273))
+- break OTLP self-log feedback loop and bound shutdown flush (#4520) (by @cmgrote in [9bf2a24](https://github.com/atlanhq/application-sdk/commit/9bf2a24))
+- run per-entrypoint auth and metadata hooks over SDR (#4518) (by @cmgrote in [07e32eb](https://github.com/atlanhq/application-sdk/commit/07e32eb))
+- stop unit tests leaking shared state across an xdist worker (FND-4236) (#4533) (by @cmgrote in [3e3a38a](https://github.com/atlanhq/application-sdk/commit/3e3a38a))
+- make the daprd download atomic and retried, seed CI caches from main (FND-4241) (#4540) (by @cmgrote in [80b1b78](https://github.com/atlanhq/application-sdk/commit/80b1b78))
+- stop each test idling 5s in the worker shutdown drain (FND-4305) (#4545) (by @cmgrote in [098461b](https://github.com/atlanhq/application-sdk/commit/098461b))
+
+### Performance
+
+- disable the RocksDB WAL in SpillableDict (FND-4087) (#4530) (by @cmgrote in [85b715a](https://github.com/atlanhq/application-sdk/commit/85b715a))
+
+### Chores
+
+- certifi>=2026.10.19 for the conformance lock and the api package (GHSA-6q48-6c7w-9gw2) (#4523) (by @vaibhavatlan in [826c15a](https://github.com/atlanhq/application-sdk/commit/826c15a))
+- lock file maintenance (#4511) (by @renovate[bot] in [602bf46](https://github.com/atlanhq/application-sdk/commit/602bf46))
+- stop passing tests from having to beat short timeouts (FND-4234) (#4531) (by @cmgrote in [7707a77](https://github.com/atlanhq/application-sdk/commit/7707a77))
+- replace sleep-as-synchronisation with events and stop the fake source sharing its port on Windows (FND-4235) (#4532) (by @cmgrote in [0343469](https://github.com/atlanhq/application-sdk/commit/0343469))
+- keep unit-test writes under tmp_path and pool children on one xdist worker (FND-4237) (#4536) (by @cmgrote in [f09cc90](https://github.com/atlanhq/application-sdk/commit/f09cc90))
+- replace wall-clock timing asserts in unit tests with LoopProbe, frozen clocks and bounded waits (FND-4233) (#4535) (by @cmgrote in [f0b8d1d](https://github.com/atlanhq/application-sdk/commit/f0b8d1d))
+- update github-actions (#4517) (by @renovate[bot] in [4aa533e](https://github.com/atlanhq/application-sdk/commit/4aa533e))
+- lock file maintenance (#4525) (by @renovate[bot] in [ac3e6fa](https://github.com/atlanhq/application-sdk/commit/ac3e6fa))
+- lock file maintenance (#4525) (by @renovate[bot] in [81151e9](https://github.com/atlanhq/application-sdk/commit/81151e9))
+- update github-actions (#4549) (by @renovate[bot] in [bb72c43](https://github.com/atlanhq/application-sdk/commit/bb72c43))
+- lock file maintenance (#4547) (by @renovate[bot] in [5d9ab0a](https://github.com/atlanhq/application-sdk/commit/5d9ab0a))
+- raise filelock to 4.2.1 in the dev/test lock (FND-4322) (#4561) (by @cmgrote in [bb833e7](https://github.com/atlanhq/application-sdk/commit/bb833e7))
+- raise pyatlan floor to 11.5.0 (#4560) (by @cmgrote in [6279dcc](https://github.com/atlanhq/application-sdk/commit/6279dcc))
+- move conformance lock to authlib 1.9.1 (#4564) (by @cmgrote in [a21af5f](https://github.com/atlanhq/application-sdk/commit/a21af5f))
+- lock file maintenance (#4557) (by @renovate[bot] in [7f8017d](https://github.com/atlanhq/application-sdk/commit/7f8017d))
+- lock file maintenance (#4565) (by @renovate[bot] in [fb2edbb](https://github.com/atlanhq/application-sdk/commit/fb2edbb))
+
+
 ## v3.51.1 (October 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.0...v3.51.1
