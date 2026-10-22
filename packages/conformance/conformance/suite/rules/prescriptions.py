@@ -188,8 +188,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "**Narrowing changes what the app accepts.**  Before narrowing, list the shapes\n"
             "the field really carries (its normaliser, its producers, the next task's\n"
             "contract) and confirm each still validates.  Only entrypoint contracts (an\n"
-            "``@entrypoint`` method, or ``async def run()`` on an App-family class) are\n"
-            "in the contract ledger, so task contracts can be narrowed freely; for an\n"
+            "``@entrypoint`` method, or ``async def run()`` on a subclass of ``App`` or\n"
+            "an SDK App class such as ``SqlApp``) are in the contract ledger, so a\n"
+            "contract used only by ``@task`` methods can be narrowed freely; for an\n"
             "entrypoint field run ``gen-contract-ledger`` then ``ledger-guard`` and read\n"
             "the result rather than inferring it.\n"
             "\n"
@@ -536,11 +537,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "On a field already recorded in the contract ledger, retyping it to a\n"
             "model in place is a B005 break (the ledger keys a field's type by its\n"
-            "name). Add the typed fields under new names with defaults, mark the old\n"
-            "one deprecated, move every writer, reader and DAG reference onto the new\n"
-            "fields (copying old values in while the old field is still sent), and\n"
-            "retire it (prescriptions guide, P015 and step 6), or keep the bounded\n"
-            "container and suppress this warning with that reason.\n"
+            "name). Add the typed fields under new names with defaults, move every\n"
+            "writer and reader onto them, then retire the old one (prescriptions\n"
+            "guide, P001 step 6), or keep the bounded container and suppress this\n"
+            "warning with that reason.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
         remediation_reference=RemediationReference(
