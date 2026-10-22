@@ -525,6 +525,7 @@ constraint-dependencies = [
     "simpleeval>=1.0.5",         # CVE-2026-32640
     "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
+    "filelock>=4.2.1",           # ReadWriteLock SQLite symlink/journal overwrite (dev/test only)
 ]
 
 [tool.uv.sources]
