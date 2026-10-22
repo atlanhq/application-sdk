@@ -249,6 +249,19 @@ class TestAppSubclassMissingExcludesTests:
         )
         assert not any("app-subclass-missing" in a for a in advisories)
 
+    def test_sql_app_subclass_detected(self, tmp_path: Path) -> None:
+        app_dir = tmp_path / "app"
+        app_dir.mkdir()
+        (app_dir / "my_connector.py").write_text(
+            "from application_sdk.templates import SqlApp\n\n"
+            "class MyConnector(SqlApp): pass\n",
+            encoding="utf-8",
+        )
+        _, advisories = check_directory(
+            tmp_path, app_subclass_required=True, entry_point_required=False
+        )
+        assert not any("app-subclass-missing" in a for a in advisories)
+
     def test_app_subclass_with_mixin_detected(self, tmp_path: Path) -> None:
         app_dir = tmp_path / "app"
         app_dir.mkdir()

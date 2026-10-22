@@ -200,6 +200,11 @@ human audit):
     for unversioned deployments or AUTO_UPGRADE, let in-flight runs finish
     first. A `SqlApp` port is a
     structural change — draft it and let the test gate decide.
+  - `class X(SqlQueryExtractor)` → subclass `application_sdk.app.App` and keep
+    the query tasks (`get_query_batches` / `fetch_queries`) and `run()` in the
+    app; `SqlApp` has no query-log tasks. `class X(IncrementalSqlMetadataExtractor)`
+    → `application_sdk.templates.SqlApp` with a custom `run()`. Both are
+    structural changes — draft them and let the test gate decide.
   - **SDR test → split by concern**: a finding naming `BaseSDRIntegrationTest`
     (import / subclass from `application_sdk.testing.sdr`) means the app's
     `tests/sdr/test_*_sdr.py` (or `tests/integration/test_sdr.py`) still uses the
