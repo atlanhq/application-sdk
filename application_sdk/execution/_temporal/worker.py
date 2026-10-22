@@ -384,6 +384,7 @@ class AppWorker:
 
     async def __aenter__(self) -> Worker:
         await _emit_worker_start_event(**self._start_event_params)
+        await _sweep_leftover_task_inputs()
         # Metrics is best-effort: never block the worker on a metrics failure.
         try:
             await self._start_metrics_push()
@@ -412,6 +413,7 @@ class AppWorker:
     async def run(self) -> None:
         """For callers that use worker.run() directly."""
         await _emit_worker_start_event(**self._start_event_params)
+        await _sweep_leftover_task_inputs()
         # Metrics is best-effort: never block the worker on a metrics failure.
         try:
             await self._start_metrics_push()
@@ -425,6 +427,15 @@ class AppWorker:
         finally:
             await self._drain_sizing()
             await self._stop_metrics_push()
+
+
+async def _sweep_leftover_task_inputs() -> None:
+    """Delete task download folders that a killed worker left (FND-4310)."""
+    from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage imports execution
+        sweep_stale_task_inputs,
+    )
+
+    await sweep_stale_task_inputs()
 
 
 async def _emit_worker_start_event(

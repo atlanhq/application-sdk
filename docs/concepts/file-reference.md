@@ -300,9 +300,10 @@ SDK:
 will be a stale path from another machine. The sidecar check catches this: the
 local sidecar is absent (different pod, different disk), so the SDK re-downloads.
 
-**Cache hit:** if the same worker hands the ref on, or another task on that
-worker is still using the downloaded copy, and the local file is intact, the SDK
-skips the download entirely. A file whose size, mtime and
+**Cache hit:** if the producer's own copy is still at the ref's `local_path` on
+this worker (a same-worker hand-off) and the file is intact, the SDK skips the
+download entirely. Downloaded copies are never reused: each task gets its own
+(see below). A file whose size, mtime and
 inode still match its marker is trusted without being read, so even a multi-GB
 hand-off costs only a `stat`. If the stat has moved, or the marker was written by
 an older SDK that recorded only the digest, the file is re-hashed in a worker
@@ -314,7 +315,8 @@ The local marker is SDK bookkeeping. Do not parse it in app code or tests: its
 format is not a contract.
 
 **Deleted when the task ends:** the SDK downloads a task's inputs into one
-folder for that task, at `<TEMPORARY_PATH>/.sdk-task-inputs/<id>/<storage_path>`,
+folder for that task, at `<TEMPORARY_PATH>/.sdk-task-inputs/<id>/<n>/<storage_path>`
+(one numbered subfolder per object),
 and deletes the folder once the task's outputs are persisted, whether it
 succeeded or failed. The task sees `local_path` pointing into that folder. A
 retry, or another task on the same worker, downloads its own copy. A local copy
@@ -324,7 +326,8 @@ the same worker) is used where it is and never deleted; a ref with
 alone. Do not hand a materialised input's `local_path` on as a plain string:
 pass the `FileReference` itself, and pass `ref=` to `UploadInput` when you
 upload it, since a key derived from the local path no longer matches the
-store key.
+store key. A worker that is killed mid-task leaves its folder behind; the next
+worker to start on that volume deletes task folders older than a day.
 
 #### Directory FileReferences
 

@@ -794,7 +794,7 @@ def create_activity_from_task(
                             remove_task_input_dir,
                         )
 
-                        await remove_task_input_dir(input_dir)
+                        remove_task_input_dir(input_dir)
 
     # Set type annotations with the actual input/output types from task metadata.
     # This is critical for Temporal to properly deserialize the input dataclass.

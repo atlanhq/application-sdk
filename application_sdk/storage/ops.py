@@ -174,6 +174,11 @@ def normalize_key(key: str) -> str:
         normalized = key.strip("/")
 
     normalized = normalized.replace("\\", "/").replace(os.sep, "/").strip("/")
+    if normalized.startswith(".sdk-task-inputs/"):
+        logger.warning(
+            "Store key derived from a task's downloaded input path; pass the "
+            "FileReference as ref= instead of its local_path"
+        )
     # os.path.relpath resolves the staging root itself to "."; treat as store root.
     return "" if normalized == "." else normalized
 

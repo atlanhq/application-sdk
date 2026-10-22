@@ -52,6 +52,7 @@ import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
@@ -465,12 +466,18 @@ async def _replace_refs(
                 continue
             key = _materialize_key(node)
             if key not in _factories:
-                if download_dir is not None:
-                    _factories[key] = lambda r=node: materialize_file_reference(
-                        _resolve_ref_store(r, store, upstream_store),
-                        r.model_copy(
-                            update={"local_path": _download_target(download_dir, r)}
-                        ),
+                keep_empty_dir = (
+                    node.file_count == 0
+                    and node.local_path is not None
+                    and os.path.isdir(node.local_path)
+                )
+                if download_dir is not None and not keep_empty_dir:
+                    target = _download_target(download_dir, node, len(_factories))
+                    _factories[key] = lambda r=node, t=target: (
+                        materialize_file_reference(
+                            _resolve_ref_store(r, store, upstream_store),
+                            r.model_copy(update={"local_path": t}),
+                        )
                     )
                 else:
                     _factories[key] = lambda r=node: materialize_file_reference(
@@ -621,6 +628,23 @@ async def materialize_file_refs(
     )
 
 
+TASK_INPUTS_DIRNAME = ".sdk-task-inputs"
+STALE_TASK_INPUTS_SECONDS = 24 * 60 * 60
+"""A task download folder older than this is left over from a worker that died
+before its task ended. Longer than any task runs, so a sweep never removes the
+folder of a task still running in another process on the same volume."""
+
+_pending_removals: set[asyncio.Future[None]] = set()
+
+
+def _task_inputs_root() -> str:
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
+        TEMPORARY_PATH,
+    )
+
+    return os.path.abspath(os.path.join(TEMPORARY_PATH, TASK_INPUTS_DIRNAME))
+
+
 def task_input_dir() -> str:
     """A fresh download folder for one task's inputs (FND-4310). Not created here.
 
@@ -629,30 +653,28 @@ def task_input_dir() -> str:
     downloads into it; :func:`remove_task_input_dir` deletes it when the task
     ends.
     """
-    from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
-        TEMPORARY_PATH,
-    )
-
-    return os.path.abspath(
-        os.path.join(TEMPORARY_PATH, ".sdk-task-inputs", uuid.uuid4().hex)
-    )
+    return os.path.join(_task_inputs_root(), uuid.uuid4().hex)
 
 
-def _download_target(download_dir: str, ref: FileReference) -> str:
-    """``<download_dir>/<storage_path>``, or a fresh name if that would leave it.
+def _download_target(download_dir: str, ref: FileReference, slot: int) -> str:
+    """``<download_dir>/<slot>/<storage_path>``, or a fresh name in the slot.
 
-    Keeping the store key as the relative path keeps the layout readers rely
-    on (a ``transformed`` segment, sibling files) and gives refs that share a
-    key one copy.
+    One slot per distinct object (store + key), so the same key in two stores,
+    or keys that nest (``a`` and ``a/b``), never share a path. Keeping the
+    store key as the relative path keeps the layout readers rely on (a
+    ``transformed`` segment, sibling files). A key that would leave the slot
+    gets a fresh name with the key's suffix.
     """
-    target = os.path.normpath(
-        os.path.join(download_dir, (ref.storage_path or "").lstrip("/"))
-    )
-    if target == download_dir or os.path.commonpath([download_dir, target]) != (
-        download_dir
-    ):
-        return os.path.join(download_dir, uuid.uuid4().hex)
-    return target
+    base = os.path.join(download_dir, str(slot))
+    key = ref.storage_path or ""
+    target = os.path.normpath(os.path.join(base, key.lstrip("/")))
+    try:
+        inside = target != base and os.path.commonpath([base, target]) == base
+    except ValueError:  # conformance: ignore[E009] os.path.commonpath raises on mixed Windows drives; such a key leaves the folder
+        inside = False
+    if inside:
+        return target
+    return os.path.join(base, uuid.uuid4().hex + PurePosixPath(key).suffix)
 
 
 def _remove_tree(path: str) -> None:
@@ -664,9 +686,45 @@ def _remove_tree(path: str) -> None:
         logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
 
 
-async def remove_task_input_dir(path: str) -> None:
-    """Delete a task's download folder off the event loop. Never raises.
+def remove_task_input_dir(path: str) -> None:
+    """Start deleting a task's download folder in a worker thread. Never raises.
 
-    The removal runs in one thread call, which a cancel does not stop.
+    Not awaited, so the wrapper's ``finally`` has no cancellation point here
+    and never replaces the error the task is ending with.
     """
-    await run_in_thread(_remove_tree, path)
+    if not os.path.lexists(path):
+        return
+    future = asyncio.get_running_loop().run_in_executor(None, _remove_tree, path)
+    _pending_removals.add(future)
+    future.add_done_callback(_pending_removals.discard)
+
+
+def _sweep_stale_task_inputs(now: float) -> None:
+    root = _task_inputs_root()
+    try:
+        entries = list(os.scandir(root))
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Could not list leftover task downloads", exc_info=True)
+        return
+    for entry in entries:
+        try:
+            if now - entry.stat(follow_symlinks=False).st_mtime > (
+                STALE_TASK_INPUTS_SECONDS
+            ):
+                _remove_tree(entry.path)
+        except OSError:
+            logger.warning("Could not delete leftover task downloads", exc_info=True)
+
+
+async def sweep_stale_task_inputs() -> None:
+    """Delete task download folders a dead worker left behind. Never raises.
+
+    Run at worker start: a worker killed mid-task (OOM, SIGKILL) never reaches
+    its ``finally``, and its folder would stay on a volume that outlives the
+    process.
+    """
+    import time  # noqa: PLC0415 — only needed here
+
+    await run_in_thread(_sweep_stale_task_inputs, time.time())

@@ -13,7 +13,9 @@ The App classes are defined inside each test because
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any
@@ -27,7 +29,7 @@ from application_sdk.app.registry import TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.storage import DeclaredFile, UploadRefsInput
-from application_sdk.contracts.types import FileReference, Lazy
+from application_sdk.contracts.types import FileReference, Lazy, StoreTarget
 from application_sdk.execution._temporal.activities import (
     TaskContext,
     create_activity_from_task,
@@ -150,9 +152,21 @@ def store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Any]:
     with _app_state_lock:
         _app_state.clear()
     yield memory
+    for _ in range(200):
+        if not _task_folders(tmp_path):
+            break
+        time.sleep(0.01)
     assert _task_folders(tmp_path) == []
     with _app_state_lock:
         _app_state.clear()
+
+
+async def _gone(path: str | Path) -> bool:
+    for _ in range(200):
+        if not os.path.lexists(path):
+            return True
+        await asyncio.sleep(0.01)
+    return False
 
 
 def _task_folders(tmp_path: Path) -> list[Path]:
@@ -197,7 +211,7 @@ class TestDownloadedInputsAreDeleted:
         assert out.seen == _PAYLOAD.decode()
         assert out.path.endswith(ref.storage_path)
         assert "/.sdk-task-inputs/" in out.path
-        assert not Path(out.path).exists()
+        assert await _gone(out.path)
         assert not Path(ref.local_path).exists()
 
     async def test_directory_input_is_deleted_after_the_task(
@@ -209,7 +223,7 @@ class TestDownloadedInputsAreDeleted:
         out = await _activity("consume")(_context("consume"), _RefIn(ref=ref))
 
         assert out.seen == (_PAYLOAD * 2).decode()
-        assert not Path(out.path).exists()
+        assert await _gone(out.path)
 
     async def test_input_without_local_path_is_deleted_after_the_task(
         self, store: Any, tmp_path: Path
@@ -221,7 +235,7 @@ class TestDownloadedInputsAreDeleted:
         out = await _activity("consume")(_context("consume"), _RefIn(ref=ref))
 
         assert out.seen == _PAYLOAD.decode()
-        assert out.path and not Path(out.path).exists()
+        assert out.path and await _gone(out.path)
 
     async def test_failed_attempt_deletes_and_retry_downloads_again(
         self, store: Any, tmp_path: Path
@@ -232,24 +246,78 @@ class TestDownloadedInputsAreDeleted:
 
         with pytest.raises(Exception, match="first attempt fails"):
             await activity_fn(_context("consume"), _RefIn(ref=ref, fail=True))
-        assert _failures and not Path(_failures[0]).exists()
+        assert _failures and await _gone(_failures[0])
 
         out = await activity_fn(_context("consume"), _RefIn(ref=ref, fail=True))
 
         assert out.seen == _PAYLOAD.decode()
         assert out.path != _failures[0]
-        assert not Path(out.path).exists()
+        assert await _gone(out.path)
 
     async def test_storage_path_cannot_leave_the_task_folder(self) -> None:
         root = "/work/.sdk-task-inputs/abc"
         for key in ("../../escape.json", "/../../etc/passwd", "", "."):
             ref = FileReference(storage_path=key or None, is_durable=True)
-            target = file_ref_sync._download_target(root, ref)
-            assert target.startswith(root + "/")
+            target = file_ref_sync._download_target(root, ref, 0)
+            assert target.startswith(root + "/0/")
+        escaped = FileReference(storage_path="../out.parquet", is_durable=True)
+        assert file_ref_sync._download_target(root, escaped, 0).endswith(".parquet")
         ref = FileReference(storage_path="run/transformed/table/x.json", is_durable=True)
-        assert file_ref_sync._download_target(root, ref) == (
-            root + "/run/transformed/table/x.json"
+        assert file_ref_sync._download_target(root, ref, 3) == (
+            root + "/3/run/transformed/table/x.json"
         )
+
+    async def test_two_objects_never_share_a_path(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        refs = [
+            FileReference(storage_path="same/key.json", is_durable=True),
+            FileReference(
+                storage_path="same/key.json",
+                is_durable=True,
+                store=StoreTarget.UPSTREAM,
+            ),
+            FileReference(storage_path="nested", is_durable=True),
+            FileReference(storage_path="nested/child.json", is_durable=True),
+        ]
+        seen: list[str] = []
+
+        async def fake_materialize(_store: Any, ref: FileReference) -> FileReference:
+            seen.append(ref.local_path or "")
+            return ref
+
+        with patch(
+            "application_sdk.storage.reference.materialize_file_reference",
+            fake_materialize,
+        ):
+            await file_ref_sync.materialize_file_refs(
+                store, refs, download_dir=str(tmp_path / "dl")
+            )
+
+        assert len(set(seen)) == 4
+        for path in seen:
+            assert not any(
+                other != path and other.startswith(path + "/") for other in seen
+            )
+
+    async def test_empty_prefix_ref_keeps_its_existing_directory(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        ref = FileReference(
+            local_path=str(empty),
+            storage_path="nothing/here",
+            is_durable=True,
+            file_count=0,
+        )
+
+        out = await file_ref_sync.materialize_file_refs(
+            store, ref, download_dir=str(tmp_path / "dl")
+        )
+
+        assert out.local_path == str(empty)
+        assert empty.is_dir()
 
 
 class TestConcurrentTasksOnOnePod:
@@ -350,7 +418,7 @@ class TestOutputsSurviveTheInputFolder:
 
         assert out.out_ref is not None and out.out_ref.is_durable
         assert out.out_ref.local_path is not None
-        assert not Path(out.out_ref.local_path).exists()
+        assert await _gone(out.out_ref.local_path)
         fetched = await fetch(out.out_ref.model_copy(update={"local_path": None}))
         assert _read(fetched.local_path or "") == _PAYLOAD
         Path(fetched.local_path or "").unlink()
@@ -396,6 +464,37 @@ class TestFrameworkTasksStillWork:
 
         assert out.path_results[str(leftover)] is True
         assert not leftover.exists()
+
+
+class TestLeftoversAndWarnings:
+    async def test_worker_start_sweeps_only_stale_task_folders(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        root = tmp_path / "work" / ".sdk-task-inputs"
+        stale, fresh = root / "stale", root / "fresh"
+        (stale / "0").mkdir(parents=True)
+        (stale / "0" / "x.json").write_bytes(_PAYLOAD)
+        fresh.mkdir()
+        old = time.time() - file_ref_sync.STALE_TASK_INPUTS_SECONDS - 60
+        os.utime(stale, (old, old))
+
+        await file_ref_sync.sweep_stale_task_inputs()
+
+        assert not stale.exists()
+        assert fresh.exists()
+        fresh.rmdir()
+
+    async def test_key_from_a_task_download_path_warns(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        from application_sdk.storage import ops
+
+        path = str(tmp_path / "work" / ".sdk-task-inputs" / "id" / "0" / "k.json")
+        with patch.object(ops.logger, "warning") as warning:
+            key = ops.normalize_key(path)
+
+        assert key.startswith(".sdk-task-inputs/")
+        warning.assert_called_once()
 
 
 class TestFailedTransfersLeaveNothing:
@@ -527,7 +626,7 @@ class TestFailedTransfersLeaveNothing:
             await asyncio.sleep(0.05)
             assert not run.done()
             gate.set()
-            with pytest.raises((asyncio.CancelledError, RuntimeError)):
+            with pytest.raises(asyncio.CancelledError):
                 await run
 
         assert order == ["thread", "caller"]
