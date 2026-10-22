@@ -406,10 +406,27 @@ def fresh_default_store() -> Iterator[None]:
     default_object_store.cache_clear()
 
 
+#: The host on an Azure Blob tenant: the chart's Blob-mode env (atlanhq/atlan
+#: atlan-app deployment.yaml) and the host's ATLAN_S3_* aliases left unresolved.
+_AZURE_BLOB_HOST_ENV = {
+    "AZURE_BLOB": "true",
+    "AZURE_STORAGE_CONTAINER": "objectstore",
+    "ATLAN_S3_BUCKET": "$(S3_BUCKET)",
+    "ATLAN_S3_REGION": "$(S3_REGION)",
+}
+
+
 @pytest.mark.usefixtures("fresh_default_store")
-def test_without_a_bucket_the_host_answers_503(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "env", [{}, _AZURE_BLOB_HOST_ENV], ids=["no-bucket", "azure-blob"]
+)
+def test_without_a_bucket_the_host_answers_503(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
+) -> None:
     for name in ("ATLAN_S3_BUCKET", "GCP_BUCKET"):
         monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
     host = TestClient(build_asgi_app(_Handler(), app_name="mysql"))
     assert host.get("/workflows/v1/config/g1?type=credentials").status_code == 503
     assert (

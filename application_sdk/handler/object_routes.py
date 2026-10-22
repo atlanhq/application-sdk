@@ -351,7 +351,9 @@ class S3ObjectStore:
             # aliases are literal "$(S3_BUCKET)" text there.
             return cls._gcs_from_env(gcs_bucket)
         bucket = os.environ.get("ATLAN_S3_BUCKET", "").strip()
-        if not bucket:
+        # Azure Blob tenants get no S3_* either: the literal alias is no bucket
+        # (Blob is not served yet), not a bucket name.
+        if not bucket or bucket.startswith("$("):
             return None
         try:
             return cls(bucket, os.environ.get("ATLAN_S3_REGION", "").strip() or None)
