@@ -320,7 +320,8 @@ retry downloads it again. Only copies the SDK downloaded are deleted: a file
 that was already at `local_path` (the producer's own copy on the same worker, or
 an app's file), a ref with `auto_materialize=False`, and a `Lazy` field the task
 fetches itself are left alone. Do not hand a materialised input's `local_path`
-on as a plain string: pass the `FileReference` itself.
+on as a plain string: pass the `FileReference` itself. Do not write a task's own
+outputs inside a materialised input directory: the directory goes with it.
 
 #### Directory FileReferences
 

@@ -568,8 +568,8 @@ def create_activity_from_task(
                 from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                     has_refs_to_materialize,
                     has_refs_to_persist,
+                    lease_materialized,
                     lease_task_inputs,
-                    lease_temp_inputs,
                     materialize_file_refs,
                     persist_file_refs,
                 )
@@ -601,15 +601,16 @@ def create_activity_from_task(
                 if store is not None:
                     input_leases = lease_task_inputs(input_data)
                 if store is not None and has_refs_to_materialize(input_data):
-                    unmaterialized = input_data
                     input_data = await materialize_file_refs(
                         store,
                         input_data,
                         upstream_store=(
                             infra.upstream_storage if infra is not None else None
                         ),
+                        on_materialized=lambda ref, local: input_leases.extend(
+                            lease_materialized(ref, local)
+                        ),
                     )
-                    input_leases += lease_temp_inputs(unmaterialized, input_data)
 
                 # Consumer side, after materialise: the bytes this task is about to
                 # read are on local disk now, so re-validate them on read. This is

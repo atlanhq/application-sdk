@@ -45,6 +45,7 @@ _PAYLOAD = b"fnd-4310 " * 128
 
 class _RefIn(Input, allow_unbounded_fields=True):
     ref: FileReference | None = None
+    other: FileReference | None = None
     lazy_ref: Annotated[FileReference | None, Lazy()] = None
     gate: str = ""
     fail: bool = False
@@ -137,8 +138,15 @@ def store(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
         _app_state.clear()
     yield memory
     leaked = dict(file_ref_sync._input_leases)
+    leaked_state = (
+        dict(file_ref_sync._leased_ancestors),
+        set(file_ref_sync._deferred_deletes),
+    )
     file_ref_sync._input_leases.clear()
+    file_ref_sync._leased_ancestors.clear()
+    file_ref_sync._deferred_deletes.clear()
     assert not leaked
+    assert leaked_state == ({}, set())
     with _app_state_lock:
         _app_state.clear()
 
@@ -376,3 +384,171 @@ class TestFrameworkTasksStillWork:
         assert out.path_results[ref.local_path] is True
         assert out.path_results[str(leftover)] is True
         assert not leftover.exists()
+
+
+async def _remote_tree_and_member(
+    store: Any, tmp_path: Path
+) -> tuple[FileReference, FileReference]:
+    """A directory ref and a file ref whose local path sits inside it."""
+    producer = tmp_path / "producer" / "tree"
+    producer.mkdir(parents=True)
+    (producer / "one.json").write_bytes(_PAYLOAD)
+    (producer / "two.json").write_bytes(_PAYLOAD)
+    tree = await persist_file_reference(store, FileReference.from_local(producer))
+    member = await persist_file_reference(
+        store, FileReference.from_local(producer / "two.json")
+    )
+    shutil.rmtree(producer.parent)
+    return tree, member
+
+
+class TestFailedMaterialiseLeavesNothing:
+    async def test_other_downloads_stop_before_cleanup_runs(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        failing = await _remote_file_ref(store, tmp_path)
+        slow = await _remote_dir_ref(store, tmp_path)
+        assert slow.local_path is not None
+        release = asyncio.Event()
+        _consume_activity()
+
+        async def fake_materialize(_store: Any, ref: FileReference) -> FileReference:
+            if ref.storage_path == failing.storage_path:
+                await asyncio.sleep(0)
+                raise RuntimeError("download failed")
+            await release.wait()
+            Path(ref.local_path or "").mkdir(parents=True, exist_ok=True)
+            (Path(ref.local_path or "") / "late.json").write_bytes(_PAYLOAD)
+            return ref
+
+        with patch(
+            "application_sdk.storage.reference.materialize_file_reference",
+            fake_materialize,
+        ):
+            with pytest.raises(Exception, match="download failed"):
+                await _activity("consume")(
+                    _context("consume"), _RefIn(ref=failing, other=slow)
+                )
+            release.set()
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+        assert not Path(slow.local_path).exists()
+
+    async def test_temp_copy_made_before_a_failure_is_deleted(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        done = await _remote_file_ref(store, tmp_path)
+        done = done.model_copy(update={"local_path": None})
+        failing = await _remote_dir_ref(store, tmp_path)
+        made: list[str] = []
+        _consume_activity()
+        from application_sdk.storage import reference
+
+        real = reference.materialize_file_reference
+
+        async def fake_materialize(_store: Any, ref: FileReference) -> FileReference:
+            if ref.storage_path == failing.storage_path:
+                while not made:
+                    await asyncio.sleep(0)
+                raise RuntimeError("download failed")
+            out = await real(_store, ref)
+            made.append(out.local_path or "")
+            return out
+
+        with patch(
+            "application_sdk.storage.reference.materialize_file_reference",
+            fake_materialize,
+        ):
+            with pytest.raises(Exception, match="download failed"):
+                await _activity("consume")(
+                    _context("consume"), _RefIn(ref=done, other=failing)
+                )
+
+        assert made and made[0]
+        assert not Path(made[0]).exists()
+
+
+class TestOverlappingCopies:
+    async def test_directory_is_kept_while_a_file_inside_it_is_in_use(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        tree, member = await _remote_tree_and_member(store, tmp_path)
+        assert tree.local_path is not None and member.local_path is not None
+        _consume_activity()
+        activity_fn = _activity("consume")
+        _gates["tree"], _entered["tree"] = asyncio.Event(), asyncio.Event()
+        _gates["member"], _entered["member"] = asyncio.Event(), asyncio.Event()
+
+        first = asyncio.create_task(
+            activity_fn(_context("consume"), _RefIn(ref=tree, gate="tree"))
+        )
+        await _entered["tree"].wait()
+        second = asyncio.create_task(
+            activity_fn(_context("consume"), _RefIn(ref=member, gate="member"))
+        )
+        await _entered["member"].wait()
+
+        _gates["tree"].set()
+        await first
+        assert Path(member.local_path).read_bytes() == _PAYLOAD
+
+        _gates["member"].set()
+        out = await second
+
+        assert out.seen == _PAYLOAD.decode()
+        assert not Path(member.local_path).exists()
+        assert not Path(tree.local_path).exists()
+
+    async def test_release_never_deletes_an_ancestor_of_a_live_copy(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        outer = tmp_path / "outer"
+        inner = outer / "inner.json"
+        outer.mkdir()
+        inner.write_bytes(_PAYLOAD)
+        with file_ref_sync._input_leases_lock:
+            file_ref_sync._lease(str(outer))
+            file_ref_sync._lease(str(inner))
+
+        await file_ref_sync.release_task_inputs([str(outer)])
+        assert inner.read_bytes() == _PAYLOAD
+
+        await file_ref_sync.release_task_inputs([str(inner)])
+        assert not outer.exists()
+
+
+class TestInterruptedDelete:
+    async def test_second_cancel_still_removes_every_renamed_copy(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        import threading
+
+        paths = []
+        for name in ("a.json", "b.json"):
+            path = tmp_path / name
+            path.write_bytes(_PAYLOAD)
+            paths.append(str(path))
+        with file_ref_sync._input_leases_lock:
+            for path in paths:
+                file_ref_sync._lease(path)
+        gate = threading.Event()
+        real = file_ref_sync._remove_tombstones
+
+        def slow_remove(tombstones: list[str]) -> None:
+            gate.wait(5)
+            real(tombstones)
+
+        with patch.object(file_ref_sync, "_remove_tombstones", slow_remove):
+            release = asyncio.create_task(file_ref_sync.release_task_inputs(paths))
+            await asyncio.sleep(0.05)
+            release.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await release
+            gate.set()
+            for _ in range(100):
+                if not list(tmp_path.glob("*.deleting")):
+                    break
+                await asyncio.sleep(0.01)
+
+        assert not list(tmp_path.glob("*"))

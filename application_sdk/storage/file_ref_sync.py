@@ -360,6 +360,7 @@ async def _replace_refs(
     output_path: str | None = None,
     *,
     upstream_store: ObjectStore | None = None,
+    on_materialized: Callable[[FileReference, FileReference], None] | None = None,
 ) -> Any:
     """Replace FileReference instances in a data tree using concurrent execution.
 
@@ -385,10 +386,16 @@ async def _replace_refs(
             ``persist_file_reference`` for ``RETAINED``-tier refs.
         upstream_store: Store a ref with ``store=UPSTREAM`` materialises
             from. ``None`` falls back to *store*.
+        on_materialized: Called with ``(ref, local_ref)`` as each download
+            finishes, before the others do — so a caller learns of every copy
+            even when a later download fails.
 
     Returns:
         A new object tree with replaced FileReference instances (original
         objects are never mutated).
+
+    If one operation fails, the others are cancelled and awaited before the
+    error propagates, so nothing keeps writing after the caller has moved on.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
         MAX_CONCURRENT_STORAGE_TRANSFERS,
@@ -469,6 +476,8 @@ async def _replace_refs(
     ) -> tuple[str, FileReference]:
         async with sem:
             result = await factory()
+        if on_materialized is not None and mode == "materialize":
+            on_materialized(_winners[key], result)
         # One ref persisted or materialised is one unit of work (ADR-0018).
         # The per-file and per-part marks inside transfer/ops already keep a
         # single large ref visible; this coarser mark exists for the label,
@@ -477,7 +486,14 @@ async def _replace_refs(
         current_progress_tracker().mark_progress(f"file_ref.{mode}")
         return key, result
 
-    pairs = await asyncio.gather(*[_run(k, f) for k, f in _factories.items()])
+    runs = [asyncio.ensure_future(_run(k, f)) for k, f in _factories.items()]
+    try:
+        pairs = await asyncio.gather(*runs)
+    except BaseException:
+        for run in runs:
+            run.cancel()
+        await asyncio.gather(*runs, return_exceptions=True)
+        raise
     _results: dict[str, FileReference] = dict(pairs)
 
     # ── Pass 3: scatter results back through the tree ─────────────────────────
@@ -557,7 +573,11 @@ async def persist_file_refs(
 
 
 async def materialize_file_refs(
-    store: ObjectStore, data: Any, *, upstream_store: ObjectStore | None = None
+    store: ObjectStore,
+    data: Any,
+    *,
+    upstream_store: ObjectStore | None = None,
+    on_materialized: Callable[[FileReference, FileReference], None] | None = None,
 ) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
@@ -578,18 +598,61 @@ async def materialize_file_refs(
         ones (``local_path`` set, ``.sha256`` sidecar written).
     """
     return await _replace_refs(
-        data, store, "materialize", upstream_store=upstream_store
+        data,
+        store,
+        "materialize",
+        upstream_store=upstream_store,
+        on_materialized=on_materialized,
     )
 
 
 _input_leases: dict[str, int] = {}
 """Local copies the task wrapper downloaded on this process, by real path, with
 how many running tasks hold each one."""
+_leased_ancestors: dict[str, int] = {}
+"""How many leased paths sit under each directory, so a release can tell in
+O(depth) whether a copy contains, or sits inside, another task's live copy."""
+_deferred_deletes: set[str] = set()
+"""Released copies kept because an overlapping copy was still leased."""
 _input_leases_lock = threading.Lock()
 
 
+def _parents(path: str) -> Iterator[str]:
+    parent = os.path.dirname(path)
+    while parent and parent != path:
+        yield parent
+        path, parent = parent, os.path.dirname(parent)
+
+
 def _lease(path: str) -> None:
-    _input_leases[path] = _input_leases.get(path, 0) + 1
+    _deferred_deletes.discard(path)
+    count = _input_leases.get(path, 0)
+    _input_leases[path] = count + 1
+    if count == 0:
+        for parent in _parents(path):
+            _leased_ancestors[parent] = _leased_ancestors.get(parent, 0) + 1
+
+
+def _unlease(path: str) -> bool:
+    """Drop one lease on *path*; ``True`` when it was the last one."""
+    remaining = _input_leases.get(path, 0) - 1
+    if remaining > 0:
+        _input_leases[path] = remaining
+        return False
+    _input_leases.pop(path, None)
+    for parent in _parents(path):
+        left = _leased_ancestors.get(parent, 0) - 1
+        if left > 0:
+            _leased_ancestors[parent] = left
+        else:
+            _leased_ancestors.pop(parent, None)
+    return True
+
+
+def _overlaps_live_lease(path: str) -> bool:
+    return path in _leased_ancestors or any(
+        parent in _input_leases for parent in _parents(path)
+    )
 
 
 def lease_task_inputs(data: Any) -> list[str]:
@@ -597,90 +660,106 @@ def lease_task_inputs(data: Any) -> list[str]:
 
     Call before ``materialize_file_refs``, with no ``await`` in between. A
     durable ref's ``local_path`` is leased when another task on this process
-    already leased it, or when nothing exists there yet — materialise will
-    download it. A path that already exists and is not leased was not
-    downloaded by the wrapper (a producer's own copy, an app's file) and is
-    never leased, so it is never deleted.
+    already leased it, when it contains or sits inside a leased copy (bytes the
+    wrapper downloaded for another task), when its delete was deferred, or when
+    nothing exists there yet — materialise will download it. Any other path that
+    already exists was not downloaded by the wrapper (a producer's own copy, an
+    app's file) and is never leased, so it is never deleted.
 
     Returns:
         The leased paths; hand them to :func:`release_task_inputs` when the
         task ends, however it ends.
     """
     paths: list[str] = []
+    seen: set[str] = set()
     with _input_leases_lock:
         for ref in _materialize_candidates(data):
             if not ref.is_durable or ref.storage_path is None or ref.local_path is None:
                 continue
             path = os.path.realpath(ref.local_path)
-            if path in paths:
+            if path in seen:
                 continue
-            if path in _input_leases or not os.path.lexists(path):
+            seen.add(path)
+            if (
+                path in _input_leases
+                or path in _deferred_deletes
+                or _overlaps_live_lease(path)
+                or not os.path.lexists(path)
+            ):
                 _lease(path)
                 paths.append(path)
     return paths
 
 
-def lease_temp_inputs(before: Any, after: Any) -> list[str]:
-    """Lease the private temp copies materialise made for refs with no ``local_path``.
+def lease_materialized(ref: FileReference, local: FileReference) -> list[str]:
+    """Lease the private temp copy materialise made for a ref with no ``local_path``.
 
-    *before* and *after* are the input tree handed to and returned by
-    ``materialize_file_refs``. A local path in *after* that no ref in *before*
-    named is a fresh temp name materialise chose; a path *before* already named
-    is :func:`lease_task_inputs`'s to decide.
+    Pass it as ``materialize_file_refs(..., on_materialized=...)``: it runs as
+    each download finishes, so a copy is leased even when a later download in
+    the same task fails. A ref that named its ``local_path`` is
+    :func:`lease_task_inputs`'s to decide.
     """
-    named = {
-        os.path.realpath(ref.local_path)
-        for ref in _materialize_candidates(before)
-        if ref.local_path is not None
-    }
-    paths: list[str] = []
+    if ref.local_path is not None or local.local_path is None:
+        return []
+    path = os.path.realpath(local.local_path)
     with _input_leases_lock:
-        for ref in _materialize_candidates(after):
-            if not ref.is_durable or ref.local_path is None:
-                continue
-            path = os.path.realpath(ref.local_path)
-            if path not in named and path not in paths:
-                _lease(path)
-                paths.append(path)
-    return paths
+        _lease(path)
+    return [path]
 
 
-def _remove_tombstone(path: str) -> None:
-    if os.path.isdir(path) and not os.path.islink(path):
-        shutil.rmtree(path)
-    else:
-        os.remove(path)
+def _remove_tombstones(paths: list[str]) -> None:
+    for path in paths:
+        try:
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        except OSError:
+            logger.warning("Could not delete a downloaded task input", exc_info=True)
+
+
+def _tombstone(path: str) -> str | None:
+    if os.path.lexists(marker_path(path)):
+        os.remove(marker_path(path))
+    if not os.path.lexists(path):
+        return None
+    tombstone = f"{path}.{uuid.uuid4().hex}.deleting"
+    os.rename(path, tombstone)
+    return tombstone
 
 
 async def release_task_inputs(paths: list[str]) -> None:
     """Drop one task's leases; delete each copy whose last lease this was.
 
-    The copy is renamed aside under the lease lock, so a task that starts now
-    finds nothing there and downloads afresh rather than reading a file being
-    deleted; the renamed copy is then removed off the event loop. Best-effort:
-    a failure is logged, never raised.
+    A copy that contains, or sits inside, another task's live copy is kept
+    until that lease ends too. The copy is renamed aside under the lease lock,
+    so a task that starts now finds nothing there and downloads afresh rather
+    than reading a file being deleted; the renamed copies are then removed off
+    the event loop in one thread call, which a cancel does not stop, so a
+    second cancel cannot leave them behind. Best-effort: a failure is logged,
+    never raised.
     """
     doomed: list[str] = []
     with _input_leases_lock:
-        for path in paths:
-            remaining = _input_leases.get(path, 0) - 1
-            if remaining > 0:
-                _input_leases[path] = remaining
+        released = [path for path in paths if _unlease(path)]
+        candidates = released + [
+            path for path in _deferred_deletes if path not in released
+        ]
+        for path in candidates:
+            if path in _input_leases:
                 continue
-            _input_leases.pop(path, None)
+            if _overlaps_live_lease(path):
+                _deferred_deletes.add(path)
+                continue
+            _deferred_deletes.discard(path)
             try:
-                if os.path.lexists(marker_path(path)):
-                    os.remove(marker_path(path))
-                if os.path.lexists(path):
-                    tombstone = f"{path}.{uuid.uuid4().hex}.deleting"
-                    os.rename(path, tombstone)
-                    doomed.append(tombstone)
+                tombstone = _tombstone(path)
             except OSError:
                 logger.warning(
                     "Could not delete a downloaded task input", exc_info=True
                 )
-    for tombstone in doomed:
-        try:
-            await run_in_thread(_remove_tombstone, tombstone)
-        except OSError:
-            logger.warning("Could not delete a downloaded task input", exc_info=True)
+                continue
+            if tombstone is not None:
+                doomed.append(tombstone)
+    if doomed:
+        await run_in_thread(_remove_tombstones, doomed)
