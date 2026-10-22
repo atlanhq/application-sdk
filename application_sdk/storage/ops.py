@@ -936,24 +936,21 @@ def _drop_directory_markers(
     ]
 
 
-def _compute_part_size(file_size: int, chunk_size: int) -> int:
-    """Compute effective upload part size to stay within 1,000 parts.
+#: An S3 proxy fronting GCS cannot complete an upload of more than 1,024 parts.
+_MAX_UPLOAD_PARTS = 1000
 
-    The binding limit is not S3's 10,000 parts but an S3 proxy fronting GCS,
-    which emulates multipart with 32-source ``compose`` calls nested two deep
-    and so cannot complete an upload of more than 1,024 parts. It reports that
-    as a 200 with a truncated body, which obstore surfaces as "Got invalid
-    multipart response". At the 8 MiB default that is any file over 8 GiB.
+
+def _compute_part_size(file_size: int, chunk_size: int) -> int:
+    """Compute effective upload part size to stay within ``_MAX_UPLOAD_PARTS``.
 
     Args:
         file_size: Total file size in bytes.
         chunk_size: Desired chunk size in bytes.
 
     Returns:
-        Effective part size — at least *chunk_size* but never so small that
-        more than 1,000 parts would be needed.
+        Effective part size, at least *chunk_size*.
     """
-    return max(chunk_size, math.ceil(file_size / 1000))
+    return max(chunk_size, math.ceil(file_size / _MAX_UPLOAD_PARTS))
 
 
 async def _finalize_upload_integrity(
@@ -1118,8 +1115,7 @@ async def upload_file(
     """Stream-upload a local file to *key* in the store.
 
     Uses obstore's multipart writer so arbitrarily large files are uploaded
-    without materialising the whole content in memory.  The part size is
-    adapted automatically to stay under S3's 10,000-part limit.
+    without materialising the whole content in memory.
 
     A single pass over the file simultaneously feeds each chunk to the
     SHA-256 hasher and the store writer.
@@ -1154,10 +1150,9 @@ async def upload_file(
             ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`` is unset — a deployment
             that sets it overrides the caller, since the workable part size
             depends on the destination the deployment writes to rather than on
-            the app.  Defaults to 8 MiB when neither is given.  Increased
-            automatically if the file is large enough to exceed 1,000 parts.
-            See the constant's docstring for the
-            S3-proxy-over-GCS case that makes part *count* what matters.
+            the app.  Defaults to 8 MiB when neither is given.  Raised
+            automatically when the file would need more than
+            ``_MAX_UPLOAD_PARTS`` parts.
         normalize: When ``True`` (default), normalise *key* before use.
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful

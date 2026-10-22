@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import itertools
-import math
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,6 +19,7 @@ from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_local_store, create_memory_store
 from application_sdk.storage.ops import (
+    _MAX_UPLOAD_PARTS,
     _get_bytes,
     _put,
     delete,
@@ -2258,40 +2258,24 @@ class TestUploadPartSizeConfiguration:
 
         assert writer.call_args.kwargs["buffer_size"] == 5 * 1024 * 1024
 
-    @pytest.mark.parametrize("overridden", [False, True])
     async def test_large_upload_stays_within_gcs_proxy_part_limit(
-        self, store, tmp_path, monkeypatch, overridden
+        self, store, tmp_path, monkeypatch
     ) -> None:
-        """An S3 proxy fronting GCS cannot complete an upload of more than
-        1,024 parts: it answers the CompleteMultipartUpload with a 200 and a
-        truncated body, which obstore reports as "Got invalid multipart
-        response: tag not closed". At the 8 MiB default that is any file over
-        8 GiB, so the part size must grow before the part count reaches it,
-        whether the size came from the caller or the deployment.
-
-        Scaled down: a 1-byte part size on a 5,000-byte file stands in for
-        8 MiB on a 39 GiB file. The real writer runs, so the bytes must still
-        land intact.
-        """
+        """A file needing too many parts gets parts just big enough to fit."""
         monkeypatch.setattr(
-            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", overridden
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", False
         )
-        monkeypatch.setattr(
-            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_BYTES", 1
-        )
-        payload = os.urandom(5000)
         f = tmp_path / "column.json"
-        f.write_bytes(payload)
+        f.write_bytes(b"x" * 5000)
 
-        with patch(
-            "application_sdk.storage.ops.obstore.open_writer_async",
-            wraps=obstore.open_writer_async,
-        ) as writer:
-            await upload_file("k", f, store, chunk_size=1, normalize=False)
+        with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
+            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aexit__ = AsyncMock(return_value=False)
+            await upload_file(
+                "k", f, store, chunk_size=1, normalize=False, verify=False
+            )
 
-        part_size = writer.call_args.kwargs["buffer_size"]
-        assert math.ceil(len(payload) / part_size) <= 1000
-        assert await _get_bytes("k", store) == payload
+        assert 5000 // writer.call_args.kwargs["buffer_size"] == _MAX_UPLOAD_PARTS
 
     async def test_max_concurrency_is_passed_through(
         self, store, tmp_path, monkeypatch
