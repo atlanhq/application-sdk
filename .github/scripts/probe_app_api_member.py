@@ -28,7 +28,9 @@ Fails when:
   ``/workflows/v1/configmaps`` is not 200, ``POST /manifest`` (what Heracles
   calls on every run submit) is not 200 JSON or still carries an unresolved
   ``{app_name}`` / ``{deployment_name}`` token, or ``/workflows/v1/input-contract``
-  answers a 5xx;
+  answers a 5xx. When the handler overrides ``compute_manifest``, the manifest
+  of every entry point in its generated tree is checked the same way, and an
+  ``ImportError`` it raises fails the probe;
 * the config route, with no object store configured, does not answer 503.
 
 common-app-server's image build runs the same probe, so an app PR that would
@@ -51,6 +53,10 @@ _PROBED = {
     "preflight_check": "/workflows/v1/check",
     "fetch_metadata": "/workflows/v1/metadata",
 }
+
+#: Handler methods whose ImportError the probe records: those above, and
+#: ``compute_manifest``, which the manifest routes run.
+_WATCHED = (*_PROBED, "compute_manifest")
 
 
 @dataclass
@@ -86,12 +92,12 @@ def check_response(
 
 
 def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
-    """Wrap the probed handler methods so an ImportError they raise is recorded.
+    """Wrap the watched handler methods so an ImportError they raise is recorded.
 
     The error still propagates, so the route answers exactly as it would on
     the host.
     """
-    for method in _PROBED:
+    for method in _WATCHED:
         original = getattr(handler, method)
 
         @functools.wraps(original)
@@ -108,6 +114,33 @@ def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
 def ships_contracts(generated: Path) -> bool:
     """Whether the app's source tree has contract-toolkit output to serve."""
     return generated.is_dir() and any(generated.glob("*.json"))
+
+
+def check_manifest(client: Any, result: Result, label: str, body: object) -> None:
+    """``POST /manifest`` with *body* answers 200 with every token resolved."""
+    manifest = client.post("/manifest", json=body)
+    check_response(label, manifest.status_code, None, result, want=200)
+    if manifest.status_code == 200:
+        text = manifest.text
+        for token in ("{app_name}", "{deployment_name}"):
+            if token in text:
+                result.fail(
+                    f"{label}: the served manifest still carries {token}; "
+                    "a run submitted from it would target no worker"
+                )
+
+
+def check_computed_manifests(
+    client: Any, result: Result, entrypoints: list[str]
+) -> None:
+    """Every entry point's manifest, for a handler that computes them."""
+    for entrypoint in entrypoints:
+        check_manifest(
+            client,
+            result,
+            f"POST /manifest (entrypoint {entrypoint})",
+            {"entrypoint": entrypoint, "fe_inputs": {}},
+        )
 
 
 def check_metadata_routes(
@@ -132,16 +165,7 @@ def check_metadata_routes(
     check_response(
         "GET /workflows/v1/configmaps", listing.status_code, None, result, want=200
     )
-    manifest = client.post("/manifest", json={})
-    check_response("POST /manifest", manifest.status_code, None, result, want=200)
-    if manifest.status_code == 200:
-        text = manifest.text
-        for token in ("{app_name}", "{deployment_name}"):
-            if token in text:
-                result.fail(
-                    f"POST /manifest: the served manifest still carries {token}; "
-                    "a run submitted from it would target no worker"
-                )
+    check_manifest(client, result, "POST /manifest", {})
     contract = client.get("/workflows/v1/input-contract")
     if contract.status_code >= 500:
         result.fail(
@@ -158,6 +182,10 @@ def run(
 
     from application_sdk.handler import Handler  # noqa: PLC0415
     from application_sdk.handler.asgi import build_asgi_app  # noqa: PLC0415
+    from application_sdk.handler.metadata_routes import (  # noqa: PLC0415
+        generated_dir_of,
+        tree_entrypoints,
+    )
 
     handler = getattr(module, obj, None)
     if callable(handler) and not isinstance(handler, Handler):
@@ -212,6 +240,15 @@ def run(
         not_500_json=True,
     )
     check_metadata_routes(client, result, expects_contracts=expects_contracts)
+    if type(handler).compute_manifest is not Handler.compute_manifest:
+        generated = generated_dir_of(Path(module.__file__ or ".").parent)
+        check_computed_manifests(client, result, tree_entrypoints(generated))
+        if "compute_manifest" in import_failures:
+            exc = import_failures["compute_manifest"]
+            result.fail(
+                "POST /manifest: compute_manifest reached a worker-only import "
+                f"({type(exc).__name__}: {exc})"
+            )
     config = client.get("/workflows/v1/config/probe-guid?type=credentials")
     check_response(
         "GET /workflows/v1/config (no object store)",

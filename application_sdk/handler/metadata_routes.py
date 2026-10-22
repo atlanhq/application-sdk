@@ -12,11 +12,15 @@ The two surfaces differ only in what a :class:`MetadataSource` resolves:
 
 * the worker resolves entry points from its app registry, stamps the manifest
   with the task queue its own worker polls, and runs an app's
-  ``compute_manifest`` hooks;
+  ``app.<segment>.core.compute_manifest`` hooks;
 * the host has no app registry. It resolves entry points from the generated
-  tree, derives the task queue from the app's name and deployment exactly as the
-  worker does, and serves static manifests only: ``gen_app_api.py check``
-  refuses an app with a ``compute_manifest`` hook, so no hooked app reaches it.
+  tree and derives the task queue from the app's name and deployment exactly as
+  the worker does. It never runs a ``core.py`` hook (``gen_app_api.py check``
+  refuses an app with one).
+
+Both run :meth:`~application_sdk.handler.base.Handler.compute_manifest` when the
+handler overrides it (:func:`handler_compute_manifest`), so a manifest that must
+be computed per request is served the same from either place.
 """
 
 from __future__ import annotations
@@ -45,6 +49,13 @@ from application_sdk.common.build_identity import (
     build_identity,
 )
 from application_sdk.common.task_queue import resolve_manifest_tokens
+from application_sdk.handler.base import Handler
+from application_sdk.handler.context import (
+    HandlerContext,
+    SecretStore,
+    bind_handler_context,
+)
+from application_sdk.handler.contracts import ManifestInput
 from application_sdk.handler.routes import (
     _ENTRYPOINT_NAME_RE,
     _wrap_response,
@@ -207,7 +218,7 @@ class MetadataSource:
         input_contract: Resolves ``?entrypoint=`` to its input model, raising
             ``HTTPException``; ``None`` resolves from the generated tree.
         compute_manifest: The entry point's ``compute_manifest`` hook, or
-            ``None``.
+            ``None`` (see :func:`handler_compute_manifest`).
         programmatic_manifest: An ``AppManifest`` built in Python, served when
             no entry point is named.
         log: The logger the routes report through.
@@ -233,6 +244,38 @@ class MetadataSource:
     log: Callable[[], Any] = lambda: logger
     max_fe_inputs_bytes: Callable[[], int] = lambda: MAX_FE_INPUTS_BYTES
     from_process_env: bool = True
+
+
+def handler_compute_manifest(
+    handler: Handler,
+    app_name: Callable[[], str],
+    *,
+    secret_store: SecretStore | None = None,
+) -> Callable[[str], ComputeManifest | None]:
+    """A ``MetadataSource.compute_manifest`` that runs ``handler.compute_manifest``.
+
+    Resolves to ``None`` for every entry point when the handler does not
+    override it, so such an app is served exactly as before. Otherwise the
+    method runs with a bound :class:`HandlerContext` (no credentials), and a
+    ``None`` result serves the generated manifest.
+    """
+    if type(handler).compute_manifest is Handler.compute_manifest:
+        return lambda _entrypoint: None
+
+    def resolve(entrypoint: str) -> ComputeManifest:
+        async def hook(manifest: dict[str, Any], fe_inputs: dict[str, Any]) -> Any:
+            context = HandlerContext(app_name=app_name(), _secret_store=secret_store)
+            with bind_handler_context(context):
+                computed = await handler.compute_manifest(
+                    ManifestInput(
+                        entrypoint=entrypoint, manifest=manifest, fe_inputs=fe_inputs
+                    )
+                )
+            return manifest if computed is None else computed
+
+        return hook
+
+    return resolve
 
 
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:

@@ -147,8 +147,9 @@ extras = ["sql", "aws"]
   import, a worker-only import `fix` would move, or a read of
   `APPLICATION_NAME` / `ATLAN_APPLICATION_NAME`. On the host that names the
   host itself; a handler uses `self.context.app_name`. It also fails on logging
-  left in the handler module (P060), and for an app with a `compute_manifest`
-  hook, which the host cannot serve.
+  left in the handler module (P060), and for an app with an
+  `app/<entrypoint>/core.py` `compute_manifest` hook, which the host never runs
+  (a manifest computed per request goes in the handler's `compute_manifest`).
 - `stage` / `build --out DIR` write the handler's files, its data files and
   `app/generated/` as `<app>_api/*`, with a generated `pyproject.toml` (its
   dependencies, and the `atlan.app_api` and `atlan.app_server` entry points)
@@ -171,7 +172,7 @@ service does for it, from one shared implementation each:
 | Routes | Module | On the host |
 |---|---|---|
 | `auth`, `check`, `warmup`, `metadata` | `handler/routes.py` | The app's handler. |
-| `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is the one the app's worker polls: its `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`), else `derive_task_queue(app, deployment)` with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME`, else the host's own `ATLAN_DEPLOYMENT_NAME` (the chart gives the host and every worker the same tenant-wide `deploymentName`; Heracles re-stamps SDR nodes itself). The host never uses its own bare `ATLAN_TASK_QUEUE` or `ATLAN_APPLICATION_NAME` for an app. Static manifests only: `check` refuses an app with a `compute_manifest` hook. |
+| `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is the one the app's worker polls: its `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`), else `derive_task_queue(app, deployment)` with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME`, else the host's own `ATLAN_DEPLOYMENT_NAME` (the chart gives the host and every worker the same tenant-wide `deploymentName`; Heracles re-stamps SDR nodes itself). The host never uses its own bare `ATLAN_TASK_QUEUE` or `ATLAN_APPLICATION_NAME` for an app. A manifest computed per request comes from the handler's `compute_manifest`, stamped the same way; `check` refuses a `core.py` `compute_manifest` hook. |
 | `config/{id}` (GET/POST), `file` | `handler/object_routes.py` | One S3 bucket from `ATLAN_S3_BUCKET` / `ATLAN_S3_REGION` (the `aws` extra, ambient AWS identity). A config is keyed `persistent-artifacts/apps/<app>/<type>/<id>/config.json` with the hosted app's name, the key its worker reads. An upload's `prefix` must be relative path segments with no `..`, and on the host every upload lands under the app's own `persistent-artifacts/apps/<app>/uploads/`. 503 without `ATLAN_S3_BUCKET`. |
 
 The worker registers the same modules with its own lookups (the app registry,

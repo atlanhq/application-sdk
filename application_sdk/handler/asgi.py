@@ -15,7 +15,8 @@ shared by every app in the process; handler code is async and offloads through
 
 The metadata routes (configmaps, manifest, input contract) are served from the
 ``generated/`` folder ``gen_app_api.py`` ships inside the app's package
-(:mod:`application_sdk.handler.metadata_routes`). The served manifest's task
+(:mod:`application_sdk.handler.metadata_routes`), through the handler's
+``compute_manifest`` when it overrides that. The served manifest's task
 queue is the one the app's worker polls: its ``ATLAN_TASK_QUEUE`` override when
 the host's app-env sync carries one (``ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE``),
 else ``derive_task_queue`` over the app's name and its deployment name, read as
@@ -42,6 +43,7 @@ from application_sdk.handler.base import Handler
 from application_sdk.handler.metadata_routes import (
     MetadataSource,
     generated_dir_of,
+    handler_compute_manifest,
     register_metadata_routes,
 )
 from application_sdk.handler.object_routes import (
@@ -242,6 +244,7 @@ def build_asgi_app(
                 app_package=app_package,
                 task_queue=lambda: _task_queue(app_name, _deployment),
                 deployment_name=_deployment,
+                compute_manifest=handler_compute_manifest(handler, lambda: app_name),
                 from_process_env=False,
             ),
         )

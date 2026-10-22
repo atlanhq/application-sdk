@@ -175,6 +175,7 @@ _HANDLER_EXPORTS = (
     "HandlerContext",
     "HandlerCredential",
     "HandlerError",
+    "ManifestInput",
     "MetadataInput",
     "MetadataOutput",
     "PreflightCheck",

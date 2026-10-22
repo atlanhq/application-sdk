@@ -103,3 +103,71 @@ def test_contract_files_are_read_from_the_apps_generated_dir(tmp_path: Path) -> 
     assert probe.ships_contracts(tmp_path / "app/generated") is False
     (tmp_path / "app/generated/demo.json").write_text("{}")
     assert probe.ships_contracts(tmp_path / "app/generated") is True
+
+
+_COMPUTING_HANDLER = """
+from application_sdk.handler import DefaultHandler
+
+
+class ComputingHandler(DefaultHandler):
+    async def compute_manifest(self, input):
+        {body}
+
+
+handler = ComputingHandler()
+
+
+def get_asgi_app():
+    from application_sdk.handler.asgi import build_asgi_app
+
+    return build_asgi_app(handler, app_name="demo", app_package=__name__)
+"""
+
+_GENERATED_MANIFEST = (
+    '{"execution_mode": "automation-engine", "dag": {"extract": {"inputs": '
+    '{"task_queue": "atlan-demo-{deployment_name}"}}}}'
+)
+
+
+def _computing_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str
+) -> str:
+    package = f"probe_computing_{abs(hash(body))}"
+    root = tmp_path / package
+    for entrypoint in ("first", "second"):
+        (root / "generated" / entrypoint).mkdir(parents=True)
+        (root / "generated" / entrypoint / "manifest.json").write_text(
+            _GENERATED_MANIFEST
+        )
+    (root / "__init__.py").write_text(
+        textwrap.dedent(_COMPUTING_HANDLER).format(body=body)
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "probe")
+    return package
+
+
+def test_a_computed_manifest_for_every_entry_point_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "return {**input.manifest, 'triggers': {'http': {'enabled': True}}}",
+    )
+    assert _problems(probe.run("demo", package, "handler")) == []
+
+
+def test_a_worker_only_import_in_compute_manifest_fails_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "import application_sdk_no_such_worker_module",
+    )
+    problems = _problems(probe.run("demo", package, "handler"))
+    assert any("entrypoint second" in p and "HTTP 200" in p for p in problems)
+    assert any(
+        "compute_manifest reached a worker-only import" in p for p in problems
+    ), problems
