@@ -1176,7 +1176,11 @@ class TestSingleKeyMode:
                 "agent-name": "test-agent",
                 "key-type": "single-key",
                 "auth-type": "basic",
-                "extra": {"database": "DB_NAME", "compiled_url": "literal-url"},
+                "extra": {
+                    "database": "real_db",
+                    "compiled_url": "literal-url",
+                    "role": "DB_NAME",
+                },
             }
         )
 
@@ -1184,6 +1188,8 @@ class TestSingleKeyMode:
 
         assert resolved["extra"]["database"] == "real_db"
         assert resolved["extra"]["compiled_url"] == "literal-url"
+        assert resolved["extra"]["role"] == "real_db"
+        assert store.get_get_optional_calls() == ["DB_NAME"]
 
     async def test_literal_keys_never_probed(self) -> None:
         """``host``, ``port``, ``aws-region``, etc. must never be sent to
@@ -1735,8 +1741,7 @@ class TestCheckSecretStoreAccess:
         assert r.substituted == 0
         assert r.resolved is not None
         assert r.suggested_action == (
-            "Check that the configured secret keys and secret-path exist in "
-            "the store."
+            "Check that the configured secret keys and secret-path exist in the store."
         )
 
     async def test_fails_when_no_store_configured(self) -> None:

@@ -315,6 +315,10 @@ def _probe_candidates(raw: dict[str, Any]) -> list[str]:
     Collected up-front because the probes run concurrently — a ``seen`` set
     mutated per-probe would race.
     """
+    # These connection settings are literals in single-key mode, not secret
+    # names. Keep this filter local to probing: multi-key bundles may still
+    # substitute these fields under the existing bundle contract.
+    connection_literals = {"extra.compiled_url", "extra.database"}
     candidates: list[str] = []
     seen: set[str] = set()
 
@@ -324,14 +328,15 @@ def _probe_candidates(raw: dict[str, Any]) -> list[str]:
             candidates.append(value)
 
     for key, value in raw.items():
-        if key in _LITERAL_KEYS:
+        if key in _LITERAL_KEYS or key in connection_literals:
             continue
         _add(value)
 
     extra = raw.get("extra")
     if isinstance(extra, dict):
-        for value in extra.values():
-            _add(value)
+        for key, value in extra.items():
+            if f"extra.{key}" not in connection_literals:
+                _add(value)
 
     return candidates
 
