@@ -27,7 +27,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.66b0,<0.67",
     "prometheus-client>=0.20.0,<1.0",
     "fastapi[standard]>=0.143.0,<0.144.0",
-    "pyatlan>=11.3,<12",
+    "pyatlan>=11.5.0,<12",  # floor carries authlib~=1.9.1 (CVE-2026-96760) to consumers
     "httpx>=0.27.0,<0.29.0",
     "httpx-retries>=0.6.0,<0.7.0",
     # Published floor (not just [tool.uv] constraint-dependencies, which only
@@ -520,7 +520,7 @@ default-groups = ["dev", "test"]
 constraint-dependencies = [
     "python-multipart>=0.0.26",  # CVE-2026-24486, CVE-2026-40347
     "protobuf>=6.33.5",          # CVE-2026-0994
-    "authlib>=1.6.11",           # CVE-2026-28802, GHSA-jj8c-mmj3-mmgv (CSRF via cache)
+    "authlib>=1.9.1",            # CVE-2026-96760 (signature bypass), CVE-2026-28802, GHSA-jj8c-mmj3-mmgv
     "black>=26.3.1",             # CVE-2026-32274
     "pyjwt>=2.12.0",             # CVE-2026-32597
     "simpleeval>=1.0.5",         # CVE-2026-32640
