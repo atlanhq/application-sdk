@@ -47,6 +47,11 @@ from __future__ import annotations
 
 import asyncio
 import os
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover — no flock on Windows; the sweep is then a no-op
+    fcntl = None  # type: ignore[assignment]
 import shutil
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
@@ -58,6 +63,8 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from application_sdk._runtime.offload import (
+    _BLOCKING_EXECUTOR,
+    _BLOCKING_EXECUTOR_OVERRIDE,
     drain_offloads,
     run_in_thread,
     tracking_offloads,
@@ -356,6 +363,18 @@ def _materialize_key(ref: FileReference) -> str:
     return f"{ref.store.value}:{ref.storage_path}"
 
 
+def _empty_directories(paths: set[str]) -> set[str]:
+    empty: set[str] = set()
+    for path in paths:
+        try:
+            with os.scandir(path) as it:
+                if next(it, None) is None:
+                    empty.add(path)
+        except OSError:
+            continue
+    return empty
+
+
 async def _replace_refs(
     data: Any,
     store: ObjectStore,
@@ -421,6 +440,7 @@ async def _replace_refs(
     # may hash a multi-GB file, so it must not run per pass (FND-4081).
     _candidates: list[FileReference] = []
     _needs: dict[int, bool] = {}
+    _empty_dirs: set[str] = set()
 
     def _collect(node: Any) -> None:
         if isinstance(node, FileReference):
@@ -461,16 +481,22 @@ async def _replace_refs(
         unique = list({id(ref): ref for ref in _candidates}.values())
         verdicts = await asyncio.gather(*[_check(ref) for ref in unique])
         _needs = {id(ref): needs for ref, needs in zip(unique, verdicts)}
+        if download_dir is not None:
+            probe = {
+                node.local_path
+                for node in _candidates
+                if _needs[id(node)]
+                and node.file_count == 0
+                and node.local_path is not None
+            }
+            if probe:
+                _empty_dirs = await run_in_thread(_empty_directories, probe)
         for node in _candidates:
             if not _needs[id(node)]:
                 continue
             key = _materialize_key(node)
             if key not in _factories:
-                keep_empty_dir = (
-                    node.file_count == 0
-                    and node.local_path is not None
-                    and os.path.isdir(node.local_path)
-                )
+                keep_empty_dir = node.local_path in _empty_dirs
                 if download_dir is not None and not keep_empty_dir:
                     target = _download_target(download_dir, node, len(_factories))
                     _factories[key] = lambda r=node, t=target: (
@@ -628,32 +654,50 @@ async def materialize_file_refs(
     )
 
 
-TASK_INPUTS_DIRNAME = ".sdk-task-inputs"
-STALE_TASK_INPUTS_SECONDS = 24 * 60 * 60
-"""A task download folder older than this is left over from a worker that died
-before its task ended. Longer than any task runs, so a sweep never removes the
-folder of a task still running in another process on the same volume."""
+_LOCK_NAME = ".owner.lock"
 
 _pending_removals: set[asyncio.Future[None]] = set()
+
+
+@dataclass(frozen=True)
+class TaskInputDir:
+    """One task's download folder and the lock that marks its owner alive."""
+
+    path: str
+    lock_fd: int
 
 
 def _task_inputs_root() -> str:
     from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
         TEMPORARY_PATH,
     )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        TASK_INPUTS_DIRNAME,
+    )
 
     return os.path.abspath(os.path.join(TEMPORARY_PATH, TASK_INPUTS_DIRNAME))
 
 
-def task_input_dir() -> str:
-    """A fresh download folder for one task's inputs (FND-4310). Not created here.
+def _create_owned_dir(path: str) -> int:
+    os.makedirs(path)
+    fd = os.open(os.path.join(path, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    return fd
+
+
+async def open_task_input_dir() -> TaskInputDir:
+    """Create one task's download folder and hold its owner lock (FND-4310).
 
     Lives under ``TEMPORARY_PATH``, the SDK's working volume, so downloads land
     where they always did. ``materialize_file_refs(..., download_dir=...)``
     downloads into it; :func:`remove_task_input_dir` deletes it when the task
-    ends.
+    ends. The exclusive ``flock`` on its lock file lasts as long as the task,
+    so :func:`sweep_dead_task_inputs` can tell a live folder from a dead one.
     """
-    return os.path.join(_task_inputs_root(), uuid.uuid4().hex)
+    path = os.path.join(_task_inputs_root(), uuid.uuid4().hex)
+    fd = await run_in_thread(_create_owned_dir, path)
+    return TaskInputDir(path=path, lock_fd=fd)
 
 
 def _download_target(download_dir: str, ref: FileReference, slot: int) -> str:
@@ -686,20 +730,37 @@ def _remove_tree(path: str) -> None:
         logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
 
 
-def remove_task_input_dir(path: str) -> None:
+def _remove_owned(path: str, lock_fd: int) -> None:
+    _remove_tree(path)
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+
+
+def remove_task_input_dir(owned: TaskInputDir) -> None:
     """Start deleting a task's download folder in a worker thread. Never raises.
 
-    Not awaited, so the wrapper's ``finally`` has no cancellation point here
-    and never replaces the error the task is ending with.
+    Runs on the SDK's blocking pool (never the loop's default executor, which
+    Temporal uses) and is not awaited, so the wrapper's ``finally`` has no
+    cancellation point here and never replaces the error the task ends with.
+    The owner lock is released after the folder is gone.
     """
-    if not os.path.lexists(path):
+    try:
+        executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
+        future = asyncio.get_running_loop().run_in_executor(
+            executor, _remove_owned, owned.path, owned.lock_fd
+        )
+    except Exception:
+        logger.warning("Could not start deleting a task's downloaded inputs", exc_info=True)
         return
-    future = asyncio.get_running_loop().run_in_executor(None, _remove_tree, path)
     _pending_removals.add(future)
     future.add_done_callback(_pending_removals.discard)
 
 
-def _sweep_stale_task_inputs(now: float) -> None:
+def _sweep_dead_task_inputs() -> None:
+    if fcntl is None:
+        return
     root = _task_inputs_root()
     try:
         entries = list(os.scandir(root))
@@ -710,21 +771,25 @@ def _sweep_stale_task_inputs(now: float) -> None:
         return
     for entry in entries:
         try:
-            if now - entry.stat(follow_symlinks=False).st_mtime > (
-                STALE_TASK_INPUTS_SECONDS
-            ):
-                _remove_tree(entry.path)
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            fd = os.open(os.path.join(entry.path, _LOCK_NAME), os.O_RDWR)
         except OSError:
-            logger.warning("Could not delete leftover task downloads", exc_info=True)
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            continue
+        _remove_owned(entry.path, fd)
 
 
-async def sweep_stale_task_inputs() -> None:
-    """Delete task download folders a dead worker left behind. Never raises.
+async def sweep_dead_task_inputs() -> None:
+    """Delete task download folders whose owner is dead. Never raises.
 
-    Run at worker start: a worker killed mid-task (OOM, SIGKILL) never reaches
-    its ``finally``, and its folder would stay on a volume that outlives the
-    process.
+    A worker killed mid-task (OOM, SIGKILL) never reaches its ``finally``; the
+    kernel drops its ``flock`` when the process dies. A folder whose lock this
+    sweep can take has no live owner in any process on the node, so it goes;
+    a folder whose lock is held belongs to a running task and is skipped.
     """
-    import time  # noqa: PLC0415 — only needed here
-
-    await run_in_thread(_sweep_stale_task_inputs, time.time())
+    await run_in_thread(_sweep_dead_task_inputs)

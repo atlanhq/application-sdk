@@ -384,7 +384,7 @@ class AppWorker:
 
     async def __aenter__(self) -> Worker:
         await _emit_worker_start_event(**self._start_event_params)
-        await _sweep_leftover_task_inputs()
+        _start_dead_task_inputs_sweep()
         # Metrics is best-effort: never block the worker on a metrics failure.
         try:
             await self._start_metrics_push()
@@ -413,7 +413,7 @@ class AppWorker:
     async def run(self) -> None:
         """For callers that use worker.run() directly."""
         await _emit_worker_start_event(**self._start_event_params)
-        await _sweep_leftover_task_inputs()
+        _start_dead_task_inputs_sweep()
         # Metrics is best-effort: never block the worker on a metrics failure.
         try:
             await self._start_metrics_push()
@@ -429,13 +429,18 @@ class AppWorker:
             await self._stop_metrics_push()
 
 
-async def _sweep_leftover_task_inputs() -> None:
-    """Delete task download folders that a killed worker left (FND-4310)."""
+_background_sweeps: set[asyncio.Task[None]] = set()
+
+
+def _start_dead_task_inputs_sweep() -> None:
+    """Delete, in the background, task download folders whose worker died (FND-4310)."""
     from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage imports execution
-        sweep_stale_task_inputs,
+        sweep_dead_task_inputs,
     )
 
-    await sweep_stale_task_inputs()
+    sweep = asyncio.ensure_future(sweep_dead_task_inputs())
+    _background_sweeps.add(sweep)
+    sweep.add_done_callback(_background_sweeps.discard)
 
 
 async def _emit_worker_start_event(

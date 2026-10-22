@@ -133,6 +133,12 @@ class BoundStore:
         return self._put_attributes
 
 
+TASK_INPUTS_DIRNAME = ".sdk-task-inputs"
+"""Folder under ``TEMPORARY_PATH`` holding each task's downloaded inputs (FND-4310)."""
+
+_warned_task_input_keys: set[str] = set()
+
+
 def normalize_key(key: str) -> str:
     """Normalise a local or object-store path into a clean object-store key.
 
@@ -174,10 +180,15 @@ def normalize_key(key: str) -> str:
         normalized = key.strip("/")
 
     normalized = normalized.replace("\\", "/").replace(os.sep, "/").strip("/")
-    if normalized.startswith(".sdk-task-inputs/"):
+    if (
+        normalized.startswith(TASK_INPUTS_DIRNAME + "/")
+        and normalized not in _warned_task_input_keys
+    ):
+        _warned_task_input_keys.add(normalized)
         logger.warning(
-            "Store key derived from a task's downloaded input path; pass the "
-            "FileReference as ref= instead of its local_path"
+            "Store key %s derived from a task's downloaded input path; pass the "
+            "FileReference as ref= instead of its local_path",
+            normalized,
         )
     # os.path.relpath resolves the staging root itself to "."; treat as store root.
     return "" if normalized == "." else normalized

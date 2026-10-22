@@ -15,8 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
-import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated, Any
 from unittest.mock import patch
@@ -36,7 +35,7 @@ from application_sdk.execution._temporal.activities import (
 )
 from application_sdk.infrastructure import context as infra_context
 from application_sdk.infrastructure.context import InfrastructureContext
-from application_sdk.storage import file_ref_sync
+from application_sdk.storage import file_ref_sync, ops
 from application_sdk.storage.batch import list_keys
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.reference import fetch, persist_file_reference
@@ -140,7 +139,7 @@ def _context(task_name: str, workflow_id: str = "wf-fnd4310") -> TaskContext:
 
 
 @pytest.fixture
-def store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Any]:
+async def store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> AsyncIterator[Any]:
     memory = create_memory_store()
     monkeypatch.setattr(
         infra_context, "_infrastructure", InfrastructureContext(storage=memory)
@@ -151,11 +150,9 @@ def store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Any]:
     _failures.clear()
     with _app_state_lock:
         _app_state.clear()
+    ops._warned_task_input_keys.clear()
     yield memory
-    for _ in range(200):
-        if not _task_folders(tmp_path):
-            break
-        time.sleep(0.01)
+    await asyncio.gather(*list(file_ref_sync._pending_removals))
     assert _task_folders(tmp_path) == []
     with _app_state_lock:
         _app_state.clear()
@@ -299,6 +296,22 @@ class TestDownloadedInputsAreDeleted:
             assert not any(
                 other != path and other.startswith(path + "/") for other in seen
             )
+
+    async def test_non_empty_directory_is_not_reused_for_an_empty_prefix_ref(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        tree = await _remote_dir_ref(store, tmp_path)
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        (shared / "other.json").write_bytes(_PAYLOAD)
+        ref = tree.model_copy(update={"local_path": str(shared), "file_count": 0})
+
+        out = await file_ref_sync.materialize_file_refs(
+            store, ref, download_dir=str(tmp_path / "dl")
+        )
+
+        assert out.local_path != str(shared)
+        assert sorted(p.name for p in shared.iterdir()) == ["other.json"]
 
     async def test_empty_prefix_ref_keeps_its_existing_directory(
         self, store: Any, tmp_path: Path
@@ -467,22 +480,30 @@ class TestFrameworkTasksStillWork:
 
 
 class TestLeftoversAndWarnings:
-    async def test_worker_start_sweeps_only_stale_task_folders(
+    async def test_sweep_deletes_only_folders_whose_owner_is_dead(
         self, tmp_path: Path, store: Any
     ) -> None:
         root = tmp_path / "work" / ".sdk-task-inputs"
-        stale, fresh = root / "stale", root / "fresh"
-        (stale / "0").mkdir(parents=True)
-        (stale / "0" / "x.json").write_bytes(_PAYLOAD)
-        fresh.mkdir()
-        old = time.time() - file_ref_sync.STALE_TASK_INPUTS_SECONDS - 60
-        os.utime(stale, (old, old))
+        live = await file_ref_sync.open_task_input_dir()
+        (Path(live.path) / "0").mkdir()
+        (Path(live.path) / "0" / "x.json").write_bytes(_PAYLOAD)
+        dead = root / "dead"
+        (dead / "0").mkdir(parents=True)
+        (dead / file_ref_sync._LOCK_NAME).write_bytes(b"")
+        stray = root / "stray-file"
+        stray.write_bytes(_PAYLOAD)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (root / "link").symlink_to(elsewhere)
 
-        await file_ref_sync.sweep_stale_task_inputs()
+        await file_ref_sync.sweep_dead_task_inputs()
 
-        assert not stale.exists()
-        assert fresh.exists()
-        fresh.rmdir()
+        assert not dead.exists()
+        assert (Path(live.path) / "0" / "x.json").read_bytes() == _PAYLOAD
+        assert stray.exists() and elsewhere.exists()
+        stray.unlink()
+        (root / "link").unlink()
+        file_ref_sync.remove_task_input_dir(live)
 
     async def test_key_from_a_task_download_path_warns(
         self, tmp_path: Path, store: Any
@@ -492,9 +513,66 @@ class TestLeftoversAndWarnings:
         path = str(tmp_path / "work" / ".sdk-task-inputs" / "id" / "0" / "k.json")
         with patch.object(ops.logger, "warning") as warning:
             key = ops.normalize_key(path)
+            ops.normalize_key(path)
 
         assert key.startswith(".sdk-task-inputs/")
         warning.assert_called_once()
+        assert key in warning.call_args.args
+
+    async def test_removal_runs_on_the_sdk_blocking_pool(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        import concurrent.futures
+
+        from application_sdk._runtime import offload
+
+        owned = await file_ref_sync.open_task_input_dir()
+        used: list[str] = []
+
+        class _Recording(concurrent.futures.ThreadPoolExecutor):
+            def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
+                used.append(getattr(fn, "__name__", ""))
+                return super().submit(fn, *args, **kwargs)
+
+        pool = _Recording(max_workers=1)
+        token = offload._BLOCKING_EXECUTOR_OVERRIDE.set(pool)
+        try:
+            file_ref_sync.remove_task_input_dir(owned)
+            await asyncio.gather(*list(file_ref_sync._pending_removals))
+        finally:
+            offload._BLOCKING_EXECUTOR_OVERRIDE.reset(token)
+            pool.shutdown()
+
+        assert used == ["_remove_owned"]
+        assert not Path(owned.path).exists()
+
+    async def test_ordinary_key_does_not_warn(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        with patch.object(ops.logger, "warning") as warning:
+            ops.normalize_key(str(tmp_path / "work" / "artifacts" / "k.json"))
+            ops.normalize_key("artifacts/apps/x/k.json")
+
+        warning.assert_not_called()
+
+    async def test_upload_with_ref_does_not_warn(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        ref = await _remote_file_ref(store, tmp_path)
+        local = tmp_path / "work" / ".sdk-task-inputs" / "id" / "0" / "out.json"
+        local.parent.mkdir(parents=True)
+        local.write_bytes(_PAYLOAD)
+        _consume_activity()
+
+        with patch.object(ops.logger, "warning") as warning:
+            await _activity("upload")(
+                _context("upload"), UploadInput(local_path=str(local), ref=ref)
+            )
+
+        warning.assert_not_called()
+        shutil.rmtree(tmp_path / "work" / ".sdk-task-inputs" / "id")
 
 
 class TestFailedTransfersLeaveNothing:

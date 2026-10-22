@@ -326,8 +326,9 @@ the same worker) is used where it is and never deleted; a ref with
 alone. Do not hand a materialised input's `local_path` on as a plain string:
 pass the `FileReference` itself, and pass `ref=` to `UploadInput` when you
 upload it, since a key derived from the local path no longer matches the
-store key. A worker that is killed mid-task leaves its folder behind; the next
-worker to start on that volume deletes task folders older than a day.
+store key. Each task holds an exclusive lock on its folder for as long as it runs; a
+worker that is killed mid-task loses it, and the next worker to start on that
+node deletes every folder whose lock is free.
 
 #### Directory FileReferences
 

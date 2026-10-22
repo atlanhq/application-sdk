@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         NoopHeartbeatController,
         TemporalHeartbeatController,
     )
+    from application_sdk.storage.file_ref_sync import TaskInputDir
 
 logger = get_logger(__name__)
 
@@ -477,7 +478,7 @@ def create_activity_from_task(
                 max_no_progress_seconds=resolved_no_progress_seconds,
             )
         ) as tracker:
-            input_dir: str | None = None
+            input_dir: TaskInputDir | None = None
             try:
                 # Resolved here rather than on the workflow side so the
                 # environment consulted is the one the watchdog runs in — which
@@ -569,8 +570,8 @@ def create_activity_from_task(
                     has_refs_to_materialize,
                     has_refs_to_persist,
                     materialize_file_refs,
+                    open_task_input_dir,
                     persist_file_refs,
-                    task_input_dir,
                 )
 
                 method_name = getattr(
@@ -596,14 +597,14 @@ def create_activity_from_task(
 
                 # Materialise any durable FileReferences in the input before the task runs.
                 if store is not None and has_refs_to_materialize(input_data):
-                    input_dir = task_input_dir()
+                    input_dir = await open_task_input_dir()
                     input_data = await materialize_file_refs(
                         store,
                         input_data,
                         upstream_store=(
                             infra.upstream_storage if infra is not None else None
                         ),
-                        download_dir=input_dir,
+                        download_dir=input_dir.path,
                     )
 
                 # Consumer side, after materialise: the bytes this task is about to
