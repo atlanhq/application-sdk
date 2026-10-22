@@ -324,14 +324,17 @@ def _probe_candidates(raw: dict[str, Any]) -> list[str]:
             candidates.append(value)
 
     for key, value in raw.items():
-        if key in _LITERAL_KEYS:
+        # The compiled connection URL is literal configuration, not a secret
+        # reference. Do not send it to a store that may reject URL-shaped keys.
+        if key in _LITERAL_KEYS or key == "extra.compiled_url":
             continue
         _add(value)
 
     extra = raw.get("extra")
     if isinstance(extra, dict):
-        for value in extra.values():
-            _add(value)
+        for key, value in extra.items():
+            if key != "compiled_url":
+                _add(value)
 
     return candidates
 
