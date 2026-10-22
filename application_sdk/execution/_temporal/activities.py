@@ -567,7 +567,6 @@ def create_activity_from_task(
                     )
 
                 from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                    has_refs_to_materialize,
                     has_refs_to_persist,
                     materialize_file_refs,
                     needs_task_input_dir,
@@ -597,16 +596,15 @@ def create_activity_from_task(
                 )
 
                 # Materialise any durable FileReferences in the input before the task runs.
-                if store is not None and has_refs_to_materialize(input_data):
-                    if needs_task_input_dir(input_data):
-                        input_dir = await open_task_input_dir()
+                if store is not None and needs_task_input_dir(input_data):
+                    input_dir = await open_task_input_dir()
                     input_data = await materialize_file_refs(
                         store,
                         input_data,
                         upstream_store=(
                             infra.upstream_storage if infra is not None else None
                         ),
-                        download_dir=input_dir.path if input_dir else None,
+                        download_dir=input_dir.path,
                     )
 
                 # Consumer side, after materialise: the bytes this task is about to

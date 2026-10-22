@@ -52,19 +52,19 @@ try:
     import fcntl
 except ImportError:  # pragma: no cover — no flock on Windows; the sweep is then a no-op
     fcntl = None  # type: ignore[assignment]
+import queue
 import shutil
+import threading
 import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
 from application_sdk._runtime.offload import (
-    _BLOCKING_EXECUTOR,
-    _BLOCKING_EXECUTOR_OVERRIDE,
     drain_offloads,
     run_in_thread,
     tracking_offloads,
@@ -363,6 +363,36 @@ def _materialize_key(ref: FileReference) -> str:
     return f"{ref.store.value}:{ref.storage_path}"
 
 
+def _current_directories(dirs: dict[str, int]) -> set[str]:
+    """The directories already complete on this worker, used where they are.
+
+    Current means: the directory holds exactly the ref's ``file_count`` files
+    (the set a directory upload sends) and every one has a marker that can be
+    trusted on stat. That is what a producer's own directory looks like after
+    it was persisted on this worker.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        UnsafeUploadPathError,
+    )
+    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _list_upload_files,
+    )
+
+    current: set[str] = set()
+    for path, file_count in dirs.items():
+        try:
+            if not os.path.isdir(path) or os.path.islink(path):
+                continue
+            files = _list_upload_files(Path(path))
+            if len(files) == file_count and all(
+                trusted_digest(str(f)) is not None for f in files
+            ):
+                current.add(path)
+        except (OSError, UnsafeUploadPathError):
+            logger.debug("Directory not reusable in place: %s", path, exc_info=True)
+    return current
+
+
 def _empty_directories(paths: set[str]) -> set[str]:
     empty: set[str] = set()
     for path in paths:
@@ -482,6 +512,18 @@ async def _replace_refs(
         verdicts = await asyncio.gather(*[_check(ref) for ref in unique])
         _needs = {id(ref): needs for ref, needs in zip(unique, verdicts)}
         if download_dir is not None:
+            dirs = {
+                node.local_path: node.file_count
+                for node in _candidates
+                if _needs[id(node)]
+                and node.file_count > 0
+                and node.local_path is not None
+            }
+            if dirs:
+                current = await run_in_thread(_current_directories, dirs)
+                for node in _candidates:
+                    if node.local_path in current:
+                        _needs[id(node)] = False
             probe = {
                 node.local_path
                 for node in _candidates
@@ -659,6 +701,12 @@ _CREATING_SUFFIX = ".creating"
 
 _pending_removals: set[asyncio.Future[None]] = set()
 _held_lock_fds: set[int] = set()
+_held_lock_fds_guard = threading.Lock()
+_removal_queue: queue.SimpleQueue[
+    tuple[str, int, asyncio.AbstractEventLoop, asyncio.Future[None]]
+] = queue.SimpleQueue()
+_removal_thread: threading.Thread | None = None
+_removal_thread_guard = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -681,7 +729,8 @@ def _task_inputs_root() -> str:
 
 
 def _close_lock(fd: int) -> None:
-    _held_lock_fds.discard(fd)
+    with _held_lock_fds_guard:
+        _held_lock_fds.discard(fd)
     try:
         os.close(fd)
     except OSError:
@@ -689,12 +738,21 @@ def _close_lock(fd: int) -> None:
 
 
 def _close_held_locks_in_child() -> None:
+    _held_lock_fds_guard.release()
     for fd in list(_held_lock_fds):
-        _close_lock(fd)
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    _held_lock_fds.clear()
 
 
 if hasattr(os, "register_at_fork"):
-    os.register_at_fork(after_in_child=_close_held_locks_in_child)
+    os.register_at_fork(
+        before=_held_lock_fds_guard.acquire,
+        after_in_parent=_held_lock_fds_guard.release,
+        after_in_child=_close_held_locks_in_child,
+    )
 
 
 def _create_owned_dir(path: str) -> int:
@@ -708,16 +766,21 @@ def _create_owned_dir(path: str) -> int:
     parent, name = os.path.split(path)
     staging = os.path.join(parent, f".{name}{_CREATING_SUFFIX}")
     os.makedirs(staging)
-    fd = os.open(os.path.join(staging, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600)
+    fd: int | None = None
     try:
+        with _held_lock_fds_guard:
+            fd = os.open(
+                os.path.join(staging, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600
+            )
+            _held_lock_fds.add(fd)
         if fcntl is not None:
             fcntl.flock(fd, fcntl.LOCK_EX)
         os.rename(staging, path)
     except BaseException:
-        os.close(fd)
+        if fd is not None:
+            _close_lock(fd)
         _remove_tree(staging)
         raise
-    _held_lock_fds.add(fd)
     return fd
 
 
@@ -768,16 +831,23 @@ def _download_target(download_dir: str, ref: FileReference, slot: int) -> str:
     return os.path.join(base, uuid.uuid4().hex + PurePosixPath(key).suffix)
 
 
-def _remove_tree(path: str) -> None:
+def _ignore_missing(func: Any, path: str, exc_info: Any) -> None:
+    if not isinstance(exc_info[1], FileNotFoundError):
+        raise exc_info[1]
+
+
+def _remove_tree(path: str) -> bool:
     try:
-        shutil.rmtree(path)
+        shutil.rmtree(path, onerror=_ignore_missing)
     except FileNotFoundError:
         pass
     except OSError:
         logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
+        return False
+    return True
 
 
-def _remove_owned(path: str, lock_fd: int | None) -> None:
+def _remove_owned(path: str, lock_fd: int | None) -> bool:
     """Delete *path*'s content first and its lock file last, then release the lock.
 
     If the content cannot all be deleted, the lock file stays: once the lock
@@ -787,17 +857,17 @@ def _remove_owned(path: str, lock_fd: int | None) -> None:
         try:
             entries = list(os.scandir(path))
         except FileNotFoundError:
-            return
+            return True
         except OSError:
             logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
-            return
+            return False
         complete = True
         for entry in entries:
             if entry.name == _LOCK_NAME:
                 continue
             try:
                 if entry.is_dir(follow_symlinks=False):
-                    shutil.rmtree(entry.path)
+                    shutil.rmtree(entry.path, onerror=_ignore_missing)
                 else:
                     os.remove(entry.path)
             except FileNotFoundError:
@@ -808,42 +878,82 @@ def _remove_owned(path: str, lock_fd: int | None) -> None:
                     "Could not delete a task's downloaded inputs", exc_info=True
                 )
         if complete:
-            _remove_tree(path)
+            complete = _remove_tree(path)
+        return complete
     finally:
         if lock_fd is not None:
             _close_lock(lock_fd)
 
 
-def remove_task_input_dir(owned: TaskInputDir) -> None:
-    """Start deleting a task's download folder in a worker thread. Never raises.
+def _removal_worker() -> None:
+    while True:
+        path, lock_fd, loop, done = _removal_queue.get()
+        try:
+            if not _remove_owned(path, lock_fd):
+                _sweep_dead_task_inputs()
+        except Exception:
+            logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
+        finally:
+            try:
+                loop.call_soon_threadsafe(_finish_removal, done)
+            except RuntimeError:
+                pass
 
-    Runs on the SDK's blocking pool (never the loop's default executor, which
-    Temporal uses) and is not awaited, so the wrapper's ``finally`` has no
+
+def _finish_removal(done: asyncio.Future[None]) -> None:
+    if not done.done():
+        done.set_result(None)
+
+
+def _start_removal_thread() -> None:
+    global _removal_thread
+    with _removal_thread_guard:
+        if _removal_thread is None or not _removal_thread.is_alive():
+            _removal_thread = threading.Thread(
+                target=_removal_worker, name="sdk-task-input-removal", daemon=True
+            )
+            _removal_thread.start()
+
+
+def remove_task_input_dir(owned: TaskInputDir) -> None:
+    """Queue a task's download folder for deletion. Never raises.
+
+    One daemon thread deletes queued folders: never the loop's default
+    executor (Temporal uses it) nor the SDK's blocking pool (downloads need
+    it, and its threads are joined at exit, so a long delete would hold a
+    stopping pod up). A delete cut short by process exit is finished by the
+    next worker's sweep. Not awaited, so the wrapper's ``finally`` has no
     cancellation point here and never replaces the error the task ends with.
-    The owner lock is released after the folder is gone. If the removal cannot
-    be started, the lock is released at once, so the next sweep deletes it.
+    The owner lock is released after the folder is gone; if the folder cannot
+    all be deleted, a sweep retries at once. If the delete cannot be queued,
+    the lock is released, so the next sweep deletes the folder.
     """
     try:
-        executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
-        future = asyncio.get_running_loop().run_in_executor(
-            executor, _remove_owned, owned.path, owned.lock_fd
-        )
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
+        _start_removal_thread()
+        _removal_queue.put((owned.path, owned.lock_fd, loop, done))
     except Exception:
         _close_lock(owned.lock_fd)
         logger.warning("Could not start deleting a task's downloaded inputs", exc_info=True)
         return
-    _pending_removals.add(future)
-    future.add_done_callback(_pending_removals.discard)
+    _pending_removals.add(done)
+    done.add_done_callback(_pending_removals.discard)
 
 
 async def wait_for_task_input_removals(timeout: float) -> None:
-    """Wait up to *timeout* seconds for started folder deletions. Never raises.
+    """Wait up to *timeout* seconds for queued folder deletions. Never raises.
 
     For worker shutdown: an unfinished deletion is logged and left to the next
     worker's sweep.
     """
     pending = list(_pending_removals)
-    if not pending:
+    if not pending or timeout <= 0:
+        if pending:
+            logger.warning(
+                "Shutdown left %d task download folders to the next sweep",
+                len(pending),
+            )
         return
     _, unfinished = await asyncio.wait(pending, timeout=timeout)
     if unfinished:

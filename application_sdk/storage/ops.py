@@ -137,6 +137,7 @@ TASK_INPUTS_DIRNAME = ".sdk-task-inputs"
 """Folder under ``TEMPORARY_PATH`` holding each task's downloaded inputs (FND-4310)."""
 
 _warned_task_input_keys: set[str] = set()
+"""Holds the first such key once warned: the warning is logged once per process."""
 
 
 def normalize_key(key: str) -> str:
@@ -181,9 +182,8 @@ def normalize_key(key: str) -> str:
 
     normalized = normalized.replace("\\", "/").replace(os.sep, "/").strip("/")
     if normalized.startswith(TASK_INPUTS_DIRNAME + "/"):
-        object_key = "/".join(normalized.split("/")[3:])
-        if object_key not in _warned_task_input_keys:
-            _warned_task_input_keys.add(object_key)
+        if not _warned_task_input_keys:
+            _warned_task_input_keys.add(normalized)
             logger.warning(
                 "Store key %s derived from a task's downloaded input path; pass "
                 "the FileReference as ref= instead of its local_path",

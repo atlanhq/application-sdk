@@ -251,6 +251,38 @@ class TestDownloadedInputsAreDeleted:
         assert out.path != _failures[0]
         assert await _gone(out.path)
 
+    async def test_producers_current_directory_is_used_in_place(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        producer = tmp_path / "producer" / "tree"
+        (producer / "a").mkdir(parents=True)
+        (producer / "a" / "one.json").write_bytes(_PAYLOAD)
+        (producer / "two.json").write_bytes(_PAYLOAD)
+        ref = await persist_file_reference(store, FileReference.from_local(producer))
+        _consume_activity()
+
+        out = await _activity("consume")(_context("consume"), _RefIn(ref=ref))
+
+        assert out.path == str(producer)
+        assert out.seen == (_PAYLOAD * 2).decode()
+        assert (producer / "two.json").read_bytes() == _PAYLOAD
+
+    async def test_changed_producer_directory_is_downloaded_instead(
+        self, store: Any, tmp_path: Path
+    ) -> None:
+        producer = tmp_path / "producer" / "tree"
+        producer.mkdir(parents=True)
+        (producer / "one.json").write_bytes(_PAYLOAD)
+        ref = await persist_file_reference(store, FileReference.from_local(producer))
+        (producer / "extra.json").write_bytes(_PAYLOAD)
+        _consume_activity()
+
+        out = await _activity("consume")(_context("consume"), _RefIn(ref=ref))
+
+        assert out.path != str(producer)
+        assert out.seen == _PAYLOAD.decode()
+        assert (producer / "extra.json").exists()
+
     async def test_storage_path_cannot_leave_the_task_folder(self) -> None:
         root = "/work/.sdk-task-inputs/abc"
         for key in ("../../escape.json", "/../../etc/passwd", "", "."):
@@ -519,31 +551,25 @@ class TestLeftoversAndWarnings:
         warning.assert_called_once()
         assert key in warning.call_args.args
 
-    async def test_removal_runs_on_the_sdk_blocking_pool(
+    async def test_removal_runs_on_its_own_daemon_thread(
         self, tmp_path: Path, store: Any
     ) -> None:
-        import concurrent.futures
-
-        from application_sdk._runtime import offload
+        import threading
 
         owned = await file_ref_sync.open_task_input_dir()
-        used: list[str] = []
+        threads: list[tuple[str, bool]] = []
+        real_remove = file_ref_sync._remove_owned
 
-        class _Recording(concurrent.futures.ThreadPoolExecutor):
-            def submit(self, fn: Any, /, *args: Any, **kwargs: Any) -> Any:
-                used.append(getattr(fn, "__name__", ""))
-                return super().submit(fn, *args, **kwargs)
+        def recording_remove(path: str, fd: int | None) -> bool:
+            current = threading.current_thread()
+            threads.append((current.name, current.daemon))
+            return real_remove(path, fd)
 
-        pool = _Recording(max_workers=1)
-        token = offload._BLOCKING_EXECUTOR_OVERRIDE.set(pool)
-        try:
+        with patch.object(file_ref_sync, "_remove_owned", recording_remove):
             file_ref_sync.remove_task_input_dir(owned)
             await asyncio.gather(*list(file_ref_sync._pending_removals))
-        finally:
-            offload._BLOCKING_EXECUTOR_OVERRIDE.reset(token)
-            pool.shutdown()
 
-        assert used == ["_remove_owned"]
+        assert threads == [("sdk-task-input-removal", True)]
         assert not Path(owned.path).exists()
 
     async def test_same_object_in_two_task_folders_warns_once(
@@ -553,6 +579,16 @@ class TestLeftoversAndWarnings:
         with patch.object(ops.logger, "warning") as warning:
             ops.normalize_key(str(root / "aaa" / "0" / "run" / "k.json"))
             ops.normalize_key(str(root / "bbb" / "2" / "run" / "k.json"))
+
+        warning.assert_called_once()
+
+    async def test_different_keys_warn_once_per_process(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        root = tmp_path / "work" / ".sdk-task-inputs"
+        with patch.object(ops.logger, "warning") as warning:
+            ops.normalize_key(str(root / "aaa" / "0" / "one.json"))
+            ops.normalize_key(str(root / "bbb" / "0" / "two.json"))
 
         warning.assert_called_once()
 
@@ -675,18 +711,68 @@ class TestFolderLifecycle:
         with pytest.raises(OSError):
             os.fstat(created[0])
 
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
     async def test_forked_child_closes_inherited_locks(
         self, tmp_path: Path, store: Any
     ) -> None:
         owned = await file_ref_sync.open_task_input_dir()
-        assert owned.lock_fd in file_ref_sync._held_lock_fds
 
-        file_ref_sync._close_held_locks_in_child()
+        pid = os.fork()
+        if pid == 0:
+            try:
+                os.fstat(owned.lock_fd)
+            except OSError:
+                os._exit(0)
+            os._exit(1)
+        _, status = os.waitpid(pid, 0)
 
-        assert owned.lock_fd not in file_ref_sync._held_lock_fds
-        with pytest.raises(OSError):
-            os.fstat(owned.lock_fd)
-        await file_ref_sync.sweep_dead_task_inputs()
+        assert os.waitstatus_to_exitcode(status) == 0
+        os.fstat(owned.lock_fd)
+        file_ref_sync.remove_task_input_dir(owned)
+
+    async def test_failed_lock_file_leaves_no_creating_folder(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        real_open = os.open
+
+        def no_space(path: str, *args: Any, **kwargs: Any) -> int:
+            if str(path).endswith(file_ref_sync._LOCK_NAME):
+                raise OSError(28, "No space left on device")
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(file_ref_sync.os, "open", no_space):
+            with pytest.raises(OSError):
+                await file_ref_sync.open_task_input_dir()
+
+        root = tmp_path / "work" / ".sdk-task-inputs"
+        assert not root.exists() or list(root.iterdir()) == []
+
+    async def test_unfinished_delete_is_swept_at_once(
+        self, tmp_path: Path, store: Any
+    ) -> None:
+        owned = await file_ref_sync.open_task_input_dir()
+        (Path(owned.path) / "0").mkdir()
+
+        def gives_up(path: str, fd: int | None) -> bool:
+            if fd is not None:
+                file_ref_sync._close_lock(fd)
+            return False
+
+        real_remove = file_ref_sync._remove_owned
+        calls: list[int | None] = []
+
+        def first_gives_up(path: str, fd: int | None) -> bool:
+            calls.append(fd)
+            if len(calls) == 1:
+                return gives_up(path, fd)
+            return real_remove(path, fd)
+
+        with patch.object(file_ref_sync, "_remove_owned", first_gives_up):
+            file_ref_sync.remove_task_input_dir(owned)
+            await asyncio.gather(*list(file_ref_sync._pending_removals))
+
+        assert len(calls) == 2
+        assert not Path(owned.path).exists()
 
     async def test_no_folder_for_inputs_that_are_never_downloaded(
         self, tmp_path: Path, store: Any
@@ -718,6 +804,71 @@ class TestFolderLifecycle:
             await asyncio.gather(*list(file_ref_sync._pending_removals))
 
         warning.assert_called_once()
+
+
+class TestWorkerWiring:
+    async def test_worker_start_sweeps_and_exit_stops_cleanup(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.execution._temporal import worker as worker_module
+
+        fake = MagicMock()
+        fake._start_event_params = {}
+        fake._shutdown_drain_delay_seconds = 0
+        fake._start_metrics_push = AsyncMock()
+        fake._stop_metrics_push = AsyncMock()
+        fake._drain_sizing = AsyncMock()
+        fake._worker.__aenter__ = AsyncMock()
+        fake._worker.__aexit__ = AsyncMock()
+        fake._worker.run = AsyncMock()
+
+        with (
+            patch.object(worker_module, "_emit_worker_start_event", AsyncMock()),
+            patch.object(worker_module, "_start_dead_task_inputs_sweep") as sweep,
+            patch.object(
+                worker_module, "_stop_task_input_cleanup", AsyncMock()
+            ) as stop,
+        ):
+            await worker_module.AppWorker.__aenter__(fake)
+            await worker_module.AppWorker.__aexit__(fake, None)
+            await worker_module.AppWorker.run(fake)
+
+        assert sweep.call_count == 2
+        assert stop.await_count == 2
+
+    async def test_shutdown_uses_one_deadline(self, tmp_path: Path, store: Any) -> None:
+        import threading
+
+        from application_sdk.execution._temporal import worker as worker_module
+
+        gate = threading.Event()
+        owned = await file_ref_sync.open_task_input_dir()
+        real_remove = file_ref_sync._remove_owned
+
+        def slow_remove(path: str, fd: int | None) -> bool:
+            gate.wait(10)
+            return real_remove(path, fd)
+
+        async def slow_sweep() -> None:
+            await asyncio.sleep(10)
+
+        sweep = asyncio.ensure_future(slow_sweep())
+        worker_module._background_sweeps.add(sweep)
+        loop = asyncio.get_running_loop()
+        with (
+            patch.object(file_ref_sync, "_remove_owned", slow_remove),
+            patch.object(worker_module, "_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS", 0.2),
+        ):
+            file_ref_sync.remove_task_input_dir(owned)
+            started = loop.time()
+            await worker_module._stop_task_input_cleanup()
+            elapsed = loop.time() - started
+            gate.set()
+            await asyncio.gather(*list(file_ref_sync._pending_removals))
+        sweep.cancel()
+        worker_module._background_sweeps.discard(sweep)
+
+        assert elapsed < 0.35
 
 
 class TestFailedTransfersLeaveNothing:

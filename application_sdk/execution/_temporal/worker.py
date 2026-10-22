@@ -457,14 +457,16 @@ async def _stop_task_input_cleanup() -> None:
     )
 
     try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS
         if _background_sweeps:
             _, unfinished = await asyncio.wait(
                 list(_background_sweeps),
-                timeout=_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS,
+                timeout=max(deadline - loop.time(), 0),
             )
             if unfinished:
                 logger.warning("Shutdown left the task download sweep unfinished")
-        await wait_for_task_input_removals(_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS)
+        await wait_for_task_input_removals(max(deadline - loop.time(), 0))
     except Exception:
         logger.warning("Task download cleanup at shutdown failed", exc_info=True)
 
