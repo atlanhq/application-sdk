@@ -112,22 +112,23 @@ mid-run with a serialization error nothing in their configuration explains.
   and read the result rather than inferring it. Removing a recorded field does fire B005
   at BLOCK tier; retiring one is the sanctioned route, but read it precisely. B005 skips
   a sunset field only when it is ABSENT from source (live is None and status ==
-  'sunset'), so retirement is: mark deprecated=True with
-  json_schema_extra={'x-lifecycle': 'sunset'}, regenerate, THEN remove the field. A
-  sunset field still declared with a changed type is still a retype and is judged as
-  one. Narrowing in place is free only where _retype_is_compatible allows it: an
-  inherited field, a widening, or replacing Any with a concrete type in the SAME OUTER
-  SHAPE (which payload safety requires anyway, so it is not optional). Wrapping Any in
-  MaxItems does not make it acceptable or clear P001: without the opt-out, P001's
-  inverse finding still reports the Any-typed field and class creation raises
-  PayloadSafetyError; with the opt-out, the class-level finding still fires. Any is
-  refused unconditionally. MaxItems bounds a collection only when its element/value type
-  is already payload-safe, and every variable-size collection needs it: set, frozenset,
-  tuple[T, ...], Sequence and Mapping are refused without it just as dict and list are,
-  so retyping one as another does not clear the finding. Note also that an app-level
-  OVERRIDE of a base-class field is often what introduces the Any — the SDK's own
-  ExtractionInput already models its filters payload-safely — and dropping an override
-  is not a retype of your contract at all.
+  'sunset'), so retirement is one ledger status per merge: mark deprecated=True and
+  regenerate (active -> deprecated); later add json_schema_extra={'x-lifecycle':
+  'sunset'} and regenerate (deprecated -> sunset); THEN remove the field. ledger-guard
+  refuses active -> sunset in one change. A sunset field still declared with a changed
+  type is still a retype and is judged as one. Narrowing in place is free only where
+  _retype_is_compatible allows it: an inherited field, a widening, or replacing Any with
+  a concrete type in the SAME OUTER SHAPE (which payload safety requires anyway, so it
+  is not optional). Wrapping Any in MaxItems does not make it acceptable or clear P001:
+  without the opt-out, P001's inverse finding still reports the Any-typed field and
+  class creation raises PayloadSafetyError; with the opt-out, the class-level finding
+  still fires. Any is refused unconditionally. MaxItems bounds a collection only when
+  its element/value type is already payload-safe, and every variable-size collection
+  needs it: set, frozenset, tuple[T, ...], Sequence and Mapping are refused without it
+  just as dict and list are, so retyping one as another does not clear the finding. Note
+  also that an app-level OVERRIDE of a base-class field is often what introduces the Any
+  — the SDK's own ExtractionInput already models its filters payload-safely — and
+  dropping an override is not a retype of your contract at all.
 - **Already correct when:** The opt-out removed, with every field it guarded bounded, not merely accepted by the
   payload-safety check. A kept opt-out with a justified `# conformance: ignore[P001]
   <reason>` is the owner's decision, reached only after the fixes in the description
@@ -183,8 +184,10 @@ needs its own bound.
 results) moves by reference: write it to the object store and pass a `FileReference`.
 This is the fix that holds at 2MB.
 
-6. *Retire a field nothing populates*: mark it `deprecated=True` with `x-lifecycle:
-sunset`, regenerate the ledger, then remove it from source.
+6. *Retire a field nothing populates*: one ledger status per merge. Mark it
+`deprecated=True` and regenerate the ledger; in a later change add `x-lifecycle: sunset`
+and regenerate; then remove it from source.  An `active` field takes three merges;
+`ledger-guard` refuses `active` to `sunset` in one change.
 
 **Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias with
 no bound (`TreeSelection` bounds every level), or a nested `BaseModel(extra='allow')`
