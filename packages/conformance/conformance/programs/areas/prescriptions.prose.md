@@ -375,12 +375,17 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`
      and regenerate (`deprecated` → `sunset`); **then remove the field from
      source**.  An `active` field takes three merges; a field already
-     `deprecated` takes the last two.  `ledger-guard` refuses `active` →
-     `sunset` in one change.  B005 skips a sunset field only when it is
-     *absent* from source, so marking it alone changes nothing, and an
-     **unmarked** removal fires B005 at BLOCK tier.  Move every field of the
-     same contract that sits at the same status through each step in the same
-     change.
+     `deprecated` takes the last two.  A skipped step fails: regeneration
+     keeps an `active` entry `active` and B005 reports the skip, and
+     `ledger-guard` refuses a hand-edited `active` → `sunset`.  B005 skips a
+     sunset field only when it is *absent* from source, so marking it alone
+     changes nothing, and an **unmarked** removal fires B005 at BLOCK tier.
+     When several fields of one contract are being retired, move all of them
+     through each step in the same change.  On a contract generated from
+     `app.pkl`, set the deprecation and sunset in the Pkl widget definition
+     and regenerate; never mark `app/generated/` by hand, the next
+     regeneration drops it.  This step is the one place that states the
+     retirement path; other guidance points here.
 
   7. **Generated contract with `Any`: fix the source, never the file.**  The
      `contract/*.pkl` widget decides the shape, and the toolkit emits
@@ -692,22 +697,31 @@ The lane applies nothing: return `not_remediable = true` with a
   as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
   are exempt too: they have no keys to model.  The target shape depends on
   the key set, read off the writers.  **Fixed keys** (the app writes a literal
-  key set): one typed field per key on the contract itself.  Context passed
+  key set): one typed field per key on the contract itself, each with a
+  default so callers that do not send it still validate.  Context passed
   to a task, from `atlan-metabase-app` `app/contracts.py`:
-  `TransformTaskInput.connection_qualified_name: str` and
-  `connection_name: str`; per-type counts on an `Output`, from
-  `atlan-openapi-app` `app/contracts.py`: `OpenAPIConnectorOutput.api_spec_count: int`
-  and `api_path_count: int` (the SDK `ExtractionOutput` does the same with
-  `tables_extracted`, `columns_extracted`, …).  **Open keys with a structured
+  `TransformTaskInput.connection_qualified_name: str = ""` and
+  `connection_name: str = ""`; per-type counts on an `Output`, from
+  `atlan-openapi-app` `app/contracts.py`:
+  `OpenAPIConnectorOutput.api_spec_count: int = 0` and
+  `api_path_count: int = 0` (the SDK `ExtractionOutput` does the same with
+  `tables_extracted`, `columns_extracted`, …).  When the contract already
+  inherits a field with the same name and meaning (for example
+  `connection_qualified_name` from `PublishInputMixin`), use the inherited
+  field; do not declare it again.  **Open keys with a structured
   value**: a bounded dict of a model, from `atlan-metabase-app`
   `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
   where `CollectionSelection` is a `BaseModel`; keep the `MaxItems` bound:
   payload safety still requires it on the container.  The brief names the
-  fields and lists every reader and writer of the old field.  On an
-  `@entrypoint` `Input` or `Output` the ledger freezes the recorded type, so
-  add the typed fields under new names and retire the old one (P001 above,
-  step 6); `@task` contracts are not recorded and change in place.
+  fields and lists every reader and writer of the old field.  The ledger
+  freezes the recorded type of every entrypoint contract (the `Input` and
+  `Output` of an `@entrypoint` method, or of an undecorated `run()` on an
+  `App` subclass).  There, add the typed fields under new names and mark the
+  old field deprecated in the same change; move every writer, reader and
+  DAG reference onto the new fields; once nothing populates the old field,
+  finish its retirement (P001 above, step 6).  `@task` contracts are not
+  recorded and change in place.
   When the key set is genuinely open and the values are plain, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).

@@ -54,11 +54,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "and read the result rather than inferring it. Removing a recorded field "
             "does fire B005 at BLOCK tier; retiring one is the sanctioned route, but "
             "read it precisely. B005 skips a sunset field only when it is ABSENT from "
-            "source (live is None and status == 'sunset'), so retirement is one "
-            "ledger status per merge: mark deprecated=True and regenerate (active -> "
-            "deprecated); later add json_schema_extra={'x-lifecycle': 'sunset'} and "
-            "regenerate (deprecated -> sunset); THEN remove the field. ledger-guard "
-            "refuses active -> sunset in one change. A sunset field still declared with a "
+            "source (live is None and status == 'sunset'), so retirement moves the "
+            "ledger entry one status per merge (active -> deprecated -> sunset) and "
+            "only then removes the field; prescriptions guide step 6 has the steps. "
+            "A sunset field still declared with a "
             "changed type is still a retype and is judged as one. Narrowing in place is "
             "free only where _retype_is_compatible allows it: an inherited field, a "
             "widening, or replacing Any with a concrete type in the SAME OUTER SHAPE "
@@ -165,11 +164,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "per-object results) moves by reference: write it to the object store and\n"
             "pass a ``FileReference``.  This is the fix that holds at 2MB.\n"
             "\n"
-            "6. *Retire a field nothing populates*: one ledger status per merge. Mark it\n"
-            "``deprecated=True`` and regenerate the ledger; in a later change add\n"
-            "``x-lifecycle: sunset`` and regenerate; then remove it from source.  An\n"
-            "``active`` field takes three merges; ``ledger-guard`` refuses ``active`` to\n"
-            "``sunset`` in one change.\n"
+            "6. *Retire a field nothing populates*: one ledger status per merge\n"
+            "(``active`` -> ``deprecated`` -> ``sunset``), then remove it from source;\n"
+            "the prescriptions guide, step 6, has the steps.\n"
             "\n"
             "**Not fixes.**  ``object``, ``JsonValue``, a bare ``dict`` or ``list``, a\n"
             "recursive alias with no bound (``TreeSelection`` bounds every level), or a\n"
@@ -469,7 +466,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P015",
         canonical_reference=(
-            "atlan-metabase-app app/contracts.py — the collection filters are "
+            "atlan-metabase-app app/contracts.py — a fixed key set is one typed field "
+            'per key (`TransformTaskInput.connection_qualified_name: str = ""`, '
+            '`connection_name: str = ""`); open keys with a structured value are '
             "containers of a typed model, `CollectionFilter = Annotated[dict[str, "
             "CollectionSelection], MaxItems(1000)]`, and `CollectResidualsInput.residual_files` "
             "is `Annotated[dict[str, FileReference], MaxItems(16)]`. The value type is what "
@@ -493,11 +492,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "over arbitrary string keys ('avoid stringly-typed contracts where the "
             "user can typo a key and only discover it at runtime').  WARN (not "
             "BLOCK) because the bounded form is technically sanctioned; this is a "
-            "modeling nudge toward a typed nested model."
+            "modeling nudge toward typed fields."
         ),
         short_description=(
             "Input/Output contract field uses a dict of primitives or a container "
-            "of Any — replace with a typed nested model"
+            "of Any — replace with typed fields (one per fixed key) or a container "
+            "of a typed model (open keys)"
         ),
         full_description=(
             "A field on an ``Input``/``Output`` contract whose annotation is a "
@@ -511,8 +511,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "``is_backwards_compatible`` checker.\n"
             "\n"
             "The SDK contract guidance (``make-contract`` skill, §6) prefers\n"
-            "typed properties / a nested ``pydantic.BaseModel`` subclass over\n"
-            "arbitrary string keys.\n"
+            "typed properties over arbitrary string keys.  The target depends on\n"
+            "the key set the app writes: a fixed key set becomes one typed field\n"
+            "per key on the contract, each with a default; open keys with a\n"
+            "structured value become a bounded container of a\n"
+            "``pydantic.BaseModel`` subclass.\n"
             "\n"
             "**Exempt:** ``list[FooModel]``, ``dict[str, FooModel]`` — containers\n"
             "of a typed class are the canonical bounded pattern and are fine.\n"
@@ -532,8 +535,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "On a field already recorded in the contract ledger, retyping it to a\n"
             "model in place is a B005 break (the ledger keys a field's type by its\n"
-            "name). Add the typed field under a new name and retire the old one, or\n"
-            "keep the bounded container and suppress this warning with that reason.\n"
+            "name). Add the typed fields under new names, move every writer and\n"
+            "reader onto them, and retire the old one (prescriptions guide, step\n"
+            "6), or keep the bounded container and suppress this warning with that\n"
+            "reason.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
         remediation_reference=RemediationReference(
