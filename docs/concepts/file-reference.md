@@ -300,8 +300,9 @@ SDK:
 will be a stale path from another machine. The sidecar check catches this: the
 local sidecar is absent (different pod, different disk), so the SDK re-downloads.
 
-**Cache hit:** if the same worker hands the ref on, or retries, and the local
-file is intact, the SDK skips the download entirely. A file whose size, mtime and
+**Cache hit:** if the same worker hands the ref on, or another task on that
+worker is still using the downloaded copy, and the local file is intact, the SDK
+skips the download entirely. A file whose size, mtime and
 inode still match its marker is trusted without being read, so even a multi-GB
 hand-off costs only a `stat`. If the stat has moved, or the marker was written by
 an older SDK that recorded only the digest, the file is re-hashed in a worker
@@ -311,6 +312,15 @@ same inode (`cp -p` over the file in place) is not caught.
 
 The local marker is SDK bookkeeping. Do not parse it in app code or tests: its
 format is not a contract.
+
+**Deleted when the task ends:** a copy the SDK downloaded for a task is deleted
+on that worker when the task ends, whether it succeeded or failed — or, when
+several tasks on the worker share the same copy, when the last of them ends. A
+retry downloads it again. Only copies the SDK downloaded are deleted: a file
+that was already at `local_path` (the producer's own copy on the same worker, or
+an app's file), a ref with `auto_materialize=False`, and a `Lazy` field the task
+fetches itself are left alone. Do not hand a materialised input's `local_path`
+on as a plain string: pass the `FileReference` itself.
 
 #### Directory FileReferences
 

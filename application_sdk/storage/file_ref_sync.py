@@ -47,6 +47,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
+import threading
+import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum
@@ -61,6 +64,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._local_marker import (
     file_fingerprint,
     hash_fingerprinted,
+    marker_path,
     read_local_marker,
     trusted_digest,
 )
@@ -137,6 +141,49 @@ def iter_named_file_refs(
 def _find_file_refs(data: Any) -> list[FileReference]:
     """Recursively find all FileReference instances in a BaseModel/dataclass tree."""
     return [named.ref for named in iter_named_file_refs(data)]
+
+
+def _is_lazy(node: BaseModel, name: str) -> bool:
+    """Return True if field *name* on *node* carries the ``Lazy`` marker."""
+    return any(isinstance(m, Lazy) for m in type(node).model_fields[name].metadata)
+
+
+def _materialize_candidates(
+    data: Any, *, log_lazy: bool = False
+) -> list[FileReference]:
+    """The refs ``materialize_file_refs`` considers in *data*, in tree order.
+
+    Skips refs with ``auto_materialize=False`` (the app owns them) and refs on a
+    ``Lazy`` field (the task fetches them itself).
+    """
+    found: list[FileReference] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, FileReference):
+            if node.auto_materialize:
+                found.append(node)
+            return
+        if isinstance(node, BaseModel):
+            for name in type(node).model_fields:
+                value = getattr(node, name)
+                if isinstance(value, FileReference) and _is_lazy(node, name):
+                    if log_lazy:
+                        # conformance: ignore[L018] storage_path is in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes it to an indexed OTLP attribute — %-style would lose the promotion
+                        logger.debug(
+                            "file_ref.materialize.lazy_skipped",
+                            storage_path=value.storage_path,
+                        )
+                    continue
+                _walk(value)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                _walk(item)
+        elif isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+
+    _walk(data)
+    return found
 
 
 class _LocalCopy(Enum):
@@ -362,19 +409,11 @@ async def _replace_refs(
     _candidates: list[FileReference] = []
     _needs: dict[int, bool] = {}
 
-    def _is_lazy(node: BaseModel, name: str) -> bool:
-        """Return True if field *name* on *node* carries the ``Lazy`` marker."""
-        return any(isinstance(m, Lazy) for m in type(node).model_fields[name].metadata)
-
     def _collect(node: Any) -> None:
         if isinstance(node, FileReference):
             if not node.auto_materialize:
                 return  # app owns the lifecycle for this ref — skip
-            if (
-                mode == "persist"
-                and node.local_path is not None
-                and not node.is_durable
-            ):
+            if node.local_path is not None and not node.is_durable:
                 key = str(id(node))
                 if key not in _factories:
                     _ref = node
@@ -382,24 +421,10 @@ async def _replace_refs(
                         store, r, output_path=output_path
                     )
                     _winners[key] = node
-            elif mode == "materialize":
-                _candidates.append(node)
             return
         if isinstance(node, BaseModel):
             for name in type(node).model_fields:
-                value = getattr(node, name)
-                if (
-                    mode == "materialize"
-                    and isinstance(value, FileReference)
-                    and _is_lazy(node, name)
-                ):
-                    # conformance: ignore[L018] storage_path is in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes it to an indexed OTLP attribute — %-style would lose the promotion
-                    logger.debug(
-                        "file_ref.materialize.lazy_skipped",
-                        storage_path=value.storage_path,
-                    )
-                    continue
-                _collect(value)
+                _collect(getattr(node, name))
         elif isinstance(node, (list, tuple)):
             for item in node:
                 _collect(item)
@@ -407,7 +432,10 @@ async def _replace_refs(
             for v in node.values():
                 _collect(v)
 
-    _collect(data)
+    if mode == "materialize":
+        _candidates = _materialize_candidates(data, log_lazy=True)
+    else:
+        _collect(data)
 
     if _candidates:
         check_sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
@@ -552,3 +580,107 @@ async def materialize_file_refs(
     return await _replace_refs(
         data, store, "materialize", upstream_store=upstream_store
     )
+
+
+_input_leases: dict[str, int] = {}
+"""Local copies the task wrapper downloaded on this process, by real path, with
+how many running tasks hold each one."""
+_input_leases_lock = threading.Lock()
+
+
+def _lease(path: str) -> None:
+    _input_leases[path] = _input_leases.get(path, 0) + 1
+
+
+def lease_task_inputs(data: Any) -> list[str]:
+    """Lease the local copies materialise is about to hand one task (FND-4310).
+
+    Call before ``materialize_file_refs``, with no ``await`` in between. A
+    durable ref's ``local_path`` is leased when another task on this process
+    already leased it, or when nothing exists there yet — materialise will
+    download it. A path that already exists and is not leased was not
+    downloaded by the wrapper (a producer's own copy, an app's file) and is
+    never leased, so it is never deleted.
+
+    Returns:
+        The leased paths; hand them to :func:`release_task_inputs` when the
+        task ends, however it ends.
+    """
+    paths: list[str] = []
+    with _input_leases_lock:
+        for ref in _materialize_candidates(data):
+            if not ref.is_durable or ref.storage_path is None or ref.local_path is None:
+                continue
+            path = os.path.realpath(ref.local_path)
+            if path in paths:
+                continue
+            if path in _input_leases or not os.path.lexists(path):
+                _lease(path)
+                paths.append(path)
+    return paths
+
+
+def lease_temp_inputs(before: Any, after: Any) -> list[str]:
+    """Lease the private temp copies materialise made for refs with no ``local_path``.
+
+    *before* and *after* are the input tree handed to and returned by
+    ``materialize_file_refs``. A local path in *after* that no ref in *before*
+    named is a fresh temp name materialise chose; a path *before* already named
+    is :func:`lease_task_inputs`'s to decide.
+    """
+    named = {
+        os.path.realpath(ref.local_path)
+        for ref in _materialize_candidates(before)
+        if ref.local_path is not None
+    }
+    paths: list[str] = []
+    with _input_leases_lock:
+        for ref in _materialize_candidates(after):
+            if not ref.is_durable or ref.local_path is None:
+                continue
+            path = os.path.realpath(ref.local_path)
+            if path not in named and path not in paths:
+                _lease(path)
+                paths.append(path)
+    return paths
+
+
+def _remove_tombstone(path: str) -> None:
+    if os.path.isdir(path) and not os.path.islink(path):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+
+
+async def release_task_inputs(paths: list[str]) -> None:
+    """Drop one task's leases; delete each copy whose last lease this was.
+
+    The copy is renamed aside under the lease lock, so a task that starts now
+    finds nothing there and downloads afresh rather than reading a file being
+    deleted; the renamed copy is then removed off the event loop. Best-effort:
+    a failure is logged, never raised.
+    """
+    doomed: list[str] = []
+    with _input_leases_lock:
+        for path in paths:
+            remaining = _input_leases.get(path, 0) - 1
+            if remaining > 0:
+                _input_leases[path] = remaining
+                continue
+            _input_leases.pop(path, None)
+            try:
+                if os.path.lexists(marker_path(path)):
+                    os.remove(marker_path(path))
+                if os.path.lexists(path):
+                    tombstone = f"{path}.{uuid.uuid4().hex}.deleting"
+                    os.rename(path, tombstone)
+                    doomed.append(tombstone)
+            except OSError:
+                logger.warning(
+                    "Could not delete a downloaded task input", exc_info=True
+                )
+    for tombstone in doomed:
+        try:
+            await run_in_thread(_remove_tombstone, tombstone)
+        except OSError:
+            logger.warning("Could not delete a downloaded task input", exc_info=True)

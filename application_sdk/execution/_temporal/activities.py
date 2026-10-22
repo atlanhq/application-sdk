@@ -477,6 +477,7 @@ def create_activity_from_task(
                 max_no_progress_seconds=resolved_no_progress_seconds,
             )
         ) as tracker:
+            input_leases: list[str] = []
             try:
                 # Resolved here rather than on the workflow side so the
                 # environment consulted is the one the watchdog runs in — which
@@ -567,6 +568,8 @@ def create_activity_from_task(
                 from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                     has_refs_to_materialize,
                     has_refs_to_persist,
+                    lease_task_inputs,
+                    lease_temp_inputs,
                     materialize_file_refs,
                     persist_file_refs,
                 )
@@ -593,7 +596,12 @@ def create_activity_from_task(
                 )
 
                 # Materialise any durable FileReferences in the input before the task runs.
+                # Downloaded copies are leased so the finally below deletes them
+                # once the last task on this process using them ends (FND-4310).
+                if store is not None:
+                    input_leases = lease_task_inputs(input_data)
                 if store is not None and has_refs_to_materialize(input_data):
+                    unmaterialized = input_data
                     input_data = await materialize_file_refs(
                         store,
                         input_data,
@@ -601,6 +609,7 @@ def create_activity_from_task(
                             infra.upstream_storage if infra is not None else None
                         ),
                     )
+                    input_leases += lease_temp_inputs(unmaterialized, input_data)
 
                 # Consumer side, after materialise: the bytes this task is about to
                 # read are on local disk now, so re-validate them on read. This is
@@ -785,6 +794,12 @@ def create_activity_from_task(
                     # included.)
                     app_instance._task_context = None
                     app_instance._context = None
+                    if input_leases:
+                        from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                            release_task_inputs,
+                        )
+
+                        await release_task_inputs(input_leases)
 
     # Set type annotations with the actual input/output types from task metadata.
     # This is critical for Temporal to properly deserialize the input dataclass.
