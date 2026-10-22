@@ -206,7 +206,7 @@ test = [
     "psycopg2-binary>=2.9.12,<3.0.0",
 ]
 examples = [
-    "snowflake-sqlalchemy>=1.7.0,<2.0.0",
+    "snowflake-sqlalchemy>=2.0.0,<2.1.0",
     "psycopg[binary]>=3.2.7,<4.0.0",
 ]
 docs = [
