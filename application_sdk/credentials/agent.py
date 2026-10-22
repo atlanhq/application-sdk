@@ -79,7 +79,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-#: Root-level keys whose values are always literals, never ref-keys
+#: Root-level keys (including dotted keys) whose values are always literals, never ref-keys
 #: into the secret bundle. Mirrors the contract the Atlan platform
 #: emits for the agent-shape JSON payload.
 _LITERAL_KEYS: frozenset[str] = frozenset(
@@ -96,6 +96,7 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
         "auth-type",
         "agent-type",
         "key-type",
+        "extra.compiled_url",
     }
 )
 
@@ -330,8 +331,9 @@ def _probe_candidates(raw: dict[str, Any]) -> list[str]:
 
     extra = raw.get("extra")
     if isinstance(extra, dict):
-        for value in extra.values():
-            _add(value)
+        for key, value in extra.items():
+            if f"extra.{key}" not in _LITERAL_KEYS:
+                _add(value)
 
     return candidates
 
@@ -391,7 +393,8 @@ def _substitute(
     if isinstance(extra, dict):
         new_extra = dict(extra)
         for key, value in list(new_extra.items()):
-            _sub(new_extra, key, value)
+            if f"extra.{key}" not in _LITERAL_KEYS:
+                _sub(new_extra, key, value)
         out["extra"] = new_extra
 
     return out, substituted
