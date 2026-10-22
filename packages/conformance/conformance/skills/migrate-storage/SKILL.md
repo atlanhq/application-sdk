@@ -253,7 +253,9 @@ each use to the inventory.
   is missing from another row of the same DataFrame → float, a missing key →
   `NaN`); the `orjson` loop returns the raw values. When callers rely on the
   pandas values, keep that handling (`pd.DataFrame` over the same records),
-  or record the change under **owner decisions**.
+  or record the change under **owner decisions**. Which rows share a frame
+  decides the values: keep one frame per `chunk_size` records for a
+  `read_batches()` caller, one frame over all records for a `read()` caller.
 - **outbound** — an `upload_to_atlan` call, a hand-rolled copy between the
   deployment and upstream stores (`create_store_from_binding*`), an
   `application_sdk.storage` upload (`upload_file`, `upload_file_from_bytes`),
