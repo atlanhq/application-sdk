@@ -251,21 +251,21 @@ class TestDownloadedInputsAreDeleted:
         assert out.path != _failures[0]
         assert await _gone(out.path)
 
-    async def test_producers_current_directory_is_used_in_place(
+    async def test_rewritten_directory_never_hands_a_ref_new_content(
         self, store: Any, tmp_path: Path
     ) -> None:
         producer = tmp_path / "producer" / "tree"
-        (producer / "a").mkdir(parents=True)
-        (producer / "a" / "one.json").write_bytes(_PAYLOAD)
-        (producer / "two.json").write_bytes(_PAYLOAD)
-        ref = await persist_file_reference(store, FileReference.from_local(producer))
+        producer.mkdir(parents=True)
+        (producer / "data.json").write_bytes(b"first")
+        first = await persist_file_reference(store, FileReference.from_local(producer))
+        (producer / "data.json").write_bytes(b"second")
+        await persist_file_reference(store, FileReference.from_local(producer))
         _consume_activity()
 
-        out = await _activity("consume")(_context("consume"), _RefIn(ref=ref))
+        out = await _activity("consume")(_context("consume"), _RefIn(ref=first))
 
-        assert out.path == str(producer)
-        assert out.seen == (_PAYLOAD * 2).decode()
-        assert (producer / "two.json").read_bytes() == _PAYLOAD
+        assert out.seen == "first"
+        assert out.path != str(producer)
 
     async def test_changed_producer_directory_is_downloaded_instead(
         self, store: Any, tmp_path: Path
@@ -717,12 +717,23 @@ class TestFolderLifecycle:
     ) -> None:
         owned = await file_ref_sync.open_task_input_dir()
 
+        spare = await file_ref_sync.open_task_input_dir()
+        file_ref_sync.remove_task_input_dir(spare)
+        await asyncio.gather(*list(file_ref_sync._pending_removals))
+        parent_queue = file_ref_sync._removal_queue
+        assert file_ref_sync._removal_threads
+
         pid = os.fork()
         if pid == 0:
+            fresh = (
+                not file_ref_sync._removal_threads
+                and file_ref_sync._removal_queue is not parent_queue
+                and not file_ref_sync._pending_removals
+            )
             try:
                 os.fstat(owned.lock_fd)
             except OSError:
-                os._exit(0)
+                os._exit(0 if fresh else 2)
             os._exit(1)
         _, status = os.waitpid(pid, 0)
 
@@ -747,11 +758,13 @@ class TestFolderLifecycle:
         root = tmp_path / "work" / ".sdk-task-inputs"
         assert not root.exists() or list(root.iterdir()) == []
 
-    async def test_unfinished_delete_is_swept_at_once(
+    async def test_unfinished_delete_retries_only_that_folder(
         self, tmp_path: Path, store: Any
     ) -> None:
         owned = await file_ref_sync.open_task_input_dir()
         (Path(owned.path) / "0").mkdir()
+        other = tmp_path / "work" / ".sdk-task-inputs" / "other-dead"
+        other.mkdir()
 
         def gives_up(path: str, fd: int | None) -> bool:
             if fd is not None:
@@ -773,6 +786,8 @@ class TestFolderLifecycle:
 
         assert len(calls) == 2
         assert not Path(owned.path).exists()
+        assert other.exists()
+        other.rmdir()
 
     async def test_no_folder_for_inputs_that_are_never_downloaded(
         self, tmp_path: Path, store: Any
@@ -857,7 +872,7 @@ class TestWorkerWiring:
         loop = asyncio.get_running_loop()
         with (
             patch.object(file_ref_sync, "_remove_owned", slow_remove),
-            patch.object(worker_module, "_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS", 0.2),
+            patch.object(worker_module, "_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS", 0.5),
         ):
             file_ref_sync.remove_task_input_dir(owned)
             started = loop.time()
@@ -868,7 +883,7 @@ class TestWorkerWiring:
         sweep.cancel()
         worker_module._background_sweeps.discard(sweep)
 
-        assert elapsed < 0.35
+        assert 0.4 < elapsed < 0.8
 
 
 class TestFailedTransfersLeaveNothing:
