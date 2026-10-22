@@ -204,8 +204,9 @@ test = [
     # a driver upgrade that moves that seam must fail loudly in CI. See
     # CONAT-767. Never add this to [project.dependencies].
     "psycopg2-binary>=2.9.12,<3.0.0",
-]
-examples = [
+    # Test-only, for the same reason: TestAttachPsycopg3 in
+    # tests/unit/clients/test_sql_typecasters.py runs against the real driver
+    # and skips without it.
     "psycopg[binary]>=3.2.7,<4.0.0",
 ]
 docs = [
