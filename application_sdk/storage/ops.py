@@ -937,7 +937,13 @@ def _drop_directory_markers(
 
 
 def _compute_part_size(file_size: int, chunk_size: int) -> int:
-    """Compute effective upload part size to stay under S3's 10,000-part limit.
+    """Compute effective upload part size to stay within 1,000 parts.
+
+    The binding limit is not S3's 10,000 parts but an S3 proxy fronting GCS,
+    which emulates multipart with 32-source ``compose`` calls nested two deep
+    and so cannot complete an upload of more than 1,024 parts. It reports that
+    as a 200 with a truncated body, which obstore surfaces as "Got invalid
+    multipart response". At the 8 MiB default that is any file over 8 GiB.
 
     Args:
         file_size: Total file size in bytes.
@@ -945,9 +951,9 @@ def _compute_part_size(file_size: int, chunk_size: int) -> int:
 
     Returns:
         Effective part size — at least *chunk_size* but never so small that
-        more than 9,900 parts would be needed (safety margin below 10,000).
+        more than 1,000 parts would be needed.
     """
-    return max(chunk_size, math.ceil(file_size / 9900))
+    return max(chunk_size, math.ceil(file_size / 1000))
 
 
 async def _finalize_upload_integrity(
@@ -1149,8 +1155,8 @@ async def upload_file(
             that sets it overrides the caller, since the workable part size
             depends on the destination the deployment writes to rather than on
             the app.  Defaults to 8 MiB when neither is given.  Increased
-            automatically if the file is large enough to exceed the 9,900-part
-            safety limit.  See the constant's docstring for the
+            automatically if the file is large enough to exceed 1,000 parts.
+            See the constant's docstring for the
             S3-proxy-over-GCS case that makes part *count* what matters.
         normalize: When ``True`` (default), normalise *key* before use.
         retain_local_copy: When ``True`` (default), keep the local file after
