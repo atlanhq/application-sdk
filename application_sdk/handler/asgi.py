@@ -83,7 +83,7 @@ def app_env(app_name: str, key: str, default: str = "") -> str:
 
 @functools.cache
 def default_object_store() -> S3ObjectStore | None:
-    """The host's object store, built once from ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION``.
+    """The host's object store, built once by :meth:`S3ObjectStore.from_env`.
 
     One bucket and one client for every hosted app: each app's configs live
     under its own ``persistent-artifacts/apps/<app>/`` prefix in that bucket.
