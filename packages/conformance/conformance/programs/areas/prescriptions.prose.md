@@ -716,7 +716,8 @@ The lane applies nothing: return `not_remediable = true` with a
   contract (P001 above, "Classify the class first"), add the typed fields
   under new names with defaults, move every writer and reader onto them,
   then retire the old one through P001 step 6.  A contract used only by
-  `@task` methods changes in place.
+  `@task` methods, and not inherited by a ledgered contract, changes in
+  place.
   When the key set is genuinely open and the values are plain, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).
