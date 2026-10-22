@@ -113,6 +113,7 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.execution.progress import ProgressWatchdogMode
+    from application_sdk.validation.asset_rules import AssetCreationRules
 
 _task_logger = get_logger(__name__)
 
@@ -194,6 +195,7 @@ async def _warn_on_invalid_transformed_assets(
     app_name: str,
     *,
     not_local: Sequence[str] = (),
+    creation_rules: "frozenset[AssetCreationRules]" = frozenset(),
 ) -> None:
     """Best-effort, warn-only validation of transformed asset NDJSON before upload.
 
@@ -264,6 +266,11 @@ async def _warn_on_invalid_transformed_assets(
     positive this fixes. When *no* transformed part is local, the same warning
     says validation was skipped entirely, so a fully distributed fan-in is never
     silent.
+
+    ``creation_rules`` (the app's :attr:`App.asset_validation_rules`) adds the
+    opt-in create-time checks pyatlan no longer runs. The wrapper's
+    ``ModelSource`` carries no asset-specific options, so a non-empty rule set
+    goes straight to the cell, as a multi-part batch already does.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
@@ -313,7 +320,7 @@ async def _warn_on_invalid_transformed_assets(
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
-    if len(targets) == 1 and check_referential_integrity:
+    if len(targets) == 1 and check_referential_integrity and not creation_rules:
         report = await run_best_effort(
             validate_artifact,
             targets[0],
@@ -327,6 +334,7 @@ async def _warn_on_invalid_transformed_assets(
             validate_assets_as_artifact,
             targets,
             check_referential_integrity=check_referential_integrity,
+            creation_rules=creation_rules,
             label="Transformed-asset validation",
             logger=_task_logger,
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
@@ -883,6 +891,23 @@ class App(ABC):
     description: ClassVar[str] = ""
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
+
+    asset_validation_rules: ClassVar["frozenset[AssetCreationRules]"] = frozenset()
+    """Extra create-time checks for the pre-upload transformed-asset validation.
+
+    Empty (default) validates exactly what pyatlan_v9's ``.validate()`` checks.
+    pyatlan 11.5.0 stopped reporting SQL-family assets that lack their schema or
+    database parents; an app whose transform emits those assets opts back in::
+
+        from application_sdk.validation import AssetCreationRules
+
+        class MyApp(App):
+            asset_validation_rules = frozenset({AssetCreationRules.SQL_PARENTS})
+
+    Applies to :meth:`upload` and :meth:`upload_refs`. The validation stays
+    warn-only: a failure is reported on ``ASSET_VALIDATION_EVENT`` and never
+    blocks the handoff. Integration tests declare the same rules on
+    ``BaseIntegrationTest.asset_validation_rules``."""
 
     legacy_workflow_types: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
     """Inbound-only Temporal workflow type aliases: ``{alias: entry-point name}``.
@@ -1634,7 +1659,11 @@ class App(ABC):
         # run in an isolated child process (CNCT-85) so a native decode fault
         # kills only the child and never blocks or crashes the event loop.
         if validate_assets:
-            await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
+            await _warn_on_invalid_transformed_assets(
+                input.local_path,
+                self._app_name,
+                creation_rules=self.asset_validation_rules,
+            )
 
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
@@ -2152,7 +2181,10 @@ class App(ABC):
             else:
                 not_local.append(declared.ref.storage_path or "")
         await _warn_on_invalid_transformed_assets(
-            local, self._app_name, not_local=not_local
+            local,
+            self._app_name,
+            not_local=not_local,
+            creation_rules=self.asset_validation_rules,
         )
 
         delivered: list[FileReference] = []
