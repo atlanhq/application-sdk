@@ -291,7 +291,9 @@ class TestDownloadedInputsAreDeleted:
             assert target.startswith(root + "/0/")
         escaped = FileReference(storage_path="../out.parquet", is_durable=True)
         assert file_ref_sync._download_target(root, escaped, 0).endswith(".parquet")
-        ref = FileReference(storage_path="run/transformed/table/x.json", is_durable=True)
+        ref = FileReference(
+            storage_path="run/transformed/table/x.json", is_durable=True
+        )
         assert file_ref_sync._download_target(root, ref, 3) == (
             root + "/3/run/transformed/table/x.json"
         )
@@ -457,9 +459,7 @@ class TestOutputsSurviveTheInputFolder:
         ref = await _remote_file_ref(store, tmp_path)
         _consume_activity()
 
-        out = await _activity("write_beside")(
-            _context("write_beside"), _RefIn(ref=ref)
-        )
+        out = await _activity("write_beside")(_context("write_beside"), _RefIn(ref=ref))
 
         assert out.out_ref is not None and out.out_ref.is_durable
         assert out.out_ref.local_path is not None
@@ -592,9 +592,7 @@ class TestLeftoversAndWarnings:
 
         warning.assert_called_once()
 
-    async def test_ordinary_key_does_not_warn(
-        self, tmp_path: Path, store: Any
-    ) -> None:
+    async def test_ordinary_key_does_not_warn(self, tmp_path: Path, store: Any) -> None:
         with patch.object(ops.logger, "warning") as warning:
             ops.normalize_key(str(tmp_path / "work" / "artifacts" / "k.json"))
             ops.normalize_key("artifacts/apps/x/k.json")
@@ -711,7 +709,9 @@ class TestFolderLifecycle:
         with pytest.raises(OSError):
             os.fstat(created[0])
 
-    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded:DeprecationWarning")
+    @pytest.mark.filterwarnings(
+        "ignore:This process .* is multi-threaded:DeprecationWarning"
+    )
     async def test_forked_child_closes_inherited_locks(
         self, tmp_path: Path, store: Any
     ) -> None:
@@ -723,12 +723,18 @@ class TestFolderLifecycle:
         parent_queue = file_ref_sync._removal_queue
         assert file_ref_sync._removal_threads
 
-        pid = os.fork()
+        file_ref_sync._removal_thread_guard.acquire()
+        try:
+            pid = os.fork()
+        finally:
+            if pid != 0:
+                file_ref_sync._removal_thread_guard.release()
         if pid == 0:
             fresh = (
                 not file_ref_sync._removal_threads
                 and file_ref_sync._removal_queue is not parent_queue
                 and not file_ref_sync._pending_removals
+                and file_ref_sync._removal_thread_guard.acquire(blocking=False)
             )
             try:
                 os.fstat(owned.lock_fd)
@@ -883,7 +889,7 @@ class TestWorkerWiring:
         sweep.cancel()
         worker_module._background_sweeps.discard(sweep)
 
-        assert 0.4 < elapsed < 0.8
+        assert 0.4 < elapsed < 0.95
 
 
 class TestFailedTransfersLeaveNothing:

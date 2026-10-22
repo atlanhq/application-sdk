@@ -698,7 +698,7 @@ def _close_lock(fd: int) -> None:
 
 
 def _close_held_locks_in_child() -> None:
-    global _removal_queue
+    global _removal_queue, _removal_thread_guard
     _held_lock_fds_guard.release()
     for fd in list(_held_lock_fds):
         try:
@@ -707,14 +707,17 @@ def _close_held_locks_in_child() -> None:
             pass
     _held_lock_fds.clear()
     _removal_queue = queue.SimpleQueue()
+    _removal_thread_guard = threading.Lock()
     _removal_threads.clear()
     _pending_removals.clear()
 
 
-if hasattr(os, "register_at_fork"):
+_fork_hooks_registered = globals().get("_fork_hooks_registered", False)
+if hasattr(os, "register_at_fork") and not _fork_hooks_registered:
+    _fork_hooks_registered = True
     os.register_at_fork(
-        before=_held_lock_fds_guard.acquire,
-        after_in_parent=_held_lock_fds_guard.release,
+        before=lambda: _held_lock_fds_guard.acquire(),
+        after_in_parent=lambda: _held_lock_fds_guard.release(),
         after_in_child=_close_held_locks_in_child,
     )
 
@@ -908,7 +911,9 @@ def remove_task_input_dir(owned: TaskInputDir) -> None:
         _removal_queue.put((owned.path, owned.lock_fd, loop, done))
     except Exception:
         _close_lock(owned.lock_fd)
-        logger.warning("Could not start deleting a task's downloaded inputs", exc_info=True)
+        logger.warning(
+            "Could not start deleting a task's downloaded inputs", exc_info=True
+        )
         return
     _pending_removals.add(done)
     done.add_done_callback(_pending_removals.discard)

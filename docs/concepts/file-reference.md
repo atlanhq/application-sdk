@@ -303,7 +303,10 @@ local sidecar is absent (different pod, different disk), so the SDK re-downloads
 **Cache hit:** if the producer's own copy is still at the ref's `local_path` on
 this worker (a same-worker hand-off) and it is intact, the SDK skips the
 download entirely. This holds for single files; a directory ref is always
-downloaded into the task's folder. Downloaded copies are never reused: each task gets its own
+downloaded into the task's folder. The check is the file's stat and size
+against its marker, not the ref's own digest: if the producer overwrites the
+file with new content of the same size and persists it again, a consumer of
+the first ref reads the new content. Write each output to a fresh path. Downloaded copies are never reused: each task gets its own
 (see below). A file whose size, mtime and
 inode still match its marker is trusted without being read, so even a multi-GB
 hand-off costs only a `stat`. If the stat has moved, or the marker was written by
