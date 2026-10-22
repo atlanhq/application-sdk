@@ -313,15 +313,18 @@ same inode (`cp -p` over the file in place) is not caught.
 The local marker is SDK bookkeeping. Do not parse it in app code or tests: its
 format is not a contract.
 
-**Deleted when the task ends:** a copy the SDK downloaded for a task is deleted
-on that worker when the task ends, whether it succeeded or failed — or, when
-several tasks on the worker share the same copy, when the last of them ends. A
-retry downloads it again. Only copies the SDK downloaded are deleted: a file
-that was already at `local_path` (the producer's own copy on the same worker, or
-an app's file), a ref with `auto_materialize=False`, and a `Lazy` field the task
-fetches itself are left alone. Do not hand a materialised input's `local_path`
-on as a plain string: pass the `FileReference` itself. Do not write a task's own
-outputs inside a materialised input directory: the directory goes with it.
+**Deleted when the task ends:** the SDK downloads a task's inputs into one
+folder for that task, at `<TEMPORARY_PATH>/.sdk-task-inputs/<id>/<storage_path>`,
+and deletes the folder once the task's outputs are persisted, whether it
+succeeded or failed. The task sees `local_path` pointing into that folder. A
+retry, or another task on the same worker, downloads its own copy. A local copy
+that is already current at the ref's `local_path` (the producer's own copy on
+the same worker) is used where it is and never deleted; a ref with
+`auto_materialize=False` and a `Lazy` field the task fetches itself are left
+alone. Do not hand a materialised input's `local_path` on as a plain string:
+pass the `FileReference` itself, and pass `ref=` to `UploadInput` when you
+upload it, since a key derived from the local path no longer matches the
+store key.
 
 #### Directory FileReferences
 

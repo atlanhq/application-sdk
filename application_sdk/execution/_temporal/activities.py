@@ -477,7 +477,7 @@ def create_activity_from_task(
                 max_no_progress_seconds=resolved_no_progress_seconds,
             )
         ) as tracker:
-            input_leases: list[str] = []
+            input_dir: str | None = None
             try:
                 # Resolved here rather than on the workflow side so the
                 # environment consulted is the one the watchdog runs in — which
@@ -568,10 +568,9 @@ def create_activity_from_task(
                 from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
                     has_refs_to_materialize,
                     has_refs_to_persist,
-                    lease_task_inputs,
-                    lease_unnamed_inputs_dir,
                     materialize_file_refs,
                     persist_file_refs,
+                    task_input_dir,
                 )
 
                 method_name = getattr(
@@ -596,21 +595,15 @@ def create_activity_from_task(
                 )
 
                 # Materialise any durable FileReferences in the input before the task runs.
-                # Downloaded copies are leased so the finally below deletes them
-                # once the last task on this process using them ends (FND-4310).
-                if store is not None:
-                    input_leases = lease_task_inputs(input_data)
                 if store is not None and has_refs_to_materialize(input_data):
-                    unnamed_dir = lease_unnamed_inputs_dir(input_data)
-                    if unnamed_dir is not None:
-                        input_leases.append(unnamed_dir)
+                    input_dir = task_input_dir()
                     input_data = await materialize_file_refs(
                         store,
                         input_data,
                         upstream_store=(
                             infra.upstream_storage if infra is not None else None
                         ),
-                        unnamed_dir=unnamed_dir,
+                        download_dir=input_dir,
                     )
 
                 # Consumer side, after materialise: the bytes this task is about to
@@ -796,12 +789,12 @@ def create_activity_from_task(
                     # included.)
                     app_instance._task_context = None
                     app_instance._context = None
-                    if input_leases:
+                    if input_dir is not None:
                         from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                            release_task_inputs,
+                            remove_task_input_dir,
                         )
 
-                        await release_task_inputs(input_leases)
+                        await remove_task_input_dir(input_dir)
 
     # Set type annotations with the actual input/output types from task metadata.
     # This is critical for Temporal to properly deserialize the input dataclass.
