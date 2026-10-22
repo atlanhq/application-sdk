@@ -305,8 +305,10 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   an assumption wearing the costume of a verification.
 
   **Classify the class first.**  Generated (`app/generated/`) classes are
-  fixed at their source; see step 7.  `@entrypoint` contracts are recorded in
-  the contract ledger, so a retype there is B005-guarded.  Task contracts are
+  fixed at their source; see step 7.  Entrypoint contracts (the `Input` and
+  `Output` of an `@entrypoint` method, or of `async def run()` on an
+  App-family class) are recorded in the contract ledger, so a retype there
+  is B005-guarded.  Task contracts are
   not in the ledger and can be narrowed freely.  The finding lists the fields
   this class declares that block removing the opt-out, those the check
   accepts that still bound nothing, and any whose type it cannot resolve;
@@ -364,7 +366,7 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      only keys and counts cross the task boundary.
 
   6. **Retire a field nothing populates** — before concluding that an
-     `@entrypoint` field is immovable, check whether it is *live*.  Grep the
+     entrypoint-contract field is immovable, check whether it is *live*.  Grep the
      generated `manifest.json` `dag.<node>.inputs.args` for the field name and
      grep the repo for constructions of the contract.  A field absent from the
      manifest and constructed nowhere is dead weight (a defensive
@@ -382,10 +384,9 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      changes nothing, and an **unmarked** removal fires B005 at BLOCK tier.
      When several fields of one contract are being retired, move all of them
      through each step in the same change.  On a contract generated from
-     `app.pkl`, set the deprecation and sunset in the Pkl widget definition
-     and regenerate; never mark `app/generated/` by hand, the next
-     regeneration drops it.  This step is the one place that states the
-     retirement path; other guidance points here.
+     `app.pkl`, set `lifecycle = "deprecated"` and later
+     `lifecycle = "sunset"` on the field in the Pkl source and regenerate;
+     never mark `app/generated/` by hand, the next regeneration drops it.
 
   7. **Generated contract with `Any`: fix the source, never the file.**  The
      `contract/*.pkl` widget decides the shape, and the toolkit emits
@@ -410,7 +411,7 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   the shape from the check and bounds nothing.  A tree-widget selection has a
   known shape; type it `TreeSelection`.
 
-  **Verify before proposing:** import the module; for an `@entrypoint` field
+  **Verify before proposing:** import the module; for an entrypoint-contract field
   run the `gen-contract-ledger` / `ledger-guard` commands shown under step 8;
   re-detect; and run
   `tools/migrate_v3/check_migration.py`, which fails on any remaining
@@ -697,8 +698,7 @@ The lane applies nothing: return `not_remediable = true` with a
   as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
   are exempt too: they have no keys to model.  The target shape depends on
   the key set, read off the writers.  **Fixed keys** (the app writes a literal
-  key set): one typed field per key on the contract itself, each with a
-  default so callers that do not send it still validate.  Context passed
+  key set): one typed field per key on the contract itself.  Context passed
   to a task, from `atlan-metabase-app` `app/contracts.py`:
   `TransformTaskInput.connection_qualified_name: str = ""` and
   `connection_name: str = ""`; per-type counts on an `Output`, from
@@ -706,9 +706,10 @@ The lane applies nothing: return `not_remediable = true` with a
   `OpenAPIConnectorOutput.api_spec_count: int = 0` and
   `api_path_count: int = 0` (the SDK `ExtractionOutput` does the same with
   `tables_extracted`, `columns_extracted`, …).  When the contract already
-  inherits a field with the same name and meaning (for example
-  `connection_qualified_name` from `PublishInputMixin`), use the inherited
-  field; do not declare it again.  **Open keys with a structured
+  has a field with the key's name (declared or inherited, for example
+  `connection_qualified_name` from `PublishInputMixin`) and the same
+  meaning, write the value there instead of adding a second field; when the
+  meaning differs, give the new field a distinct name.  **Open keys with a structured
   value**: a bounded dict of a model, from `atlan-metabase-app`
   `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
@@ -716,12 +717,17 @@ The lane applies nothing: return `not_remediable = true` with a
   payload safety still requires it on the container.  The brief names the
   fields and lists every reader and writer of the old field.  The ledger
   freezes the recorded type of every entrypoint contract (the `Input` and
-  `Output` of an `@entrypoint` method, or of an undecorated `run()` on an
-  `App` subclass).  There, add the typed fields under new names and mark the
+  `Output` of an `@entrypoint` method, or of `async def run()` on an
+  App-family class).  There, add the typed fields under new names, each with
+  a default so callers that do not send them still validate, and mark the
   old field deprecated in the same change; move every writer, reader and
-  DAG reference onto the new fields; once nothing populates the old field,
+  DAG reference onto the new fields.  While the old field is deprecated, a
+  saved config or an old DAG can still send only the old value: on an
+  `Input`, copy it onto the new fields in a `model_validator(mode="before")`;
+  on an `Output`, keep writing both.  Once nothing populates the old field,
   finish its retirement (P001 above, step 6).  `@task` contracts are not
-  recorded and change in place.
+  recorded and change in place; add no default there that would hide a
+  caller that forgets the value.
   When the key set is genuinely open and the values are plain, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).

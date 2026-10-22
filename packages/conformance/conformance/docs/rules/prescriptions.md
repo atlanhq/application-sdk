@@ -204,9 +204,10 @@ file, and never let a post-generate hook re-insert the opt-out.
 
 **Narrowing changes what the app accepts.**  Before narrowing, list the shapes the field
 really carries (its normaliser, its producers, the next task's contract) and confirm
-each still validates.  Only `@entrypoint` fields are in the contract ledger, so task
-contracts can be narrowed freely; for an entrypoint field run `gen-contract-ledger` then
-`ledger-guard` and read the result rather than inferring it.
+each still validates.  Only entrypoint contracts (an `@entrypoint` method, or `async def
+run()` on an App-family class) are in the contract ledger, so task contracts can be
+narrowed freely; for an entrypoint field run `gen-contract-ledger` then `ledger-guard`
+and read the result rather than inferring it.
 
 **Keeping the opt-out** is the owner's decision, reached only after the steps above were
 tried and refused, with each refusal named in `# conformance: ignore[P001] <reason>`.
@@ -760,8 +761,8 @@ runtime-only failures, and the field is invisible to contract diffing and the SD
 
 The SDK contract guidance (`make-contract` skill, §6) prefers typed properties over
 arbitrary string keys.  The target depends on the key set the app writes: a fixed key
-set becomes one typed field per key on the contract, each with a default; open keys with
-a structured value become a bounded container of a `pydantic.BaseModel` subclass.
+set becomes one typed field per key on the contract; open keys with a structured value
+become a bounded container of a `pydantic.BaseModel` subclass.
 
 **Exempt:** `list[FooModel]`, `dict[str, FooModel]` — containers of a typed class are
 the canonical bounded pattern and are fine. Lists and sets of a scalar primitive (`str`,
@@ -776,9 +777,10 @@ conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 
 On a field already recorded in the contract ledger, retyping it to a model in place is a
 B005 break (the ledger keys a field's type by its name). Add the typed fields under new
-names, move every writer and reader onto them, and retire the old one (prescriptions
-guide, step 6), or keep the bounded container and suppress this warning with that
-reason.
+names with defaults, mark the old one deprecated, move every writer, reader and DAG
+reference onto the new fields (copying old values in while the old field is still sent),
+and retire it (prescriptions guide, P015 and step 6), or keep the bounded container and
+suppress this warning with that reason.
 
 ---
 
