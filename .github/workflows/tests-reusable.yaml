@@ -930,9 +930,9 @@ jobs:
       - name: Check the handler's files are safe to host
         run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
 
-      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.13.4"
+          version: "0.13.5"
       - name: Install the api member alone and mount it like the host
         env:
           MEMBER: ${{ needs.detect-api-member.outputs.member }}
@@ -2794,9 +2794,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.13.4"
+          version: "0.13.5"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -3335,9 +3335,9 @@ jobs:
       HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.13.4"
+          version: "0.13.5"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
