@@ -39,6 +39,7 @@ from application_sdk.storage import file_ref_sync, ops
 from application_sdk.storage.batch import list_keys
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.reference import fetch, persist_file_reference
+from tests.unit.private_stdlib import private_stdlib
 
 pytestmark = pytest.mark.asyncio
 
@@ -623,16 +624,18 @@ class TestFolderLifecycle:
     async def test_sweep_between_lock_file_and_lock_cannot_delete_a_new_folder(
         self, tmp_path: Path, store: Any
     ) -> None:
-        real_flock = file_ref_sync.fcntl.flock
         swept: list[bool] = []
 
-        def flock_after_a_sweep(fd: int, op: int) -> None:
-            if op == file_ref_sync.fcntl.LOCK_EX and not swept:
-                swept.append(True)
-                file_ref_sync._sweep_dead_task_inputs()
-            real_flock(fd, op)
+        with private_stdlib(file_ref_sync, "fcntl") as local_fcntl:
+            real_flock = local_fcntl.flock
 
-        with patch.object(file_ref_sync.fcntl, "flock", flock_after_a_sweep):
+            def flock_after_a_sweep(fd: int, op: int) -> None:
+                if op == local_fcntl.LOCK_EX and not swept:
+                    swept.append(True)
+                    file_ref_sync._sweep_dead_task_inputs()
+                real_flock(fd, op)
+
+            local_fcntl.flock = flock_after_a_sweep
             owned = await file_ref_sync.open_task_input_dir()
 
         assert swept
@@ -663,9 +666,8 @@ class TestFolderLifecycle:
             def run_in_executor(self, *_: Any) -> Any:
                 raise RuntimeError("executor shut down")
 
-        with patch.object(
-            file_ref_sync.asyncio, "get_running_loop", return_value=_Closed()
-        ):
+        with private_stdlib(file_ref_sync, "asyncio") as local_asyncio:
+            local_asyncio.get_running_loop = lambda: _Closed()
             file_ref_sync.remove_task_input_dir(owned)
 
         with pytest.raises(OSError):
@@ -757,7 +759,8 @@ class TestFolderLifecycle:
                 raise OSError(28, "No space left on device")
             return real_open(path, *args, **kwargs)
 
-        with patch.object(file_ref_sync.os, "open", no_space):
+        with private_stdlib(file_ref_sync, "os") as local_os:
+            local_os.open = no_space
             with pytest.raises(OSError):
                 await file_ref_sync.open_task_input_dir()
 
@@ -857,39 +860,42 @@ class TestWorkerWiring:
         assert sweep.call_count == 2
         assert stop.await_count == 2
 
-    async def test_shutdown_uses_one_deadline(self, tmp_path: Path, store: Any) -> None:
-        import threading
+    async def test_shutdown_uses_one_deadline(self) -> None:
+        from unittest.mock import AsyncMock
 
         from application_sdk.execution._temporal import worker as worker_module
 
-        gate = threading.Event()
-        owned = await file_ref_sync.open_task_input_dir()
-        real_remove = file_ref_sync._remove_owned
+        clock = iter([100.0, 100.0, 100.3])
+        timeouts: list[float] = []
 
-        def slow_remove(path: str, fd: int | None) -> bool:
-            gate.wait(10)
-            return real_remove(path, fd)
+        class _Loop:
+            def time(self) -> float:
+                return next(clock)
 
-        async def slow_sweep() -> None:
-            await asyncio.sleep(10)
+        async def fake_wait(aws: Any, timeout: float) -> tuple[set[Any], set[Any]]:
+            timeouts.append(timeout)
+            return set(), set()
 
-        sweep = asyncio.ensure_future(slow_sweep())
+        sweep = asyncio.ensure_future(asyncio.sleep(0))
         worker_module._background_sweeps.add(sweep)
-        loop = asyncio.get_running_loop()
-        with (
-            patch.object(file_ref_sync, "_remove_owned", slow_remove),
-            patch.object(worker_module, "_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS", 0.5),
-        ):
-            file_ref_sync.remove_task_input_dir(owned)
-            started = loop.time()
-            await worker_module._stop_task_input_cleanup()
-            elapsed = loop.time() - started
-            gate.set()
-            await asyncio.gather(*list(file_ref_sync._pending_removals))
-        sweep.cancel()
-        worker_module._background_sweeps.discard(sweep)
+        removals = AsyncMock()
+        try:
+            with (
+                private_stdlib(worker_module, "asyncio") as local_asyncio,
+                patch.object(file_ref_sync, "wait_for_task_input_removals", removals),
+                patch.object(
+                    worker_module, "_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS", 0.5
+                ),
+            ):
+                local_asyncio.get_running_loop = lambda: _Loop()
+                local_asyncio.wait = fake_wait
+                await worker_module._stop_task_input_cleanup()
+        finally:
+            await sweep
+            worker_module._background_sweeps.discard(sweep)
 
-        assert 0.4 < elapsed < 0.95
+        assert timeouts == [0.5]
+        assert removals.await_args.args[0] == pytest.approx(0.2)
 
 
 class TestFailedTransfersLeaveNothing:

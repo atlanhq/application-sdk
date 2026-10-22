@@ -694,7 +694,7 @@ def _close_lock(fd: int) -> None:
     try:
         os.close(fd)
     except OSError:
-        pass
+        logger.debug("Task input lock fd was already closed", exc_info=True)
 
 
 def _close_held_locks_in_child() -> None:
@@ -703,7 +703,7 @@ def _close_held_locks_in_child() -> None:
     for fd in list(_held_lock_fds):
         try:
             os.close(fd)
-        except OSError:
+        except OSError:  # conformance: ignore[E002] forked child: an inherited fd may already be closed, and logging after fork can deadlock on a lock another thread held
             pass
     _held_lock_fds.clear()
     _removal_queue = queue.SimpleQueue()
@@ -814,7 +814,7 @@ def _remove_tree(path: str) -> bool:
     try:
         _rmtree(path)
     except FileNotFoundError:
-        pass
+        logger.debug("Task download folder already gone: %s", path)
     except OSError:
         logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
         return False
@@ -845,7 +845,7 @@ def _remove_owned(path: str, lock_fd: int | None) -> bool:
                 else:
                     os.remove(entry.path)
             except FileNotFoundError:
-                pass
+                logger.debug("Task download entry already gone: %s", entry.path)
             except OSError:
                 complete = False
                 logger.warning(
@@ -871,7 +871,7 @@ def _removal_worker() -> None:
             try:
                 loop.call_soon_threadsafe(_finish_removal, done)
             except RuntimeError:
-                pass
+                logger.debug("Event loop closed before a task download delete ended")
 
 
 def _finish_removal(done: asyncio.Future[None]) -> None:
