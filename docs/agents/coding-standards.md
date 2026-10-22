@@ -493,9 +493,13 @@ async def transform_users(self, inp: TransformInput) -> TransformOutput:
 ```
 
 For JSON inputs, swap `pd.read_parquet` for an `orjson.loads` loop over the
-file lines. No `ParquetFileReader` / `JsonFileReader` construction required —
-they exist only to bridge the legacy inline-upload contract and will be
-deleted in v4.0.
+file lines. `JsonFileReader` returned pandas values: an int whose key is
+missing from another row of the same DataFrame came back as float (`3` →
+`3.0`), a missing key as `NaN`. The orjson loop returns the raw values, so
+when callers rely on the pandas values, keep that handling (`pd.DataFrame`
+over the same records) or decide the change explicitly. No
+`ParquetFileReader` / `JsonFileReader` construction required — they exist
+only to bridge the legacy inline-upload contract and will be deleted in v4.0.
 
 ### Transitional opt-in on the legacy `ParquetFileWriter`
 

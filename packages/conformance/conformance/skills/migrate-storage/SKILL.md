@@ -249,7 +249,11 @@ each use to the inventory.
   `RollingFileWriter` (or a local write plus `FileReference.from_local` for
   the directory); `ParquetFileReader` / `JsonFileReader` → a FileReference
   input read with `pandas.read_parquet` or an `orjson` line loop, through
-  `run_in_thread`.
+  `run_in_thread`. `JsonFileReader` returned pandas values (an int whose key
+  is missing from another row of the same DataFrame → float, a missing key →
+  `NaN`); the `orjson` loop returns the raw values. When callers rely on the
+  pandas values, keep that handling (`pd.DataFrame` over the same records),
+  or record the change under **owner decisions**.
 - **outbound** — an `upload_to_atlan` call, a hand-rolled copy between the
   deployment and upstream stores (`create_store_from_binding*`), an
   `application_sdk.storage` upload (`upload_file`, `upload_file_from_bytes`),
@@ -298,9 +302,13 @@ and `storage.ops._resolve_store` (a **store** site). The private
 `execution._temporal.activity_utils.get_object_store_prefix` /
 `build_output_path` imports are a `migrate-deprecated-symbols` swap; this
 skill only removes their calls when the shared path they build goes. Do not
-replace `build_output_path` with a path composed from `input.workflow_id`
-alone when the path feeds a published key: that drops the run id from the
-key; keep it and record the call. Private
+replace `build_output_path` with a path that drops the run id when the path
+feeds a published key: that changes the key; keep it and record the call. A
+run-scoped path built in `run()` takes its ids from the App context:
+`self.context.workflow_id` and `self.run_id`, always set there. Not
+`input.workflow_id`: only the SDK's own dispatch (`handler.service` and the
+Temporal executor backend) fills it, so a run started any other way gets an
+empty id. Private
 non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
 
 **Owner decisions** — record each; do not apply without an answer:

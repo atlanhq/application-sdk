@@ -94,8 +94,15 @@ class JsonFileReader(Reader):
             "field on your task's typed Input — the SDK's activity "
             "interceptor auto-materialises it to a local path before the "
             "task runs (with sha256 sidecar verification + parallel "
-            "transfers), then read it directly with orjson / json. See "
-            "docs/agents/coding-standards.md.",
+            "transfers), then read it directly with orjson / json. "
+            "This reader returns pandas values: an int whose key is "
+            "missing from another row of the same DataFrame (one "
+            "read_batches() chunk, or the whole read()) comes back as "
+            "float (3 → 3.0), and a missing key as NaN. A plain orjson "
+            "read returns the raw "
+            "values, so if callers rely on the pandas values, keep that "
+            "handling (pd.DataFrame over the same records) or decide the "
+            "change explicitly. See docs/agents/coding-standards.md.",
             DeprecationWarning,
             stacklevel=2,
         )
