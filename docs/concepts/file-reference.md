@@ -303,17 +303,19 @@ local sidecar is absent (different pod, different disk), so the SDK re-downloads
 **Cache hit:** if the producer's own copy is still at the ref's `local_path` on
 this worker (a same-worker hand-off) and it is intact, the SDK skips the
 download entirely. This holds for single files; a directory ref is always
-downloaded into the task's folder. The check is the file's stat and size
-against its marker, not the ref's own digest: if the producer overwrites the
-file with new content of the same size and persists it again, a consumer of
-the first ref reads the new content. Write each output to a fresh path. Downloaded copies are never reused: each task gets its own
-(see below). A file whose size, mtime and
-inode still match its marker is trusted without being read, so even a multi-GB
-hand-off costs only a `stat`. If the stat has moved, or the marker was written by
+downloaded into the task's folder. Downloaded copies are never reused: each
+task gets its own (see below). A file whose size, mtime and inode still match
+its marker is trusted without being read, so even a multi-GB hand-off costs
+only a `stat`. If the stat has moved, or the marker was written by
 an older SDK that recorded only the digest, the file is re-hashed in a worker
 thread (never on the event loop): a match re-stamps the marker, a mismatch
 re-downloads. A replacement that restores the original size *and* mtime on the
 same inode (`cp -p` over the file in place) is not caught.
+
+The check compares the file's stat and size with its marker, not with the
+ref's own digest. If the producer overwrites the file with new content of the
+same size and persists it again, a consumer of the first ref reads the new
+content. Write each output to a fresh path.
 
 The local marker is SDK bookkeeping. Do not parse it in app code or tests: its
 format is not a contract.
