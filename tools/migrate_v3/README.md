@@ -87,7 +87,7 @@ Imports that the rewriter **cannot** fix automatically (structural work):
 | v2 | v3 | Why manual |
 |----|----|----|
 | `WorkflowInterface` + `ActivitiesInterface` | `App` + `@task` | Classes must be merged |
-| `BaseSQLMetadataExtractionWorkflow` + `Activities` | `SqlMetadataExtractor` | Classes must be merged |
+| `BaseSQLMetadataExtractionWorkflow` + `Activities` | `SqlApp` | Classes must be merged |
 | `BaseApplication` | `run_dev_combined()` | Different call pattern |
 | `Worker` | `create_worker()` | Registration is automatic now |
 | `auto_heartbeater` | built into `@task` | Decorator removed |

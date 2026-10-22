@@ -189,6 +189,15 @@ class MyQueryExtractor(App):
         ...
 ```
 
+In `run()`, keep two things the old `SqlQueryExtractor.run()` did:
+
+- Use `input.credential_ref`; if it is `None` and `input.credential_guid` is set, use
+  `application_sdk.credentials.legacy_credential_ref(input.credential_guid)`
+  (older connectors send only `credential_guid`).
+- Catch errors and re-raise them as a typed `InternalError` subclass
+  (`application_sdk.errors`) with `from e`. The old `run()` raised
+  `SqlQueryExtractionError`, which is internal to the SDK.
+
 ---
 
 ## Step 3: Upgrade Incremental SQL Extraction
