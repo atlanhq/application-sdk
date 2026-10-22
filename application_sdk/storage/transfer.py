@@ -217,10 +217,13 @@ async def _upload_from_store(
       (FND-536).
     * Step 1 — cross-store SHA-256 dedup: skips the transfer when both stores
       already hold the same content at their respective keys.
-    * Step 3 — deployment-store fallback: downloads to a temporary local file
-      and re-uploads to the target.  Both legs validate: the download against
-      the source's sidecar, the upload against what the target reports back,
-      and ``upload_file`` writes the target's own sidecar (FND-306).
+    * Same-store, different-key copies use the backend's server-side copy and
+      carry the source digest to the target without local staging. S3 objects
+      above 5 GiB use ETag-pinned multipart range copies.
+    * Step 3 — cross-store fallback: downloads to a temporary local file and
+      re-uploads to the target. Both legs validate: the download against the
+      source's sidecar, the upload against what the target reports back, and
+      ``upload_file`` writes the target's own sidecar (FND-306).
 
     Args:
         source_store: Store to read *source_key* from.
@@ -266,6 +269,19 @@ async def _upload_from_store(
         # that skips everything is still forward progress.
         current_progress_tracker().mark_progress("storage.copy_file")
         return False, "skipped:hash_match", matched
+
+    if source_store is target_store and source_key != target_key:
+        from application_sdk.storage._copy import _copy_same_store  # noqa: PLC0415
+        from application_sdk.storage.integrity import (  # noqa: PLC0415
+            write_digest_sidecar,
+        )
+
+        digest = await read_expected_digest(source_store, source_key)
+        await _copy_same_store(source_store, source_key, target_key)
+        if digest is not None:
+            await write_digest_sidecar(target_store, target_key, digest)
+        current_progress_tracker().mark_progress("storage.copy_file")
+        return True, "uploaded", digest
 
     fd, tmp_path_str = tempfile.mkstemp()
     os.close(fd)
