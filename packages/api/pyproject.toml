@@ -51,7 +51,7 @@ aws = [
 # Never needed to serve a handler: the input-contract models import pyatlan_v9
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
 # calls. Declared so those function-level imports are an extra's, as on the worker.
-pyatlan = ["pyatlan>=11.3,<12"]
+pyatlan = ["pyatlan>=11.5.0,<12"]
 
 [project.urls]
 Homepage = "https://github.com/atlanhq/application-sdk"
