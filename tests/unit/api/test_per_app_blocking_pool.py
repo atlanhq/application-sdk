@@ -93,6 +93,68 @@ async def test_a_stuck_app_does_not_stall_another_app() -> None:
         healthy.state.blocking_executor.shutdown(wait=False)
 
 
+async def test_several_stuck_apps_do_not_stall_another_app() -> None:
+    """Each stuck app fills only its own pool, however many of them there are."""
+    handlers = [_Stuck() for _ in range(4)]
+    stuck = [
+        build_asgi_app(handler, app_name=f"stuck-{i}", blocking_threads=1)
+        for i, handler in enumerate(handlers)
+    ]
+    healthy = build_asgi_app(_Healthy(), app_name="healthy", blocking_threads=1)
+    body = {"credentials": []}
+    clients = [
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=a), base_url="http://s")
+        for a in stuck
+    ]
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=healthy), base_url="http://h"
+        ) as h:
+            blocked = [
+                asyncio.create_task(c.post("/workflows/v1/auth", json=body))
+                for c in clients
+            ]
+            # Every stuck app's only thread is now stuck — known, not assumed.
+            for handler in handlers:
+                await asyncio.wait_for(handler.started.wait(), timeout=5)
+            response = await asyncio.wait_for(
+                h.post("/workflows/v1/auth", json=body), timeout=5
+            )
+            assert response.status_code == 200
+            assert _THREADS["healthy"].startswith("api-healthy-")
+            for handler in handlers:
+                handler.release.set()
+            for task in blocked:
+                assert (await task).status_code == 200
+    finally:
+        for handler in handlers:
+            handler.release.set()
+        for c in clients:
+            await c.aclose()
+        for a in [*stuck, healthy]:
+            a.state.blocking_executor.shutdown(wait=False)
+
+
+async def test_a_hosted_request_is_charged_to_its_app() -> None:
+    """Every route, not only the handler routes, charges its offloads to its app."""
+    from application_sdk._runtime import offload
+
+    app = build_asgi_app(_Healthy(), app_name="charged", blocking_threads=1)
+
+    @app.get("/owner")
+    async def owner() -> dict[str, str]:
+        return {"owner": offload._current_offload_owner()}
+
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://c"
+        ) as c:
+            response = await c.get("/owner")
+        assert response.json() == {"owner": "charged"}
+    finally:
+        app.state.blocking_executor.shutdown(wait=False)
+
+
 async def test_outside_a_hosted_request_run_in_thread_uses_the_shared_pool() -> None:
     name = await run_in_thread(lambda: threading.current_thread().name)
     assert name.startswith("sdk-blocking-")

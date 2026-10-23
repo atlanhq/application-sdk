@@ -905,6 +905,31 @@ OTLP.
 > fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
 > worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
 
+#### Opt-in creation rules
+
+By default the check runs exactly what pyatlan_v9's `.validate(for_creation=True)` checks. pyatlan
+11.5.0 derives SQL parents from the qualifiedName in its `creator()` helpers, so it stopped
+reporting SQL-family assets that lack their parents: a `Schema` without `database` /
+`database_name` / `database_qualified_name`, a `Table` without `atlan_schema`, and `Table`, `View`,
+`Column`, `Procedure` and the other SQL-family types without their `schema_*` / `database_*`
+names. A transform that writes NDJSON by hand can still emit those assets, and publish needs those
+fields. An app opts back in to the checks by naming a rule set:
+
+```python
+from application_sdk.validation import AssetCreationRules
+
+
+class MyApp(App):
+    asset_validation_rules = frozenset({AssetCreationRules.SQL_PARENTS})
+```
+
+`App.asset_validation_rules` applies to both `upload()` and `upload_refs()`. The check stays
+warn-only. Rule messages use pyatlan's `"<field> is required for creation"` wording, so they land in
+`asset_validation_summary` under the same `required_for_creation:<field>` keys. Integration tests
+declare the same set on `BaseIntegrationTest.asset_validation_rules`, with a per-`Scenario`
+override. `validate_asset`, `validate_transformed_dir` and `validate_assets_as_artifact` take it
+as `creation_rules=`. The default is an empty set, which keeps the SDK aligned with pyatlan.
+
 ### Declaring artifact schemas
 
 Data crosses app boundaries as **files**, and at every hand-off the producer's idea of the
@@ -1284,6 +1309,8 @@ class MyConnector(App):
 ```python
 policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 ```
+
+A non-retryable error raised in a task (an `AppError` whose `retryable` resolves to `False`) is non-retryable for the whole run. The task is not retried, and a workflow-level `RetryPolicy` does not re-run the workflow either: the generated workflow re-raises the failure as a top-level non-retryable `ApplicationError` that keeps the task's `type` and `details`. A retryable error that uses up the task's attempts still fails the workflow retryably, so a workflow-level retry applies.
 
 ---
 

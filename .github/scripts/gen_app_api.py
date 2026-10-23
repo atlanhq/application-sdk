@@ -609,9 +609,19 @@ def _toml_str(value: str) -> str:
     return json.dumps(value)
 
 
+#: A PEP 508 ``name[extras] @ url`` requirement: what ``packaging``'s
+#: ``Requirement.url`` reads, without importing it (this script runs alone).
+_DIRECT_REFERENCE = re.compile(
+    r"^\s*[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\s*(?:\[[^\]]*\])?\s*@"
+)
+
+
 def _pyproject(config: Config) -> str:
     deps = [_api_requirement(config), *config.dependencies]
-    direct = config.api_source is not None and "git" in config.api_source
+    # hatchling refuses a direct reference unless allowed, so allow it only when
+    # one is declared: a git-pinned api package, or a private package that a bare
+    # name would expose to dependency confusion. Every requirement ships as declared.
+    direct = any(_DIRECT_REFERENCE.match(d) for d in deps)
     return (
         "[project]\n"
         f'name = "{config.distribution}"\n'

@@ -134,14 +134,49 @@ jobs:
   fan-out:
     # After an SDK release, trigger the self-hosted Renovate runner so consumers
     # pick up the new atlan-application-sdk version within minutes rather than
-    # waiting for the next scheduled run. Skipped automatically when `release` is
-    # skipped (non-release PR) or fails.
+    # waiting for the next scheduled run, then re-dispatch the fleet repos that
+    # sweep missed. Skipped automatically when `release` is skipped (non-release
+    # PR) or fails.
+    #
+    # KEEP IN STEP with conformance-publish.yml's fan-out (FND-4330): both jobs
+    # share the concurrency group below and wait for EVERY first-party version
+    # on main, not just their own. The SDK and conformance bump PRs routinely
+    # merge seconds apart; the later fan-out cancels the earlier one while it is
+    # still waiting, and the survivor dispatches once, after both are on PyPI.
+    # A cancelled fan-out shows this run as cancelled even though the release
+    # job succeeded.
     name: Fan out Renovate to consumers
     needs: [release]
     runs-on: ubuntu-latest
+    # Visibility wait (<=15 min) + full sweep + up to two scoped re-runs.
+    timeout-minutes: 120
+    concurrency:
+      group: renovate-release-fanout
+      cancel-in-progress: true
     permissions:
       contents: read
     steps:
+      # main, not the bump commit: main is where a sibling release that merged
+      # moments later already shows its version.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the release to be visible on PyPI
+        id: pypi
+        # Soft-fail: a timeout already warns and exits 0, and anything else
+        # going wrong here must not cost the fleet its sweep.
+        continue-on-error: true
+        run: |
+          python3 .github/scripts/wait_for_pypi_release.py \
+            --pyproject pyproject.toml \
+            --pyproject packages/api/pyproject.toml \
+            --pyproject packages/conformance/pyproject.toml
+
+      # Minted after the wait so the one-hour token covers the follow-up.
+      # Owner-scoped (no `repositories:`): the follow-up reads fleet repos'
+      # uv.lock and rules as well as dispatching here.
       - name: Mint fleet App token
         id: app-token
         continue-on-error: true
@@ -150,16 +185,15 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
-          repositories: application-sdk
-      - name: Trigger the self-hosted Renovate runner
-        # No dry_run/repos overrides: inherits renovate.yaml's live defaults (full
-        # discovery, dry_run=null). Soft-fail so a fan-out hiccup never fails the
-        # release — the 4-hourly schedule is the backstop.
+
+      - name: Trigger Renovate and re-dispatch repos it missed
+        # The full sweep inherits renovate.yaml's live defaults. Soft-fail
+        # throughout (the script warns and exits 0) so a fan-out hiccup never
+        # fails the release — the 4-hourly schedule is the backstop.
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-        run: |
-          gh workflow run renovate.yaml --repo atlanhq/application-sdk \
-          || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."
+          PACKAGES: ${{ steps.pypi.outputs.packages }}
+        run: python3 .github/scripts/renovate_release_followup.py --packages "$PACKAGES"
 
   linear-release:
     # Record what shipped in this version as a Linear release, so the

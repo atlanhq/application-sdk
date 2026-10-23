@@ -154,7 +154,11 @@ extras = ["sql", "aws"]
   `app/generated/` as `<app>_api/*`, with a generated `pyproject.toml` (its
   dependencies, and the `atlan.app_api` and `atlan.app_server` entry points)
   and `__init__.py`. The api requirement is floored at the SDK version the app
-  locks in its `uv.lock`, keeping the app's upper bound.
+  locks in its `uv.lock`, keeping the app's upper bound. A dependency declared
+  as a direct reference (`name @ git+https://...@<rev>`, such as a private
+  package) ships exactly as declared; the generated `pyproject.toml` sets
+  hatchling's `allow-direct-references` only when a dependency, the api
+  package included, is one.
 - `hash` prints the content hash of that package; a worker-only change leaves
   it unchanged.
 
@@ -173,7 +177,7 @@ service does for it, from one shared implementation each:
 |---|---|---|
 | `auth`, `check`, `warmup`, `metadata` | `handler/routes.py` | The app's handler. |
 | `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is the one the app's worker polls: its `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`), else `derive_task_queue(app, deployment)` with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME`, else the host's own `ATLAN_DEPLOYMENT_NAME` (the chart gives the host and every worker the same tenant-wide `deploymentName`; Heracles re-stamps SDR nodes itself). The host never uses its own bare `ATLAN_TASK_QUEUE` or `ATLAN_APPLICATION_NAME` for an app. A manifest computed per request comes from the handler's `compute_manifest`, stamped the same way; `check` refuses a `core.py` `compute_manifest` hook. |
-| `config/{id}` (GET/POST), `file` | `handler/object_routes.py` | One S3 bucket from `ATLAN_S3_BUCKET` / `ATLAN_S3_REGION` (the `aws` extra, ambient AWS identity). A config is keyed `persistent-artifacts/apps/<app>/<type>/<id>/config.json` with the hosted app's name, the key its worker reads. An upload's `prefix` must be relative path segments with no `..`, and on the host every upload lands under the app's own `persistent-artifacts/apps/<app>/uploads/`. 503 without `ATLAN_S3_BUCKET`. |
+| `config/{id}` (GET/POST), `file` | `handler/object_routes.py` | One S3 bucket from `ATLAN_S3_BUCKET` / `ATLAN_S3_REGION` (the `aws` extra, ambient AWS identity). On GCP `ATLAN_GCP_BUCKET` / `ATLAN_GCP_REGION` instead, through GCS's S3-compatible endpoint with `ATLAN_GCP_HMAC_ACCESS_KEY` / `ATLAN_GCP_HMAC_SECRET`, sending checksums only where an API requires them (GCS rejects boto3's default CRC32). A config is keyed `persistent-artifacts/apps/<app>/<type>/<id>/config.json` with the hosted app's name, the key its worker reads. An upload's `prefix` must be relative path segments with no `..`, and on the host every upload lands under the app's own `persistent-artifacts/apps/<app>/uploads/`. 503 without either bucket, as on an Azure Blob tenant (not served yet). The host's manifest sets each of these as an alias of the chart's name (`ATLAN_GCP_BUCKET: "$(GCP_BUCKET)"`); an alias the chart leaves unresolved on another cloud (`$(...)` text) counts as unset. |
 
 The worker registers the same modules with its own lookups (the app registry,
 its Dapr-configured store), and `test_metadata_route_parity.py` /
@@ -220,7 +224,8 @@ hosted app is **trusted first-party code**:
 - **Shared capacity.** Each app has its own `run_in_thread` / `submit_in_thread`
   pool, but the event loop, FastAPI's thread pool and the host's request
   concurrency limit are shared.
-- **One AWS identity** writes the shared bucket for every app; uploads are
+- **One identity** (the pod's AWS identity, or on GCP the tenant's HMAC key)
+  writes the shared bucket for every app; uploads are
   contained to each app's namespace by the shared route, and config keys use
   the mounted app's name, never request input.
 
