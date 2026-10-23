@@ -85,7 +85,6 @@ def cap(monkeypatch: pytest.MonkeyPatch):
 
 
 class TestPerAppCap:
-    @pytest.mark.asyncio
     async def test_one_apps_hung_calls_do_not_block_another_app(
         self, cap, hangs: list[_Hang]
     ) -> None:
@@ -113,7 +112,6 @@ class TestPerAppCap:
         assert error.limit == "2"
         assert "app-a-blocks" in error.message
 
-    @pytest.mark.asyncio
     async def test_a_refusal_is_immediate_not_queued(
         self, cap, hangs: list[_Hang]
     ) -> None:
@@ -128,7 +126,6 @@ class TestPerAppCap:
                 await run_in_thread(lambda: None)
         assert time.monotonic() - start < _PROMPT
 
-    @pytest.mark.asyncio
     async def test_the_slot_is_held_until_the_thread_finishes_not_the_caller(
         self, cap, hangs: list[_Hang]
     ) -> None:
@@ -150,7 +147,6 @@ class TestPerAppCap:
         with offload_owner("app-slot-held"):
             assert await run_in_thread(lambda: "free again") == "free again"
 
-    @pytest.mark.asyncio
     async def test_no_cap_by_default_calls_beyond_the_pool_width_still_queue(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -169,10 +165,11 @@ class TestPerAppCap:
         assert sum(results) == width + 5
         assert offload._LEDGER.in_flight("app-uncapped") == 0
 
-    @pytest.mark.asyncio
-    async def test_an_invalid_cap_is_ignored_and_reported_once(self, cap) -> None:
+    async def test_an_invalid_cap_is_ignored_and_reported_once(
+        self, cap, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         cap("not-a-number")
-        offload._REPORTED_BAD_CAPS.discard("not-a-number")
+        monkeypatch.setattr(offload, "_REPORTED_BAD_CAPS", set())
 
         with patch.object(offload.logger, "warning") as warning:
             with offload_owner("app-bad-cap"):
@@ -188,7 +185,6 @@ class TestPerAppCap:
 
 
 class TestStrandedCount:
-    @pytest.mark.asyncio
     async def test_a_hung_call_past_its_caller_is_counted_until_it_returns(
         self, hangs: list[_Hang]
     ) -> None:
@@ -204,26 +200,33 @@ class TestStrandedCount:
         assert "app-stranded" in rendered
         assert "_Hang" in rendered
 
-        hang.release.set()
-        await _wait_until(
-            lambda: "app-stranded" not in offload._LEDGER.stranded(),
-            "the stranded count to clear",
-        )
+        with patch.object(offload.logger, "info") as info:
+            hang.release.set()
+            await _wait_until(
+                lambda: "app-stranded" not in offload._LEDGER.stranded(),
+                "the stranded count to clear",
+            )
+        finished = [c for c in info.call_args_list if "app-stranded" in str(c)]
+        assert len(finished) == 1
+        assert "finished" in str(finished[0])
 
-    @pytest.mark.asyncio
     async def test_the_gauge_reports_stranded_threads_per_app(
-        self, hangs: list[_Hang]
+        self, hangs: list[_Hang], monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """The first strand registers the named gauge, and its callback reads the ledger."""
+        monkeypatch.setattr(offload, "_INSTRUMENTS", {})
         hang = _Hang()
         hangs.append(hang)
-        await _strand("app-gauge", hang)
+        with patch("opentelemetry.metrics.get_meter") as get_meter:
+            await _strand("app-gauge", hang)
 
-        observed = {
-            o.attributes["app.name"]: o.value for o in offload._observe_stranded(None)
-        }
+        create = get_meter.return_value.create_observable_gauge
+        create.assert_called_once()
+        assert create.call_args.args[0] == "offload.stranded_threads"
+        (callback,) = create.call_args.kwargs["callbacks"]
+        observed = {o.attributes["app.name"]: o.value for o in callback(None)}
         assert observed.get("app-gauge") == 1
 
-    @pytest.mark.asyncio
     async def test_a_queued_call_given_up_on_never_runs_and_leaks_nothing(
         self, cap
     ) -> None:
@@ -266,7 +269,6 @@ class TestStrandedCount:
 class TestOnAnAppsOwnPool:
     """The consolidated host runs each app's calls on its own pool."""
 
-    @pytest.mark.asyncio
     async def test_a_stranded_call_runs_on_the_apps_pool_and_is_counted(
         self, cap, hangs: list[_Hang]
     ) -> None:
@@ -304,7 +306,6 @@ class TestOnAnAppsOwnPool:
 
 
 class TestOwnership:
-    @pytest.mark.asyncio
     async def test_a_handler_invocation_charges_its_own_app(
         self, cap, hangs: list[_Hang]
     ) -> None:
