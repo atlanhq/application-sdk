@@ -5774,14 +5774,30 @@ SCOPED_HEAD = {
         "from application_sdk.handler.routes import handler_compute_manifest\n\n"
         "def build():\n    return handler_compute_manifest(None)\n"
     ),
+    # F-b0cde5: the call names the alias, not the symbol.
+    "app/aliased.py": (
+        "from application_sdk.handler.routes import handler_compute_manifest as hcm\n\n"
+        "def build():\n    return hcm(None)\n"
+    ),
     # Calls the name without importing it: some other handler_compute_manifest.
     "app/other.py": "def run():\n    return handler_compute_manifest()\n",
     "application_sdk/storage/store.py": (
         "class Store:\n    def get(self, key):\n        return key.strip()\n"
     ),
     "application_sdk/storage/use.py": (
-        "from .store import Store\n\ndef read():\n    return Store().get('k')\n"
+        "from .store import Store\n\n"
+        "def read():\n    return Store().get('k')\n\n"
+        "def typed(s: 'Store | None'):\n    return s.get('k')\n\n"
+        # F-fc5325: the file imports Store, but `d` is not one.
+        "def lookup(d):\n    return d.get('x')\n\n"
+        "class Cached(Store):\n    def get(self, key):\n        return super().get(key)\n"
     ),
+    # F-3f69d2: a method of a local class escapes through the instance.
+    "application_sdk/handler/factory.py": (
+        "def factory():\n    class Runner:\n        def run(self):\n"
+        "            return 1\n    return Runner()\n"
+    ),
+    "app/runs.py": "def go(r):\n    return r.run()\n",
     "app/config.py": "def lookup(d):\n    return d.get('k')\n",
 }
 
@@ -5811,23 +5827,48 @@ def test_recheck_evidence_lists_no_outside_callers_for_a_nested_symbol():
         "handler_compute_manifest, so no code outside it can call it by name "
         "(callers inside handler_compute_manifest: none; 1 same-name call "
         "elsewhere unrelated: no import reaches it)",
-        "callers of handler_compute_manifest at the PR head (2 in its file or "
+        "callers of handler_compute_manifest at the PR head (3 in its file or "
         "importing it; 1 same-name call elsewhere unrelated: no import reaches "
-        "it): app/main.py:3 build, application_sdk/handler/routes.py:9 serve",
+        "it): app/aliased.py:3 build, app/main.py:3 build, "
+        "application_sdk/handler/routes.py:9 serve",
     ]
     assert not any("e2e/base.py" in x or "app/other.py" in x for x in ev.facts)
 
 
 def test_recheck_evidence_keeps_a_method_caller_through_a_relative_import():
-    """A method is listed only where its class is in reach; a `.get()` on any
-    other receiver is a count, so dict lookups do not pose as its callers."""
+    """A method is listed only where the call's receiver is tied to its class:
+    `C()`, an annotation, or super() in a subclass. A `.get()` on any other
+    receiver is a count, even in a file that imports the class (F-fc5325)."""
     ev = _scoped_evidence("application_sdk/storage/store.py", "return key.strip()")
     assert [x for x in ev.facts if "caller" in x] == [
-        # dict.get in routes.py and config.py: counted, never listed as callers.
-        "callers of Store.get at the PR head (1 in its file or importing it; 2 more "
+        # dict.get in routes.py, config.py and use.py's lookup: counted, not listed.
+        "callers of Store.get at the PR head (3 on a receiver typed as Store; 3 more "
         ".get() calls on a receiver the index cannot type): "
-        "application_sdk/storage/use.py:3 read"
+        "application_sdk/storage/use.py:3 read, application_sdk/storage/use.py:6 typed, "
+        "application_sdk/storage/use.py:13 Cached.get"
     ]
+
+
+def test_recheck_evidence_treats_a_local_class_method_as_a_method():
+    """F-3f69d2: `factory.Runner.run` is reachable wherever the instance goes,
+    so it is not "local to factory"; `r.run()` elsewhere is an untyped count."""
+    ev = _scoped_evidence("application_sdk/handler/factory.py", "return 1")
+    assert [x for x in ev.facts if "caller" in x] == [
+        "callers of factory.Runner.run at the PR head (0 on a receiver typed as "
+        "Runner; 1 more .run() call on a receiver the index cannot type): none"
+    ]
+
+
+def test_index_keeps_calls_made_in_a_nested_class_body():
+    """F-e06eb2: a class body runs at definition; its calls are the class's."""
+    idx = build_index(
+        Path("/nonexistent"),
+        overrides={
+            "m.py": "def build():\n    class Local:\n        value = register()\n"
+            "    return Local\n"
+        },
+    )
+    assert [c.qualname for c in idx.callers_of("register")] == ["m:build.Local"]
 
 
 def test_recheck_request_keeps_pr_code_inside_its_block(repo: Path):

@@ -1038,9 +1038,14 @@ def _caller_facts(idx: Index, sym: Symbol, added: PRAdditions) -> list[str]:
         if got.untyped
         else ""
     )
+    reach = (
+        f"on a receiver typed as {got.owner.name}"
+        if got.owner
+        else "in its file or importing it"
+    )
     return [
-        f"callers of {dotted} at the PR head ({len(got.callers)} in its file or "
-        f"importing it{unrelated}{untyped}): {listing(got.callers)}"
+        f"callers of {dotted} at the PR head ({len(got.callers)} {reach}"
+        f"{unrelated}{untyped}): {listing(got.callers)}"
     ]
 
 
