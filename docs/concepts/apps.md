@@ -1262,6 +1262,69 @@ See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design inc
 
 Picking a pool means guessing a resource profile unless you have measured one. Activity sizing telemetry records peak container memory, CPU throttling and input bytes per execution, which is what turns "this feels memory-intensive" into a number you can size against. It is off by default and opt-in per activity — see [Monitoring → Activity Sizing Telemetry](monitoring.md#activity-sizing-telemetry).
 
+### Size tiers
+
+`pool=` fixes a queue at decoration time. That is the right shape when a task's
+resource profile is a property of the *task*. It cannot express one that is a
+property of the **run** — the same activity needing 0.5 GiB for one input and
+20 GiB for another, which is the usual shape across a fleet.
+
+`application_sdk.tiering` covers that case. An app declares a ladder: its tiers,
+the memory each one's pool holds, and one sizer per activity. At dispatch the
+workflow asks the ladder for a tier, resolves it to a queue, and passes the
+queue to the task:
+
+```python
+from application_sdk.tiering import ActivitySizer, Axis, Band, INF, Ladder, queue_map_from_env, resolve, run_on_queue
+
+LADDER = Ladder(
+    order=("s", "m", "l"),
+    memory_gib={"s": 6.0, "m": 8.0, "l": 16.0},
+    sizers={
+        "transform": ActivitySizer(
+            activity="transform",
+            floor="s",
+            why="measured: steady under 3 GiB except on file-heavy inputs",
+            axes=(Axis("files", (Band(12_000, "s"), Band(32_000, "m"), Band(INF, "l"))),),
+        ),
+    },
+)
+
+# In an activity (it reads the environment), once per run:
+queues = queue_map_from_env()
+
+# In the workflow:
+tier = LADDER.tier_for("transform", {"files": discovered.file_count})
+await run_on_queue(self, "transform", args, resolve(tier, queues))
+```
+
+Three properties are worth knowing before you adopt it.
+
+**Classification is total.** Every activity always names a tier; an activity with
+no tier is one `temporal-activity-rerouter` will not escalate, because it only
+moves work *out of* a declared tier. An activity with no registered sizer gets
+the smallest rung and climbs.
+
+**Inertness is a deployment property, not a code one.** `resolve` answers `None`
+for every tier while `ATLAN_APP_SIZE_QUEUE_MAP` is unset, and `run_on_queue`
+with `None` is the ordinary bound-method call — same activity name, same
+options, same command in workflow history. So a build carrying a ladder routes
+nothing until that variable is set, and unsetting it is the rollback.
+
+**The ladder has no memory.** The tier is a function of what this run measured
+and nothing else. Caching "where this connection ended last time" would hide a
+broken axis instead of failing it; a wrong tier has to cost a visible climb,
+because the climb is the only feedback the ladder gets.
+
+The variable name is a shared contract: `temporal-activity-rerouter` reads the
+same `ATLAN_APP_SIZE_QUEUE_MAP` off the pod template to build its escalation
+ladder, so the app and the watcher cannot disagree about which pools form a
+series. Turn the escalation lane on *before* setting the queue map —
+pin-and-climb with nothing to climb to is worse than not routing at all.
+
+A per-dispatch queue takes precedence over the task's declared `pool=` for that
+call only.
+
 ## Retry Policies
 
 Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff: initial 1s, coefficient 2.0, capped at 5 minutes):
