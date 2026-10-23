@@ -41,10 +41,10 @@ is structural upgrade work, not refactoring.
 ```
 Does the connector extract SQL database metadata?
 ├── YES → Does it also do incremental extraction (diff-based)?
-│         ├── YES → §2c  IncrementalSqlMetadataExtractor
-│         └── NO  → §2a  SqlMetadataExtractor
+│         ├── YES → §2c  Incremental SQL Metadata Extractor (SqlApp + custom run())
+│         └── NO  → §2a  SQL Metadata Extractor (SqlApp)
 ├── Does the connector extract SQL query logs?
-│   └── YES → §2b  SqlQueryExtractor
+│   └── YES → §2b  SQL Query Extractor (App)
 ├── Does the connector call a REST/HTTP API (BI tool, SaaS platform)?
 │   └── YES → §2d  REST/HTTP Metadata Extractor (App)
 └── Custom connector (none of the above)?
@@ -53,6 +53,10 @@ Does the connector extract SQL database metadata?
 
 Every connector also has a **Handler** (§4) and an **entry point** (§5).
 Apply those sections regardless of which workflow path you chose.
+
+`SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor` and
+`SqlQueryExtractor` are deprecated (removal in v4.0.0, conformance `B001`).
+Do not land on them: the import rewriter writes them as placeholders, and §2a–§2c replace them.
 
 ---
 
@@ -81,44 +85,49 @@ class MyActivities(BaseSQLMetadataExtractionActivities):
 
 ### After (v3)
 
-```python
-from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts.sql_metadata import (
-    FetchDatabasesInput, FetchDatabasesOutput,
-    FetchSchemasInput, FetchSchemasOutput,
-    FetchTablesInput, FetchTablesOutput,
-    FetchColumnsInput, FetchColumnsOutput,
-    ExtractionInput, ExtractionOutput,
-)
-from application_sdk.app import task
-from application_sdk.common.models import TaskStatistics
+Reference app: atlan-mysql-app.
 
-class MyExtractor(SqlMetadataExtractor):
+```python
+from typing import Any
+
+from application_sdk.templates import SqlApp
+
+class MyExtractor(SqlApp):
+    sql_client_class = MySQLClient  # your BaseSQLClient subclass
+
     fetch_database_sql = "SELECT ..."
     fetch_schema_sql   = "SELECT ..."
     fetch_table_sql    = "SELECT ..."
     fetch_column_sql   = "SELECT ..."
 
-    @task(timeout_seconds=1800)
-    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
-        # custom logic  ← paste original method body here; rename workflow_args → input
-        return FetchDatabasesOutput(chunk_count=1, total_record_count=n)
+    def map_database(self, record: dict[str, Any], connection_qn: str):
+        from pyatlan_v9.model.assets import Database
+        return Database.creator(name=record["database_name"], connection_qualified_name=connection_qn)
+
+    # map_schema / map_table / map_column likewise
 ```
 
 ### Checklist
 
 - [ ] Delete the `@workflow.defn` class and `activities_cls = …` line.
-- [ ] Merge both classes into one `MyExtractor(SqlMetadataExtractor)`.
+- [ ] Merge both classes into one `MyExtractor(SqlApp)` and set `sql_client_class`.
 - [ ] Move all SQL class-level attributes (`fetch_database_sql`, etc.) to the merged class.
-- [ ] For each overridden activity method:
-  - Rename the parameter from `workflow_args: Dict[str, Any]` to
-    `input: FetchXxxInput`.
-  - Replace `ActivityStatistics(...)` with `FetchXxxOutput(...)`.
-  - Add `@task(timeout_seconds=…)`.
-- [ ] Delete methods you did **not** override (the base class provides defaults).
+- [ ] Write `map_database` / `map_schema` / `map_table` / `map_column` (and
+      `map_procedure` if used): each turns one raw SQL row into a
+      `pyatlan_v9` asset. They replace the v2 transformer / YAML step.
+- [ ] For each overridden v2 activity method (`fetch_databases`, …):
+  - If it only changed the SQL, set the matching `fetch_*_sql` attribute and delete it.
+  - Otherwise override the matching `extract_*` task
+    (`input: ExtractionTaskInput` → `ExtractionTaskOutput`, from
+    `application_sdk.templates.contracts.sql_metadata`) and keep the
+    `@task(timeout_seconds=…)` decorator, or override `run()` with the
+    public helpers the `SqlApp` docstring lists (`build_task_input`,
+    `build_transform_input`, `finalize_extraction`).
+- [ ] The default `run()` runs the four extracts in parallel. If one query
+      needs another's result (per-schema, per-database), override `run()`.
 - [ ] Replace `from application_sdk.activities.common.models import ActivityStatistics`
       with `from application_sdk.common.models import TaskStatistics` if used
-      directly (usually it is now inside the typed Output).
+      directly.
 
 ---
 
@@ -143,15 +152,19 @@ class MyQueryActivities(SQLQueryExtractionActivities):
 
 ### After (v3)
 
+`SqlApp` has no query-log tasks, so a query-log extractor subclasses plain
+`App` and keeps its own query tasks and `run()`. The typed contracts in
+`application_sdk.templates.contracts.sql_query` are not deprecated; reuse them.
+
 ```python
-from application_sdk.templates import SqlQueryExtractor
+from application_sdk.app import App, task
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput, QueryBatchOutput,
     QueryFetchInput, QueryFetchOutput,
+    QueryExtractionInput, QueryExtractionOutput,
 )
-from application_sdk.app import task
 
-class MyQueryExtractor(SqlQueryExtractor):
+class MyQueryExtractor(App):
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         ...
@@ -159,14 +172,29 @@ class MyQueryExtractor(SqlQueryExtractor):
     @task(timeout_seconds=3600)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
         ...
+
+    async def run(self, input: QueryExtractionInput) -> QueryExtractionOutput:  # type: ignore[override]
+        batches = await self.get_query_batches(QueryBatchInput(workflow_args=...))
+        for batch_number in range(batches.total_batches):
+            await self.fetch_queries(QueryFetchInput(workflow_args=..., batch_number=batch_number, batch_size=batches.batch_size))
+        return QueryExtractionOutput(...)
 ```
 
 ### Checklist
 
 - [ ] Delete the `@workflow.defn` class.
-- [ ] Merge both classes into `MyQueryExtractor(SqlQueryExtractor)`.
+- [ ] Merge both classes into `MyQueryExtractor(App)`.
 - [ ] Rename `workflow_args: Dict[str, Any]` → `input: QueryBatchInput` / `input: QueryFetchInput`.
-- [ ] Add `@task(timeout_seconds=…)` to each overridden method.
+- [ ] Add `@task(timeout_seconds=…)` to each query task.
+- [ ] Write `run()`: get the batch count, fetch each batch, return the totals.
+      To upload output, call `App.upload`, not `upload_to_atlan` (deprecated).
+- [ ] In `run()`, use `input.credential_ref`; if it is `None` and
+      `input.credential_guid` is set, use
+      `application_sdk.credentials.legacy_credential_ref(input.credential_guid)`
+      (older connectors send only `credential_guid`).
+- [ ] Catch errors in `run()` and re-raise them as a typed `InternalError`
+      subclass (`application_sdk.errors`) with `from e`. The old `run()` raised
+      `SqlQueryExtractionError`, which is internal to the SDK.
 
 ---
 
@@ -193,26 +221,29 @@ class MyIncrementalActivities(BaseSQLIncrementalMetadataExtractionActivities):
 
 ### After (v3)
 
-```python
-from application_sdk.templates import IncrementalSqlMetadataExtractor
-from application_sdk.templates.contracts.incremental_sql import (
-    IncrementalExtractionInput, IncrementalExtractionOutput,
-    FetchColumnsInput, FetchColumnsOutput,
-)
-from application_sdk.app import task
+There is no drop-in incremental base. Subclass `SqlApp` as in §2a and
+override `run()` for the incremental orchestration.
 
-class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_columns(self, input: FetchColumnsInput) -> FetchColumnsOutput:
+```python
+from application_sdk.templates import SqlApp
+from application_sdk.templates.contracts.sql_metadata import ExtractionInput, ExtractionOutput
+
+class MyIncrementalExtractor(SqlApp):
+    sql_client_class = MyClient
+    fetch_column_sql = "SELECT ..."
+
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
+        # incremental steps as your own @task methods, around or instead of super().run(input)
         ...
 ```
 
 ### Checklist
 
-- [ ] Same pattern as §2a — delete the workflow class, merge, rename params, add `@task`.
-- [ ] The 4-phase incremental sequence (marker → fetch → diff → finalize) is
-      provided automatically by the base class `run()`.  Only override `run()`
-      if you need a custom sequence.
+- [ ] Same pattern as §2a: delete the workflow class, merge into one `SqlApp`
+      subclass, set the SQL attributes, write the `map_*` functions.
+- [ ] The v2 4-phase sequence (marker → fetch → diff → finalize) is not
+      provided by `SqlApp`. Write the phases the connector needs as `@task`
+      methods and call them from your `run()`.
 
 ---
 

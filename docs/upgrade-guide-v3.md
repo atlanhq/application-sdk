@@ -30,9 +30,9 @@ v3.0 is a clean break from v2. All v2 Python module paths raise `ImportError` �
 | `from application_sdk.handlers import HandlerInterface` | `from application_sdk.handler import Handler` |
 | `from application_sdk.worker import Worker` | `from application_sdk.execution import create_worker` |
 | `from application_sdk.application import BaseApplication` | `from application_sdk.main import run_dev_combined` |
-| `from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow` | `from application_sdk.templates import SqlMetadataExtractor` |
-| `from application_sdk.workflows.metadata_extraction.incremental_sql import IncrementalSQLMetadataExtractionWorkflow` | `from application_sdk.templates import IncrementalSqlMetadataExtractor` |
-| `from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow` | `from application_sdk.templates import SqlQueryExtractor` |
+| `from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow` | `from application_sdk.templates import SqlApp` |
+| `from application_sdk.workflows.metadata_extraction.incremental_sql import IncrementalSQLMetadataExtractionWorkflow` | `from application_sdk.templates import SqlApp` (custom `run()`) |
+| `from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow` | `from application_sdk.app import App` (own query tasks) |
 | `from application_sdk.services.objectstore import ObjectStore` | `from application_sdk.storage import upload_file, download_file` |
 | `from application_sdk.services.secretstore import SecretStore` | `from application_sdk.infrastructure import SecretStore` |
 | `from application_sdk.services.statestore import StateStore` | `from application_sdk.infrastructure import StateStore` |
@@ -123,26 +123,30 @@ class MyMetadataActivities(BaseSQLMetadataExtractionActivities):
 
 ### v3
 
-```python
-from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts import (
-    FetchDatabasesInput, FetchDatabasesOutput,
-    ExtractionInput, ExtractionOutput,
-)
-from application_sdk.app import task
+`SqlMetadataExtractor` is deprecated (removal in v4.0.0); subclass `SqlApp`
+(reference: atlan-mysql-app).
 
-class MyMetadataExtractor(SqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
-        # fetch databases
-        return FetchDatabasesOutput(chunk_count=1, total_record_count=10)
+```python
+from application_sdk.templates import SqlApp
+
+class MyMetadataExtractor(SqlApp):
+    sql_client_class = MySQLClient
+
+    fetch_database_sql = "SELECT ..."
+    fetch_schema_sql = "SELECT ..."
+    fetch_table_sql = "SELECT ..."
+    fetch_column_sql = "SELECT ..."
+
+    def map_database(self, record, connection_qn):
+        from pyatlan_v9.model.assets import Database
+        return Database.creator(name=record["database_name"], connection_qualified_name=connection_qn)
 ```
 
 Key changes:
 - Single class instead of workflow + activities split
 - Typed `Input`/`Output` Pydantic models instead of `Dict[str, Any]`
 - `@task` decorator instead of `@activity.defn` + manual `execute_activity_method`
-- Override `run()` to customize orchestration (default: parallel fetch of all metadata types)
+- Override `run()` to customize orchestration (default: parallel extract of all metadata types, then transform through the `map_*` functions)
 
 ---
 
@@ -161,15 +165,18 @@ class MyQueryWorkflow(SQLQueryExtractionWorkflow):
 
 ### v3
 
+`SqlQueryExtractor` is deprecated (removal in v4.0.0) and `SqlApp` has no
+query-log tasks. Subclass `App` and keep the query tasks and `run()` in the app:
+
 ```python
-from application_sdk.templates import SqlQueryExtractor
-from application_sdk.templates.contracts import (
+from application_sdk.app import App, task
+from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput, QueryBatchOutput,
     QueryFetchInput, QueryFetchOutput,
+    QueryExtractionInput, QueryExtractionOutput,
 )
-from application_sdk.app import task
 
-class MyQueryExtractor(SqlQueryExtractor):
+class MyQueryExtractor(App):
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         ...
@@ -177,7 +184,19 @@ class MyQueryExtractor(SqlQueryExtractor):
     @task(timeout_seconds=3600)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
         ...
+
+    async def run(self, input: QueryExtractionInput) -> QueryExtractionOutput:  # type: ignore[override]
+        ...
 ```
+
+In `run()`, keep two things the old `SqlQueryExtractor.run()` did:
+
+- Use `input.credential_ref`; if it is `None` and `input.credential_guid` is set, use
+  `application_sdk.credentials.legacy_credential_ref(input.credential_guid)`
+  (older connectors send only `credential_guid`).
+- Catch errors and re-raise them as a typed `InternalError` subclass
+  (`application_sdk.errors`) with `from e`. The old `run()` raised
+  `SqlQueryExtractionError`, which is internal to the SDK.
 
 ---
 
@@ -204,27 +223,23 @@ class MyIncrementalActivities(BaseSQLIncrementalMetadataExtractionActivities):
 
 ### v3
 
-```python
-from application_sdk.templates import IncrementalSqlMetadataExtractor
-from application_sdk.templates.contracts import (
-    IncrementalExtractionInput, IncrementalExtractionOutput,
-    FetchColumnsIncrementalInput, FetchColumnsOutput,
-)
-from application_sdk.app import task
+`IncrementalSqlMetadataExtractor` is deprecated (removal in v4.0.0). Subclass
+`SqlApp` as in Step 1 and override `run()` for the incremental orchestration:
 
-class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
-    @task(timeout_seconds=1800)
-    async def fetch_columns(self, input: FetchColumnsIncrementalInput) -> FetchColumnsOutput:
+```python
+from application_sdk.templates import SqlApp
+from application_sdk.templates.contracts.sql_metadata import ExtractionInput, ExtractionOutput
+
+class MyIncrementalExtractor(SqlApp):
+    sql_client_class = MyClient
+
+    async def run(self, input: ExtractionInput) -> ExtractionOutput:
         ...
 ```
 
-`IncrementalSqlMetadataExtractor` runs a 4-phase extraction by default:
-1. Write an incremental marker (current timestamp)
-2. Fetch the current full state into a local DuckDB file
-3. Diff against the previous state and emit only changed rows
-4. Finalize by persisting the new state to object storage
-
-Override `run()` if you need to customise this sequence. The incremental state files are managed by the framework and cleaned up automatically via the cleanup lifecycle.
+`SqlApp` does not provide the v2 4-phase sequence (marker → fetch → diff →
+finalize). Write the phases the connector needs as `@task` methods and call
+them from `run()`.
 
 ---
 
@@ -246,7 +261,7 @@ Use the asset-mapper pattern when:
 - You don't have SQL queries to templatize in YAML.
 - You want typed intermediate records instead of untyped DataFrames.
 
-SQL connectors should continue to use `SqlMetadataExtractor` (Step 1) and the templated-query pattern.
+SQL connectors use `SqlApp` (Step 1) and the templated-query pattern.
 
 ### v2
 
@@ -1241,7 +1256,7 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 | Deprecated | Replacement |
 |---|---|
 | `application_sdk.application.BaseApplication` | `application_sdk.app.App` + `application_sdk.main.run_dev_combined` |
-| `application_sdk.application.metadata_extraction.sql.BaseSQLMetadataExtractionApplication` | `application_sdk.templates.SqlMetadataExtractor` |
+| `application_sdk.application.metadata_extraction.sql.BaseSQLMetadataExtractionApplication` | `application_sdk.templates.SqlApp` |
 | Multiple `WorkflowInterface` pairs (comma-separated `ATLAN_APP_MODULE`) | Single `App` with multiple `@entrypoint` methods (see Step 5b) |
 
 ### Worker
@@ -1255,11 +1270,11 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 | Deprecated | Replacement |
 |---|---|
 | `application_sdk.workflows.WorkflowInterface` | `application_sdk.app.App` with `@task` |
-| `application_sdk.workflows.metadata_extraction.MetadataExtractionWorkflow` | `application_sdk.templates.SqlMetadataExtractor` |
-| `application_sdk.workflows.metadata_extraction.sql.BaseSQLMetadataExtractionWorkflow` | `application_sdk.templates.SqlMetadataExtractor` |
-| `application_sdk.workflows.metadata_extraction.incremental_sql.IncrementalSQLMetadataExtractionWorkflow` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
-| `application_sdk.workflows.query_extraction.QueryExtractionWorkflow` | `application_sdk.templates.SqlQueryExtractor` |
-| `application_sdk.workflows.query_extraction.sql.SQLQueryExtractionWorkflow` | `application_sdk.templates.SqlQueryExtractor` |
+| `application_sdk.workflows.metadata_extraction.MetadataExtractionWorkflow` | `application_sdk.templates.SqlApp` |
+| `application_sdk.workflows.metadata_extraction.sql.BaseSQLMetadataExtractionWorkflow` | `application_sdk.templates.SqlApp` |
+| `application_sdk.workflows.metadata_extraction.incremental_sql.IncrementalSQLMetadataExtractionWorkflow` | `application_sdk.templates.SqlApp` (custom `run()`) |
+| `application_sdk.workflows.query_extraction.QueryExtractionWorkflow` | `application_sdk.app.App` (own query tasks) |
+| `application_sdk.workflows.query_extraction.sql.SQLQueryExtractionWorkflow` | `application_sdk.app.App` (own query tasks) |
 
 ### Activities
 
@@ -1270,9 +1285,9 @@ All of the following were removed in v3.0.0. They no longer exist — importing 
 | `application_sdk.activities.common.models.ActivityResult` | `application_sdk.common.models.TaskResult` |
 | `application_sdk.activities.common.utils` | `application_sdk.execution` (`build_output_path`, `get_object_store_prefix` are re-exported; direct activity internals should be accessed via `Input.workflow_id` instead) |
 | `application_sdk.activities.metadata_extraction.base` | `application_sdk.app.App` (non-SQL source); `application_sdk.templates.SqlApp` (SQL source) |
-| `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlMetadataExtractor` |
-| `application_sdk.activities.metadata_extraction.incremental` | `application_sdk.templates.IncrementalSqlMetadataExtractor` |
-| `application_sdk.activities.query_extraction.sql` | `application_sdk.templates.SqlQueryExtractor` |
+| `application_sdk.activities.metadata_extraction.sql` | `application_sdk.templates.SqlApp` |
+| `application_sdk.activities.metadata_extraction.incremental` | `application_sdk.templates.SqlApp` (custom `run()`) |
+| `application_sdk.activities.query_extraction.sql` | `application_sdk.app.App` (own query tasks) |
 
 > **Note:** `application_sdk.common.sql_utils` (the v3-era replacement for `application_sdk.activities.common.sql_utils`) has also been removed. Apps that still depend on it should migrate to `BaseSQLClient` directly.
 

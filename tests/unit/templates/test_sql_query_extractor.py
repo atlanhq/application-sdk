@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from application_sdk.app.base import App
@@ -95,3 +97,27 @@ class TestSqlQueryExtractorSubclass:
         extractor = SqlQueryExtractor.__new__(SqlQueryExtractor)
         with pytest.raises(UnimplementedError):
             await extractor.fetch_queries(QueryFetchInput())
+
+
+class TestSubclassDeprecationNotice:
+    def test_notice_names_app_with_own_query_tasks(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", DeprecationWarning)
+
+            class _NoticeQueryExtractor(SqlQueryExtractor):
+                pass
+
+        messages = [
+            str(w.message)
+            for w in caught
+            if issubclass(w.category, DeprecationWarning)
+            and "_NoticeQueryExtractor subclasses SqlQueryExtractor" in str(w.message)
+        ]
+        assert len(messages) == 1
+        assert "application_sdk.app.App" in messages[0]
+        assert "get_query_batches" in messages[0]
+        assert "fetch_queries" in messages[0]
+        assert "Use application_sdk.templates.SqlApp" not in messages[0]
+        assert "v4.0.0" in messages[0]

@@ -7,7 +7,8 @@ metadata extraction and query extraction.
 
     from application_sdk.templates import SqlApp
 
-**Legacy (deprecated, use SqlApp instead):**
+**Legacy (deprecated; use SqlApp instead, or App with its own query tasks
+for SqlQueryExtractor):**
 
     from application_sdk.templates import SqlMetadataExtractor, SqlQueryExtractor
     from application_sdk.templates import IncrementalSqlMetadataExtractor
