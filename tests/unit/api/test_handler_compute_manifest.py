@@ -16,8 +16,10 @@ from typing import Any
 from urllib.parse import quote
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from application_sdk.errors.leaves import InvalidInputError
 from application_sdk.handler import (
     AuthInput,
     AuthOutput,
@@ -79,6 +81,20 @@ class _ComputingHandler(_StaticHandler):
 class _FailingHandler(_StaticHandler):
     async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
         raise RuntimeError("catalog lookup failed for token sk-do-not-leak")
+
+
+class _RefusingHandler(_StaticHandler):
+    """Answers the caller itself: its detail is written for them."""
+
+    async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
+        raise HTTPException(status_code=422, detail="policy_id is required")
+
+
+class _InvalidInputHandler(_StaticHandler):
+    async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
+        raise InvalidInputError(
+            message="policy_id is not a valid policy", field="policy_id"
+        )
 
 
 @pytest.fixture
@@ -175,6 +191,28 @@ def test_none_serves_the_generated_manifest_unchanged(
 def test_a_handler_without_the_override_resolves_no_hook() -> None:
     resolve = handler_compute_manifest(_StaticHandler(), lambda: "parity")
     assert resolve("computed") is None
+
+
+@pytest.mark.parametrize(
+    ("handler", "status", "detail"),
+    [
+        (_RefusingHandler, 422, "policy_id is required"),
+        (_InvalidInputHandler, 400, "policy_id is not a valid policy"),
+    ],
+)
+@pytest.mark.parametrize("surface", [0, 1], ids=["worker", "host"])
+def test_a_deliberate_compute_manifest_error_reaches_the_caller(
+    generated: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    surface: int,
+    handler: type[Handler],
+    status: int,
+    detail: str,
+) -> None:
+    """An HTTPException or typed AppError answers as on the other handler routes."""
+    client = _clients(handler(), generated, monkeypatch)[surface]
+    response = client.post("/manifest", json={"entrypoint": "computed"})
+    assert (response.status_code, response.json()["detail"]) == (status, detail)
 
 
 @pytest.mark.parametrize("surface", [0, 1], ids=["worker", "host"])

@@ -133,6 +133,21 @@ def check_manifest(client: Any, result: Result, label: str, body: object) -> Non
                 )
 
 
+def computed_manifest_entrypoints(
+    generated: Path, entrypoints: list[str], app_name: str
+) -> list[str]:
+    """The entry points to request by name, so the handler's hook runs.
+
+    *entrypoints* are those with a manifest under *generated*. A flat
+    ``generated/manifest.json`` has none, and a request that names none serves
+    it without the hook. The host serves the flat manifest for any named entry
+    point (as Heracles names one on submit), so the app's name stands in.
+    """
+    if not entrypoints and (generated / "manifest.json").is_file():
+        return [app_name]
+    return entrypoints
+
+
 def check_computed_manifests(
     client: Any, result: Result, entrypoints: list[str]
 ) -> None:
@@ -251,7 +266,11 @@ def run(
         and type(handler).compute_manifest is not default_compute
     ):
         generated = generated_dir_of(Path(module.__file__ or ".").parent)
-        check_computed_manifests(client, result, tree_entrypoints(generated))
+        check_computed_manifests(
+            client,
+            result,
+            computed_manifest_entrypoints(generated, tree_entrypoints(generated), name),
+        )
         if "compute_manifest" in import_failures:
             exc = import_failures["compute_manifest"]
             result.fail(

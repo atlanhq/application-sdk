@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import orjson
 from fastapi import FastAPI, HTTPException, Request
@@ -58,6 +59,7 @@ from application_sdk.handler.context import (
 from application_sdk.handler.contracts import ManifestInput
 from application_sdk.handler.routes import (
     _ENTRYPOINT_NAME_RE,
+    _http_error_boundary,
     _wrap_response,
     entrypoint_module_segment,
 )
@@ -551,22 +553,16 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
                 else decode_fe_inputs(fe_inputs, source.max_fe_inputs_bytes())
             )
             manifest_dict = orjson.loads(raw)
-            try:
+            # The other handler routes' boundary: an HTTPException is the
+            # hook's own answer, a typed AppError answers with its category's
+            # status and message, and anything else is a generic 500 whose
+            # internals (stack/SQL/paths) stay in the log.
+            with _http_error_boundary(
+                f"compute_manifest for entrypoint {entrypoint_name!r}",
+                source.app_name(),
+                str(uuid4()),
+            ):
                 computed = await compute(manifest_dict, fe_inputs_decoded)
-            except HTTPException:
-                raise
-            except Exception:
-                # Don't leak the hook's internals (stack/SQL/paths) to the
-                # caller — mirror the other handler routes' generic 500.
-                # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
-                log.error(
-                    "compute_manifest hook failed for entrypoint %r",
-                    entrypoint_name,
-                    exc_info=True,
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
             if not isinstance(computed, dict):
                 # conformance: ignore[L009] logs caller-invisible context (the actual returned type) that the generic 500 HTTPException detail omits.
                 log.error(

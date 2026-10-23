@@ -146,11 +146,14 @@ _GENERATED_MANIFEST = (
 
 
 def _computing_member(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str, *, flat: bool = False
 ) -> str:
-    package = f"probe_computing_{abs(hash(body))}"
+    package = f"probe_computing_{abs(hash((body, flat)))}"
     root = tmp_path / package
-    for entrypoint in ("first", "second"):
+    if flat:
+        (root / "generated").mkdir(parents=True)
+        (root / "generated" / "manifest.json").write_text(_GENERATED_MANIFEST)
+    for entrypoint in () if flat else ("first", "second"):
         (root / "generated" / entrypoint).mkdir(parents=True)
         (root / "generated" / entrypoint / "manifest.json").write_text(
             _GENERATED_MANIFEST
@@ -187,3 +190,32 @@ def test_a_worker_only_import_in_compute_manifest_fails_the_probe(
     assert any(
         "compute_manifest reached a worker-only import" in p for p in problems
     ), problems
+
+
+def test_a_worker_only_import_in_a_flat_apps_compute_manifest_fails_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flat manifest names no entry point; the hook must still be requested."""
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "import application_sdk_no_such_worker_module",
+        flat=True,
+    )
+    problems = _problems(probe.run("demo", package, "handler"))
+    assert any("entrypoint demo" in p and "HTTP 200" in p for p in problems)
+    assert any(
+        "compute_manifest reached a worker-only import" in p for p in problems
+    ), problems
+
+
+def test_a_flat_apps_computed_manifest_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "return {**input.manifest, 'triggers': {'http': {'enabled': True}}}",
+        flat=True,
+    )
+    assert _problems(probe.run("demo", package, "handler")) == []
