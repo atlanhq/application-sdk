@@ -1033,6 +1033,7 @@ async def _upload_once(
     path: Path,
     *,
     effective_chunk: int,
+    max_concurrency: int,
     put_attributes: dict[str, str] | None,
     compute_hash: bool,
     started: float,
@@ -1047,9 +1048,6 @@ async def _upload_once(
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
     )
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_UPLOAD_MAX_CONCURRENCY,
-    )
 
     last_progress = started
     bytes_sent = 0
@@ -1057,15 +1055,13 @@ async def _upload_once(
     # observable, so the reservation covers the writer's whole life: up to
     # max_concurrency parts in flight, the part being filled, and the chunk
     # read here — or twice the file, when it fits in one buffer (FND-4082).
-    buffered_bytes = min(
-        2 * file_size, effective_chunk * (STORAGE_UPLOAD_MAX_CONCURRENCY + 2)
-    )
+    buffered_bytes = min(2 * file_size, effective_chunk * (max_concurrency + 2))
     async with transfer_budget().reserve(buffered_bytes):
         async with obstore.open_writer_async(
             resolved,
             key,
             buffer_size=effective_chunk,
-            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+            max_concurrency=max_concurrency,
             attributes=put_attributes,
         ) as writer:
             with path.open("rb") as fh:
@@ -1194,6 +1190,7 @@ async def upload_file(
         key = normalize_key(key)
 
     from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_UPLOAD_MAX_CONCURRENCY,
         STORAGE_UPLOAD_PART_SIZE_BYTES,
         STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
     )
@@ -1222,6 +1219,9 @@ async def upload_file(
     path = Path(local_path)
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, requested_chunk)
+    max_concurrency = max(
+        1, STORAGE_UPLOAD_MAX_CONCURRENCY * requested_chunk // effective_chunk
+    )
 
     if file_size == 0:
         logger.warning(
@@ -1243,6 +1243,7 @@ async def upload_file(
                 key,
                 path,
                 effective_chunk=effective_chunk,
+                max_concurrency=max_concurrency,
                 put_attributes=put_attributes,
                 compute_hash=compute_hash,
                 started=started,

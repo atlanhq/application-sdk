@@ -525,10 +525,10 @@ class CloudStore:
 
         Transport policy is the primitive's, not this class's: that includes the
         deployment part-size override (``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES``,
-        DISTR-899), which now reaches external buckets too. The default is
-        unchanged at 8 MiB, so only a deployment that has explicitly tuned the
-        part size sees a difference — and a deployment that had to tune it for
-        its egress path almost certainly wants it applied uniformly.
+        DISTR-899), which now reaches external buckets too, and the 1,000-part
+        cap that grows the part size for files over ~7.8 GiB. A deployment that
+        had to tune the part size for its egress path almost certainly wants it
+        applied uniformly.
 
         Args:
             local_path: Path to the local file.

@@ -414,7 +414,7 @@ STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN = (
 #: Peak upload memory is roughly ``STORAGE_UPLOAD_PART_SIZE_BYTES`` times this,
 #: so a deployment that raises the part size to 64 MiB and leaves this at 12
 #: budgets ~768 MiB of buffer. Lower it alongside a larger part size to hold
-#: peak memory steady.
+#: peak memory steady; the SDK does this itself when it grows the part size.
 STORAGE_UPLOAD_MAX_CONCURRENCY = int(
     os.getenv("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", "12")
 )
