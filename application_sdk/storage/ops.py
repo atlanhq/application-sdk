@@ -936,18 +936,21 @@ def _drop_directory_markers(
     ]
 
 
+#: An S3 proxy fronting GCS cannot complete an upload of more than 1,024 parts.
+_MAX_UPLOAD_PARTS = 1000
+
+
 def _compute_part_size(file_size: int, chunk_size: int) -> int:
-    """Compute effective upload part size to stay under S3's 10,000-part limit.
+    """Compute effective upload part size to stay within ``_MAX_UPLOAD_PARTS``.
 
     Args:
         file_size: Total file size in bytes.
         chunk_size: Desired chunk size in bytes.
 
     Returns:
-        Effective part size — at least *chunk_size* but never so small that
-        more than 9,900 parts would be needed (safety margin below 10,000).
+        Effective part size, at least *chunk_size*.
     """
-    return max(chunk_size, math.ceil(file_size / 9900))
+    return max(chunk_size, math.ceil(file_size / _MAX_UPLOAD_PARTS))
 
 
 async def _finalize_upload_integrity(
@@ -1030,6 +1033,7 @@ async def _upload_once(
     path: Path,
     *,
     effective_chunk: int,
+    max_concurrency: int,
     put_attributes: dict[str, str] | None,
     compute_hash: bool,
     started: float,
@@ -1044,9 +1048,6 @@ async def _upload_once(
     from application_sdk.constants import (  # noqa: PLC0415
         STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
     )
-    from application_sdk.constants import (  # noqa: PLC0415
-        STORAGE_UPLOAD_MAX_CONCURRENCY,
-    )
 
     last_progress = started
     bytes_sent = 0
@@ -1054,15 +1055,13 @@ async def _upload_once(
     # observable, so the reservation covers the writer's whole life: up to
     # max_concurrency parts in flight, the part being filled, and the chunk
     # read here — or twice the file, when it fits in one buffer (FND-4082).
-    buffered_bytes = min(
-        2 * file_size, effective_chunk * (STORAGE_UPLOAD_MAX_CONCURRENCY + 2)
-    )
+    buffered_bytes = min(2 * file_size, effective_chunk * (max_concurrency + 2))
     async with transfer_budget().reserve(buffered_bytes):
         async with obstore.open_writer_async(
             resolved,
             key,
             buffer_size=effective_chunk,
-            max_concurrency=STORAGE_UPLOAD_MAX_CONCURRENCY,
+            max_concurrency=max_concurrency,
             attributes=put_attributes,
         ) as writer:
             with path.open("rb") as fh:
@@ -1112,8 +1111,7 @@ async def upload_file(
     """Stream-upload a local file to *key* in the store.
 
     Uses obstore's multipart writer so arbitrarily large files are uploaded
-    without materialising the whole content in memory.  The part size is
-    adapted automatically to stay under S3's 10,000-part limit.
+    without materialising the whole content in memory.
 
     A single pass over the file simultaneously feeds each chunk to the
     SHA-256 hasher and the store writer.
@@ -1148,10 +1146,9 @@ async def upload_file(
             ``ATLAN_STORAGE_UPLOAD_PART_SIZE_BYTES`` is unset — a deployment
             that sets it overrides the caller, since the workable part size
             depends on the destination the deployment writes to rather than on
-            the app.  Defaults to 8 MiB when neither is given.  Increased
-            automatically if the file is large enough to exceed the 9,900-part
-            safety limit.  See the constant's docstring for the
-            S3-proxy-over-GCS case that makes part *count* what matters.
+            the app.  Defaults to 8 MiB when neither is given.  Raised
+            automatically when the file would need more than
+            ``_MAX_UPLOAD_PARTS`` parts.
         normalize: When ``True`` (default), normalise *key* before use.
         retain_local_copy: When ``True`` (default), keep the local file after
             upload.  When ``False``, delete the local file after a successful
@@ -1193,6 +1190,7 @@ async def upload_file(
         key = normalize_key(key)
 
     from application_sdk.constants import (  # noqa: PLC0415
+        STORAGE_UPLOAD_MAX_CONCURRENCY,
         STORAGE_UPLOAD_PART_SIZE_BYTES,
         STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN,
     )
@@ -1221,6 +1219,9 @@ async def upload_file(
     path = Path(local_path)
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, requested_chunk)
+    max_concurrency = max(
+        1, STORAGE_UPLOAD_MAX_CONCURRENCY * requested_chunk // effective_chunk
+    )
 
     if file_size == 0:
         logger.warning(
@@ -1242,6 +1243,7 @@ async def upload_file(
                 key,
                 path,
                 effective_chunk=effective_chunk,
+                max_concurrency=max_concurrency,
                 put_attributes=put_attributes,
                 compute_hash=compute_hash,
                 started=started,
