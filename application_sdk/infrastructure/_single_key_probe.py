@@ -50,6 +50,13 @@ logger = get_logger(__name__)
 #: wide burst invites vault throttling.
 MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
 
+#: A value with this prefix is a file in the deployment object store
+#: (``credentials.utils.OBJECT_STORE_PREFIX``, fetched by
+#: ``resolve_credential_file``), never a secret name. Probing it fails the run
+#: on a store that rejects ``/`` in names, such as the Kubernetes store.
+#: Repeated here because importing ``credentials`` from this module is circular.
+_FILE_REF_PREFIX = "objectstore://"
+
 SecretT = TypeVar("SecretT")
 
 #: ``fetch(value, label)``: look up *value*, returning ``None`` (or an empty
@@ -72,6 +79,9 @@ async def probe_single_keys(
     fetch: ProbeFetch[SecretT],
 ) -> list[tuple[str, SecretT]]:
     """Probe each candidate as a secret key; return the ones that resolved.
+
+    ``objectstore://`` file references are not probed: they are left as-is
+    for ``resolve_credential_file`` to fetch.
 
     Probes run **concurrently**, bounded by
     :data:`MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until BLDX-1594:
@@ -98,6 +108,7 @@ async def probe_single_keys(
         :func:`_probe_one`). When several probes fail, the first in candidate
         order is raised.
     """
+    candidates = [c for c in candidates if not c.startswith(_FILE_REF_PREFIX)]
     if not candidates:
         return []
 
