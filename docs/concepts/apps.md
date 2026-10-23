@@ -1339,7 +1339,9 @@ series. Turn the escalation lane on *before* setting the queue map —
 pin-and-climb with nothing to climb to is worse than not routing at all.
 
 A per-dispatch queue takes precedence over the task's declared `pool=` for that
-call only.
+call only. Outside a workflow run — a local run, or a direct unit test of a
+workflow method — the task is not wrapped as an activity, so there is no queue
+to choose and `run_on_queue` ignores the one it is given rather than failing.
 
 ## Retry Policies
 

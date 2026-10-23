@@ -64,6 +64,13 @@ if TYPE_CHECKING:  # pragma: no cover - import shapes for type checkers only
 #: API surface. The ladder is meant to be askable from workflow code without
 #: dragging the activity-side half of the package in behind it, so each name is
 #: resolved on first use instead (PEP 562).
+#:
+#: One consequence to know about: ``gen_api_files.py`` computes the api
+#: distribution's file list by following module-level imports, and neither a
+#: ``TYPE_CHECKING`` import nor the ``importlib`` call below is visible to it.
+#: Nothing in this package is an api seed today, so the list is correct. If one
+#: ever becomes a seed, list the submodules in that generator's input rather
+#: than assuming the closure found them.
 _OWNER: dict[str, str] = {
     "INF": "ladder",
     "ActivitySizer": "ladder",

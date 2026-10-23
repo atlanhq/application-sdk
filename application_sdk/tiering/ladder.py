@@ -178,6 +178,12 @@ class Ladder:
     pool's ``spec.template``, so it must match the pool resources the app
     declares in its deployment manifest — an app-side guard test should fail
     when the two drift.
+
+    ``sizers`` is keyed by activity and each sizer also names its own activity.
+    That looks redundant and is kept deliberately: the key is what
+    :meth:`tier_for` looks up, while the field is what error messages and an
+    app's own telemetry read off a sizer they are holding. Construction rejects
+    a pair that disagrees, so the duplication cannot drift.
     """
 
     order: tuple[Tier, ...]
