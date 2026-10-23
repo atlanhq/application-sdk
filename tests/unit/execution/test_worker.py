@@ -26,6 +26,7 @@ from application_sdk.execution._temporal._activity_errors import (
     WorkerActivityNameCollisionError,
     WorkerInterceptorDuplicateError,
 )
+from application_sdk.execution._temporal.interceptors import disruption_guard
 from application_sdk.execution._temporal.worker import (
     _MAX_FATAL_CHAIN_DEPTH,
     AppWorker,
@@ -1880,3 +1881,78 @@ class TestWorkerAndWorkflowResolveTheSameGatePolicy:
         assert row[GATE_MODE_KEY] == worker["mode"].value
         assert row[GATE_TIMEOUT_KEY] == worker["budget_seconds"]
         assert workflow_attempts == worker["attempts"]
+
+
+class TestDisruptionGuardWiring:
+    """create_worker adds the guard outermost only when enabled and in a pod."""
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        disruption_guard._process_guard = None
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        disruption_guard._process_guard = None
+
+    @staticmethod
+    def _interceptors(patcher, workers: int = 1) -> list:
+        class _GuardApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured: list = []
+
+        def capture_worker(*args, **kwargs):
+            captured.extend(kwargs.get("interceptors", []))
+            return mock.MagicMock()
+
+        with (
+            mock.patch(
+                "application_sdk.execution._temporal.worker.Worker",
+                side_effect=capture_worker,
+            ),
+            mock.patch(
+                "application_sdk.execution._temporal.interceptors.disruption_guard."
+                "PodAnnotationPatcher.from_environment",
+                return_value=patcher,
+            ),
+        ):
+            for _ in range(workers):
+                create_worker(_make_mock_client())
+
+        return captured
+
+    @classmethod
+    def _interceptor_types(cls, patcher) -> list[str]:
+        return [type(i).__name__ for i in cls._interceptors(patcher)]
+
+    def test_workers_in_one_process_share_a_guard(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_DYNAMIC_DO_NOT_DISRUPT", "true")
+        guards = [
+            i._guard
+            for i in self._interceptors(mock.MagicMock(), workers=2)
+            if type(i).__name__ == "DisruptionGuardInterceptor"
+        ]
+        assert len(guards) == 2 and guards[0] is guards[1]
+
+    def test_off_by_default(self) -> None:
+        assert "DisruptionGuardInterceptor" not in self._interceptor_types(
+            mock.MagicMock()
+        )
+
+    def test_enabled_in_a_pod_is_outermost(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_DYNAMIC_DO_NOT_DISRUPT", "true")
+        types = self._interceptor_types(mock.MagicMock())
+        assert types[0] == "DisruptionGuardInterceptor"
+
+    def test_enabled_outside_a_pod_is_skipped(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("APPLICATION_SDK_ENABLE_DYNAMIC_DO_NOT_DISRUPT", "true")
+        assert "DisruptionGuardInterceptor" not in self._interceptor_types(None)
