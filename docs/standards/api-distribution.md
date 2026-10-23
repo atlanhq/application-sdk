@@ -153,7 +153,11 @@ extras = ["sql", "aws"]
   `app/generated/` as `<app>_api/*`, with a generated `pyproject.toml` (its
   dependencies, and the `atlan.app_api` and `atlan.app_server` entry points)
   and `__init__.py`. The api requirement is floored at the SDK version the app
-  locks in its `uv.lock`, keeping the app's upper bound.
+  locks in its `uv.lock`, keeping the app's upper bound. A dependency declared
+  as a direct reference (`name @ git+https://...@<rev>`, such as a private
+  package) ships exactly as declared; the generated `pyproject.toml` sets
+  hatchling's `allow-direct-references` only when a dependency, the api
+  package included, is one.
 - `hash` prints the content hash of that package; a worker-only change leaves
   it unchanged.
 
