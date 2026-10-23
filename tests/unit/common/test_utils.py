@@ -925,7 +925,6 @@ def test_read_sql_files_with_multiple_files(tmp_path: Path):
     with (
         patch("glob.glob") as mock_glob,
         patch("builtins.open", new_callable=mock_open) as mock_file_open,
-        patch("os.path.dirname", return_value="/mock/path"),
     ):
         # Configure glob to return our mock files
         mock_glob.return_value = [
@@ -954,7 +953,6 @@ def test_read_sql_files_with_empty_directory():
     """Test read_sql_files when no SQL files are found."""
     with (
         patch("glob.glob", return_value=[]),
-        patch("os.path.dirname", return_value="/mock/path"),
     ):
         result = read_sql_files("/mock/path")
         assert result == {}
@@ -973,7 +971,6 @@ def test_read_sql_files_with_whitespace():
     with (
         patch("glob.glob") as mock_glob,
         patch("builtins.open", mock_open(read_data=sql_content)),
-        patch("os.path.dirname", return_value="/mock/path"),
     ):
         mock_glob.return_value = ["/mock/path/queries/test.sql"]
 
@@ -998,7 +995,6 @@ def test_read_sql_files_case_sensitivity():
     with (
         patch("glob.glob") as mock_glob,
         patch("builtins.open", new_callable=mock_open) as mock_file_open,
-        patch("os.path.dirname", return_value="/mock/path"),
     ):
         mock_glob.return_value = [
             os.path.join("/mock/path", file_path) for file_path in mock_files

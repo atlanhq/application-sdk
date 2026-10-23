@@ -345,6 +345,25 @@ _PREFIXES_PASSTHROUGH = (
 DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span", "httpx"]
 
 
+# The OTel SDK and its exporters log their own failures on stdlib loggers under
+# this namespace. Those records must never be exported over OTLP (FND-4228).
+_OTEL_SELF_LOGGER = "opentelemetry"
+
+
+def _is_otel_self_log(logger_name: str) -> bool:
+    """True for records the OTel SDK logs about itself.
+
+    With the collector unreachable, every failed export logs on
+    ``opentelemetry.exporter.*``. The root InterceptHandler forwards that line
+    to the synchronous ``_log_sink``, which would emit it back into the batch
+    queue ``force_flush`` is draining, so the queue never empties and shutdown
+    hangs. OTel's guidance: SDK self-diagnostics must not feed the pipeline.
+    """
+    return logger_name == _OTEL_SELF_LOGGER or logger_name.startswith(
+        _OTEL_SELF_LOGGER + "."
+    )
+
+
 def _derive_log_source(logger_name: str) -> str:
     """Classify a log line's origin from its logger name (CNCT-106).
 
@@ -1633,6 +1652,10 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         sync activity (those run in the worker's thread pool). Both targets are
         synchronous and thread-safe, so nothing here needs a loop.
 
+        The OTel SDK's own log lines skip the OTLP target (see
+        :func:`_is_otel_self_log`); they still reach the console and the
+        object store.
+
         Args:
             message: Loguru message object passed by the loguru dispatcher.
         """
@@ -1640,7 +1663,9 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
             log_record = _make_log_record_dict(message)
             if ENABLE_OBSERVABILITY_STORE_SINK:
                 self.add_record(log_record)
-            if self.logger_provider is not None:
+            if self.logger_provider is not None and not _is_otel_self_log(
+                log_record["logger_name"]
+            ):
                 self._send_to_otel(log_record)
         except Exception:
             logging.error("Error in log sink", exc_info=True)
@@ -1720,16 +1745,32 @@ def flush_otlp_logs(timeout_millis: int = 5000) -> None:
     Drains the BatchLogRecordProcessor queue so records emitted in the last
     ``OTEL_BATCH_DELAY_MS`` window reach the collector. Safe to call from
     shutdown paths; a no-op when OTLP export is disabled.
+
+    Returns within ``timeout_millis``. ``BatchProcessor.force_flush`` ignores
+    its timeout (opentelemetry-python#4568) and exports until the queue is
+    empty, which against a dead collector costs one exporter timeout per
+    batch. The flush runs on a daemon thread and is abandoned at the bound;
+    ``shutdown()`` later stops that thread's export loop.
     """
-    for adapter in list(_logger_instances.values()):
-        provider = adapter.logger_provider
-        if provider is None:
-            continue
-        try:
-            provider.force_flush(timeout_millis=timeout_millis)
-        # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
-        except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
-            pass
+    providers = [
+        adapter.logger_provider
+        for adapter in list(_logger_instances.values())
+        if adapter.logger_provider is not None
+    ]
+    if not providers:
+        return
+
+    def _flush() -> None:
+        for provider in providers:
+            try:
+                provider.force_flush(timeout_millis=timeout_millis)
+            # conformance: ignore[E004] best-effort shutdown drain; a failed flush must never break shutdown
+            except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
+                pass
+
+    flusher = threading.Thread(target=_flush, name="otlp-log-flush", daemon=True)
+    flusher.start()
+    flusher.join(timeout_millis / 1000)
 
 
 def shutdown_otlp_logs() -> None:

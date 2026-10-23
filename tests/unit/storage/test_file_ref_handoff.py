@@ -45,6 +45,7 @@ from application_sdk.storage.reference import (
     persist_file_reference,
 )
 from tests.unit.loop_probe import LoopProbe
+from tests.unit.private_stdlib import private_stdlib
 
 pytestmark = pytest.mark.asyncio
 
@@ -490,7 +491,15 @@ class TestInOrderHasher:
         with pytest.raises(asyncio.CancelledError):
             await waiter
         aborting = asyncio.ensure_future(hasher.abort())
-        await asyncio.sleep(0.05)
+
+        # abort() sets _stop and then awaits the feeder in the same step, so
+        # once _stop is set it is parked on the thread — checked from there,
+        # not after a guessed delay.
+        async def _parked() -> None:
+            while not hasher._stop:
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(_parked(), 5)
         assert not aborting.done()  # still waiting for the thread
 
         release.set()
@@ -525,8 +534,9 @@ class TestInOrderHasher:
 
         with (
             patch.object(_InOrderHasher, "finish", _cancelled),
-            patch("application_sdk.storage.chunked.os.open", _tracking_open),
-            patch("application_sdk.storage.chunked.os.close", _tracking_close),
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "open", _tracking_open),
+            patch.object(local_os, "close", _tracking_close),
             pytest.raises(asyncio.CancelledError),
         ):
             await download_file_chunked(

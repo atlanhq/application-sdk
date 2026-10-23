@@ -19,6 +19,7 @@ import pytest
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.errors import STORAGE_DISK_FULL, DiskFullError
+from application_sdk.storage import chunked as chunked_module
 from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.chunked import (
@@ -31,6 +32,7 @@ from application_sdk.storage.errors import StorageDiskFullError, StorageError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _put, download_file, download_file_chunked
 from application_sdk.storage.reference import _materialize_lock
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -315,7 +317,8 @@ class TestCleanupCannotReplaceTheTransferResult:
 
         with (
             patch.dict(download_file_chunked.__kwdefaults__, {"chunk_size_bytes": 64}),
-            patch("application_sdk.storage.chunked.os.replace", new=record_and_publish),
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "replace", new=record_and_publish),
             patch.object(Path, "unlink", deny_part_unlink),
         ):
             # A third element, the copied object's digest, since FND-3796:
@@ -532,8 +535,20 @@ class TestTransferLockRegistry:
             task_a = asyncio.create_task(_download())
             await second_chunk_requested.wait()
             gets_before_b = len(gets)
-            task_b = asyncio.create_task(_download())
-            await asyncio.sleep(0.05)
+            # The destination lock task_a holds. Once task_b calls its acquire
+            # it is parked there until task_a lets go, so the check below runs
+            # at a known point instead of after a guessed delay.
+            lock = chunked_module._TRANSFER_LOCKS.lock(str(path))
+            real_acquire = lock.acquire
+            b_queued = asyncio.Event()
+
+            async def queued_acquire() -> bool:
+                b_queued.set()
+                return await real_acquire()
+
+            with patch.object(lock, "acquire", new=queued_acquire):
+                task_b = asyncio.create_task(_download())
+                await asyncio.wait_for(b_queued.wait(), timeout=5)
             assert len(gets) == gets_before_b, (
                 "second download reached the store while the first still "
                 "held the shared staging file"
@@ -579,7 +594,10 @@ class TestPublishFailureIsResumable:
                 raise OSError("transient rename failure")
             return real_replace(src, dst, *args, **kwargs)
 
-        with patch("application_sdk.storage.chunked.os.replace", new=failing_publish):
+        with (
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "replace", new=failing_publish),
+        ):
             with pytest.raises(StorageError, match="Failed to publish"):
                 await _download()
         assert not path.exists()
@@ -702,7 +720,8 @@ class TestOwnedTempCleanupRemovesBothStagingFiles:
         # the object under test actually goes down the chunked path.
         with (
             patch.dict(download_file_chunked.__kwdefaults__, {"chunk_size_bytes": 64}),
-            patch("application_sdk.storage.chunked.os.replace", new=failing_publish),
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "replace", new=failing_publish),
         ):
             with pytest.raises(StorageError):
                 await _upload_from_store(store, "copy/src.bin", target, "copy/dst.bin")
@@ -823,9 +842,9 @@ class TestDiskFullDuringDownload:
                 "application_sdk.storage.ops.obstore.get_async",
                 new=AsyncMock(return_value=_Result()),
             ),
-            patch(
-                "application_sdk.storage.ops.os.fsync",
-                side_effect=OSError(errno.ENOSPC, "no space"),
+            private_stdlib("application_sdk.storage.ops", "os") as local_os,
+            patch.object(
+                local_os, "fsync", side_effect=OSError(errno.ENOSPC, "no space")
             ),
         ):
             with pytest.raises(DiskFullError):

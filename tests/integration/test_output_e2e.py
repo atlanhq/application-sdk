@@ -1,15 +1,16 @@
 """E2E test: Prove that get_outputs().add_metric() in activities
 automatically appears in the workflow's return dict.
 
-Uses WorkflowEnvironment.start_local() — spins up a local Temporal server,
-no external dependencies needed.
+Runs against the session's shared embedded Temporal server (the
+``temporal_client`` / ``task_queue`` fixtures in ``conftest.py``) rather than
+booting a server per test.
 """
 
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from temporalio import activity, workflow
-from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from application_sdk.execution._temporal.interceptors.outputs import OutputInterceptor
@@ -126,22 +127,21 @@ class BatchCountWorkflow:
 
 
 @pytest.mark.asyncio
-async def test_metrics_flow_through_interceptor():
+async def test_metrics_flow_through_interceptor(temporal_client, task_queue):
     """Test that metrics from activities are merged into workflow result."""
-    async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(
-            env.client,
-            task_queue="test-outputs-queue",
-            workflows=[SampleMetricsWorkflow],
-            activities=[fetch_tables, fetch_columns],
-            interceptors=[OutputInterceptor()],
-        ):
-            result = await env.client.execute_workflow(
-                SampleMetricsWorkflow.run,
-                {"test": True},
-                id="test-outputs-workflow",
-                task_queue="test-outputs-queue",
-            )
+    async with Worker(
+        temporal_client,
+        task_queue=task_queue,
+        workflows=[SampleMetricsWorkflow],
+        activities=[fetch_tables, fetch_columns],
+        interceptors=[OutputInterceptor()],
+    ):
+        result = await temporal_client.execute_workflow(
+            SampleMetricsWorkflow.run,
+            {"test": True},
+            id=f"test-outputs-workflow-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+        )
 
     assert result["connection_qualified_name"] == "default/test/123"
     assert result["transformed_data_prefix"] == "artifacts/test/transformed"
@@ -156,22 +156,21 @@ async def test_metrics_flow_through_interceptor():
 
 
 @pytest.mark.asyncio
-async def test_workflow_without_metrics_returns_unchanged():
+async def test_workflow_without_metrics_returns_unchanged(temporal_client, task_queue):
     """Test that workflows without metrics return their original result."""
-    async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(
-            env.client,
-            task_queue="test-simple-queue",
-            workflows=[SimpleWorkflow],
-            activities=[simple_activity],
-            interceptors=[OutputInterceptor()],
-        ):
-            result = await env.client.execute_workflow(
-                SimpleWorkflow.run,
-                {},
-                id="test-simple-workflow",
-                task_queue="test-simple-queue",
-            )
+    async with Worker(
+        temporal_client,
+        task_queue=task_queue,
+        workflows=[SimpleWorkflow],
+        activities=[simple_activity],
+        interceptors=[OutputInterceptor()],
+    ):
+        result = await temporal_client.execute_workflow(
+            SimpleWorkflow.run,
+            {},
+            id=f"test-simple-workflow-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+        )
 
     assert result == {"status": "completed", "data": "unchanged"}
     assert "metrics" not in result
@@ -179,22 +178,21 @@ async def test_workflow_without_metrics_returns_unchanged():
 
 
 @pytest.mark.asyncio
-async def test_multiple_activities_same_metric_sums():
+async def test_multiple_activities_same_metric_sums(temporal_client, task_queue):
     """Test that same-named numeric metrics from multiple activities sum correctly."""
-    async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(
-            env.client,
-            task_queue="test-batch-queue",
-            workflows=[BatchCountWorkflow],
-            activities=[count_batch_1, count_batch_2, count_batch_3],
-            interceptors=[OutputInterceptor()],
-        ):
-            result = await env.client.execute_workflow(
-                BatchCountWorkflow.run,
-                {},
-                id="test-batch-workflow",
-                task_queue="test-batch-queue",
-            )
+    async with Worker(
+        temporal_client,
+        task_queue=task_queue,
+        workflows=[BatchCountWorkflow],
+        activities=[count_batch_1, count_batch_2, count_batch_3],
+        interceptors=[OutputInterceptor()],
+    ):
+        result = await temporal_client.execute_workflow(
+            BatchCountWorkflow.run,
+            {},
+            id=f"test-batch-workflow-{uuid4().hex[:8]}",
+            task_queue=task_queue,
+        )
 
     assert result["batch_count"] == 3
     assert result["metrics"]["rows-processed"] == 4000

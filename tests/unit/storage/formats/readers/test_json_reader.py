@@ -1,28 +1,55 @@
+import os
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import orjson
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import given
 
 from application_sdk.common.types import DataframeType
+from application_sdk.storage.formats import utils as _formats_utils
 from application_sdk.storage.formats.json import JsonFileReader
 from application_sdk.storage.formats.utils import _download_files
 from application_sdk.testing.hypothesis.strategies.inputs.json_input import (
     json_input_config_strategy,
 )
+from tests.unit.private_stdlib import private_stdlib
+
+
+@pytest.fixture(autouse=True)
+def _private_os_path() -> Iterator[None]:
+    """Give ``_download_files`` its own ``os.path`` so a patched ``isfile`` or
+    ``isdir`` reaches nothing else on the worker. Copying ``os`` does not copy
+    ``os.path``, hence the second copy."""
+    with (
+        private_stdlib(_formats_utils, "os") as local_os,
+        private_stdlib(local_os, "path"),
+    ):
+        yield
+
+
+def _local_path() -> ModuleType:
+    """``_download_files``' private ``os.path`` copy, the one a test patches."""
+    local = _formats_utils.os.path
+    assert local is not os.path, "the _private_os_path fixture is not active"
+    return local
+
 
 _MOCK_STORE = MagicMock()
 _FIXED_HEX = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"
 _DL_ID = _FIXED_HEX[:12]
-_EXPECTED_TMP = str(Path("./local/tmp/") / _DL_ID)
 
-# Configure Hypothesis settings at the module level
-settings.register_profile(
-    "json_input_tests", suppress_health_check=[HealthCheck.function_scoped_fixture]
-)
-settings.load_profile("json_input_tests")
+
+def _expected_tmp() -> Path:
+    """Where ``_download_files`` stages a download with the fixed id.
+
+    Read at call time: the unit conftest roots ``TEMPORARY_PATH`` under the
+    session's tmp dir after this module is imported.
+    """
+    return Path(_formats_utils.TEMPORARY_PATH) / _DL_ID
 
 
 @given(config=json_input_config_strategy)
@@ -53,8 +80,8 @@ async def test_not_download_file_that_exists() -> None:
     path = "/data/test.json"
 
     with (
-        patch("os.path.isfile", return_value=True),
-        patch("os.path.isdir", return_value=False),
+        patch.object(_local_path(), "isfile", return_value=True),
+        patch.object(_local_path(), "isdir", return_value=False),
         patch(
             "application_sdk.storage.formats.utils._download_one",
             new_callable=AsyncMock,
@@ -74,8 +101,8 @@ async def test_download_file_invoked_for_missing_files() -> None:
     file_names = ["a.json", "b.json"]
 
     with (
-        patch("os.path.isfile", return_value=False),
-        patch("os.path.isdir", return_value=True),
+        patch.object(_local_path(), "isfile", return_value=False),
+        patch.object(_local_path(), "isdir", return_value=True),
         patch("glob.glob", side_effect=[[]]),
         patch(
             "application_sdk.storage.formats.utils._resolve_store",
@@ -100,21 +127,21 @@ async def test_download_file_invoked_for_missing_files() -> None:
                 call(
                     _MOCK_STORE,
                     "local/a.json",
-                    Path(_EXPECTED_TMP) / "local/a.json",
+                    _expected_tmp() / "local/a.json",
                     skip_if_exists=False,
                 ),
                 call(
                     _MOCK_STORE,
                     "local/b.json",
-                    Path(_EXPECTED_TMP) / "local/b.json",
+                    _expected_tmp() / "local/b.json",
                     skip_if_exists=False,
                 ),
             ],
             any_order=True,
         )
         assert result == [
-            str(Path(_EXPECTED_TMP) / "local/a.json"),
-            str(Path(_EXPECTED_TMP) / "local/b.json"),
+            str(_expected_tmp() / "local/a.json"),
+            str(_expected_tmp() / "local/b.json"),
         ]
 
 
@@ -125,8 +152,8 @@ async def test_download_file_not_invoked_when_file_present() -> None:
     file_names = ["exists.json"]
 
     with (
-        patch("os.path.isfile", return_value=False),
-        patch("os.path.isdir", return_value=True),
+        patch.object(_local_path(), "isfile", return_value=False),
+        patch.object(_local_path(), "isdir", return_value=True),
         patch("glob.glob", return_value=["/local/exists.json"]),
         patch(
             "application_sdk.storage.formats.utils._download_one",
@@ -152,8 +179,8 @@ async def test_download_file_error_propagation() -> None:
     file_names = ["bad.json"]
 
     with (
-        patch("os.path.isfile", return_value=False),
-        patch("os.path.isdir", return_value=True),
+        patch.object(_local_path(), "isfile", return_value=False),
+        patch.object(_local_path(), "isdir", return_value=True),
         patch("glob.glob", return_value=[]),
         patch(
             "application_sdk.storage.formats.utils._resolve_store",
@@ -192,8 +219,8 @@ async def test_no_matching_files_surfaces_read_error_not_download_error() -> Non
     path = "/local"
 
     with (
-        patch("os.path.isfile", return_value=False),
-        patch("os.path.isdir", return_value=True),
+        patch.object(_local_path(), "isfile", return_value=False),
+        patch.object(_local_path(), "isdir", return_value=True),
         patch("glob.glob", return_value=[]),
         patch(
             "application_sdk.storage.formats.utils._resolve_store",

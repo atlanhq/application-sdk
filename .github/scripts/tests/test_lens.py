@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,7 @@ from lens.holistic import build_input  # noqa: E402
 from lens.index import build_index  # noqa: E402
 from lens.llm import FatalRequestError  # noqa: E402
 from lens.llm import BudgetExhausted, Client, Ledger, LLMError, Price  # noqa: E402
-from lens.lock import BUSY_NOTE, older_active_run, run_name  # noqa: E402
+from lens.lock import BUSY_NOTE, JOB_TIMEOUT, older_active_run, run_name  # noqa: E402
 from lens.review import (  # noqa: E402
     SUMMARY_MARKER,
     RunResult,
@@ -1399,6 +1400,9 @@ def test_round_cap_defaults_to_five():
 # ---- one review per PR at a time -------------------------------------------------------------------------------
 
 
+_NOW = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
+
+
 def _run(i, status="in_progress", pr=7):
     return {
         "id": i,
@@ -1408,9 +1412,30 @@ def _run(i, status="in_progress", pr=7):
     }
 
 
+def _job(status, started_minutes_ago=1):
+    job = {"name": "lens review", "status": status}
+    if status != "queued":
+        job["started_at"] = (_NOW - timedelta(minutes=started_minutes_ago)).isoformat()
+    return job
+
+
+def _jobs(*jobs):
+    """A `jobs_of` returning the same jobs for every run."""
+    return lambda run_id: [j if isinstance(j, dict) else _job(j) for j in jobs]
+
+
+_RUNNING = _jobs("in_progress")
+
+
+def _older(runs, own_run_id=105, jobs_of=_RUNNING):
+    return older_active_run(
+        runs, pr=7, own_run_id=own_run_id, jobs_of=jobs_of, now=_NOW
+    )
+
+
 def test_a_newer_request_yields_to_an_older_active_review():
-    assert older_active_run([_run(100)], pr=7, own_run_id=105)["id"] == 100
-    assert older_active_run([_run(100, status="queued")], pr=7, own_run_id=105)
+    assert _older([_run(100)])["id"] == 100
+    assert _older([_run(100, status="queued")])
 
 
 @pytest.mark.parametrize(
@@ -1424,17 +1449,77 @@ def test_a_newer_request_yields_to_an_older_active_review():
     ],
 )
 def test_a_review_proceeds_when_no_older_review_of_this_pr_is_active(runs):
-    assert older_active_run(runs, pr=7, own_run_id=105) is None
+    assert _older(runs) is None
+
+
+def test_a_run_left_in_progress_after_its_jobs_finished_does_not_block():
+    # GitHub can leave a run `in_progress` minutes after its only job ended.
+    assert _older([_run(100)], jobs_of=_jobs("completed")) is None
+    assert _older([_run(100)], jobs_of=_jobs("completed", "completed")) is None
+
+
+@pytest.mark.parametrize(
+    "jobs_of",
+    [
+        _jobs("in_progress"),
+        _jobs("completed", "queued"),  # one job still to run
+        _jobs(),  # no jobs yet: the run is still being set up
+    ],
+)
+def test_an_older_run_with_work_left_blocks(jobs_of):
+    assert _older([_run(100)], jobs_of=jobs_of)["id"] == 100
+
+
+def test_jobs_are_only_listed_for_an_older_run_that_claims_to_be_active():
+    asked: list[int] = []
+
+    def jobs_of(run_id):
+        asked.append(run_id)
+        return [_job("in_progress")]
+
+    runs = [_run(110), _run(104, status="completed"), _run(103, pr=8), _run(100)]
+    assert _older(runs, jobs_of=jobs_of)["id"] == 100
+    assert asked == [100]
+
+
+def test_a_job_started_more_than_the_job_timeout_ago_never_blocks():
+    assert _older([_run(100)], jobs_of=_jobs(_job("in_progress", 46))) is None
+    assert _older([_run(100)], jobs_of=_jobs(_job("in_progress", 44)))["id"] == 100
+    # A stale run does not hide a live one behind it.
+    stale = {101: [_job("in_progress", 60)], 100: [_job("in_progress")]}
+    assert _older([_run(101), _run(100)], jobs_of=stale.__getitem__)["id"] == 100
+
+
+def test_a_job_still_queued_blocks_however_long_ago_the_run_was_created():
+    # The job timeout bounds a started job; a queued one can still start and overlap.
+    assert _older([_run(100)], jobs_of=_jobs("queued"))["id"] == 100
+    no_start = {"status": "in_progress", "started_at": None}
+    assert _older([_run(100)], jobs_of=_jobs(no_start))["id"] == 100
+
+
+def test_a_failed_jobs_lookup_yields_rather_than_risk_two_reviews():
+    def jobs_of(run_id):
+        raise GitHubError("GET /jobs: HTTP 403: rate limit exceeded")
+
+    assert _older([_run(100)], jobs_of=jobs_of)["id"] == 100
+
+
+def test_lock_timeout_matches_the_workflow_job_timeout():
+    wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
+    assert re.findall(r"timeout-minutes: (\d+)", wf) == [
+        str(int(JOB_TIMEOUT.total_seconds() // 60))
+    ]
 
 
 def test_two_simultaneous_requests_resolve_to_exactly_one_review():
     runs = [_run(200), _run(201)]
-    proceeding = [
-        rid
-        for rid in (200, 201)
-        if older_active_run(runs, pr=7, own_run_id=rid) is None
-    ]
-    assert proceeding == [200]
+    for jobs_of in (_RUNNING, _jobs()):  # also before either run has a job
+        proceeding = [
+            rid
+            for rid in (200, 201)
+            if _older(runs, own_run_id=rid, jobs_of=jobs_of) is None
+        ]
+        assert proceeding == [200]
 
 
 def test_workflow_names_runs_for_the_guard_and_has_no_queueing_concurrency():
@@ -1459,6 +1544,15 @@ def test_cli_drops_a_request_while_another_review_runs(monkeypatch):
 
         def workflow_runs(self, workflow_file):
             return [_run(100)]
+
+        def run_jobs(self, run_id):
+            # The CLI reads the real clock, so the job must be fresh by it.
+            return [
+                {
+                    "status": "in_progress",
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ]
 
         def comment(self, number, body):
             posted.append(body)
@@ -2013,6 +2107,9 @@ class _CliGitHub:
         del _CliGitHub.live[comment_id]
 
     def workflow_runs(self, workflow_file):
+        return []
+
+    def run_jobs(self, run_id):  # pragma: no cover - no runs, so never asked
         return []
 
 
@@ -5702,3 +5799,212 @@ def test_malformed_verdict_items_are_skipped_not_fatal(repo: Path):
     st = PRState.decode(gh.comments[0]["body"])
     assert {x.id: x for x in st.findings}[f.id].status == "open"
     assert st.ledger["spent_usd"] > before.ledger["spent_usd"]  # the call is booked
+
+
+# ---- FND-4230: new findings and recheck evidence are judged against the base branch ------------------------
+
+
+def test_recheck_evidence_shows_the_base_symbol_when_the_quote_is_new_in_the_pr(
+    repo: Path,
+):
+    """The quote is new in the PR, so it is not on the merge base, but `fetch`
+    shipped: <at_merge_base> shows `fetch` as the merge base has it."""
+    ev = _evidence(repo, _compat_on_fetch("data = client.get(key)"), SRC_V1)
+    assert ev.facts[0] == (
+        "present on merge base: fetch in application_sdk/storage/fetch.py"
+    )
+    lines = ev.at_merge_base.splitlines()
+    assert lines[0] == "application_sdk/storage/fetch.py: fetch"
+    assert "def fetch(client, key):" in ev.at_merge_base
+    assert "return client.get(key)" in ev.at_merge_base
+    assert "load_all" not in ev.at_merge_base  # the symbol, not a window
+
+
+# Round 2 of the PR #4518 shape: round 1 changed fetch's result (decode), round 2
+# puts the base-branch result back. Against round 1's commit that reads as a change.
+SRC_RESTORED = SRC_V2.replace("    return data.decode()\n", "    return data\n")
+RESTORE_ROUND_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -3,2 +3,2 @@\n     data = client.get(key)\n-    return data.decode()\n+    return data\n"
+)
+RESTORE_PR_DIFF = (
+    "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+    "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+    "@@ -1,3 +1,4 @@\n-def fetch(client, key):\n+def fetch(client, key, timeout=None):\n"
+    '     """Fetch one object."""\n-    return client.get(key)\n'
+    "+    data = client.get(key)\n+    return data\n"
+)
+REGRESSION_CLAIM = dict(
+    COMMENT,
+    existing_code="    return data",
+    severity="high",
+    title="fetch now returns raw bytes instead of the decoded string",
+    content="Callers got a str from fetch before; keep the previous behaviour.",
+)
+
+
+def _restoring_round_two(repo: Path, verdict: str) -> tuple[RunResult, Script, str]:
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = RESTORE_ROUND_DIFF
+    gh.diffs[("b0", "h2")] = RESTORE_PR_DIFF
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_RESTORED
+    fid = Finding(
+        "application_sdk/storage/fetch.py",
+        0,
+        "high",
+        REGRESSION_CLAIM["category"],
+        "t",
+        "b",
+        REGRESSION_CLAIM["existing_code"],
+    ).id
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [REGRESSION_CLAIM]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": verdict}]})]),
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    return res, script, fid
+
+
+def _new_check_request(script: Script) -> str:
+    [user] = [
+        r["messages"][1]["content"]
+        for r in script.requests
+        if 'new="true"' in r["messages"][1]["content"]
+    ]
+    return user
+
+
+def test_a_new_blocking_finding_moot_against_the_base_branch_is_not_published(
+    repo: Path,
+):
+    res, script, fid = _restoring_round_two(repo, "moot")
+
+    assert res.mode == "incremental"
+    assert res.new_findings == [] and res.new_dropped == [fid]
+    assert fid not in {f.id for f in res.state.findings}
+    assert res.state.open_findings(findings_mod.BLOCKING) == []
+    user = _new_check_request(script)
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert block.splitlines()[0] == "application_sdk/storage/fetch.py: fetch"
+    assert "return client.get(key)" in block
+
+
+def test_a_new_blocking_finding_that_stands_is_published(repo: Path):
+    res, script, fid = _restoring_round_two(repo, "open")
+
+    assert [f.id for f in res.new_findings] == [fid] and res.new_dropped == []
+    assert [f.id for f in res.state.open_findings(findings_mod.BLOCKING)] == [fid]
+    assert _new_check_request(script)
+
+
+def _check_new(repo: Path, transport, findings: list[Finding], cap: float = 1.0):
+    ws, _ = _ws(repo)
+    res = RunResult("reviewed")
+    client = Client(
+        model="m",
+        price=PRICE,
+        ledger=Ledger(cap_usd=cap),
+        transport=transport,
+        max_retries=0,
+    )
+    kept = review_mod._check_new_against_base(
+        client,
+        ws,
+        PRState(),
+        findings,
+        res,
+        changes=[],
+        removed="",
+        released="",
+        added=review_mod.baseline.PRAdditions(),
+        max_tokens=8000,
+    )
+    return kept, res
+
+
+def _new_high(n: int = 0) -> Finding:
+    return Finding(
+        "application_sdk/storage/fetch.py", 4, "high", "bug", f"t{n}", "b", f"x{n}"
+    )
+
+
+@pytest.mark.parametrize(
+    "reply, cap, why",
+    [
+        (_cut_off_reply(), 1.0, "the check spent its whole output budget"),
+        (response(), 1.0, "no verdict came back for it"),  # stop, no tool call
+        (response([tool_call("verdicts", {"items": []})]), 1.0, "no verdict came back"),
+        (response(), 0.0, "the PR budget ran out"),  # BudgetExhausted before sending
+        ((400, {}, "bad request"), 1.0, "the model call failed"),  # LLMError
+    ],
+    ids=["cut-off", "empty-reply", "no-item", "budget", "llm-error"],
+)
+def test_a_new_finding_with_no_base_verdict_publishes_with_a_note(
+    repo: Path, reply, cap, why
+):
+    f = _new_high()
+    kept, res = _check_new(repo, Script(reply), [f], cap=cap)
+
+    assert kept == [f] and res.new_dropped == []
+    [note] = res.notes
+    assert note.startswith(f"New blocking finding(s) {f.id} were published without")
+    assert why in note
+
+
+def test_every_new_blocking_finding_is_checked_past_one_batch(repo: Path):
+    """More than VERIFY_BATCH new findings: each batch gets its own call, so
+    none is published unchecked."""
+    found = [_new_high(i) for i in range(review_mod.VERIFY_BATCH + 1)]
+    last = found[-1]
+    script = Script(
+        response(
+            [
+                tool_call(
+                    "verdicts",
+                    {"items": [{"id": f.id, "status": "open"} for f in found[:-1]]},
+                )
+            ]
+        ),
+        response(
+            [tool_call("verdicts", {"items": [{"id": last.id, "status": "moot"}]})]
+        ),
+    )
+    kept, res = _check_new(repo, script, found)
+
+    assert len(script.requests) == 2
+    assert kept == found[:-1] and res.new_dropped == [last.id]
+    assert res.notes == []
+
+
+def test_the_base_check_call_is_in_the_run_report(repo: Path):
+    res, script, _ = _restoring_round_two(repo, "moot")
+    check = [
+        i
+        for i, r in enumerate(script.requests)
+        if 'new="true"' in r["messages"][1]["content"]
+    ]
+    assert check and len(res.calls) == len(script.requests)

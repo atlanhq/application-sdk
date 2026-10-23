@@ -8,6 +8,13 @@ name: SDK tests (reusable)
 # `if:` guards — when the SDK area is untouched the orchestrator skips this
 # entire reusable and the composing gate counts a skipped area as a pass.
 #
+# The integration tier (Integration Tests, Storage Emulator Tests) runs in the
+# merge queue, on v* tags, and on a PR commit someone asked for with `/e2e` or
+# `/gate-check`; `integration-request` below decides. That is the split
+# connectors use (tests-reusable.yaml, docs/standards/ci.md). The queue runs
+# the full suite on the exact merged state before anything lands, so a PR-side
+# run on every push only repeated it (FND-4306).
+#
 # Deliberately NOT built on tests-reusable.yaml: that workflow is
 # connector-shaped (app-name required, e2e scaffold, no OS matrix).  The SDK's
 # own tests need the OS x Python matrix + object-store emulators, so they live
@@ -56,6 +63,35 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           fail-under: "85"
           python-version: ${{ matrix.python-version }}
+          # One leg measures coverage; it posts the PR comment and enforces
+          # fail-under. Tracing under xdist cost every other leg ~20-30% of its
+          # wall time for a report nobody read (FND-4238).
+          coverage: ${{ matrix.os == 'ubuntu-22.04' && matrix.python-version == '3.12' }}
+
+  unit-perf:
+    name: Unit Perf Tests
+    # Tests marked `perf` (excluded from the matrix by addopts): throughput
+    # comparisons and 100k-key scale probes. They took ~2 minutes of every
+    # matrix leg's critical path, and a timing comparison next to three xdist
+    # neighbours is a flake by construction. Here they run once, in one
+    # process, on a quiet box (FND-4238).
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The container's Python, for the same reason as the integration job:
+      # the concurrent-decode regression in this set (CNCT-85) is most
+      # meaningful on the interpreter the image ships.
+      - name: Resolve container Python version
+        id: pyver
+        run: echo "version=$(python3 .github/scripts/container_python_version.py print-version)" >> "$GITHUB_OUTPUT"
+      - uses: "./.github/actions/setup-deps"
+        with:
+          python-version: ${{ steps.pyver.outputs.version }}
+      - name: Run perf tests
+        env:
+          ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK: "false"
+        run: uv run --frozen pytest --import-mode=importlib tests/unit -m perf --disable-socket --allow-unix-socket --timeout=300 --durations=0
 
   python-version-guard:
     name: Container Python is in the unit matrix
@@ -79,14 +115,57 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install bats-core
-        run: sudo apt-get update && sudo apt-get install -y bats
       - uses: "./.github/actions/setup-deps"
+      # A pinned bats-core checkout instead of `apt-get update && apt-get
+      # install` on every run. After setup-deps, whose checkout would clean an
+      # untracked directory away.
+      - name: Check out bats-core
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: bats-core/bats-core
+          ref: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5 # v1.14.0
+          path: .bats-core
+          persist-credentials: false
+      - name: Put bats on PATH
+        run: echo "${GITHUB_WORKSPACE}/.bats-core/bin" >> "$GITHUB_PATH"
       - name: Run shell script tests
         run: uv run poe test-scripts
 
+  # Decides whether the integration tier runs (FND-4306). Only the two tier
+  # jobs need it, so `/e2e` re-runs this job alone (pr_test_command.py,
+  # SDK_E2E_RERUN_JOBS) and the tier and SDK Gate's verdict re-run with it,
+  # while the unit legs keep their result. It reads the `/e2e` and
+  # `/gate-check` markers live because a re-run replays the original payload.
+  integration-request:
+    name: Decide integration request
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    # Reads the head commit's `e2e-request` / `gate-check` statuses. Granted
+    # explicitly rather than relying on a public repo's open read access; an
+    # unreadable status fails open and would run the tier on every PR.
+    permissions:
+      contents: read
+      statuses: read
+    outputs:
+      requested: ${{ steps.decide.outputs.requested }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 .github/scripts/bump_pr_opt_in.py integration-requested --event "$EVENT_NAME" --sha "$HEAD_SHA"
+
   integration:
     name: Integration Tests
+    # Queue, tags and on-demand PR runs only; see the header (FND-4306).
+    needs: integration-request
+    if: needs.integration-request.outputs.requested == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -113,22 +192,24 @@ jobs:
       # is no separate CLI version pin to keep in sync.
       #
       # Both helpers fetch their binary to ~/.cache on first use; cache those
-      # paths across runs so we don't re-download every time.
+      # paths across runs so we don't re-download every time. warm-caches.yaml
+      # seeds this cache (same composite, same key) on every push to main, so a
+      # fresh PR restores it instead of downloading.
       - name: Cache embedded runtime binaries
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cache/atlan-sdk/temporal
-            ~/.cache/atlan-sdk/dapr
-          key: embedded-runtimes-${{ runner.os }}-${{ hashFiles('uv.lock', 'application_sdk/version.py') }}
-          restore-keys: |
-            embedded-runtimes-${{ runner.os }}-
+        uses: "./.github/actions/embedded-runtimes-cache"
 
+      # No --reruns: the old --only-rerun filter matched failure *text*, so it
+      # retried real regressions in timeout behaviour (any message containing
+      # "TimeoutError") while never retrying a pytest-timeout kill — and it
+      # fired 0 times in 101 logs (FND-4241). A failure here is a failure.
       - name: Run integration tests
-        run: uv run pytest tests/integration/ -m integration -v --timeout=120 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
+        run: uv run pytest tests/integration/ -m integration -v --timeout=120
 
   storage-emulator:
     name: Storage Emulator Tests
+    # Queue, tags and on-demand PR runs only; see the header (FND-4306).
+    needs: integration-request
+    if: needs.integration-request.outputs.requested == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -144,6 +225,12 @@ jobs:
       # The package is private (we do not redistribute the image), readable by
       # this repo's GITHUB_TOKEN via the package's "Manage Actions access".
       MINIO_IMAGE: ghcr.io/atlanhq/ci-mirror/minio:RELEASE.2026-09-22T19-25-18Z@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+      # The other three are public images, pinned by tag AND digest so a
+      # re-pushed tag cannot change what CI runs (nginx:1.27-alpine is a
+      # floating tag). Update tag and digest together.
+      AZURITE_IMAGE: mcr.microsoft.com/azure-storage/azurite:3.31.0@sha256:d449d953a1c5bd1e26c800744a65c451e88f3387b696e02e3e2e79a995c3105b
+      GCS_TESTBENCH_IMAGE: gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0@sha256:4d7713db9282234cb64a65e54f872bd7059f9793a94232dd9bd51b2be56b223f
+      NGINX_IMAGE: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: "./.github/actions/setup-deps"
@@ -159,54 +246,47 @@ jobs:
         run: |
           set -euo pipefail
           # Pull images first with retry — image pulls are the main 504 surface.
+          # with-retry.sh retries a failed pull but cannot see a stalled one, so
+          # each attempt is bounded by `timeout 120`.
           # Use ${GITHUB_WORKSPACE} (not a bare relative path) to match the style
           # used in composite actions and stay correct if CWD ever changes.
           # MinIO comes from our private GHCR mirror (see MINIO_IMAGE above).
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull "${MINIO_IMAGE}"
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull mcr.microsoft.com/azure-storage/azurite:3.31.0
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
-          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" docker pull nginx:1.27-alpine
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" timeout 120 docker pull "${MINIO_IMAGE}"
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" timeout 120 docker pull "${AZURITE_IMAGE}"
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" timeout 120 docker pull "${GCS_TESTBENCH_IMAGE}"
+          "${GITHUB_WORKSPACE}/.github/scripts/with-retry.sh" timeout 120 docker pull "${NGINX_IMAGE}"
           # S3 → MinIO
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
             "${MINIO_IMAGE}" server /data
           # Azure → Azurite
           docker run -d --name azurite -p 10000:10000 \
-            mcr.microsoft.com/azure-storage/azurite:3.31.0 \
+            "${AZURITE_IMAGE}" \
             azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck
           # GCS → storage-testbench behind an nginx proxy that re-injects the
           # ETag / Last-Modified headers testbench omits (obstore requires them).
-          docker network create gcs-net || true
+          docker network create gcs-net
           docker run -d --name gcs-testbench --network gcs-net -e PORT=9000 \
-            gcr.io/cloud-devrel-public-resources/storage-testbench:v0.62.0
+            "${GCS_TESTBENCH_IMAGE}"
           docker run -d --name gcs-proxy --network gcs-net -p 9095:9000 \
             -v "$PWD/tests/integration/storage/gcs_emulator_proxy.conf:/etc/nginx/conf.d/default.conf:ro" \
-            nginx:1.27-alpine
+            "${NGINX_IMAGE}"
 
+      # Fails the job when an emulator never answers or a bucket cannot be
+      # created, instead of handing the tests a half-started harness.
       - name: Wait for emulators + provision buckets/container
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live >/dev/null 2>&1 && break; sleep 2; done
-          for i in $(seq 1 30); do curl -s --max-time 2 http://localhost:10000/devstoreaccount1 >/dev/null 2>&1 && break; sleep 2; done
-          for i in $(seq 1 40); do curl -sf "http://localhost:9095/storage/v1/b?project=test" >/dev/null 2>&1 && break; sleep 2; done
-          export AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin AWS_DEFAULT_REGION=us-east-1
-          # Provisioning is idempotent (|| true) so a step re-run on a still-warm
-          # runner doesn't abort on "bucket already exists" under set -e.
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test || true
-          # SDR ENABLE_ATLAN_UPLOAD handoff: customer-managed + internal Atlan buckets.
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-customer-objectstore || true
-          aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-atlan-objectstore || true
-          az storage container create --name sdk-emulator-test \
-            --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;" || true
-          curl -sf -X POST "http://localhost:9095/storage/v1/b?project=test" \
-            -H "Content-Type: application/json" -d '{"name":"sdk-emulator-test"}' || true
+        run: python3 .github/scripts/wait_for_emulators.py
 
       - name: Run storage emulator tests
         env:
           AWS_ENDPOINT_URL: http://localhost:9000
           AZURE_STORAGE_ENDPOINT: http://localhost:10000
           GCS_EMULATOR_ENDPOINT: http://localhost:9095
-        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300 --reruns 2 --reruns-delay 5 --only-rerun "ConnectError|ConnectionError|ClientConnectorError|TimeoutError|ReadTimeout"
+          # The emulators were started above: an unreachable one fails its
+          # tests instead of skipping them (tests/integration/storage/conftest.py).
+          STORAGE_EMULATOR_REQUIRED: "1"
+        # No --reruns, for the same reason as the integration job (FND-4241).
+        run: uv run pytest tests/integration/storage -m storage_emulator -v --timeout=300
 
       - name: Teardown emulators
         if: always()

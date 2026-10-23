@@ -110,5 +110,6 @@ def test_importing_the_package_does_not_pull_in_storage() -> None:
         capture_output=True,
         text=True,
         check=False,
+        timeout=120,
     )
     assert proc.returncode == 0, proc.stderr

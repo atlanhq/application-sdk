@@ -560,9 +560,9 @@ PROD_RELATIONSHIP_SIGNATURES = [
         "tableau_dashboard is required for creation",
     ),
     ("tableau", "TableauDashboard", "workbook", "workbook is required for creation"),
-    ("mssql", "Schema", "database", "database is required for creation"),
+    # mssql Schema.database and athena Table.atlan_schema were here too; pyatlan
+    # 11.5.0 derives those parents from the qualifiedName and no longer reports them.
     ("mssql", "Procedure", "atlan_schema", "atlan_schema is required for creation"),
-    ("athena", "Table", "atlan_schema", "atlan_schema is required for creation"),
     (
         "athena",
         "Column",
@@ -689,17 +689,16 @@ def test_prod_relationship_signature_survives_the_move(
 def test_prod_signature_matrix_is_not_empty():
     """Guard against the parametrize list being emptied and the suite going
     quietly green."""
-    assert len(PROD_RELATIONSHIP_SIGNATURES) >= 14
-    assert len({t for _, t, _, _ in PROD_RELATIONSHIP_SIGNATURES}) >= 12
+    assert len(PROD_RELATIONSHIP_SIGNATURES) >= 12
+    assert len({t for _, t, _, _ in PROD_RELATIONSHIP_SIGNATURES}) >= 11
     assert len({c for c, _, _, _ in PROD_RELATIONSHIP_SIGNATURES}) >= 8
 
 
 def test_scalar_gaps_are_not_claimed_to_be_fixed():
     """Some production failures name plain attributes, not relationships —
-    e.g. fivetran Column also reports `schema_name` / `database_name` /
-    `order` missing. Those are real gaps in the transformed data and this fix
-    does NOT address them. Pinned so nobody reads the fix as clearing every
-    failure on the board.
+    e.g. fivetran Column also reports `order` missing. Those are real gaps in
+    the transformed data and this fix does NOT address them. Pinned so nobody
+    reads the fix as clearing every failure on the board.
     """
     from pyatlan_v9.model.assets.sql_related import RelatedTable
     from pyatlan_v9.model.transform import get_type
@@ -714,8 +713,8 @@ def test_scalar_gaps_are_not_claimed_to_be_fixed():
     # The relationship error is gone...
     assert not any("one of table" in e for e in errors), errors
     # ...but the missing scalars are still correctly reported.
-    assert any("schema_name is required" in e for e in errors), errors
-    assert any("database_name is required" in e for e in errors), errors
+    assert any("order is required" in e for e in errors), errors
+    assert any("table_name is required" in e for e in errors), errors
 
 
 # ---------------------------------------------------------------------------

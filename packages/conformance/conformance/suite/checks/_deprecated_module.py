@@ -5,8 +5,8 @@ A module is deprecated wholesale when importing it emits a
 statement. A package marked that way in its ``__init__.py`` deprecates every
 submodule under it, because no submodule can be imported without running it.
 
-E007's logged-sentinel arm skips such files: they are being removed, not
-fixed, so a finding there is noise that no remediation should act on. The
+E007's logged-sentinel arm and P023 skip such files: they are being removed,
+not fixed, so a finding there is noise that no remediation should act on. The
 signal is the module's own marker, the same call the deprecated-symbol
 manifest recognises, so no path list has to track what is deprecated.
 """
@@ -17,7 +17,7 @@ import ast
 from functools import lru_cache
 from pathlib import Path
 
-from .._deprecation_warn import _is_deprecation_warn_call
+from ._deprecation_warn import _is_deprecation_warn_call
 
 
 def _emits_module_deprecation(tree: ast.Module) -> bool:

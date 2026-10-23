@@ -7,9 +7,12 @@ description: |
 
   It includes:
   - Running pytest for all test files in the tests/ directory
-  - Generating code coverage reports in XML and HTML formats
-  - Enforcing a minimum coverage threshold of 60%
+  - Generating code coverage reports in XML and HTML formats (when `coverage` is "true")
+  - Enforcing the minimum coverage threshold `fail-under`
   - Adding coverage report comments to pull requests
+
+  Tests marked `perf` are excluded by `addopts`; the SDK workflow runs them in
+  a separate single-process job.
 
 inputs:
   github-token:
@@ -23,6 +26,13 @@ inputs:
     required: false
     description: The Python version to use for the action.
     default: "3.11"
+  coverage:
+    required: false
+    description: |
+      "true" to measure coverage, enforce fail-under and comment the report on
+      the PR. Tracing costs ~20-30% of a leg's wall time, so the SDK matrix
+      turns it on for one leg only.
+    default: "true"
 
 runs:
   using: "composite"
@@ -36,55 +46,57 @@ runs:
       run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
       id: get_branch
 
-    - name: Run Unit and Integration Tests with Coverage
+    # Paired with "Check tests wrote nothing into the checkout" below (FND-4237).
+    - name: Snapshot the checkout before tests
+      shell: bash
+      run: python .github/scripts/check_test_write_hygiene.py snapshot "${RUNNER_TEMP}/pre-test-git-status.txt"
+
+    - name: Run Unit Tests
       shell: bash
       env:
         ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK: "false"
-      run: |
-        PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
-        UV_RUN="uv run --frozen"
-        PYTEST_IGNORE=""
-        if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then
-          UV_RUN="uv run --frozen --no-group dev"
-          # Skip tests that require libcst (dev-only, no 3.14 support) or
-          # pyatlan pydantic-v1 compat (upstream fix: atlan-python PR #893)
-          PYTEST_IGNORE="--ignore=tests/unit/tools --ignore=tests/unit/clients/test_atlan_client.py --ignore=tests/unit/credentials/test_atlan_client.py"
-        fi
-        # pytest-socket: on Linux/macOS the event loop uses os.pipe()/AF_UNIX for its
-        # self-pipe, so --allow-unix-socket is sufficient. On Windows, ProactorEventLoop
-        # uses AF_INET socket pairs internally; --disable-socket would break asyncio
-        # entirely there, so we skip the guard on Windows. Linux CI still enforces it.
-        if [ "${RUNNER_OS}" != "Windows" ]; then
-          SOCKET_FLAGS="--disable-socket --allow-unix-socket"
-        else
-          SOCKET_FLAGS=""  # intentionally empty — see comment above
-        fi
-        # -n auto: the suite is ~8,700 tests and was single-threaded, so a leg
-        # took 6-10 minutes while the runner sat on 4 idle vCPUs. Roughly a
-        # third of that was tests sleeping on real clocks, which parallelism
-        # hides for free. See FND-961.
-        #
-        # --cov rather than `coverage run -m pytest`: coverage only traces the
-        # parent process, so under xdist the workers' coverage is silently lost
-        # and --fail-under reads well under half the true number.
-        #
-        # --capture=no is deliberately absent. xdist ignores it in workers, and
-        # leaving it on means a failing test's stdout is written to a worker
-        # process nobody reads instead of being replayed in the failure report.
-        # --log-cli-level is deliberately absent, and it is the single biggest
-        # remaining lever: it costs 42% of wall time under xdist (77.6s -> 45.3s
-        # locally) and 93s of CPU, because every worker formats each record and
-        # ships it over execnet. It also forces per-test verbose headers even
-        # without -v, which is what made a job log 20,000 lines. Under xdist the
-        # live stream is dropped for passing tests anyway; a failing test still
-        # gets its `Captured log call` section.
-        $UV_RUN pytest --import-mode=importlib tests/ $PYTEST_IGNORE \
-          -n auto --hypothesis-show-statistics ${SOCKET_FLAGS} \
-          --durations=25 --durations-min=1.0 \
-          --cov=application_sdk --cov-report=xml --cov-report=html \
-          --cov-report=term --cov-fail-under=${{ inputs.fail-under }}
+        # Inputs reach the shell as env vars, never as `${{ }}` in `run:`:
+        # GitHub expands an expression before bash parses the line, so a
+        # quote in an input would become shell syntax.
+        UNIT_TEST_PYTHON_VERSION: ${{ inputs.python-version }}
+        UNIT_TEST_COVERAGE: ${{ inputs.coverage }}
+        UNIT_TEST_FAIL_UNDER: ${{ inputs.fail-under }}
+      # Every per-leg decision (uv groups on 3.14, socket guard, timeout
+      # method, coverage) is made by the script, which has tests; see its
+      # docstring and docs/standards/ci.md.
+      run: >-
+        python .github/scripts/unit_test_command.py
+        --python-version "$UNIT_TEST_PYTHON_VERSION"
+        --runner-os "$RUNNER_OS"
+        --coverage "$UNIT_TEST_COVERAGE"
+        --fail-under "$UNIT_TEST_FAIL_UNDER"
+
+    # Per-test timings for the leg, written by the script above, so a slow leg
+    # can be broken down by file and OS without rerunning it (FND-4304).
+    # Diagnostic only: an artifact-service blip must never fail the leg, so
+    # there is no retry step (EXEMPT in test_artifact_upload_retry.py).
+    - name: Upload unit test timings
+      if: ${{ !cancelled() }}
+      continue-on-error: true
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      with:
+        name: unit-test-timings-${{ runner.os }}-${{ inputs.python-version }}
+        path: ${{ runner.temp }}/unit-tests-junit.xml
+        if-no-files-found: ignore
+        retention-days: 14
+
+    # Unit tests write under tmp_path. Everything they would otherwise write into
+    # the repo (./local/, ./.hypothesis/) is gitignored, so this compares
+    # `git status --ignored` against the snapshot rather than trusting a clean
+    # `git status`. Runs after a failed test step too: a leak is worth knowing
+    # about either way.
+    - name: Check tests wrote nothing into the checkout
+      if: ${{ !cancelled() }}
+      shell: bash
+      run: python .github/scripts/check_test_write_hygiene.py check "${RUNNER_TEMP}/pre-test-git-status.txt"
 
     - name: Comment Coverage Report on PR
+      if: inputs.coverage == 'true'
       uses: orgoro/coverage@ca0c362dc1a4f100447309405e6dfea47e251495 # v3.3.1
       continue-on-error: true
       with:

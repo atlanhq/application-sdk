@@ -8,6 +8,7 @@ Requires a running Temporal dev server (see conftest.py).
 """
 
 import asyncio
+import time
 from uuid import UUID
 
 import httpx
@@ -472,18 +473,29 @@ async def test_start_and_stop(run_worker, long_running_workflow_app):
         transport=httpx.ASGITransport(app=long_running_workflow_app),
         base_url="http://test",
     ) as client:
-        async with run_worker():
+        # long_sleep never heartbeats, so terminating the workflow does not
+        # reach it. With the default grace the worker's exit waited for the
+        # whole 60s sleep whenever the activity had been dispatched before the
+        # stop, and not when it hadn't: 60s or 5s depending on a race. A zero
+        # grace cancels it at shutdown either way (FND-4305).
+        async with run_worker(graceful_shutdown_timeout_seconds=0):
             start_resp = await client.post("/workflows/v1/start", json={})
             assert start_resp.status_code == 200
             wf_id = start_resp.json()["data"]["workflow_id"]
             run_id = start_resp.json()["data"]["run_id"]
 
-            # Poll until RUNNING to avoid race with terminate
-            for _ in range(20):
+            # Poll until RUNNING to avoid race with terminate. A deadline, and an
+            # assert after it: a workflow that never reaches RUNNING fails here,
+            # not later as a confusing stop/TERMINATED mismatch.
+            status = None
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
                 status_resp = await client.get(f"/workflows/v1/status/{wf_id}/{run_id}")
-                if status_resp.json().get("data", {}).get("status") == "RUNNING":
+                status = status_resp.json().get("data", {}).get("status")
+                if status == "RUNNING":
                     break
                 await asyncio.sleep(0.25)
+            assert status == "RUNNING"
 
             stop_resp = await client.post(f"/workflows/v1/stop/{wf_id}/{run_id}")
             assert stop_resp.status_code == 200

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import math
 import sys
-import time
 import types
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -515,12 +514,12 @@ class TestCheckWarmupTier:
     def test_probe_overrun_reads_as_warming(self, app_registry: None) -> None:
         handler = _SlowWarmupHandler()
         client = _client(handler, _warm_app(ceiling=60, probe_timeout=1))
-        started = time.monotonic()
         body = client.post(
             "/workflows/v1/check",
             json={"credentials": [], "tiers": ["preflight", "warmup"]},
         ).json()
-        assert time.monotonic() - started < 10
+        # "warming", not the probe's eventual "ready": the route stopped
+        # waiting at the probe timeout instead of waiting the probe out.
         assert handler.warmup_inputs[0].probe_timeout_seconds == 1
         assert body["preflight"]["status"] == "pending"
         assert body["preflight"]["warmup"] == {"state": "warming", "source_state": ""}
@@ -637,9 +636,9 @@ class TestWarmupRoute:
 
     def test_probe_overrun_reads_as_warming(self, app_registry: None) -> None:
         client = _client(_SlowWarmupHandler(), _warm_app(ceiling=60, probe_timeout=1))
-        started = time.monotonic()
         response = client.post("/workflows/v1/warmup", json={"credentials": []})
-        assert time.monotonic() - started < 10
+        # "warming", not the probe's eventual "ready": the route stopped
+        # waiting at the probe timeout instead of waiting the probe out.
         assert response.status_code == 200
         assert response.json()["data"]["state"] == "warming"
 

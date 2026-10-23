@@ -31,8 +31,8 @@ jobs:
       #          wrappers), so changing *how* those checks run still re-runs them.
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
       # 'false' only on a bump-version PR not yet opted in with `/gate-check`
-      # (FND-3748, FND-3839): the remaining jobs skip and Connector Tests Gate
-      # fails fast.
+      # (FND-3748, FND-3839): the remaining jobs skip, Connector Tests Gate
+      # included. SDK Gate is what fails until the opt-in (FND-4239).
       opted_in: ${{ steps.opt-in.outputs.opted_in }}
       # 'storage' — the object-store layer or its real-cloud suite changed, so
       # Storage Integration runs on the PR without being asked (FND-3839).
@@ -669,6 +669,15 @@ jobs:
   # upstream job died. So we require changes + matrix-builder to have SUCCEEDED
   # and build-sdk-base-image to be success|skipped (never failure) before
   # treating a skipped connector-tests as the genuine docs-only skip.
+  #
+  # The one deliberate skip is an un-opted bump-version PR (FND-3748): nothing
+  # upstream ran, and a skipped check run passes the required context. It used
+  # to fail here, which made every push to a bump PR a red PR Checks run that
+  # tested nothing (FND-4239). The PR still cannot merge un-opted: SDK Gate
+  # fails closed on the same opt-in and says to comment /gate-check. The
+  # comment re-runs this whole run, which re-reads the opt-in and runs the
+  # gate. A `/e2e` on an un-opted bump PR runs it too, to wait on and report
+  # the e2e it dispatched.
   connector-gate:
     name: Connector Tests Gate
     needs:
@@ -680,7 +689,14 @@ jobs:
         merge-sdk-base-image,
         connector-tests,
       ]
-    if: always()
+    # A `changes` that did not succeed runs the gate, which then fails on it:
+    # its empty outputs must never read as "not opted in" and skip.
+    if: |
+      always() && (
+        needs.changes.result != 'success' ||
+        needs.changes.outputs.opted_in == 'true' ||
+        needs.e2e-request.outputs.requested == 'true'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -691,14 +707,6 @@ jobs:
       # never notice. Write: the sticky `/e2e` comment's verdict (FND-3839).
       pull-requests: write
     steps:
-      # An un-opted bump-version PR (FND-3748) skipped every upstream job; fail
-      # here, before the upstream check would read those skips as a pass.
-      - name: Require the bump-PR CI opt-in
-        if: needs.changes.result == 'success' && needs.changes.outputs.opted_in != 'true'
-        run: |
-          echo "::error::Bump-version PR CI is opt-in (FND-3748). Comment /gate-check on the PR to run it."
-          exit 1
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # connector-tests now only dispatches (e2e-apps wait-mode: callback) —

@@ -36,6 +36,19 @@
       "packageNameTemplate": "apple/pkl",
       "datasourceTemplate": "github-tags",
       "versioningTemplate": "semver"
+    },
+    {
+      "description": "uv binary cache key in setup-deps (FND-4242). The github-actions manager bumps astral-sh/setup-uv's `version:` input (dep astral-sh/uv) but cannot see the same version inside the actions/cache key one step earlier, so the key drifted (0.11.21 against an installed 0.13.4) and the cache restored a uv nobody used. This manager tracks the key literal under the same depName; the packageRule below groups it into the github-actions PR so both land in one Renovate branch. If it ever stops matching, .github/scripts/tests/test_setup_deps_uv_cache_key.py fails on the bump PR instead of the drift going silent.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/actions/setup-deps/action\\.yaml$/"
+      ],
+      "matchStrings": [
+        "key: uv-bin-\\$\\{\\{ runner\\.os \\}\\}-\\$\\{\\{ runner\\.arch \\}\\}-(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "astral-sh/uv",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
@@ -73,6 +86,19 @@
         "python"
       ],
       "allowedVersions": "<3.15"
+    },
+    {
+      "description": "Put the uv cache-key bump in the same PR as the setup-uv `version:` bump it must track. The fleet preset's github-actions group rule matches on matchManagers github-actions only, so a shared depName is not enough: the regex manager's astral-sh/uv bump fell outside the group and a github-actions PR bumped the install without the key, failing test_setup_deps_uv_cache_key.py. Same groupName and auto-merge settings as the preset's rule, because Renovate auto-merges a group only when every member does.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "astral-sh/uv"
+      ],
+      "groupName": "github-actions",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
     }
   ],
   "ignorePaths": [

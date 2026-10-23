@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -41,6 +42,7 @@ from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -1570,9 +1572,15 @@ class TestPython314EventLoopCompat:
                 "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
             ):
-                with mock.patch(
-                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
-                    side_effect=RuntimeError("no running event loop"),
+                with (
+                    private_stdlib(
+                        "application_sdk.observability.logger_adaptor", "asyncio"
+                    ) as local_asyncio,
+                    mock.patch.object(
+                        local_asyncio,
+                        "get_running_loop",
+                        side_effect=RuntimeError("no running event loop"),
+                    ),
                 ):
                     with mock.patch.object(
                         AtlanLoggerAdapter, "_spawn_flush_thread"
@@ -1599,9 +1607,15 @@ class TestPython314EventLoopCompat:
                 "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
             ):
-                with mock.patch(
-                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
-                    return_value=mock_loop,
+                with (
+                    private_stdlib(
+                        "application_sdk.observability.logger_adaptor", "asyncio"
+                    ) as local_asyncio,
+                    mock.patch.object(
+                        local_asyncio,
+                        "get_running_loop",
+                        return_value=mock_loop,
+                    ),
                 ):
                     with mock.patch.object(
                         AtlanLoggerAdapter, "_spawn_flush_thread"
@@ -3307,6 +3321,23 @@ class TestOtelTraceContextOnLogRecord:
         assert log_record.span_id == 0
 
 
+def _loguru_message(logger_name: str) -> mock.MagicMock:
+    """Minimal loguru message object for driving ``_log_sink`` directly."""
+    level = mock.MagicMock()
+    level.name = "WARNING"
+    message = mock.MagicMock()
+    message.record = {
+        "time": datetime.now(),
+        "level": level,
+        "extra": {"logger_name": logger_name},
+        "message": "exporter self-log",
+        "file": mock.MagicMock(path="exporter.py"),
+        "line": 1,
+        "function": "export",
+    }
+    return message
+
+
 class TestOtlpShutdownFlush:
     """CNCT-107: flush/shutdown the OTLP provider on process exit."""
 
@@ -3363,6 +3394,153 @@ class TestOtlpShutdownFlush:
         finally:
             adapter.logger_provider = None
             la._otlp_shutdown_done.clear()
+
+    def test_flush_returns_within_bound_when_force_flush_blocks(self):
+        """OTel 1.45.1 ``BatchProcessor.force_flush`` ignores ``timeout_millis``
+        (opentelemetry-python#4568), so ``flush_otlp_logs`` must enforce it.
+
+        ``force_flush`` here blocks until the test releases it, and the test
+        releases it only after the flush has returned, so a flush that waited
+        on it could not return at all. The join bound only decides how long
+        that regression takes to fail."""
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.flush_block_test")
+        release = threading.Event()
+        provider = mock.MagicMock()
+        provider.force_flush.side_effect = lambda **_: release.wait()
+        adapter.logger_provider = provider
+        # join() swallows the target's exception, so the target records it.
+        raised: list[BaseException] = []
+
+        def _flush() -> None:
+            try:
+                la.flush_otlp_logs(timeout_millis=200)
+            except BaseException as e:
+                raised.append(e)
+
+        flusher = threading.Thread(target=_flush, daemon=True)
+        try:
+            flusher.start()
+            flusher.join(30)
+            assert not flusher.is_alive(), "flush waited on a blocked force_flush"
+            assert raised == [], f"flush raised instead of returning: {raised!r}"
+            provider.force_flush.assert_called_once_with(timeout_millis=200)
+        finally:
+            release.set()
+            adapter.logger_provider = None
+
+    def test_exporter_self_logs_do_not_feed_back_into_otlp_queue(self):
+        """FND-4228: the exporter's own failure logs must not re-enter the queue.
+
+        Dead collector: every export logs on the gRPC exporter's stdlib logger,
+        which the root InterceptHandler forwards to loguru and the sync
+        ``_log_sink``. Without the guard each line is emitted back into the
+        queue ``force_flush`` is draining, so it never empties.
+        """
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs.export import (
+            BatchLogRecordProcessor,
+            LogExportResult,
+            LogRecordExporter,
+        )
+
+        from application_sdk.observability import logger_adaptor as la
+
+        exporter_logger = logging.getLogger(
+            "opentelemetry.exporter.otlp.proto.grpc.exporter"
+        )
+
+        # Mirrors OTLPLogExporter.export against a dead collector: a retry
+        # warning, then the final error. Alternating the two is what gets them
+        # past the DuplicateFilter OTel attaches to this logger.
+        class _DeadCollectorExporter(LogRecordExporter):
+            def export(self, batch):
+                exporter_logger.warning(
+                    "Transient error %s encountered while exporting %s to %s, retrying in %.2fs.",
+                    "StatusCode.UNAVAILABLE",
+                    "logs",
+                    "collector:4317",
+                    0.0,
+                )
+                exporter_logger.error(
+                    "Failed to export %s to %s, error code: %s",
+                    "logs",
+                    "collector:4317",
+                    "StatusCode.UNAVAILABLE",
+                )
+                return LogExportResult.FAILURE
+
+            def shutdown(self):
+                pass
+
+            def force_flush(self, timeout_millis=30000):
+                return True
+
+        provider = LoggerProvider(shutdown_on_exit=False)
+        processor = BatchLogRecordProcessor(
+            _DeadCollectorExporter(),
+            schedule_delay_millis=60_000,
+            max_export_batch_size=10,
+        )
+        provider.add_log_record_processor(processor)
+
+        adapter = get_logger("app.otlp_feedback_test")
+        adapter.logger_provider = provider
+        handler_id = logger.add(adapter._log_sink, level="DEBUG")
+        # Pin the real stdlib→loguru bridge on the exporter's logger so the
+        # test does not depend on what pytest left on the root logger.
+        saved = (exporter_logger.handlers[:], exporter_logger.propagate)
+        exporter_logger.handlers = [la._intercept_handler]
+        exporter_logger.propagate = False
+
+        sent_names: list[str] = []
+        real_send = adapter._send_to_otel
+
+        def _spy(record):
+            sent_names.append(record.get("logger_name", ""))
+            real_send(record)
+
+        try:
+            with (
+                mock.patch.object(la, "ENABLE_OBSERVABILITY_STORE_SINK", False),
+                mock.patch.object(adapter, "_send_to_otel", side_effect=_spy),
+            ):
+                for i in range(50):
+                    adapter.info("queued record %d", i)
+                la.flush_otlp_logs(timeout_millis=2000)
+
+            assert not [n for n in sent_names if n.startswith("opentelemetry")]
+            assert len(processor._batch_processor._queue) == 0
+        finally:
+            logger.remove(handler_id)
+            exporter_logger.handlers, exporter_logger.propagate = saved
+            adapter.logger_provider = None
+            # Short timeout: on a regression the abandoned flush thread is
+            # still looping, and only shutdown's timeout stops it.
+            processor._batch_processor.shutdown(timeout_millis=500)
+
+    def test_log_sink_keeps_otel_self_logs_on_other_targets(self):
+        """Guarded records skip OTLP only; the object-store sink still gets them."""
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.otlp_guard_targets_test")
+        adapter.logger_provider = mock.MagicMock()
+        try:
+            with (
+                mock.patch.object(la, "ENABLE_OBSERVABILITY_STORE_SINK", True),
+                mock.patch.object(adapter, "add_record") as add_record,
+                mock.patch.object(adapter, "_send_to_otel") as send,
+            ):
+                for name in ("opentelemetry", "opentelemetry.sdk._shared_internal"):
+                    adapter._log_sink(_loguru_message(name))
+                send.assert_not_called()
+                assert add_record.call_count == 2
+
+                adapter._log_sink(_loguru_message("opentelemetry_lookalike.app"))
+                send.assert_called_once()
+        finally:
+            adapter.logger_provider = None
 
 
 # loguru annotates each traceback frame with the values of the names on its source
@@ -3439,6 +3617,7 @@ class TestDiagnoseGating:
             text=True,
             env=env,
             cwd=str(Path(__file__).resolve().parents[3]),
+            timeout=120,
         )
         assert "RuntimeError" in result.stderr, (
             f"probe never logged the exception:\nstdout={result.stdout}\n"

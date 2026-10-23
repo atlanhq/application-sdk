@@ -476,6 +476,36 @@ surface.
   but they feed `Tests Gate` with the integration tier, so they were left
   alone.
 
+### The SDK's own integration tier runs in the queue only (FND-4306)
+
+application-sdk follows the connector split. In `sdk-tests-reusable.yaml`,
+Integration Tests and Storage Emulator Tests run on `merge_group` and on `v*`
+tag pushes, and on a PR only when someone asks for the full suite. Unit legs,
+Unit Perf Tests and the script tests still run on every PR push.
+
+**On demand.** A `/e2e` or `/gate-check` comment runs the integration tier on
+that PR commit too. The reusable's `Decide integration request` job reads the
+`e2e-request` and `gate-check` statuses live
+(`bump_pr_opt_in.py integration-requested`), and only the two tier jobs need
+it. `/e2e` re-runs that one job (`pr_test_command.py`, `SDK_E2E_RERUN_JOBS`):
+GitHub re-runs it, the tier and `SDK Gate`'s verdict, and keeps the unit legs'
+result from the first attempt, so `/e2e` never runs or cancels the unit legs.
+`/gate-check` re-runs the whole run, as before. A status that cannot be read
+runs the tier: that costs runner minutes, never a lost request. A new push is
+a new commit with no marker, so the tier skips on it again.
+
+On a PR without a request the skipped jobs report `skipped`,
+`SDK Tests` concludes `success`, and `SDK Gate` reads that as a pass, so the
+required check still concludes on the PR. Every queue entry that touches SDK
+code escalates to the full suite (`sdk-gate.yaml`, "Synthesize final force
+flags"), so nothing lands on `main` without integration passing.
+
+Measured before the change (2026-10-13 → 2026-10-21, 1000 SDK Gate runs): PRs
+averaged 5.8 pushes, and integration ran 8.9 minutes p50 on each, about 50
+runner-minutes per PR. Over the same window, three PR-side integration failures
+came from one PR, and no queue failure was an integration break the PR run had
+missed. The cost of the move is about one extra queue ejection in that window.
+
 ### The vulnerability scan gates the bump PR, not every PR (FND-3328)
 
 Since FND-3327 the only image a release-flow app ships is the release image,

@@ -900,8 +900,13 @@ drafting.
   `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers), tree traversal (`os.walk`/
   `glob.glob`/`Path.glob`/`Path.rglob`), data-scale I/O (pandas and pyarrow
   readers and writers, whole-file `Path.read_text`/`write_bytes`/…, file-handle
-  `json.load`/`json.dump`/`pickle`/`tomllib`), or a `subprocess.*` call runs
-  inside an `async def`.  Draft per category:
+  `json.load`/`json.dump`/`pickle`/`tomllib`), a `subprocess.*` call, work on
+  a tracked client or handle (sync `httpx.Client`, a `boto3` client, an
+  `open()` / `gzip.open()` handle, a `zipfile`/`tarfile` archive, an
+  `Event.wait` / `Thread.join` / `Future.result`, a sqlalchemy or DuckDB
+  `execute`), a whole-file copy/compress (`shutil.copyfile`, `gzip.compress`),
+  `os.fsync`, or a call to a repo-defined sync helper whose body does any of
+  these runs inside an `async def`.  Draft per category:
 
   - *bridge* — `await` the coroutine directly instead of re-entering a loop.
   - *blocking network / sleep* — `await` an async equivalent, or offload via
@@ -927,6 +932,21 @@ drafting.
     worse than none.
   - *subprocess* — prefer `asyncio.create_subprocess_exec` and `await` it;
     offload only when the sync API is unavoidable.
+  - *client / handle work, query, fsync* — offload the whole block that owns
+    the client in one hop: `await run_in_thread(_read_rows, path)` around the
+    `with open(...)` / `with engine.connect()` / `s3.get_object(...)` it
+    contains.  Offloading the send alone while the connect or open stays on
+    the loop moves half the cost.  An `fsync` goes with the write it makes
+    durable.
+  - *wait* — `threading.Event` → `asyncio.Event`; a `Future` from
+    `executor.submit` → `await asyncio.wrap_future(future)`; otherwise offload
+    the wait.
+  - *sync helper* — the finding names the call the helper reaches.  Offload
+    the helper call (`await run_in_thread(helper, *args)`), or make the
+    helper async if everything it does has an async equivalent.  Never push
+    the blocking call one helper deeper: the rule follows exactly one hop, so
+    that clears the finding without moving any work off the loop — a fix
+    that games the detector.
 
   Two conditions make the offload proposal wrong, and both must be checked
   before drafting one: the call is already inside a sync `def` that is itself

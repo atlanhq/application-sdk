@@ -2538,7 +2538,9 @@ def test_gate_module_import_does_not_load_obstore() -> None:
         "assert 'obstore' not in sys.modules, 'obstore leaked'; "
         "assert 'application_sdk.storage.ops' not in sys.modules, 'ops leaked'"
     )
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    proc = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
     assert proc.returncode == 0, proc.stderr
 
 

@@ -4,7 +4,6 @@ import asyncio
 import os
 import sys
 import threading
-import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import TextIO
@@ -15,6 +14,10 @@ from loguru import logger
 
 from application_sdk.observability.console_sink import ConsoleWriter, flush_console_logs
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter
+
+#: How long the loop gets to log past a stalled pipe. A healthy run takes well
+#: under a second; this only decides how long a regression takes to fail.
+_STALL_SECONDS = 30.0
 
 
 class _GatedStream:
@@ -76,30 +79,22 @@ def test_stalled_stdout_does_not_block_the_event_loop(
     About 600 KB is far past a kernel pipe buffer (64 KB on Linux and macOS).
     With a loguru stream sink, the first write past the buffer blocks the
     loop's thread, so ``logged`` never gets set and the heartbeat stops.
+
+    Nothing drains the pipe until the wait below gives up, so a blocked write
+    can never finish inside it: the bound only decides how long a regression
+    takes to fail. An earlier version also bounded the gap between heartbeat
+    ticks, which measured GIL contention with the writer thread on the runner
+    (about 2s on a loaded macOS runner) and failed at random (FND-4233).
     """
     logged = threading.Event()
-    gaps: list[float] = []
 
     async def main(adapter: AtlanLoggerAdapter) -> None:
-        last = time.monotonic()
-
-        async def heartbeat() -> None:
-            nonlocal last
-            while True:
-                await asyncio.sleep(0.01)
-                now = time.monotonic()
-                gaps.append(now - last)
-                last = now
-
-        beat = asyncio.create_task(heartbeat())
         payload = "x" * 200
         for i in range(3000):
             adapter.info("%s %d", payload, i)
             if i % 100 == 0:
                 await asyncio.sleep(0)
         logged.set()
-        await asyncio.sleep(0.1)
-        beat.cancel()
 
     with _unread_pipe() as (start_draining, stream):
         monkeypatch.setattr(sys, "stdout", stream)
@@ -112,7 +107,7 @@ def test_stalled_stdout_does_not_block_the_event_loop(
             target=lambda: asyncio.run(main(adapter)), daemon=True
         )
         loop_thread.start()
-        finished = logged.wait(timeout=5.0)
+        finished = logged.wait(timeout=_STALL_SECONDS)
         # Release a blocked writer before touching loguru. Without the fix,
         # the loop thread holds the stdout handler's lock inside write(), and
         # logger.remove() would wait on that lock indefinitely.
@@ -124,10 +119,6 @@ def test_stalled_stdout_does_not_block_the_event_loop(
         AtlanLoggerAdapter._reset_for_testing()
         AtlanLoggerAdapter("test_logger")
         assert finished, "event loop blocked writing to a stalled stdout"
-    # A blocked write stalls the loop until draining starts, after the 5s wait
-    # above. GIL contention with the writer thread alone reaches ~2s on slow
-    # CI runners, so the bound sits between the two.
-    assert max(gaps) < 3.0, f"heartbeat stalled for {max(gaps):.2f}s"
 
 
 def test_full_queue_drops_oldest_and_counts() -> None:

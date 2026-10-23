@@ -15,10 +15,12 @@ in :mod:`application_sdk.testing.integration.fixtures` and are star-imported
 from a connector's ``tests/integration/conftest.py`` as one unit.
 """
 
+import sys
 from collections.abc import Generator
 
 import pytest
 
+from application_sdk import constants
 from application_sdk.app.context import AppContext
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.constants import LOCAL_WORKFLOW_ID
@@ -158,3 +160,29 @@ def restore_logger_init_flags() -> Generator[None, None, None]:
             AtlanLoggerAdapter._initialized = True
         if flush_task_started:
             AtlanLoggerAdapter._flush_task_started = True
+
+
+def _redirect_temporary_path(patcher: pytest.MonkeyPatch, path: str) -> None:
+    """Point ``TEMPORARY_PATH`` at *path* everywhere this process can see it.
+
+    Most consumers bind the constant at import time (``from
+    application_sdk.constants import TEMPORARY_PATH`` at module top), so
+    patching ``constants`` alone would miss every one already imported. This
+    patches ``constants.TEMPORARY_PATH`` — which covers modules imported later —
+    and then every already-imported ``application_sdk`` module carrying its own
+    binding of the old value. The scan matches by value, so a module that stored
+    a *derived* path at import time (say, a pre-computed abspath) would be
+    missed; no current consumer does that.
+
+    Every patch goes through *patcher*, so ``patcher.undo()`` restores them all.
+    """
+    previous = constants.TEMPORARY_PATH
+    patcher.setattr(constants, "TEMPORARY_PATH", path)
+    for name, module in list(sys.modules.items()):
+        if (
+            name.startswith("application_sdk")
+            and module is not None
+            and module is not constants
+            and getattr(module, "TEMPORARY_PATH", None) == previous
+        ):
+            patcher.setattr(module, "TEMPORARY_PATH", path)

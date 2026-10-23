@@ -53,15 +53,23 @@ jobs:
     # runs there. Skipped reports as a pass; SDK Gate is what blocks the merge.
     if: ${{ !startsWith(github.head_ref, 'bump-version') }}
     runs-on: ubuntu-latest
+    # The job runs ~3-4 minutes; without a cap a hung test holds a runner for
+    # the 360-minute default.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.13.4"
+          version: "0.13.5"
 
+      # pytest comes from the locked `test` group (a default group, as is
+      # `dev`, which carries the conformance workspace package several of these
+      # tests import). `--with pytest` resolved the newest pytest from PyPI on
+      # every run: unpinned, and outside the release-age cooldown the lock is
+      # held to.
       - name: Run script tests
-        run: uv run --extra workflows --with pytest python -m pytest .github/scripts/tests -q
+        run: uv run --frozen --extra workflows python -m pytest .github/scripts/tests -q
 
       # Plain bash, no uv — the script under test is bash + perl and the harness
       # asserts on its output, so keeping it dependency-free keeps it runnable

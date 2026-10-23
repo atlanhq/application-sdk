@@ -18,6 +18,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from conformance.suite.checks._ast_common import repo_module_file
+
 _SDK_ERRORS_MODULE = "application_sdk.errors"
 
 #: Suffix marking a module alias in the returned set: ``"errors."`` means
@@ -51,28 +53,7 @@ class _Resolver:
     def module_file(
         self, module: str | None, level: int, current: Path | None
     ) -> Path | None:
-        if self._root is None:
-            return None
-        if level:
-            if current is None:
-                return None
-            base = current.resolve().parent
-            for _ in range(level - 1):
-                base = base.parent
-        else:
-            base = self._root
-        parts = module.split(".") if module else []
-        for candidate in (
-            base.joinpath(*parts).with_suffix(".py") if parts else None,
-            base.joinpath(*parts, "__init__.py"),
-        ):
-            if (
-                candidate is not None
-                and candidate.is_file()
-                and candidate.resolve().is_relative_to(self._root)
-            ):
-                return candidate.resolve()
-        return None
+        return repo_module_file(self._root, module, level, current)
 
     def module_aliases(self, tree: ast.Module) -> set[str]:
         """Local names bound to the ``application_sdk.errors`` module itself."""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import itertools
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -30,6 +31,7 @@ from application_sdk.storage.ops import (
     put_json,
     upload_file,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -1424,8 +1426,10 @@ class TestResumableChunkedDownload:
 
         with (
             patch("application_sdk.storage.ops.obstore.get_async", new=hanging_get),
-            patch("os.open", new=recording_open),
-            patch("os.close", new=recording_close),
+            # The part file's fd is opened and closed in ``storage.chunked``.
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "open", new=recording_open),
+            patch.object(local_os, "close", new=recording_close),
         ):
             task = asyncio.create_task(
                 download_file_chunked(
@@ -1634,10 +1638,20 @@ class TestTransferProgressHeartbeat:
         content = bytes(range(38))
         await _put("hb/f.bin", content, store, normalize=False)
         out = tmp_path / "f.bin"
+        # Drive the module's clock seam, not wall time: in-memory chunks can
+        # all land inside one coarse OS tick (~15.6ms on Windows), a zero delta
+        # that never crosses the interval. Each read advances 1s, past the 0.5s
+        # interval, so every chunk fires. Patching the seam rather than
+        # time.monotonic leaves asyncio's loop clock alone.
+        clock = itertools.count()
         with (
             patch(
                 "application_sdk.constants.STORAGE_PROGRESS_LOG_INTERVAL_SECONDS",
-                1e-9,  # every chunk crosses the interval boundary
+                0.5,
+            ),
+            patch(
+                "application_sdk.storage.chunked._monotonic",
+                lambda: float(next(clock)),
             ),
             patch("application_sdk.storage.chunked._log_transfer_progress") as mock_hb,
         ):
@@ -1649,7 +1663,14 @@ class TestTransferProgressHeartbeat:
                 max_concurrent_chunks=1,
                 normalize=False,
             )
-        assert mock_hb.called
+        # One heartbeat per 8-byte chunk of the 38-byte object, in order.
+        assert [c.kwargs["bytes_so_far"] for c in mock_hb.call_args_list] == [
+            8,
+            16,
+            24,
+            32,
+            38,
+        ]
 
     async def test_heartbeat_interval_zero_disables(self, store, tmp_path) -> None:
         content = bytes(range(38))

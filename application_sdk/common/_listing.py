@@ -29,6 +29,11 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # Windows has no fcntl; only the darwin barrier below uses it
+    fcntl = None  # type: ignore[assignment]  # — sentinel for "no fcntl on this platform": None is not a module
+
 # Darwin-only fcntl op: flush kernel buffer + drive cache. Value from
 # <sys/fcntl.h>; not exported by Python's fcntl module.
 _DARWIN_F_FULLFSYNC = 51
@@ -114,9 +119,7 @@ def _flush_directory_metadata(path: Path) -> None:
     except OSError:
         return
     try:
-        if sys.platform == "darwin":
-            import fcntl  # noqa: PLC0415
-
+        if sys.platform == "darwin" and fcntl is not None:
             try:
                 fcntl.fcntl(fd, _DARWIN_F_FULLFSYNC)
                 return

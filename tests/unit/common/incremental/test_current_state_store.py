@@ -8,6 +8,7 @@ mocked.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import threading
 import time
@@ -27,6 +28,7 @@ from application_sdk.app.context import AppContext
 from application_sdk.app.task import task
 from application_sdk.common._listing import has_internal_component
 from application_sdk.common.incremental import helpers
+from application_sdk.common.incremental import marker as marker_module
 from application_sdk.common.incremental.incremental_errors import (
     CurrentStateManifestError,
 )
@@ -218,7 +220,8 @@ class TestProbe:
         assert MANIFEST_NAME.startswith(".")
         assert not MANIFEST_NAME.endswith(".json")
 
-    async def test_probe_of_100k_keys_is_fast_and_never_starves_the_loop(
+    @pytest.mark.perf
+    async def test_probe_of_100k_keys_is_one_pass_and_never_starves_the_loop(
         self,
     ) -> None:
         memory = MemoryStore()
@@ -235,23 +238,39 @@ class TestProbe:
             memory, f"{PREFIX}/{MANIFEST_NAME}", orjson.dumps(manifest)
         )
 
-        # Structural, not a loop-gap timer: at this size the reconcile held
-        # inline blocks the loop for ~50ms, well under any threshold a shared CI
-        # runner's GIL contention stays below, so a timer could only flake.
+        # Structural, not timers: at this size the reconcile held inline
+        # blocks the loop for ~50ms, well under any threshold a shared CI
+        # runner's GIL contention stays below, and a wall-clock bound on the
+        # whole probe measured the runner and failed at random (FND-4233).
+        # "Fast" is the request count: one listing and one manifest read,
+        # never a request per key.
         offloaded: list[str] = []
+        requests: list[str] = []
         real_run_in_thread = store_module.run_in_thread
+        real_list = store_module.list_data_objects
+        real_get = store_module._get_bytes
 
         async def _spy(fn, *args, **kwargs):
             offloaded.append(fn.__name__)
             return await real_run_in_thread(fn, *args, **kwargs)
 
-        started = time.perf_counter()
-        with patch.object(store_module, "run_in_thread", _spy):
+        async def _counted_list(*args, **kwargs):
+            requests.append("list")
+            return await real_list(*args, **kwargs)
+
+        async def _counted_get(*args, **kwargs):
+            requests.append("get")
+            return await real_get(*args, **kwargs)
+
+        with (
+            patch.object(store_module, "run_in_thread", _spy),
+            patch.object(store_module, "list_data_objects", _counted_list),
+            patch.object(store_module, "_get_bytes", _counted_get),
+        ):
             snapshot = await CurrentStateStore(PREFIX, memory).probe()
-        elapsed = time.perf_counter() - started
 
         assert snapshot.json_count == 100_000
-        assert elapsed < 10, f"probe of 100k keys took {elapsed:.1f}s"
+        assert requests == ["list", "get"]
         # The one pass over the whole snapshot (manifest decode + reconcile)
         # runs off the loop, so an activity's auto-heartbeat keeps beating.
         assert offloaded == ["_reconcile"]
@@ -657,6 +676,24 @@ with warnings.catch_warnings():
             return len(rows)
 
 
+class _SteppingDatetime(datetime.datetime):
+    """A ``datetime`` whose ``now()`` moves one second per call.
+
+    The marker has one-second resolution, so two runs inside the same wall
+    second would write the same marker. Stepping the marker module's clock
+    makes every run's marker distinct without sleeping out the second.
+    """
+
+    _ticks = 0
+
+    @classmethod
+    def now(cls, tz: datetime.tzinfo | None = None) -> _SteppingDatetime:
+        cls._ticks += 1
+        start = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
+        stepped = start + datetime.timedelta(seconds=cls._ticks)
+        return cls.fromtimestamp(stepped.timestamp(), tz)
+
+
 class TestTwoRunsEndToEnd:
     """Run 1 full; run 2 incremental with one table dropped and one added."""
 
@@ -665,6 +702,8 @@ class TestTwoRunsEndToEnd:
         self, tmp_path, local, monkeypatch, clean_app_registry, clean_task_registry
     ):
         monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path / "staging"))
+        monkeypatch.setattr(_SteppingDatetime, "_ticks", 0)
+        monkeypatch.setattr(marker_module, "datetime", _SteppingDatetime)
         monkeypatch.setenv("ATLAN_APPLICATION_NAME", APP)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", DeprecationWarning)
@@ -731,7 +770,6 @@ class TestTwoRunsEndToEnd:
         env.tables = {"KEEP": "NO CHANGE", "ADD": "NO CHANGE"}
         marker, _ = await fetch_marker_from_storage(CONN_QN, APP)
         assert marker == marker_after_run_1
-        await asyncio.sleep(1.1)  # the marker has one-second resolution
         second = await self._run(env, tmp_path, "run-2")
 
         # current-state holds exactly run 2's keys, plus the manifest.
@@ -784,7 +822,6 @@ class TestTwoRunsEndToEnd:
             await CurrentStateStore(PREFIX).probe()
 
         env.tables = {"KEEP": "NO CHANGE"}
-        await asyncio.sleep(1.1)
         second = await self._run(env, tmp_path, "run-2")
 
         # A full extraction: no previous state was read, so there is no diff
@@ -814,7 +851,6 @@ class TestTwoRunsEndToEnd:
         committed = await CurrentStateStore(PREFIX).probe()
 
         env.tables = {"KEEP": "NO CHANGE", "ADD": "NO CHANGE"}
-        await asyncio.sleep(1.1)
         real_put = store_module._put
 
         async def _fail_manifest(key, *args, **kwargs):

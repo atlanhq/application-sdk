@@ -221,27 +221,33 @@ class _InFlightRanges:
 
     A range is held from the moment its GET is issued until its bytes are
     returned; ``_fetch_chunk`` writes them to disk before its next await, so
-    nothing else can start in between. Each GET yields to the loop first, so
-    every range the limits allow is outstanding at the same time.
+    nothing else can start in between. Every GET waits until ``overlap`` bytes
+    are held at once before it completes — an event, not a sleep, so the
+    overlap the assertions read is there however the loop schedules the
+    tasks. A run that can never reach ``overlap`` fails on ``_TIMEOUT``.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, overlap: int) -> None:
         self.held = 0
         self.peak = 0
+        self._overlap = overlap
+        self._overlapped = asyncio.Event()
         self._get_async = obstore.get_async
         self._get_range_async = obstore.get_range_async
 
-    def _add(self, nbytes: int) -> None:
+    async def _add(self, nbytes: int) -> None:
         self.held += nbytes
         self.peak = max(self.peak, self.held)
+        if self.held >= self._overlap:
+            self._overlapped.set()
+        await asyncio.wait_for(self._overlapped.wait(), _TIMEOUT)
 
     async def get_async(self, store: Any, key: str, *, options: Any = None) -> Any:
         rng = (options or {}).get("range")
         if rng is None:
             return await self._get_async(store, key, options=options)
         nbytes = rng[1] - rng[0]
-        self._add(nbytes)
-        await asyncio.sleep(0.005)
+        await self._add(nbytes)
         result = await self._get_async(store, key, options=options)
         outer = self
 
@@ -257,9 +263,8 @@ class _InFlightRanges:
     async def get_range_async(
         self, store: Any, key: str, *, start: int, length: int
     ) -> Any:
-        self._add(length)
         try:
-            await asyncio.sleep(0.005)
+            await self._add(length)
             return await self._get_range_async(store, key, start=start, length=length)
         finally:
             self.held -= length
@@ -304,6 +309,10 @@ class TestStreamedDownloads:
         )
         streaming = 0
         peak_streaming = 0
+        # Set once the two streams the budget admits are open together. Each
+        # stream waits on it, so the overlap is there however the loop orders
+        # the tasks; a budget that admits only one deadlocks into _TIMEOUT.
+        both_streaming = asyncio.Event()
         real_get = obstore.get_async
 
         async def _counting_get(store_: Any, key: str, **kwargs: Any) -> Any:
@@ -316,9 +325,11 @@ class TestStreamedDownloads:
                     nonlocal streaming, peak_streaming
                     streaming += 1
                     peak_streaming = max(peak_streaming, streaming)
+                    if streaming >= 2:
+                        both_streaming.set()
                     try:
+                        await both_streaming.wait()
                         async for chunk in result.stream(**stream_kwargs):
-                            await asyncio.sleep(0.005)
                             yield chunk
                     finally:
                         streaming -= 1
@@ -348,7 +359,12 @@ class TestStreamedDownloads:
 
 class TestFourDirectoryRefs:
     async def _materialize_peak(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, budget: int
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        budget: int,
+        *,
+        overlap: int,
     ) -> tuple[int, int]:
         store = create_memory_store()
         persisted = await _persisted_dirs(store, tmp_path / "src")
@@ -356,7 +372,7 @@ class TestFourDirectoryRefs:
         monkeypatch.setattr(
             "application_sdk.constants.STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", budget
         )
-        ranges = _InFlightRanges()
+        ranges = _InFlightRanges(overlap)
         monkeypatch.setattr(obstore, "get_async", ranges.get_async)
         monkeypatch.setattr(obstore, "get_range_async", ranges.get_range_async)
         materialized = await asyncio.wait_for(
@@ -371,17 +387,21 @@ class TestFourDirectoryRefs:
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, small_chunks: None
     ) -> None:
         budget = 4 * _CHUNK
+        # The ranges wait for a full budget's worth at once, so the peak below
+        # is a budget that was filled and held the line, not one never tested.
         held_peak, reserved_peak = await self._materialize_peak(
-            monkeypatch, tmp_path, budget
+            monkeypatch, tmp_path, budget, overlap=budget
         )
-        assert 0 < held_peak <= budget
-        assert reserved_peak <= budget
+        assert held_peak == budget
+        assert reserved_peak == budget
 
     async def test_control_without_a_binding_budget_the_limits_multiply(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, small_chunks: None
     ) -> None:
         """Proves the instrument sees the nesting the budget exists to bound."""
-        held_peak, _ = await self._materialize_peak(monkeypatch, tmp_path, 1 << 40)
+        held_peak, _ = await self._materialize_peak(
+            monkeypatch, tmp_path, 1 << 40, overlap=5 * _CHUNK
+        )
         assert held_peak > 4 * _CHUNK
 
     async def test_upload_buffers_stay_within_the_budget(
@@ -395,6 +415,9 @@ class TestFourDirectoryRefs:
         )
         open_writers = 0
         peak_writers = 0
+        # As for streams: each writer waits until the two the budget admits are
+        # open together, so the peak does not depend on loop scheduling.
+        both_open = asyncio.Event()
         real_open = obstore.open_writer_async
 
         def _counting_open(*args: Any, **kwargs: Any) -> Any:
@@ -406,7 +429,9 @@ class TestFourDirectoryRefs:
                     inner = await writer.__aenter__()
                     open_writers += 1
                     peak_writers = max(peak_writers, open_writers)
-                    await asyncio.sleep(0.005)
+                    if open_writers >= 2:
+                        both_open.set()
+                    await both_open.wait()
                     return inner
 
                 async def __aexit__(self, *exc: Any) -> Any:
@@ -430,6 +455,7 @@ class TestFourDirectoryRefs:
 
 
 class TestFlatFanOut:
+    @pytest.mark.perf
     async def test_100k_keys_hold_a_bounded_number_of_tasks(self) -> None:
         bound = 4
         peak_tasks = 0

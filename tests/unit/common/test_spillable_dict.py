@@ -147,6 +147,23 @@ class TestSpillableDict:
         # and the temp dir is already gone.
         d.close()
 
+    def test_writes_skip_the_wal(self) -> None:
+        """The store is deleted on close, so writes must not pay for a WAL.
+
+        RocksDB keeps the WAL as ``*.log`` files in the db dir; with the WAL
+        disabled they stay empty until the MemTable is flushed.
+        """
+        with SpillableDict() as d:
+            for i in range(1000):
+                d[f"k{i}"] = "v" * 100
+            wal_bytes = sum(
+                os.path.getsize(os.path.join(d._temp_dir, name))
+                for name in os.listdir(d._temp_dir)
+                if name.endswith(".log")
+            )
+            assert wal_bytes == 0
+            assert d["k999"] == "v" * 100
+
     def test_import_error_when_rocksdict_unavailable(self) -> None:
         """Constructor must raise ImportError with an actionable message when
         rocksdict isn't installed."""

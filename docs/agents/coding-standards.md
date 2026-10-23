@@ -431,8 +431,8 @@ The `gc.collect()` cost grows with the heap. With a production-sized heap
 the deprecated writers took 11.7 s (Parquet) and 15.5 s (JSON); without the
 GC they took 1.1 s and 1.4 s.
 
-`tests/unit/storage/test_rolling_throughput.py` re-runs this comparison on
-every CI leg. It fails if `RollingFileWriter` is slower than the deprecated
+`tests/unit/storage/test_rolling_throughput.py` re-runs this comparison once
+per CI run, in the `Unit Perf Tests` job (it is marked `perf`). It fails if `RollingFileWriter` is slower than the deprecated
 writer it replaces.
 
 ### Alternative: bare copy-paste (no helper class)

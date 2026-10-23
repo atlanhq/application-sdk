@@ -26,6 +26,7 @@ from application_sdk.observability.segment_client import (
     SegmentClient,
     SegmentTrackEvent,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -361,7 +362,10 @@ class TestSendMetricEnabled:
         touching the worker thread or asyncio.run_coroutine_threadsafe."""
         client = _enabled_client_no_thread()
         record = _make_record(labels={})  # no send_to_segment label
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             client.send_metric(record)
         mrun.assert_not_called()
 
@@ -379,7 +383,10 @@ class TestSendMetricEnabled:
         fake_event.wait.return_value = False
         client._initialized_event = fake_event
         record = _make_record(labels={"send_to_segment": "true"})
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             client.send_metric(record)
         mrun.assert_not_called()
 
@@ -404,7 +411,10 @@ class TestSendMetricEnabled:
         client._queue.put = _put
 
         record = _make_record(labels={"send_to_segment": "true"})
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             # capture the coroutine handed to run_coroutine_threadsafe so we can close it
             captured = {}
 
@@ -437,10 +447,13 @@ class TestSendMetricEnabled:
         client._queue = mock.MagicMock()
         client._queue.put = _put
 
-        with mock.patch.object(
-            sc_module.asyncio,
-            "run_coroutine_threadsafe",
-            side_effect=RuntimeError("boom"),
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(
+                local_asyncio,
+                "run_coroutine_threadsafe",
+                side_effect=RuntimeError("boom"),
+            ),
         ):
             # Must not raise.
             client.send_metric(_make_record(labels={"send_to_segment": "true"}))
@@ -451,22 +464,25 @@ class TestSendMetricEnabled:
 # ---------------------------------------------------------------------------
 
 
+# The timeout(30) marks only turn a hang into a failure. They also count fixture
+# setup, and on Windows pytest-timeout's thread method kills the whole xdist
+# worker, so a bound a passing test could miss on a loaded runner is a crash.
 class TestSendBatchToSegment:
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_no_client_returns_quickly(self):
         client = _enabled_client_no_thread()
         client._client = None
         # Should not raise.
         await client._send_batch_to_segment([_make_record()])
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_empty_list_returns_quickly(self):
         client = _enabled_client_no_thread()
         client._client = mock.AsyncMock()
         await client._send_batch_to_segment([])
         client._client.post.assert_not_called()
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_post_invoked_with_basic_auth_and_payload(self):
         client = _enabled_client_no_thread()
         client._write_key = "fake-key"
@@ -492,7 +508,7 @@ class TestSendBatchToSegment:
         assert kwargs["headers"]["content-type"] == "application/json"
         fake_resp.raise_for_status.assert_called_once()
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_http_error_swallowed(self):
         import httpx
 
@@ -504,7 +520,7 @@ class TestSendBatchToSegment:
         # Must not raise — error is logged, not propagated.
         await client._send_batch_to_segment([_make_record()])
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_unexpected_exception_swallowed(self):
         client = _enabled_client_no_thread()
         client._write_key = "k"
@@ -521,7 +537,7 @@ class TestSendBatchToSegment:
 
 
 class TestProcessQueue:
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_no_queue_or_client_early_return(self):
         client = _enabled_client_no_thread()
         client._queue = None
@@ -529,7 +545,7 @@ class TestProcessQueue:
         # Should return immediately without raising.
         await client._process_queue()
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_cancelled_with_pending_batch_flushes(self):
         """When the worker task is cancelled while batch is non-empty,
         _send_batch_to_segment is called once with the pending batch.
@@ -571,7 +587,8 @@ class TestProcessQueue:
 
         with (
             mock.patch.object(client, "_send_batch_to_segment", side_effect=_capture),
-            mock.patch.object(sc_module.asyncio, "wait_for", _fake_wait_for),
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "wait_for", _fake_wait_for),
         ):
             # Mark the seeded record as task_done-able by first putting it.
             await client._queue.put(record)
@@ -651,14 +668,14 @@ class TestClose:
 
 
 class TestFlushQueue:
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_no_queue_or_client_early_return(self):
         client = _enabled_client_no_thread()
         client._queue = None
         client._client = None
         await client._flush_queue()  # must not raise
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_empty_queue_sends_nothing(self):
         client = _enabled_client_no_thread()
         client._queue = asyncio.Queue()
@@ -667,7 +684,7 @@ class TestFlushQueue:
             await client._flush_queue()
         msend.assert_not_called()
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_drains_all_pending_records(self):
         client = _enabled_client_no_thread()
         client._queue = asyncio.Queue()
@@ -695,29 +712,32 @@ class TestFlushQueue:
 
 
 class TestFlush:
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_flush_disabled_is_noop(self):
         client = _disabled_client()
         await client.flush()  # must not raise
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_flush_no_loop_is_noop(self):
         client = _enabled_client_no_thread()
         client._loop = None
         await client.flush()  # must not raise
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_flush_loop_not_running_is_noop(self):
         client = _enabled_client_no_thread()
         fake_loop = mock.MagicMock()
         fake_loop.is_running.return_value = False
         client._loop = fake_loop
         client._queue = asyncio.Queue()
-        with mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun:
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
+        ):
             await client.flush()
         mrun.assert_not_called()
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_flush_schedules_flush_queue_on_worker_loop(self):
         """flush() must schedule _flush_queue on the worker loop and await it."""
         import concurrent.futures
@@ -740,8 +760,11 @@ class TestFlush:
             captured["loop"] = loop
             return cf_future
 
-        with mock.patch.object(
-            sc_module.asyncio, "run_coroutine_threadsafe", side_effect=_capture
+        with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(
+                local_asyncio, "run_coroutine_threadsafe", side_effect=_capture
+            ),
         ):
             await client.flush()
 
@@ -750,7 +773,7 @@ class TestFlush:
         assert hasattr(captured.get("coro"), "close")
         captured["coro"].close()
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_flush_times_out_and_cancels_future(self):
         """flush() cancels the concurrent future and logs warning on timeout."""
         import concurrent.futures
@@ -768,18 +791,19 @@ class TestFlush:
             return cf_future
 
         with (
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
             mock.patch.object(
-                sc_module.asyncio, "run_coroutine_threadsafe", side_effect=_stub
+                local_asyncio, "run_coroutine_threadsafe", side_effect=_stub
             ),
             mock.patch.object(
-                sc_module.asyncio, "wait_for", side_effect=asyncio.TimeoutError
+                local_asyncio, "wait_for", side_effect=asyncio.TimeoutError
             ),
         ):
             await client.flush()  # must not raise
 
         assert cf_future.cancelled()
 
-    @pytest.mark.timeout(2)
+    @pytest.mark.timeout(30)
     async def test_flush_inside_temporal_workflow_does_not_bridge_worker_loop(self):
         """Avoid the unsupported asyncio bridge from a Temporal workflow.
 
@@ -794,7 +818,8 @@ class TestFlush:
 
         with (
             mock.patch.object(sc_module, "in_temporal_workflow", return_value=True),
-            mock.patch.object(sc_module.asyncio, "run_coroutine_threadsafe") as mrun,
+            private_stdlib(sc_module, "asyncio") as local_asyncio,
+            mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
         ):
             await client.flush()
 
