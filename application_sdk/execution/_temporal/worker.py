@@ -912,6 +912,31 @@ def create_worker(
 
         all_interceptors.append(LivenessInterceptor(on_activity))
 
+    # Outermost, so the pod is protected before any other interceptor or the
+    # activity itself runs, and stays protected until all of them have returned.
+    if interceptor_settings.enable_dynamic_do_not_disrupt:
+        from application_sdk.execution._temporal.interceptors.disruption_guard import (  # noqa: PLC0415 — cold path: only when dynamic do-not-disrupt is enabled
+            DisruptionGuardInterceptor,
+            process_guard,
+        )
+
+        guard = process_guard(interceptor_settings.dynamic_do_not_disrupt_idle_seconds)
+        if guard is None:
+            logger.warning(
+                "APPLICATION_SDK_ENABLE_DYNAMIC_DO_NOT_DISRUPT is on but this worker "
+                "is not running in a pod; leaving do-not-disrupt unmanaged"
+            )
+        else:
+            all_interceptors.insert(0, DisruptionGuardInterceptor(guard))
+            try:
+                guard.start()
+            except RuntimeError:
+                # No running loop when the worker is built synchronously; the
+                # first finished activity schedules the release instead.
+                logger.debug(
+                    "No event loop yet; deferring initial do-not-disrupt release"
+                )
+
     # Before user interceptors, so what they hold is inside the measured window.
     if interceptor_settings.enable_sizing_telemetry:
         _sizing_activities = interceptor_settings.sizing_telemetry_activities
