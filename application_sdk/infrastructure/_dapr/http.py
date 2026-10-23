@@ -138,7 +138,9 @@ _DEFAULT_SIDECAR_POLL_INTERVAL = 0.5
 
 def _dapr_base_url() -> str:
     port = os.environ.get("DAPR_HTTP_PORT", str(_DEFAULT_DAPR_HTTP_PORT))
-    return f"http://localhost:{port}"
+    # IP literal: a hostname goes through getaddrinfo on the loop's default
+    # executor, which blocked threads there can starve, failing calls to a live daprd.
+    return f"http://127.0.0.1:{port}"
 
 
 #: Set once this worker process has confirmed the Dapr sidecar is reachable
