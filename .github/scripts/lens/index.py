@@ -6,6 +6,8 @@ and Greptile's graph queries work: "who calls `resolve_credential`" answers
 from a reverse map, not from a shell. Bare names over-approximate, which is
 the right failure direction for context (an extra caller costs tokens; a
 missing one costs a bug), and every consumer caps how many it takes.
+`scoped_callers` is the narrower answer, for evidence that states a fact
+about one symbol rather than gathering context around it.
 """
 
 from __future__ import annotations
@@ -45,6 +47,23 @@ class Symbol:
 
 
 @dataclass
+class ScopedCallers:
+    """The callers of one symbol that its scope lets reach it by name, ranked
+    as `callers_of` ranks them.
+
+    `local_to` is the outermost function the symbol is defined inside, when
+    it is nested: nothing outside that function can name it. `unrelated`
+    counts same-name calls from files that neither define nor import a
+    module-level symbol; `untyped` counts `.name` calls on a method's name
+    whose receiver the index cannot type, so they may or may not be it."""
+
+    callers: list[Symbol]
+    local_to: Symbol | None = None
+    unrelated: int = 0
+    untyped: int = 0
+
+
+@dataclass
 class Index:
     root: str
     symbols: dict[str, Symbol] = field(default_factory=dict)
@@ -56,6 +75,9 @@ class Index:
     tests_for: dict[str, list[str]] = field(
         default_factory=dict
     )  # source path -> test paths
+    imports: dict[str, list[str]] = field(
+        default_factory=dict
+    )  # path -> absolute dotted names it imports ("a.b", "a.b.name", "a.b.*")
 
     # ---- queries -------------------------------------------------------
     def enclosing(self, path: str, line: int) -> Symbol | None:
@@ -69,9 +91,58 @@ class Index:
     def callers_of(self, name: str, limit: int = 5) -> list[Symbol]:
         seen = self.callers.get(name, [])
         # Prefer callers outside tests and outside the callee's own file: those are the contracts a change can break.
-        out = [self.symbols[q] for q in seen if q in self.symbols]
-        out.sort(key=lambda s: (s.path.startswith("tests/"), s.path))
-        return out[:limit]
+        return _ranked([self.symbols[q] for q in seen if q in self.symbols])[:limit]
+
+    def scoped_callers(self, sym: Symbol) -> ScopedCallers:
+        """The callers of `sym` its scope allows, not every call of its bare name.
+
+        A nested symbol is reachable by name only inside its outermost
+        enclosing function. A module-level function or class is reachable from
+        its own file and from files that import it, its package, or its module.
+        A method is reachable from its class, its file, and files that import
+        the class; other `.name` calls are counted as untyped, not listed."""
+        mod, dotted = sym.qualname.split(":", 1)
+        parts = dotted.split(".")
+        chain = [
+            self.symbols.get(f"{mod}:{'.'.join(parts[:i])}")
+            for i in range(1, len(parts))
+        ]
+        named = [
+            self.symbols[q]
+            for q in self.callers.get(sym.name, [])
+            if q in self.symbols and q != sym.qualname
+        ]
+        local_to = next((s for s in chain if s and s.kind != "class"), None)
+        if local_to is not None:
+            inside = [
+                c
+                for c in named
+                if c.path == sym.path
+                and (c.qualname + ".").startswith(local_to.qualname + ".")
+            ]
+            return ScopedCallers(
+                _ranked(inside), local_to, unrelated=len(named) - len(inside)
+            )
+        owner = chain[-1] if sym.kind == "method" and chain else None
+        target = owner or sym
+        modules = _import_names(sym.path)
+
+        def reaches(c: Symbol) -> bool:
+            if c.path == sym.path:
+                return True
+            return any(
+                _imports_symbol(i, m, target.name)
+                for i in self.imports.get(c.path, [])
+                for m in modules
+            )
+
+        found = [c for c in named if reaches(c)]
+        rest = len(named) - len(found)
+        return ScopedCallers(
+            _ranked(found),
+            unrelated=0 if owner else rest,
+            untyped=rest if owner else 0,
+        )
 
     def definitions(self, name: str, limit: int = 5) -> list[Symbol]:
         return [self.symbols[q] for q in self.by_name.get(name, [])[:limit]]
@@ -82,13 +153,18 @@ class Index:
                 "root": self.root,
                 "symbols": {k: asdict(v) for k, v in self.symbols.items()},
                 "tests_for": self.tests_for,
+                "imports": self.imports,
             }
         )
 
     @classmethod
     def from_json(cls, text: str) -> "Index":
         raw = json.loads(text)
-        idx = cls(root=raw["root"], tests_for=raw.get("tests_for", {}))
+        idx = cls(
+            root=raw["root"],
+            tests_for=raw.get("tests_for", {}),
+            imports=raw.get("imports", {}),
+        )
         for q, s in raw["symbols"].items():
             idx._add(Symbol(**s))
         idx._link()
@@ -107,6 +183,40 @@ class Index:
                 self.callers.setdefault(c, []).append(q)
 
 
+def _ranked(syms: list[Symbol]) -> list[Symbol]:
+    return sorted(syms, key=lambda s: (s.path.startswith("tests/"), s.path))
+
+
+def _imports_symbol(imported: str, module: str, name: str) -> bool:
+    """True when the import `imported` can bring `module`'s `name` into a
+    file: the module itself or a package above it (called as `mod.name`),
+    the name from the module, or the name re-exported by a package above it."""
+    if module == imported or module.startswith(imported + "."):
+        return True
+    pkg, _, last = imported.rpartition(".")
+    if last not in (name, "*"):
+        return False
+    return module == pkg or module.startswith(pkg + ".")
+
+
+def _file_imports(rel: str, tree: ast.AST) -> list[str]:
+    """Every absolute dotted name `rel` imports, at any depth (a lazy import
+    inside a function still reaches the module), relative imports resolved
+    against the file's own package."""
+    package = _module_name(rel).split(".")
+    if not rel.endswith("__init__.py"):
+        package = package[:-1]
+    out: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            out += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            base = package[: len(package) - node.level + 1] if node.level else []
+            mod = ".".join([*base, *([node.module] if node.module else [])])
+            out += [f"{mod}.{a.name}" if mod else a.name for a in node.names]
+    return out
+
+
 def _call_name(node: ast.AST) -> str | None:
     f = node.func if isinstance(node, ast.Call) else None
     if isinstance(f, ast.Name):
@@ -114,6 +224,25 @@ def _call_name(node: ast.AST) -> str | None:
     if isinstance(f, ast.Attribute):
         return f.attr
     return None
+
+
+def _own_calls(fn: ast.AST) -> list[ast.Call]:
+    """The calls `fn` makes itself: a nested def or class is its own symbol,
+    so its calls are attributed to it, not to every function around it."""
+    out: list[ast.Call] = []
+    todo = list(ast.iter_child_nodes(fn))
+    while todo:
+        node = todo.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            # Decorators and defaults are evaluated by the enclosing function.
+            todo += [*node.decorator_list, *getattr(node, "bases", [])]
+            if not isinstance(node, ast.ClassDef):
+                todo += [*node.args.defaults, *(d for d in node.args.kw_defaults if d)]
+            continue
+        if isinstance(node, ast.Call):
+            out.append(node)
+        todo.extend(ast.iter_child_nodes(node))
+    return out
 
 
 def _signature(
@@ -140,6 +269,7 @@ def index_source(idx: Index, rel: str, source: str) -> None:
     except (SyntaxError, ValueError):
         return
     mod = _module_name(rel)
+    idx.imports[rel] = _file_imports(rel, tree)
 
     def visit(node: ast.AST, scope: list[str], in_class: bool) -> None:
         for child in ast.iter_child_nodes(node):
@@ -147,15 +277,7 @@ def index_source(idx: Index, rel: str, source: str) -> None:
                 q = f"{mod}:{'.'.join([*scope, child.name])}"
                 calls: list[str] = []
                 if not isinstance(child, ast.ClassDef):
-                    calls = [
-                        n
-                        for n in (
-                            _call_name(c)
-                            for c in ast.walk(child)
-                            if isinstance(c, ast.Call)
-                        )
-                        if n
-                    ]
+                    calls = [n for n in map(_call_name, _own_calls(child)) if n]
                 kind = (
                     "class"
                     if isinstance(child, ast.ClassDef)

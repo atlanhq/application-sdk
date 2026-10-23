@@ -5751,6 +5751,85 @@ def test_recheck_evidence_does_not_infer_absence_from_a_stale_quote(repo: Path):
     assert "merge-base presence of its symbol unknown" in ev.facts[0]
 
 
+ROUTES = """\
+def handler_compute_manifest(source):
+    def resolve(entrypoint):
+        def hook(config):
+            return config.get("name")
+        return hook
+    return resolve
+
+
+def serve(source):
+    return handler_compute_manifest(source)
+"""
+
+SCOPED_HEAD = {
+    "application_sdk/handler/routes.py": ROUTES,
+    # A same-named `hook` called from another module: not the closure above.
+    "application_sdk/testing/e2e/base.py": (
+        "class BaseE2ETest:\n    def config_name(self):\n        return self.hook()\n"
+    ),
+    "app/main.py": (
+        "from application_sdk.handler.routes import handler_compute_manifest\n\n"
+        "def build():\n    return handler_compute_manifest(None)\n"
+    ),
+    # Calls the name without importing it: some other handler_compute_manifest.
+    "app/other.py": "def run():\n    return handler_compute_manifest()\n",
+    "application_sdk/storage/store.py": (
+        "class Store:\n    def get(self, key):\n        return key.strip()\n"
+    ),
+    "application_sdk/storage/use.py": (
+        "from .store import Store\n\ndef read():\n    return Store().get('k')\n"
+    ),
+    "app/config.py": "def lookup(d):\n    return d.get('k')\n",
+}
+
+
+def _scoped_evidence(path: str, quote: str) -> Any:
+    ws = Workspace(
+        root=Path("/nonexistent"),
+        head_text=SCOPED_HEAD,
+        diffs={},
+        index=build_index(Path("/nonexistent"), overrides=SCOPED_HEAD),
+    )
+    f = Finding(path, 1, "high", "bug", "t", "b", quote)
+    return review_mod.recheck_evidence(
+        ws, f, review_mod.baseline.PRAdditions(), lambda p: None, ""
+    )
+
+
+def test_recheck_evidence_lists_no_outside_callers_for_a_nested_symbol():
+    """FND-4341: a closure's bare name colliding with a call elsewhere is not a
+    caller; the evidence names the enclosing function's real callers instead."""
+    ev = _scoped_evidence(
+        "application_sdk/handler/routes.py", 'return config.get("name")'
+    )
+    facts = [x for x in ev.facts if "caller" in x]
+    assert facts == [
+        "local symbol: handler_compute_manifest.resolve.hook is defined inside "
+        "handler_compute_manifest, so no code outside it can call it by name "
+        "(callers inside handler_compute_manifest: none; 1 same-name call "
+        "elsewhere unrelated: no import reaches it)",
+        "callers of handler_compute_manifest at the PR head (2 in its file or "
+        "importing it; 1 same-name call elsewhere unrelated: no import reaches "
+        "it): app/main.py:3 build, application_sdk/handler/routes.py:9 serve",
+    ]
+    assert not any("e2e/base.py" in x or "app/other.py" in x for x in ev.facts)
+
+
+def test_recheck_evidence_keeps_a_method_caller_through_a_relative_import():
+    """A method is listed only where its class is in reach; a `.get()` on any
+    other receiver is a count, so dict lookups do not pose as its callers."""
+    ev = _scoped_evidence("application_sdk/storage/store.py", "return key.strip()")
+    assert [x for x in ev.facts if "caller" in x] == [
+        # dict.get in routes.py and config.py: counted, never listed as callers.
+        "callers of Store.get at the PR head (1 in its file or importing it; 2 more "
+        ".get() calls on a receiver the index cannot type): "
+        "application_sdk/storage/use.py:3 read"
+    ]
+
+
 def test_recheck_request_keeps_pr_code_inside_its_block(repo: Path):
     """PR source that spells a closing tag or a forged <evidence> stays data."""
     gh, f = _blocking_on_added_code(repo)

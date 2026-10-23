@@ -1001,6 +1001,49 @@ def _private(parts: list[str]) -> bool:
     return any(p.startswith("_") and not p.startswith("__") for p in parts)
 
 
+def _caller_facts(idx: Index, sym: Symbol, added: PRAdditions) -> list[str]:
+    """Who can call `sym` by name at the PR head, resolved by scope: a nested
+    symbol's callers sit inside its enclosing function, so the facts name that
+    function's callers too; a same-name call elsewhere is never listed."""
+
+    def listing(callers: list[Symbol]) -> str:
+        return (
+            ", ".join(
+                f"{c.path}:{c.start} {c.qualname.split(':')[-1]}"
+                + (" (added by this PR)" if added.added(c.path, c) else "")
+                for c in callers[:8]
+            )
+            or "none"
+        )
+
+    got = idx.scoped_callers(sym)
+    dotted = sym.qualname.split(":", 1)[1]
+    unrelated = (
+        f"; {got.unrelated} same-name call{'s' * (got.unrelated != 1)} elsewhere "
+        "unrelated: no import reaches it"
+        if got.unrelated
+        else ""
+    )
+    if got.local_to is not None:
+        outer = got.local_to.qualname.split(":", 1)[1]
+        return [
+            f"local symbol: {dotted} is defined inside {outer}, so no code outside "
+            f"it can call it by name (callers inside {outer}: "
+            f"{listing(got.callers)}{unrelated})",
+            *_caller_facts(idx, got.local_to, added),
+        ]
+    untyped = (
+        f"; {got.untyped} more .{sym.name}() call{'s' * (got.untyped != 1)} on a "
+        "receiver the index cannot type"
+        if got.untyped
+        else ""
+    )
+    return [
+        f"callers of {dotted} at the PR head ({len(got.callers)} in its file or "
+        f"importing it{unrelated}{untyped}): {listing(got.callers)}"
+    ]
+
+
 def recheck_evidence(
     ws: Workspace,
     f: Finding,
@@ -1086,23 +1129,7 @@ def recheck_evidence(
         else f"{CAPABILITIES_DOC} not found on the base branch"
     )
     if sym is not None:
-        callers = [
-            c
-            for c in ws.index.callers_of(sym.name, limit=8)
-            if c.qualname != sym.qualname
-        ]
-        total = len(ws.index.callers.get(sym.name, []))
-        facts.append(
-            f"callers of {sym.name} at the PR head ({total} by name): "
-            + (
-                ", ".join(
-                    f"{c.path}:{c.start} {c.qualname.split(':')[-1]}"
-                    + (" (added by this PR)" if added.added(c.path, c) else "")
-                    for c in callers
-                )
-                or "none"
-            )
-        )
+        facts += _caller_facts(ws.index, sym, added)
     return RecheckEvidence(facts, absent, code_now, at_base or "(none)")
 
 
