@@ -9,6 +9,7 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
+    ManifestInput,
     MetadataInput,
     MetadataOutput,
     PreflightInput,
@@ -108,3 +109,7 @@ class TestDefaultHandler:
         assert isinstance(result, MetadataOutput)
         assert isinstance(result, SqlMetadataOutput)
         assert result.objects == []
+
+    async def test_compute_manifest_serves_the_generated_manifest(self, handler):
+        inp = ManifestInput(entrypoint="extract", manifest={"dag": {}})
+        assert await handler.compute_manifest(inp) is None

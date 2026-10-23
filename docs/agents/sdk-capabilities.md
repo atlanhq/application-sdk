@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 74 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 27 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
@@ -2605,6 +2605,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Signature:** `class HandlerError(message: str, ...)`
 - **Summary:** Deprecated: use a typed ``AppError`` subclass — removed in v4.0.
 - **Defined in:** `application_sdk/handler/base.py`
+
+#### `ManifestInput`
+
+- **Import:** `from application_sdk.handler import ManifestInput`
+- **Signature:** `class ManifestInput`
+- **Summary:** Input for the optional ``Handler.compute_manifest`` operation.
+- **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataInput`
 
@@ -7873,6 +7880,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `key: str` — Credential key (e.g., 'api_key', 'username').
   - `value: str` — Credential value (sensitive — never log this directly).
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `ManifestInput`
+
+- **Import:** `from application_sdk.handler.contracts import ManifestInput`
+- **Summary:** Input for the optional ``Handler.compute_manifest`` operation.
+- **Fields:**
+  - `entrypoint: str` — The entry point whose manifest is requested.
+  - `manifest: dict[str, Any]` — Its generated manifest, tokens already resolved. Open on purpose: the
+  - `fe_inputs: dict[str, Any]` `= Field(default_factory=dict)` — The decoded setup-form values; empty when the request sends none.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataInput`

@@ -666,8 +666,9 @@ def generated_files(root: Path) -> list[str]:
 def compute_manifest_hooks(root: Path) -> list[str]:
     """``app/<entrypoint>/core.py`` files defining ``compute_manifest``.
 
-    The host serves static manifests only: a hook runs app code at request time,
-    which the host's api-only install cannot be trusted to import.
+    The host never runs one: ``core.py`` is worker code outside the handler's
+    files, which the host's api-only install cannot be trusted to import. A
+    manifest computed per request belongs in the handler's ``compute_manifest``.
     """
     return sorted(
         p.relative_to(root).as_posix()
@@ -803,8 +804,9 @@ def check(root: Path, config: Config) -> list[str]:
             for n in logging_statements(ast.parse(text, filename=handler))
         )
     problems.extend(
-        f"{hook}: compute_manifest runs app code per request; the consolidated "
-        "host serves static manifests only, so this app cannot be hosted yet"
+        f"{hook}: compute_manifest runs app code per request outside the "
+        "handler, which the consolidated host never runs; make the manifest "
+        "static, or move the hook to the handler's compute_manifest"
         for hook in compute_manifest_hooks(root)
     )
     return problems

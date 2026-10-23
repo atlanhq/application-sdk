@@ -12,11 +12,15 @@ The two surfaces differ only in what a :class:`MetadataSource` resolves:
 
 * the worker resolves entry points from its app registry, stamps the manifest
   with the task queue its own worker polls, and runs an app's
-  ``compute_manifest`` hooks;
+  ``app.<segment>.core.compute_manifest`` hooks;
 * the host has no app registry. It resolves entry points from the generated
-  tree, derives the task queue from the app's name and deployment exactly as the
-  worker does, and serves static manifests only: ``gen_app_api.py check``
-  refuses an app with a ``compute_manifest`` hook, so no hooked app reaches it.
+  tree and derives the task queue from the app's name and deployment exactly as
+  the worker does. It never runs a ``core.py`` hook (``gen_app_api.py check``
+  refuses an app with one).
+
+Both run :meth:`~application_sdk.handler.base.Handler.compute_manifest` when the
+handler overrides it (:func:`handler_compute_manifest`), so a manifest that must
+be computed per request is served the same from either place.
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import orjson
 from fastapi import FastAPI, HTTPException, Request
@@ -45,8 +50,17 @@ from application_sdk.common.build_identity import (
     build_identity,
 )
 from application_sdk.common.task_queue import resolve_manifest_tokens
+from application_sdk.errors.base import redact_secrets
+from application_sdk.handler.base import Handler
+from application_sdk.handler.context import (
+    HandlerContext,
+    SecretStore,
+    bind_handler_context,
+)
+from application_sdk.handler.contracts import ManifestInput
 from application_sdk.handler.routes import (
     _ENTRYPOINT_NAME_RE,
+    _http_error_boundary,
     _wrap_response,
     entrypoint_module_segment,
 )
@@ -207,7 +221,7 @@ class MetadataSource:
         input_contract: Resolves ``?entrypoint=`` to its input model, raising
             ``HTTPException``; ``None`` resolves from the generated tree.
         compute_manifest: The entry point's ``compute_manifest`` hook, or
-            ``None``.
+            ``None`` (see :func:`handler_compute_manifest`).
         programmatic_manifest: An ``AppManifest`` built in Python, served when
             no entry point is named.
         log: The logger the routes report through.
@@ -233,6 +247,60 @@ class MetadataSource:
     log: Callable[[], Any] = lambda: logger
     max_fe_inputs_bytes: Callable[[], int] = lambda: MAX_FE_INPUTS_BYTES
     from_process_env: bool = True
+
+
+def handler_compute_manifest(
+    handler: Handler,
+    app_name: Callable[[], str],
+    *,
+    secret_store: SecretStore | None = None,
+) -> Callable[[str], ComputeManifest | None]:
+    """A ``MetadataSource.compute_manifest`` that runs ``handler.compute_manifest``.
+
+    Resolves to ``None`` for every entry point when the handler does not
+    override it, so such an app is served exactly as before. Otherwise the
+    method runs with a bound :class:`HandlerContext` (no credentials), and a
+    ``None`` result serves the generated manifest.
+    """
+    if type(handler).compute_manifest is Handler.compute_manifest:
+        return lambda _entrypoint: None
+
+    def resolve(entrypoint: str) -> ComputeManifest:
+        async def hook(manifest: dict[str, Any], fe_inputs: dict[str, Any]) -> Any:
+            context = HandlerContext(app_name=app_name(), _secret_store=secret_store)
+            with bind_handler_context(context):
+                try:
+                    computed = await handler.compute_manifest(
+                        ManifestInput(
+                            entrypoint=entrypoint,
+                            manifest=manifest,
+                            fe_inputs=fe_inputs,
+                        )
+                    )
+                except HTTPException as exc:
+                    raise _redacted(exc) from None
+            return manifest if computed is None else computed
+
+        return hook
+
+    return resolve
+
+
+def _redacted(exc: HTTPException) -> HTTPException:
+    """*exc* with its detail passed through :func:`redact_secrets`.
+
+    A handler's ``HTTPException`` is its answer to the caller and keeps its
+    status and message; its detail is scrubbed as an ``AppError`` message is on
+    the other handler routes. A non-string detail is scrubbed as JSON text.
+    """
+    detail = exc.detail if isinstance(exc.detail, str) else orjson.dumps(exc.detail)
+    if isinstance(detail, bytes):
+        detail = detail.decode()
+    return HTTPException(
+        status_code=exc.status_code,
+        detail=redact_secrets(detail),
+        headers=exc.headers,
+    )
 
 
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
@@ -508,22 +576,16 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
                 else decode_fe_inputs(fe_inputs, source.max_fe_inputs_bytes())
             )
             manifest_dict = orjson.loads(raw)
-            try:
+            # The other handler routes' boundary: an HTTPException is the
+            # hook's own answer, a typed AppError answers with its category's
+            # status and message, and anything else is a generic 500 whose
+            # internals (stack/SQL/paths) stay in the log.
+            with _http_error_boundary(
+                f"compute_manifest for entrypoint {entrypoint_name!r}",
+                source.app_name(),
+                str(uuid4()),
+            ):
                 computed = await compute(manifest_dict, fe_inputs_decoded)
-            except HTTPException:
-                raise
-            except Exception:
-                # Don't leak the hook's internals (stack/SQL/paths) to the
-                # caller — mirror the other handler routes' generic 500.
-                # conformance: ignore[L009] boundary handler logs the real exception (exc_info) then raises a sanitized HTTPException `from None`; the log is the only server-side record of the actual failure.
-                log.error(
-                    "compute_manifest hook failed for entrypoint %r",
-                    entrypoint_name,
-                    exc_info=True,
-                )
-                raise HTTPException(
-                    status_code=500, detail="Internal server error"
-                ) from None
             if not isinstance(computed, dict):
                 # conformance: ignore[L009] logs caller-invisible context (the actual returned type) that the generic 500 HTTPException detail omits.
                 log.error(

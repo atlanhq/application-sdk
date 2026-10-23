@@ -433,10 +433,20 @@ def test_check_refuses_a_compute_manifest_hook(tmp_path: Path) -> None:
     )
     problems = gen.check(root, gen.load(root))
     assert problems == [
-        "app/crawler/core.py: compute_manifest runs app code per request; the "
-        "consolidated host serves static manifests only, so this app cannot be "
-        "hosted yet"
+        "app/crawler/core.py: compute_manifest runs app code per request outside "
+        "the handler, which the consolidated host never runs; make the manifest "
+        "static, or move the hook to the handler's compute_manifest"
     ]
+
+
+def test_check_accepts_a_handler_compute_manifest(tmp_path: Path) -> None:
+    """The handler's own compute_manifest ships with it and runs on the host."""
+    root = _app(
+        tmp_path,
+        "from .client import C\n\n\nclass DemoHandler:\n"
+        "    async def compute_manifest(self, input):\n        return None\n",
+    )
+    assert gen.check(root, gen.load(root)) == []
 
 
 def test_a_relative_import_in_a_package_init_ships_its_sibling(tmp_path: Path) -> None:
