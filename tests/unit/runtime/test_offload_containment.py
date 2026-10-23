@@ -33,9 +33,6 @@ from application_sdk.handler.context import HandlerContext, bind_handler_context
 #: How long a blocked call waits before releasing itself.
 _RELEASE_AFTER = 5.0
 
-#: How quickly an uncontended call, or a refusal, must come back.
-_PROMPT = 1.0
-
 
 class _Hang:
     """A blocking call that runs until released, like a driver stuck on a dead host."""
@@ -43,10 +40,14 @@ class _Hang:
     def __init__(self) -> None:
         self.release = threading.Event()
         self.started = threading.Event()
+        #: Set only when the call ends: a caller that came back while it is
+        #: unset did not wait for this call.
+        self.returned = threading.Event()
 
     def __call__(self) -> str:
         self.started.set()
         self.release.wait(_RELEASE_AFTER)
+        self.returned.set()
         return "released"
 
 
@@ -99,11 +100,12 @@ class TestPerAppCap:
             with pytest.raises(ResourceExhaustedError) as refused:
                 await run_in_thread(lambda: "never runs")
 
-        start = time.monotonic()
         with offload_owner("app-b-unaffected"):
-            result = await run_in_thread(lambda: "b ran")
+            result = await asyncio.wait_for(
+                run_in_thread(lambda: "b ran"), _RELEASE_AFTER
+            )
         assert result == "b ran"
-        assert time.monotonic() - start < _PROMPT
+        assert not any(h.returned.is_set() for h in hangs), "b waited for a's calls"
 
         error = refused.value
         assert error.category is FailureCategory.RESOURCE_EXHAUSTED
@@ -120,11 +122,10 @@ class TestPerAppCap:
         hangs.append(hang)
         await _strand("app-refused-fast", hang)
 
-        start = time.monotonic()
         with offload_owner("app-refused-fast"):
             with pytest.raises(ResourceExhaustedError):
-                await run_in_thread(lambda: None)
-        assert time.monotonic() - start < _PROMPT
+                await asyncio.wait_for(run_in_thread(lambda: None), _RELEASE_AFTER)
+        assert not hang.returned.is_set(), "the refusal queued behind the hung call"
 
     async def test_the_slot_is_held_until_the_thread_finishes_not_the_caller(
         self, cap, hangs: list[_Hang]
