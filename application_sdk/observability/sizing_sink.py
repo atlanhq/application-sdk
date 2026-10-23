@@ -33,10 +33,32 @@ class SizingObservabilitySink(AtlanObservability[Any]):
     """
 
     _flush_task_started: ClassVar[bool] = False
+    # Kept so ``_reset_for_testing`` can stop the flush: a reset that only
+    # clears the flag leaves the old loop flushing a dropped sink's rows later,
+    # against whatever store the environment then names.
+    _flush_task: ClassVar["asyncio.Task[None] | None"] = None
+    _flush_thread: ClassVar[threading.Thread | None] = None
 
     @classmethod
     def _reset_for_testing(cls) -> None:
+        """Stop the flush and drop every sizing sink's unflushed rows."""
+        task, thread = cls._flush_task, cls._flush_thread
+        cls._flush_task = None
+        cls._flush_thread = None
         cls._flush_task_started = False
+        for instance in list(AtlanObservability._instances):
+            if isinstance(instance, cls):
+                with instance._buffer_lock:
+                    instance._buffer = []
+                AtlanObservability._instances.remove(instance)
+        if task is not None:
+            try:
+                task.get_loop().call_soon_threadsafe(task.cancel)
+            except RuntimeError:
+                pass  # its loop is closed, so the task can never run again
+        if thread is not None:
+            # Waits out a flush already in progress, which may be uploading.
+            thread.join(timeout=30)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -46,21 +68,38 @@ class SizingObservabilitySink(AtlanObservability[Any]):
             # Loop-or-thread, as the traces adaptor does: built lazily inside an
             # activity, but must also work when constructed off a loop.
             try:
-                asyncio.get_running_loop().create_task(self._periodic_flush())
+                loop = asyncio.get_running_loop()
             except RuntimeError:
-                threading.Thread(target=self._flush_forever, daemon=True).start()
+                loop = None
+            if loop is not None:
+                task = loop.create_task(self._periodic_flush())
+            else:
+                # The task is made here, not in the thread, so a reset that
+                # runs before the thread is scheduled still has it to cancel.
+                task = asyncio.new_event_loop().create_task(self._periodic_flush())
+                thread = threading.Thread(
+                    target=self._flush_forever, args=(task,), daemon=True
+                )
+                thread.start()
+                SizingObservabilitySink._flush_thread = thread
+            SizingObservabilitySink._flush_task = task
             SizingObservabilitySink._flush_task_started = True
         # conformance: ignore[E004] telemetry; a sink that cannot start its flush must not stop collection
         except Exception:
             logger.warning("could not start the sizing flush task", exc_info=True)
 
-    def _flush_forever(self) -> None:
+    def _flush_forever(self, task: "asyncio.Task[None]") -> None:
         """Run the periodic flush on its own loop, for the no-running-loop case."""
+        loop = task.get_loop()
         try:
-            asyncio.run(self._periodic_flush())
+            loop.run_until_complete(task)
+        except asyncio.CancelledError:
+            pass  # stopped by ``_reset_for_testing``
         # conformance: ignore[E004] background thread; must not take the process down
         except Exception:
             logger.warning("sizing flush loop stopped", exc_info=True)
+        finally:
+            loop.close()
 
     def process_record(self, record: Any) -> dict[str, Any]:
         """Flatten one observation into a row. ``app``/``deployment`` are stamped
@@ -162,7 +201,9 @@ async def drain() -> None:
 
 
 def _reset_for_testing() -> None:
-    """Drop the process-wide sink so a test can build its own."""
+    """Drop the process-wide sink so a test can build its own, and stop its
+    flush so nothing the test buffered is written after the test ends.
+    """
     global _sink
     with _sink_lock:
         _sink = None

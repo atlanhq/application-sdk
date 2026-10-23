@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import pathlib
+import threading
 from unittest.mock import MagicMock, patch
 
 import orjson
@@ -15,6 +16,7 @@ from application_sdk.observability import sizing_sink
 from application_sdk.observability.observability import (
     LOCAL_OBS_SUBDIR_MAP,
     OBSERVABILITY_S3_PREFIX_MAP,
+    AtlanObservability,
 )
 from application_sdk.observability.sizing import SizingObservation
 from application_sdk.observability.sizing_sink import (
@@ -371,3 +373,82 @@ class TestTheFlushActuallyHappens:
             await sink._flush_records([sink.process_record(_observation())])
         msgs = " ".join(str(c) for c in mock_log.info.call_args_list)
         assert "flushed" in msgs
+
+
+#: The repo's ``components/objectstore.yaml``, rooted at *root*.
+_OBJECTSTORE_COMPONENT = """\
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+spec:
+  version: v1
+  type: bindings.localstorage
+  ignoreErrors: true
+  metadata:
+    - name: rootPath
+      value: "{root}"
+"""
+
+
+class TestResetLeavesNothingToFlushLater:
+    """A sink a test built must not flush after that test ends.
+
+    Its flush thread outlived ``_reset_for_testing`` and still held the test's
+    rows. Once the session fixture restored ``DAPR_COMPONENTS_PATH``, that
+    thread's next flush resolved the store from ``./components`` and wrote into
+    the checkout's ``local/dapr/objectstore`` (FND-4334).
+    """
+
+    def test_reset_stops_the_flush_thread(self, tmp_path):
+        before = set(threading.enumerate())
+        with patch.object(
+            sizing_sink, "get_observability_dir", return_value=str(tmp_path)
+        ):
+            sizing_sink.get_sink()  # no running loop: starts the flush thread
+        started = [
+            t
+            for t in threading.enumerate()
+            if t not in before and "_flush_forever" in t.name
+        ]
+        assert len(started) == 1, "the off-loop sink should start one flush thread"
+
+        sizing_sink._reset_for_testing()
+
+        assert not started[0].is_alive(), "the flush thread outlived the reset"
+
+    @pytest.mark.asyncio
+    async def test_a_flush_after_the_session_restores_env_writes_nothing(
+        self, tmp_path, monkeypatch
+    ):
+        with patch.object(
+            sizing_sink, "get_observability_dir", return_value=str(tmp_path / "obs")
+        ):
+            persist(_observation())
+        sink = sizing_sink._sink
+        assert sink is not None and sink._buffer, "no row buffered: vacuous"
+
+        sizing_sink._reset_for_testing()  # the per-test fixture's teardown
+
+        # Then the session fixture's undo: the store resolves from the
+        # working directory's ``./components`` again.
+        checkout = tmp_path / "checkout"
+        (checkout / "components").mkdir(parents=True)
+        (checkout / "components" / "objectstore.yaml").write_text(
+            _OBJECTSTORE_COMPONENT.format(
+                root=(checkout / "local" / "dapr" / "objectstore").as_posix()
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(checkout)
+        monkeypatch.delenv("DAPR_COMPONENTS_PATH", raising=False)
+        monkeypatch.setattr(AtlanObservability, "_deployment_store", None)
+
+        # What the old flush thread or a later ``flush_all`` would do.
+        for instance in list(AtlanObservability._instances):
+            if isinstance(instance, SizingObservabilitySink):
+                await instance._flush_buffer(force=True)
+
+        leaked = [p for p in (checkout / "local").rglob("*") if p.is_file()]
+        assert not leaked, "a row an earlier test buffered reached the checkout"
+        assert sink not in AtlanObservability._instances

@@ -265,7 +265,13 @@ def _clear_infrastructure() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def _reset_sizing_sink() -> Iterator[None]:
-    """Drop the lazily built, process-wide sizing sink around every unit test."""
+    """Drop the lazily built, process-wide sizing sink around every unit test.
+
+    The reset also stops the sink's flush thread and discards its rows. Left
+    running, that thread flushed a test's rows minutes later, after
+    ``local_writes_stay_out_of_the_repo`` had restored ``DAPR_COMPONENTS_PATH``,
+    into the checkout's ``local/dapr/objectstore``.
+    """
     from application_sdk.observability import sizing_sink
 
     sizing_sink._reset_for_testing()
