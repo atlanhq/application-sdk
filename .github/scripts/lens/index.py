@@ -184,7 +184,9 @@ class Index:
         def in_class(c: Symbol) -> bool:
             if (c.qualname + ".").startswith(owner.qualname + "."):
                 return True
-            k = next((s for s in reversed(self._parents(c)) if s and s.kind == "class"), None)
+            k = next(
+                (s for s in reversed(self._parents(c)) if s and s.kind == "class"), None
+            )
             bases = k.signature.partition("(")[2] if k else ""
             return owner.name in re.findall(r"\w+", bases)
 
@@ -337,7 +339,7 @@ def _type_names(ann: ast.AST | None) -> set[str]:
 
 
 def _typed_calls(fn: ast.AST, nodes: list[ast.AST]) -> list[str]:
-    """"Type.name" for each `.name()` call in `nodes` whose receiver's class
+    """One "Type.name" per `.name()` call in `nodes` whose receiver's class
     the call site states: `self`, `cls` or `super()` ("self.name"), `C(...)`,
     `C` itself, or a local or parameter annotated as, or assigned from, `C(...)`.
     Anything else (`self.store.get()`, `d.get()` on an unannotated `d`) has
