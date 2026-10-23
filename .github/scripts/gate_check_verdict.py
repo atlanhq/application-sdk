@@ -51,7 +51,7 @@ import argparse
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -168,6 +168,9 @@ FINAL_STATES = ("success", "failure", "error")
 VERDICT_CREATOR = "github-actions[bot]"
 
 
+_UNDATED = datetime.min.replace(tzinfo=timezone.utc)
+
+
 def _is_request(row: dict) -> bool:
     return (
         row.get("context") == GATE_CHECK_CONTEXT
@@ -185,16 +188,26 @@ def find_request(rows: list) -> tuple[dict | None, datetime | None]:
     bot-signed pass.
 
     A request is identified by its link, the command run that made it, and
-    dated by its FIRST row: ``recheck_failure`` re-posts a request it masked,
-    and the re-post must not move the request's time past runs it dispatched.
+    dated by its FIRST row. ``recheck_failure`` re-posts a request it masked,
+    so the newest row need not be the newest request: ranking by the first
+    row means a re-post can neither move a request's time past the runs it
+    dispatched nor put an older request above a newer one (lens F-f1a9c4).
+    Returns the request's newest row (its description) and its time; an
+    undated request ranks last and settles nothing.
     """
-    request = next((row for row in rows if _is_request(row)), None)
-    if request is None:
+    groups: dict[str, list] = {}
+    for index, row in enumerate(rows):
+        if _is_request(row):
+            groups.setdefault(row.get("target_url") or f"#{index}", []).append(row)
+    if not groups:
         return None, None
-    url = request.get("target_url") or ""
-    same = [r for r in rows if _is_request(r) and url and r.get("target_url") == url]
-    times = [t for t in (_ts(r.get("created_at")) for r in same or [request]) if t]
-    return request, min(times) if times else None
+
+    def first_at(group: list) -> datetime | None:
+        times = [_ts(r.get("created_at")) for r in group]
+        return None if None in times else min(times)
+
+    newest = max(groups.values(), key=lambda group: first_at(group) or _UNDATED)
+    return newest[0], first_at(newest)
 
 
 def recheck_failure(github: GitHub, sha: str, branch: str) -> Verdict | None:

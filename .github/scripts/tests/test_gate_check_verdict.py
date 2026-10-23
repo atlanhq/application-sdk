@@ -172,16 +172,16 @@ class FakeApi:
         written_at: str = _iso(40),
         rerun_fails: bool = False,
         history: list[dict[str, Any]] | None = None,
-        arrives_before_write: dict[str, Any] | None = None,
+        arrives_before_write: list[dict[str, Any] | None] | None = None,
     ) -> None:
         self.status = status
         self.status_created_at = status_created_at
         self.status_url = COMMAND_URL
         # Older `gate-check` rows under the current one, newest first.
         self.history = history or []
-        # A row another workflow posts just before this driver's next status
-        # write lands (a racing `/gate-check force`).
-        self.arrives_before_write = arrives_before_write
+        # Rows another workflow posts just before each of this driver's status
+        # writes lands, in write order (a racing `/gate-check force`).
+        self.arrives_before_write = list(arrives_before_write or [])
         self.written_at = written_at
         self.rerun_fails = rerun_fails
         # workflow → successive listings; the last one sticks.
@@ -197,8 +197,12 @@ class FakeApi:
             )
             self.writes.append((path, fields))
             if "/statuses/" in path:
-                if self.arrives_before_write is not None:
-                    row, self.arrives_before_write = self.arrives_before_write, None
+                row = (
+                    self.arrives_before_write.pop(0)
+                    if self.arrives_before_write
+                    else None
+                )
+                if row is not None:
                     self._push(row["state"], row["description"])
                     self.status_created_at = row["created_at"]
                     self.status_url = row["target_url"]
@@ -369,6 +373,36 @@ FORCE = _status_row(
     created=_iso(45),
     url="https://example.invalid/command/2",
 )
+#: A second force after that one, made by a third command run.
+FORCE_AGAIN = _status_row(
+    "pending",
+    "running: checks.yml",
+    created=_iso(47),
+    url="https://example.invalid/command/3",
+)
+
+
+class TestFindRequest:
+    def test_ranks_requests_by_their_first_row_not_the_newest_row(self) -> None:
+        rows = [
+            _status_row("pending", "running: tests.yaml", created=_iso(50)),
+            FORCE_AGAIN,
+            REQUEST,
+        ]
+        request, requested_at = gcv.find_request(rows)
+        assert request == FORCE_AGAIN
+        assert requested_at == datetime(2026, 10, 13, 12, 47, tzinfo=timezone.utc)
+
+    def test_an_undated_request_settles_nothing(self) -> None:
+        undated = dict(REQUEST, created_at=None)
+        assert gcv.find_request([undated]) == (undated, None)
+
+    def test_rows_that_are_not_requests_are_skipped(self) -> None:
+        rows = [
+            _status_row("failure", "failed: x", created=_iso(40)),
+            _status_row("pending", "running: x", created=_iso(41), creator="x"),
+        ]
+        assert gcv.find_request(rows) == (None, None)
 
 
 class TestRerunAfterFailure:
@@ -461,7 +495,7 @@ class TestRerunAfterFailure:
             gcv, "show_verdict", lambda g, s, b, verdict: shown.append(verdict.state)
         )
         api = self._api(_run(1))
-        api.arrives_before_write = FORCE
+        api.arrives_before_write = [FORCE]
         verdict = gcv.settle(GitHub(REPO, api), SHA)
         assert verdict.final is False
         assert [f["state"] for _, f in api.writes[:2]] == ["success", "pending"]
@@ -472,6 +506,28 @@ class TestRerunAfterFailure:
         )
         assert api.status == ("pending", FORCE["description"])
         assert shown == []
+
+    def test_a_second_force_racing_the_put_back_stays_the_request(self) -> None:
+        """lens F-f1a9c4: a second `/gate-check force` lands between the
+        re-read and the put-back of the first. The put-back is then the
+        newest row, but the second force is the newest request, and only its
+        runs may settle the commit."""
+        api = self._api(_run(1))
+        api.arrives_before_write = [FORCE, FORCE_AGAIN]
+        gcv.settle(GitHub(REPO, api), SHA)
+        rows = GitHub(REPO, api).status_rows(SHA)
+        assert rows[0]["target_url"] == FORCE["target_url"]  # the put-back
+        request, requested_at = gcv.find_request(rows)
+        assert request is not None
+        assert request["target_url"] == FORCE_AGAIN["target_url"]
+        assert requested_at == datetime(2026, 10, 13, 12, 47, tzinfo=timezone.utc)
+        # The next callback waits on the second force's own runs (checks.yml
+        # has none since it was made), never on the first force's passing one.
+        api.writes.clear()
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert verdict.final is False
+        assert verdict.reason == "checks.yml has not started yet"
+        assert api.writes == []
 
     def test_the_put_back_request_keeps_its_own_time(self) -> None:
         """The forced runs were created before the re-post. Dated by the
