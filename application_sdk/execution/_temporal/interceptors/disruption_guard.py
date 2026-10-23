@@ -10,6 +10,11 @@ before the first in-flight activity starts and removed once none have run for
 ``idle_seconds``. If a patch fails the activity still runs; the pod is then only as
 protected as a pod without the annotation, and an eviction drains it through the
 normal graceful-shutdown path.
+
+The guard only manages pods the chart asked to protect: if the pod was created
+without the annotation, the guard does nothing. Its first patch also writes a marker
+annotation, so a container restart after the annotation was removed still knows the
+pod is managed.
 """
 
 from __future__ import annotations
@@ -32,6 +37,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 DO_NOT_DISRUPT_ANNOTATION = "karpenter.sh/do-not-disrupt"
+MANAGED_ANNOTATION = "application-sdk.atlan.com/dynamic-do-not-disrupt"
 _SERVICE_ACCOUNT_DIR = Path("/var/run/secrets/kubernetes.io/serviceaccount")
 _PATCH_TIMEOUT_SECONDS = 5.0
 
@@ -63,26 +69,38 @@ class PodAnnotationPatcher:
             return None
         return cls(pod, namespace_file.read_text().strip())
 
+    def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            verify=self._verify,
+            timeout=_PATCH_TIMEOUT_SECONDS,
+            transport=self._transport,
+        )
+
+    def _auth(self) -> dict[str, str]:
+        # Projected service-account tokens rotate, so read it on every call.
+        return {"Authorization": f"Bearer {self._token_path.read_text().strip()}"}
+
+    async def get_annotations(self) -> dict[str, str]:
+        async with self._client() as client:
+            response = await client.get(self._url, headers=self._auth())
+            response.raise_for_status()
+            return response.json().get("metadata", {}).get("annotations") or {}
+
     async def set(self, protected: bool) -> None:
         body = {
             "metadata": {
                 "annotations": {
-                    DO_NOT_DISRUPT_ANNOTATION: "true" if protected else None
+                    DO_NOT_DISRUPT_ANNOTATION: "true" if protected else None,
+                    MANAGED_ANNOTATION: "true",
                 }
             }
         }
-        # Projected service-account tokens rotate, so read it on every call.
-        token = self._token_path.read_text().strip()
-        async with httpx.AsyncClient(
-            verify=self._verify,
-            timeout=_PATCH_TIMEOUT_SECONDS,
-            transport=self._transport,
-        ) as client:
+        async with self._client() as client:
             response = await client.patch(
                 self._url,
                 content=json.dumps(body),
                 headers={
-                    "Authorization": f"Bearer {token}",
+                    **self._auth(),
                     "Content-Type": "application/merge-patch+json",
                 },
             )
@@ -97,9 +115,13 @@ class DisruptionGuard:
         set_protected: Callable[[bool], Awaitable[None]],
         *,
         idle_seconds: float = 60.0,
+        read_annotations: Callable[[], Awaitable[dict[str, str]]] | None = None,
     ) -> None:
         self._set_protected = set_protected
         self._idle_seconds = idle_seconds
+        self._read_annotations = read_annotations
+        # Decided once, from the pod's own annotations; without a reader, always managed.
+        self._managed: bool | None = None if read_annotations else True
         self._running = 0
         # Assume a creation-time static annotation may be present until the first
         # release confirms otherwise.
@@ -115,12 +137,47 @@ class DisruptionGuard:
     def protected(self) -> bool:
         return self._protected
 
+    @property
+    def managed(self) -> bool | None:
+        return self._managed
+
     def start(self) -> None:
         """Release a creation-time annotation once the worker has been idle."""
-        self._schedule_release()
+        asyncio.get_running_loop().create_task(self._start())
+
+    async def _start(self) -> None:
+        async with self._lock:
+            if await self._is_managed():
+                self._schedule_release()
+
+    async def _is_managed(self) -> bool:
+        if self._managed is None:
+            try:
+                annotations = await self._read_annotations()  # type: ignore[misc]
+            # conformance: ignore[E004] best-effort read; manage rather than leave a chart annotation pinned
+            except Exception:
+                logger.warning(
+                    "Could not read this pod's annotations; managing %s anyway",
+                    DO_NOT_DISRUPT_ANNOTATION,
+                    exc_info=True,
+                )
+                self._managed = True
+            else:
+                self._managed = (
+                    annotations.get(DO_NOT_DISRUPT_ANNOTATION) == "true"
+                    or MANAGED_ANNOTATION in annotations
+                )
+                if not self._managed:
+                    logger.info(
+                        "This pod was created without %s; dynamic do-not-disrupt does nothing",
+                        DO_NOT_DISRUPT_ANNOTATION,
+                    )
+        return self._managed
 
     async def activity_started(self) -> None:
         async with self._lock:
+            if not await self._is_managed():
+                return
             self._running += 1
             self._cancel_release()
             if not self._protected:
@@ -128,6 +185,8 @@ class DisruptionGuard:
 
     async def activity_finished(self) -> None:
         async with self._lock:
+            if not self._managed:
+                return
             self._running = max(0, self._running - 1)
             if self._running == 0:
                 self._schedule_release()
@@ -189,7 +248,11 @@ def process_guard(idle_seconds: float) -> DisruptionGuard | None:
         patcher = PodAnnotationPatcher.from_environment()
         if patcher is None:
             return None
-        _process_guard = DisruptionGuard(patcher.set, idle_seconds=idle_seconds)
+        _process_guard = DisruptionGuard(
+            patcher.set,
+            idle_seconds=idle_seconds,
+            read_annotations=patcher.get_annotations,
+        )
     return _process_guard
 
 

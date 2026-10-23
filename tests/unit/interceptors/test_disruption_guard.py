@@ -14,6 +14,7 @@ import pytest
 from application_sdk.execution._temporal.interceptors import disruption_guard
 from application_sdk.execution._temporal.interceptors.disruption_guard import (
     DO_NOT_DISRUPT_ANNOTATION,
+    MANAGED_ANNOTATION,
     DisruptionGuard,
     DisruptionGuardInterceptor,
     PodAnnotationPatcher,
@@ -178,6 +179,78 @@ async def test_two_workers_sharing_a_guard_keep_the_pod_protected() -> None:
     assert recorder.calls == [False, True, False]
 
 
+def _reader(annotations=None, error=None):
+    async def read():
+        if error:
+            raise error
+        return annotations or {}
+
+    return read
+
+
+async def _run_once(guard: DisruptionGuard) -> None:
+    async def body(_input):
+        return None
+
+    guard.start()
+    await asyncio.sleep(0)
+    await _inbound(guard, body).execute_activity(_Input())
+    await _released(guard)
+
+
+@pytest.mark.asyncio
+async def test_pod_created_without_the_annotation_is_left_alone() -> None:
+    recorder = _Recorder()
+    guard = DisruptionGuard(recorder, idle_seconds=IDLE, read_annotations=_reader({}))
+    await _run_once(guard)
+    assert guard.managed is False and recorder.calls == [] and guard.running == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "annotations",
+    [{DO_NOT_DISRUPT_ANNOTATION: "true"}, {MANAGED_ANNOTATION: "true"}],
+    ids=["chart-annotation", "marker-after-restart"],
+)
+async def test_pod_the_chart_protected_is_managed(annotations) -> None:
+    recorder = _Recorder()
+    guard = DisruptionGuard(
+        recorder, idle_seconds=IDLE, read_annotations=_reader(annotations)
+    )
+    await _run_once(guard)
+    assert guard.managed is True and recorder.calls[-1] is False
+
+
+@pytest.mark.asyncio
+async def test_unreadable_annotations_are_managed() -> None:
+    recorder = _Recorder()
+    guard = DisruptionGuard(
+        recorder,
+        idle_seconds=IDLE,
+        read_annotations=_reader(error=httpx.HTTPError("forbidden")),
+    )
+    await _run_once(guard)
+    assert guard.managed is True and recorder.calls[-1] is False
+
+
+@pytest.mark.asyncio
+async def test_patcher_reads_its_own_annotations(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        return httpx.Response(
+            200, json={"metadata": {"annotations": {MANAGED_ANNOTATION: "true"}}}
+        )
+
+    patcher = PodAnnotationPatcher(
+        "worker-abc",
+        "app-ns",
+        api_url="https://api.test",
+        service_account_dir=_service_account(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+    assert await patcher.get_annotations() == {MANAGED_ANNOTATION: "true"}
+
+
 def test_process_guard_is_shared_and_absent_outside_a_pod(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -230,8 +303,8 @@ async def test_patcher_sends_a_merge_patch_for_its_own_pod(tmp_path: Path) -> No
     assert requests[0].headers["Authorization"] == "Bearer token-1"
     annotations = [json.loads(r.content)["metadata"]["annotations"] for r in requests]
     assert annotations == [
-        {DO_NOT_DISRUPT_ANNOTATION: "true"},
-        {DO_NOT_DISRUPT_ANNOTATION: None},
+        {DO_NOT_DISRUPT_ANNOTATION: "true", MANAGED_ANNOTATION: "true"},
+        {DO_NOT_DISRUPT_ANNOTATION: None, MANAGED_ANNOTATION: "true"},
     ]
 
 
