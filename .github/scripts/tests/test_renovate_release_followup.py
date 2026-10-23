@@ -52,6 +52,7 @@ class FakeGh:
         self.repos = repos
         self.dispatches: list[list[str] | None] = []
         self.dispatch_fails = False
+        self.run_listings: list[list[dict]] | None = []
 
     def __call__(self, args: list) -> tuple:
         if args[:2] == ["repo", "list"]:
@@ -65,6 +66,10 @@ class FakeGh:
             )
             return 0, json.dumps({"workflow_run_id": 100 + len(self.dispatches)}), ""
         path = args[-1]
+        if "/actions/workflows/" in path and "/runs?" in path:
+            if self.run_listings is None:
+                return 1, "", "HTTP 502"
+            return 0, json.dumps({"workflow_runs": self.run_listings.pop(0)}), ""
         repo = path.split("/")[2]
         spec = self.repos[repo]
         if path.endswith("/contents/renovate.json"):
@@ -160,11 +165,36 @@ def test_soft_mode_and_unprotected_repos_are_not_monitored():
     assert gh.dispatches == [None]
 
 
-def test_cancelled_sweep_skips_verification():
+def test_cancelled_sweep_verifies_behind_its_successor():
+    # A scheduled sweep cancelled ours. It has no follow-up of its own, so we
+    # wait for it to finish, then verify and re-dispatch as usual.
     gh = FakeGh({"atlan-nopr-app": {"locks": {"main": OLD}}})
+    gh.run_listings = [
+        [{"id": 50, "status": "completed"}, {"id": 200, "status": "in_progress"}],
+        [{"id": 200, "status": "completed"}],
+    ]
+    left, _ = _followup(gh, conclusions=["cancelled"], max_redispatches=1)
+    assert gh.run_listings == []  # it waited for the successor
+    assert gh.dispatches == [None, ["atlanhq/atlan-nopr-app"]]
+    assert left == ["atlanhq/atlan-nopr-app"]
+
+
+def test_cancelled_sweep_gives_up_if_successor_never_finishes(capsys):
+    gh = FakeGh({"atlan-nopr-app": {"locks": {"main": OLD}}})
+    gh.run_listings = [[{"id": 200, "status": "in_progress"}]] * 100
+    left, _ = _followup(gh, conclusions=["cancelled"], run_timeout_seconds=120)
+    assert left == []
+    assert gh.dispatches == [None]
+    assert "still pending" in capsys.readouterr().out
+
+
+def test_cancelled_sweep_gives_up_on_unreadable_listing(capsys):
+    gh = FakeGh({"atlan-nopr-app": {"locks": {"main": OLD}}})
+    gh.run_listings = None  # every listing fails
     left, _ = _followup(gh, conclusions=["cancelled"])
     assert left == []
     assert gh.dispatches == [None]
+    assert "could not list renovate.yaml runs" in capsys.readouterr().out
 
 
 def test_failed_sweep_is_still_verified():

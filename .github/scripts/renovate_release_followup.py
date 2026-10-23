@@ -18,8 +18,11 @@ STEPS.
      the same warning the fan-out always has, and stops.
   2. Poll that run to completion (poll_dispatched_run.poll). If the run was
      cancelled, a newer live sweep superseded it (renovate.yaml coalesces live
-     sweeps), and that run is a release fan-out with its own follow-up or the
-     schedule. Either way verifying now would race it, so stop.
+     sweeps). That successor is never another release fan-out: those share
+     this job's cancel-in-progress group, so a newer one would have cancelled
+     this job before it dispatched. It is the schedule or a hand dispatch,
+     neither of which verifies anything, so wait until no renovate.yaml run
+     newer than ours is still going, then verify behind it.
   3. Verify the fleet against the released versions, and dispatch a scoped run
      for the stragglers. At most `--max-redispatches` times, so it can't loop.
 
@@ -232,6 +235,63 @@ def find_stragglers(
     return [r for r in monitored if is_straggler(r, released, run=run)]
 
 
+def wait_for_successors(
+    run_id: str,
+    *,
+    run: RunFn = _run_gh,
+    sleep: Callable[[float], None],
+    interval_seconds: int = 60,
+    timeout_seconds: int = 3600,
+    max_consecutive_errors: int = 5,
+) -> bool:
+    """Wait until no renovate.yaml run newer than `run_id` is still pending.
+
+    Every newer run counts, scoped ones included: a scoped run is short, and
+    verifying while any sweep may still push a branch would misread a repo
+    mid-update. Returns False (after a warning) on timeout or repeated
+    unreadable listings.
+    """
+    waited = 0
+    errors = 0
+    while True:
+        code, out, err = run(
+            [
+                "api",
+                f"repos/{SDK_REPO}/actions/workflows/{WORKFLOW}/runs?per_page=50",
+            ]
+        )
+        try:
+            if code != 0:
+                raise ValueError(err.strip())
+            runs = json.loads(out)["workflow_runs"]
+            pending = [
+                str(r["id"])
+                for r in runs
+                if int(r["id"]) > int(run_id)
+                and r.get("status") in poll_dispatched_run.PENDING_STATUSES
+            ]
+            errors = 0
+        except (ValueError, KeyError, TypeError) as exc:
+            errors += 1
+            if errors >= max_consecutive_errors:
+                print(
+                    f"::warning::could not list renovate.yaml runs ({exc}); "
+                    "skipping the post-sweep check."
+                )
+                return False
+            pending = ["?"]
+        if not pending:
+            return True
+        if waited >= timeout_seconds:
+            print(
+                f"::warning::renovate.yaml runs {', '.join(pending)} still pending "
+                f"after {waited}s; skipping the post-sweep check."
+            )
+            return False
+        sleep(interval_seconds)
+        waited += interval_seconds
+
+
 def _summary(line: str) -> None:
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
@@ -269,10 +329,14 @@ def followup(
         status, conclusion = poll(SDK_REPO, run_id, timeout_seconds=run_timeout_seconds)
         if conclusion == "cancelled":
             print(
-                f"::notice::Renovate run {run_id} was cancelled by a newer sweep; "
-                "that sweep's own fan-out, or the schedule, covers the fleet."
+                f"Renovate run {run_id} was cancelled by a newer sweep; "
+                "verifying behind that one instead."
             )
-            return []
+            if not wait_for_successors(
+                run_id, run=run, sleep=sleep, timeout_seconds=run_timeout_seconds
+            ):
+                return []
+            status = "completed"
         # Only a completed run is safe to verify behind: poll() returns on any
         # status outside its pending set, and timeout/unreadable/an unknown
         # status may all mean the sweep is still pushing branches.
