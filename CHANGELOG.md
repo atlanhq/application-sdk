@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.52.1 (October 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.52.0...v3.52.1
+
+### Chores
+
+- lock file maintenance (#4583) (by @renovate[bot] in [99d2a9d](https://github.com/atlanhq/application-sdk/commit/99d2a9d))
+- sync daprd pin to 1.18.9 (#4587) (by @atlan-app-fleet[bot] in [cffbe16](https://github.com/atlanhq/application-sdk/commit/cffbe16))
+- update atlanhq/application-sdk action to v3.52.0 (#4589) (by @renovate[bot] in [5dcd4b4](https://github.com/atlanhq/application-sdk/commit/5dcd4b4))
+- update github-actions (#4591) (by @renovate[bot] in [2eaa597](https://github.com/atlanhq/application-sdk/commit/2eaa597))
+
+
 ## v3.52.0 (October 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.2...v3.52.0
