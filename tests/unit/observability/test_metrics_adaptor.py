@@ -1,3 +1,4 @@
+import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime
@@ -26,32 +27,50 @@ def mock_metrics():
 
 @contextmanager
 def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
-    """Create a metrics adapter instance with mocked environment."""
-    with mock.patch.dict(
-        "os.environ",
-        {
-            "ATLAN_ENABLE_OTLP_METRICS": "true",  # Enable OTLP for testing
-            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
-            "ATLAN_METRICS_BATCH_SIZE": "100",
-            "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
-            "ATLAN_METRICS_RETENTION_DAYS": "7",
-            "ATLAN_METRICS_CLEANUP_ENABLED": "true",
-            "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
-        },
+    """Create a metrics adapter instance with mocked environment.
+
+    The periodic flush is stubbed out, so no real flusher can swap the buffer
+    between a ``record_metric`` call and the test's assertion on it. The
+    ``_flush_task_started`` flag is restored on exit so a later test that
+    builds an adapter sees the class state this fixture found.
+    """
+    flush_task_started = AtlanMetricsAdapter._flush_task_started
+    with (
+        mock.patch.dict(
+            "os.environ",
+            {
+                "ATLAN_ENABLE_OTLP_METRICS": "true",  # Enable OTLP for testing
+                "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+                "ATLAN_METRICS_BATCH_SIZE": "100",
+                "ATLAN_METRICS_FLUSH_INTERVAL_SECONDS": "1",
+                "ATLAN_METRICS_RETENTION_DAYS": "7",
+                "ATLAN_METRICS_CLEANUP_ENABLED": "true",
+                "ATLAN_METRICS_FILE_NAME": "metrics.parquet",
+            },
+        ),
+        mock.patch.object(AtlanMetricsAdapter, "_spawn_flush_thread"),
+        mock.patch.object(
+            AtlanMetricsAdapter, "_periodic_flush", new_callable=mock.AsyncMock
+        ),
     ):
         # Create mock meter first
         mock_meter = mock.MagicMock()
 
         # Mock the meter provider setup
-        with mock.patch("opentelemetry.metrics.set_meter_provider"):
-            with mock.patch("opentelemetry.sdk.metrics.MeterProvider") as mock_provider:
-                mock_provider.return_value.get_meter.return_value = mock_meter
+        try:
+            with mock.patch("opentelemetry.metrics.set_meter_provider"):
+                with mock.patch(
+                    "opentelemetry.sdk.metrics.MeterProvider"
+                ) as mock_provider:
+                    mock_provider.return_value.get_meter.return_value = mock_meter
 
-                # Create adapter after mocks are in place
-                adapter = AtlanMetricsAdapter()
-                # Set the meter directly
-                adapter.meter = mock_meter
-                yield adapter
+                    # Create adapter after mocks are in place
+                    adapter = AtlanMetricsAdapter()
+                    # Set the meter directly
+                    adapter.meter = mock_meter
+                    yield adapter
+        finally:
+            AtlanMetricsAdapter._flush_task_started = flush_task_started
 
 
 @pytest.fixture
@@ -152,6 +171,61 @@ def test_record_metric_with_various_inputs(
         assert buffered_metric["labels"] == labels
         assert buffered_metric["description"] == description
         assert buffered_metric["unit"] == unit
+
+
+def _flusher_threads(thread_cls: mock.MagicMock) -> list[object]:
+    """Targets of the threads that would run the metrics flush loop.
+
+    OTel and executors start their own threads, so only threads whose target
+    is ``AtlanMetricsAdapter._start_asyncio_flush`` count.
+    """
+    targets = [c.kwargs.get("target") for c in thread_cls.call_args_list]
+    return [
+        t
+        for t in targets
+        if getattr(t, "__func__", None) is AtlanMetricsAdapter._start_asyncio_flush
+    ]
+
+
+def test_init_without_loop_starts_flusher_through_spawn_seam():
+    """Outside a running loop, ``__init__`` starts the flusher only via
+    ``_spawn_flush_thread``, the seam ``create_metrics_adapter`` stubs out."""
+    previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
+    AtlanMetricsAdapter._flush_task_started = False
+    try:
+        with (
+            mock.patch.object(AtlanMetricsAdapter, "_spawn_flush_thread") as spawn,
+            mock.patch(
+                "application_sdk.observability.metrics_adaptor.threading.Thread",
+                wraps=threading.Thread,
+            ) as thread_cls,
+        ):
+            AtlanMetricsAdapter()
+
+        spawn.assert_called_once_with()
+        assert _flusher_threads(thread_cls) == []
+        assert AtlanMetricsAdapter._flush_task_started is True
+    finally:
+        AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
+
+
+def test_create_metrics_adapter_starts_no_flusher_and_restores_flag():
+    """The fixture must never start a real flusher, and must leave
+    ``_flush_task_started`` as it found it."""
+    previous_flush_task_started = AtlanMetricsAdapter._flush_task_started
+    AtlanMetricsAdapter._flush_task_started = False
+    try:
+        with mock.patch(
+            "application_sdk.observability.metrics_adaptor.threading.Thread",
+            wraps=threading.Thread,
+        ) as thread_cls:
+            with create_metrics_adapter():
+                pass
+
+        assert _flusher_threads(thread_cls) == []
+        assert AtlanMetricsAdapter._flush_task_started is False
+    finally:
+        AtlanMetricsAdapter._flush_task_started = previous_flush_task_started
 
 
 def test_export_record_sends_to_otel_and_console():
