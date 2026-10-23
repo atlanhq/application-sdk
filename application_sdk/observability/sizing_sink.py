@@ -55,7 +55,8 @@ class SizingObservabilitySink(AtlanObservability[Any]):
             try:
                 task.get_loop().call_soon_threadsafe(task.cancel)
             except RuntimeError:
-                pass  # its loop is closed, so the task can never run again
+                # Its loop is already closed, so the task can never run again.
+                logger.debug("sizing flush loop already closed", exc_info=True)
         if thread is not None:
             # Waits out a flush already in progress, which may be uploading.
             thread.join(timeout=30)
@@ -68,12 +69,8 @@ class SizingObservabilitySink(AtlanObservability[Any]):
             # Loop-or-thread, as the traces adaptor does: built lazily inside an
             # activity, but must also work when constructed off a loop.
             try:
-                loop = asyncio.get_running_loop()
+                task = asyncio.get_running_loop().create_task(self._periodic_flush())
             except RuntimeError:
-                loop = None
-            if loop is not None:
-                task = loop.create_task(self._periodic_flush())
-            else:
                 # The task is made here, not in the thread, so a reset that
                 # runs before the thread is scheduled still has it to cancel.
                 task = asyncio.new_event_loop().create_task(self._periodic_flush())
@@ -94,7 +91,8 @@ class SizingObservabilitySink(AtlanObservability[Any]):
         try:
             loop.run_until_complete(task)
         except asyncio.CancelledError:
-            pass  # stopped by ``_reset_for_testing``
+            # Only ``_reset_for_testing`` cancels this task.
+            logger.debug("sizing flush loop stopped by a reset")
         # conformance: ignore[E004] background thread; must not take the process down
         except Exception:
             logger.warning("sizing flush loop stopped", exc_info=True)
