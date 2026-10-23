@@ -99,6 +99,25 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
     }
 )
 
+#: Connection settings under ``extra`` whose values are literals, never
+#: ref-keys: single-key probing skips them wherever the ``extra`` sits
+#: (``extra.database``, ``basic.extra.database``, a nested ``extra`` dict).
+#: A store that rejects such a value as a secret name (a URL's ``/``)
+#: answers with a failure, not "not found", and that failure stops the whole
+#: resolution. Probing only: a multi-key bundle may still substitute them.
+_CONNECTION_LITERAL_EXTRA_FIELDS: frozenset[str] = frozenset(
+    {"compiled_url", "database"}
+)
+
+
+def _is_connection_literal(key: str) -> bool:
+    *parents, field = key.split(".")
+    return (
+        bool(parents)
+        and parents[-1] == "extra"
+        and field in _CONNECTION_LITERAL_EXTRA_FIELDS
+    )
+
 
 async def resolve_agent_credential(
     spec: AgentCredentialSpec,
@@ -324,14 +343,15 @@ def _probe_candidates(raw: dict[str, Any]) -> list[str]:
             candidates.append(value)
 
     for key, value in raw.items():
-        if key in _LITERAL_KEYS:
+        if key in _LITERAL_KEYS or _is_connection_literal(key):
             continue
         _add(value)
 
     extra = raw.get("extra")
     if isinstance(extra, dict):
-        for value in extra.values():
-            _add(value)
+        for field, value in extra.items():
+            if field not in _CONNECTION_LITERAL_EXTRA_FIELDS:
+                _add(value)
 
     return candidates
 
