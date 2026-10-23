@@ -131,13 +131,7 @@ def settle(
     statuses = github.statuses(sha)
     state, description = statuses.get(GATE_CHECK_CONTEXT, ("", ""))
     if state == "pending":
-        request, requested_at = find_request(github.status_rows(sha))
-        expected = parse_gate_check_runs((request or {}).get("description") or "")
-        runs = {
-            workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
-            for workflow in expected
-        }
-        verdict = resolve(expected, runs, requested_at)
+        verdict = _resolve_request(github, sha, *find_request(github.status_rows(sha)))
         if not verdict.final:
             return verdict
         github.status(
@@ -213,32 +207,23 @@ def find_request(rows: list) -> tuple[dict | None, datetime | None]:
 def recheck_failure(github: GitHub, sha: str, branch: str) -> Verdict | None:
     """Turn a recorded failure green once a re-run of what failed passes.
 
-    "Re-run failed jobs" makes a new attempt of the same run, so the request's
-    runs are unchanged and ``resolve`` reads their latest attempt (FND-4331).
-    Only a pass is written: a failure stands until every listed workflow's
-    newest run has passed, and a recorded pass is never re-decided. Returns
-    the new verdict, or None when the failure stands.
-
-    A `/gate-check force` runs in its own concurrency group, so its `pending`
-    can land between the read above and the write below, and this pass would
-    then mask it: the forced runs' callbacks would find a recorded pass and
-    stand down (lens F-7d5bea). A status write cannot be conditional, so the
-    history is re-read after it, and a newer request is put back on top.
+    "Re-run failed jobs" makes a new attempt of the same run, so ``resolve``
+    reads its latest attempt (FND-4331). Only a pass is written, and a
+    recorded pass is never re-decided. Returns the new verdict, or None.
     """
     request, requested_at = find_request(github.status_rows(sha))
-    if request is None:
-        return None
-    expected = parse_gate_check_runs(request.get("description") or "")
-    runs = {
-        workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
-        for workflow in expected
-    }
-    verdict = resolve(expected, runs, requested_at)
-    if not (verdict.final and verdict.state == "success"):
+    verdict = _resolve_request(github, sha, request, requested_at)
+    if request is None or not (verdict.final and verdict.state == "success"):
         return None
     github.status(
         sha, GATE_CHECK_CONTEXT, verdict.state, verdict.description, verdict.target_url
     )
+    # A `/gate-check force` (own concurrency group) may have landed since the
+    # read, and this pass masks it (lens F-7d5bea): re-read, and put the newest
+    # request back on top. That write is unconditional too, so a request made
+    # after this re-read can land UNDER the re-post. It still wins: find_request
+    # ranks requests by their FIRST row, and the re-post is only a later row of
+    # an older request, never a newer request (lens F-f1a9c4).
     newer, _ = find_request(github.status_rows(sha))
     if newer is not None and newer.get("target_url") != request.get("target_url"):
         github.status(
@@ -251,6 +236,20 @@ def recheck_failure(github: GitHub, sha: str, branch: str) -> Verdict | None:
         return Verdict(False, reason="a newer `/gate-check` request is running")
     show_verdict(github, sha, branch, verdict)
     return verdict
+
+
+def _resolve_request(
+    github: GitHub, sha: str, request: dict | None, requested_at: datetime | None
+) -> Verdict:
+    """``resolve`` the request's listed workflows against their dispatched runs."""
+    if request is None:
+        return Verdict(False, reason="no `/gate-check` request on this commit")
+    expected = parse_gate_check_runs(request.get("description") or "")
+    runs = {
+        workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
+        for workflow in expected
+    }
+    return resolve(expected, runs, requested_at)
 
 
 def show_verdict(github: GitHub, sha: str, branch: str, verdict: Verdict) -> None:
