@@ -425,8 +425,8 @@ async def test_read_returns_pandas_values_for_missing_keys(tmp_path: Path) -> No
     assert pd.isna(rows[1]["n"])
 
 
-def test_deprecation_notice_says_to_keep_pandas_value_handling() -> None:
-    """The notice warns that a plain orjson read changes record values."""
+def test_deprecation_notice_says_to_fix_callers_of_pandas_coercion() -> None:
+    """The notice warns that orjson drops the pandas coercion and names the caller fixes."""
     with pytest.warns(
         DeprecationWarning, match="JsonFileReader is deprecated"
     ) as caught:
@@ -438,7 +438,8 @@ def test_deprecation_notice_says_to_keep_pandas_value_handling() -> None:
     )
     assert "3 → 3.0" in message
     assert "NaN" in message
-    assert "keep that handling" in message
+    assert "row.get(key)" in message
+    assert "pd.DataFrame" not in message
 
 
 # ---------------------------------------------------------------------------

@@ -95,14 +95,14 @@ class JsonFileReader(Reader):
             "interceptor auto-materialises it to a local path before the "
             "task runs (with sha256 sidecar verification + parallel "
             "transfers), then read it directly with orjson / json. "
-            "This reader returns pandas values: an int whose key is "
-            "missing from another row of the same DataFrame (one "
-            "read_batches() chunk, or the whole read()) comes back as "
-            "float (3 → 3.0), and a missing key as NaN. A plain orjson "
-            "read returns the raw "
-            "values, so if callers rely on the pandas values, keep that "
-            "handling (pd.DataFrame over the same records) or decide the "
-            "change explicitly. See docs/agents/coding-standards.md.",
+            "This reader coerces values through pandas (an int column "
+            "with a missing key comes back as float, 3 → 3.0; the missing "
+            "key as NaN); orjson returns the values in the file. Fix "
+            "callers that relied on the coercion: row.get(key) for an "
+            "optional key (row[key] raises KeyError), `is None` for "
+            "NaN checks, and record any value formatted into a published "
+            "key or name, since 3.0 becomes 3. See "
+            "docs/agents/coding-standards.md.",
             DeprecationWarning,
             stacklevel=2,
         )

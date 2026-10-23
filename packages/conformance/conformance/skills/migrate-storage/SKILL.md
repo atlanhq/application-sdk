@@ -249,13 +249,14 @@ each use to the inventory.
   `RollingFileWriter` (or a local write plus `FileReference.from_local` for
   the directory); `ParquetFileReader` / `JsonFileReader` → a FileReference
   input read with `pandas.read_parquet` or an `orjson` line loop, through
-  `run_in_thread`. `JsonFileReader` returned pandas values (an int whose key
-  is missing from another row of the same DataFrame → float, a missing key →
-  `NaN`); the `orjson` loop returns the raw values. When callers rely on the
-  pandas values, keep that handling (`pd.DataFrame` over the same records),
-  or record the change under **owner decisions**. Which rows share a frame
-  decides the values: keep one frame per `chunk_size` records for a
-  `read_batches()` caller, one frame over all records for a `read()` caller.
+  `run_in_thread`. `JsonFileReader` coerced values through pandas (an int
+  column with a missing key → float, the missing key → `NaN`); the `orjson`
+  loop returns the values in the file. Do not rebuild a DataFrame to keep
+  the coercion; fix the callers that relied on it: `row.get(key)` for an
+  optional key (`row[key]` raises `KeyError`), `is None` / `key not in row`
+  for `pd.isna` / `math.isnan` checks. A value formatted into a published
+  key or qualified name changes (`"3.0"` → `"3"`): record it under
+  **owner decisions**.
 - **outbound** — an `upload_to_atlan` call, a hand-rolled copy between the
   deployment and upstream stores (`create_store_from_binding*`), an
   `application_sdk.storage` upload (`upload_file`, `upload_file_from_bytes`),
