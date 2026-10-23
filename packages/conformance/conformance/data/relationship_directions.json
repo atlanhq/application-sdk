@@ -60,6 +60,8 @@
   "dq_reference_dataset_rules",
   "dq_rule_reference_columns",
   "dq_rule_reference_datasets",
+  "fabric_semantic_model_measures",
+  "fabric_semantic_model_table_columns",
   "facts",
   "flow_predecessors",
   "flow_successors",
@@ -68,6 +70,7 @@
   "input_port_data_products",
   "input_ports",
   "input_to_airflow_tasks",
+  "input_to_connection_processes",
   "input_to_processes",
   "input_to_spark_jobs",
   "inputs",
@@ -114,6 +117,7 @@
   "model_versions",
   "models",
   "output_from_airflow_tasks",
+  "output_from_connection_processes",
   "output_from_processes",
   "output_from_spark_jobs",
   "output_port_data_products",
@@ -164,7 +168,6 @@
   "sisense_datamodel_tables",
   "sisense_datamodels",
   "sisense_widgets",
-  "snowflake_dynamic_tables",
   "soda_check_assets",
   "soda_check_columns",
   "soda_checks",
@@ -443,7 +446,11 @@
      "BIProcess",
      "Badge",
      "BigqueryRoutine",
+     "BigqueryTag",
      "BusinessPolicy",
+     "BusinessPolicyException",
+     "BusinessPolicyIncident",
+     "BusinessPolicyLog",
      "CalculationView",
      "Cassandra",
      "CassandraColumn",
@@ -475,6 +482,7 @@
      "Column",
      "ColumnProcess",
      "Connection",
+     "ConnectionProcess",
      "Context",
      "ContextArtifact",
      "ContextRepository",
@@ -509,6 +517,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "Dataverse",
@@ -545,6 +554,8 @@
      "DremioVirtualDataset",
      "DynamoDB",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "EventStore",
@@ -557,6 +568,7 @@
      "FabricPage",
      "FabricReport",
      "FabricSemanticModel",
+     "FabricSemanticModelMeasure",
      "FabricSemanticModelTable",
      "FabricSemanticModelTableColumn",
      "FabricVisual",
@@ -581,6 +593,7 @@
      "GCS",
      "GCSBucket",
      "GCSObject",
+     "GlueTag",
      "Google",
      "Iceberg",
      "IcebergCatalog",
@@ -594,6 +607,7 @@
      "KafkaCluster",
      "KafkaConsumerGroup",
      "KafkaField",
+     "KafkaTag",
      "KafkaTopic",
      "Knowledge",
      "KnowledgeFile",
@@ -691,6 +705,7 @@
      "QlikDataset",
      "QlikSheet",
      "QlikSpace",
+     "QlikStream",
      "Query",
      "QuickSight",
      "QuickSightAnalysis",
@@ -708,6 +723,7 @@
      "RedashQuery",
      "RedashVisualization",
      "Resource",
+     "Response",
      "S3",
      "S3Bucket",
      "S3Object",
@@ -755,6 +771,12 @@
      "SalesforceObject",
      "SalesforceOrganization",
      "SalesforceReport",
+     "SapAnalyticsCloud",
+     "SapAnalyticsCloudColumn",
+     "SapAnalyticsCloudFolder",
+     "SapAnalyticsCloudModel",
+     "SapAnalyticsCloudStory",
+     "SapDatasphereDataProduct",
      "SapDatasphereReplicationFlow",
      "SapErpAbapProgram",
      "SapErpCdsView",
@@ -797,12 +819,16 @@
      "SnowflakeAIModelVersion",
      "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Soda",
      "SodaCheck",
      "SourceTag",
@@ -812,6 +838,7 @@
      "SqlInsightBusinessQuestion",
      "SqlInsightFilter",
      "SqlInsightJoin",
+     "Stakeholder",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -835,6 +862,7 @@
      "TableauWorksheet",
      "TableauWorksheetField",
      "Tag",
+     "TagAttachment",
      "Task",
      "Thoughtspot",
      "ThoughtspotAnswer",
@@ -850,7 +878,8 @@
      "UnstructuredObject",
      "View",
      "Workflow",
-     "WorkflowNotification"
+     "WorkflowNotification",
+     "WorkflowRun"
     ],
     "target_type": "AnomaloCheck"
    }
@@ -1388,11 +1417,22 @@
    },
    {
     "attribute": "columns",
+    "inverse": "snowflake_dynamic_table",
+    "inverse_attribute": "snowflakeDynamicTable",
+    "owners": [
+     "SnowflakeDynamicTable"
+    ],
+    "target_type": "Column"
+   },
+   {
+    "attribute": "columns",
     "inverse": "table",
     "inverse_attribute": "table",
     "owners": [
      "DocumentDBCollection",
      "DremioPhysicalDataset",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "IcebergTable",
@@ -1751,6 +1791,7 @@
      "DremioColumn",
      "DynamoDBAttribute",
      "IcebergColumn",
+     "SapAnalyticsCloudColumn",
      "StarburstDatasetColumn"
     ],
     "target_type": "DbtModelColumn"
@@ -1763,6 +1804,7 @@
     "inverse_attribute": "sqlAsset",
     "owners": [
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Column",
      "CosmosMongoDBCollection",
@@ -1777,6 +1819,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "DocumentDBCollection",
@@ -1789,9 +1832,12 @@
      "DremioSpace",
      "DremioVirtualDataset",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "Function",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -1803,18 +1849,24 @@
      "Procedure",
      "Query",
      "SQL",
+     "SapAnalyticsCloudColumn",
      "SapErpColumn",
      "Schema",
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -1832,6 +1884,7 @@
     "inverse_attribute": "sqlAsset",
     "owners": [
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Column",
      "CosmosMongoDBCollection",
@@ -1846,6 +1899,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "DocumentDBCollection",
@@ -1858,9 +1912,12 @@
      "DremioSpace",
      "DremioVirtualDataset",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "Function",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -1872,18 +1929,24 @@
      "Procedure",
      "Query",
      "SQL",
+     "SapAnalyticsCloudColumn",
      "SapErpColumn",
      "Schema",
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -1948,6 +2011,7 @@
      "DremioColumn",
      "DynamoDBAttribute",
      "IcebergColumn",
+     "SapAnalyticsCloudColumn",
      "StarburstDatasetColumn"
     ],
     "target_type": "DataQualityRule"
@@ -2029,7 +2093,11 @@
      "BIProcess",
      "Badge",
      "BigqueryRoutine",
+     "BigqueryTag",
      "BusinessPolicy",
+     "BusinessPolicyException",
+     "BusinessPolicyIncident",
+     "BusinessPolicyLog",
      "CalculationView",
      "Cassandra",
      "CassandraColumn",
@@ -2061,6 +2129,7 @@
      "Column",
      "ColumnProcess",
      "Connection",
+     "ConnectionProcess",
      "Context",
      "ContextArtifact",
      "ContextRepository",
@@ -2095,6 +2164,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "Dataverse",
@@ -2131,6 +2201,8 @@
      "DremioVirtualDataset",
      "DynamoDB",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "EventStore",
@@ -2143,6 +2215,7 @@
      "FabricPage",
      "FabricReport",
      "FabricSemanticModel",
+     "FabricSemanticModelMeasure",
      "FabricSemanticModelTable",
      "FabricSemanticModelTableColumn",
      "FabricVisual",
@@ -2167,6 +2240,7 @@
      "GCS",
      "GCSBucket",
      "GCSObject",
+     "GlueTag",
      "Google",
      "Iceberg",
      "IcebergCatalog",
@@ -2180,6 +2254,7 @@
      "KafkaCluster",
      "KafkaConsumerGroup",
      "KafkaField",
+     "KafkaTag",
      "KafkaTopic",
      "Knowledge",
      "KnowledgeFile",
@@ -2277,6 +2352,7 @@
      "QlikDataset",
      "QlikSheet",
      "QlikSpace",
+     "QlikStream",
      "Query",
      "QuickSight",
      "QuickSightAnalysis",
@@ -2294,6 +2370,7 @@
      "RedashQuery",
      "RedashVisualization",
      "Resource",
+     "Response",
      "S3",
      "S3Bucket",
      "S3Object",
@@ -2341,6 +2418,12 @@
      "SalesforceObject",
      "SalesforceOrganization",
      "SalesforceReport",
+     "SapAnalyticsCloud",
+     "SapAnalyticsCloudColumn",
+     "SapAnalyticsCloudFolder",
+     "SapAnalyticsCloudModel",
+     "SapAnalyticsCloudStory",
+     "SapDatasphereDataProduct",
      "SapDatasphereReplicationFlow",
      "SapErpAbapProgram",
      "SapErpCdsView",
@@ -2383,12 +2466,16 @@
      "SnowflakeAIModelVersion",
      "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Soda",
      "SodaCheck",
      "SourceTag",
@@ -2398,6 +2485,7 @@
      "SqlInsightBusinessQuestion",
      "SqlInsightFilter",
      "SqlInsightJoin",
+     "Stakeholder",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -2421,6 +2509,7 @@
      "TableauWorksheet",
      "TableauWorksheetField",
      "Tag",
+     "TagAttachment",
      "Task",
      "Thoughtspot",
      "ThoughtspotAnswer",
@@ -2436,7 +2525,8 @@
      "UnstructuredObject",
      "View",
      "Workflow",
-     "WorkflowNotification"
+     "WorkflowNotification",
+     "WorkflowRun"
     ],
     "target_type": "DataQualityRule"
    }
@@ -2532,6 +2622,39 @@
      "DynamoDBTable"
     ],
     "target_type": "DynamoDBAttribute"
+   }
+  ],
+  "dynamo_db_global_secondary_indexes": [
+   {
+    "attribute": "dynamoDBGlobalSecondaryIndexes",
+    "inverse": "dynamo_db_table",
+    "inverse_attribute": "dynamoDBTable",
+    "owners": [
+     "DynamoDBTable"
+    ],
+    "target_type": "DynamoDBGlobalSecondaryIndex"
+   }
+  ],
+  "dynamo_db_local_secondary_indexes": [
+   {
+    "attribute": "dynamoDBLocalSecondaryIndexes",
+    "inverse": "dynamo_db_table",
+    "inverse_attribute": "dynamoDBTable",
+    "owners": [
+     "DynamoDBTable"
+    ],
+    "target_type": "DynamoDBLocalSecondaryIndex"
+   }
+  ],
+  "exceptions_for_business_policy": [
+   {
+    "attribute": "exceptionsForBusinessPolicy",
+    "inverse": "business_policy_for_exception",
+    "inverse_attribute": "businessPolicyForException",
+    "owners": [
+     "BusinessPolicy"
+    ],
+    "target_type": "BusinessPolicyException"
    }
   ],
   "explores": [
@@ -2657,6 +2780,17 @@
      "FabricWorkspace"
     ],
     "target_type": "FabricReport"
+   }
+  ],
+  "fabric_semantic_model_measures": [
+   {
+    "attribute": "fabricSemanticModelMeasures",
+    "inverse": "fabric_semantic_model_table",
+    "inverse_attribute": "fabricSemanticModelTable",
+    "owners": [
+     "FabricSemanticModelTable"
+    ],
+    "target_type": "FabricSemanticModelMeasure"
    }
   ],
   "fabric_semantic_model_table_columns": [
@@ -2862,7 +2996,11 @@
      "BIProcess",
      "Badge",
      "BigqueryRoutine",
+     "BigqueryTag",
      "BusinessPolicy",
+     "BusinessPolicyException",
+     "BusinessPolicyIncident",
+     "BusinessPolicyLog",
      "CalculationView",
      "Cassandra",
      "CassandraColumn",
@@ -2894,6 +3032,7 @@
      "Column",
      "ColumnProcess",
      "Connection",
+     "ConnectionProcess",
      "Context",
      "ContextArtifact",
      "ContextRepository",
@@ -2928,6 +3067,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "Dataverse",
@@ -2964,6 +3104,8 @@
      "DremioVirtualDataset",
      "DynamoDB",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "EventStore",
@@ -2976,6 +3118,7 @@
      "FabricPage",
      "FabricReport",
      "FabricSemanticModel",
+     "FabricSemanticModelMeasure",
      "FabricSemanticModelTable",
      "FabricSemanticModelTableColumn",
      "FabricVisual",
@@ -3000,6 +3143,7 @@
      "GCS",
      "GCSBucket",
      "GCSObject",
+     "GlueTag",
      "Google",
      "Iceberg",
      "IcebergCatalog",
@@ -3013,6 +3157,7 @@
      "KafkaCluster",
      "KafkaConsumerGroup",
      "KafkaField",
+     "KafkaTag",
      "KafkaTopic",
      "Knowledge",
      "KnowledgeFile",
@@ -3110,6 +3255,7 @@
      "QlikDataset",
      "QlikSheet",
      "QlikSpace",
+     "QlikStream",
      "Query",
      "QuickSight",
      "QuickSightAnalysis",
@@ -3127,6 +3273,7 @@
      "RedashQuery",
      "RedashVisualization",
      "Resource",
+     "Response",
      "S3",
      "S3Bucket",
      "S3Object",
@@ -3174,6 +3321,12 @@
      "SalesforceObject",
      "SalesforceOrganization",
      "SalesforceReport",
+     "SapAnalyticsCloud",
+     "SapAnalyticsCloudColumn",
+     "SapAnalyticsCloudFolder",
+     "SapAnalyticsCloudModel",
+     "SapAnalyticsCloudStory",
+     "SapDatasphereDataProduct",
      "SapDatasphereReplicationFlow",
      "SapErpAbapProgram",
      "SapErpCdsView",
@@ -3216,12 +3369,16 @@
      "SnowflakeAIModelVersion",
      "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Soda",
      "SodaCheck",
      "SourceTag",
@@ -3231,6 +3388,7 @@
      "SqlInsightBusinessQuestion",
      "SqlInsightFilter",
      "SqlInsightJoin",
+     "Stakeholder",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -3254,6 +3412,7 @@
      "TableauWorksheet",
      "TableauWorksheetField",
      "Tag",
+     "TagAttachment",
      "Task",
      "Thoughtspot",
      "ThoughtspotAnswer",
@@ -3269,7 +3428,8 @@
      "UnstructuredObject",
      "View",
      "Workflow",
-     "WorkflowNotification"
+     "WorkflowNotification",
+     "WorkflowRun"
     ],
     "target_type": "File"
    }
@@ -3374,6 +3534,7 @@
      "DremioColumn",
      "DynamoDBAttribute",
      "IcebergColumn",
+     "SapAnalyticsCloudColumn",
      "StarburstDatasetColumn"
     ],
     "target_type": "Column"
@@ -3523,7 +3684,11 @@
      "BIProcess",
      "Badge",
      "BigqueryRoutine",
+     "BigqueryTag",
      "BusinessPolicy",
+     "BusinessPolicyException",
+     "BusinessPolicyIncident",
+     "BusinessPolicyLog",
      "CalculationView",
      "Cassandra",
      "CassandraColumn",
@@ -3555,6 +3720,7 @@
      "Column",
      "ColumnProcess",
      "Connection",
+     "ConnectionProcess",
      "Context",
      "ContextArtifact",
      "ContextRepository",
@@ -3589,6 +3755,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "Dataverse",
@@ -3625,6 +3792,8 @@
      "DremioVirtualDataset",
      "DynamoDB",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "EventStore",
@@ -3637,6 +3806,7 @@
      "FabricPage",
      "FabricReport",
      "FabricSemanticModel",
+     "FabricSemanticModelMeasure",
      "FabricSemanticModelTable",
      "FabricSemanticModelTableColumn",
      "FabricVisual",
@@ -3661,6 +3831,7 @@
      "GCS",
      "GCSBucket",
      "GCSObject",
+     "GlueTag",
      "Google",
      "Iceberg",
      "IcebergCatalog",
@@ -3674,6 +3845,7 @@
      "KafkaCluster",
      "KafkaConsumerGroup",
      "KafkaField",
+     "KafkaTag",
      "KafkaTopic",
      "Knowledge",
      "KnowledgeFile",
@@ -3771,6 +3943,7 @@
      "QlikDataset",
      "QlikSheet",
      "QlikSpace",
+     "QlikStream",
      "Query",
      "QuickSight",
      "QuickSightAnalysis",
@@ -3788,6 +3961,7 @@
      "RedashQuery",
      "RedashVisualization",
      "Resource",
+     "Response",
      "S3",
      "S3Bucket",
      "S3Object",
@@ -3835,6 +4009,12 @@
      "SalesforceObject",
      "SalesforceOrganization",
      "SalesforceReport",
+     "SapAnalyticsCloud",
+     "SapAnalyticsCloudColumn",
+     "SapAnalyticsCloudFolder",
+     "SapAnalyticsCloudModel",
+     "SapAnalyticsCloudStory",
+     "SapDatasphereDataProduct",
      "SapDatasphereReplicationFlow",
      "SapErpAbapProgram",
      "SapErpCdsView",
@@ -3877,12 +4057,16 @@
      "SnowflakeAIModelVersion",
      "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Soda",
      "SodaCheck",
      "SourceTag",
@@ -3892,6 +4076,7 @@
      "SqlInsightBusinessQuestion",
      "SqlInsightFilter",
      "SqlInsightJoin",
+     "Stakeholder",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -3915,6 +4100,7 @@
      "TableauWorksheet",
      "TableauWorksheetField",
      "Tag",
+     "TagAttachment",
      "Task",
      "Thoughtspot",
      "ThoughtspotAnswer",
@@ -3930,7 +4116,8 @@
      "UnstructuredObject",
      "View",
      "Workflow",
-     "WorkflowNotification"
+     "WorkflowNotification",
+     "WorkflowRun"
     ],
     "target_type": "Link"
    }
@@ -4074,6 +4261,7 @@
      "DremioColumn",
      "DynamoDBAttribute",
      "IcebergColumn",
+     "SapAnalyticsCloudColumn",
      "StarburstDatasetColumn"
     ],
     "target_type": "Metric"
@@ -4385,6 +4573,7 @@
      "DremioColumn",
      "DynamoDBAttribute",
      "IcebergColumn",
+     "SapAnalyticsCloudColumn",
      "StarburstDatasetColumn"
     ],
     "target_type": "Column"
@@ -4486,6 +4675,7 @@
      "AzureServiceBusTopic",
      "BI",
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Cassandra",
      "CassandraColumn",
@@ -4546,6 +4736,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "Dataverse",
@@ -4582,6 +4773,8 @@
      "DremioVirtualDataset",
      "DynamoDB",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "EventStore",
@@ -4594,6 +4787,7 @@
      "FabricPage",
      "FabricReport",
      "FabricSemanticModel",
+     "FabricSemanticModelMeasure",
      "FabricSemanticModelTable",
      "FabricSemanticModelTableColumn",
      "FabricVisual",
@@ -4607,6 +4801,7 @@
      "GCS",
      "GCSBucket",
      "GCSObject",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -4617,6 +4812,7 @@
      "KafkaCluster",
      "KafkaConsumerGroup",
      "KafkaField",
+     "KafkaTag",
      "KafkaTopic",
      "Knowledge",
      "KnowledgeFile",
@@ -4708,6 +4904,7 @@
      "QlikDataset",
      "QlikSheet",
      "QlikSpace",
+     "QlikStream",
      "Query",
      "QuickSight",
      "QuickSightAnalysis",
@@ -4772,6 +4969,12 @@
      "SalesforceObject",
      "SalesforceOrganization",
      "SalesforceReport",
+     "SapAnalyticsCloud",
+     "SapAnalyticsCloudColumn",
+     "SapAnalyticsCloudFolder",
+     "SapAnalyticsCloudModel",
+     "SapAnalyticsCloudStory",
+     "SapDatasphereDataProduct",
      "SapErpAbapProgram",
      "SapErpCdsView",
      "SapErpColumn",
@@ -4811,13 +5014,18 @@
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Soda",
      "SodaCheck",
      "SourceTag",
@@ -4932,6 +5140,7 @@
      "AzureServiceBusTopic",
      "BI",
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Cassandra",
      "CassandraColumn",
@@ -4992,6 +5201,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "Dataverse",
@@ -5028,6 +5238,8 @@
      "DremioVirtualDataset",
      "DynamoDB",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "EventStore",
@@ -5040,6 +5252,7 @@
      "FabricPage",
      "FabricReport",
      "FabricSemanticModel",
+     "FabricSemanticModelMeasure",
      "FabricSemanticModelTable",
      "FabricSemanticModelTableColumn",
      "FabricVisual",
@@ -5053,6 +5266,7 @@
      "GCS",
      "GCSBucket",
      "GCSObject",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -5063,6 +5277,7 @@
      "KafkaCluster",
      "KafkaConsumerGroup",
      "KafkaField",
+     "KafkaTag",
      "KafkaTopic",
      "Knowledge",
      "KnowledgeFile",
@@ -5154,6 +5369,7 @@
      "QlikDataset",
      "QlikSheet",
      "QlikSpace",
+     "QlikStream",
      "Query",
      "QuickSight",
      "QuickSightAnalysis",
@@ -5218,6 +5434,12 @@
      "SalesforceObject",
      "SalesforceOrganization",
      "SalesforceReport",
+     "SapAnalyticsCloud",
+     "SapAnalyticsCloudColumn",
+     "SapAnalyticsCloudFolder",
+     "SapAnalyticsCloudModel",
+     "SapAnalyticsCloudStory",
+     "SapDatasphereDataProduct",
      "SapErpAbapProgram",
      "SapErpCdsView",
      "SapErpColumn",
@@ -5257,13 +5479,18 @@
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Soda",
      "SodaCheck",
      "SourceTag",
@@ -5322,10 +5549,13 @@
      "CosmosMongoDBCollection",
      "DocumentDBCollection",
      "DremioPhysicalDataset",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "IcebergTable",
      "MongoDBCollection",
+     "SnowflakeDynamicTable",
      "StarburstDataset",
      "Table"
     ],
@@ -5340,7 +5570,8 @@
     "owners": [
      "AccessControl",
      "Persona",
-     "Purpose"
+     "Purpose",
+     "Stakeholder"
     ],
     "target_type": "AuthPolicy"
    }
@@ -5449,7 +5680,8 @@
     "inverse": "qlik_space",
     "inverse_attribute": "qlikSpace",
     "owners": [
-     "QlikSpace"
+     "QlikSpace",
+     "QlikStream"
     ],
     "target_type": "QlikApp"
    }
@@ -5500,7 +5732,8 @@
     "inverse": "qlik_space",
     "inverse_attribute": "qlikSpace",
     "owners": [
-     "QlikSpace"
+     "QlikSpace",
+     "QlikStream"
     ],
     "target_type": "QlikDataset"
    }
@@ -5677,6 +5910,50 @@
     "target_type": "SageMakerModel"
    }
   ],
+  "sap_analytics_cloud_columns": [
+   {
+    "attribute": "sapAnalyticsCloudColumns",
+    "inverse": "sap_analytics_cloud_model",
+    "inverse_attribute": "sapAnalyticsCloudModel",
+    "owners": [
+     "SapAnalyticsCloudModel"
+    ],
+    "target_type": "SapAnalyticsCloudColumn"
+   }
+  ],
+  "sap_analytics_cloud_models": [
+   {
+    "attribute": "sapAnalyticsCloudModels",
+    "inverse": "sap_analytics_cloud_folder",
+    "inverse_attribute": "sapAnalyticsCloudFolder",
+    "owners": [
+     "SapAnalyticsCloudFolder"
+    ],
+    "target_type": "SapAnalyticsCloudModel"
+   }
+  ],
+  "sap_analytics_cloud_stories": [
+   {
+    "attribute": "sapAnalyticsCloudStories",
+    "inverse": "sap_analytics_cloud_folder",
+    "inverse_attribute": "sapAnalyticsCloudFolder",
+    "owners": [
+     "SapAnalyticsCloudFolder"
+    ],
+    "target_type": "SapAnalyticsCloudStory"
+   }
+  ],
+  "sap_analytics_cloud_sub_folders": [
+   {
+    "attribute": "sapAnalyticsCloudSubFolders",
+    "inverse": "sap_analytics_cloud_parent_folder",
+    "inverse_attribute": "sapAnalyticsCloudParentFolder",
+    "owners": [
+     "SapAnalyticsCloudFolder"
+    ],
+    "target_type": "SapAnalyticsCloudFolder"
+   }
+  ],
   "sap_bw_adso_fields": [
    {
     "attribute": "sapBwAdsoFields",
@@ -5796,6 +6073,18 @@
      "SAPBWQuery"
     ],
     "target_type": "SAPBWQueryElement"
+   }
+  ],
+  "sap_datasphere_data_products": [
+   {
+    "attribute": "sapDatasphereDataProducts",
+    "inverse": "sap_datasphere_schema",
+    "inverse_attribute": "sapDatasphereSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SapDatasphereDataProduct"
    }
   ],
   "sap_datasphere_replication_flows": [
@@ -6185,6 +6474,30 @@
     "target_type": "SnowflakeAIModelVersion"
    }
   ],
+  "snowflake_dynamic_tables": [
+   {
+    "attribute": "snowflakeDynamicTables",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SnowflakeDynamicTable"
+   }
+  ],
+  "snowflake_pipes": [
+   {
+    "attribute": "snowflakePipes",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SnowflakePipe"
+   }
+  ],
   "snowflake_semantic_dimensions": [
    {
     "attribute": "snowflakeSemanticDimensions",
@@ -6214,6 +6527,7 @@
     "inverse_attribute": "snowflakeBaseTable",
     "owners": [
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Column",
      "CosmosMongoDBCollection",
@@ -6228,6 +6542,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "DocumentDBCollection",
@@ -6240,9 +6555,12 @@
      "DremioSpace",
      "DremioVirtualDataset",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "Function",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -6254,17 +6572,23 @@
      "Procedure",
      "Query",
      "SQL",
+     "SapAnalyticsCloudColumn",
      "SapErpColumn",
      "Schema",
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -6318,6 +6642,42 @@
     "target_type": "SnowflakeShare"
    }
   ],
+  "snowflake_stages": [
+   {
+    "attribute": "snowflakeStages",
+    "inverse": "sql_stage_schema",
+    "inverse_attribute": "sqlStageSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SnowflakeStage"
+   }
+  ],
+  "snowflake_streams": [
+   {
+    "attribute": "snowflakeStreams",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SnowflakeStream"
+   }
+  ],
+  "snowflake_tags": [
+   {
+    "attribute": "snowflakeTags",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SnowflakeTag"
+   }
+  ],
   "spark_jobs": [
    {
     "attribute": "sparkJobs",
@@ -6344,6 +6704,7 @@
     "inverse_attribute": "sqlInsightDataset",
     "owners": [
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Column",
      "CosmosMongoDBCollection",
@@ -6358,6 +6719,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "DocumentDBCollection",
@@ -6370,9 +6732,12 @@
      "DremioSpace",
      "DremioVirtualDataset",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "Function",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -6384,18 +6749,24 @@
      "Procedure",
      "Query",
      "SQL",
+     "SapAnalyticsCloudColumn",
      "SapErpColumn",
      "Schema",
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -6416,6 +6787,7 @@
      "DremioColumn",
      "DynamoDBAttribute",
      "IcebergColumn",
+     "SapAnalyticsCloudColumn",
      "StarburstDatasetColumn"
     ],
     "target_type": "SqlInsightFilter"
@@ -6428,6 +6800,7 @@
     "inverse_attribute": "sqlInsightJoinedDataset",
     "owners": [
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Column",
      "CosmosMongoDBCollection",
@@ -6442,6 +6815,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "DocumentDBCollection",
@@ -6454,9 +6828,12 @@
      "DremioSpace",
      "DremioVirtualDataset",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "Function",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -6468,18 +6845,24 @@
      "Procedure",
      "Query",
      "SQL",
+     "SapAnalyticsCloudColumn",
      "SapErpColumn",
      "Schema",
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -6497,6 +6880,7 @@
     "inverse_attribute": "sqlInsightSourceDataset",
     "owners": [
      "BigqueryRoutine",
+     "BigqueryTag",
      "CalculationView",
      "Column",
      "CosmosMongoDBCollection",
@@ -6511,6 +6895,7 @@
      "DatabricksGenieAgent",
      "DatabricksMetricView",
      "DatabricksNotebook",
+     "DatabricksUnityCatalogTag",
      "DatabricksVolume",
      "DatabricksVolumePath",
      "DocumentDBCollection",
@@ -6523,9 +6908,12 @@
      "DremioSpace",
      "DremioVirtualDataset",
      "DynamoDBAttribute",
+     "DynamoDBGlobalSecondaryIndex",
+     "DynamoDBLocalSecondaryIndex",
      "DynamoDBSecondaryIndex",
      "DynamoDBTable",
      "Function",
+     "GlueTag",
      "Iceberg",
      "IcebergCatalog",
      "IcebergColumn",
@@ -6537,18 +6925,24 @@
      "Procedure",
      "Query",
      "SQL",
+     "SapAnalyticsCloudColumn",
      "SapErpColumn",
      "Schema",
      "Snowflake",
      "SnowflakeAIModelContext",
      "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
      "SnowflakeListing",
+     "SnowflakePipe",
      "SnowflakeSemanticDimension",
      "SnowflakeSemanticFact",
      "SnowflakeSemanticLogicalTable",
      "SnowflakeSemanticMetric",
      "SnowflakeSemanticView",
      "SnowflakeShare",
+     "SnowflakeStage",
+     "SnowflakeStream",
+     "SnowflakeTag",
      "Starburst",
      "StarburstDataset",
      "StarburstDatasetColumn",
@@ -6601,6 +6995,17 @@
      "SSRSFolder"
     ],
     "target_type": "SSRSFolder"
+   }
+  ],
+  "stakeholders": [
+   {
+    "attribute": "stakeholders",
+    "inverse": "stakeholder_data_domain",
+    "inverse_attribute": "stakeholderDataDomain",
+    "owners": [
+     "DataDomain"
+    ],
+    "target_type": "Stakeholder"
    }
   ],
   "starburst_dataset_columns": [
