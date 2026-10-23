@@ -66,6 +66,20 @@ What this means in practice:
   effective_retryable` on the `ApplicationError`, so it *is* Temporal's retry
   decision. Flipping it for an existing failure class changes production retry
   behaviour, not just a dashboard label — coordinate it before landing.
+- **A non-retryable task failure is non-retryable for the whole workflow.**
+  Temporal reads `non_retryable` only on a workflow's *top-level* failure, and
+  a task's error arrives wrapped in an `ActivityError`. So the generated
+  workflow (`_lift_non_retryable_activity_failure()` in
+  `application_sdk/app/base.py`) re-raises a non-retryable cause as a
+  top-level `ApplicationError` with the same `type`, `message` and `details`,
+  `non_retryable=True`, chained `from` the `ActivityError`. A workflow-level
+  `RetryPolicy` then stops after one attempt instead of re-running a run that
+  fails the same way each time. The workflow's terminal failure therefore
+  carries the envelope at `details[0]` on the top level as well as on the
+  wrapped activity failure underneath. A consumer may read either, but must
+  not assume the top level is an `ActivityError`. `WorkerEvicted` is not
+  lifted: it is non-retryable only so the eviction re-dispatch loop sees it at
+  once. A retryable cause that used up its task retries is not lifted either.
 
 ## The served manifest's resolved `task_queue`
 

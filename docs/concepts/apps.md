@@ -1283,6 +1283,8 @@ class MyConnector(App):
 policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 ```
 
+A non-retryable error raised in a task (an `AppError` whose `retryable` resolves to `False`) is non-retryable for the whole run. The task is not retried, and a workflow-level `RetryPolicy` does not re-run the workflow either: the generated workflow re-raises the failure as a top-level non-retryable `ApplicationError` that keeps the task's `type` and `details`. A retryable error that uses up the task's attempts still fails the workflow retryably, so a workflow-level retry applies.
+
 ---
 
 ## Catching Client-Side Workflow Failures

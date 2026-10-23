@@ -31,6 +31,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from temporalio import activity, workflow
+from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 from temporalio.exceptions import FailureError
 
 from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
@@ -88,6 +90,7 @@ from application_sdk.contracts.storage import (
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, ErrorCode
 from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 from application_sdk.handler.contracts import PreflightGateMode
@@ -3478,6 +3481,48 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
         ) from e
 
 
+def _lift_non_retryable_activity_failure(
+    exc: BaseException,
+) -> _TemporalApplicationError | None:
+    """The non-retryable failure a task raised, lifted to the workflow's top level.
+
+    A ``@task`` that raises a non-retryable error reaches the workflow as
+    ``ActivityError(cause=ApplicationError(non_retryable=True))``. Temporal reads
+    ``non_retryable`` only on the *top-level* failure of a workflow execution, so
+    re-raising the ``ActivityError`` unchanged lets the workflow-level
+    ``RetryPolicy`` re-run the whole workflow, which fails the same way each
+    time. Lifting the cause's type, message and ``details`` onto a top-level
+    non-retryable ``ApplicationError`` ends the run after one attempt; the
+    caller raises it ``from`` the ``ActivityError``, so the original chain (and
+    ``details[0]`` on the cause) is still there for anything that walks it.
+
+    ``WorkerEvicted`` is excluded: it is non-retryable only so the eviction
+    re-dispatch loop sees it at once. An eviction that outlasts that loop is
+    infrastructure, not a deterministic failure, so a workflow retry may still
+    rescue it.
+
+    Returns:
+        The lifted error, or ``None`` when ``exc`` is not an ``ActivityError``
+        whose direct cause is a non-retryable, non-eviction ``ApplicationError``.
+    """
+    # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    if not isinstance(exc, ActivityError):
+        return None
+    cause = exc.cause
+    if not isinstance(cause, _TemporalApplicationError) or not cause.non_retryable:
+        return None
+    if cause.type == WORKER_EVICTED_TYPE:
+        return None
+    return ApplicationError(
+        cause.message,
+        *cause.details,
+        type=cause.type,
+        non_retryable=True,
+    )
+
+
 def generate_workflow_class(
     app_cls: "type[App]",
     ep: "EntryPointMetadata",
@@ -3704,7 +3749,10 @@ def generate_workflow_class(
             # as failed, causing the server to retry the task indefinitely
             # instead of failing the workflow execution.
             # FailureError subclasses (ActivityError, CancelledError, …) are
-            # already handled natively by Temporal and must not be rewrapped.
+            # already handled natively by Temporal and must not be rewrapped —
+            # except an ActivityError whose cause is non-retryable, which is
+            # lifted so the workflow-level RetryPolicy does not re-run the
+            # workflow (see _lift_non_retryable_activity_failure).
             #
             # All raw exceptions are non-retryable: any Python exception raised
             # directly from an entrypoint (not through a @task activity) is
@@ -3715,6 +3763,9 @@ def generate_workflow_class(
                 ApplicationError,
             )
 
+            lifted = _lift_non_retryable_activity_failure(e)
+            if lifted is not None:
+                raise lifted from e
             if isinstance(e, FailureError):
                 raise
             if isinstance(e, _NewAppError):
