@@ -378,9 +378,7 @@ def test_gcs_requests_carry_no_checksums(
     assert upload.status_code == 200
 
     assert [r.method for r in sent] == ["PUT", "GET", "PUT"]
-    assert all(
-        urlsplit(r.url).hostname.endswith("storage.googleapis.com") for r in sent
-    )
+    assert {urlsplit(r.url).hostname for r in sent} == {"storage.googleapis.com"}
     assert [_checksums(r.headers) for r in sent] == [{}, {}, {}]
 
     # Not vacuous: boto3's default client does send them.
