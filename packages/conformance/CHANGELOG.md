@@ -2,6 +2,26 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.52.0] - 2026-10-22
+
+### Features
+
+- P023 follows one hop into sync helpers and covers the missing blocking calls (#4515) ([780d837](https://github.com/atlanhq/application-sdk/commit/780d837))
+- serve an app's real handler and metadata, config and file routes from the consolidated host (atlan-application-sdk-api) (#4058) ([e563097](https://github.com/atlanhq/application-sdk/commit/e563097))
+
+### Bug fixes
+
+- run per-entrypoint auth and metadata hooks over SDR (#4518) ([07e32eb](https://github.com/atlanhq/application-sdk/commit/07e32eb))
+- exempt E020 per-object 4xx skips from the raise fix (#4512) ([5774aba](https://github.com/atlanhq/application-sdk/commit/5774aba))
+- E007 accepts a per-item None after a durable residual record (#4491) ([aed2c4a](https://github.com/atlanhq/application-sdk/commit/aed2c4a))
+- resolve pre-raise logs with L009's fix instead of L004/E005 enrichment (#4492) ([2613e20](https://github.com/atlanhq/application-sdk/commit/2613e20))
+- K007 is not auto-fixable; Renovate owns the toolkit bump (#4493) ([f8b90d7](https://github.com/atlanhq/application-sdk/commit/f8b90d7))
+
+### Other changes
+
+- chore(deps): move conformance lock to authlib 1.9.1 (#4564) ([a21af5f](https://github.com/atlanhq/application-sdk/commit/a21af5f))
+- chore(deps): certifi>=2026.10.19 for the conformance lock and the api package (GHSA-6q48-6c7w-9gw2) (#4523) ([826c15a](https://github.com/atlanhq/application-sdk/commit/826c15a))
+
 ## [0.51.1] - 2026-10-19
 
 ### Bug fixes

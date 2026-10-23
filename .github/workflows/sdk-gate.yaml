@@ -293,9 +293,9 @@ jobs:
       # closed on `changes`, with uv's resolver output in this step's log.
       # The script re-checks only when uv.lock or a pyproject.toml differ from
       # the base, so a stale lock on main cannot redden unrelated PRs.
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.13.4"
+          version: "0.13.5"
 
       - name: Check that uv.lock resolves
         env:
@@ -308,11 +308,14 @@ jobs:
     if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true')
     uses: ./.github/workflows/sdk-tests-reusable.yaml
     # packages: read lets the Storage Emulator job pull the private MinIO
-    # mirror (ghcr.io/atlanhq/ci-mirror/minio). A called workflow cannot hold
-    # more than its caller grants, so it has to be granted here.
+    # mirror (ghcr.io/atlanhq/ci-mirror/minio); statuses: read lets
+    # "Decide integration request" read the /e2e and /gate-check markers. A
+    # called workflow cannot hold more than its caller grants, so both are
+    # granted here.
     permissions:
       contents: read
       packages: read
+      statuses: read
     secrets: inherit
 
   conformance:

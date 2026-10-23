@@ -12,14 +12,21 @@ production while requiring nothing on the host beyond Python and ``uv``.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import http.client
 import os
 import platform
 import shutil
 import socket
 import stat
+import subprocess
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
+import zipfile
+import zlib
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -29,6 +36,8 @@ from application_sdk.dev._dapr_errors import (
     DaprComponentsConfigError,
     DaprComponentsDirNotFoundError,
     DaprdBinaryMissingError,
+    DaprdDownloadIncompleteError,
+    DaprdExitedError,
     DaprReadinessTimeoutError,
     UnsupportedArchitectureError,
     UnsupportedOsError,
@@ -80,54 +89,146 @@ def _platform_tuple() -> tuple[str, str]:
     return system, arch
 
 
+# A stalled GitHub release download must fail, not hang the caller; a 5xx or a
+# dropped connection is worth another attempt before giving up.
+_DOWNLOAD_TIMEOUT_SECONDS = 60.0
+_DOWNLOAD_ATTEMPTS = 3
+_DOWNLOAD_BACKOFF_SECONDS = 2.0
+
+# Failures a fresh download can fix: the network ones, plus an archive that came
+# down short (the archive readers raise these on a truncated stream).
+_RETRYABLE_DOWNLOAD_ERRORS: tuple[type[BaseException], ...] = (
+    urllib.error.URLError,
+    http.client.IncompleteRead,
+    ConnectionError,
+    TimeoutError,
+    EOFError,
+    tarfile.ReadError,
+    zipfile.BadZipFile,
+    zlib.error,
+    DaprdDownloadIncompleteError,
+)
+
+
+def _is_retryable_download_error(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        # 4xx (a missing asset for this version/platform) will not change on retry.
+        return exc.code >= 500 or exc.code == 429
+    return isinstance(exc, _RETRYABLE_DOWNLOAD_ERRORS)
+
+
+def _fetch_archive(url: str, dest: Path) -> None:
+    """Stream *url* into *dest*, bounded by a socket timeout."""
+    with (
+        urllib.request.urlopen(url, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as resp,
+        dest.open("wb") as out,
+    ):
+        shutil.copyfileobj(resp, out)
+
+
+def _extract_daprd(archive: Path, url: str, dest: Path) -> None:
+    """Extract the ``daprd`` entry of *archive* into *dest*, checking its size."""
+    binary_name = _daprd_binary_name()
+    if archive.name.endswith(".zip"):
+        with zipfile.ZipFile(archive) as zf:
+            info = next(
+                (i for i in zf.infolist() if i.filename.endswith(binary_name)), None
+            )
+            if info is None:
+                raise DaprdBinaryMissingError(archive_url=url, archive_format="zip")
+            expected = info.file_size
+            with zf.open(info) as src, dest.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+    else:
+        with tarfile.open(archive, "r:gz") as tar:
+            member = next(
+                (m for m in tar.getmembers() if m.name.endswith(binary_name)), None
+            )
+            if member is None:
+                raise DaprdBinaryMissingError(archive_url=url, archive_format="tar")
+            expected = member.size
+            with tar.extractfile(member) as src, dest.open("wb") as dst:  # type: ignore[union-attr]
+                shutil.copyfileobj(src, dst)
+    actual = dest.stat().st_size
+    if actual != expected:
+        raise DaprdDownloadIncompleteError(expected_bytes=expected, actual_bytes=actual)
+
+
 def _download_daprd(target: Path) -> None:
-    """Download + extract the ``daprd`` binary into *target*."""
+    """Download + extract the ``daprd`` binary into *target*, atomically.
+
+    Everything is written beside *target* under a per-process temp name and
+    only ``os.replace``-d into place once the extracted size matches the
+    archive entry, so an interrupted download can never leave a truncated
+    binary at *target* — which ``_ensure_daprd_binary`` would otherwise accept
+    on every later run.
+    """
     os_name, arch = _platform_tuple()
     ext = _daprd_archive_ext()
-    binary_name = _daprd_binary_name()
     url = (
         _DAPRD_RELEASE_BASE.format(version=_DAPRD_VERSION, os=os_name, arch=arch) + ext
     )
     logger.info("Downloading daprd v%s for %s/%s …", _DAPRD_VERSION, os_name, arch)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Use mkstemp + immediate close so the file handle is released before
-    # urlretrieve opens it — NamedTemporaryFile on Windows keeps an exclusive
-    # lock that prevents urlretrieve from opening the same path ([WinError 32]).
-    tmp_fd, tmp_name = tempfile.mkstemp(suffix=ext)
-    os.close(tmp_fd)
+    archive = target.with_name(f"{target.name}.{os.getpid()}.download{ext}")
+    staged = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     try:
-        urllib.request.urlretrieve(url, tmp_name)
-        if ext == ".zip":
-            import zipfile  # noqa: PLC0415 — Windows-only cold path
-
-            with zipfile.ZipFile(tmp_name) as zf:
-                member = next(
-                    (m for m in zf.namelist() if m.endswith(binary_name)),
-                    None,
+        for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+            try:
+                _fetch_archive(url, archive)
+                _extract_daprd(archive, url, staged)
+                break
+            except _RETRYABLE_DOWNLOAD_ERRORS as exc:
+                # HTTPError is a URLError, so a 4xx lands here too and is
+                # re-raised at once by the classifier.
+                if attempt == _DOWNLOAD_ATTEMPTS or not _is_retryable_download_error(
+                    exc
+                ):
+                    raise
+                logger.warning(
+                    "daprd download attempt %d/%d failed (%s); retrying",
+                    attempt,
+                    _DOWNLOAD_ATTEMPTS,
+                    type(exc).__name__,
+                    exc_info=True,
                 )
-                if member is None:
-                    raise DaprdBinaryMissingError(archive_url=url, archive_format="zip")
-                with zf.open(member) as src, target.open("wb") as dst:
-                    shutil.copyfileobj(src, dst)
-        else:
-            with tarfile.open(tmp_name, "r:gz") as tar:
-                member = next(
-                    (m for m in tar.getmembers() if m.name.endswith(binary_name)),
-                    None,
-                )
-                if member is None:
-                    raise DaprdBinaryMissingError(archive_url=url, archive_format="tar")
-                with tar.extractfile(member) as src, target.open("wb") as dst:  # type: ignore[arg-type]
-                    shutil.copyfileobj(src, dst)
+                time.sleep(_DOWNLOAD_BACKOFF_SECONDS * attempt)
+        staged.chmod(staged.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        os.replace(staged, target)
     finally:
-        Path(tmp_name).unlink(missing_ok=True)
-    target.chmod(target.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        archive.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
     logger.info("daprd cached at %s", target)
 
 
+def _daprd_runs(binary: Path) -> bool:
+    """True when *binary* executes and reports the pinned version."""
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed argv, our own cached binary
+            [str(binary), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("daprd --version failed for %s", binary, exc_info=True)
+        return False
+    return result.returncode == 0 and _DAPRD_VERSION in result.stdout
+
+
 def _ensure_daprd_binary() -> Path:
-    """Return path to the daprd binary, downloading if absent."""
+    """Return path to the daprd binary, downloading if absent or broken.
+
+    New downloads are published atomically, but a cache written before that —
+    or damaged since — can still hold a truncated binary at this path. An
+    existing file is therefore trusted only if it runs and reports the pinned
+    version; otherwise it is replaced.
+    """
     binary = _CACHE_DIR / _daprd_binary_name()
+    if binary.exists() and not _daprd_runs(binary):
+        logger.warning("Cached daprd at %s does not run; re-downloading", binary)
+        binary.unlink(missing_ok=True)
     if not binary.exists():
         _download_daprd(binary)
     return binary
@@ -135,9 +236,27 @@ def _ensure_daprd_binary() -> Path:
 
 def _pick_free_port() -> int:
     """Bind a TCP socket to port 0, read the port, release. Race-free enough."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    return _pick_free_ports(1)[0]
+
+
+def _pick_free_ports(count: int) -> list[int]:
+    """Return *count* distinct free loopback ports.
+
+    Every socket is held open until all ports are read, so the OS cannot hand
+    the same port out twice — picking the http and grpc ports one at a time
+    (bind, release, bind again) can return the same port for both. Another
+    process can still take a port between release and daprd's bind; that case
+    surfaces as ``DaprdExitedError`` (daprd exits on a bind failure) rather
+    than as a readiness timeout.
+    """
+    with contextlib.ExitStack() as stack:
+        socks = [
+            stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_STREAM))
+            for _ in range(count)
+        ]
+        for sock in socks:
+            sock.bind(("127.0.0.1", 0))
+        return [sock.getsockname()[1] for sock in socks]
 
 
 DEFAULT_OBJECTSTORE_ROOT = "./local/dapr/objectstore"
@@ -275,13 +394,46 @@ def _write_components(
             )
 
 
-async def _wait_for_dapr_ready(http_port: int, timeout_s: float = 30.0) -> None:
-    """Poll Dapr's metadata endpoint until it responds or *timeout_s* elapses."""
+_LOG_TAIL_BYTES = 4096
+_LOG_TAIL_LINES = 20
+
+
+def _read_log_tail(log_path: Path) -> str:
+    """Last few lines of the daprd log, for the error raised when it dies."""
+    try:
+        with log_path.open("rb") as fh:
+            fh.seek(max(0, log_path.stat().st_size - _LOG_TAIL_BYTES))
+            text = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        logger.debug("Could not read daprd log %s", log_path, exc_info=True)
+        return ""
+    return "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
+
+
+async def _wait_for_dapr_ready(
+    http_port: int,
+    timeout_s: float = 30.0,
+    *,
+    proc: asyncio.subprocess.Process | None = None,
+    log_path: Path | None = None,
+) -> None:
+    """Poll Dapr's metadata endpoint until it responds or *timeout_s* elapses.
+
+    When *proc* is given, a daprd that has already exited fails the wait at
+    once with :class:`DaprdExitedError` (carrying the tail of *log_path*)
+    instead of being polled for the full *timeout_s*.
+    """
     import httpx  # noqa: PLC0415 — defer the heavy import
 
     deadline = asyncio.get_event_loop().time() + timeout_s
     async with httpx.AsyncClient() as client:
         while asyncio.get_event_loop().time() < deadline:
+            if proc is not None and proc.returncode is not None:
+                raise DaprdExitedError(
+                    exit_code=proc.returncode,
+                    log_path=str(log_path) if log_path is not None else None,
+                    log_tail=_read_log_tail(log_path) if log_path is not None else None,
+                )
             try:
                 resp = await client.get(
                     f"http://127.0.0.1:{http_port}/v1.0/metadata", timeout=1.0
@@ -357,8 +509,7 @@ async def embedded_dapr(
         raise DaprComponentsDirNotFoundError(value_summary=repr(components_dir))
 
     binary = _ensure_daprd_binary()
-    http_port = _pick_free_port()
-    grpc_port = _pick_free_port()
+    http_port, grpc_port = _pick_free_ports(2)
     if components_dir is not None:
         # Caller supplies (and owns) the component YAMLs — use them as-is and
         # do not delete the directory on exit (validated above).
@@ -386,25 +537,43 @@ async def embedded_dapr(
     os.environ["DAPR_COMPONENTS_PATH"] = str(components_path)
 
     logger.info("Starting embedded Dapr (http=%d grpc=%d)", http_port, grpc_port)
-    proc = await asyncio.create_subprocess_exec(
-        str(binary),
-        "--app-id",
-        app_id,
-        "--dapr-http-port",
-        str(http_port),
-        "--dapr-grpc-port",
-        str(grpc_port),
-        "--resources-path",
-        str(components_path),
-        "--log-level",
-        log_level,
-        # Disable the metrics + placement endpoints we don't need for local dev.
-        "--enable-metrics=false",
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
+    # daprd's own output goes to a temp log rather than DEVNULL, so a daprd that
+    # dies on startup reports why. The log is kept only in that case.
+    log_fd, log_name = tempfile.mkstemp(prefix="atlan-daprd-", suffix=".log")
+    log_path = Path(log_name)
+    keep_log = False
     try:
-        await _wait_for_dapr_ready(http_port)
+        proc = await asyncio.create_subprocess_exec(
+            str(binary),
+            "--app-id",
+            app_id,
+            "--dapr-http-port",
+            str(http_port),
+            "--dapr-grpc-port",
+            str(grpc_port),
+            "--resources-path",
+            str(components_path),
+            "--log-level",
+            log_level,
+            # Disable the metrics + placement endpoints we don't need for local dev.
+            "--enable-metrics=false",
+            stdout=log_fd,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except BaseException:
+        # Nothing was spawned, so the cleanup below is never reached. Close
+        # before unlinking: Windows refuses to delete a file that is still open.
+        os.close(log_fd)
+        log_path.unlink(missing_ok=True)
+        raise
+    # The child holds its own copy of the descriptor.
+    os.close(log_fd)
+    try:
+        try:
+            await _wait_for_dapr_ready(http_port, proc=proc, log_path=log_path)
+        except DaprdExitedError:
+            keep_log = True
+            raise
         logger.info("Embedded Dapr ready at http://127.0.0.1:%d", http_port)
         yield EmbeddedDapr(
             http_port=http_port,
@@ -425,6 +594,8 @@ async def embedded_dapr(
         if _owns_components_dir:
             # conformance: ignore[P023] local-dev teardown of a self-generated temp dir holding a few component YAMLs — not a data-scaled tree, and an await here would be skipped on the cancellation path this finally exists to serve
             shutil.rmtree(components_path, ignore_errors=True)
+        if not keep_log:
+            log_path.unlink(missing_ok=True)
         for _k, _v in _prev_env.items():
             if _v is None:
                 os.environ.pop(_k, None)

@@ -473,7 +473,12 @@ async def test_start_and_stop(run_worker, long_running_workflow_app):
         transport=httpx.ASGITransport(app=long_running_workflow_app),
         base_url="http://test",
     ) as client:
-        async with run_worker():
+        # long_sleep never heartbeats, so terminating the workflow does not
+        # reach it. With the default grace the worker's exit waited for the
+        # whole 60s sleep whenever the activity had been dispatched before the
+        # stop, and not when it hadn't: 60s or 5s depending on a race. A zero
+        # grace cancels it at shutdown either way (FND-4305).
+        async with run_worker(graceful_shutdown_timeout_seconds=0):
             start_resp = await client.post("/workflows/v1/start", json={})
             assert start_resp.status_code == 200
             wf_id = start_resp.json()["data"]["workflow_id"]

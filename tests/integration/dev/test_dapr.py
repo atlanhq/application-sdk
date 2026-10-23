@@ -7,7 +7,7 @@ Moved from tests/unit/dev/test_dapr.py when the unit suite was hardened with
 
 import pytest
 
-from application_sdk.dev._dapr import _pick_free_port
+from application_sdk.dev._dapr import _pick_free_port, _pick_free_ports
 
 
 @pytest.mark.integration
@@ -17,3 +17,13 @@ class TestPickFreePort:
         assert isinstance(port, int)
         # Ephemeral port range — varies by OS, but always > 1023.
         assert 1024 <= port <= 65535
+
+
+@pytest.mark.integration
+class TestPickFreePorts:
+    def test_ports_are_distinct(self) -> None:
+        """http and grpc must never be handed the same port: every socket is
+        held until all are read."""
+        for _ in range(50):
+            ports = _pick_free_ports(2)
+            assert len(set(ports)) == 2

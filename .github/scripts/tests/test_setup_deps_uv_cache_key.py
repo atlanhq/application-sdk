@@ -4,7 +4,8 @@ The key and the ``astral-sh/setup-uv`` ``version:`` input are two literals in
 .github/actions/setup-deps/action.yaml. They drifted once (key 0.11.21, install
 0.13.4), after which every run restored a uv binary setup-uv then ignored.
 Renovate bumps the install through its github-actions manager and the key
-through a regex manager in renovate.json; these tests keep both halves honest.
+through a regex manager in renovate.json, grouped into one PR by a packageRule;
+these tests keep both halves honest.
 """
 
 from __future__ import annotations
@@ -65,5 +66,36 @@ def test_renovate_regex_manager_tracks_the_key_under_the_install_dep_name():
     assert found, "renovate.json's uv cache-key manager no longer matches the key"
     assert found.group("currentValue") == _installed_version()
     # Same depName as the github-actions manager's setup-uv extraction, so
-    # Renovate puts both bumps in one branch.
+    # the grouping rule below can select it.
     assert manager["depNameTemplate"] == "astral-sh/uv"
+
+
+def _preset_github_actions_group_rule() -> dict:
+    preset = json.loads((REPO_ROOT / "renovate-config/default.json").read_text())
+    matches = [
+        r
+        for r in preset["packageRules"]
+        if r.get("matchManagers") == ["github-actions"]
+        and r.get("groupName") == "github-actions"
+    ]
+    assert len(matches) == 1, matches
+    return matches[0]
+
+
+def test_renovate_groups_the_key_bump_with_the_install_bump():
+    # The preset's github-actions group matches by manager, so a shared
+    # depName alone left the key bump out of the github-actions PR.
+    rules = json.loads((REPO_ROOT / "renovate.json").read_text())["packageRules"]
+    matches = [
+        r
+        for r in rules
+        if "custom.regex" in r.get("matchManagers", [])
+        and "astral-sh/uv" in r.get("matchDepNames", [])
+    ]
+    assert len(matches) == 1, matches
+    rule = matches[0]
+    preset = _preset_github_actions_group_rule()
+    assert rule["groupName"] == preset["groupName"]
+    # A group auto-merges only when every member does.
+    for key in ("automerge", "automergeType", "platformAutomerge"):
+        assert rule.get(key) == preset.get(key), key

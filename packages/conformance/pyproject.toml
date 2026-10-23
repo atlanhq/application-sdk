@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlan-application-sdk-conformance"
-version = "0.51.1"
+version = "0.52.0"
 description = "Conformance suite, remediation programs, and CLI for the Atlan Application SDK"
 license = "Apache-2.0"
 authors = [
@@ -97,9 +97,11 @@ url = "https://pypi.org/simple"
 default = true
 
 [tool.uv]
-# Pins this package's own lock only. certifi is not a runtime dependency of
-# conformance (it arrives via the `test` extra's atlan-application-sdk), so no
-# published floor: the SDK already publishes one for its consumers.
+# Pins this package's own lock only. certifi and authlib are not runtime
+# dependencies of conformance (they arrive via the `test` extra's
+# atlan-application-sdk), so no published floor: the SDK already publishes one
+# for its consumers (authlib through its pyatlan floor).
 constraint-dependencies = [
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
+    "authlib>=1.9.1",       # CVE-2026-96760, CVE-2026-28802, GHSA-jj8c-mmj3-mmgv
 ]

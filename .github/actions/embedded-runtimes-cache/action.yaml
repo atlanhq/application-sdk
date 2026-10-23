@@ -1,0 +1,25 @@
+name: Cache embedded runtime binaries
+description: |
+  Restores (and, on a miss, saves at job end) the Temporal dev-server and daprd
+  binaries that application_sdk.dev.embedded_runtime / embedded_dapr fetch to
+  ~/.cache/atlan-sdk on first use.
+
+  One definition for every job that uses or warms this cache — the integration
+  job in sdk-tests-reusable.yaml and warm-caches.yaml on main — so the key can
+  never drift between the job that seeds main's cache scope and the jobs that
+  restore from it. A PR can only restore a cache saved on its own ref or on the
+  base branch; a key that differed by one character would leave every PR cold.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cache/atlan-sdk/temporal
+          ~/.cache/atlan-sdk/dapr
+        # uv.lock pins temporalio (which fixes the dev-server version);
+        # version.py pins daprd (__dapr_version).
+        key: embedded-runtimes-${{ runner.os }}-${{ hashFiles('uv.lock', 'application_sdk/version.py') }}
+        restore-keys: |
+          embedded-runtimes-${{ runner.os }}-

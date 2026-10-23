@@ -37,6 +37,25 @@ class DaprdBinaryMissingError(InternalError):
     archive_format: str | None = None
 
 
+@dataclass(kw_only=True)
+class DaprdDownloadIncompleteError(InternalError):
+    code: ClassVar[str] = "INTERNAL_DAPR_DOWNLOAD_INCOMPLETE"
+    message: str = "Extracted daprd binary is smaller than its archive entry"
+    component: str | None = "embedded_dapr"
+    expected_bytes: int | None = None
+    actual_bytes: int | None = None
+
+
+@dataclass(kw_only=True)
+class DaprdExitedError(InternalError):
+    code: ClassVar[str] = "INTERNAL_DAPR_EXITED"
+    message: str = "Embedded daprd exited before it became ready"
+    component: str | None = "embedded_dapr"
+    exit_code: int | None = None
+    log_path: str | None = None
+    log_tail: str | None = None
+
+
 # Caller-misuse errors (bad embedded_dapr arguments) are InvalidInputError, not
 # InternalError: they carry field/constraint and are addressed to the caller.
 # (The Unsupported*/BinaryMissing errors above are genuine runtime/environment

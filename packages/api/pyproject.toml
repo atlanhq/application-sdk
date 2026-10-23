@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk-api"
-version = "3.51.1"
+version = "3.51.2"
 description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
 license = "Apache-2.0"
 authors = [
@@ -51,7 +51,13 @@ aws = [
 # Never needed to serve a handler: the input-contract models import pyatlan_v9
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
 # calls. Declared so those function-level imports are an extra's, as on the worker.
-pyatlan = ["pyatlan>=11.3,<12"]
+pyatlan = [
+    "pyatlan>=11.5.0,<12",
+    # pyatlan 11.5.0 already requires authlib~=1.9.1 on Python >=3.10. Published
+    # here too so a resolver that ignores requires-python cannot pick pyatlan's
+    # py3.9 authlib branch for this wheel.
+    "authlib>=1.9.1,<2",  # CVE-2026-96760
+]
 
 [project.urls]
 Homepage = "https://github.com/atlanhq/application-sdk"
