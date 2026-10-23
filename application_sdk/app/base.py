@@ -3957,7 +3957,11 @@ def _create_task_activity_wrapper(
             )
         )
 
-    async def wrapper(input_data: Input) -> Output:
+    async def wrapper(input_data: Input, *, task_queue: str | None = None) -> Output:
+        # ``task_queue`` is the per-dispatch override used by size-tier routing
+        # (:mod:`application_sdk.tiering`). A tier is a property of the run, so
+        # it cannot be fixed at decoration time the way ``pool=`` is; when both
+        # are present the caller's queue wins for that call only.
         # Create the task context (metadata for the activity)
         task_context = TaskContext(
             app_name=app_name,
@@ -3994,8 +3998,9 @@ def _create_task_activity_wrapper(
         # Execute as activity, routed through the SDK eviction-retry loop so
         # worker pod evictions (SIGTERM mid-activity) re-dispatch as fresh
         # attempts without burning the application-error retry budget.
-        # When a pool_queue is set the activity is dispatched to the task
-        # queue for that pool; otherwise it runs on the workflow's own queue.
+        # When a queue is set the activity is dispatched there: the caller's
+        # per-dispatch ``task_queue`` first, else the pool the task declared.
+        # With neither it runs on the workflow's own queue.
         result: Output = await execute_activity_with_eviction_retry(
             f"{app_name}:{task_name}",
             args=[task_context, input_data],
@@ -4013,7 +4018,11 @@ def _create_task_activity_wrapper(
                 if schedule_to_close_timeout is not None
                 else {}
             ),
-            **({"task_queue": pool_queue} if pool_queue else {}),
+            **(
+                {"task_queue": task_queue or pool_queue}
+                if (task_queue or pool_queue)
+                else {}
+            ),
         )
 
         return result

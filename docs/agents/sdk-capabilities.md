@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.50.0
-source-sha:    7ada10d8c3517269378fd4c0e7de5454ad121fdc
-source-date:   2026-10-16T12:15:10+05:30
+sdk-version:   3.51.2
+source-sha:    078bfd7c1b9d3832e0389a92896599030f0fb0d4
+source-date:   2026-10-23T12:22:20+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -36,6 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 47 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
+| `application_sdk.tiering` | Size-tier routing — Ladder/Axis/ActivitySizer, tier-to-queue resolution, per-dispatch routing | 11 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
@@ -6806,6 +6807,93 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `WarmingStep`
 - **Summary:** One entry in a :class:`WarmingSource` script.
 - **Defined in:** `application_sdk/testing/warming.py`
+
+## `application_sdk.tiering`
+
+Size-tier routing — Ladder/Axis/ActivitySizer, tier-to-queue resolution, per-dispatch routing
+
+### Classes
+
+#### `ActivitySizer`
+
+- **Import:** `from application_sdk.tiering import ActivitySizer`
+- **Signature:** `class ActivitySizer(activity: str, floor: Tier, why: str, axes: tuple[Axis, ...] = (), provisional: bool = False)`
+- **Summary:** What tier one activity needs. **Total** — it always returns a tier.
+- **Defined in:** `application_sdk/tiering/ladder.py`
+
+#### `Axis`
+
+- **Import:** `from application_sdk.tiering import Axis`
+- **Signature:** `class Axis(name: str, bands: tuple[Band, ...])`
+- **Summary:** One measurable dimension of the work, cut into ascending tier bands.
+- **Defined in:** `application_sdk/tiering/ladder.py`
+
+#### `Band`
+
+- **Import:** `from application_sdk.tiering import Band`
+- **Signature:** `class Band(upper: float, tier: Tier)`
+- **Summary:** Everything up to and including ``upper`` on one axis belongs to ``tier``.
+- **Defined in:** `application_sdk/tiering/ladder.py`
+
+#### `Ladder`
+
+- **Import:** `from application_sdk.tiering import Ladder`
+- **Signature:** `class Ladder(order: tuple[Tier, ...)`
+- **Summary:** An app's tiers, in ascending capability, plus one sizer per activity.
+- **Defined in:** `application_sdk/tiering/ladder.py`
+
+### Functions
+
+#### `queue_map_from_env`
+
+- **Import:** `from application_sdk.tiering import queue_map_from_env`
+- **Signature:** `queue_map_from_env(env_var: str = SIZE_QUEUE_MAP_ENV)`
+- **Summary:** ``{tier: task_queue}`` from a JSON env var; ``{}`` on anything unusable.
+- **Defined in:** `application_sdk/tiering/queues.py`
+
+#### `resolve`
+
+- **Import:** `from application_sdk.tiering import resolve`
+- **Signature:** `resolve(tier: Tier | None, queues: Mapping[Tier, str])`
+- **Summary:** The task queue for ``tier``, or ``None`` meaning "leave it where it is".
+- **Defined in:** `application_sdk/tiering/queues.py`
+
+#### `run_on_queue`
+
+- **Import:** `from application_sdk.tiering import run_on_queue`
+- **Signature:** `run_on_queue(app: Any, task_name: str, arg: Any, task_queue: str | None)`
+- **Summary:** Run ``app.<task_name>(arg)``, on ``task_queue`` when one is given.
+- **Defined in:** `application_sdk/tiering/dispatch.py`
+
+#### `tier_of_queue`
+
+- **Import:** `from application_sdk.tiering import tier_of_queue`
+- **Signature:** `tier_of_queue(task_queue: str | None, queues: Mapping[Tier, str])`
+- **Summary:** The tier whose pool is ``task_queue``, or ``None`` for any other queue.
+- **Defined in:** `application_sdk/tiering/queues.py`
+
+### Constants and Enums
+
+#### `INF`
+
+- **Import:** `from application_sdk.tiering import INF`
+- **Signature:** `INF`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/tiering/ladder.py`
+
+#### `SIZE_QUEUE_MAP_ENV`
+
+- **Import:** `from application_sdk.tiering import SIZE_QUEUE_MAP_ENV`
+- **Signature:** `SIZE_QUEUE_MAP_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/tiering/queues.py`
+
+#### `Tier`
+
+- **Import:** `from application_sdk.tiering import Tier`
+- **Signature:** `Tier`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/tiering/ladder.py`
 
 ## `application_sdk.validation`
 
