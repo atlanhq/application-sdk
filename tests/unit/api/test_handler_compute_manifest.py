@@ -90,6 +90,16 @@ class _RefusingHandler(_StaticHandler):
         raise HTTPException(status_code=422, detail="policy_id is required")
 
 
+class _OversharingHandler(_StaticHandler):
+    """Puts a fetched URL, token and all, in the detail it answers with."""
+
+    async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
+        raise HTTPException(
+            status_code=403,
+            detail="catalog refused https://catalog.example/p?token=sk-do-not-leak",
+        )
+
+
 class _InvalidInputHandler(_StaticHandler):
     async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
         raise InvalidInputError(
@@ -213,6 +223,18 @@ def test_a_deliberate_compute_manifest_error_reaches_the_caller(
     client = _clients(handler(), generated, monkeypatch)[surface]
     response = client.post("/manifest", json={"entrypoint": "computed"})
     assert (response.status_code, response.json()["detail"]) == (status, detail)
+
+
+@pytest.mark.parametrize("surface", [0, 1], ids=["worker", "host"])
+def test_a_secret_in_a_handlers_http_exception_is_redacted(
+    generated: Path, monkeypatch: pytest.MonkeyPatch, surface: int
+) -> None:
+    client = _clients(_OversharingHandler(), generated, monkeypatch)[surface]
+    response = client.post("/manifest", json={"entrypoint": "computed"})
+    assert (response.status_code, response.json()["detail"]) == (
+        403,
+        "catalog refused https://catalog.example/p?token=***",
+    )
 
 
 @pytest.mark.parametrize("surface", [0, 1], ids=["worker", "host"])

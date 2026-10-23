@@ -50,6 +50,7 @@ from application_sdk.common.build_identity import (
     build_identity,
 )
 from application_sdk.common.task_queue import resolve_manifest_tokens
+from application_sdk.errors.base import redact_secrets
 from application_sdk.handler.base import Handler
 from application_sdk.handler.context import (
     HandlerContext,
@@ -268,16 +269,38 @@ def handler_compute_manifest(
         async def hook(manifest: dict[str, Any], fe_inputs: dict[str, Any]) -> Any:
             context = HandlerContext(app_name=app_name(), _secret_store=secret_store)
             with bind_handler_context(context):
-                computed = await handler.compute_manifest(
-                    ManifestInput(
-                        entrypoint=entrypoint, manifest=manifest, fe_inputs=fe_inputs
+                try:
+                    computed = await handler.compute_manifest(
+                        ManifestInput(
+                            entrypoint=entrypoint,
+                            manifest=manifest,
+                            fe_inputs=fe_inputs,
+                        )
                     )
-                )
+                except HTTPException as exc:
+                    raise _redacted(exc) from None
             return manifest if computed is None else computed
 
         return hook
 
     return resolve
+
+
+def _redacted(exc: HTTPException) -> HTTPException:
+    """*exc* with its detail passed through :func:`redact_secrets`.
+
+    A handler's ``HTTPException`` is its answer to the caller and keeps its
+    status and message; its detail is scrubbed as an ``AppError`` message is on
+    the other handler routes. A non-string detail is scrubbed as JSON text.
+    """
+    detail = exc.detail if isinstance(exc.detail, str) else orjson.dumps(exc.detail)
+    if isinstance(detail, bytes):
+        detail = detail.decode()
+    return HTTPException(
+        status_code=exc.status_code,
+        detail=redact_secrets(detail),
+        headers=exc.headers,
+    )
 
 
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
