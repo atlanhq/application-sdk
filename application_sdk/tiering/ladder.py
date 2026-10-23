@@ -1,8 +1,10 @@
 """Size-tier ladders: decide which worker pool one activity should run on.
 
-Pure and import-light — no I/O, no environment reads, no SDK imports — so every
-function here is safe to call from Temporal workflow code, where the sandbox
-forbids both.
+Pure: no I/O, no environment reads, no clock, no SDK imports. Every function
+here is deterministic and safe to call from Temporal workflow code, which may do
+none of those things. The package re-exports it lazily for the same reason, so
+``from application_sdk.tiering import Ladder`` in a workflow module does not
+drag the activity-side half of the package in behind it.
 
 **Every sizer is total: it always names a tier.** There is no "unclassified"
 outcome, because an activity with no tier is an activity the OOM lane cannot
@@ -14,13 +16,27 @@ Fail-open therefore lives one layer down, in :mod:`application_sdk.tiering.queue
 with ``ATLAN_APP_SIZE_QUEUE_MAP`` unset, ``resolve`` answers ``None`` for every
 tier and every activity keeps the queue it has today. That is the inert build,
 and it is a property of the deployment rather than of the classification.
+
+**A malformed ladder raises at construction**, because every way of getting one
+wrong is silent at runtime: a floor naming a tier the ladder does not declare
+sizes nothing and routes nowhere, bands out of order make the later ones
+unreachable, and a sizer keyed under one name while declaring another drifts
+the moment somebody renames an activity. None of that shows up as an error — it
+shows up as work on the wrong pool, which is what the ladder exists to prevent.
+
+Those raise ``ValueError`` rather than an SDK error leaf, deliberately. The
+categorical leaves live under ``application_sdk.errors``, whose package import
+pulls in ``httpx``; this module is imported by workflow code to ask for a tier
+inline, so it stays on the standard library. A ladder that fails to construct
+also never travels — it stops the worker at import, which is the whole point —
+so it has no need of the error envelope's audience and category routing.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
-from math import inf, isfinite
+from dataclasses import dataclass
+from math import inf, isfinite, isnan
 
 Tier = str
 
@@ -52,6 +68,31 @@ class Axis:
     name: str
     bands: tuple[Band, ...]
 
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("Axis.name must not be empty")
+        if not self.bands:
+            raise ValueError(f"Axis {self.name!r} declares no bands")
+        uppers = [band.upper for band in self.bands]
+        for upper in uppers:
+            # NaN compares False against everything, so a NaN bound silently
+            # sends every value past it to the last band; a negative bound can
+            # never match a measurement and is dead weight.
+            if isnan(upper) or upper < 0:
+                raise ValueError(
+                    f"Axis {self.name!r} has band bound {upper!r}; bounds must be "
+                    "non-negative (INF is allowed for the open-ended top band)"
+                )
+        if uppers != sorted(uppers) or len(set(uppers)) != len(uppers):
+            raise ValueError(
+                f"Axis {self.name!r} bands must ascend by upper bound, got {uppers}. "
+                "tier_for takes the first band a value fits, so an out-of-order "
+                "or duplicated bound makes the later band unreachable."
+            )
+        for band in self.bands:
+            if not band.tier:
+                raise ValueError(f"Axis {self.name!r} has a band with no tier")
+
     def tier_for(self, value: float | None) -> Tier | None:
         """The tier this axis asks for, or ``None`` when nothing was measured.
 
@@ -65,7 +106,9 @@ class Axis:
         for band in self.bands:
             if value <= band.upper:
                 return band.tier
-        return self.bands[-1].tier if self.bands else None
+        # Past the top band's bound: the top rung is the answer. Only reachable
+        # when the last band is finite; the usual Band(INF, ...) absorbs it.
+        return self.bands[-1].tier
 
 
 @dataclass(frozen=True)
@@ -91,6 +134,22 @@ class ActivitySizer:
     #: executions were observed to say anything. Report it from a guard test so
     #: these decay visibly instead of silently hardening into facts.
     provisional: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.activity:
+            raise ValueError("ActivitySizer.activity must not be empty")
+        if not self.floor:
+            raise ValueError(f"Sizer for {self.activity!r} has no floor tier")
+        if not self.why:
+            raise ValueError(
+                f"Sizer for {self.activity!r} must say why: the floor is a measurement, "
+                "and the next person retuning it needs to tell a measured floor from a guess."
+            )
+        names = [axis.name for axis in self.axes]
+        if len(set(names)) != len(names):
+            raise ValueError(
+                f"Sizer for {self.activity!r} declares axis {names} more than once"
+            )
 
     def tier_for(self, signal: Mapping[str, float], order: Sequence[Tier]) -> Tier:
         """The highest of ``floor`` and every tier a *measured* axis asks for.
@@ -124,16 +183,75 @@ class Ladder:
     order: tuple[Tier, ...]
     memory_gib: Mapping[Tier, float]
     sizers: Mapping[str, ActivitySizer]
-    #: Answer for an activity with no registered sizer. The smallest rung, so a
-    #: newly added activity is pinned low and climbs rather than reserving the
-    #: fleet's worst envelope on its first run. An app-side
+    #: Answer for an activity with no registered sizer. Left unset it resolves
+    #: to ``order[0]`` — the smallest rung, whatever this app calls its tiers —
+    #: so a newly added activity is pinned low and climbs rather than reserving
+    #: the fleet's worst envelope on its first run. An app-side
     #: ``test_every_task_has_a_sizer`` is what stops that fallback from becoming
-    #: the normal path.
-    unknown_activity_tier: Tier = field(default="s")
+    #: the normal path. Unset is ``""`` rather than ``None`` so the attribute is
+    #: a ``Tier`` for every reader after construction, which is what lets
+    #: :meth:`tier_for` promise it never answers ``None``.
+    unknown_activity_tier: Tier = ""
+
+    def __post_init__(self) -> None:
+        if not self.order:
+            raise ValueError("Ladder.order must declare at least one tier")
+        if len(set(self.order)) != len(self.order):
+            raise ValueError(f"Ladder.order repeats a tier: {self.order}")
+        known = set(self.order)
+
+        missing_memory = [tier for tier in self.order if tier not in self.memory_gib]
+        if missing_memory:
+            raise ValueError(
+                f"Ladder.memory_gib is missing {missing_memory}. next_up orders escalation by "
+                "declared memory, so an absent tier reads as 0 GiB and is escalated to first."
+            )
+
+        if not self.unknown_activity_tier:
+            # Frozen dataclass: this is the documented way to normalise a field
+            # in __post_init__, and it keeps the attribute a plain Tier for
+            # every reader afterwards.
+            object.__setattr__(self, "unknown_activity_tier", self.order[0])
+        elif self.unknown_activity_tier not in known:
+            raise ValueError(
+                f"Ladder.unknown_activity_tier {self.unknown_activity_tier!r} is not in "
+                f"{self.order}. Every unregistered activity would resolve to no queue and "
+                "silently stay untiered."
+            )
+
+        for key, sizer in self.sizers.items():
+            if key != sizer.activity:
+                raise ValueError(
+                    f"Ladder.sizers key {key!r} does not match its sizer's activity "
+                    f"{sizer.activity!r}. Lookup goes by key, so the two drift apart silently."
+                )
+            if sizer.floor not in known:
+                raise ValueError(
+                    f"Sizer for {key!r} has floor {sizer.floor!r}, which is not in {self.order}"
+                )
+            for axis in sizer.axes:
+                unknown = sorted({band.tier for band in axis.bands} - known)
+                if unknown:
+                    raise ValueError(
+                        f"Axis {axis.name!r} on {key!r} names {unknown}, not in {self.order}. "
+                        "An axis asking for a tier the ladder does not declare is ignored, so "
+                        "the activity would quietly stay on its floor."
+                    )
 
     def rank(self, tier: Tier) -> int:
-        """Position in ``order``. Higher means more capable."""
-        return self.order.index(tier)
+        """Position in ``order``. Higher means more capable.
+
+        Raises:
+            ValueError: if ``tier`` is not one this ladder declares. Pools
+                outside the ladder have no rank — ``next_up`` answers ``None``
+                for them rather than asking.
+        """
+        try:
+            return self.order.index(tier)
+        except ValueError:
+            raise ValueError(
+                f"{tier!r} is not a tier of this ladder {self.order}"
+            ) from None
 
     def tier_for(
         self, activity: str, signal: Mapping[str, float] | None = None

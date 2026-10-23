@@ -29,7 +29,40 @@ dispatch and takes precedence over the decorator's pool for that call.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
+
+
+def _accepts_task_queue(task: Any) -> bool:
+    """Whether ``task`` is the per-run wrapper, which takes a ``task_queue``.
+
+    Inside a workflow run ``_wrap_instance_tasks`` replaces every ``@task``
+    method with a wrapper that dispatches a Temporal activity and accepts the
+    queue to place it on. Outside one — a local run, a direct unit test of a
+    workflow method — the attribute is still the raw decorated function, whose
+    body executes in process. There is no activity there and so no queue to
+    choose, and passing the keyword would raise ``TypeError: got an unexpected
+    keyword argument 'task_queue'``: a hard failure in exactly the paths where
+    routing was never going to apply.
+
+    Asking the signature rather than looking for ``@task``'s ``_task_metadata``
+    marker, for two reasons. Importing ``application_sdk.app.task.is_task``
+    would pull the whole app stack (``application_sdk.app`` → ``base`` →
+    pydantic) into a package that workflow code imports to ask for a tier. And
+    the marker is an absence test, which any object that manufactures
+    attributes on demand — a ``Mock``, a proxy — answers wrongly.
+
+    An uninspectable callable is assumed to accept it: the module's rule is that
+    a wrong answer costs something visible, so a failed dispatch is preferable
+    to silently not routing.
+    """
+    try:
+        parameters = inspect.signature(task).parameters
+    except (TypeError, ValueError):
+        return True
+    if "task_queue" in parameters:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values())
 
 
 async def run_on_queue(
@@ -37,7 +70,7 @@ async def run_on_queue(
 ) -> Any:
     """Run ``app.<task_name>(arg)``, on ``task_queue`` when one is given.
 
-    ``task_queue=None`` takes the ordinary bound-method path, byte-identical to
+    No queue — ``None`` or empty — takes the ordinary bound-method path, byte-identical to
     calling the task directly — the same activity name, the same options, the
     same command in workflow history. That is what makes an unrouted run
     indistinguishable from one on a build without tiering, and it is the path
@@ -47,13 +80,20 @@ async def run_on_queue(
         app: The app instance, inside a workflow, with its tasks bound.
         task_name: The bare task name, as ``@task`` registered it.
         arg: The task's single typed input.
-        task_queue: Queue to dispatch on, or ``None`` to leave it where it is —
-            normally ``queues.resolve(ladder.tier_for(...), queue_map)``.
+        task_queue: Queue to dispatch on, or ``None``/empty to leave it where it
+            is — normally ``queues.resolve(ladder.tier_for(...), queue_map)``.
 
     Returns:
         Whatever the task returns.
+
+    Note:
+        Outside a workflow run the task is not wrapped as an activity, so there
+        is no queue to choose and ``task_queue`` is ignored rather than raising.
     """
     task = getattr(app, task_name)
-    if task_queue is None:
+    # Falsy, not just ``None``: ``resolve`` answers ``None`` for an unrouted
+    # tier, but an app computing the queue another way can land on ``""``, and
+    # the two have to mean the same thing at both layers.
+    if not task_queue or not _accepts_task_queue(task):
         return await task(arg)
     return await task(arg, task_queue=task_queue)

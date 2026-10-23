@@ -32,11 +32,18 @@ SIZE_QUEUE_MAP_ENV = "ATLAN_APP_SIZE_QUEUE_MAP"
 def queue_map_from_env(env_var: str = SIZE_QUEUE_MAP_ENV) -> dict[Tier, str]:
     """``{tier: task_queue}`` from a JSON env var; ``{}`` on anything unusable.
 
-    Unset, empty, malformed JSON, a non-object, or entries with a blank key or
-    value all yield an empty mapping — which routes nothing and leaves every
-    activity where it is. A parse failure is warned about rather than raised: a
-    typo in a deployment variable must not fail a run that would otherwise have
-    worked exactly as it did yesterday.
+    Unset, empty, malformed JSON or a non-object yield an empty mapping — which
+    routes nothing and leaves every activity where it is. A parse failure is
+    warned about rather than raised: a typo in a deployment variable must not
+    fail a run that would otherwise have worked exactly as it did yesterday.
+
+    An individual entry is kept only when its tier and queue are both non-empty
+    strings. The rest are dropped and named in a warning. They are **not**
+    coerced: ``{"s": ["a"]}`` would otherwise become the queue ``"['a']"``, and
+    a queue no worker polls is worse than no routing at all — the activity is
+    accepted and then sits unscheduled until its start-to-close timeout, with
+    every health check green. Dropping the entry leaves that tier unrouted,
+    which is the safe direction.
     """
     raw = os.environ.get(env_var, "").strip()
     if not raw:
@@ -53,7 +60,25 @@ def queue_map_from_env(env_var: str = SIZE_QUEUE_MAP_ENV) -> dict[Tier, str]:
     if not isinstance(parsed, dict):
         logger.warning("Size routing disabled: %s is not a JSON object.", env_var)
         return {}
-    return {str(k): str(v) for k, v in parsed.items() if k and v}
+    usable = {
+        k: v for k, v in parsed.items() if _is_queue_name(k) and _is_queue_name(v)
+    }
+    dropped = sorted(set(parsed) - set(usable))
+    if dropped:
+        logger.warning(
+            "Ignoring %d unusable %s entr%s (%s): a tier and its queue must both be "
+            "non-empty strings. Those tiers stay unrouted.",
+            len(dropped),
+            env_var,
+            "y" if len(dropped) == 1 else "ies",
+            ", ".join(repr(tier) for tier in dropped),
+        )
+    return usable
+
+
+def _is_queue_name(value: object) -> bool:
+    """A usable tier name or task queue: a string with something in it."""
+    return isinstance(value, str) and bool(value.strip())
 
 
 def resolve(tier: Tier | None, queues: Mapping[Tier, str]) -> str | None:

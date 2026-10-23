@@ -1272,10 +1272,15 @@ property of the **run** — the same activity needing 0.5 GiB for one input and
 `application_sdk.tiering` covers that case. An app declares a ladder: its tiers,
 the memory each one's pool holds, and one sizer per activity. At dispatch the
 workflow asks the ladder for a tier, resolves it to a queue, and passes the
-queue to the task:
+queue to the task.
+
+The ladder is a declaration, and it is checked when you build it — a
+floor or band naming a tier the ladder does not declare, bands out of order, a
+sizer keyed under one name while declaring another, all raise at construction
+rather than mis-routing in production:
 
 ```python
-from application_sdk.tiering import ActivitySizer, Axis, Band, INF, Ladder, queue_map_from_env, resolve, run_on_queue
+from application_sdk.tiering import INF, ActivitySizer, Axis, Band, Ladder
 
 LADDER = Ladder(
     order=("s", "m", "l"),
@@ -1289,14 +1294,25 @@ LADDER = Ladder(
         ),
     },
 )
+```
 
-# In an activity (it reads the environment), once per run:
+Routing then happens at two sites. The queue map is read once per run, from an
+activity, because reading the environment is not allowed in workflow code; the
+resolved map travels on that activity's result:
+
+```python
+# In an activity, once per run:
 queues = queue_map_from_env()
 
-# In the workflow:
+# In the workflow, with that map in hand:
 tier = LADDER.tier_for("transform", {"files": discovered.file_count})
 await run_on_queue(self, "transform", args, resolve(tier, queues))
 ```
+
+Import the ladder names from `application_sdk.tiering` in workflow modules and
+the queue helpers where you use them: the package resolves each export lazily,
+so importing `Ladder` does not pull in the activity-side half (and the ~800
+modules its logger brings with it).
 
 Three properties are worth knowing before you adopt it.
 

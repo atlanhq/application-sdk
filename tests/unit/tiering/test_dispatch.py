@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from application_sdk.app.base import _create_task_activity_wrapper
-from application_sdk.contracts.base import Output
-from application_sdk.tiering.dispatch import run_on_queue
+from application_sdk.app.task import task
+from application_sdk.contracts.base import Input, Output
+from application_sdk.tiering.dispatch import _accepts_task_queue, run_on_queue
 
 
 class SimpleOutput(Output):
@@ -39,6 +41,18 @@ class TestRunOnQueue:
         app = MagicMock(transform=task)
 
         assert asyncio.run(run_on_queue(app, "transform", "arg", None)) == "done"
+        task.assert_awaited_once_with("arg")
+
+    def test_an_empty_queue_is_treated_as_no_queue(self) -> None:
+        """`resolve` answers None, but an app computing a queue itself can land on "".
+
+        Both layers must agree, or an empty string dispatches a kwarg the
+        wrapper then has to discard.
+        """
+        task = AsyncMock(return_value="done")
+        app = MagicMock(transform=task)
+
+        asyncio.run(run_on_queue(app, "transform", "arg", ""))
         task.assert_awaited_once_with("arg")
 
     def test_a_queue_is_threaded_to_the_task(self) -> None:
@@ -137,3 +151,98 @@ class TestWrapperQueueOverride:
         routed = self._dispatch(task_queue="app-l")
 
         assert routed.call_args.kwargs["args"][0] == plain.call_args.kwargs["args"][0]
+
+
+class RealInput(Input):
+    value: str = ""
+
+
+class RealOutput(Output):
+    result: str = ""
+
+
+class RealApp:
+    """An app whose task is the raw decorated method — never wrapped for a run."""
+
+    @task
+    async def transform(self, input: RealInput) -> RealOutput:
+        return RealOutput(result=input.value)
+
+
+class TestDispatchOutsideAWorkflow:
+    """Routing is meaningless where the body runs in process; it must not raise."""
+
+    def test_an_unwrapped_task_ignores_the_queue_instead_of_raising(self) -> None:
+        """Without this, local runs of an app that adopted tiering die on a TypeError.
+
+        The raw decorated method is ``async def transform(self, input)``; handing
+        it ``task_queue=`` raises `got an unexpected keyword argument`. There is
+        no Temporal activity here and so no queue to choose.
+        """
+        out = asyncio.run(
+            run_on_queue(RealApp(), "transform", RealInput(value="v"), "app-l")
+        )
+        assert out.result == "v"
+
+    def test_it_is_the_same_result_as_no_routing(self) -> None:
+        plain = asyncio.run(
+            run_on_queue(RealApp(), "transform", RealInput(value="v"), None)
+        )
+        routed = asyncio.run(
+            run_on_queue(RealApp(), "transform", RealInput(value="v"), "app-l")
+        )
+        assert plain.result == routed.result
+
+
+class TestAcceptsTaskQueue:
+    """The detection itself, including the shapes that fooled the first attempt."""
+
+    def test_the_raw_decorated_method_does_not_accept_it(self) -> None:
+        assert _accepts_task_queue(RealApp().transform) is False
+
+    def test_a_kwargs_callable_accepts_it(self) -> None:
+        async def anything(arg: object, **kwargs: object) -> None: ...
+
+        assert _accepts_task_queue(anything) is True
+
+    def test_a_mock_accepts_it(self) -> None:
+        """A Mock manufactures attributes, so an `hasattr` marker test answers wrongly.
+
+        Signature inspection gets it right: `AsyncMock` presents `(*args, **kwargs)`.
+        """
+        assert _accepts_task_queue(AsyncMock()) is True
+
+    @pytest.mark.parametrize("raised", [TypeError, ValueError])
+    def test_an_uninspectable_callable_is_assumed_to_accept_it(
+        self, raised: type[Exception]
+    ) -> None:
+        """A failed dispatch is visible; silently not routing is not.
+
+        Some builtins and C callables have no retrievable signature, and
+        `inspect.signature` reports that as TypeError or ValueError.
+        """
+
+        async def anything(arg: object) -> None: ...
+
+        with patch("inspect.signature", side_effect=raised("no signature")):
+            assert _accepts_task_queue(anything) is True
+
+    def test_it_agrees_with_the_sdk_wrapper(self) -> None:
+        """The pin: if the SDK renames or drops the kwarg, this fails here.
+
+        `run_on_queue` is only correct while the wrapper the SDK binds for a run
+        actually takes `task_queue`. Asserting it against the real factory means
+        a rename cannot quietly turn every routed dispatch into an unrouted one.
+        """
+        wrapper = _create_task_activity_wrapper(**_TASK)
+        assert _accepts_task_queue(wrapper) is True
+        assert "task_queue" in inspect.signature(wrapper).parameters
+
+    def test_the_wrapper_takes_the_queue_by_keyword_only(self) -> None:
+        """Positionally it would collide with a future parameter."""
+        kind = (
+            inspect.signature(_create_task_activity_wrapper(**_TASK))
+            .parameters["task_queue"]
+            .kind
+        )
+        assert kind is inspect.Parameter.KEYWORD_ONLY

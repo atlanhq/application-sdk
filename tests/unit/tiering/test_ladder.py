@@ -59,8 +59,9 @@ class TestAxis:
         """
         assert ROWS.tier_for(0) == "s"
 
-    def test_an_axis_with_no_bands_answers_nothing(self) -> None:
-        assert Axis(name="empty", bands=()).tier_for(5) is None
+    def test_an_axis_with_no_bands_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="declares no bands"):
+            Axis(name="empty", bands=())
 
 
 class TestActivitySizer:
@@ -172,3 +173,108 @@ def test_the_module_imports_nothing_a_workflow_sandbox_forbids() -> None:
     assert (
         imported <= allowed
     ), f"ladder.py gained imports: {sorted(imported - allowed)}"
+
+
+class TestConstructionIsValidated:
+    """Every one of these is silent at runtime, which is why it raises here."""
+
+    def test_bands_must_ascend(self) -> None:
+        with pytest.raises(ValueError, match="must ascend"):
+            Axis(name="rows", bands=(Band(100, "m"), Band(10, "s")))
+
+    def test_bands_must_not_repeat_a_bound(self) -> None:
+        """A duplicated bound makes the second band unreachable."""
+        with pytest.raises(ValueError, match="must ascend"):
+            Axis(name="rows", bands=(Band(10, "s"), Band(10, "m")))
+
+    def test_an_axis_needs_a_name(self) -> None:
+        with pytest.raises(ValueError, match="name must not be empty"):
+            Axis(name="", bands=(Band(INF, "s"),))
+
+    def test_a_band_needs_a_tier(self) -> None:
+        with pytest.raises(ValueError, match="band with no tier"):
+            Axis(name="rows", bands=(Band(INF, ""),))
+
+    def test_a_sizer_must_say_why(self) -> None:
+        """The floor is a measurement; the next person needs to know which."""
+        with pytest.raises(ValueError, match="must say why"):
+            ActivitySizer(activity="x", floor="s", why="")
+
+    def test_a_sizer_needs_an_activity_and_a_floor(self) -> None:
+        with pytest.raises(ValueError, match="activity must not be empty"):
+            ActivitySizer(activity="", floor="s", why="measured")
+        with pytest.raises(ValueError, match="no floor tier"):
+            ActivitySizer(activity="x", floor="", why="measured")
+
+    def test_a_sizer_cannot_declare_one_axis_twice(self) -> None:
+        with pytest.raises(ValueError, match="more than once"):
+            ActivitySizer(activity="x", floor="s", why="measured", axes=(ROWS, ROWS))
+
+    def test_a_ladder_needs_tiers(self) -> None:
+        with pytest.raises(ValueError, match="at least one tier"):
+            Ladder(order=(), memory_gib={}, sizers={})
+
+    def test_a_ladder_cannot_repeat_a_tier(self) -> None:
+        with pytest.raises(ValueError, match="repeats a tier"):
+            Ladder(order=("s", "s"), memory_gib={"s": 6.0}, sizers={})
+
+    def test_every_tier_declares_its_memory(self) -> None:
+        """next_up orders by declared memory; an absent tier reads as 0 GiB."""
+        with pytest.raises(ValueError, match="missing \\['m'\\]"):
+            Ladder(order=("s", "m"), memory_gib={"s": 6.0}, sizers={})
+
+    def test_an_explicit_fallback_tier_must_be_a_real_rung(self) -> None:
+        with pytest.raises(ValueError, match="unknown_activity_tier"):
+            Ladder(
+                order=("a", "b"),
+                memory_gib={"a": 1.0, "b": 2.0},
+                sizers={},
+                unknown_activity_tier="zzz",
+            )
+
+    def test_the_fallback_defaults_to_this_ladder_s_own_smallest_rung(self) -> None:
+        """Not a hardcoded "s" — an app is free to name its tiers anything."""
+        ladder = Ladder(
+            order=("tiny", "huge"), memory_gib={"tiny": 1.0, "huge": 9.0}, sizers={}
+        )
+        assert ladder.unknown_activity_tier == "tiny"
+        assert ladder.tier_for("never-registered") == "tiny"
+
+    def test_a_sizer_key_must_match_its_activity(self) -> None:
+        """Lookup goes by key, so a mismatch drifts the moment one is renamed."""
+        with pytest.raises(ValueError, match="does not match"):
+            Ladder(
+                order=("s",),
+                memory_gib={"s": 6.0},
+                sizers={
+                    "transform": ActivitySizer(
+                        activity="transfrm", floor="s", why="measured"
+                    )
+                },
+            )
+
+    def test_a_floor_outside_the_ladder_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="floor 'huge'"):
+            Ladder(
+                order=("s",),
+                memory_gib={"s": 6.0},
+                sizers={"x": ActivitySizer(activity="x", floor="huge", why="measured")},
+            )
+
+    def test_an_axis_naming_an_undeclared_tier_is_rejected(self) -> None:
+        """Otherwise the axis is ignored and the activity quietly stays on its floor."""
+        rogue = Axis(name="rows", bands=(Band(INF, "enormous"),))
+        with pytest.raises(ValueError, match="names \\['enormous'\\]"):
+            Ladder(
+                order=("s",),
+                memory_gib={"s": 6.0},
+                sizers={
+                    "x": ActivitySizer(
+                        activity="x", floor="s", why="measured", axes=(rogue,)
+                    )
+                },
+            )
+
+    def test_the_reference_ladder_in_this_module_is_valid(self) -> None:
+        """Guards the fixtures above from drifting out of validity themselves."""
+        assert LADDER.declared_tiers()

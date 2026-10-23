@@ -21,6 +21,10 @@ The split, and what is safe to call from where:
 An app supplies its own ladder: its tiers, their declared memory, and one sizer
 per activity.
 
+The names above are re-exported lazily, so importing a ladder in a workflow
+module does not also load the activity-side half of the package — see
+``_OWNER`` below for what that costs when it is eager.
+
 **Classification is total** — every activity always names a tier, because an
 activity with no tier is one the rerouter will not escalate. Inertness lives in
 ``queues.resolve``: with ``ATLAN_APP_SIZE_QUEUE_MAP`` unset every tier resolves
@@ -33,14 +37,63 @@ lane must be live *before* the queue map is set. Pin-and-climb with nothing to
 climb to is strictly worse than not routing at all.
 """
 
-from application_sdk.tiering.dispatch import run_on_queue
-from application_sdk.tiering.ladder import INF, ActivitySizer, Axis, Band, Ladder, Tier
-from application_sdk.tiering.queues import (
-    SIZE_QUEUE_MAP_ENV,
-    queue_map_from_env,
-    resolve,
-    tier_of_queue,
-)
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - import shapes for type checkers only
+    from application_sdk.tiering.dispatch import run_on_queue
+    from application_sdk.tiering.ladder import (
+        INF,
+        ActivitySizer,
+        Axis,
+        Band,
+        Ladder,
+        Tier,
+    )
+    from application_sdk.tiering.queues import (
+        SIZE_QUEUE_MAP_ENV,
+        queue_map_from_env,
+        resolve,
+        tier_of_queue,
+    )
+
+#: Which submodule owns each exported name, for the lazy import below.
+#:
+#: Eager re-exports would make ``from application_sdk.tiering import Ladder``
+#: — the workflow-side import — also load ``queues``, whose module-level logger
+#: pulls in roughly 800 modules including pydantic, httpx and the temporalio
+#: API surface. The ladder is meant to be askable from workflow code without
+#: dragging the activity-side half of the package in behind it, so each name is
+#: resolved on first use instead (PEP 562).
+_OWNER: dict[str, str] = {
+    "INF": "ladder",
+    "ActivitySizer": "ladder",
+    "Axis": "ladder",
+    "Band": "ladder",
+    "Ladder": "ladder",
+    "Tier": "ladder",
+    "run_on_queue": "dispatch",
+    "SIZE_QUEUE_MAP_ENV": "queues",
+    "queue_map_from_env": "queues",
+    "resolve": "queues",
+    "tier_of_queue": "queues",
+}
+
+
+def __getattr__(name: str) -> Any:
+    """Resolve an exported name from its submodule on first access."""
+    module = _OWNER.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib  # noqa: PLC0415 - deferred so the package root stays cheap
+
+    value = getattr(importlib.import_module(f"{__name__}.{module}"), name)
+    globals()[name] = value  # resolve once, then it is an ordinary attribute
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)
+
 
 __all__ = [
     "INF",
