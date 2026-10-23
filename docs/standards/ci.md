@@ -423,12 +423,16 @@ base-sensitive or not:
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
 runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
-head SHA from the queue branch name
-(`gh-readonly-queue/<base>/pr-<N>-<head sha>`) and the queue's base from
-`merge_group.base_sha`, fetches the commits and trees (no blobs, bounded depth)
-behind both, and compares them with the queue commit. It writes two outputs:
-`identical` (the whole tree matches and the head already contains the base) and
-`image_changed` (a path in the script's image-input list may differ). Every git
+number from the queue branch name (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and
+fetches the PR head from `refs/pull/<N>/head`. The SHA in the branch name is
+the commit the entry was built on, the queue commit's parent, not the PR head.
+Until FND-4344 the script read it as the head, so `identical` was never true and
+these skips never fired. It takes the queue's base from `merge_group.base_sha`,
+fetches the commits and trees (no blobs, bounded depth) behind both, and
+compares them with the queue commit. It writes three outputs: `identical` (the
+whole tree matches and the head already contains the base), `image_changed` (a
+path in the script's image-input list may differ) and `pr_head` (the head it
+compared against). Every git
 call has a timeout, and a timeout runs every check. The skipping job's gate is
 `!cancelled() && needs.queue-diff.outputs.<x> != '<skip value>'`, so an empty
 output still runs the check. That covers a skipped `queue-diff` on every
