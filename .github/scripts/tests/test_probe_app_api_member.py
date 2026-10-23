@@ -209,6 +209,21 @@ def test_a_worker_only_import_in_a_flat_apps_compute_manifest_fails_the_probe(
     ), problems
 
 
+@pytest.mark.parametrize("flat", [True, False], ids=["flat", "per-entrypoint"])
+def test_a_handler_refusing_empty_form_inputs_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flat: bool
+) -> None:
+    """The probe sends no form values; a 4xx for them is the handler's answer."""
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "from fastapi import HTTPException; "
+        "raise HTTPException(status_code=422, detail='policy_id is required')",
+        flat=flat,
+    )
+    assert _problems(probe.run("demo", package, "handler")) == []
+
+
 def test_a_flat_apps_computed_manifest_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

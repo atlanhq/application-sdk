@@ -119,9 +119,17 @@ def ships_contracts(generated: Path) -> bool:
     return generated.is_dir() and any(generated.glob("*.json"))
 
 
-def check_manifest(client: Any, result: Result, label: str, body: object) -> None:
-    """``POST /manifest`` with *body* answers 200 with every token resolved."""
+def check_manifest(
+    client: Any, result: Result, label: str, body: object, *, refusal_ok: bool = False
+) -> None:
+    """``POST /manifest`` with *body* answers 200 with every token resolved.
+
+    With *refusal_ok*, a 4xx passes too: the handler's own answer to inputs it
+    needs and the probe cannot supply.
+    """
     manifest = client.post("/manifest", json=body)
+    if refusal_ok and 400 <= manifest.status_code < 500:
+        return
     check_response(label, manifest.status_code, None, result, want=200)
     if manifest.status_code == 200:
         text = manifest.text
@@ -151,25 +159,37 @@ def computed_manifest_entrypoints(
 def check_computed_manifests(
     client: Any, result: Result, entrypoints: list[str]
 ) -> None:
-    """Every entry point's manifest, for a handler that computes them."""
+    """Every entry point's manifest, for a handler that computes them.
+
+    The probe has no form values to send, so a handler may refuse the empty
+    ``fe_inputs`` with a 4xx. Only a 5xx fails here; a worker-only import is
+    caught separately, from the hook itself.
+    """
     for entrypoint in entrypoints:
         check_manifest(
             client,
             result,
             f"POST /manifest (entrypoint {entrypoint})",
             {"entrypoint": entrypoint, "fe_inputs": {}},
+            refusal_ok=True,
         )
 
 
 def check_metadata_routes(
-    client: Any, result: Result, *, expects_contracts: bool
+    client: Any,
+    result: Result,
+    *,
+    expects_contracts: bool,
+    computes_manifest: bool = False,
 ) -> None:
     """The routes Heracles serves setup forms and run submits from.
 
     A 404 on ``/configmaps`` is a pass only for an app with no generated
     contract files. When its source ships them (``expects_contracts``), the 404
     means they are missing from the api member wheel, and the host would serve
-    no setup form, manifest or input contract.
+    no setup form, manifest or input contract. A handler that computes its
+    manifest (``computes_manifest``) may refuse the probe's empty form inputs,
+    as in :func:`check_computed_manifests`.
     """
     listing = client.get("/workflows/v1/configmaps")
     if listing.status_code == 404:
@@ -183,7 +203,7 @@ def check_metadata_routes(
     check_response(
         "GET /workflows/v1/configmaps", listing.status_code, None, result, want=200
     )
-    check_manifest(client, result, "POST /manifest", {})
+    check_manifest(client, result, "POST /manifest", {}, refusal_ok=computes_manifest)
     contract = client.get("/workflows/v1/input-contract")
     if contract.status_code >= 500:
         result.fail(
@@ -257,14 +277,20 @@ def run(
         result,
         not_500_json=True,
     )
-    check_metadata_routes(client, result, expects_contracts=expects_contracts)
     # None on an SDK release without Handler.compute_manifest: its host never
     # calls one, so there is nothing more to check.
     default_compute = getattr(Handler, "compute_manifest", None)
-    if (
+    computes_manifest = (
         default_compute is not None
         and type(handler).compute_manifest is not default_compute
-    ):
+    )
+    check_metadata_routes(
+        client,
+        result,
+        expects_contracts=expects_contracts,
+        computes_manifest=computes_manifest,
+    )
+    if computes_manifest:
         generated = generated_dir_of(Path(module.__file__ or ".").parent)
         check_computed_manifests(
             client,
