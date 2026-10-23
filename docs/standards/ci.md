@@ -416,7 +416,7 @@ base-sensitive or not:
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
 | `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
 | `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
-| `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
+| `tests.yaml` → unit, integration | Yes | Skipped when the queue tree equals the PR head tree, the head already contains the queue's base, and github-actions[bot]'s newest `gate-check` status on that head is `success` (FND-4344). Otherwise always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates, except on a release PR: `/gate-check` already ran the whole suite on the head commit, and refuses a head that is behind its base. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
 | `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
@@ -476,9 +476,14 @@ surface.
   by basename: `Dockerfile*`, `*.dockerfile`, `Containerfile`). `atlan.yaml`,
   which names the Dockerfile, is on the list. A bespoke name still needs adding
   there.
-* Unit tests. They are base-sensitive and could skip on an identical tree too,
-  but they feed `Tests Gate` with the integration tier, so they were left
-  alone.
+* Unit tests, outside a release PR. They are base-sensitive and could skip on
+  an identical tree too, but on an ordinary PR the integration tier they feed
+  `Tests Gate` with has not run anywhere else, so the queue run is still the
+  first one. A release PR's `queue-proof` job (`tests-reusable.yaml`) skips
+  both, together with `Tests Gate`, because `/gate-check` ran them on the head
+  commit. It runs the same `queue_tree_diff.py`, then
+  `queue_gate_check_proof.py` reads the head's `gate-check` status, trusting
+  only github-actions[bot] as Release Gate does.
 
 ### The SDK's own integration tier runs in the queue only (FND-4306)
 

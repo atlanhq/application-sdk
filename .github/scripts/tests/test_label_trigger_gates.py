@@ -527,8 +527,9 @@ def test_integration_always_runs_off_the_pr_path(github: dict[str, Any]) -> None
     detect = _gate("tests-reusable.yaml", "detect-integration")
     integration = _gate("tests-reusable.yaml", "integration")
     # Queue output is absent on these events (`detect-merge-queue` is skipped);
-    # the `event_name != 'pull_request'` term must win without reading it.
-    assert evaluate(detect, {"github": github}) is True
+    # the `event_name != 'pull_request'` term must win without reading it. An
+    # unproven `queue-proof` (FND-4344) leaves no output either.
+    assert evaluate(detect, {"github": github, "needs": {}}) is True
     assert (
         evaluate(
             integration,
