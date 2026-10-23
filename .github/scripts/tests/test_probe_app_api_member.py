@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 
+import application_sdk.handler.asgi as asgi
+from application_sdk.handler import Handler
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import probe_app_api_member as probe  # noqa: E402
@@ -62,6 +65,19 @@ def test_a_worker_only_import_in_preflight_fails_the_probe(
 def test_a_handler_that_fails_for_want_of_a_source_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    package = _member(tmp_path, monkeypatch, "raise ConnectionError('no source')")
+    assert _problems(probe.run("demo", package, "handler")) == []
+
+
+def test_the_probe_runs_against_an_sdk_without_compute_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Apps run this probe from the SDK's main against the release they pin,
+    whose Handler may predate compute_manifest (and whose host never calls it)."""
+    monkeypatch.delattr(Handler, "compute_manifest")
+    monkeypatch.setattr(
+        asgi, "handler_compute_manifest", lambda *_a, **_k: lambda _ep: None
+    )
     package = _member(tmp_path, monkeypatch, "raise ConnectionError('no source')")
     assert _problems(probe.run("demo", package, "handler")) == []
 

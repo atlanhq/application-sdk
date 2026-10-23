@@ -95,10 +95,13 @@ def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
     """Wrap the watched handler methods so an ImportError they raise is recorded.
 
     The error still propagates, so the route answers exactly as it would on
-    the host.
+    the host. A method the installed SDK predates is skipped: apps run this
+    script from the SDK's main against the SDK release they pin.
     """
     for method in _WATCHED:
-        original = getattr(handler, method)
+        original = getattr(handler, method, None)
+        if original is None:
+            continue
 
         @functools.wraps(original)
         async def wrapped(*args: Any, _m: str = method, _f: Any = original) -> Any:
@@ -240,7 +243,13 @@ def run(
         not_500_json=True,
     )
     check_metadata_routes(client, result, expects_contracts=expects_contracts)
-    if type(handler).compute_manifest is not Handler.compute_manifest:
+    # None on an SDK release without Handler.compute_manifest: its host never
+    # calls one, so there is nothing more to check.
+    default_compute = getattr(Handler, "compute_manifest", None)
+    if (
+        default_compute is not None
+        and type(handler).compute_manifest is not default_compute
+    ):
         generated = generated_dir_of(Path(module.__file__ or ".").parent)
         check_computed_manifests(client, result, tree_entrypoints(generated))
         if "compute_manifest" in import_failures:
