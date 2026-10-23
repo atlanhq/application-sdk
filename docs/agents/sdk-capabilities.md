@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 47 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
-| `application_sdk.tiering` | _(no description)_ | 11 |
+| `application_sdk.tiering` | Size-tier routing — Ladder/Axis/ActivitySizer, tier-to-queue resolution, per-dispatch routing | 11 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
@@ -6809,6 +6809,8 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Defined in:** `application_sdk/testing/warming.py`
 
 ## `application_sdk.tiering`
+
+Size-tier routing — Ladder/Axis/ActivitySizer, tier-to-queue resolution, per-dispatch routing
 
 ### Classes
 
