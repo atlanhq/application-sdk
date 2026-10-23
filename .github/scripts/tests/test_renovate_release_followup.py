@@ -10,6 +10,7 @@ repo that got no PR at all.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -232,3 +233,28 @@ def test_main_with_bad_packages_still_dispatches():
     gh = FakeGh({})
     assert mod.main(["--packages", "not json"], run=gh) == 0
     assert gh.dispatches == [None]
+
+
+@pytest.mark.parametrize("status", ["", "in_progress_unknown", "unreadable"])
+def test_unfinished_status_skips_verification(status):
+    gh = FakeGh({"atlan-nopr-app": {"locks": {"main": OLD}}})
+    left = mod.followup(
+        RELEASED,
+        run=gh,
+        poll=lambda repo, run_id, timeout_seconds: (status, ""),
+        sleep=lambda s: None,
+    )
+    assert left == []
+    assert gh.dispatches == [None]
+
+
+def test_gh_timeout_is_an_ordinary_failure(monkeypatch, tmp_path):
+    # A real hanging `gh` on PATH rather than a patched subprocess.run, which
+    # would be process-wide.
+    fake = tmp_path / "gh"
+    fake.write_text("#!/bin/sh\nsleep 30\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(mod, "GH_TIMEOUT_SECONDS", 0.2)
+    code, out, err = mod._run_gh(["api", "x"])
+    assert code == 1 and out == "" and "timed out" in err

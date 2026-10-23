@@ -179,7 +179,7 @@ def test_main_reads_pyprojects_writes_output_and_exits_zero_on_timeout(
     out = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setattr(mod, "run", FakeIndex({}, fail=True))
-    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    # --timeout-seconds 0 returns after the first round, before any sleep.
 
     rc = mod.main(
         ["--pyproject", str(sdk), "--pyproject", str(conf), "--timeout-seconds", "0"]
@@ -222,3 +222,22 @@ def test_a_stale_round_mid_streak_starts_it_over(monkeypatch):
     )
     assert ok is True
     assert sleeps == [10, 10, 10, 5]
+
+
+def test_simple_probe_reads_files_not_the_versions_list():
+    # PyPI's PEP 691 shape; `versions` (PEP 700) is not relied on.
+    payload = {
+        "name": SDK,
+        "files": [{"filename": "atlan_application_sdk-3.51.2.tar.gz"}],
+    }
+    assert mod._simple_has(payload, "3.51.2") is True
+
+
+def test_simple_probe_does_not_match_a_longer_version():
+    payload = {
+        "files": [
+            {"filename": "atlan_application_sdk-3.51.20-py3-none-any.whl"},
+            {"filename": "atlan_application_sdk-3.51.20.tar.gz"},
+        ]
+    }
+    assert mod._simple_has(payload, "3.51.2") is False

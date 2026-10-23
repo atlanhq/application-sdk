@@ -80,13 +80,22 @@ DISPATCH_FALLBACK = (
     "scheduled run."
 )
 
+GH_TIMEOUT_SECONDS = 60
+
 # (args) -> (returncode, stdout, stderr), the discover_org_consumers.py seam.
 RunFn = Callable[[list], tuple]
 
 
 def _run_gh(args: list) -> tuple:
     """Run `gh` and return (returncode, stdout, stderr). Single test seam."""
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    # Bounded, so a stalled request lands on the callers' warning paths instead
+    # of holding the fan-out until the job timeout.
+    try:
+        result = subprocess.run(
+            ["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        return 1, "", f"gh timed out after {GH_TIMEOUT_SECONDS}s"
     return result.returncode, result.stdout, result.stderr
 
 
@@ -264,9 +273,13 @@ def followup(
                 "that sweep's own fan-out, or the schedule, covers the fleet."
             )
             return []
-        if status in ("timeout", "unreadable"):
+        # Only a completed run is safe to verify behind: poll() returns on any
+        # status outside its pending set, and timeout/unreadable/an unknown
+        # status may all mean the sweep is still pushing branches.
+        if status != "completed":
             print(
-                f"::warning::Renovate run {run_id} {status}; skipping the post-sweep check."
+                f"::warning::Renovate run {run_id} ended polling with status "
+                f"{status!r}; skipping the post-sweep check."
             )
             return []
 

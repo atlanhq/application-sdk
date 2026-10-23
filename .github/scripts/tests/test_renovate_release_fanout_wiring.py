@@ -1,4 +1,4 @@
-"""Guard: the SDK and conformance release fan-outs coalesce into one (FND-4330).
+"""Guard: the release fan-outs coalesce into one (FND-4330).
 
 The two bump PRs merge seconds apart and each publish workflow has its own
 fan-out job. They only fan out once, after both releases are visible, if:
@@ -20,7 +20,13 @@ import pytest
 import yaml
 
 _WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
-_FILES = ["tag-and-publish.yaml", "conformance-publish.yml"]
+_FILES = [
+    "tag-and-publish.yaml",
+    "conformance-publish.yml",
+    # Publishes nothing to PyPI, but a bare dispatch from it would cancel a
+    # release sweep whose follow-up then stands down.
+    "contract-toolkit-publish.yml",
+]
 _PYPROJECTS = [
     "pyproject.toml",
     "packages/api/pyproject.toml",
@@ -74,6 +80,8 @@ def _steps_without_names(job: dict) -> list[dict]:
     return [{k: v for k, v in s.items() if k != "name"} for s in job["steps"]]
 
 
-def test_both_fan_outs_run_the_same_steps():
-    sdk, conf = (_fan_out(n) for n in _FILES)
-    assert _steps_without_names(sdk) == _steps_without_names(conf)
+@pytest.mark.parametrize("name", _FILES[1:])
+def test_every_fan_out_runs_the_same_steps(name):
+    assert _steps_without_names(_fan_out(name)) == _steps_without_names(
+        _fan_out(_FILES[0])
+    )

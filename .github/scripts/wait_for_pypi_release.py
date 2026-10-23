@@ -84,12 +84,17 @@ def _fetch_json(url: str, accept: str | None) -> dict | None:
 
 
 def _simple_has(payload: dict | None, version: str) -> bool:
-    # `versions` alone is not enough for an installer: uv needs a file to
-    # download, and a version can be listed before its files are.
-    if payload is None or version not in (payload.get("versions") or []):
+    # Files, not the `versions` list: uv needs a file to download, a version
+    # can be listed before its files are, and `versions` is a PEP 700 addition
+    # an index may omit. Matched on the whole version so 3.51.2 is never
+    # satisfied by a 3.51.20 file.
+    if payload is None:
         return False
-    files = payload.get("files") or []
-    return any(f"-{version}" in str(f.get("filename", "")) for f in files)
+    for entry in payload.get("files") or []:
+        filename = str(entry.get("filename", ""))
+        if f"-{version}-" in filename or filename.endswith(f"-{version}.tar.gz"):
+            return True
+    return False
 
 
 def _legacy_has(payload: dict | None, version: str) -> bool:

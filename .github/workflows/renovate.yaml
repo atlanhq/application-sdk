@@ -40,7 +40,7 @@ on:
     # Baseline cadence. Best-effort (GitHub may delay scheduled runs under load);
     # on-demand immediacy comes from the release fan-out that dispatches this
     # workflow from tag-and-publish.yaml / conformance-publish.yml /
-    # contract-toolkit-publish.yml. The first two wait for PyPI visibility
+    # contract-toolkit-publish.yml. All three wait for PyPI visibility
     # first, then dispatch `repos`-scoped re-runs for fleet repos the sweep
     # missed (renovate_release_followup.py, FND-4330).
     - cron: "0 */4 * * *"
