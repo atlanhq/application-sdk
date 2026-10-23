@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         NoopHeartbeatController,
         TemporalHeartbeatController,
     )
+    from application_sdk.storage.file_ref_sync import TaskInputDir
 
 logger = get_logger(__name__)
 
@@ -477,6 +478,7 @@ def create_activity_from_task(
                 max_no_progress_seconds=resolved_no_progress_seconds,
             )
         ) as tracker:
+            input_dir: TaskInputDir | None = None
             try:
                 # Resolved here rather than on the workflow side so the
                 # environment consulted is the one the watchdog runs in — which
@@ -565,9 +567,10 @@ def create_activity_from_task(
                     )
 
                 from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
-                    has_refs_to_materialize,
                     has_refs_to_persist,
                     materialize_file_refs,
+                    needs_task_input_dir,
+                    open_task_input_dir,
                     persist_file_refs,
                 )
 
@@ -593,13 +596,15 @@ def create_activity_from_task(
                 )
 
                 # Materialise any durable FileReferences in the input before the task runs.
-                if store is not None and has_refs_to_materialize(input_data):
+                if store is not None and needs_task_input_dir(input_data):
+                    input_dir = await open_task_input_dir()
                     input_data = await materialize_file_refs(
                         store,
                         input_data,
                         upstream_store=(
                             infra.upstream_storage if infra is not None else None
                         ),
+                        download_dir=input_dir.path,
                     )
 
                 # Consumer side, after materialise: the bytes this task is about to
@@ -785,6 +790,12 @@ def create_activity_from_task(
                     # included.)
                     app_instance._task_context = None
                     app_instance._context = None
+                    if input_dir is not None:
+                        from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: execution/__init__.py loads sibling modules + app.base imports execution
+                            remove_task_input_dir,
+                        )
+
+                        remove_task_input_dir(input_dir)
 
     # Set type annotations with the actual input/output types from task metadata.
     # This is critical for Temporal to properly deserialize the input dataclass.

@@ -384,6 +384,7 @@ class AppWorker:
 
     async def __aenter__(self) -> Worker:
         await _emit_worker_start_event(**self._start_event_params)
+        _start_dead_task_inputs_sweep()
         # Metrics is best-effort: never block the worker on a metrics failure.
         try:
             await self._start_metrics_push()
@@ -408,10 +409,12 @@ class AppWorker:
         finally:
             await self._drain_sizing()
             await self._stop_metrics_push()
+            await _stop_task_input_cleanup()
 
     async def run(self) -> None:
         """For callers that use worker.run() directly."""
         await _emit_worker_start_event(**self._start_event_params)
+        _start_dead_task_inputs_sweep()
         # Metrics is best-effort: never block the worker on a metrics failure.
         try:
             await self._start_metrics_push()
@@ -425,6 +428,47 @@ class AppWorker:
         finally:
             await self._drain_sizing()
             await self._stop_metrics_push()
+            await _stop_task_input_cleanup()
+
+
+_background_sweeps: set[asyncio.Task[None]] = set()
+_TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS = 10.0
+
+
+def _start_dead_task_inputs_sweep() -> None:
+    """Delete, in the background, task download folders whose worker died (FND-4310)."""
+    from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage imports execution
+        sweep_dead_task_inputs,
+    )
+
+    sweep = asyncio.ensure_future(sweep_dead_task_inputs())
+    _background_sweeps.add(sweep)
+    sweep.add_done_callback(_background_sweeps.discard)
+
+
+async def _stop_task_input_cleanup() -> None:
+    """Give task download cleanup a bounded time at shutdown (FND-4310).
+
+    What does not finish is logged and left to the next worker's sweep, so a
+    large delete never holds the process past its shutdown grace period.
+    """
+    from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: storage imports execution
+        wait_for_task_input_removals,
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _TASK_INPUT_CLEANUP_SHUTDOWN_SECONDS
+        if _background_sweeps:
+            _, unfinished = await asyncio.wait(
+                list(_background_sweeps),
+                timeout=max(deadline - loop.time(), 0),
+            )
+            if unfinished:
+                logger.warning("Shutdown left the task download sweep unfinished")
+        await wait_for_task_input_removals(max(deadline - loop.time(), 0))
+    except Exception:
+        logger.warning("Task download cleanup at shutdown failed", exc_info=True)
 
 
 async def _emit_worker_start_event(

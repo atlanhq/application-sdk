@@ -1661,7 +1661,11 @@ class App(ABC):
         # Derive the FileReference for cross-store dedup / deployment-store fallback.
         # normalize_key strips TEMPORARY_PATH → canonical deployment-store key.
         # Guard: "" means local_path resolved to the store root — skip source_ref.
-        _store_key = normalize_key(input.local_path) if input.local_path else ""
+        _store_key = (
+            normalize_key(input.local_path)
+            if input.local_path and input.ref is None
+            else ""
+        )
         source_ref = input.ref or (
             FileReference(local_path=input.local_path, storage_path=_store_key)
             if _store_key

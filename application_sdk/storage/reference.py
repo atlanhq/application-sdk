@@ -1341,7 +1341,7 @@ async def _materialize_single_file(
     owns_temp = ref.local_path is None
     if ref.local_path is not None:
         out_path = ref.local_path
-        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        await run_in_thread(Path(out_path).parent.mkdir, parents=True, exist_ok=True)
     else:
         suffix = Path(ref.storage_path).suffix or ""
         if local_dir:
