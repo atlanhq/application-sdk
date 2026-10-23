@@ -474,7 +474,7 @@ def production_temporary_path(monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 @pytest.fixture(autouse=True)
-def e2e_evidence_stays_out_of_the_repo(tmp_path_factory, monkeypatch):
+def e2e_evidence_stays_out_of_the_repo(_e2e_evidence_root, monkeypatch):
     """Point the e2e evidence bundle at a temp directory for every unit test.
 
     ``BaseE2ETest.evidence_dir`` defaults to ``results/e2e-evidence``, relative
@@ -490,11 +490,20 @@ def e2e_evidence_stays_out_of_the_repo(tmp_path_factory, monkeypatch):
     for some unrelated reason and have no cause to know a bundle now exists. A
     test that is about the bundle sets ``evidence_dir`` on its own instance,
     which still wins.
+
+    The directory is made once per xdist worker, not once per test: a
+    ``mktemp`` on every one of ~13k tests was the largest fixed per-test cost
+    in the unit tier (FND-4304). Nothing reads a bundle it did not write
+    itself, so sharing the directory changes nothing a test can observe; the
+    attribute is still patched per test, so a test that reassigns it is still
+    undone.
     """
     from application_sdk.testing.e2e.base import BaseE2ETest
 
-    monkeypatch.setattr(
-        BaseE2ETest,
-        "evidence_dir",
-        str(tmp_path_factory.mktemp("e2e-evidence")),
-    )
+    monkeypatch.setattr(BaseE2ETest, "evidence_dir", _e2e_evidence_root)
+
+
+@pytest.fixture(scope="session")
+def _e2e_evidence_root(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """One e2e evidence directory per xdist worker, shared by its tests."""
+    return str(tmp_path_factory.mktemp("e2e-evidence"))

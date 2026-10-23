@@ -305,6 +305,45 @@ class TestWriterWrite:
             for w in captured
         )
 
+    async def test_buffer_chunks_do_not_force_a_garbage_collection(self) -> None:
+        """No chunk runs a full ``gc.collect()`` on the event loop.
+
+        One per chunk used to block the loop for the full-heap walk, ~20ms a
+        chunk in a small process, and freed nothing measurable: over 8.7 GB
+        through each writer it found under 50 objects in total, and peak RSS
+        was unchanged, because each chunk is freed by refcount when dropped
+        (FND-4304). With automatic collection off for the write, every
+        collection ``gc.callbacks`` sees is an explicit call.
+        """
+        import gc
+
+        import pandas as pd
+
+        writer = _StubWriter()
+        frame = pd.DataFrame({"id": range(10 * writer.buffer_size)})
+        collections: list[int] = []
+
+        def _record(phase: str, info: dict[str, int]) -> None:
+            if phase == "start":
+                collections.append(info["generation"])
+
+        was_enabled = gc.isenabled()
+        gc.disable()
+        gc.callbacks.append(_record)
+        try:
+            with (
+                patch.object(writer, "_upload_file", new_callable=AsyncMock),
+                patch.object(writer, "_write_chunk", new_callable=AsyncMock) as chunk,
+            ):
+                await writer.write(frame)
+        finally:
+            gc.callbacks.remove(_record)
+            if was_enabled:
+                gc.enable()
+
+        assert chunk.await_count == 10
+        assert collections == []
+
 
 # ---------------------------------------------------------------------------
 # Writer.write_batches and _write_batched_dataframe
