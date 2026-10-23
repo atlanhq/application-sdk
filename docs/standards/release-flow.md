@@ -126,6 +126,20 @@ branch as well as the `release` label, because the label is added after the PR o
 `opened` payload can lack it. Labels never pass the gate any more, and Release Gate no longer
 subscribes to `labeled`/`unlabeled`.
 
+**Recovering from one failed leg: re-run it, don't restart the gate** (FND-4331). When a
+`/gate-check` fails on one job (typically a single cloud's `End-to-end` leg), open that
+dispatched run and choose **Re-run failed jobs**. That re-runs the failed job and the jobs that
+depend on it, including `Tests Gate`, which re-posts the `e2e` status. The re-run attempt's
+completion fires the same `workflow_run` callback. `gate_check_verdict.py` re-checks a recorded
+`failure` on every callback and turns it to `success` once each dispatched workflow's newest
+run has passed, then re-runs Release Gate. So `e2e`, `gate-check` and Release Gate all go green
+with no new commit and no full `/gate-check force`. A recorded `success` is never re-decided.
+Only a request posted by `github-actions[bot]` is re-checked, the same identity Release Gate
+trusts. The re-run leg holds no tenant lease, because the lease was taken and given back by
+attempt 1. It still asserts the app version attempt 1 installed, so if another run has installed
+onto that tenant since, the leg fails on the version mismatch instead of passing. In that case,
+comment `/gate-check force`.
+
 **Two guards decide whether a run acts at all** (`.github/scripts/release_guard.py`, called
 from `release.py` before any file is touched; each sets `skip=true`, which every mutating
 step is gated on). Both read the target branch fresh from the remote rather than trusting

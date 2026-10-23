@@ -19,8 +19,16 @@ event, and this driver runs on every one of them:
 Only runs on the status's own commit count, and only runs created after the
 request: an older run on the same commit (an earlier `/gate-check force`)
 cannot answer for this one. When the request time cannot be read, nothing
-settles — older runs never stand in for it. A recorded verdict is never
+settles — older runs never stand in for it. A recorded pass is never
 re-decided, so a late duplicate event cannot flip it.
+
+A recorded failure is re-checked by every later callback (FND-4331). "Re-run
+failed jobs" on a dispatched run makes a new attempt of the same run, whose
+completion fires the same event; once every listed workflow's newest run has
+passed, the failure gives way to `success` and Release Gate is re-run, so one
+re-run leg clears the gate without a full `/gate-check force`. The request is
+read from the status history, and only a `pending` row github-actions[bot]
+posted counts — the identity Release Gate trusts (FND-3947).
 
 The Release Gate re-run is idempotent and retried by every later callback:
 a Release Gate whose latest attempt started after the verdict was written has
@@ -144,6 +152,8 @@ def settle(
         # Already recorded — possibly by a callback whose Release Gate re-run
         # failed. Re-check the Release Gate rather than exiting (F-76a87b).
         verdict = Verdict(True, state, description, reason="already recorded")
+        if state != "success":
+            verdict = recheck_failure(github, sha, branch) or verdict
     else:
         return Verdict(False, reason="no `gate-check` request on this commit")
     verdict_at = github.status_created_at(sha, GATE_CHECK_CONTEXT)
@@ -152,6 +162,57 @@ def settle(
 
 
 FINAL_STATES = ("success", "failure", "error")
+
+#: The identity the request and the verdict are posted as; the only one
+#: Release Gate trusts (FND-3947).
+VERDICT_CREATOR = "github-actions[bot]"
+
+
+def find_request(rows: list) -> tuple[list, datetime | None]:
+    """The workflows and time of the newest `/gate-check` request in ``rows``.
+
+    ``rows`` is the commit's status history, newest first. Only a `pending`
+    `gate-check` row ``VERDICT_CREATOR`` posted is a request: anyone with write
+    access can post a status, and theirs must never be settled into a
+    bot-signed pass.
+    """
+    for row in rows:
+        if (
+            row.get("context") == GATE_CHECK_CONTEXT
+            and row.get("state") == "pending"
+            and (row.get("creator") or {}).get("login") == VERDICT_CREATOR
+        ):
+            return (
+                parse_gate_check_runs(row.get("description") or ""),
+                _ts(row.get("created_at")),
+            )
+    return [], None
+
+
+def recheck_failure(github: GitHub, sha: str, branch: str) -> Verdict | None:
+    """Turn a recorded failure green once a re-run of what failed passes.
+
+    "Re-run failed jobs" makes a new attempt of the same run, so the request's
+    runs are unchanged and ``resolve`` reads their latest attempt (FND-4331).
+    Only a pass is written: a failure stands until every listed workflow's
+    newest run has passed, and a recorded pass is never re-decided. Returns
+    the new verdict, or None when the failure stands.
+    """
+    expected, requested_at = find_request(github.status_rows(sha))
+    if not expected:
+        return None
+    runs = {
+        workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
+        for workflow in expected
+    }
+    verdict = resolve(expected, runs, requested_at)
+    if not (verdict.final and verdict.state == "success"):
+        return None
+    github.status(
+        sha, GATE_CHECK_CONTEXT, verdict.state, verdict.description, verdict.target_url
+    )
+    show_verdict(github, sha, branch, verdict)
+    return verdict
 
 
 def show_verdict(github: GitHub, sha: str, branch: str, verdict: Verdict) -> None:
