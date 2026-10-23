@@ -105,6 +105,6 @@ async def test_probe_skips_file_refs_for_every_caller() -> None:
         fetched.append(value)
         return None
 
-    await probe_single_keys([CERT_REF, "USER_REF"], fetch)
+    await probe_single_keys([CERT_REF, f" {CERT_REF} ", "USER_REF"], fetch)
 
     assert fetched == ["USER_REF"]

@@ -108,7 +108,9 @@ async def probe_single_keys(
         :func:`_probe_one`). When several probes fail, the first in candidate
         order is raised.
     """
-    candidates = [c for c in candidates if not c.startswith(_FILE_REF_PREFIX)]
+    # Trimmed for the check only: resolve_credential_file strips the value
+    # before its own prefix check, so a padded ref is a file reference too.
+    candidates = [c for c in candidates if not c.strip().startswith(_FILE_REF_PREFIX)]
     if not candidates:
         return []
 
