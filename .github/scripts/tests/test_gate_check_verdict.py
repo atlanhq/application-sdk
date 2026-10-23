@@ -172,11 +172,16 @@ class FakeApi:
         written_at: str = _iso(40),
         rerun_fails: bool = False,
         history: list[dict[str, Any]] | None = None,
+        arrives_before_write: dict[str, Any] | None = None,
     ) -> None:
         self.status = status
         self.status_created_at = status_created_at
+        self.status_url = COMMAND_URL
         # Older `gate-check` rows under the current one, newest first.
         self.history = history or []
+        # A row another workflow posts just before this driver's next status
+        # write lands (a racing `/gate-check force`).
+        self.arrives_before_write = arrives_before_write
         self.written_at = written_at
         self.rerun_fails = rerun_fails
         # workflow → successive listings; the last one sticks.
@@ -192,11 +197,15 @@ class FakeApi:
             )
             self.writes.append((path, fields))
             if "/statuses/" in path:
+                if self.arrives_before_write is not None:
+                    row, self.arrives_before_write = self.arrives_before_write, None
+                    self._push(row["state"], row["description"])
+                    self.status_created_at = row["created_at"]
+                    self.status_url = row["target_url"]
                 # Read back like GitHub: the newest row wins.
-                if self.status is not None:
-                    self.history.insert(0, self._row())
-                self.status = (fields["state"], fields["description"])
+                self._push(fields["state"], fields["description"])
                 self.status_created_at = self.written_at
+                self.status_url = fields["target_url"]
             if path.endswith("/rerun") and self.rerun_fails:
                 return subprocess.CompletedProcess(args, 1, "", "409 already running")
             return subprocess.CompletedProcess(args, 0, "{}", "")
@@ -224,21 +233,36 @@ class FakeApi:
             raise AssertionError(f"unexpected gh call: {args}")
         return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
 
+    def _push(self, state: str, description: str) -> None:
+        if self.status is not None:
+            self.history.insert(0, self._row())
+        self.status = (state, description)
+
     def _row(self) -> dict[str, Any]:
         assert self.status is not None
-        return _status_row(*self.status, created=self.status_created_at)
+        return _status_row(
+            *self.status, created=self.status_created_at, url=self.status_url
+        )
 
 
 BOT = "github-actions[bot]"
+#: The command run that posted a `/gate-check` request: one per request.
+COMMAND_URL = "https://example.invalid/command/1"
 
 
 def _status_row(
-    state: str, description: str, *, created: str, creator: str = BOT
+    state: str,
+    description: str,
+    *,
+    created: str,
+    creator: str = BOT,
+    url: str = COMMAND_URL,
 ) -> dict[str, Any]:
     return {
         "context": "gate-check",
         "state": state,
         "description": description,
+        "target_url": url,
         "created_at": created,
         "creator": {"login": creator},
     }
@@ -338,6 +362,13 @@ class TestSettle:
 
 
 REQUEST = _status_row("pending", "running: tests.yaml checks.yml", created=_iso(30))
+#: A later `/gate-check force`, made by another command run.
+FORCE = _status_row(
+    "pending",
+    "running: tests.yaml",
+    created=_iso(45),
+    url="https://example.invalid/command/2",
+)
 
 
 class TestRerunAfterFailure:
@@ -418,6 +449,50 @@ class TestRerunAfterFailure:
         api = self._api(_run(1, created=10))
         assert gcv.settle(GitHub(REPO, api), SHA).state == "failure"
         assert api.writes == []
+
+    def test_a_force_request_racing_the_write_is_put_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """lens F-7d5bea: a `/gate-check force` lands between the read and the
+        write. The pass must not mask it, or the forced runs' callbacks find a
+        recorded pass and never settle them."""
+        shown: list[str] = []
+        monkeypatch.setattr(
+            gcv, "show_verdict", lambda g, s, b, verdict: shown.append(verdict.state)
+        )
+        api = self._api(_run(1))
+        api.arrives_before_write = FORCE
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert verdict.final is False
+        assert [f["state"] for _, f in api.writes[:2]] == ["success", "pending"]
+        fields = api.writes[1][1]
+        assert (fields["description"], fields["target_url"]) == (
+            FORCE["description"],
+            FORCE["target_url"],
+        )
+        assert api.status == ("pending", FORCE["description"])
+        assert shown == []
+
+    def test_the_put_back_request_keeps_its_own_time(self) -> None:
+        """The forced runs were created before the re-post. Dated by the
+        re-post, they would never count and the request would never settle."""
+        api = FakeApi(
+            status=("pending", FORCE["description"]),
+            status_created_at=_iso(50),
+            history=[
+                _status_row(
+                    "success", "passed: tests.yaml checks.yml", created=_iso(49)
+                ),
+                FORCE,
+            ],
+            runs={
+                "tests.yaml": [[_run(3, created=47)]],
+                gcv.RELEASE_GATE_WORKFLOW: [[_gate(8, started=51)]],
+            },
+        )
+        api.status_url = FORCE["target_url"]
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert (verdict.final, verdict.state) == (True, "success")
 
     def test_a_recorded_pass_is_never_rewritten(self) -> None:
         """A later re-run that fails does not reach back into a passed gate."""

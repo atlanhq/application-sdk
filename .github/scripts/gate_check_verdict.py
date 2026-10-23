@@ -131,8 +131,8 @@ def settle(
     statuses = github.statuses(sha)
     state, description = statuses.get(GATE_CHECK_CONTEXT, ("", ""))
     if state == "pending":
-        expected = parse_gate_check_runs(description)
-        requested_at = github.status_created_at(sha, GATE_CHECK_CONTEXT)
+        request, requested_at = find_request(github.status_rows(sha))
+        expected = parse_gate_check_runs((request or {}).get("description") or "")
         runs = {
             workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
             for workflow in expected
@@ -168,25 +168,33 @@ FINAL_STATES = ("success", "failure", "error")
 VERDICT_CREATOR = "github-actions[bot]"
 
 
-def find_request(rows: list) -> tuple[list, datetime | None]:
-    """The workflows and time of the newest `/gate-check` request in ``rows``.
+def _is_request(row: dict) -> bool:
+    return (
+        row.get("context") == GATE_CHECK_CONTEXT
+        and row.get("state") == "pending"
+        and (row.get("creator") or {}).get("login") == VERDICT_CREATOR
+    )
+
+
+def find_request(rows: list) -> tuple[dict | None, datetime | None]:
+    """The newest `/gate-check` request in ``rows`` and the time it was made.
 
     ``rows`` is the commit's status history, newest first. Only a `pending`
     `gate-check` row ``VERDICT_CREATOR`` posted is a request: anyone with write
     access can post a status, and theirs must never be settled into a
     bot-signed pass.
+
+    A request is identified by its link, the command run that made it, and
+    dated by its FIRST row: ``recheck_failure`` re-posts a request it masked,
+    and the re-post must not move the request's time past runs it dispatched.
     """
-    for row in rows:
-        if (
-            row.get("context") == GATE_CHECK_CONTEXT
-            and row.get("state") == "pending"
-            and (row.get("creator") or {}).get("login") == VERDICT_CREATOR
-        ):
-            return (
-                parse_gate_check_runs(row.get("description") or ""),
-                _ts(row.get("created_at")),
-            )
-    return [], None
+    request = next((row for row in rows if _is_request(row)), None)
+    if request is None:
+        return None, None
+    url = request.get("target_url") or ""
+    same = [r for r in rows if _is_request(r) and url and r.get("target_url") == url]
+    times = [t for t in (_ts(r.get("created_at")) for r in same or [request]) if t]
+    return request, min(times) if times else None
 
 
 def recheck_failure(github: GitHub, sha: str, branch: str) -> Verdict | None:
@@ -197,10 +205,17 @@ def recheck_failure(github: GitHub, sha: str, branch: str) -> Verdict | None:
     Only a pass is written: a failure stands until every listed workflow's
     newest run has passed, and a recorded pass is never re-decided. Returns
     the new verdict, or None when the failure stands.
+
+    A `/gate-check force` runs in its own concurrency group, so its `pending`
+    can land between the read above and the write below, and this pass would
+    then mask it: the forced runs' callbacks would find a recorded pass and
+    stand down (lens F-7d5bea). A status write cannot be conditional, so the
+    history is re-read after it, and a newer request is put back on top.
     """
-    expected, requested_at = find_request(github.status_rows(sha))
-    if not expected:
+    request, requested_at = find_request(github.status_rows(sha))
+    if request is None:
         return None
+    expected = parse_gate_check_runs(request.get("description") or "")
     runs = {
         workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
         for workflow in expected
@@ -211,6 +226,16 @@ def recheck_failure(github: GitHub, sha: str, branch: str) -> Verdict | None:
     github.status(
         sha, GATE_CHECK_CONTEXT, verdict.state, verdict.description, verdict.target_url
     )
+    newer, _ = find_request(github.status_rows(sha))
+    if newer is not None and newer.get("target_url") != request.get("target_url"):
+        github.status(
+            sha,
+            GATE_CHECK_CONTEXT,
+            "pending",
+            newer.get("description") or "",
+            newer.get("target_url") or "",
+        )
+        return Verdict(False, reason="a newer `/gate-check` request is running")
     show_verdict(github, sha, branch, verdict)
     return verdict
 
