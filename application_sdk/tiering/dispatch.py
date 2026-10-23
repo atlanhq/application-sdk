@@ -59,6 +59,10 @@ def _accepts_task_queue(task: Any) -> bool:
     try:
         parameters = inspect.signature(task).parameters
     except (TypeError, ValueError):
+        # An uninspectable callable is an expected, answerable case rather than
+        # a hidden error, and taking a logger here would pull the observability
+        # stack (~800 modules) into a module workflow code imports.
+        # conformance: ignore[E007] intentional: expected case, and a logger here is not affordable
         return True
     if "task_queue" in parameters:
         return True

@@ -12,9 +12,10 @@ mid-run, so it cannot change an in-flight command stream.
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Mapping
+
+import orjson
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.tiering.ladder import Tier
@@ -49,12 +50,18 @@ def queue_map_from_env(env_var: str = SIZE_QUEUE_MAP_ENV) -> dict[Tier, str]:
     if not raw:
         return {}
     try:
-        parsed = json.loads(raw)
+        parsed = orjson.loads(raw)
     except ValueError:
+        # exc_info carries the decoder's position ("line 1 column 7"), which is
+        # the only part of this that tells an operator where the typo is. The
+        # value itself is not logged: it is deployment config, and its length
+        # is enough to tell "unset" from "mangled".
         logger.warning(
-            "Size routing disabled: %s is not valid JSON (%d chars). Activities keep their current queues.",
+            "Size routing disabled: %s is not valid JSON (%d chars). "
+            "Activities keep their current queues.",
             env_var,
             len(raw),
+            exc_info=True,
         )
         return {}
     if not isinstance(parsed, dict):

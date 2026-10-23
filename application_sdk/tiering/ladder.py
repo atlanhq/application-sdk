@@ -255,6 +255,7 @@ class Ladder:
         try:
             return self.order.index(tier)
         except ValueError:
+            # conformance: ignore[E012] intentional: stdlib-only module, see the module docstring
             raise ValueError(
                 f"{tier!r} is not a tier of this ladder {self.order}"
             ) from None
