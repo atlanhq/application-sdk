@@ -12,8 +12,8 @@ consolidated API host register the same routes through
 * the worker uses its Dapr-configured ``application_sdk.storage`` store;
 * the host has no Dapr, so it uses :class:`S3ObjectStore`, configured from the
   chart-injected ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION`` with the pod's ambient AWS
-  identity (the ``aws`` extra), or on GCP from the chart's ``GCP_BUCKET`` through
-  GCS's S3-compatible API. Without a bucket the routes answer 503, exactly as the
+  identity (the ``aws`` extra), or on GCP from ``ATLAN_GCP_BUCKET`` (aliasing the
+  chart's ``GCP_BUCKET``) through GCS's S3-compatible API. Without a bucket the routes answer 503, exactly as the
   worker does without a store.
 
 Both write a config to ``persistent-artifacts/apps/{app_name}/{type}/{id}/config.json``.
@@ -320,6 +320,17 @@ class S3Client(Protocol):
 _GCS_ENDPOINT = "https://storage.googleapis.com"
 
 
+def _resolved_env(name: str) -> str:
+    """``name``'s value, or ``""`` when unset or an unresolved Kubernetes alias.
+
+    The host's manifest aliases chart names (``ATLAN_S3_BUCKET: "$(S3_BUCKET)"``);
+    where the chart does not inject the source, Kubernetes leaves the
+    ``$(...)`` text in place, which is no value, not a bucket or region.
+    """
+    value = os.environ.get(name, "").strip()
+    return "" if value.startswith("$(") else value
+
+
 class S3ObjectStore:
     """One S3 bucket through a boto3 client: the host's store.
 
@@ -344,19 +355,18 @@ class S3ObjectStore:
     @classmethod
     def from_env(cls) -> S3ObjectStore | None:
         """From ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION``, or on GCP from
-        ``GCP_BUCKET`` (:meth:`_gcs_from_env`); ``None`` when no bucket is set."""
-        gcs_bucket = os.environ.get("GCP_BUCKET", "").strip()
+        ``ATLAN_GCP_BUCKET`` (:meth:`_gcs_from_env`); ``None`` when no bucket is set."""
+        gcs_bucket = _resolved_env("ATLAN_GCP_BUCKET")
         if gcs_bucket:
             # First: the chart injects no S3_* on GCP, so the host's ATLAN_S3_*
-            # aliases are literal "$(S3_BUCKET)" text there.
+            # aliases are unresolved there.
             return cls._gcs_from_env(gcs_bucket)
-        bucket = os.environ.get("ATLAN_S3_BUCKET", "").strip()
-        # Azure Blob tenants get no S3_* either: the literal alias is no bucket
-        # (Blob is not served yet), not a bucket name.
-        if not bucket or bucket.startswith("$("):
+        # Azure Blob tenants get no S3_* either: no bucket (Blob is not served yet).
+        bucket = _resolved_env("ATLAN_S3_BUCKET")
+        if not bucket:
             return None
         try:
-            return cls(bucket, os.environ.get("ATLAN_S3_REGION", "").strip() or None)
+            return cls(bucket, _resolved_env("ATLAN_S3_REGION") or None)
         except ModuleNotFoundError:
             logger.warning(
                 "ATLAN_S3_BUCKET is set but boto3 is not installed, so the config and "
@@ -367,17 +377,17 @@ class S3ObjectStore:
 
     @classmethod
     def _gcs_from_env(cls, bucket: str) -> S3ObjectStore | None:
-        """GCS through its S3-compatible API, with the chart's HMAC key pair.
+        """GCS through its S3-compatible API, with the tenant's HMAC key pair.
 
-        The atlan-app chart's own names, set on GCP only: an ``ATLAN_`` alias
-        in the host's manifest would be literal ``$(GCP_BUCKET)`` elsewhere.
+        The host's manifest aliases the atlan-app chart's GCP-only ``GCP_*``
+        names as ``ATLAN_GCP_*``; elsewhere they are unresolved, so unset.
         """
-        access_key = os.environ.get("GCP_HMAC_ACCESS_KEY", "").strip()
-        secret = os.environ.get("GCP_HMAC_SECRET", "").strip()
+        access_key = _resolved_env("ATLAN_GCP_HMAC_ACCESS_KEY")
+        secret = _resolved_env("ATLAN_GCP_HMAC_SECRET")
         if not (access_key and secret):
             logger.warning(
-                "GCP_BUCKET is set without GCP_HMAC_ACCESS_KEY / GCP_HMAC_SECRET, "
-                "so the config and file routes answer 503."
+                "ATLAN_GCP_BUCKET is set without ATLAN_GCP_HMAC_ACCESS_KEY / "
+                "ATLAN_GCP_HMAC_SECRET, so the config and file routes answer 503."
             )
             return None
         try:
@@ -385,7 +395,7 @@ class S3ObjectStore:
             from botocore.config import Config  # noqa: PLC0415 — ships with boto3
         except ModuleNotFoundError:
             logger.warning(
-                "GCP_BUCKET is set but boto3 is not installed, so the config and "
+                "ATLAN_GCP_BUCKET is set but boto3 is not installed, so the config and "
                 "file routes answer 503. Install atlan-application-sdk-api[aws].",
                 exc_info=True,
             )
@@ -393,7 +403,7 @@ class S3ObjectStore:
         client = boto3.client(
             "s3",
             endpoint_url=_GCS_ENDPOINT,
-            region_name=os.environ.get("GCP_REGION", "").strip() or None,
+            region_name=_resolved_env("ATLAN_GCP_REGION") or None,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret,
             # boto3 >= 1.36 sends CRC32 checksums (aws-chunked uploads, checksum

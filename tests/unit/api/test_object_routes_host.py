@@ -191,7 +191,7 @@ def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
 
 def test_the_store_comes_from_atlan_s3_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ATLAN_S3_BUCKET", raising=False)
-    monkeypatch.delenv("GCP_BUCKET", raising=False)
+    monkeypatch.delenv("ATLAN_GCP_BUCKET", raising=False)
     assert S3ObjectStore.from_env() is None
 
 
@@ -199,8 +199,19 @@ def test_an_unprefixed_s3_bucket_is_not_read(monkeypatch: pytest.MonkeyPatch) ->
     """Runtime settings take the ``ATLAN_`` prefix (docs/standards/env-vars.md):
     a pod's generic ``S3_BUCKET`` for something else must not become this store."""
     monkeypatch.delenv("ATLAN_S3_BUCKET", raising=False)
-    monkeypatch.delenv("GCP_BUCKET", raising=False)
+    monkeypatch.delenv("ATLAN_GCP_BUCKET", raising=False)
     monkeypatch.setenv("S3_BUCKET", "someone-elses-bucket")
+    assert S3ObjectStore.from_env() is None
+
+
+def test_an_unprefixed_gcp_bucket_is_not_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The chart's bare ``GCP_*`` reach the store only through the host's
+    ``ATLAN_GCP_*`` aliases (docs/standards/env-vars.md)."""
+    monkeypatch.delenv("ATLAN_S3_BUCKET", raising=False)
+    monkeypatch.delenv("ATLAN_GCP_BUCKET", raising=False)
+    monkeypatch.setenv("GCP_BUCKET", "tenant-gcs-bucket")
+    monkeypatch.setenv("GCP_HMAC_ACCESS_KEY", "test-access-id")
+    monkeypatch.setenv("GCP_HMAC_SECRET", "test-secret")
     assert S3ObjectStore.from_env() is None
 
 
@@ -211,7 +222,7 @@ def test_the_store_reads_the_atlan_names(monkeypatch: pytest.MonkeyPatch) -> Non
         "__init__",
         lambda self, bucket, region=None, client=None: built.append((bucket, region)),
     )
-    monkeypatch.delenv("GCP_BUCKET", raising=False)
+    monkeypatch.delenv("ATLAN_GCP_BUCKET", raising=False)
     monkeypatch.setenv("ATLAN_S3_BUCKET", "tenant-bucket")
     monkeypatch.setenv("ATLAN_S3_REGION", "eu-west-1")
     assert S3ObjectStore.from_env() is not None
@@ -235,21 +246,33 @@ def _boto3_clients(
 
 
 def _host_env_on_gcp(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The host's env on a GCP tenant: ``GCP_*`` as the atlan-app chart injects
-    them (atlanhq/atlan subcharts/atlan-app/templates/deployment.yaml), and the
-    ``ATLAN_S3_*`` aliases from common-app-server's atlan.yaml left unresolved,
-    since the chart injects no ``S3_*`` there."""
-    monkeypatch.setenv("GCP_BUCKET", "tenant-gcs-bucket")
-    monkeypatch.setenv("GCP_REGION", "us-central1")
-    monkeypatch.setenv("GCP_HMAC_ACCESS_KEY", "test-access-id")
-    monkeypatch.setenv("GCP_HMAC_SECRET", "test-secret")
+    """The host's env on a GCP tenant: common-app-server's atlan.yaml aliases
+    the atlan-app chart's ``GCP_*`` (atlanhq/atlan
+    subcharts/atlan-app/templates/deployment.yaml) as ``ATLAN_GCP_*``, and its
+    ``ATLAN_S3_*`` aliases are left unresolved, since the chart injects no
+    ``S3_*`` there."""
+    monkeypatch.setenv("ATLAN_GCP_BUCKET", "tenant-gcs-bucket")
+    monkeypatch.setenv("ATLAN_GCP_REGION", "us-central1")
+    monkeypatch.setenv("ATLAN_GCP_HMAC_ACCESS_KEY", "test-access-id")
+    monkeypatch.setenv("ATLAN_GCP_HMAC_SECRET", "test-secret")
     monkeypatch.setenv("ATLAN_S3_BUCKET", "$(S3_BUCKET)")
     monkeypatch.setenv("ATLAN_S3_REGION", "$(S3_REGION)")
 
 
-def test_on_aws_the_client_is_built_as_before(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "gcp_alias", [None, "$(GCP_BUCKET)"], ids=["no-alias", "unresolved-alias"]
+)
+def test_on_aws_the_client_is_built_as_before(
+    monkeypatch: pytest.MonkeyPatch, gcp_alias: str | None
+) -> None:
+    """On AWS the host's ``ATLAN_GCP_*`` aliases are unresolved: not a GCS bucket."""
     calls = _boto3_clients(monkeypatch)
-    monkeypatch.delenv("GCP_BUCKET", raising=False)
+    if gcp_alias is None:
+        monkeypatch.delenv("ATLAN_GCP_BUCKET", raising=False)
+    else:
+        monkeypatch.setenv("ATLAN_GCP_BUCKET", gcp_alias)
+        monkeypatch.setenv("ATLAN_GCP_HMAC_ACCESS_KEY", "$(GCP_HMAC_ACCESS_KEY)")
+        monkeypatch.setenv("ATLAN_GCP_HMAC_SECRET", "$(GCP_HMAC_SECRET)")
     monkeypatch.setenv("ATLAN_S3_BUCKET", "tenant-bucket")
     monkeypatch.setenv("ATLAN_S3_REGION", "eu-west-1")
 
@@ -303,11 +326,11 @@ def test_gcp_without_its_hmac_keys_has_no_store(
     log = _Log()
     monkeypatch.setattr(object_routes, "logger", log)
     _host_env_on_gcp(monkeypatch)
-    monkeypatch.setenv("GCP_HMAC_SECRET", "")
+    monkeypatch.setenv("ATLAN_GCP_HMAC_SECRET", "")
 
     assert S3ObjectStore.from_env() is None
     assert calls == []
-    assert len(log.lines) == 1 and "GCP_HMAC_SECRET" in log.lines[0]
+    assert len(log.lines) == 1 and "ATLAN_GCP_HMAC_SECRET" in log.lines[0]
     assert "test-access-id" not in log.lines[0]
 
 
@@ -411,6 +434,8 @@ _AZURE_BLOB_HOST_ENV = {
     "AZURE_STORAGE_CONTAINER": "objectstore",
     "ATLAN_S3_BUCKET": "$(S3_BUCKET)",
     "ATLAN_S3_REGION": "$(S3_REGION)",
+    "ATLAN_GCP_BUCKET": "$(GCP_BUCKET)",
+    "ATLAN_GCP_REGION": "$(GCP_REGION)",
 }
 
 
@@ -421,7 +446,7 @@ _AZURE_BLOB_HOST_ENV = {
 def test_without_a_bucket_the_host_answers_503(
     monkeypatch: pytest.MonkeyPatch, env: dict[str, str]
 ) -> None:
-    for name in ("ATLAN_S3_BUCKET", "GCP_BUCKET"):
+    for name in ("ATLAN_S3_BUCKET", "ATLAN_GCP_BUCKET"):
         monkeypatch.delenv(name, raising=False)
     for name, value in env.items():
         monkeypatch.setenv(name, value)
