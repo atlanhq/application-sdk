@@ -91,12 +91,16 @@ def check_response(
         result.fail(f"{label}: answered a bare 500 instead of a JSON envelope")
 
 
-def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
+def record_import_failures(
+    handler: Any, seen: dict[str, ImportError], calls: dict[str, int]
+) -> None:
     """Wrap the watched handler methods so an ImportError they raise is recorded.
 
-    The error still propagates, so the route answers exactly as it would on
-    the host. A method the installed SDK predates is skipped: apps run this
-    script from the SDK's main against the SDK release they pin.
+    Each call is counted in *calls*, so a check can tell whether a route
+    reached the handler. The error still propagates, so the route answers
+    exactly as it would on the host. A method the installed SDK predates is
+    skipped: apps run this script from the SDK's main against the SDK release
+    they pin.
     """
     for method in _WATCHED:
         original = getattr(handler, method, None)
@@ -105,6 +109,7 @@ def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
 
         @functools.wraps(original)
         async def wrapped(*args: Any, _m: str = method, _f: Any = original) -> Any:
+            calls[_m] = calls.get(_m, 0) + 1
             try:
                 return await _f(*args)
             except ImportError as exc:
@@ -120,15 +125,23 @@ def ships_contracts(generated: Path) -> bool:
 
 
 def check_manifest(
-    client: Any, result: Result, label: str, body: object, *, refusal_ok: bool = False
+    client: Any,
+    result: Result,
+    label: str,
+    body: object,
+    calls: dict[str, int] | None = None,
 ) -> None:
     """``POST /manifest`` with *body* answers 200 with every token resolved.
 
-    With *refusal_ok*, a 4xx passes too: the handler's own answer to inputs it
-    needs and the probe cannot supply.
+    A 4xx passes too when the handler's ``compute_manifest`` ran for it (its
+    count in *calls* went up): the handler's own answer to form inputs the
+    probe cannot supply. A 4xx the handler never saw (a missing route, an
+    unknown entry point) still fails.
     """
+    before = (calls or {}).get("compute_manifest", 0)
     manifest = client.post("/manifest", json=body)
-    if refusal_ok and 400 <= manifest.status_code < 500:
+    ran = (calls or {}).get("compute_manifest", 0) > before
+    if ran and 400 <= manifest.status_code < 500:
         return
     check_response(label, manifest.status_code, None, result, want=200)
     if manifest.status_code == 200:
@@ -157,13 +170,13 @@ def computed_manifest_entrypoints(
 
 
 def check_computed_manifests(
-    client: Any, result: Result, entrypoints: list[str]
+    client: Any, result: Result, entrypoints: list[str], calls: dict[str, int]
 ) -> None:
     """Every entry point's manifest, for a handler that computes them.
 
-    The probe has no form values to send, so a handler may refuse the empty
-    ``fe_inputs`` with a 4xx. Only a 5xx fails here; a worker-only import is
-    caught separately, from the hook itself.
+    The probe has no form values to send, so the handler may refuse the empty
+    ``fe_inputs`` with a 4xx (see :func:`check_manifest`). A worker-only import
+    is caught separately, from the hook itself.
     """
     for entrypoint in entrypoints:
         check_manifest(
@@ -171,7 +184,7 @@ def check_computed_manifests(
             result,
             f"POST /manifest (entrypoint {entrypoint})",
             {"entrypoint": entrypoint, "fe_inputs": {}},
-            refusal_ok=True,
+            calls,
         )
 
 
@@ -180,16 +193,16 @@ def check_metadata_routes(
     result: Result,
     *,
     expects_contracts: bool,
-    computes_manifest: bool = False,
+    calls: dict[str, int] | None = None,
 ) -> None:
     """The routes Heracles serves setup forms and run submits from.
 
     A 404 on ``/configmaps`` is a pass only for an app with no generated
     contract files. When its source ships them (``expects_contracts``), the 404
     means they are missing from the api member wheel, and the host would serve
-    no setup form, manifest or input contract. A handler that computes its
-    manifest (``computes_manifest``) may refuse the probe's empty form inputs,
-    as in :func:`check_computed_manifests`.
+    no setup form, manifest or input contract. *calls* lets a handler that
+    computes its manifest refuse the probe's empty form inputs (see
+    :func:`check_manifest`).
     """
     listing = client.get("/workflows/v1/configmaps")
     if listing.status_code == 404:
@@ -203,7 +216,7 @@ def check_metadata_routes(
     check_response(
         "GET /workflows/v1/configmaps", listing.status_code, None, result, want=200
     )
-    check_manifest(client, result, "POST /manifest", {}, refusal_ok=computes_manifest)
+    check_manifest(client, result, "POST /manifest", {}, calls)
     contract = client.get("/workflows/v1/input-contract")
     if contract.status_code >= 500:
         result.fail(
@@ -235,7 +248,8 @@ def run(
         return result
 
     import_failures: dict[str, ImportError] = {}
-    record_import_failures(handler, import_failures)
+    calls: dict[str, int] = {}
+    record_import_failures(handler, import_failures, calls)
     factory = getattr(module, "get_asgi_app", None)
     if callable(factory):
         # What the host calls (entry point atlan.app_server); it serves the same
@@ -280,22 +294,19 @@ def run(
     # None on an SDK release without Handler.compute_manifest: its host never
     # calls one, so there is nothing more to check.
     default_compute = getattr(Handler, "compute_manifest", None)
-    computes_manifest = (
+    check_metadata_routes(
+        client, result, expects_contracts=expects_contracts, calls=calls
+    )
+    if (
         default_compute is not None
         and type(handler).compute_manifest is not default_compute
-    )
-    check_metadata_routes(
-        client,
-        result,
-        expects_contracts=expects_contracts,
-        computes_manifest=computes_manifest,
-    )
-    if computes_manifest:
+    ):
         generated = generated_dir_of(Path(module.__file__ or ".").parent)
         check_computed_manifests(
             client,
             result,
             computed_manifest_entrypoints(generated, tree_entrypoints(generated), name),
+            calls,
         )
         if "compute_manifest" in import_failures:
             exc = import_failures["compute_manifest"]

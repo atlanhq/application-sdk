@@ -113,6 +113,39 @@ def test_a_404_fails_when_the_app_ships_contract_files() -> None:
     assert "configmaps" in result.problems[0]
 
 
+class _Manifest:
+    """A host whose ``POST /manifest`` answers *status*, running the hook or not."""
+
+    def __init__(self, status: int, calls: dict[str, int], *, runs_hook: bool):
+        self.status, self.calls, self.runs_hook = status, calls, runs_hook
+
+    def post(self, path: str, json: object = None) -> _Answer:
+        if self.runs_hook:
+            self.calls["compute_manifest"] = self.calls.get("compute_manifest", 0) + 1
+        return _Answer(self.status)
+
+
+@pytest.mark.parametrize(
+    ("status", "runs_hook", "passes"),
+    [
+        (422, True, True),  # the handler refused the probe's empty form inputs
+        (404, False, False),  # no manifest route on the host
+        (405, False, False),
+        (422, False, False),  # a refusal the handler never saw
+        (500, True, False),
+    ],
+)
+def test_a_4xx_passes_only_when_the_handler_gave_it(
+    status: int, runs_hook: bool, passes: bool
+) -> None:
+    calls: dict[str, int] = {}
+    result = probe.Result()
+    probe.check_computed_manifests(
+        _Manifest(status, calls, runs_hook=runs_hook), result, ["demo"], calls
+    )
+    assert (result.problems == []) is passes, result.problems
+
+
 def test_contract_files_are_read_from_the_apps_generated_dir(tmp_path: Path) -> None:
     assert probe.ships_contracts(tmp_path / "app/generated") is False
     (tmp_path / "app/generated").mkdir(parents=True)
