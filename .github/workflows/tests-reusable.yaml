@@ -42,7 +42,9 @@ name: tests-reusable
 #                      state that will land, the one point a regression could
 #                      actually ship — re-run in place if the base moves under
 #                      the queue. (Skipped on pull_request; unit is the PR
-#                      signal.)
+#                      signal.) A release PR whose `/gate-check` passed on
+#                      the exact tree it queues skips it there too, with unit
+#                      and the gate (`queue-proof`, FND-4344).
 #                    • queue absent  → pull_request, per commit. Without a
 #                      queue there is no batched pre-merge state to test in, so
 #                      gating on the PR is the only way the tier blocks a bad
@@ -637,18 +639,88 @@ on:
 
 jobs:
 
+  # ── Merge-queue release proof (FND-4344) ─────────────────────────────────
+  # A release PR's full suite ran before it was queued: `/gate-check`
+  # dispatched this workflow on the PR head, and its pass is the `gate-check`
+  # status on that commit. When the queue commit's tree IS that head's tree
+  # (queue_tree_diff.py, the same decision checks-reusable and
+  # conformance-reusable use), Unit and Integration here can only repeat the
+  # verdict. queue_gate_check_proof.py then answers `proven=true`, and the root
+  # jobs below (unit, detect-integration, detect-api-member, scorecard) and
+  # Tests Gate skip at job level; their children skip with them. Each still
+  # files its static-named check, and a skipped `tests / Tests Gate` passes
+  # the required context.
+  #
+  # Single-leg retry is untouched: it happens on the PR's dispatched run
+  # (FND-4331), before the queue. Any other answer — a base that moved, a
+  # batched group, a status from anyone but github-actions[bot], an error, or
+  # this job skipped or failed (empty output) — runs everything as before.
+  queue-proof:
+    name: Queue release proof
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (github.event_name == 'merge_group')
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
+    outputs:
+      proven: ${{ steps.proof.outputs.proven }}
+    steps:
+      # Credentials stay persisted: the diff fetches the PR head from this
+      # same remote, and the repo may be private.
+      - name: Checkout queue commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Fetch the queue drivers from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts/queue_tree_diff.py
+            .github/scripts/queue_gate_check_proof.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: Compare the queue commit with the PR head
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+
+      - name: Read the PR head's gate-check verdict
+        id: proof
+        if: steps.diff.outputs.identical == 'true'
+        env:
+          IDENTICAL: ${{ steps.diff.outputs.identical }}
+          PR_HEAD: ${{ steps.diff.outputs.pr_head }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 _sdk/.github/scripts/queue_gate_check_proof.py
+
   # ── Unit (lightweight: no app server / daprd / Temporal / services) ──────
   # Runs on EVERY event as the fast per-commit signal. connector-unit-tests is
   # setup-deps + pytest tests/unit + coverage — none of the runtime infra the
   # integration job spins up, so a PR greens in seconds of test time.
   unit:
     name: Unit
+    needs: [queue-proof]
     # An e2e-only run (a `/e2e` comment) skips the tier its PR run already
     # measured. The run reports under `e2e / …`, so this skip never reaches a
-    # required `tests / …` context (FND-3839).
+    # required `tests / …` context (FND-3839). A proven queue entry skips it
+    # too (queue-proof); `!cancelled()` keeps the skipped queue-proof on every
+    # other event from skipping this job.
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (inputs.run-e2e != 'only')
+      (inputs.run-e2e != 'only' && !cancelled() && needs.queue-proof.outputs.proven != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -821,7 +893,7 @@ jobs:
   # the same events the integration job does, so the two `if`s move together.
   detect-integration:
     name: Detect integration suite
-    needs: detect-merge-queue
+    needs: [detect-merge-queue, queue-proof]
     # `always()` because detect-merge-queue is *skipped* on every non-PR event
     # and a skipped `need` would otherwise block this job. On a PR it runs when
     # no queue was detected, OR when the PR carries the `e2e` label — the same
@@ -829,7 +901,7 @@ jobs:
     # tier that won't.
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() && inputs.run-e2e != 'only' &&
+      (always() && inputs.run-e2e != 'only' && needs.queue-proof.outputs.proven != 'true' &&
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( inputs.e2e-label-trigger &&
@@ -865,9 +937,10 @@ jobs:
   # api-member entirely.
   detect-api-member:
     name: Detect hosted api member
+    needs: [queue-proof]
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (inputs.run-e2e != 'only')
+      (inputs.run-e2e != 'only' && !cancelled() && needs.queue-proof.outputs.proven != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -3317,12 +3390,14 @@ jobs:
     # a job's `needs` gate is evaluated separately from its `if:`, and without a
     # status-check function GitHub applies an implicit success() that a skipped
     # need does not satisfy.
-    needs: [unit, detect-integration, integration, discover-e2e, e2e]
+    needs: [queue-proof, unit, detect-integration, integration, discover-e2e, e2e]
     # Not on an e2e-only run: it skips the unit and integration tiers on
-    # purpose, and a scorecard row reading them as absent would be wrong.
+    # purpose, and a scorecard row reading them as absent would be wrong. Not
+    # on a proven queue entry either, for the same reason (queue-proof).
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() && github.event_name != 'pull_request' && inputs.run-e2e != 'only')
+      (always() && github.event_name != 'pull_request' && inputs.run-e2e != 'only' &&
+      needs.queue-proof.outputs.proven != 'true')
     runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
@@ -3581,6 +3656,7 @@ jobs:
     name: Tests Gate
     needs:
       [
+        queue-proof,
         unit,
         detect-merge-queue,
         detect-integration,
@@ -3596,9 +3672,13 @@ jobs:
         detect-api-member,
         api-member,
       ]
+    # Skipped on a proven queue entry (queue-proof): the skipped check run
+    # passes the required `tests / Tests Gate` context, as on a bump PR's own
+    # run (FND-3947). An empty output, from a skipped or failed queue-proof,
+    # runs the gate.
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always())
+      (always() && needs.queue-proof.outputs.proven != 'true')
     runs-on: ubuntu-slim
     # Gate-eval, comment, and up to 10 min waiting on the e2e verdict of a
     # sibling run (FND-3650). GitHub kills a slim job at 15 min regardless
