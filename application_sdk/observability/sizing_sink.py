@@ -205,6 +205,8 @@ def _reset_for_testing() -> None:
     flush so nothing the test buffered is written after the test ends.
     """
     global _sink
+    # One critical section: a ``get_sink`` that slipped in between dropping
+    # ``_sink`` and stopping the flush would get a sink the reset then stops.
     with _sink_lock:
         _sink = None
-    SizingObservabilitySink._reset_for_testing()
+        SizingObservabilitySink._reset_for_testing()

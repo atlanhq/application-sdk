@@ -417,6 +417,35 @@ class TestResetLeavesNothingToFlushLater:
 
         assert not started[0].is_alive(), "the flush thread outlived the reset"
 
+    def test_a_sink_built_during_a_reset_keeps_its_flush(self, tmp_path):
+        """A ``get_sink`` racing the reset must not get a sink the reset stops."""
+        real_reset = SizingObservabilitySink._reset_for_testing.__func__
+        racer = threading.Thread(target=sizing_sink.get_sink)
+
+        def reset_with_a_racing_build(cls):
+            racer.start()
+            # Lets an unguarded build finish first; a guarded one waits.
+            racer.join(timeout=0.5)
+            real_reset(cls)
+
+        with (
+            patch.object(
+                sizing_sink, "get_observability_dir", return_value=str(tmp_path)
+            ),
+            patch.object(
+                SizingObservabilitySink,
+                "_reset_for_testing",
+                classmethod(reset_with_a_racing_build),
+            ),
+        ):
+            sizing_sink._reset_for_testing()
+            racer.join(timeout=30)
+
+        sink = sizing_sink._sink
+        assert sink is not None, "the racing build never ran: vacuous"
+        assert sink in AtlanObservability._instances, "_sink is a stopped sink"
+        assert SizingObservabilitySink._flush_task_started
+
     @pytest.mark.asyncio
     async def test_a_flush_after_the_session_restores_env_writes_nothing(
         self, tmp_path, monkeypatch
