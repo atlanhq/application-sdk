@@ -47,6 +47,32 @@ import subprocess
 import sys
 from pathlib import Path
 
+BUMP_TITLE_PREFIX = "Bump version to "
+# Separator the release-train job uses to append a status suffix to a bump PR
+# title, e.g. "Bump version to 1.4.0 · Next release Mon 26 Oct 12:00 IST".
+TITLE_SUFFIX_SEP = " \u00b7 "
+
+
+def carry_title_suffix(current: str | None, desired: str) -> str:
+    """Return ``desired`` with the release-train status suffix of ``current``.
+
+    The release-train job appends `` · <status>`` to an open bump PR's title
+    and resets it to the plain ``Bump version to X`` itself before arming
+    auto-merge. Re-syncing the title on every merge to main must not erase that
+    suffix between slots, so when both titles are bump titles and the current
+    one carries a suffix (everything after the first separator), it is kept on
+    the new version. Otherwise ``desired`` is returned unchanged; a suffix is
+    never invented.
+    """
+    if not current or not desired.startswith(BUMP_TITLE_PREFIX):
+        return desired
+    if not current.startswith(BUMP_TITLE_PREFIX) or TITLE_SUFFIX_SEP in desired:
+        return desired
+    _, sep, suffix = current.partition(TITLE_SUFFIX_SEP)
+    if not sep or not suffix.strip():
+        return desired
+    return f"{desired}{TITLE_SUFFIX_SEP}{suffix}"
+
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     """Single seam so tests can stub the `gh` CLI."""
@@ -156,9 +182,13 @@ def sync_pr(
     no-op path matters: ``gh pr edit`` fires a ``pull_request: edited`` webhook,
     and there is no reason to emit one on every merge to main when the bump is
     already described correctly.
+
+    A release-train status suffix on the current title is carried onto the new
+    version (see :func:`carry_title_suffix`).
     """
     number = str(pr["number"])
     changed = False
+    title = carry_title_suffix(pr.get("title"), title)
 
     if pr.get("title") != title or _normalize(pr.get("body")) != _normalize(body):
         _gh(
