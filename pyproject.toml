@@ -26,7 +26,7 @@ dependencies = [
     "opentelemetry-exporter-prometheus>=0.66b0,<0.67",
     "opentelemetry-instrumentation-fastapi>=0.66b0,<0.67",
     "prometheus-client>=0.20.0,<1.0",
-    "fastapi[standard]>=0.143.0,<0.144.0",
+    "fastapi[standard]>=0.156.8,<0.157.0",
     "pyatlan>=11.5.0,<12",  # floor carries authlib~=1.9.1 (CVE-2026-96760) to consumers
     "httpx>=0.27.0,<0.29.0",
     "httpx-retries>=0.6.0,<0.7.0",
