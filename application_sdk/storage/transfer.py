@@ -267,7 +267,14 @@ async def _upload_from_store(
         current_progress_tracker().mark_progress("storage.copy_file")
         return False, "skipped:hash_match", matched
 
-    fd, tmp_path_str = tempfile.mkstemp()
+    # Staged under TEMPORARY_PATH, not the system temp dir: /tmp sits on the
+    # node's root disk, far smaller than the work volume, and one large object
+    # copied between stores fills it.
+    from application_sdk.constants import TEMPORARY_PATH  # noqa: PLC0415
+
+    staging_dir = Path(TEMPORARY_PATH)
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path_str = tempfile.mkstemp(dir=staging_dir)
     os.close(fd)
     tmp = Path(tmp_path_str)
     try:
@@ -275,7 +282,7 @@ async def _upload_from_store(
         # file survives slow egress on the cross-store copy path. (BLDX-1513)
         # resume=False: mkstemp yields a fresh name per call, so a checkpoint
         # sidecar could never be reused — without this, a failed copy strands
-        # a checkpoint under /tmp until pod restart.
+        # a checkpoint in the staging directory until pod restart.
         await download_file_chunked(
             source_key, tmp, source_store, normalize=False, resume=False
         )
