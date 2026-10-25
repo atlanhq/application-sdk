@@ -292,6 +292,47 @@ class TestDaprSecretStore:
         # The backend's own wording reaches the message for diagnosis.
         assert backend_error.split(": ")[-1] in exc.value.message
 
+    @pytest.mark.parametrize(
+        "name,reason",
+        [
+            ("arn:aws:iam::123456789012:role/example-role", "may not contain '/'"),
+            ("example%name", "may not contain '%'"),
+        ],
+    )
+    async def test_k8s_invalid_resource_name_is_not_found(self, name: str, reason: str):
+        """A name the store rejects as invalid cannot exist there: a literal,
+        not a ref, so it classifies as not-found."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            f"failed getting secret with key {name} from secret store "
+            f'glue-secretstore: invalid resource name "{name}": [{reason}]',
+        )
+        with pytest.raises(SecretNotFoundError):
+            await self.store.get(name)
+        assert await self.store.get_optional(name) is None
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            pytest.param("ThrottlingException: Rate exceeded", id="throttled"),
+            pytest.param("invalid credentials", id="invalid-credentials"),
+            pytest.param('invalid resource name "db/creds"', id="no-may-not-reason"),
+        ],
+    )
+    async def test_invalid_wording_without_name_reason_stays_store_failure(
+        self, backend_error: str
+    ):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretNotFoundError)
+
     async def test_dapr_wrapper_words_never_count_as_absence(self):
         """Only the backend's own error is matched: Dapr's
         ``failed getting secret with key … from secret store …:`` wrapper says
