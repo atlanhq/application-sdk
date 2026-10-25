@@ -39,6 +39,9 @@ class RaisingStore(MockSecretStore):
         super().__init__({})
         self._exc = exc
 
+    async def get(self, name: str) -> str:
+        raise self._exc
+
     async def get_optional(self, name: str) -> str | None:
         raise self._exc
 
@@ -75,6 +78,37 @@ async def test_agent_single_key_access_denied_is_user_audience() -> None:
     assert details.audience is Audience.USER
     assert details.suggested_action
     assert RAW_KEY not in json.dumps(details.model_dump(mode="json"))
+
+
+async def test_agent_bundle_access_denied_is_user_audience() -> None:
+    raw = {k: v for k, v in _RAW.items() if k != "key-type"}
+    raw["secret-path"] = RAW_KEY
+    store = RaisingStore(
+        SecretStoreAccessDeniedError("denied", secret_name=RAW_KEY, retryable=True)
+    )
+
+    with pytest.raises(AgentSecretAccessDeniedError) as exc:
+        await resolve_agent_credential(AgentCredentialSpec.model_validate(raw), store)
+
+    err = exc.value
+    assert type(err).audience is Audience.USER
+    assert isinstance(err, SecretStoreAccessDeniedError)
+    assert err.cause is None
+    details = err.to_failure_details()
+    assert details.audience is Audience.USER
+    assert details.suggested_action
+
+
+async def test_agent_bundle_throttling_stays_platform() -> None:
+    raw = {k: v for k, v in _RAW.items() if k != "key-type"}
+    raw["secret-path"] = RAW_KEY
+    store = RaisingStore(SecretStoreError("throttled", secret_name=RAW_KEY))
+
+    with pytest.raises(SecretStoreError) as exc:
+        await resolve_agent_credential(AgentCredentialSpec.model_validate(raw), store)
+
+    assert not isinstance(exc.value, SecretStoreAccessDeniedError)
+    assert type(exc.value).audience is Audience.PLATFORM
 
 
 async def test_agent_single_key_throttling_stays_platform() -> None:

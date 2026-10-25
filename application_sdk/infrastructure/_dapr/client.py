@@ -259,7 +259,9 @@ def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | Non
 #: Backend wording that says the store denied the read. One alternative per
 #: backend:
 #:
-#: * AWS Secrets Manager (aws-sdk-go-v2) — ``api error AccessDeniedException``
+#: * AWS Secrets Manager (aws-sdk-go-v2) — ``api error AccessDeniedException``.
+#:   The ``api error`` prefix is the SDK's own (smithy-go ``GenericAPIError``),
+#:   so a match carries backend text beyond a key that merely spells the code.
 #: * GCP Secret Manager (gRPC) — ``rpc error: code = PermissionDenied``
 #: * Azure Key Vault (azure-sdk-for-go ``ResponseError``) — ``RESPONSE 403:
 #:   403 Forbidden`` (covers ``Forbidden``, ``ForbiddenByPolicy``,
@@ -273,39 +275,47 @@ def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | Non
 #: and has not been confirmed against a production log yet.
 #: Unverified follow-up, deliberately NOT matched: Vault ``permission denied``.
 _SECRET_ACCESS_DENIED_MESSAGE_RE = re.compile(
-    r"\bAccessDeniedException\b"
+    r"\bapi error AccessDeniedException\b"
     r"|\bcode\s*=\s*PermissionDenied\b"
     r"|\bRESPONSE 403\b"
     r"|\bsecrets?\s*(?:\"[^\"]*\")?\s*is forbidden"
 )
 
 
-def _backend_error(name: str, message: object) -> str | None:
-    """The backend's own error text: Dapr's wrapper and the key stripped, so
-    neither the wrapper's words nor a key that itself says "not found" can
-    steer classification. ``None`` if *message* isn't a string."""
+def _backend_error_says(name: str, message: object, pattern: re.Pattern[str]) -> bool:
+    """Whether the backend's own error text matches *pattern*.
+
+    Dapr's wrapper is stripped first, so its words never count. The key *name*
+    is stripped too, so a key that itself says "not found" can't steer
+    classification (and an unquoted key between "secret" and "not found"
+    doesn't break the match). A key that *equals* the backend's marker, e.g. a
+    secret named ``AccessDeniedException``, would erase the marker that way,
+    so a match in the unstripped text counts as well, provided it isn't wholly
+    inside an occurrence of the key. ``False`` if *message* isn't a string."""
     if not isinstance(message, str):
-        return None
+        return False
     backend_error = _DAPR_SECRET_GET_PREFIX_RE.sub("", message, count=1)
-    return backend_error.replace(name, "") if name else backend_error
+    if not name:
+        return pattern.search(backend_error) is not None
+    if pattern.search(backend_error.replace(name, "")) is not None:
+        return True
+    name_spans = [
+        (m.start(), m.end()) for m in re.finditer(re.escape(name), backend_error)
+    ]
+    return any(
+        not any(start <= m.start() and m.end() <= end for start, end in name_spans)
+        for m in pattern.finditer(backend_error)
+    )
 
 
 def _is_secret_absent_message(name: str, message: object) -> bool:
     """Whether an ``ERR_SECRET_GET`` message says the key *name* doesn't exist."""
-    backend_error = _backend_error(name, message)
-    return (
-        backend_error is not None
-        and _SECRET_ABSENT_MESSAGE_RE.search(backend_error) is not None
-    )
+    return _backend_error_says(name, message, _SECRET_ABSENT_MESSAGE_RE)
 
 
 def _is_secret_access_denied_message(name: str, message: object) -> bool:
     """Whether an ``ERR_SECRET_GET`` message says the store denied the read."""
-    backend_error = _backend_error(name, message)
-    return (
-        backend_error is not None
-        and _SECRET_ACCESS_DENIED_MESSAGE_RE.search(backend_error) is not None
-    )
+    return _backend_error_says(name, message, _SECRET_ACCESS_DENIED_MESSAGE_RE)
 
 
 def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:

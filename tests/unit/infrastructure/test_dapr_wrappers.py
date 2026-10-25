@@ -455,6 +455,35 @@ class TestDaprSecretStore:
             await self.store.get("db/creds")
         assert not isinstance(exc.value, SecretStoreAccessDeniedError)
 
+    async def test_key_equal_to_denial_marker_keeps_access_denied(self):
+        """A key named like the marker must not erase the backend's own
+        ``AccessDeniedException`` when the key is stripped."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key AccessDeniedException from secret "
+            "store secretstore: couldn't get secret: api error "
+            "AccessDeniedException: User: arn:aws:sts::123456789012:"
+            "assumed-role/example-sdr-role/i-0123456789abcdef0 is not "
+            "authorized to perform: secretsmanager:GetSecretValue on resource: "
+            "AccessDeniedException",
+        )
+        with pytest.raises(SecretStoreAccessDeniedError):
+            await self.store.get("AccessDeniedException")
+
+    async def test_key_equal_to_denial_marker_does_not_fake_denial(self):
+        """The marker inside the key alone is not a denial."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key AccessDeniedException from secret "
+            "store secretstore: couldn't get secret: api error "
+            "ThrottlingException: Rate exceeded for AccessDeniedException",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("AccessDeniedException")
+        assert not isinstance(exc.value, SecretStoreAccessDeniedError)
+
     async def test_dapr_wrapper_words_never_count_as_absence(self):
         """Only the backend's own error is matched: Dapr's
         ``failed getting secret with key … from secret store …:`` wrapper says
