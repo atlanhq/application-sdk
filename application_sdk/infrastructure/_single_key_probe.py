@@ -35,6 +35,7 @@ from application_sdk.errors.leaves import (
     DaprSidecarUnreachableError,
 )
 from application_sdk.infrastructure.secrets import (
+    SecretStoreAccessDeniedError,
     SecretStoreError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
@@ -210,7 +211,13 @@ async def _probe_one(fetch: ProbeFetch[SecretT], value: str) -> SecretT | None:
             label,
             safe_traceback,
         )
-        raise SecretStoreError(
+        # Keep the access-denied subtype so the agent path can route it to the user.
+        error_cls = (
+            SecretStoreAccessDeniedError
+            if isinstance(exc, SecretStoreAccessDeniedError)
+            else SecretStoreError
+        )
+        raise error_cls(
             f"Secret store failed while looking up single-key ref-key {label} "
             f"({type(exc).__name__})",
             secret_name=label,

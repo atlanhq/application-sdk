@@ -271,6 +271,23 @@ class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
         )
 
 
+class SecretStoreAccessDeniedError(SecretStoreError):
+    """The secret store answered and *denied* the read (e.g. AWS
+    ``AccessDeniedException``) — an IAM / permission failure on the identity
+    the store runs as, not an outage and not a missing key.
+
+    Classified at the infrastructure layer (``_dapr/client.py``) from the
+    backend's own error wording. Keeps ``SecretStoreError``'s category and
+    default PLATFORM audience: against Atlan's own store a denial is Atlan's
+    misconfiguration. The agent (SDR) credential path, where the identity is the
+    customer's, re-raises it as a USER-audience leaf. Remains a
+    ``SecretStoreError`` so ``except SecretStoreError`` still catches it; the
+    distinct ``code`` lets it be told apart end-to-end.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_ACCESS_DENIED"
+
+
 @dataclass(kw_only=True)
 class SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError):
     """Terminal counterpart of :class:`SecretStoreUnavailableError`: the secret

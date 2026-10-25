@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import orjson
 
@@ -55,6 +55,7 @@ from application_sdk.credentials.errors import (
 )
 from application_sdk.errors import (
     AppError,
+    Audience,
     ColdStartRaceError,
     DaprSidecarUnreachableError,
     redact_secrets,
@@ -67,6 +68,7 @@ from application_sdk.infrastructure import (
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
+    SecretStoreAccessDeniedError,
     SecretStoreError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
@@ -119,6 +121,30 @@ def _is_connection_literal(key: str) -> bool:
     )
 
 
+class AgentSecretAccessDeniedError(SecretStoreAccessDeniedError):
+    """The SDR's own secret store denied a read during credential resolution.
+
+    On the agent (SDR) path the store identity is the customer's IAM role, so
+    the fix is the customer's: USER audience, unlike the same denial against
+    Atlan's store (PLATFORM). Hash-labelled and cause-free, like the errors it
+    replaces.
+    """
+
+    audience: ClassVar[Audience] = Audience.USER
+
+    def __init__(self, label: str | None) -> None:
+        super().__init__(
+            "The SDR's secret store denied access while resolving a credential "
+            f"field ({label}).",
+            secret_name=label,
+            retryable=True,
+        )
+        self.suggested_action = (
+            "Grant the SDR's IAM role secretsmanager:GetSecretValue on the "
+            "referenced secrets, or check that the field's value is correct."
+        )
+
+
 async def resolve_agent_credential(
     spec: AgentCredentialSpec,
     secret_store: SecretStore,
@@ -169,14 +195,18 @@ async def resolve_agent_credential(
     """
     raw = spec.to_raw_dict()
 
-    if spec.key_type == "single-key":
-        bundle = await _fetch_per_key_bundle(secret_store, raw)
-        resolved_flat, _ = _substitute(raw, bundle)
-    elif spec.secret_path:
-        bundle = await _fetch_bundle(secret_store, spec.secret_path)
-        resolved_flat, _ = _substitute(raw, bundle)
-    else:
-        resolved_flat = raw
+    try:
+        if spec.key_type == "single-key":
+            bundle = await _fetch_per_key_bundle(secret_store, raw)
+            resolved_flat, _ = _substitute(raw, bundle)
+        elif spec.secret_path:
+            bundle = await _fetch_bundle(secret_store, spec.secret_path)
+            resolved_flat, _ = _substitute(raw, bundle)
+        else:
+            resolved_flat = raw
+    except SecretStoreAccessDeniedError as exc:
+        # The label is already hash-labelled by the probe / bundle path.
+        raise AgentSecretAccessDeniedError(exc.secret_name) from None
 
     return transform_agent_credentials(resolved_flat)
 
@@ -278,7 +308,12 @@ def _bundle_store_error(secret_path: str, exc: Exception) -> SecretStoreError:
         )
     if isinstance(exc, ColdStartRaceError):
         return SecretStoreUnavailableError(secret_path)
-    return SecretStoreError(
+    error_cls = (
+        SecretStoreAccessDeniedError
+        if isinstance(exc, SecretStoreAccessDeniedError)
+        else SecretStoreError
+    )
+    return error_cls(
         "Secret store failed to return the secret bundle at the configured "
         "secret-path. Check that your secret store is healthy and that this "
         "app is allowed to read the secret-path.",

@@ -21,6 +21,7 @@ from application_sdk.infrastructure.bindings import BindingError, BindingRespons
 from application_sdk.infrastructure.pubsub import PubSubError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
+    SecretStoreAccessDeniedError,
     SecretStoreError,
     SecretStoreUnavailableError,
 )
@@ -332,6 +333,51 @@ class TestDaprSecretStore:
         with pytest.raises(SecretStoreError) as exc:
             await self.store.get("db/creds")
         assert not isinstance(exc.value, SecretNotFoundError)
+
+    async def test_aws_access_denied_is_access_denied_subtype(self):
+        """An AWS ``AccessDeniedException`` is the store denying the read:
+        the distinct subtype, still retryable (retry semantics unchanged)."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            "secretstore: couldn't get secret: operation error Secrets Manager: "
+            "GetSecretValue, https response error StatusCode: 400, RequestID: "
+            "00000000-0000-0000-0000-000000000000, api error "
+            "AccessDeniedException: User: arn:aws:sts::123456789012:"
+            "assumed-role/example-sdr-role/i-0123456789abcdef0 is not "
+            "authorized to perform: secretsmanager:GetSecretValue on resource: "
+            "db/creds because no identity-based policy allows the "
+            "secretsmanager:GetSecretValue action",
+        )
+        with pytest.raises(SecretStoreAccessDeniedError) as exc:
+            await self.store.get("db/creds")
+        assert exc.value.effective_retryable is True
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+
+    async def test_throttling_is_not_access_denied_subtype(self):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            "secretstore: couldn't get secret: api error ThrottlingException: "
+            "Rate exceeded",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretStoreAccessDeniedError)
+
+    async def test_not_found_is_not_access_denied_subtype(self):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            "secretstore: couldn't get secret: ResourceNotFoundException: "
+            "Secrets Manager can't find the specified secret.",
+        )
+        with pytest.raises(SecretNotFoundError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretStoreAccessDeniedError)
 
     async def test_dapr_wrapper_words_never_count_as_absence(self):
         """Only the backend's own error is matched: Dapr's

@@ -11,6 +11,7 @@ from application_sdk.infrastructure.bindings import BindingError, BindingRespons
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
+    SecretStoreAccessDeniedError,
     SecretStoreError,
     SecretStoreUnavailableError,
 )
@@ -255,19 +256,39 @@ def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | Non
     return body if isinstance(body, dict) else None
 
 
-def _is_secret_absent_message(name: str, message: object) -> bool:
-    """Whether an ``ERR_SECRET_GET`` message says the key *name* doesn't exist.
+#: Backend wording that says the store denied the read. Verified wording only:
+#: AWS Secrets Manager (aws-sdk-go-v2) ``api error AccessDeniedException``.
+#: Unverified follow-ups, deliberately NOT matched: Kubernetes ``forbidden``,
+#: GCP ``PermissionDenied``, Azure ``Forbidden``, Vault ``permission denied``.
+_SECRET_ACCESS_DENIED_MESSAGE_RE = re.compile(r"\bAccessDeniedException\b")
 
-    Dapr's wrapper is stripped and the key removed first, so neither the
-    wrapper's words nor a key that itself says "not found" can make a
-    throttling error look like an absence.
-    """
+
+def _backend_error(name: str, message: object) -> str | None:
+    """The backend's own error text: Dapr's wrapper and the key stripped, so
+    neither the wrapper's words nor a key that itself says "not found" can
+    steer classification. ``None`` if *message* isn't a string."""
     if not isinstance(message, str):
-        return False
+        return None
     backend_error = _DAPR_SECRET_GET_PREFIX_RE.sub("", message, count=1)
-    if name:
-        backend_error = backend_error.replace(name, "")
-    return _SECRET_ABSENT_MESSAGE_RE.search(backend_error) is not None
+    return backend_error.replace(name, "") if name else backend_error
+
+
+def _is_secret_absent_message(name: str, message: object) -> bool:
+    """Whether an ``ERR_SECRET_GET`` message says the key *name* doesn't exist."""
+    backend_error = _backend_error(name, message)
+    return (
+        backend_error is not None
+        and _SECRET_ABSENT_MESSAGE_RE.search(backend_error) is not None
+    )
+
+
+def _is_secret_access_denied_message(name: str, message: object) -> bool:
+    """Whether an ``ERR_SECRET_GET`` message says the store denied the read."""
+    backend_error = _backend_error(name, message)
+    return (
+        backend_error is not None
+        and _SECRET_ACCESS_DENIED_MESSAGE_RE.search(backend_error) is not None
+    )
 
 
 def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
@@ -323,7 +344,12 @@ def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
             if code == _ERR_SECRET_GET:
                 if _is_secret_absent_message(name, body.get("message")):
                     return SecretNotFoundError(name)
-                return SecretStoreError(
+                error_cls = (
+                    SecretStoreAccessDeniedError
+                    if _is_secret_access_denied_message(name, body.get("message"))
+                    else SecretStoreError
+                )
+                return error_cls(
                     f"Secret store failed to return the secret: {dapr_error_detail(exc)}",
                     secret_name=name,
                     cause=exc,
