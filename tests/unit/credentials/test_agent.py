@@ -37,6 +37,7 @@ from application_sdk.errors.leaves import ColdStartRaceError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
 )
@@ -809,11 +810,11 @@ class TestSingleKeyMode:
         assert resolved["username"] == "real_user"
         assert resolved["password"] == "ATLAN_PASS"  # ref-key preserved
 
-    async def test_store_error_on_probe_stops_resolution(self) -> None:
-        """A probe whose lookup *fails* (as opposed to finding no key) must stop
-        resolution (FND-4077). Skipping it would leave the ref-key in place and
-        send it to the source as the password: an auth failure blamed on the
-        user, plus a burned lockout attempt.
+    async def test_non_store_exception_on_probe_stops_resolution(self) -> None:
+        """A probe that fails with something that is not a store answer (a bug)
+        must stop resolution rather than be read as "this field is not a
+        secret". Store answers are handled separately: transient ones raise,
+        the rest keep the value.
         """
 
         class ProbeStore:
@@ -883,9 +884,10 @@ class TestSingleKeyMode:
     ) -> None:
         """FND-4077 end to end through the real Dapr adapter: a throttled vault
         used to classify as "not found", so the password field kept its ref-key
-        and the connector logged in with ``ATLAN_PASS`` as the password. Now
-        resolution stops with a retryable store error; a genuinely absent
-        literal (``analytics``) is still skipped."""
+        and the connector logged in with ``ATLAN_PASS`` as the password.
+        Throttling is transient, so resolution fails with a retryable
+        ``SecretStoreTransientError``; a genuinely absent literal
+        (``analytics``) is still skipped."""
         store = self._dapr_store_answering(
             {
                 "ATLAN_USER": "value:real_user",
@@ -906,12 +908,74 @@ class TestSingleKeyMode:
             }
         )
 
-        with pytest.raises(SecretStoreError) as exc_info:
+        with pytest.raises(SecretStoreTransientError) as exc_info:
             await resolve_agent_json(agent_json, store)
 
         assert not isinstance(exc_info.value, SecretNotFoundError)
         assert exc_info.value.effective_retryable is True
         assert "ATLAN_PASS" not in str(exc_info.value)
+        assert exc_info.value.cause is None
+
+    async def test_dapr_access_denied_probe_keeps_value_with_warning(self) -> None:
+        """AccessDenied on a probed field is not transient and says nothing
+        about whether the field is a secret name: resolution succeeds, the
+        value is kept, and the WARNING names it by hash only."""
+        from unittest.mock import patch
+
+        ref_key = "db-password"
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+        store = self._dapr_store_answering(
+            {
+                "ATLAN_USER": "value:real_user",
+                ref_key: "couldn't get secret: AccessDeniedException: User is "
+                "not authorized to perform: secretsmanager:GetSecretValue",
+            }
+        )
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+                "basic.password": ref_key,
+            }
+        )
+
+        with patch(
+            "application_sdk.infrastructure._single_key_probe.logger"
+        ) as mock_logger:
+            resolved = await resolve_agent_json(agent_json, store)
+
+        assert resolved["username"] == "real_user"
+        assert resolved["password"] == ref_key
+        mock_logger.warning.assert_called_once()
+        logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
+        assert f"sha256:{expected_hash}" in logged
+        assert ref_key not in logged
+        assert "treating as non-secret" in logged
+
+    async def test_multi_key_bundle_fetch_stays_strict_on_store_error(self) -> None:
+        """Only single-key probes keep the value: a ``secret-path`` bundle that
+        the store answers with an access denial still fails resolution."""
+        store = self._dapr_store_answering(
+            {
+                "bundle-path": "couldn't get secret: AccessDeniedException: "
+                "User is not authorized",
+            }
+        )
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "secret-path": "bundle-path",
+                "auth-type": "basic",
+                "basic.username": "username",
+            }
+        )
+
+        with pytest.raises(SecretStoreError) as exc_info:
+            await resolve_agent_json(agent_json, store)
+
+        assert not isinstance(exc_info.value, SecretNotFoundError)
 
     async def test_dapr_absent_probe_still_falls_through(self) -> None:
         """The other half: a not-found-shaped ``ERR_SECRET_GET`` is still an
@@ -1016,9 +1080,9 @@ class TestSingleKeyMode:
         assert exc_info.value.secret_name != "ATLAN_USER"
         assert exc_info.value.cause is None
 
-    async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
-        """On a store outage during a single-key probe, the WARNING must not
-        leak the raw ref-key. The store error renders the ref-key both as
+    async def test_store_error_does_not_leak_ref_key_in_logs(self) -> None:
+        """On a non-transient store error during a single-key probe, the WARNING
+        must not leak the raw ref-key. The store error renders the ref-key both as
         ``secret=<key>`` and echoed inside the message (mirroring real Dapr
         backends), so a naive ``exc_info=True`` would undo the sha256 hashing.
         """
@@ -1046,17 +1110,13 @@ class TestSingleKeyMode:
             }
         )
 
-        with (
-            patch(
-                "application_sdk.infrastructure._single_key_probe.logger"
-            ) as mock_logger,
-            pytest.raises(SecretStoreError) as exc_info,
-        ):
-            await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
+        with patch(
+            "application_sdk.infrastructure._single_key_probe.logger"
+        ) as mock_logger:
+            resolved = await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
 
-        # Resolution stops instead of sending the ref-key as the password, and
-        # the raised error doesn't carry it either.
-        assert ref_key not in str(exc_info.value)
+        # The value is kept (the auth attempt would fail with it as the literal).
+        assert resolved["password"] == ref_key
 
         mock_logger.warning.assert_called_once()
         logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
@@ -1110,16 +1170,12 @@ class TestSingleKeyMode:
             }
         )
 
-        with (
-            patch(
-                "application_sdk.infrastructure._single_key_probe.logger"
-            ) as mock_logger,
-            pytest.raises(SecretStoreError) as exc_info,
-        ):
-            await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
+        with patch(
+            "application_sdk.infrastructure._single_key_probe.logger"
+        ) as mock_logger:
+            resolved = await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
 
-        assert ref_key not in str(exc_info.value)
-        assert encoded_key not in str(exc_info.value)
+        assert resolved["password"] == ref_key
         mock_logger.warning.assert_called_once()
         logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
         assert ref_key not in logged
@@ -1156,12 +1212,9 @@ class TestSingleKeyMode:
             }
         )
 
-        with (
-            patch(
-                "application_sdk.infrastructure._single_key_probe.logger"
-            ) as mock_logger,
-            pytest.raises(SecretStoreError),
-        ):
+        with patch(
+            "application_sdk.infrastructure._single_key_probe.logger"
+        ) as mock_logger:
             await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
 
         logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
@@ -1923,14 +1976,14 @@ class TestSingleKeyProbeConcurrency:
         resolved, _ = _substitute(raw, bundle)
         assert resolved["basic.password"] == "hunter2-literal"
 
-    async def test_store_error_raises_even_when_nothing_else_resolves(
+    async def test_transient_error_raises_even_when_nothing_else_resolves(
         self,
     ) -> None:
-        """Every probe failing is a store fault, not "nothing to resolve"."""
+        """Every probe throttled is a store fault, not "nothing to resolve"."""
 
         class ThrottledStore:
             async def get_optional(self, name: str) -> str | None:
-                raise SecretStoreError(
+                raise SecretStoreTransientError(
                     "ThrottlingException: Rate exceeded",
                     secret_name=name,
                     retryable=True,
@@ -1940,31 +1993,36 @@ class TestSingleKeyProbeConcurrency:
             **{"basic.username": "u", "basic.password": "p", "database": "db"}
         ).to_raw_dict()
 
-        with pytest.raises(SecretStoreError) as exc_info:
+        with pytest.raises(SecretStoreTransientError) as exc_info:
             await _fetch_per_key_bundle(ThrottledStore(), raw)
 
         # The retry hint survives the hash-labelled re-raise, so Temporal
         # retries a throttled vault instead of failing the run as AUTH.
         assert exc_info.value.effective_retryable is True
         assert not isinstance(exc_info.value, SecretNotFoundError)
+        assert exc_info.value.cause is None
 
-    async def test_non_retryable_store_error_stays_non_retryable(self) -> None:
-        """A definitive rejection keeps its ``retryable=False`` hint."""
+    async def test_non_transient_store_error_keeps_every_value(self) -> None:
+        """A rejection that is not transient (bad binding, access denied) keeps
+        the value on every field: the bundle is empty and nothing raises."""
 
         class RejectingStore:
             async def get_optional(self, name: str) -> str | None:
                 raise SecretStoreError("bad binding", secret_name=name, retryable=False)
 
-        raw = self._spec(**{"basic.password": "only-field"}).to_raw_dict()
+        raw = self._spec(
+            **{"basic.username": "u", "basic.password": "p", "database": "db"}
+        ).to_raw_dict()
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await _fetch_per_key_bundle(RejectingStore(), raw)
+        assert await _fetch_per_key_bundle(RejectingStore(), raw) == {}
+        resolved, _ = _substitute(raw, {})
+        assert resolved["basic.password"] == "p"
 
-        assert exc_info.value.effective_retryable is False
-
-    async def test_partial_resolution_with_a_store_error_raises(self) -> None:
-        """One field resolving does not excuse another field's store failure:
-        that field would be sent as its literal ref-key."""
+    async def test_partial_resolution_with_a_non_transient_error_keeps_value(
+        self,
+    ) -> None:
+        """One field resolving and another denied: the denied field keeps its
+        value, the resolved one is substituted."""
 
         class FlakyStore:
             async def get_optional(self, name: str) -> str | None:
@@ -1976,7 +2034,25 @@ class TestSingleKeyProbeConcurrency:
             **{"basic.password": "real-key", "database": "db-ref"}
         ).to_raw_dict()
 
-        with pytest.raises(SecretStoreError) as exc_info:
+        assert await _fetch_per_key_bundle(FlakyStore(), raw) == {
+            "real-key": "real-value"
+        }
+
+    async def test_partial_resolution_with_a_transient_error_raises(self) -> None:
+        """One field resolving does not excuse another field's transient
+        failure: that field would be sent as its literal ref-key."""
+
+        class FlakyStore:
+            async def get_optional(self, name: str) -> str | None:
+                if name == "real-key":
+                    return "real-value"
+                raise SecretStoreTransientError("throttled", secret_name=name)
+
+        raw = self._spec(
+            **{"basic.password": "real-key", "database": "db-ref"}
+        ).to_raw_dict()
+
+        with pytest.raises(SecretStoreTransientError) as exc_info:
             await _fetch_per_key_bundle(FlakyStore(), raw)
 
         assert "db-ref" not in str(exc_info.value)
@@ -1990,7 +2066,7 @@ class TestSingleKeyProbeConcurrency:
             async def get_optional(self, name: str) -> str | None:
                 if name == "first":
                     await asyncio.sleep(0.01)  # completes last
-                    raise SecretStoreError("denied", secret_name=name)
+                    raise SecretStoreTransientError("throttled", secret_name=name)
                 raise SecretStoreUnavailableError(name)
 
         raw = self._spec(
@@ -2008,8 +2084,7 @@ class TestSingleKeyProbeConcurrency:
     async def test_zero_resolved_is_recorded_at_info_not_warning(self) -> None:
         """Zero resolutions is recorded, but at INFO — for a config carrying
         literal credentials inline it is the expected steady state and would
-        otherwise warn on every run. (A throttled vault no longer lands here:
-        it raises.)"""
+        otherwise warn on every run."""
         from unittest.mock import patch
 
         class EmptyStore:

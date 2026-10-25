@@ -243,6 +243,18 @@ class SecretStoreError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+class SecretStoreTransientError(SecretStoreError):
+    """The secret store answered, but with a temporary failure (throttling or a
+    transient server error), so a later attempt may succeed.
+
+    Distinct from :class:`SecretStoreUnavailableError`, where the store did not
+    answer at all, and from a plain :class:`SecretStoreError`, where the answer
+    was a rejection that retrying will not change. Retryable by default.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
+
+
 class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     """The secret store / Dapr sidecar was *unreachable* — a transport failure
     (connection refused, reset mid-handshake, read/write/close error, timeout)

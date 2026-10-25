@@ -2887,6 +2887,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreTransientError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreTransientError`
+- **Signature:** `class SecretStoreTransientError(message: str, ...)`
+- **Summary:** The secret store answered, but with a temporary failure (throttling or a transient server error), so a later attempt may succeed.
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `SecretStoreUnavailableError`
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`

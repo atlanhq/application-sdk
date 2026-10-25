@@ -140,12 +140,18 @@ Each probe has one of three outcomes:
   literal value (a host, a database name, an inline credential). "Absent" means
   Dapr's `500`/`ERR_SECRET_GET` with a not-found message (`secret … not found`,
   `ResourceNotFoundException`, `SecretNotFound`, …).
-- **Store error** — anything else: a throttled vault, an IAM or KMS denial, a
-  `403` `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an
-  outage. Resolution **stops** with a `SecretStoreError` (hash-labelled,
-  keeping its `retryable` hint) instead of skipping the field. Skipping it used
-  to send the ref-key itself to the source as the password: an auth failure
-  blamed on the user, plus a burned lockout attempt.
+- **Transient store error** — an outage or cold start, or a temporary answer
+  from the backend (throttling, a transient server error:
+  `SecretStoreTransientError`). Resolution **fails and retries** with a
+  hash-labelled, retryable `SecretStoreError`; skipping the field could send a
+  real ref-key to the source as the password.
+- **Any other store answer** — an invalid name, an IAM or KMS denial, a `403`
+  `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, a `4xx`
+  rejection, unrecognised backend wording. Nothing records which fields are
+  secret names, so the value is **kept** and a WARNING is logged. If it was a
+  real credential key, the auth attempt fails with the ref-key as the literal
+  value. A multi-key `secret-path` bundle fetch stays strict: any store error
+  there fails resolution.
 
 What the logs tell you:
 
@@ -155,8 +161,10 @@ What the logs tell you:
 - **Nothing resolved** also logs INFO ("resolved 0 of N probed fields"). This is
   *not* an error: a credential that carries literal usernames and passwords
   inline rather than ref-keys legitimately resolves nothing.
-- **A probe hit a store error** logs a WARNING with a redacted traceback, then
-  the run fails with that error.
+- **A probe hit a non-transient store error** logs a WARNING with the error
+  type and a redacted traceback, and the value is kept.
+- **A probe hit a transient store error or an outage** fails the run with a
+  retryable error.
 
 #### Check tiers and warmup
 

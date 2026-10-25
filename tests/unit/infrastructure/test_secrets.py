@@ -18,6 +18,7 @@ from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreNotConfiguredError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
     get_deployment_secret,
@@ -364,6 +365,17 @@ class TestSecretStoreUnavailableError:
         """Unlike a definitive rejection, an unreachable store is retryable
         by default — it inherits DependencyUnavailableError's default."""
         err = SecretStoreUnavailableError("db_pass")
+        assert err.effective_retryable is True
+
+
+class TestSecretStoreTransientError:
+    """The store answered with a temporary failure: retryable, own code."""
+
+    def test_is_a_retryable_secret_store_error(self) -> None:
+        err = SecretStoreTransientError("throttled", secret_name="db_pass")
+        assert isinstance(err, SecretStoreError)
+        assert not isinstance(err, SecretStoreUnavailableError)
+        assert err.code == "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
         assert err.effective_retryable is True
 
 

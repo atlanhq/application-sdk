@@ -289,14 +289,11 @@ class TestDaprCredentialVaultGetCredentials:
         # _try_fetch, not the original SecretStoreUnavailableError("secret_key_ref").
         assert "secret_key_ref" not in str(exc_info.value)
 
-    async def test_single_key_store_error_raises_without_leaking_ref_key(
-        self,
-    ) -> None:
-        """A definitive (non-cold-start) rejection during single-key probing
-        stops resolution (FND-4077) rather than leaving the ref-key in place as
-        the password — and neither the WARNING log nor the raised error leaks
-        the raw ref-key."""
-        ref_key = "SNOWFLAKE_PROD_PASSWORD"
+    async def test_single_key_non_transient_store_error_keeps_value(self) -> None:
+        """A definitive (non-transient) rejection during single-key probing
+        keeps the value and logs a WARNING (FND-4360) — and neither the log nor
+        the result leaks anything but the hash label for the ref-key."""
+        ref_key = "example-db-password"
         expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
         config = {"credentialSource": "agent", "password": ref_key}
 
@@ -314,21 +311,50 @@ class TestDaprCredentialVaultGetCredentials:
             patch(
                 "application_sdk.infrastructure._single_key_probe.logger"
             ) as mock_logger,
-            pytest.raises(CredentialVaultError) as exc_info,
         ):
             vault = self._make_vault(mock_client)
-            await vault.get_credentials("my-guid")
+            result = await vault.get_credentials("my-guid")
 
-        # The first failing candidate in config order is raised (here the
-        # ``credentialSource`` value, which this path also probes).
-        assert ref_key not in str(exc_info.value)
-        assert "sha256:" in str(exc_info.value)
-
+        assert result["password"] == ref_key
         logged = " ".join(
             str(arg) for call in mock_logger.warning.call_args_list for arg in call.args
         )
         assert ref_key not in logged
         assert f"sha256:{expected_hash}" in logged
+
+    async def test_single_key_transient_store_error_raises_without_leaking_ref_key(
+        self,
+    ) -> None:
+        """Throttling through the real classifier fails resolution (retryable)
+        and neither the raised error nor the log carries the raw ref-key."""
+        ref_key = "example-db-password"
+        config = {"credentialSource": "agent", "password": ref_key}
+
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_SECRET_GET",
+                "message": f"failed getting secret with key {ref_key} from secret "
+                "store secretstore: ThrottlingException: Rate exceeded",
+            },
+        )
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError("throttled", request=req, response=resp)
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            pytest.raises(CredentialVaultError) as exc_info,
+        ):
+            await self._make_vault(mock_client).get_credentials("my-guid")
+
+        assert ref_key not in str(exc_info.value)
+        assert "sha256:" in str(exc_info.value)
 
     async def test_guid_validation_rejects_path_traversal(self) -> None:
         """GUIDs with unsafe characters (e.g. '../') raise CredentialVaultError immediately."""
@@ -938,27 +964,56 @@ class TestSingleKeyProbeConcurrency:
         assert "sha256:" in str(err)
         assert err.cause is None
 
-    async def test_store_error_on_one_field_stops_resolution(self) -> None:
-        """A store error on one field is fatal even when another field resolved
-        (FND-4077): skipping it would send that field's ref-key as its value.
-        A key the store definitively lacks is still skipped (``_get_secret``
-        returns ``{}`` for it, covered above)."""
-        from application_sdk.infrastructure.secrets import SecretStoreError
+    async def test_transient_store_error_on_one_field_stops_resolution(self) -> None:
+        """A transient store error on one field is fatal even when another field
+        resolved: skipping it could send that field's ref-key as its value. The
+        subtype and retryable hint are kept."""
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
 
         async def _get_secret(value: str, *, log_label: str | None = None):
             if value == "real-key":
                 return {"password": "resolved"}
-            raise SecretStoreError(
+            raise SecretStoreTransientError(
                 "ThrottlingException", secret_name=value, retryable=True
             )
 
         config = {"a": "real-key", "b": "throttled-key"}
 
-        with pytest.raises(SecretStoreError) as exc_info:
+        with pytest.raises(SecretStoreTransientError) as exc_info:
             await self._vault(_get_secret)._fetch_single_key_secrets(config)
 
         assert exc_info.value.effective_retryable is True
         assert "throttled-key" not in str(exc_info.value)
+        assert exc_info.value.cause is None
+
+    async def test_non_transient_store_error_on_one_field_keeps_value(self) -> None:
+        """Any other store error keeps the field's value (nothing records which
+        fields are secret names); the sibling field still resolves."""
+        from application_sdk.infrastructure.secrets import SecretStoreError
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            if value == "real-key":
+                return {"password": "resolved"}
+            raise SecretStoreError("AccessDenied", secret_name=value, retryable=False)
+
+        config = {"a": "real-key", "b": "denied-key"}
+
+        collected = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert collected == {"password": "resolved"}
+
+    async def test_non_store_exception_on_one_field_raises(self) -> None:
+        """A bug (not a store answer) is never swallowed as "not a secret"."""
+        from application_sdk.infrastructure.secrets import SecretStoreError
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            raise RuntimeError("boom")
+
+        with pytest.raises(SecretStoreError) as exc_info:
+            await self._vault(_get_secret)._fetch_single_key_secrets({"a": "some-key"})
+
+        assert "some-key" not in str(exc_info.value)
+        assert exc_info.value.cause is None
 
 
 def test_outage_types_stay_importable_from_this_module() -> None:

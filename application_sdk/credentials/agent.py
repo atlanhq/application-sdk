@@ -99,25 +99,6 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
     }
 )
 
-#: Connection settings under ``extra`` whose values are literals, never
-#: ref-keys: single-key probing skips them wherever the ``extra`` sits
-#: (``extra.database``, ``basic.extra.database``, a nested ``extra`` dict).
-#: A store that rejects such a value as a secret name (a URL's ``/``)
-#: answers with a failure, not "not found", and that failure stops the whole
-#: resolution. Probing only: a multi-key bundle may still substitute them.
-_CONNECTION_LITERAL_EXTRA_FIELDS: frozenset[str] = frozenset(
-    {"compiled_url", "database"}
-)
-
-
-def _is_connection_literal(key: str) -> bool:
-    *parents, field = key.split(".")
-    return (
-        bool(parents)
-        and parents[-1] == "extra"
-        and field in _CONNECTION_LITERAL_EXTRA_FIELDS
-    )
-
 
 async def resolve_agent_credential(
     spec: AgentCredentialSpec,
@@ -154,7 +135,8 @@ async def resolve_agent_credential(
           Useful for ``secretstores.local.env``-backed deployments
           where each env var holds one credential value, avoiding the
           all-in-one-JSON-bundle workaround. Non-secret fields
-          (host/port) silently fall through unchanged.
+          (host/port) fall through unchanged, as does a field the store
+          rejects with a non-transient error (logged at WARNING).
         * ``secret-path`` set (and ``key-type`` not single-key): the
           bundle is fetched once from ``secret_path`` and ref-keys are
           substituted from it (the original v2 multi-key behavior).
@@ -302,9 +284,12 @@ async def _fetch_per_key_bundle(
     carrying a hostname) won't fail the resolution. Unmatched values then take
     the v2-parity fallthrough in :func:`_substitute` (left as-is).
 
-    A store *failure* is never skipped: a throttled or access-denied lookup
-    would otherwise leave the ref-key in place and send it as the credential
-    value. Probing, classification and redaction are shared with the
+    A store error that is not transient (invalid name, access denied, a 4xx
+    rejection) is treated the same way: a WARNING is logged and the value is
+    kept, because nothing records which fields are secret names. An outage, a
+    cold start or a transient answer (throttling, a transient server error)
+    fails resolution so the run retries. Probing, classification and redaction
+    are shared with the
     GUID-path vault via
     :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`;
     each probe retries a cold-start race via
@@ -312,9 +297,10 @@ async def _fetch_per_key_bundle(
     (shared with :func:`_fetch_bundle` — both race the same sidecar).
 
     Raises:
-        SecretStoreError: If any probe's store lookup failed (the subtypes
-            :class:`SecretStoreUnavailableError` /
-            :class:`SecretStoreUnreachableError` for an outage). Hash-labelled.
+        SecretStoreError: If a probe hit an outage
+            (:class:`SecretStoreUnavailableError` /
+            :class:`SecretStoreUnreachableError`) or a transient store answer
+            (:class:`SecretStoreTransientError`). Hash-labelled.
     """
 
     async def _fetch(value: str, label: str) -> str | None:
@@ -343,15 +329,14 @@ def _probe_candidates(raw: dict[str, Any]) -> list[str]:
             candidates.append(value)
 
     for key, value in raw.items():
-        if key in _LITERAL_KEYS or _is_connection_literal(key):
+        if key in _LITERAL_KEYS:
             continue
         _add(value)
 
     extra = raw.get("extra")
     if isinstance(extra, dict):
-        for field, value in extra.items():
-            if field not in _CONNECTION_LITERAL_EXTRA_FIELDS:
-                _add(value)
+        for value in extra.values():
+            _add(value)
 
     return candidates
 

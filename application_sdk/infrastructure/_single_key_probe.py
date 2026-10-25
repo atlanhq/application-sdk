@@ -6,11 +6,15 @@ which are literals (a host, a port, an inline credential). A key the store
 definitively doesn't have is therefore expected and skipped; the field keeps
 its literal value.
 
-Anything else — the store failing to answer — must stop resolution. Before
-FND-4077 a store error was also skipped, so a throttled or access-denied vault
-left the ref-key string in place and the connector logged in with it as the
-password: an auth failure blamed on the user, plus a burned lockout attempt at
-the source.
+A store *error* is judged by what it says about the lookup. An outage, a cold
+start, or a transient answer (throttling, a transient server error) fails
+resolution so the run retries: skipping those would send a real ref-key as the
+credential value. Any other store answer (invalid name, access denied, a 4xx
+rejection, unrecognised backend wording) logs a WARNING and keeps the value,
+because nothing in the payload records which fields are secret names and a
+literal such as a URL or database name is routinely rejected by some stores.
+If it was a real credential key, the auth attempt fails with the ref-key as the
+literal value, and the WARNING names it by hash.
 
 Used by :mod:`application_sdk.credentials.agent` (agent-shape payloads) and
 :mod:`application_sdk.infrastructure._dapr.credential_vault` (GUID configs).
@@ -36,6 +40,7 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.infrastructure.secrets import (
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
 )
@@ -49,13 +54,6 @@ logger = get_logger(__name__)
 #: wave. Bounded because the candidate set is open-ended (``extra.*``) and a
 #: wide burst invites vault throttling.
 MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
-
-#: A value with this prefix is a file in the deployment object store
-#: (``credentials.utils.OBJECT_STORE_PREFIX``, fetched by
-#: ``resolve_credential_file``), never a secret name. Probing it fails the run
-#: on a store that rejects ``/`` in names, such as the Kubernetes store.
-#: Repeated here because importing ``credentials`` from this module is circular.
-_FILE_REF_PREFIX = "objectstore://"
 
 SecretT = TypeVar("SecretT")
 
@@ -80,9 +78,6 @@ async def probe_single_keys(
 ) -> list[tuple[str, SecretT]]:
     """Probe each candidate as a secret key; return the ones that resolved.
 
-    ``objectstore://`` file references are not probed: they are left as-is
-    for ``resolve_credential_file`` to fetch.
-
     Probes run **concurrently**, bounded by
     :data:`MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until BLDX-1594:
     a probe that misses pays a full Dapr retry ladder, so serial probing cost
@@ -100,17 +95,18 @@ async def probe_single_keys(
             its whole cold-start budget.
         SecretStoreUnavailableError: A probe hit a transient outage after the
             store had already answered once.
-        SecretStoreError: The store answered a probe with a failure rather than
-            "not found" (throttled, access denied, KMS). Keeps the original
-            ``retryable`` hint.
+        SecretStoreTransientError: The store answered a probe with a temporary
+            failure (throttling, a transient server error). Retryable.
+        SecretStoreError: A probe failed with a non-store exception (a bug).
+
+        A non-transient store error (invalid name, access denied, a 4xx
+        rejection) does not raise: the value is kept and a WARNING is logged
+        (see :func:`_probe_one`).
 
         Every raised error is hash-labelled and carries no ``cause`` (see
         :func:`_probe_one`). When several probes fail, the first in candidate
         order is raised.
     """
-    # Trimmed for the check only: resolve_credential_file strips the value
-    # before its own prefix check, so a padded ref is a file reference too.
-    candidates = [c for c in candidates if not c.strip().startswith(_FILE_REF_PREFIX)]
     if not candidates:
         return []
 
@@ -129,8 +125,8 @@ async def probe_single_keys(
     resolved: list[tuple[str, SecretT]] = []
     for value, result in zip(candidates, results, strict=True):
         if isinstance(result, BaseException):
-            # Don't proceed on a partial resolve: a field whose store lookup
-            # failed would be sent as its literal ref-key.
+            # Outage, cold start, transient answer or a bug: don't proceed on a
+            # partial resolve.
             raise result
         if result is not None:
             resolved.append((value, result))
@@ -155,12 +151,17 @@ async def probe_single_keys(
 
 
 async def _probe_one(fetch: ProbeFetch[SecretT], value: str) -> SecretT | None:
-    """Probe one candidate. ``None`` means the store has no such key.
+    """Probe one candidate. ``None`` means "use the value as-is".
 
-    Every failure is re-raised **hash-labelled and cause-free**, never as the
-    original: a ``SecretStoreError`` carries the raw ref-key in
-    ``.secret_name`` and ``__str__()``, and its ``cause`` (the underlying httpx
-    exception) can re-embed it via a percent-encoded request URL.
+    That is either a key the store doesn't have, or a store answer that is not
+    transient (invalid name, access denied, a 4xx rejection, unrecognised
+    wording): the latter is logged at WARNING and the value kept, as SDK 3.49
+    did. Outages, cold starts and transient answers raise instead.
+
+    Every raised error is **hash-labelled and cause-free**, never the original:
+    a ``SecretStoreError`` carries the raw ref-key in ``.secret_name`` and
+    ``__str__()``, and its ``cause`` (the underlying httpx exception) can
+    re-embed it via a percent-encoded request URL.
     """
     label = hash_label(value)
     try:
@@ -183,11 +184,18 @@ async def _probe_one(fetch: ProbeFetch[SecretT], value: str) -> SecretT | None:
         # — this component has already answered once — and gave up after the
         # short warm retry.
         raise SecretStoreUnavailableError(label) from None
+    except SecretStoreTransientError:
+        # The store answered with a temporary failure (throttling, a transient
+        # server error): skipping would send a real ref-key as the credential,
+        # so fail and let the run retry. Keep the subtype.
+        raise SecretStoreTransientError(
+            f"Secret store failed transiently while looking up single-key "
+            f"ref-key {label}",
+            secret_name=label,
+            retryable=True,
+        ) from None
     # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
     except Exception as exc:
-        # The store answered with a failure, not "not found". Stop: skipping
-        # here would send the ref-key itself as the credential value.
-        #
         # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
         # and its message embeds the backend cause, which can echo the raw
         # ref-key — that would undo the hashing in the same log record. Format
@@ -204,19 +212,32 @@ async def _probe_one(fetch: ProbeFetch[SecretT], value: str) -> SecretT | None:
                 label,
                 safe_traceback,
             )
+        if isinstance(exc, SecretStoreError):
+            # The store answered, but not "not found" and not transiently:
+            # nothing says this field is a secret name (it may be a URL or a
+            # database name the store rejects), so keep the value.
+            logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
+                "single-key probe failed for ref-key %s (%s) — store error, "
+                "treating as non-secret. If this was a real credential "
+                "key, the auth attempt will fail with the ref-key as the "
+                "literal value.\n%s",
+                label,
+                type(exc).__name__,
+                safe_traceback,
+            )
+            return None
+        # Not a store error: a bug, not "this field isn't a secret".
         logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
-            "single-key probe for ref-key %s failed — secret store error, "
-            "not a missing key; stopping credential resolution.\n%s",
+            "single-key probe for ref-key %s failed with an unexpected error "
+            "(%s); stopping credential resolution.\n%s",
             label,
+            type(exc).__name__,
             safe_traceback,
         )
         raise SecretStoreError(
             f"Secret store failed while looking up single-key ref-key {label} "
             f"({type(exc).__name__})",
             secret_name=label,
-            retryable=(
-                exc.effective_retryable if isinstance(exc, SecretStoreError) else None
-            ),
         ) from None
     if not secret:
         # Key not in store — expected for non-secret fields (host, port,

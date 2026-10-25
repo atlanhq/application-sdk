@@ -12,6 +12,7 @@ from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
 )
 from application_sdk.infrastructure.state import StateStoreError
@@ -210,12 +211,6 @@ _ERR_SECRET_GET = "ERR_SECRET_GET"
 #:   find the specified secret.``
 #: * Azure Key Vault — ``ERROR CODE: SecretNotFound``
 #: * HashiCorp Vault — ``getSecret <k> failed secret key or version not exist``
-#: * Kubernetes "invalid name" — ``invalid resource name "<k>": [may not
-#:   contain '/']`` (client-go path-segment validation: ``may not contain
-#:   '/'`` or ``may not contain '%'``).
-#:   A name the store rejects as invalid cannot exist there, so the value is
-#:   a literal, not a secret ref. Anchored on those reasons, never a bare
-#:   "invalid" (``invalid credentials`` is an auth failure).
 #:
 #: ``secretstores.local.env`` never errors: it answers a missing variable with
 #: an empty value, which callers already treat as absent.
@@ -225,9 +220,36 @@ _SECRET_ABSENT_MESSAGE_RE = re.compile(
     r"|\bResourceNotFoundException\b"
     r"|can'?t find the specified secret"
     r"|\bSecretNotFound\b"
-    r"|secret key or version not exist"
-    r"""|\binvalid resource name\s*(?:"[^"]*")?\s*:\s*\[may not contain '[/%]'""",
+    r"|secret key or version not exist",
     re.IGNORECASE,
+)
+
+#: Each secret-store backend's wording for a *temporary* failure (throttling or
+#: a transient server error), matched like :data:`_SECRET_ABSENT_MESSAGE_RE`
+#: against the backend part of the ``ERR_SECRET_GET`` message with Dapr's
+#: wrapper and the key already removed. Narrow on purpose: anything not listed
+#: stays a plain :class:`SecretStoreError`.
+#:
+#: Documented error format, not yet confirmed against a production log:
+#:
+#: * AWS Secrets Manager — ``ThrottlingException``, ``TooManyRequestsException``,
+#:   ``InternalServiceError``, ``Rate exceeded``
+#: * GCP (gRPC) — ``code = ResourceExhausted``, ``code = Unavailable``,
+#:   ``code = DeadlineExceeded``, ``code = Internal``
+#: * Azure Key Vault (azure-sdk ``ResponseError``) — ``RESPONSE 429``,
+#:   ``RESPONSE 5xx``
+#: * Kubernetes / Vault — ``429`` with ``Too Many Requests``,
+#:   ``the server is currently unable to handle the request``,
+#:   ``etcdserver: request timed out``
+_SECRET_TRANSIENT_MESSAGE_RE = re.compile(
+    r"\b(?:ThrottlingException|TooManyRequestsException|InternalServiceError)\b"
+    r"|\bRate exceeded\b"
+    r"|\bcode\s*=\s*(?:ResourceExhausted|Unavailable|DeadlineExceeded|Internal)\b"
+    r"|\bRESPONSE (?:429|5\d\d)\b"
+    r"|\b429\b.*\bToo Many Requests\b"
+    r"|\bthe server is currently unable to handle the request\b"
+    r"|\betcdserver: request timed out\b",
+    re.IGNORECASE | re.DOTALL,
 )
 
 #: Dapr's own wrapper around the backend error (``pkg/messages`` in
@@ -255,19 +277,29 @@ def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | Non
     return body if isinstance(body, dict) else None
 
 
-def _is_secret_absent_message(name: str, message: object) -> bool:
-    """Whether an ``ERR_SECRET_GET`` message says the key *name* doesn't exist.
+def _backend_error(name: str, message: object) -> str:
+    """The backend part of an ``ERR_SECRET_GET`` message.
 
     Dapr's wrapper is stripped and the key removed first, so neither the
-    wrapper's words nor a key that itself says "not found" can make a
-    throttling error look like an absence.
+    wrapper's words nor a key that itself says "not found" or "429" can sway
+    the classification.
     """
     if not isinstance(message, str):
-        return False
+        return ""
     backend_error = _DAPR_SECRET_GET_PREFIX_RE.sub("", message, count=1)
-    if name:
-        backend_error = backend_error.replace(name, "")
-    return _SECRET_ABSENT_MESSAGE_RE.search(backend_error) is not None
+    return backend_error.replace(name, "") if name else backend_error
+
+
+def _is_secret_absent_message(name: str, message: object) -> bool:
+    """Whether an ``ERR_SECRET_GET`` message says the key *name* doesn't exist."""
+    return _SECRET_ABSENT_MESSAGE_RE.search(_backend_error(name, message)) is not None
+
+
+def _is_secret_transient_message(name: str, message: object) -> bool:
+    """Whether an ``ERR_SECRET_GET`` message is a temporary backend failure."""
+    return (
+        _SECRET_TRANSIENT_MESSAGE_RE.search(_backend_error(name, message)) is not None
+    )
 
 
 def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
@@ -301,9 +333,11 @@ def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
     not-found shape (:data:`_SECRET_ABSENT_MESSAGE_RE`). Any other
     ``ERR_SECRET_GET`` — a throttled vault, an IAM or KMS denial — is the
     store failing to answer, raised as a *retryable* :class:`SecretStoreError`
-    carrying the cause. Collapsing it to "not found" let single-key resolution
-    send the ref-key itself as the password: an auth failure blamed on the
-    user, plus a burned lockout attempt at the source.
+    carrying the cause. When the wording is a known temporary failure
+    (:data:`_SECRET_TRANSIENT_MESSAGE_RE`) it is the
+    :class:`SecretStoreTransientError` subtype, which single-key probes retry
+    rather than skip. Collapsing it to "not found" would let single-key
+    resolution send the ref-key itself as the password.
 
     A 4xx (including Dapr's 403 ``ERR_PERMISSION_DENIED`` for a key outside
     the store's scoping policy), or a 5xx that carries neither the "not configured" nor the
@@ -323,6 +357,13 @@ def classify_secret_fetch_error(name: str, exc: Exception) -> SecretStoreError:
             if code == _ERR_SECRET_GET:
                 if _is_secret_absent_message(name, body.get("message")):
                     return SecretNotFoundError(name)
+                if _is_secret_transient_message(name, body.get("message")):
+                    return SecretStoreTransientError(
+                        f"Secret store failed to return the secret: {dapr_error_detail(exc)}",
+                        secret_name=name,
+                        cause=exc,
+                        retryable=True,
+                    )
                 return SecretStoreError(
                     f"Secret store failed to return the secret: {dapr_error_detail(exc)}",
                     secret_name=name,

@@ -448,18 +448,19 @@ class DaprCredentialVault:
         resolver via
         :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`:
         a definitively-absent key is skipped (:meth:`_get_secret` returns
-        ``{}``), any store failure stops resolution rather than leaving the
-        ref-key in place as the credential value.
+        ``{}``), as is a non-transient store error (logged at WARNING, value
+        kept). An outage or transient store answer stops resolution so the run
+        retries.
 
         Each probe's *inner* keys merge into one dict in **candidate order**, so
         a key returned by two probes is last-writer-wins with serial probing's
         tiebreak.
 
         Raises:
-            SecretStoreError: If any probe's store lookup failed (the subtypes
-                :class:`SecretStoreUnavailableError` /
-                :class:`SecretStoreUnreachableError` for an outage).
-                Hash-labelled.
+            SecretStoreError: If a probe hit an outage
+                (:class:`SecretStoreUnavailableError` /
+                :class:`SecretStoreUnreachableError`) or a transient store
+                answer (:class:`SecretStoreTransientError`). Hash-labelled.
         """
         logger.debug("Single-key mode: fetching secrets per field")
 

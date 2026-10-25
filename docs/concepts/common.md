@@ -79,6 +79,7 @@ AppError  (base — application_sdk.errors)
     │   └── StorageBucketRelocationError(StorageError)                                 # platform-side, temporary
     └── SecretStoreError(DependencyUnavailableError)
         ├── SecretNotFoundError(NotFoundError, SecretStoreError)
+        ├── SecretStoreTransientError(SecretStoreError)                                # backend throttling / transient 5xx
         ├── SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError)          # transient
         └── SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)  # terminal
 ```
@@ -159,8 +160,10 @@ from the Dapr *secrets* API is deliberately NOT treated as proof of unreachabili
 verified against a live sidecar, a genuinely-missing secret key also returns 500 with
 `errorCode=ERR_SECRET_GET` — indistinguishable by status code alone from a still-cold
 component — so classification there additionally inspects the JSON error body's `errorCode`,
-and for `ERR_SECRET_GET` its message: only a not-found-shaped message is "absent"; a throttled,
-access-denied or KMS failure is a retryable `SecretStoreError`
+and for `ERR_SECRET_GET` its message: only a not-found-shaped message is "absent"; a throttling or
+transient-server-error message is a `SecretStoreTransientError`; any other failure (access denied,
+KMS) is a retryable `SecretStoreError`. Single-key probes fail and retry on the transient subtype
+and keep the value, with a WARNING, on any other store error
 (see `application_sdk.infrastructure._dapr.client.classify_secret_fetch_error`). A generic
 helper — `application_sdk.infrastructure.retry_past_dapr_cold_start` — retries any current or
 future subtype across domains (secret store today; state store, pub/sub, or credential-vault
