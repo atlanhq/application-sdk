@@ -140,8 +140,10 @@ class AgentSecretAccessDeniedError(SecretStoreAccessDeniedError):
             retryable=True,
         )
         self.suggested_action = (
-            "Grant the SDR's IAM role secretsmanager:GetSecretValue on the "
-            "referenced secrets, or check that the field's value is correct."
+            "Grant the SDR's secret-store identity read access to the referenced "
+            "secrets (for example secretsmanager:GetSecretValue on AWS, "
+            "roles/secretmanager.secretAccessor on GCP), or check that the "
+            "field's value is correct."
         )
 
 

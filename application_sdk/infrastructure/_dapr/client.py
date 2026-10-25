@@ -257,10 +257,14 @@ def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | Non
 
 
 #: Backend wording that says the store denied the read. Verified wording only:
-#: AWS Secrets Manager (aws-sdk-go-v2) ``api error AccessDeniedException``.
+#: AWS Secrets Manager (aws-sdk-go-v2) ``api error AccessDeniedException``, and
+#: GCP Secret Manager's gRPC ``rpc error: code = PermissionDenied`` (same gRPC
+#: status format as the GCP not-found alternative above).
 #: Unverified follow-ups, deliberately NOT matched: Kubernetes ``forbidden``,
-#: GCP ``PermissionDenied``, Azure ``Forbidden``, Vault ``permission denied``.
-_SECRET_ACCESS_DENIED_MESSAGE_RE = re.compile(r"\bAccessDeniedException\b")
+#: Azure ``Forbidden``, Vault ``permission denied``.
+_SECRET_ACCESS_DENIED_MESSAGE_RE = re.compile(
+    r"\bAccessDeniedException\b|\bcode\s*=\s*PermissionDenied\b"
+)
 
 
 def _backend_error(name: str, message: object) -> str | None:

@@ -355,6 +355,23 @@ class TestDaprSecretStore:
         assert exc.value.effective_retryable is True
         assert isinstance(exc.value.cause, httpx.HTTPStatusError)
 
+    async def test_gcp_permission_denied_is_access_denied_subtype(self):
+        """A GCP Secret Manager ``PermissionDenied`` is the store denying the
+        read: the distinct subtype, still retryable."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db-password from secret store "
+            "secretstore: rpc error: code = PermissionDenied desc = Permission "
+            "'secretmanager.versions.access' denied for resource "
+            "'projects/example-project/secrets/db-password/versions/latest' "
+            "(or it may not exist).",
+        )
+        with pytest.raises(SecretStoreAccessDeniedError) as exc:
+            await self.store.get("db-password")
+        assert exc.value.effective_retryable is True
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+
     async def test_throttling_is_not_access_denied_subtype(self):
         self._dapr_error(
             500,
