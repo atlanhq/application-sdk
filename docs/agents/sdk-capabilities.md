@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.51.2
-source-sha:    47e3bf0aaa797cbaf151f3b1d8a270daa29924d0
-source-date:   2026-10-23T10:14:29+01:00
+sdk-version:   3.52.0
+source-sha:    068a7cfa8b5accd75495d11dc89ebf42117976d7
+source-date:   2026-10-25T14:08:31Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -27,7 +27,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 74 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 39 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -2878,6 +2878,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Import:** `from application_sdk.infrastructure import SecretStore`
 - **Signature:** `class SecretStore`
 - **Summary:** Protocol for secrets management.
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
+#### `SecretStoreAccessDeniedError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreAccessDeniedError`
+- **Signature:** `class SecretStoreAccessDeniedError`
+- **Summary:** The secret store answered and *denied* the read (e.g. AWS
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `SecretStoreError`
