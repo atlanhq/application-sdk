@@ -1,7 +1,7 @@
 """Unit tests for Dapr wrapper classes."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import orjson
@@ -106,10 +106,89 @@ class TestDaprStateStore:
 # ---------------------------------------------------------------------------
 
 
+_TYPES_PATH = "application_sdk.infrastructure._dapr.client.get_dapr_component_types"
+_IAM_ROLE_ARN = "arn:aws:iam::123456789012:role/example-role"
+
+
 class TestDaprSecretStore:
     def setup_method(self):
         self.client = _make_client()
         self.store = DaprSecretStore(self.client, store_name="mysecrets")
+        # Default: sidecar metadata unavailable -> no pre-check (today's behaviour).
+        patcher = patch(_TYPES_PATH, new=AsyncMock(return_value={}))
+        patcher.start()
+        self._patcher = patcher
+
+    def teardown_method(self):
+        self._patcher.stop()
+
+    async def _probe(self, store_type: str, name: str) -> str | None:
+        self.client.get_secret.reset_mock()
+        self.client.get_secret.return_value = {name: "v"}
+        with patch(_TYPES_PATH, new=AsyncMock(return_value={"mysecrets": store_type})):
+            return await self.store.get_optional(name)
+
+    @pytest.mark.parametrize(
+        "store_type,name,fetched",
+        [
+            ("secretstores.azure.keyvault", "reporting_db", False),
+            (
+                "secretstores.azure.keyvault",
+                "sqlserver://db.example.com:1433/reporting",
+                False,
+            ),
+            ("secretstores.azure.keyvault", "DB-PASSWORD-REF", True),
+            ("secretstores.kubernetes", _IAM_ROLE_ARN, False),
+            ("secretstores.kubernetes", "..", False),
+            ("secretstores.kubernetes", "db-password", True),
+            ("secretstores.aws.secretmanager", _IAM_ROLE_ARN, False),
+            (
+                "secretstores.aws.secretmanager",
+                "arn:aws:secretsmanager:us-east-1:123456789012:secret:example-AbCdEf",
+                True,
+            ),
+            ("secretstores.aws.secretmanager", "prod/db_password", True),
+            ("secretstores.gcp.secretmanager", "prod/db", False),
+            ("secretstores.gcp.secretmanager", "prod_db-1", True),
+            ("secretstores.hashicorp.vault", "reporting_db", True),
+            ("secretstores.hashicorp.vault", _IAM_ROLE_ARN, True),
+        ],
+    )
+    async def test_name_precheck_by_store_type(self, store_type, name, fetched):
+        result = await self._probe(store_type, name)
+        if fetched:
+            assert result == "v"
+            self.client.get_secret.assert_awaited_once_with(
+                store_name="mysecrets", key=name
+            )
+        else:
+            assert result is None
+            self.client.get_secret.assert_not_awaited()
+
+    async def test_empty_metadata_fetches_every_name(self):
+        self.client.get_secret.return_value = {"reporting_db": "v"}
+        assert await self.store.get_optional("reporting_db") == "v"
+        self.client.get_secret.assert_awaited_once()
+
+    async def test_empty_metadata_is_not_cached(self):
+        types = AsyncMock(
+            side_effect=[{}, {"mysecrets": "secretstores.azure.keyvault"}]
+        )
+        self.client.get_secret.return_value = {"reporting_db": "v"}
+        with patch(_TYPES_PATH, new=types):
+            # 1st call: metadata empty -> probes as today.
+            assert await self.store.get_optional("reporting_db") == "v"
+            # 2nd call: AKV type now known -> rule applies, no backend call.
+            assert await self.store.get_optional("reporting_db") is None
+        self.client.get_secret.assert_awaited_once()
+        assert types.await_count == 2
+
+    async def test_store_type_cached_once_known(self):
+        types = AsyncMock(return_value={"mysecrets": "secretstores.kubernetes"})
+        with patch(_TYPES_PATH, new=types):
+            await self.store.get_optional("a/b")
+            await self.store.get_optional("c/d")
+        types.assert_awaited_once()
 
     async def test_get_returns_value(self):
         self.client.get_secret.return_value = {"db_pass": "s3cret"}
