@@ -1,17 +1,12 @@
 """Dapr client implementations."""
 
 import re
-from collections.abc import Callable
 from typing import Any
 
 import httpx
 import orjson
 
-from application_sdk.infrastructure._dapr.http import (
-    AsyncDaprClient,
-    get_dapr_component_types,
-)
-from application_sdk.infrastructure._single_key_probe import hash_label
+from application_sdk.infrastructure._dapr.http import AsyncDaprClient
 from application_sdk.infrastructure.bindings import BindingError, BindingResponse
 from application_sdk.infrastructure.pubsub import MessageHandler, PubSubError
 from application_sdk.infrastructure.secrets import (
@@ -23,33 +18,6 @@ from application_sdk.infrastructure.state import StateStoreError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-
-# A value that cannot be a valid secret name in the backing store cannot be a
-# stored secret, so ``DaprSecretStore.get`` treats it as not-found without a
-# backend call. Keyed by Dapr component type; unlisted types are not pre-checked.
-_AWS_SM_ARN_PREFIX = "arn:aws:secretsmanager:"
-_AWS_SM_NAME_RE = re.compile(r"[A-Za-z0-9/_+=.@-]{1,512}")
-_AKV_NAME_RE = re.compile(r"[0-9A-Za-z-]{1,127}")
-_GCP_SM_NAME_RE = re.compile(r"[A-Za-z0-9_-]{1,255}")
-
-_SECRET_NAME_VALIDATORS: dict[str, Callable[[str], bool]] = {
-    # https://learn.microsoft.com/en-us/azure/key-vault/general/about-keys-secrets-certificates
-    "secretstores.azure.keyvault": lambda n: _AKV_NAME_RE.fullmatch(n) is not None,
-    # Name charset/length: https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_CreateSecret.html
-    # SecretId also accepts an ARN: https://docs.aws.amazon.com/secretsmanager/latest/apireference/API_GetSecretValue.html
-    "secretstores.aws.secretmanager": lambda n: (
-        n.startswith(_AWS_SM_ARN_PREFIX) or _AWS_SM_NAME_RE.fullmatch(n) is not None
-    ),
-    # https://docs.cloud.google.com/secret-manager/docs/creating-and-accessing-secrets
-    "secretstores.gcp.secretmanager": lambda n: _GCP_SM_NAME_RE.fullmatch(n)
-    is not None,
-    # Path-segment rule only (not DNS-1123):
-    # https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#path-segment-names
-    "secretstores.kubernetes": lambda n: (
-        n not in (".", "..") and "/" not in n and "%" not in n
-    ),
-}
 
 
 def create_dapr_secret_store(
@@ -394,19 +362,6 @@ class DaprSecretStore:
         """
         self._client = client
         self._store_name = store_name
-        self._store_type: str | None = None
-
-    async def _name_is_invalid(self, name: str) -> bool:
-        """True if the store's naming rules prove *name* cannot be a secret."""
-        if self._store_type is None:
-            # Cache only a non-empty answer: the metadata call is best-effort
-            # and a cold sidecar can miss it. A concurrent duplicate call is fine.
-            store_type = (await get_dapr_component_types()).get(self._store_name)
-            if not store_type:
-                return False
-            self._store_type = store_type
-        validator = _SECRET_NAME_VALIDATORS.get(self._store_type)
-        return validator is not None and not validator(name)
 
     async def get(self, name: str) -> str:
         """Get a secret via Dapr.
@@ -421,17 +376,7 @@ class DaprSecretStore:
 
         This mirrors v2's ``SecretStore._process_secret_data`` which
         handled both formats transparently.
-
-        A name the store's naming rules cannot hold raises
-        :class:`SecretNotFoundError` without a backend call.
         """
-        if await self._name_is_invalid(name):
-            logger.debug(
-                "Secret name %s is not valid for store type %s; treating as not found",
-                hash_label(name),
-                self._store_type,
-            )
-            raise SecretNotFoundError(name)
         try:
             result = await self._client.get_secret(
                 store_name=self._store_name,
