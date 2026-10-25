@@ -142,8 +142,9 @@ class AgentSecretAccessDeniedError(SecretStoreAccessDeniedError):
         self.suggested_action = (
             "Grant the SDR's secret-store identity read access to the referenced "
             "secrets (for example secretsmanager:GetSecretValue on AWS, "
-            "roles/secretmanager.secretAccessor on GCP), or check that the "
-            "field's value is correct."
+            "roles/secretmanager.secretAccessor on GCP, the Key Vault Get secret "
+            "permission or Key Vault Secrets User role on Azure, or RBAC get on "
+            "secrets on Kubernetes), or check that the field's value is correct."
         )
 
 

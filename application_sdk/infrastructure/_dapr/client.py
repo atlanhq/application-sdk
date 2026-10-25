@@ -256,14 +256,27 @@ def _dapr_secrets_error_body(exc: httpx.HTTPStatusError) -> dict[str, Any] | Non
     return body if isinstance(body, dict) else None
 
 
-#: Backend wording that says the store denied the read. Verified wording only:
-#: AWS Secrets Manager (aws-sdk-go-v2) ``api error AccessDeniedException``, and
-#: GCP Secret Manager's gRPC ``rpc error: code = PermissionDenied`` (same gRPC
-#: status format as the GCP not-found alternative above).
-#: Unverified follow-ups, deliberately NOT matched: Kubernetes ``forbidden``,
-#: Azure ``Forbidden``, Vault ``permission denied``.
+#: Backend wording that says the store denied the read. One alternative per
+#: backend:
+#:
+#: * AWS Secrets Manager (aws-sdk-go-v2) — ``api error AccessDeniedException``
+#: * GCP Secret Manager (gRPC) — ``rpc error: code = PermissionDenied``
+#: * Azure Key Vault (azure-sdk-for-go ``ResponseError``) — ``RESPONSE 403:
+#:   403 Forbidden`` (covers ``Forbidden``, ``ForbiddenByPolicy``,
+#:   ``ForbiddenByRbac``, all HTTP 403). Only the status line is matched, so a
+#:   400 ``BadParameter`` never counts.
+#: * Kubernetes (client-go RBAC) — ``secrets "<k>" is forbidden: User ...``.
+#:   The key is stripped before matching, so it reads ``secrets "" is
+#:   forbidden``.
+#:
+#: Azure and Kubernetes wording comes from each SDK's documented error format
+#: and has not been confirmed against a production log yet.
+#: Unverified follow-up, deliberately NOT matched: Vault ``permission denied``.
 _SECRET_ACCESS_DENIED_MESSAGE_RE = re.compile(
-    r"\bAccessDeniedException\b|\bcode\s*=\s*PermissionDenied\b"
+    r"\bAccessDeniedException\b"
+    r"|\bcode\s*=\s*PermissionDenied\b"
+    r"|\bRESPONSE 403\b"
+    r"|\bsecrets?\s*(?:\"[^\"]*\")?\s*is forbidden"
 )
 
 

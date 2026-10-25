@@ -372,6 +372,65 @@ class TestDaprSecretStore:
         assert exc.value.effective_retryable is True
         assert isinstance(exc.value.cause, httpx.HTTPStatusError)
 
+    async def test_azure_key_vault_403_is_access_denied_subtype(self):
+        """An Azure Key Vault 403 (``Forbidden``) is the store denying the
+        read: the distinct subtype, still retryable."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db-password from secret store "
+            "secretstore: GET https://example-vault.vault.azure.net/secrets/"
+            "db-password/\n"
+            "--------------------------------------------------------------------------------\n"
+            "RESPONSE 403: 403 Forbidden\n"
+            "ERROR CODE: Forbidden\n"
+            "--------------------------------------------------------------------------------\n"
+            '{"error":{"code":"Forbidden","message":"The user, group or '
+            'application does not have secrets get permission","innererror":'
+            '{"code":"AccessDenied"}}}',
+        )
+        with pytest.raises(SecretStoreAccessDeniedError) as exc:
+            await self.store.get("db-password")
+        assert exc.value.effective_retryable is True
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+
+    async def test_azure_key_vault_400_bad_parameter_is_not_access_denied(self):
+        """A Key Vault 400 ``BadParameter`` is a rejected request, not a
+        denial: it must not take the access-denied subtype."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db-password from secret store "
+            "secretstore: GET https://example-vault.vault.azure.net/secrets/"
+            "db-password/\n"
+            "--------------------------------------------------------------------------------\n"
+            "RESPONSE 400: 400 Bad Request\n"
+            "ERROR CODE: BadParameter\n"
+            "--------------------------------------------------------------------------------\n"
+            '{"error":{"code":"BadParameter","message":"Invalid request."}}',
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db-password")
+        assert not isinstance(exc.value, SecretStoreAccessDeniedError)
+        assert not isinstance(exc.value, SecretNotFoundError)
+
+    async def test_kubernetes_forbidden_is_access_denied_subtype(self):
+        """A Kubernetes RBAC ``is forbidden`` on a secret is the store denying
+        the read: the distinct subtype, still retryable. The key is stripped
+        before matching, so the quoted name is empty by the time it's read."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db-password from secret store "
+            'secretstore: secrets "db-password" is forbidden: User '
+            '"system:serviceaccount:example-ns:example-sa" cannot get resource '
+            '"secrets" in API group "" in the namespace "example-ns"',
+        )
+        with pytest.raises(SecretStoreAccessDeniedError) as exc:
+            await self.store.get("db-password")
+        assert exc.value.effective_retryable is True
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+
     async def test_throttling_is_not_access_denied_subtype(self):
         self._dapr_error(
             500,
