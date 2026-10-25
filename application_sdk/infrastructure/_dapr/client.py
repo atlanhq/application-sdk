@@ -210,6 +210,12 @@ _ERR_SECRET_GET = "ERR_SECRET_GET"
 #:   find the specified secret.``
 #: * Azure Key Vault — ``ERROR CODE: SecretNotFound``
 #: * HashiCorp Vault — ``getSecret <k> failed secret key or version not exist``
+#: * Kubernetes "invalid name" — ``invalid resource name "<k>": [may not
+#:   contain '/']`` (client-go path-segment validation: ``may not contain
+#:   '/'`` or ``may not contain '%'``).
+#:   A name the store rejects as invalid cannot exist there, so the value is
+#:   a literal, not a secret ref. Anchored on those reasons, never a bare
+#:   "invalid" (``invalid credentials`` is an auth failure).
 #:
 #: ``secretstores.local.env`` never errors: it answers a missing variable with
 #: an empty value, which callers already treat as absent.
@@ -219,7 +225,8 @@ _SECRET_ABSENT_MESSAGE_RE = re.compile(
     r"|\bResourceNotFoundException\b"
     r"|can'?t find the specified secret"
     r"|\bSecretNotFound\b"
-    r"|secret key or version not exist",
+    r"|secret key or version not exist"
+    r"""|\binvalid resource name\s*(?:"[^"]*")?\s*:\s*\[may not contain '[/%]'""",
     re.IGNORECASE,
 )
 
