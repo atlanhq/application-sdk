@@ -825,8 +825,13 @@ def _remove_owned(path: str, lock_fd: int | None) -> bool:
     """Delete *path*'s content first and its lock file last, then release the lock.
 
     If the content cannot all be deleted, the lock file stays: once the lock
-    is released, the next sweep finds the folder dead and retries.
+    is released, the next sweep finds the folder dead and retries. Without
+    ``flock`` (Windows) the lock is only a file, and an open file cannot be
+    deleted there, so it is closed first.
     """
+    if fcntl is None and lock_fd is not None:
+        _close_lock(lock_fd)
+        lock_fd = None
     try:
         try:
             entries = list(os.scandir(path))

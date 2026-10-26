@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Annotated, Any
@@ -41,7 +42,13 @@ from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.reference import fetch, persist_file_reference
 from tests.unit.private_stdlib import private_stdlib
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="POSIX-only: owner locks use fcntl.flock, fork handling uses os.fork",
+    ),
+]
 
 _PAYLOAD = b"fnd-4310 " * 128
 
