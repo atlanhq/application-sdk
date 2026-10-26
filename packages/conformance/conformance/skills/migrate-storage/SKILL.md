@@ -428,19 +428,23 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    attempt's prefix; per-task scratch directories do not. Confirm no consumer
    depends on that overwrite.
 7. **Cross-run state.** A prefix the next run reads back (a cross-run
-   **state** site) either stays a whole-prefix sync with a reasoned
-   `# conformance: ignore[P044] state synced across runs` (P044's own text
-   allows this for a state directory synced wholesale), or moves to
-   `App.upload` / `App.download` in `run()` at the same stable key. Either
-   way the key must not move: the next run, on the old or new version,
-   reads it.
+   **state** site). The reference apps keep no state of their own: they
+   hand a `current_state_prefix` to the publish node, which owns the state
+   (`atlan-mysql-app` `app/mysql.py`). An app that diffs or carries state
+   forward itself has a design difference, not a storage fix: leave the
+   site open and record it. P044's own text allows
+   `# conformance: ignore[P044] state synced across runs` for a state
+   directory synced wholesale; do not add it without the owner's answer.
 8. **Entrypoint key.** A **key** field that the generated manifest or
-   another app reads either keeps its name with a reasoned
-   `# conformance: ignore[P012] object-store key read by <reader>`, or gets
-   a `*_prefix` / `*_key` twin that the manifest switches to, with the old
-   name retired as in decision 5.
+   another app reads keeps its name with a reasoned
+   `# conformance: ignore[P012] object-store key, not a local path, read by <reader>`
+   (decided default `entry-key-ignore`). P012 matches the field name, and
+   the value already survives the move to another node; a `*_prefix` /
+   `*_key` rename (the reference apps' names) changes only the name and
+   costs the decision 5 lifecycle plus a manifest switch. Rename only when
+   the owner asks for it.
 
-Decisions 1, 2, 3, 5 and 6 have answers that apply to every app; they are in
+Decisions 1, 2, 3, 5, 6 and 8 have answers that apply to every app; they are in
 **Decided defaults** below. A site that needs a different answer (a key
 outside the run would move, the delivered file set would change) still
 stops here.
@@ -503,7 +507,9 @@ is delivered at the same key).
 {"rule": "P009", "fix_shape": "outbound-upload-refs", "decision": "Replace the hand-written copy between the deployment and upstream stores with self.upload_refs(UploadRefsInput(files=[DeclaredFile(ref=ref, label=<the file name delivered today>)], prefix=<the prefix delivered today>)) from run(), called per entity type right after its transform so earlier results still land if a later step fails. Declare exactly the files today's code delivers. Run it in every deployment, not only when ENABLE_ATLAN_UPLOAD is set. Refs it re-delivers are TRANSIENT.", "why": "Owner decisions 1-3: destination keys equal today's keys; upload_refs writes to upstream_storage or storage, which in-cluster is the same store. Reference shape: atlan-mysql-app app/mysql.py run(), atlan-metabase-app app/connector.py."}
 {"rule": "P044", "fix_shape": "outbound-upload-refs", "decision": "Same as P009 outbound-upload-refs for an upload_prefix of transformed output that publish or another app reads: return the refs from the task, deliver from run() with upload_refs at today's prefix and file names.", "why": "An upload inside a @task trades P044 for P008. Reference shape: atlan-mysql-app app/mysql.py run()."}
 {"rule": "P009", "fix_shape": "customer-bucket", "decision": "CloudStore.from_credentials(<the same bucket, region and auth the client used>); call store.list(prefix) first when the old code failed on an empty prefix; then store.download(prefix=..., output_dir=<the same local layout>). Needs SDK 3.49.1 or later; with a lower lock, plan the site as SDK.", "why": "CloudStore is the SDK API for a customer bucket; 3.49.1 skips S3 folder-marker keys and resolves a blank region as boto3 did. Reference shape: atlan-openapi-app app/connector.py."}
-{"rule": "P009", "fix_shape": "auth-only-ignore", "decision": "# conformance: ignore[P009] boto3 for authentication only (STS / IAM / RDS token), not object storage, on the import line, after checking that no client in the file is s3 or another storage service.", "why": "Step 1 store class: authentication is not storage."}
+{"rule": "P009", "fix_shape": "auth-only-ignore", "decision": "# conformance: ignore[P009] boto3 for authentication only, not object storage (STS / IAM / RDS token), on the import line, after checking that no client in the file is s3 or another storage service.", "why": "Step 1 store class: authentication is not storage.", "suppress": true, "reason": "authentication only, not object storage"}
+{"rule": "P012", "fix_shape": "entry-key-ignore", "decision": "# conformance: ignore[P012] object-store key, not a local path, read by <the manifest node or app that reads it>, on the field line, for a str field on an @entrypoint Output (or Input) whose value is an object-store key or prefix read outside this run. Only after checking that no code in the app uses the value as a local path (os.path.join with a local root, open, makedirs); a field used both ways is a hand-off or entrypoint-field-retire site.", "why": "Owner decision 8: P012 matches the name; the value already survives the move to another node, and a rename changes only the name.", "suppress": true, "reason": "object-store key, not a local path"}
+{"rule": "P012", "fix_shape": "not-path-ignore", "decision": "# conformance: ignore[P012] <what the value is>, not a path, on the field line, for a str field whose value is not a path at all (a format flag, a list of names, a display name).", "why": "P012 is a name heuristic; its rule text names a reasoned ignore for a field that is not a transferable path.", "suppress": true, "reason": "not a path"}
 ```
 
 ## Agent protocol
