@@ -14,6 +14,7 @@ import orjson
 import pytest
 
 from application_sdk import constants
+from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage.batch import download_prefix, list_keys
 from application_sdk.storage.chunked import _part_path, _transfer_state_path
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
@@ -2277,28 +2278,50 @@ class TestUploadPartSizeConfiguration:
 
         assert 5000 // writer.call_args.kwargs["buffer_size"] == _MAX_UPLOAD_PARTS
 
-    async def test_grown_parts_keep_bytes_in_flight_within_configured_budget(
+    async def test_grown_parts_hold_no_more_memory_than_requested_parts(
         self, store, tmp_path, monkeypatch
     ) -> None:
-        """Parts grown past the requested size lower concurrency so memory holds."""
+        """A 50 GiB file at 8 MiB parts and concurrency 12, scaled to bytes.
+
+        Before the part-count cap it held 14 requested parts; growing its parts
+        to fit the cap must not hold more, or a worker at the minimum transfer
+        budget is pushed past it.
+        """
         monkeypatch.setattr(
             "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", False
         )
         monkeypatch.setattr(
             "application_sdk.constants.STORAGE_UPLOAD_MAX_CONCURRENCY", 12
         )
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", 10**9
+        )
+        requested_part = 10
         f = tmp_path / "column.json"
-        f.write_bytes(b"x" * 5000)
+        f.write_bytes(b"x" * 6400 * requested_part)
+        held_while_writing: list[int] = []
+        chunk_sizes: list[int] = []
+
+        async def write(chunk: bytes) -> None:
+            held_while_writing.append(transfer_budget().used)
+            chunk_sizes.append(len(chunk))
 
         with patch("application_sdk.storage.ops.obstore.open_writer_async") as writer:
-            writer.return_value.__aenter__ = AsyncMock()
+            writer.return_value.__aenter__ = AsyncMock(
+                return_value=MagicMock(write=write)
+            )
             writer.return_value.__aexit__ = AsyncMock(return_value=False)
             await upload_file(
-                "k", f, store, chunk_size=1, normalize=False, verify=False
+                "k",
+                f,
+                store,
+                chunk_size=requested_part,
+                normalize=False,
+                verify=False,
             )
 
-        kwargs = writer.call_args.kwargs
-        assert kwargs["buffer_size"] * kwargs["max_concurrency"] <= 1 * 12
+        assert max(chunk_sizes) <= requested_part
+        assert max(held_while_writing) <= requested_part * (12 + 2)
 
     async def test_max_concurrency_is_passed_through(
         self, store, tmp_path, monkeypatch

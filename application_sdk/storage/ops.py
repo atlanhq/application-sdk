@@ -1033,6 +1033,7 @@ async def _upload_once(
     path: Path,
     *,
     effective_chunk: int,
+    read_chunk: int,
     max_concurrency: int,
     put_attributes: dict[str, str] | None,
     compute_hash: bool,
@@ -1055,7 +1056,9 @@ async def _upload_once(
     # observable, so the reservation covers the writer's whole life: up to
     # max_concurrency parts in flight, the part being filled, and the chunk
     # read here — or twice the file, when it fits in one buffer (FND-4082).
-    buffered_bytes = min(2 * file_size, effective_chunk * (max_concurrency + 2))
+    buffered_bytes = min(
+        2 * file_size, effective_chunk * (max_concurrency + 1) + read_chunk
+    )
     async with transfer_budget().reserve(buffered_bytes):
         async with obstore.open_writer_async(
             resolved,
@@ -1066,15 +1069,15 @@ async def _upload_once(
         ) as writer:
             with path.open("rb") as fh:
                 while True:
-                    chunk = fh.read(effective_chunk)
+                    chunk = fh.read(read_chunk)
                     if not chunk:
                         break
                     if h is not None:
                         h.update(chunk)
                     await writer.write(chunk)
                     bytes_sent += len(chunk)
-                    # One multipart part on its way to the store is one
-                    # observable unit (ADR-0018). Marking per part rather than
+                    # One read handed to the multipart writer is one
+                    # observable unit (ADR-0018). Marking per read rather than
                     # per file is what keeps a single multi-GB upload — the
                     # common shape for a large connector's parquet output —
                     # from looking like one long quiet window to the stall
@@ -1243,6 +1246,7 @@ async def upload_file(
                 key,
                 path,
                 effective_chunk=effective_chunk,
+                read_chunk=requested_chunk,
                 max_concurrency=max_concurrency,
                 put_attributes=put_attributes,
                 compute_hash=compute_hash,
