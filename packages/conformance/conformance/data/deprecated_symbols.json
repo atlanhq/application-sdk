@@ -552,7 +552,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": " subclasses SqlQueryExtractor which is deprecated. Use application_sdk.app.App with the app's own query tasks (get_query_batches / fetch_queries) and run() instead; application_sdk.templates.SqlApp has no query-log tasks. Will be removed in v4.0.0.",
+      "message": " subclasses SqlQueryExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.sql_query_extractor",
       "removal_version": "4.0.0",

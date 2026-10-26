@@ -44,7 +44,7 @@ Does the connector extract SQL database metadata?
 │         ├── YES → §2c  Incremental SQL Metadata Extractor (SqlApp + custom run())
 │         └── NO  → §2a  SQL Metadata Extractor (SqlApp)
 ├── Does the connector extract SQL query logs?
-│   └── YES → §2b  SQL Query Extractor (App)
+│   └── YES → §2b  SqlQueryExtractor
 ├── Does the connector call a REST/HTTP API (BI tool, SaaS platform)?
 │   └── YES → §2d  REST/HTTP Metadata Extractor (App)
 └── Custom connector (none of the above)?
@@ -54,9 +54,9 @@ Does the connector extract SQL database metadata?
 Every connector also has a **Handler** (§4) and an **entry point** (§5).
 Apply those sections regardless of which workflow path you chose.
 
-`SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor` and
-`SqlQueryExtractor` are deprecated (removal in v4.0.0, conformance `B001`).
-Do not land on them: the import rewriter writes them as placeholders, and §2a–§2c replace them.
+`SqlMetadataExtractor` and `IncrementalSqlMetadataExtractor` are deprecated
+(removal in v4.0.0, conformance `B001`). Do not land on them: the import
+rewriter writes them as placeholders, and §2a and §2c replace them.
 
 ---
 
@@ -152,19 +152,14 @@ class MyQueryActivities(SQLQueryExtractionActivities):
 
 ### After (v3)
 
-`SqlApp` has no query-log tasks, so a query-log extractor subclasses plain
-`App` and keeps its own query tasks and `run()`. The typed contracts in
-`application_sdk.templates.contracts.sql_query` are not deprecated; reuse them.
-
 ```python
 from application_sdk.app import App, task
 from application_sdk.templates.contracts.sql_query import (
     QueryBatchInput, QueryBatchOutput,
     QueryFetchInput, QueryFetchOutput,
-    QueryExtractionInput, QueryExtractionOutput,
 )
 
-class MyQueryExtractor(App):
+class MyQueryExtractor(SqlQueryExtractor):
     @task(timeout_seconds=600)
     async def get_query_batches(self, input: QueryBatchInput) -> QueryBatchOutput:
         ...
@@ -172,29 +167,14 @@ class MyQueryExtractor(App):
     @task(timeout_seconds=3600)
     async def fetch_queries(self, input: QueryFetchInput) -> QueryFetchOutput:
         ...
-
-    async def run(self, input: QueryExtractionInput) -> QueryExtractionOutput:  # type: ignore[override]
-        batches = await self.get_query_batches(QueryBatchInput(workflow_args=...))
-        for batch_number in range(batches.total_batches):
-            await self.fetch_queries(QueryFetchInput(workflow_args=..., batch_number=batch_number, batch_size=batches.batch_size))
-        return QueryExtractionOutput(...)
 ```
 
 ### Checklist
 
 - [ ] Delete the `@workflow.defn` class.
-- [ ] Merge both classes into `MyQueryExtractor(App)`.
+- [ ] Merge both classes into `MyQueryExtractor(SqlQueryExtractor)`.
 - [ ] Rename `workflow_args: Dict[str, Any]` → `input: QueryBatchInput` / `input: QueryFetchInput`.
-- [ ] Add `@task(timeout_seconds=…)` to each query task.
-- [ ] Write `run()`: get the batch count, fetch each batch, return the totals.
-      To upload output, call `App.upload`, not `upload_to_atlan` (deprecated).
-- [ ] In `run()`, use `input.credential_ref`; if it is `None` and
-      `input.credential_guid` is set, use
-      `application_sdk.credentials.legacy_credential_ref(input.credential_guid)`
-      (older connectors send only `credential_guid`).
-- [ ] Catch errors in `run()` and re-raise them as a typed `InternalError`
-      subclass (`application_sdk.errors`) with `from e`. The old `run()` raised
-      `SqlQueryExtractionError`, which is internal to the SDK.
+- [ ] Add `@task(timeout_seconds=…)` to each overridden method.
 
 ---
 

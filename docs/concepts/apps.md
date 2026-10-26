@@ -152,8 +152,6 @@ class MyExtractor(SqlMetadataExtractor):
 
 ### SqlQueryExtractor
 
-Deprecated (removal in v4.0.0): subclass `App` and keep the query tasks (`get_query_batches` / `fetch_queries`) and `run()` in the app. `SqlApp` has no query-log tasks.
-
 Extracts query history/logs from SQL sources:
 
 ```python

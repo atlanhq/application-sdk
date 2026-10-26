@@ -168,9 +168,8 @@ use), because each use changes with the migration.
     through `run_in_thread`).
   - `QueryBasedTransformer`, `TransformerInterface` (→ the asset-mapper
     pattern), `SqlMetadataExtractor` or `BaseMetadataExtractor` on a SQL
-    source (→ `templates.SqlApp`), `IncrementalSqlMetadataExtractor`
-    (→ `templates.SqlApp` with a custom `run()`) and `SqlQueryExtractor`
-    (→ `app.App` with the app's own query tasks; `SqlApp` has none) are
+    source (→ `templates.SqlApp`) and `IncrementalSqlMetadataExtractor`
+    (→ `templates.SqlApp` with a custom `run()`) are
     structural v3 migrations no packaged skill
     performs: hand them to the developer with
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)

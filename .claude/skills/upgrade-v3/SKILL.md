@@ -143,7 +143,7 @@ After identifying the connector type, determine the transformation strategy:
 > ```python
 > from application_sdk.templates import SqlApp
 > ```
-> For incremental extraction, the SDK's guidance is `SqlApp` with a custom `run()` for the incremental orchestration — there is no drop-in incremental base any more. For query-log extraction, subclass plain `application_sdk.app.App` and keep the query tasks (`get_query_batches` / `fetch_queries`) and `run()` in the app: `SqlApp` has no query-log tasks. A migration that lands on a deprecated template will show up as a `B001` finding in Phase 7.
+> For incremental extraction, the SDK's guidance is `SqlApp` with a custom `run()` for the incremental orchestration — there is no drop-in incremental base any more. A migration that lands on a deprecated template will show up as a `B001` finding in Phase 7.
 
 - **Default to the asset-mapper + `FileReference` + `self.upload()` pipeline.** This is the v3-native shape that lets each `@task` stream rows into a typed file output and hand the path downstream — same as `atlan-openapi-app`. The fetch tasks return `FileReference`-typed outputs, the publish step calls `self.upload(UploadInput(local_path=..., storage_path=...))`, and there is no shared `output_path` / scan-the-directory upload step. Inform the user:
   > "v3 SQL connectors use the same asset-mapper + FileReference pipeline as REST connectors: each fetch task writes a typed file and returns a `FileReference`; `self.upload()` carries it to object store. This replaces the v2 `output_path` directory + `upload_to_atlan()` scan pattern. Shall I proceed with this approach?"
@@ -832,7 +832,7 @@ Read the findings, but check these first — each is something this skill's earl
 
 | Rule | Tier | What the migration did wrong |
 |---|---|---|
-| `B001 DeprecatedSdkSymbolUsage` | warn | Landed on `SqlMetadataExtractor` / `SqlQueryExtractor` / `BaseMetadataExtractor` / `IncrementalSqlMetadataExtractor` instead of `SqlApp` (or plain `App` for a non-SQL connector or a query-log extractor); kept `TransformerInterface` / `AtlasTransformer` / `QueryBasedTransformer`; used `ParquetFileWriter` / `JsonFileWriter`; used the deprecated e2e names from Phase 4b's table; called `upload_to_atlan()`; read `DataframeType.daft`. The finding carries the SDK's own migration guidance — follow that, not a guess. |
+| `B001 DeprecatedSdkSymbolUsage` | warn | Landed on `SqlMetadataExtractor` / `SqlQueryExtractor` / `BaseMetadataExtractor` / `IncrementalSqlMetadataExtractor` instead of `SqlApp` (or plain `App` for a non-SQL connector); kept `TransformerInterface` / `AtlasTransformer` / `QueryBasedTransformer`; used `ParquetFileWriter` / `JsonFileWriter`; used the deprecated e2e names from Phase 4b's table; called `upload_to_atlan()`; read `DataframeType.daft`. The finding carries the SDK's own migration guidance — follow that, not a guess. |
 | `P013` / `P014` | **block** | A `@task` or `@entrypoint` left with a `dict`, `Any`, or a plain pydantic model on its boundary instead of an SDK `Input`/`Output` subclass. The commonest residue of a hand-merged Workflow + Activities class. |
 | `P001 UnboundedContractFields` | **block** | `allow_unbounded_fields=True` used as the escape hatch while typing contracts (Phase 2b). |
 | `F001 ReservedPreflightActivityName` | **block** | The v2 connector had a `preflight` activity and the codemod carried the name over. The SDK now reserves `{app_name}:preflight` for its injected gate; worker boot fails with `WorkerActivityNameCollisionError`. Rename it, or fold it into `Handler.preflight_check` — which the gate already calls. |
@@ -1056,7 +1056,7 @@ class MyApp(App):  # SQL connectors: replace App with SqlApp
             await self.dispose_client()
 ```
 
-> **SQL connectors:** use `application_sdk.templates.SqlApp` as the base class (it provides `run()` and SQL-specific task scaffolding). A query-log extractor subclasses plain `App` (`SqlApp` has no query-log tasks). `SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are deprecated aliases of the old shape — see the box in §2a′. The client-caching pattern above is identical regardless of base class.
+> **SQL connectors:** use `application_sdk.templates.SqlApp` as the base class (it provides `run()` and SQL-specific task scaffolding). `SqlMetadataExtractor`, `SqlQueryExtractor` and `IncrementalSqlMetadataExtractor` are deprecated aliases of the old shape — see the box in §2a′. The client-caching pattern above is identical regardless of base class.
 
 `get_app_state` / `set_app_state` are only callable inside `@task` methods — see the corresponding gotcha. Putting the cached object on `app_state` (not a module-level global) is what makes the cache worker-local rather than process-global, which matters when the worker pool runs multiple connectors.
 

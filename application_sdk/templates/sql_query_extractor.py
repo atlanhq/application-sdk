@@ -45,10 +45,8 @@ class SqlQueryExtractor(BaseMetadataExtractor):
     """Abstract base class for SQL query extraction apps.
 
     .. deprecated::
-        Will be removed in v4.0.0. Use :class:`application_sdk.app.App`
-        with the app's own query tasks (``get_query_batches`` /
-        ``fetch_queries``) and ``run()`` instead.
-        :class:`application_sdk.templates.SqlApp` has no query-log tasks.
+        Will be removed in v4.0.0. Use
+        :class:`application_sdk.templates.SqlApp` instead.
 
     Inherits ``client_class``, ``handler_class``, and ``transformer_class``
     from ``BaseMetadataExtractor``.
@@ -70,9 +68,7 @@ class SqlQueryExtractor(BaseMetadataExtractor):
             return
         warnings.warn(
             f"{cls.__name__} subclasses SqlQueryExtractor which is deprecated. "
-            "Use application_sdk.app.App with the app's own query tasks "
-            "(get_query_batches / fetch_queries) and run() instead; "
-            "application_sdk.templates.SqlApp has no query-log tasks. "
+            "Use application_sdk.templates.SqlApp instead. "
             "Will be removed in v4.0.0.",
             DeprecationWarning,
             stacklevel=2,
