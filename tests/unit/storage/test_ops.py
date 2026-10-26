@@ -2278,6 +2278,22 @@ class TestUploadPartSizeConfiguration:
 
         assert 5000 // writer.call_args.kwargs["buffer_size"] == _MAX_UPLOAD_PARTS
 
+    @pytest.mark.parametrize("part_size", [0, -1])
+    async def test_non_positive_part_size_is_rejected_before_upload(
+        self, store, tmp_path, monkeypatch, part_size
+    ) -> None:
+        """Zero read nothing and stored an empty object; -1 read the whole file."""
+        monkeypatch.setattr(
+            "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", False
+        )
+        f = tmp_path / "column.json"
+        f.write_bytes(b"x" * 5000)
+
+        with pytest.raises(ValueError, match="part size"):
+            await upload_file("k", f, store, chunk_size=part_size, normalize=False)
+
+        assert not await exists("k", store)
+
     @pytest.mark.parametrize("file_gib", range(8, 51))
     async def test_grown_parts_hold_no_more_memory_than_requested_parts(
         self, store, tmp_path, monkeypatch, file_gib

@@ -1180,6 +1180,7 @@ async def upload_file(
         StorageIntegrityError: If the local file shrank while it was being
             read, so the uploaded object is a truncated prefix of it.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
+        ValueError: If the part size is zero or negative.
 
     Note:
         Zero-byte uploads are allowed but emit a warning — some S3-style backends
@@ -1218,6 +1219,8 @@ async def upload_file(
         if (STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN or chunk_size is None)
         else chunk_size
     )
+    if requested_chunk <= 0:
+        raise ValueError(f"Upload part size must be positive, got {requested_chunk}")
 
     path = Path(local_path)
     file_size = path.stat().st_size
