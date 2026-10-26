@@ -203,9 +203,9 @@ async def _resolve_v2(
     Every error names the payload *field*, never the secret name or key.
 
     Raises:
-        CredentialParseError: a field is not a valid source, or a referenced
-            secret is not a JSON object.
-        CredentialNotFoundError: a referenced secret or key is absent.
+        CredentialParseError: a field is not a valid source.
+        CredentialNotFoundError: a referenced secret is absent, or the key is
+            not in it (a single-value secret is addressed with ``key == name``).
         SecretStoreError: the store failed; :class:`AgentSecretReadError` for a
             non-outage failure, the outage subtypes for an outage.
     """
@@ -214,10 +214,12 @@ async def _resolve_v2(
     out: dict[str, Any] = {
         k: v for k, v in raw.items() if k in V2_ENVELOPE_KEYS and k != "format"
     }
-    bundles: dict[str, dict[str, Any]] = {}
+    raw_secrets: dict[str, Any] = {}
     refs = 0
     for field, source in fields.items():
-        out[field], is_ref = await _read_v2_field(field, source, secret_store, bundles)
+        out[field], is_ref = await _read_v2_field(
+            field, source, secret_store, raw_secrets
+        )
         refs += is_ref
     return out, refs
 
@@ -226,7 +228,7 @@ async def _read_v2_field(
     field: str,
     source: FieldSource,
     secret_store: SecretStore,
-    bundles: dict[str, dict[str, Any]],
+    raw_secrets: dict[str, Any],
 ) -> tuple[Any, bool]:
     """One field's value, and whether it came from the secret store."""
     if source.value_from is None:
@@ -235,18 +237,34 @@ async def _read_v2_field(
         return source.value_from.file_ref.path, False
     ref = source.value_from.secret_key_ref
     assert ref is not None  # ValueFrom guarantees exactly one
-    if ref.name not in bundles:
-        bundles[ref.name] = await _fetch_v2_secret(secret_store, ref.name, field)
-    bundle = bundles[ref.name]
-    if ref.key not in bundle:
-        raise CredentialNotFoundError(field)
-    return bundle[ref.key], True
+    if ref.name not in raw_secrets:
+        raw_secrets[ref.name] = await _fetch_v2_secret(secret_store, ref.name, field)
+    raw = raw_secrets[ref.name]
+    mapping = raw if isinstance(raw, dict) else _json_object_or_none(raw)
+    if mapping is not None and ref.key in mapping:
+        return mapping[ref.key], True
+    if ref.key == ref.name:
+        # Single-value secret (Azure Key Vault, GCP, a plain AWS string): the
+        # store returns the value itself. Returned as-is, never parsed, so
+        # "12345" stays a string.
+        return raw, True
+    raise CredentialNotFoundError(field)
 
 
-async def _fetch_v2_secret(
-    secret_store: SecretStore, name: str, field: str
-) -> dict[str, Any]:
-    """Fetch the secret *name* as a JSON object; errors are keyed by *field*."""
+def _json_object_or_none(raw: Any) -> dict[str, Any] | None:
+    """``raw`` parsed as a JSON object, or ``None`` for anything else."""
+    try:
+        parsed = orjson.loads(raw)
+    except (orjson.JSONDecodeError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+async def _fetch_v2_secret(secret_store: SecretStore, name: str, field: str) -> Any:
+    """Fetch the secret *name* raw (``str``, or ``dict`` from some backends).
+
+    Not parsed here: a secret may be a JSON map or a single value. Errors are
+    keyed by *field*."""
     try:
         raw = await retry_past_dapr_cold_start(
             lambda: secret_store.get(name),
@@ -265,22 +283,7 @@ async def _fetch_v2_secret(
         )
         raise _v2_store_error(field, exc) from None
 
-    if isinstance(raw, dict):
-        return raw
-    try:
-        bundle = orjson.loads(raw)
-    except orjson.JSONDecodeError:
-        raise CredentialParseError(
-            f"Secret for agent_json field '{field}' is not valid JSON",
-            credential_name=field,
-        ) from None
-    if not isinstance(bundle, dict):
-        raise CredentialParseError(
-            f"Secret for agent_json field '{field}' must be a JSON object, "
-            f"got {type(bundle).__name__}",
-            credential_name=field,
-        )
-    return bundle
+    return raw
 
 
 def _v2_store_error(field: str, exc: Exception) -> SecretStoreError:

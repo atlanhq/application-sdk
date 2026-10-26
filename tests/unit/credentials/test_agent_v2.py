@@ -142,14 +142,72 @@ class TestAbsence:
         assert _SECRET_NAME not in str(info.value)
 
     @pytest.mark.parametrize("body", ["not json", "[1, 2]"])
-    async def test_secret_that_is_not_an_object_is_a_parse_error(
+    async def test_non_map_secret_with_key_not_name_is_not_found(
         self, body: str
     ) -> None:
         store = MockSecretStore({_SECRET_NAME: body})
-        with pytest.raises(CredentialParseError) as info:
+        with pytest.raises(CredentialNotFoundError) as info:
             await resolve_agent_credential(_spec(_payload()), store)
         assert _SECRET_NAME not in str(info.value)
         assert info.value.__cause__ is None
+
+
+def _single_value_payload(name: str, key: str) -> dict[str, Any]:
+    return {
+        "format": 2,
+        "agent-name": "example-agent",
+        "token": {"valueFrom": {"secretKeyRef": {"name": name, "key": key}}},
+    }
+
+
+class TestSingleValueSecret:
+    async def test_plain_string_with_key_equal_name_returns_the_string(self) -> None:
+        store = MockSecretStore({"example-pw": "plain-secret"})
+        out = await resolve_agent_credential(
+            _spec(_single_value_payload("example-pw", "example-pw")), store
+        )
+        assert out["token"] == "plain-secret"
+
+    async def test_numeric_string_stays_a_string(self) -> None:
+        store = MockSecretStore({"example-pw": "12345"})
+        out = await resolve_agent_credential(
+            _spec(_single_value_payload("example-pw", "example-pw")), store
+        )
+        assert out["token"] == "12345"
+        assert isinstance(out["token"], str)
+
+    async def test_plain_string_with_key_not_name_is_not_found(self) -> None:
+        store = MockSecretStore({"example-pw": "plain-secret"})
+        with pytest.raises(CredentialNotFoundError) as info:
+            await resolve_agent_credential(
+                _spec(_single_value_payload("example-pw", "other")), store
+            )
+        assert "plain-secret" not in str(info.value)
+        assert info.value.__cause__ is None
+
+    async def test_json_map_key_hit_returns_the_value(self) -> None:
+        store = MockSecretStore({"example-pw": json.dumps({"k": "v"})})
+        out = await resolve_agent_credential(
+            _spec(_single_value_payload("example-pw", "k")), store
+        )
+        assert out["token"] == "v"
+
+    async def test_json_map_key_miss_with_key_not_name_is_not_found(self) -> None:
+        store = MockSecretStore({"example-pw": json.dumps({"k": "v"})})
+        with pytest.raises(CredentialNotFoundError):
+            await resolve_agent_credential(
+                _spec(_single_value_payload("example-pw", "other")), store
+            )
+
+    async def test_two_fields_on_one_name_fetch_once(self) -> None:
+        store = MockSecretStore({"example-pw": json.dumps({"a": "1", "b": "2"})})
+        payload = _single_value_payload("example-pw", "a")
+        payload["token2"] = {
+            "valueFrom": {"secretKeyRef": {"name": "example-pw", "key": "b"}}
+        }
+        out = await resolve_agent_credential(_spec(payload), store)
+        assert (out["token"], out["token2"]) == ("1", "2")
+        assert store._get_calls == ["example-pw"]
 
 
 class TestStoreFailure:
@@ -253,6 +311,21 @@ class TestBoundary:
         out = await CredentialResolver(_store()).resolve_raw(ref)
         assert out["password"] == _SECRET_VALUE
         assert out["port"] == 5432
+
+    async def test_payload_without_host_or_port_survives_the_wire(self) -> None:
+        # A REST-style app: envelope keys plus one secret, no host/port.
+        store = MockSecretStore({"example-api": json.dumps({"token": "t0k"})})
+        payload = {
+            "format": 2,
+            "agent-name": "example-agent",
+            "api.token": {
+                "valueFrom": {"secretKeyRef": {"name": "example-api", "key": "token"}}
+            },
+        }
+        decoded = await self._through_the_wire(payload)
+        ref = CredentialRef.resolve(decoded)
+        out = await CredentialResolver(store).resolve_raw(ref)
+        assert out["api.token"] == "t0k"
 
     async def test_missing_secret_surfaces_as_not_found(self) -> None:
         decoded = await self._through_the_wire(_payload())

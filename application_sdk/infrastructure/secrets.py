@@ -345,6 +345,10 @@ class AgentSecretReadError(PreconditionError, SecretStoreError):
             retryable=retryable,
         )
         self.resource = "agent_json_secret"
+        self.suggested_action = (
+            "Check that the secret named by this field's secretKeyRef exists and "
+            "that the SDR's secret-store identity can read it."
+        )
 
 
 @dataclass(kw_only=True)

@@ -215,6 +215,19 @@ class AgentCredentialSpec(BaseModel):
         """The keys the payload actually set, by alias, for v2 parsing.
 
         Not :meth:`to_raw_dict`: that fills defaults (``key-type: ""``,
-        ``host: ""``) which are not v2 sources.
+        ``host: ""``) which are not v2 sources. ``exclude_unset`` alone is not
+        enough: a spec reloaded by the Temporal data converter counts every
+        declared field as set, so a declared non-envelope field still equal to
+        its default is dropped too. A non-empty ``key-type`` / ``secret-path``
+        is kept, so the v2 conflict check still sees it.
         """
-        return self.model_dump(by_alias=True, exclude_unset=True)
+        from application_sdk.credentials.sources import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            V2_ENVELOPE_KEYS,
+        )
+
+        out = self.model_dump(by_alias=True, exclude_unset=True)
+        for name, info in type(self).model_fields.items():
+            key = info.alias or name
+            if key not in V2_ENVELOPE_KEYS and key in out and out[key] == info.default:
+                del out[key]
+        return out

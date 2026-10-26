@@ -307,8 +307,10 @@ strings are secret names (the v1 `single-key` probe).
   `value` or `valueFrom`.
 - `value`: a JSON scalar, used as-is with its type kept (`5432` stays an int).
 - `valueFrom.secretKeyRef`: the SDK reads the secret `name` from the secret
-  store, parses it as a JSON object, and takes `key`. Each distinct secret is
-  fetched once.
+  store (once per distinct secret). If the value is a JSON object and has `key`,
+  that entry is used. Otherwise, when `key` equals `name` (a single-value
+  secret: Azure Key Vault, GCP, a plain AWS string), the whole value is used
+  as-is, never parsed, so `"12345"` stays a string. Anything else is not found.
 - `valueFrom.fileRef`: resolves to the `path` string; the app fetches the file
   itself.
 - `key-type` and `secret-path` cannot be combined with `format: 2`.
@@ -318,7 +320,7 @@ Errors name the payload field, never the secret name or value:
 
 | Situation | Error | Audience |
 | --- | --- | --- |
-| Field is not a valid source, or a secret is not a JSON object | `CredentialParseError` | user |
+| Field is not a valid source | `CredentialParseError` | user |
 | Secret or key does not exist | `CredentialNotFoundError` (no cause) | user |
 | Store answered with a failure (throttled, access denied) | `AgentSecretReadError` (PRECONDITION, `retryable` kept from the store) | user |
 | Store unreachable or still cold | `SecretStoreUnavailableError` / `SecretStoreUnreachableError` | platform |
