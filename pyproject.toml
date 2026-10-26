@@ -81,7 +81,7 @@ sql = [
     "pandas>=2.2.3,<3.0.0",
     "pyarrow>=23.0.1,<24.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
-    "duckdb>=1.1.3,<1.6.0",
+    "duckdb>=2.0.0,<2.1.0",
     "duckdb-engine>=0.17.0,<0.18.0",
 ]
 # Deprecated alias for [sql] — removed in v4.0.0. Install [sql] (or
@@ -113,7 +113,7 @@ incremental = [
     "pandas>=2.2.3,<3.0.0",
     "pyarrow>=23.0.1,<24.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
-    "duckdb>=1.1.3,<1.6.0",
+    "duckdb>=2.0.0,<2.1.0",
     "duckdb-engine>=0.17.0,<0.18.0",
 ]
 # Backwards-compatibility shim — boto3 promoted to core in v3.14; keeping this
