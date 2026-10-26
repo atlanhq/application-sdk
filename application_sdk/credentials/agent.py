@@ -72,6 +72,7 @@ from application_sdk.infrastructure import (
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
 from application_sdk.infrastructure.secrets import (
     AgentSecretReadError,
+    AgentSingleKeyReadError,
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreUnavailableError,
@@ -147,8 +148,10 @@ async def resolve_agent_credential(
         CredentialParseError: If the fetched bundle isn't valid JSON.
         CredentialNotFoundError: If the secret store does not have
             a bundle at ``secret_path``.
-        SecretStoreError: For any other secret-store failure, in either
-            mode — a dependency failure, not a credential one. The
+        AgentSingleKeyReadError: ``single-key`` mode only — the store failed a
+            probe without being down (PRECONDITION, USER-facing).
+        SecretStoreError: For any other secret-store failure — a dependency
+            failure, not a credential one. The
             :class:`SecretStoreUnavailableError` /
             :class:`SecretStoreUnreachableError` subtypes mark an outage.
 
@@ -180,7 +183,16 @@ async def resolve_agent_credential(
     raw = spec.to_raw_dict()
 
     if spec.key_type == "single-key":
-        bundle = await _fetch_per_key_bundle(secret_store, raw)
+        try:
+            bundle = await _fetch_per_key_bundle(secret_store, raw)
+        except (SecretStoreUnavailableError, SecretStoreUnreachableError):
+            raise  # an outage stays an outage
+        except SecretStoreError as exc:
+            # A store failure that is not an outage is something the customer
+            # fixes (grants, or the value entered): USER-facing, hashed label only.
+            raise AgentSingleKeyReadError(
+                exc.secret_name, retryable=exc.effective_retryable
+            ) from None
         resolved_flat, _ = _substitute(raw, bundle)
     elif spec.secret_path:
         bundle = await _fetch_bundle(secret_store, spec.secret_path)

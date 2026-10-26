@@ -2923,6 +2923,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** The store answered a v2 ``secretKeyRef`` read with a failure (throttled, access denied, bad binding) rather than "not found" or an outage.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `AgentSingleKeyReadError`
+
+- **Import:** `from application_sdk.infrastructure.secrets import AgentSingleKeyReadError`
+- **Signature:** `class AgentSingleKeyReadError(label: str | None, *, retryable: bool | None = None)`
+- **Summary:** The store failed a legacy ``single-key`` lookup (not "not found", not an outage).
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `SecretNotFoundError`
 
 - **Import:** `from application_sdk.infrastructure import SecretNotFoundError`

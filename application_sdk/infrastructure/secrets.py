@@ -352,6 +352,37 @@ class AgentSecretReadError(PreconditionError, SecretStoreError):
 
 
 @dataclass(kw_only=True)
+class AgentSingleKeyReadError(PreconditionError, SecretStoreError):
+    """The store failed a legacy ``single-key`` lookup (not "not found", not an outage).
+
+    Sibling of :class:`AgentSecretReadError` for payloads with no v2 field names:
+    every value is probed as a possible secret name, so the error is keyed by the
+    probe's hashed ``sha256:...`` label — never the raw value, which may be a
+    secret name or the secret itself. PRECONDITION / USER; ``retryable`` is kept
+    from the probe error.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_AGENT_SINGLE_KEY_READ"
+
+    def __init__(self, label: str | None, *, retryable: bool | None = None) -> None:
+        where = f" ({label})" if label else ""
+        SecretStoreError.__init__(
+            self,
+            f"A value in this agent configuration{where} was looked up in your "
+            "secret store and the store returned an error.",
+            secret_name=label,
+            retryable=retryable,
+        )
+        self.resource = "agent_json_value"
+        self.suggested_action = (
+            "A value in this agent configuration was looked up in your secret "
+            "store and the store returned an error. If the field holds a secret "
+            "name, check that the SDR's secret-store identity can read it; if it "
+            "holds a plain value, check the value entered."
+        )
+
+
+@dataclass(kw_only=True)
 class SecretNotFoundError(NotFoundError, SecretStoreError):
     """The requested secret key was not found in the secret store.
 
