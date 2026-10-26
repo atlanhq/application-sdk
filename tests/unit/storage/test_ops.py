@@ -2278,14 +2278,15 @@ class TestUploadPartSizeConfiguration:
 
         assert 5000 // writer.call_args.kwargs["buffer_size"] == _MAX_UPLOAD_PARTS
 
+    @pytest.mark.parametrize("file_gib", range(8, 51))
     async def test_grown_parts_hold_no_more_memory_than_requested_parts(
-        self, store, tmp_path, monkeypatch
+        self, store, tmp_path, monkeypatch, file_gib
     ) -> None:
-        """A 50 GiB file at 8 MiB parts and concurrency 12, scaled to bytes.
+        """Files of 8-50 GiB at 8 MiB parts and concurrency 12, scaled to bytes.
 
-        Before the part-count cap it held 14 requested parts; growing its parts
-        to fit the cap must not hold more, or a worker at the minimum transfer
-        budget is pushed past it.
+        Before the part-count cap they held 14 requested parts; growing their
+        parts to fit the cap must not hold more, or a worker at the minimum
+        transfer budget is pushed past it.
         """
         monkeypatch.setattr(
             "application_sdk.constants.STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN", False
@@ -2296,9 +2297,9 @@ class TestUploadPartSizeConfiguration:
         monkeypatch.setattr(
             "application_sdk.constants.STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", 10**9
         )
-        requested_part = 10
+        requested_part = 100
         f = tmp_path / "column.json"
-        f.write_bytes(b"x" * 6400 * requested_part)
+        f.write_bytes(b"x" * file_gib * 128 * requested_part)
         held_while_writing: list[int] = []
         chunk_sizes: list[int] = []
 

@@ -1223,7 +1223,8 @@ async def upload_file(
     file_size = path.stat().st_size
     effective_chunk = _compute_part_size(file_size, requested_chunk)
     max_concurrency = max(
-        1, STORAGE_UPLOAD_MAX_CONCURRENCY * requested_chunk // effective_chunk
+        1,
+        requested_chunk * (STORAGE_UPLOAD_MAX_CONCURRENCY + 1) // effective_chunk - 1,
     )
 
     if file_size == 0:
