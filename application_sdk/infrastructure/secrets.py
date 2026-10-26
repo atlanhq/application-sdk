@@ -322,6 +322,32 @@ class SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)
 
 
 @dataclass(kw_only=True)
+class AgentSecretReadError(PreconditionError, SecretStoreError):
+    """The store answered a v2 ``secretKeyRef`` read with a failure (throttled,
+    access denied, bad binding) rather than "not found" or an outage.
+
+    ``PreconditionError`` comes first so the category is PRECONDITION and the
+    audience USER: the customer must fix the store or its grants. Still a
+    ``SecretStoreError`` so ``except SecretStoreError:`` catches it. Keyed by
+    the payload *field* name — never the secret name, which encodes the
+    customer's store layout. ``retryable`` is carried over from the source.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_AGENT_SECRET_READ"
+
+    def __init__(self, field: str, *, retryable: bool | None = None) -> None:
+        SecretStoreError.__init__(
+            self,
+            f"Secret store failed to return the secret for agent_json field "
+            f"'{field}'. Check that your secret store is healthy and that this "
+            "app is allowed to read it.",
+            secret_name=field,
+            retryable=retryable,
+        )
+        self.resource = "agent_json_secret"
+
+
+@dataclass(kw_only=True)
 class SecretNotFoundError(NotFoundError, SecretStoreError):
     """The requested secret key was not found in the secret store.
 

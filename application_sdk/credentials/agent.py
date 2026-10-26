@@ -53,6 +53,11 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
+from application_sdk.credentials.sources import (
+    V2_ENVELOPE_KEYS,
+    FieldSource,
+    parse_v2_fields,
+)
 from application_sdk.errors import (
     AppError,
     ColdStartRaceError,
@@ -66,6 +71,7 @@ from application_sdk.infrastructure import (
 )
 from application_sdk.infrastructure._single_key_probe import probe_single_keys
 from application_sdk.infrastructure.secrets import (
+    AgentSecretReadError,
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreUnavailableError,
@@ -167,6 +173,10 @@ async def resolve_agent_credential(
           ``key-type: single-key``) and routing falls through to
           ``credential_guid`` instead.
     """
+    if spec.is_v2:
+        resolved_v2, _ = await _resolve_v2(spec, secret_store)
+        return transform_agent_credentials(resolved_v2)
+
     raw = spec.to_raw_dict()
 
     if spec.key_type == "single-key":
@@ -179,6 +189,120 @@ async def resolve_agent_credential(
         resolved_flat = raw
 
     return transform_agent_credentials(resolved_flat)
+
+
+async def _resolve_v2(
+    spec: AgentCredentialSpec, secret_store: SecretStore
+) -> tuple[dict[str, Any], int]:
+    """Resolve a ``format: 2`` payload: each field says where its value lives.
+
+    Returns the flat dict (envelope keys plus one entry per field; ``format``
+    dropped) and the number of ``secretKeyRef`` fields read from the store. A
+    ``fileRef`` resolves to its path string — the app fetches the file itself.
+
+    Every error names the payload *field*, never the secret name or key.
+
+    Raises:
+        CredentialParseError: a field is not a valid source, or a referenced
+            secret is not a JSON object.
+        CredentialNotFoundError: a referenced secret or key is absent.
+        SecretStoreError: the store failed; :class:`AgentSecretReadError` for a
+            non-outage failure, the outage subtypes for an outage.
+    """
+    raw = spec.to_v2_input()
+    fields = parse_v2_fields(raw)
+    out: dict[str, Any] = {
+        k: v for k, v in raw.items() if k in V2_ENVELOPE_KEYS and k != "format"
+    }
+    bundles: dict[str, dict[str, Any]] = {}
+    refs = 0
+    for field, source in fields.items():
+        out[field], is_ref = await _read_v2_field(field, source, secret_store, bundles)
+        refs += is_ref
+    return out, refs
+
+
+async def _read_v2_field(
+    field: str,
+    source: FieldSource,
+    secret_store: SecretStore,
+    bundles: dict[str, dict[str, Any]],
+) -> tuple[Any, bool]:
+    """One field's value, and whether it came from the secret store."""
+    if source.value_from is None:
+        return source.value, False
+    if source.value_from.file_ref is not None:
+        return source.value_from.file_ref.path, False
+    ref = source.value_from.secret_key_ref
+    assert ref is not None  # ValueFrom guarantees exactly one
+    if ref.name not in bundles:
+        bundles[ref.name] = await _fetch_v2_secret(secret_store, ref.name, field)
+    bundle = bundles[ref.name]
+    if ref.key not in bundle:
+        raise CredentialNotFoundError(field)
+    return bundle[ref.key], True
+
+
+async def _fetch_v2_secret(
+    secret_store: SecretStore, name: str, field: str
+) -> dict[str, Any]:
+    """Fetch the secret *name* as a JSON object; errors are keyed by *field*."""
+    try:
+        raw = await retry_past_dapr_cold_start(
+            lambda: secret_store.get(name),
+            description=f"agent_json field '{field}' secret fetch",
+            component=DAPR_SECRET_STORE_COMPONENT,
+        )
+    except SecretNotFoundError:
+        raise CredentialNotFoundError(field) from None
+    except Exception as exc:  # conformance: ignore[E004] the failure is logged by type and re-raised as a clean, field-keyed SecretStoreError without the raw cause
+        # Never log the traceback or chain the cause: both can carry the secret
+        # name (httpx puts it in the request URL). Type name and field only.
+        logger.warning(  # conformance: ignore[L009,L004] the raise below drops the cause (`from None`); the type name and field are the diagnosable record, and a traceback would re-log the secret name
+            "agent_json field '%s': secret store read failed (%s)",
+            field,
+            type(exc).__name__,
+        )
+        raise _v2_store_error(field, exc) from None
+
+    if isinstance(raw, dict):
+        return raw
+    try:
+        bundle = orjson.loads(raw)
+    except orjson.JSONDecodeError:
+        raise CredentialParseError(
+            f"Secret for agent_json field '{field}' is not valid JSON",
+            credential_name=field,
+        ) from None
+    if not isinstance(bundle, dict):
+        raise CredentialParseError(
+            f"Secret for agent_json field '{field}' must be a JSON object, "
+            f"got {type(bundle).__name__}",
+            credential_name=field,
+        )
+    return bundle
+
+
+def _v2_store_error(field: str, exc: Exception) -> SecretStoreError:
+    """Field-keyed, cause-free rebuild of a failed v2 secret read.
+
+    Outages keep their subtype (the gate and probe aggregators route on it);
+    anything else becomes :class:`AgentSecretReadError`. The source error's
+    ``retryable`` is kept.
+    """
+    if isinstance(exc, DaprSidecarUnreachableError):
+        return SecretStoreUnreachableError(
+            field,
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        )
+    if isinstance(exc, ColdStartRaceError):
+        return SecretStoreUnavailableError(field)
+    return AgentSecretReadError(
+        field,
+        retryable=exc.effective_retryable if isinstance(exc, AppError) else None,
+    )
 
 
 # Keep backward-compatible alias for existing callers and tests
@@ -494,6 +618,9 @@ async def check_secret_store_access(
             suggested_action="Configure a secret store on the SDR deployment.",
         )
 
+    if spec.is_v2:
+        return await _check_v2_secret_store_access(spec, secret_store)
+
     raw = spec.to_raw_dict()
     if spec.key_type != "single-key" and not spec.secret_path:
         # Multi-key (non single-key) resolution fetches the bundle from a
@@ -571,4 +698,43 @@ async def check_secret_store_access(
             "retrieved."
         ),
         resolved=resolved,
+    )
+
+
+async def _check_v2_secret_store_access(
+    spec: AgentCredentialSpec, secret_store: SecretStore
+) -> SecretStoreCheckResult:
+    """:func:`check_secret_store_access` for a ``format: 2`` payload."""
+    try:
+        resolved_flat, refs = await _resolve_v2(spec, secret_store)
+    except (CredentialNotFoundError, CredentialParseError, AgentSecretReadError):
+        # The payload names a secret, key or field that cannot be read: a
+        # config gap the customer fixes, not a store outage.
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=True,
+            substituted=0,
+            message="A secret referenced by this credential could not be read.",
+            suggested_action=(
+                "Check that each secretKeyRef names an existing secret and key "
+                "that this app is allowed to read."
+            ),
+        )
+    except (DependencyUnavailableError, CredentialError):
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=True,
+            fatal=True,
+            substituted=0,
+            message="Configured secret store is not accessible.",
+            suggested_action="Check that the secret store is running and reachable from the SDR worker.",
+        )
+    return SecretStoreCheckResult(
+        passed=True,
+        store_down=False,
+        fatal=False,
+        substituted=refs,
+        message=f"Configured secret store is accessible - {refs} secret(s) retrieved.",
+        resolved=transform_agent_credentials(resolved_flat),
     )

@@ -94,11 +94,13 @@ class AgentCredentialSpec(BaseModel):
 
     # ---- Common optional fields ----
 
-    host: str = ""
-    """Database / service hostname. Required for JDBC connectors."""
+    host: str | dict[str, Any] = ""
+    """Database / service hostname. Required for JDBC connectors. A dict
+    (``{"value": ...}``) is only accepted in a ``format: 2`` payload."""
 
-    port: int = 0
-    """Database / service port."""
+    port: int | dict[str, Any] = 0
+    """Database / service port. A dict is only accepted in a ``format: 2``
+    payload."""
 
     connect_by: str = Field(default="", alias="connectBy")
     """Connection method hint (``host``, ``url``, etc.)."""
@@ -155,7 +157,23 @@ class AgentCredentialSpec(BaseModel):
                 raise CredentialParseError(
                     f"agent_json must be a JSON object, got {type(parsed).__name__}",
                 )
-            return parsed
+            data = parsed
+        from application_sdk.credentials.sources import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            is_v2,
+        )
+
+        if isinstance(data, dict) and not is_v2(data):
+            # v2 sources are dicts; legacy payloads never carry one here.
+            for key in ("host", "port"):
+                if isinstance(data.get(key), dict):
+                    from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+                        CredentialParseError,
+                    )
+
+                    raise CredentialParseError(
+                        f"agent_json field '{key}' must be a plain value "
+                        "unless the payload is format 2"
+                    )
         return data
 
     # ---- Convenience methods ----
@@ -177,6 +195,26 @@ class AgentCredentialSpec(BaseModel):
         (secret_path, or key_type "single-key"). Rejects the name-only AE
         placeholder that would otherwise resolve to empty credentials.
         """
+        if self.is_v2:
+            # A v2 payload carries its fetch anchors per field.
+            return bool(self.agent_name)
         return bool(self.agent_name) and (
             bool(self.secret_path) or self.key_type == "single-key"
         )
+
+    @property
+    def is_v2(self) -> bool:
+        """True for a ``format: 2`` payload (per-field value sources)."""
+        from application_sdk.credentials.sources import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+            is_v2,
+        )
+
+        return is_v2(self.model_extra or {})
+
+    def to_v2_input(self) -> dict[str, Any]:
+        """The keys the payload actually set, by alias, for v2 parsing.
+
+        Not :meth:`to_raw_dict`: that fills defaults (``key-type: ""``,
+        ``host: ""``) which are not v2 sources.
+        """
+        return self.model_dump(by_alias=True, exclude_unset=True)
