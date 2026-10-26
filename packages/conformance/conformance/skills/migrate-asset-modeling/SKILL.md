@@ -206,8 +206,9 @@ add them (`atlan-metabase-app` `serialize_entity`); never fall back to
 4. Capture the app's current output for parity. Run the offline (recorded
    or cassette) integration test with `--basetemp=<scratch dir>` and collect
    the transformed entity files, one JSONL line per entity, outside the repo.
-   If the app has no such test, stop and ask the developer how to produce the
-   output. Check coverage: the capture must contain every asset type and
+   If the app has no such test, do not stop: record that delivered-output
+   parity is not proven, say so in the PR description, and treat every type
+   as not contained in the capture (next sentence). Check coverage: the capture must contain every asset type and
    process kind (each distinct process qualifiedName grammar, for example
    `{conn}/{model}@allmodule`) in the Step 1 inventory. For a type it does not
    contain, first check whether an existing unit test already pins its
@@ -221,7 +222,9 @@ finding; unseen sites that call the same helper share one row that names the
 helper and lists their lines.
 
 The fix for each class is in the P028 rule definition (`full_description`
-and `terminal_state`); this step only decides the class.
+and `terminal_state`); this step only decides the class. The terminal state,
+in short: an ignore is correct only where the string is not a qualifiedName;
+every other site stays open until a pyatlan creator produces its string.
 
 - **creator** — a `pyatlan_v9.model.assets` class with a `creator()` produces
   the **same** string. Check it: build one value both ways with a realistic
