@@ -96,6 +96,7 @@ from application_sdk.clients._sql_failure_classifier import (
     classify_sql_failure,
     root_cause,
 )
+from application_sdk.clients.sql_errors import SqlPandasResultError
 from application_sdk.common.asset_serialization import entity_bytes
 from application_sdk.common.asset_serialization import orjson_default as _orjson_default
 from application_sdk.common.entity_envelope import (
@@ -786,17 +787,25 @@ class SqlApp(App):
         ``SqlPandasResultError``, so by the time only a class name and a
         message survive there is nothing left to discriminate on (CNCT-197).
 
-        An already-typed root cause keeps its verdict — if a connector took
-        the trouble to raise a typed ``AppError``, that beats anything string
-        matching can infer. But the typed path reaches ``to_failure_details()``
+        The outermost typed error in the cause chain keeps its verdict: if a
+        connector raised an ``AppError`` from a driver exception, that beats
+        anything string matching can infer from the driver. But the typed path
+        reaches ``to_failure_details()``
         without the redaction the plain-driver path gets, so a connection
         string in the message or a custom evidence field would serialise onto
         the wire verbatim. Redact before returning, as the sibling string path
         already does.
         """
+        node: BaseException | None = exc
+        seen: set[int] = set()
+        while node is not None and id(node) not in seen:
+            # The SDK's result wrapper is typed but has no source verdict.
+            # Preserve its root fallback rather than masking connector errors.
+            if isinstance(node, AppError) and type(node) is not SqlPandasResultError:
+                return SqlApp._redact_typed_error(node)
+            seen.add(id(node))
+            node = node.__cause__
         root = _root_cause(exc)
-        if isinstance(root, AppError):
-            return SqlApp._redact_typed_error(root)
         return SqlApp._classify_probe_strings(
             type(root).__name__, redact_secrets(str(root)), cause=root
         )
