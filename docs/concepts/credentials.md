@@ -285,6 +285,46 @@ offending field, not a plain-text 500.
 
 ---
 
+## agent_json format 2
+
+A `format: 2` payload declares where each field's value comes from, in the
+Kubernetes `value` / `valueFrom` style, instead of leaving the SDK to guess which
+strings are secret names (the v1 `single-key` probe).
+
+```json
+{"format": 2, "agent-name": "example-agent", "secret-manager": "awssecretmanager",
+ "auth-type": "basic",
+ "host": {"value": "db.example.com"}, "port": {"value": 5432},
+ "basic.password": {"valueFrom": {"secretKeyRef":
+     {"name": "connections/example-db", "key": "db_password"}}},
+ "extra.ca_cert": {"valueFrom": {"fileRef": {"path": "objectstore://certs/ca.pem"}}}}
+```
+
+- `format` must be the int `2` (not `"2"`, `2.0` or `true`).
+- The envelope keys (`format`, `agent-name`, `secret-manager`, `aws-region`,
+  `aws-auth-method`, `azure-auth-method`, `agent-type`, `auth-type`, `connectBy`,
+  `name`) stay plain values. Every other key is a source with exactly one of
+  `value` or `valueFrom`.
+- `value`: a JSON scalar, used as-is with its type kept (`5432` stays an int).
+- `valueFrom.secretKeyRef`: the SDK reads the secret `name` from the secret
+  store, parses it as a JSON object, and takes `key`. Each distinct secret is
+  fetched once.
+- `valueFrom.fileRef`: resolves to the `path` string; the app fetches the file
+  itself.
+- `key-type` and `secret-path` cannot be combined with `format: 2`.
+- `host` and `port` accept the dict form only in a `format: 2` payload.
+
+Errors name the payload field, never the secret name or value:
+
+| Situation | Error | Audience |
+| --- | --- | --- |
+| Field is not a valid source, or a secret is not a JSON object | `CredentialParseError` | user |
+| Secret or key does not exist | `CredentialNotFoundError` (no cause) | user |
+| Store answered with a failure (throttled, access denied) | `AgentSecretReadError` (PRECONDITION, `retryable` kept from the store) | user |
+| Store unreachable or still cold | `SecretStoreUnavailableError` / `SecretStoreUnreachableError` | platform |
+
+---
+
 ## Utility: parse_credentials_extra
 
 For connectors that receive credentials as a flat dict (e.g. from Heracles), use `parse_credentials_extra` to extract nested fields:

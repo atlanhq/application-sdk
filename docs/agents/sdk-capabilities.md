@@ -1235,6 +1235,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `class AgentCredentialSpec`
 - **Summary:** Typed envelope for an agent-shape credential payload.
 - **Defined in:** `application_sdk/credentials/spec.py`
+- **Members:** `is_v2` (property: True for a `format: 2` payload); `to_v2_input()` (the keys the payload set, by alias, for v2 parsing).
 
 #### `ApiKeyCredential`
 
@@ -1396,6 +1397,34 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `class ResolvedCredentials`
 - **Summary:** Where a run's credential comes from. At most one field is populated.
 - **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `FieldSource`
+
+- **Import:** `from application_sdk.credentials.sources import FieldSource`
+- **Signature:** `class FieldSource`
+- **Summary:** Exactly one of ``value`` (a JSON scalar, type preserved) / ``valueFrom``.
+- **Defined in:** `application_sdk/credentials/sources.py`
+
+#### `FileRef`
+
+- **Import:** `from application_sdk.credentials.sources import FileRef`
+- **Signature:** `class FileRef`
+- **Summary:** A file the app fetches itself (e.g. ``objectstore://certs/ca.pem``).
+- **Defined in:** `application_sdk/credentials/sources.py`
+
+#### `SecretKeyRef`
+
+- **Import:** `from application_sdk.credentials.sources import SecretKeyRef`
+- **Signature:** `class SecretKeyRef`
+- **Summary:** A key inside a named secret in the customer's secret store.
+- **Defined in:** `application_sdk/credentials/sources.py`
+
+#### `ValueFrom`
+
+- **Import:** `from application_sdk.credentials.sources import ValueFrom`
+- **Signature:** `class ValueFrom`
+- **Summary:** Exactly one of ``secretKeyRef`` / ``fileRef``.
+- **Defined in:** `application_sdk/credentials/sources.py`
 
 ### Functions
 
@@ -1574,6 +1603,20 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Transform raw agent JSON into the format connectors expect.
 - **Defined in:** `application_sdk/common/transforms.py`
 
+#### `is_v2`
+
+- **Import:** `from application_sdk.credentials.sources import is_v2`
+- **Signature:** `is_v2(raw: Mapping[str, Any])`
+- **Summary:** True only for an int ``format`` of exactly 2 (not ``True``, ``"2"``, ``2.0``).
+- **Defined in:** `application_sdk/credentials/sources.py`
+
+#### `parse_v2_fields`
+
+- **Import:** `from application_sdk.credentials.sources import parse_v2_fields`
+- **Signature:** `parse_v2_fields(raw: Mapping[str, Any])`
+- **Summary:** Parse every non-envelope key of a v2 payload as a :class:`FieldSource`.
+- **Defined in:** `application_sdk/credentials/sources.py`
+
 ### Constants and Enums
 
 #### `AGENT_JSON_ALIASES`
@@ -1603,6 +1646,13 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `InlineCredentials`
 - **Summary:** The ``credentials`` field of an entry-point input: v3 ``[{key, value}]`` pairs or a dict.
 - **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `V2_ENVELOPE_KEYS`
+
+- **Import:** `from application_sdk.credentials.sources import V2_ENVELOPE_KEYS`
+- **Signature:** `V2_ENVELOPE_KEYS: Final[frozenset[str]]`
+- **Summary:** Top-level keys that stay plain values in a v2 payload instead of being field sources.
+- **Defined in:** `application_sdk/credentials/sources.py`
 
 ## `application_sdk.dev`
 
@@ -2865,6 +2915,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Signature:** `class PubSubError(message: str, ...)`
 - **Summary:** Deprecated: use ``application_sdk.errors.DependencyUnavailableError`` — removed in v4.0.
 - **Defined in:** `application_sdk/infrastructure/pubsub.py`
+
+#### `AgentSecretReadError`
+
+- **Import:** `from application_sdk.infrastructure.secrets import AgentSecretReadError`
+- **Signature:** `class AgentSecretReadError(field: str, *, retryable: bool | None = None)`
+- **Summary:** The store answered a v2 ``secretKeyRef`` read with a failure (throttled, access denied, bad binding) rather than "not found" or an outage.
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `SecretNotFoundError`
 
