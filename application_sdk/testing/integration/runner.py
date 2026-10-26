@@ -41,7 +41,7 @@ import requests as http_requests
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.harness._poll import until_deadline
-from application_sdk.validation import validate_transformed_dir
+from application_sdk.validation import AssetCreationRules, validate_transformed_dir
 
 from .client import IntegrationTestClient
 from .comparison import compare_metadata, load_actual_output, load_expected_data
@@ -275,9 +275,12 @@ class BaseIntegrationTest:
     # (orphan) pass. Warn-first by default — failures are logged, not raised —
     # so the fleet gets the signal without red builds; flip
     # ``asset_validation_strict`` to True (per class or scenario) to hard-fail
-    # once a connector is clean.
+    # once a connector is clean. ``asset_validation_rules`` opts in to extra
+    # create-time checks pyatlan no longer runs (e.g. SQL parents since pyatlan
+    # 11.5.0); declare the same set as the app's ``App.asset_validation_rules``.
     validate_assets: bool = True
     asset_validation_strict: bool = False
+    asset_validation_rules: frozenset[AssetCreationRules] = frozenset()
 
     # Internal state
     client: IntegrationTestClient
@@ -946,7 +949,8 @@ class BaseIntegrationTest:
         runs per-asset validation plus a referential-integrity (orphan) pass, and
         reports the outcome. Warn-first by default: failures are logged, not raised.
         Set ``asset_validation_strict`` (on the scenario or the test class) to
-        turn failures into an ``AssertionError``.
+        turn failures into an ``AssertionError``, and ``asset_validation_rules``
+        to add the opt-in create-time checks.
 
         Args:
             scenario: The scenario being validated.
@@ -975,7 +979,12 @@ class BaseIntegrationTest:
             scenario.name,
             transformed_path,
         )
-        report = validate_transformed_dir(transformed_path)
+        rules = (
+            scenario.asset_validation_rules
+            if scenario.asset_validation_rules is not None
+            else self.asset_validation_rules
+        )
+        report = validate_transformed_dir(transformed_path, creation_rules=rules)
 
         if report.ok:
             logger.info(

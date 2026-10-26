@@ -676,6 +676,12 @@ class GitHub:
                 return _ts(row.get("created_at"))
         return None
 
+    def status_rows(self, sha: str) -> list:
+        """Every status row on ``sha`` (all pages), newest first, with creator."""
+        return self._paged_list(
+            f"repos/{self.repo}/commits/{sha}/statuses?per_page=100"
+        )
+
     def runs(self, sha: str, event: str = "", workflow: str = "") -> list:
         path = (
             f"repos/{self.repo}/actions/workflows/{workflow}/runs"

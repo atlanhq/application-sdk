@@ -1356,8 +1356,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "rule -- now routes off the manifest block. A drifted block does not "
             "merely go unnoticed; it changes what another blocking rule "
             "concludes, so the two must be held together at the same strength. "
-            "The surface is new and no app declares aliases yet, so nothing in "
-            "the fleet is blocked by adopting it at this tier."
+            "Apps whose declaration already drifts from the manifest block go "
+            "red at this tier and are fixed after the release that turns the "
+            "check on for them."
         ),
         short_description=(
             "the manifest's legacy_workflow_types block and the SDK App's "

@@ -520,6 +520,7 @@ from application_sdk.handler.metadata_routes import (  # noqa: E402
     MetadataSource,
     decode_fe_inputs,
     entrypoint_form,
+    handler_compute_manifest,
     register_metadata_routes,
 )
 from application_sdk.handler.object_routes import (  # noqa: E402
@@ -1045,6 +1046,7 @@ def _register_workflow_routes(
     app: FastAPI,
     *,
     app_name: str,
+    handler: Handler,
     manifest: AppManifest | None,
     event_triggers: list[EventTriggerConfig],
     subscriptions: list[SubscriptionConfig],
@@ -1763,6 +1765,14 @@ def _register_workflow_routes(
             )
         return input_type
 
+    # A core.py hook wins over the handler's method, as module hooks do for
+    # the other handler operations.
+    handler_manifest = handler_compute_manifest(
+        handler,
+        lambda: _workflow_config.app_name or app_name,
+        secret_store=_secret_store,
+    )
+
     # Every lookup reads this module's globals per request, so a process
     # reconfigured after startup (and a test that repoints them) is seen.
     register_metadata_routes(
@@ -1776,7 +1786,9 @@ def _register_workflow_routes(
             default_entrypoint=_registry_default_entrypoint,
             explicit_entrypoints=_registry_explicit_entrypoints,
             input_contract=_registry_input_contract,
-            compute_manifest=lambda ep: _discover_compute_manifest(ep),
+            compute_manifest=lambda ep: (
+                _discover_compute_manifest(ep) or handler_manifest(ep)
+            ),
             programmatic_manifest=manifest,
             log=lambda: logger,
             max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
@@ -2038,6 +2050,7 @@ def create_app_handler_service(
     _register_workflow_routes(
         app,
         app_name=app_name,
+        handler=handler,
         manifest=manifest,
         event_triggers=list(event_triggers or []),
         subscriptions=list(subscriptions or []),

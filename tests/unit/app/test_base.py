@@ -1519,6 +1519,7 @@ class TestGenerateWorkflowClass:
 
         from application_sdk.execution._temporal.preflight_gate import (
             PREFLIGHT_FAILED_ERROR_TYPE,
+            is_preflight_block,
         )
         from application_sdk.execution.errors import ApplicationError
 
@@ -1550,12 +1551,104 @@ class TestGenerateWorkflowClass:
             mock.patch(
                 "application_sdk.app.base._run_preflight_gate", side_effect=block
             ),
-            pytest.raises(type(block)) as excinfo,
+            pytest.raises(ApplicationError) as excinfo,
         ):
             await wf_cls.run(mock.MagicMock(), _BLDXInput())
 
-        assert excinfo.value is block, "the block must propagate unchanged"
+        if wrapped:
+            # Lifted to the top level so the workflow-level RetryPolicy does not
+            # re-run a blocked workflow; the wrapper stays on the chain.
+            assert excinfo.value.non_retryable is True
+            assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+            assert excinfo.value.__cause__ is block
+            assert is_preflight_block(excinfo.value)
+        else:
+            assert excinfo.value is block, "the block must propagate unchanged"
         assert GatedApp.calls == 0
+
+    @staticmethod
+    def _activity_error(cause: BaseException) -> BaseException:
+        from temporalio.exceptions import ActivityError
+
+        wrapper = ActivityError(
+            "Activity task failed",
+            scheduled_event_id=1,
+            started_event_id=2,
+            identity="worker",
+            activity_type="gatedapp:do_work",
+            activity_id="1",
+            retry_state=None,
+        )
+        wrapper.__cause__ = cause
+        return wrapper
+
+    async def _run_with_entry_failure(self, failure: BaseException) -> BaseException:
+        GatedApp, wf_cls = self._counting_gate_app()
+        info_mock = mock.MagicMock(run_id="r", workflow_id="w")
+        with (
+            self._patched_workflow_layer(info_mock),
+            mock.patch.object(GatedApp, "on_complete", new_callable=mock.AsyncMock),
+            mock.patch(
+                "application_sdk.observability.correlation.get_correlation_context",
+                return_value=None,
+            ),
+            mock.patch(
+                "application_sdk.app.base._run_preflight_gate",
+                mock.AsyncMock(return_value=None),
+            ),
+            mock.patch.object(GatedApp, "run", side_effect=failure),
+            pytest.raises(BaseException) as excinfo,
+        ):
+            await wf_cls.run(mock.MagicMock(), _BLDXInput())
+        return excinfo.value
+
+    @pytest.mark.asyncio
+    async def test_non_retryable_task_failure_is_lifted_to_a_non_retryable_workflow_failure(
+        self,
+    ) -> None:
+        """A task's non-retryable failure ends the workflow non-retryably: Temporal
+        reads ``non_retryable`` only on the top-level failure, so an unchanged
+        ActivityError would let the workflow RetryPolicy re-run the run."""
+        from application_sdk.execution.errors import ApplicationError
+
+        details = {"category": "PRECONDITION", "code": "APP_NON_RETRYABLE"}
+        cause = ApplicationError(
+            "Deterministic failure",
+            details,
+            type="NonRetryableError",
+            non_retryable=True,
+        )
+        wrapper = self._activity_error(cause)
+
+        raised = await self._run_with_entry_failure(wrapper)
+
+        assert isinstance(raised, ApplicationError)
+        assert raised.non_retryable is True
+        assert raised.type == "NonRetryableError"
+        assert raised.message == "Deterministic failure"
+        assert list(raised.details) == [details]
+        assert raised.__cause__ is wrapper
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("error_type", "non_retryable"),
+        [("ValueError", False), ("WorkerEvicted", True)],
+        ids=["retryable_cause", "worker_evicted"],
+    )
+    async def test_other_activity_failures_propagate_unchanged(
+        self, error_type: str, non_retryable: bool
+    ) -> None:
+        """A retryable cause (task retries exhausted) and an eviction that outlasted
+        the re-dispatch loop stay ActivityErrors, so a workflow retry still applies."""
+        from application_sdk.execution.errors import ApplicationError
+
+        wrapper = self._activity_error(
+            ApplicationError("boom", type=error_type, non_retryable=non_retryable)
+        )
+
+        raised = await self._run_with_entry_failure(wrapper)
+
+        assert raised is wrapper
 
     @pytest.mark.asyncio
     async def test_a_proceeding_gate_runs_the_entry_method_exactly_once(

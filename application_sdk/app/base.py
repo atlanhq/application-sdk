@@ -31,6 +31,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from temporalio import activity, workflow
+from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ApplicationError as _TemporalApplicationError
 from temporalio.exceptions import FailureError
 
 from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
@@ -88,6 +90,7 @@ from application_sdk.contracts.storage import (
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, ErrorCode
 from application_sdk.errors.base import AppError as _NewAppError
+from application_sdk.errors.leaves import WORKER_EVICTED_TYPE
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 from application_sdk.handler.contracts import PreflightGateMode
@@ -110,6 +113,7 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.execution.progress import ProgressWatchdogMode
+    from application_sdk.validation.asset_rules import AssetCreationRules
 
 _task_logger = get_logger(__name__)
 
@@ -191,6 +195,7 @@ async def _warn_on_invalid_transformed_assets(
     app_name: str,
     *,
     not_local: Sequence[str] = (),
+    creation_rules: "frozenset[AssetCreationRules]" = frozenset(),
 ) -> None:
     """Best-effort, warn-only validation of transformed asset NDJSON before upload.
 
@@ -261,6 +266,11 @@ async def _warn_on_invalid_transformed_assets(
     positive this fixes. When *no* transformed part is local, the same warning
     says validation was skipped entirely, so a fully distributed fan-in is never
     silent.
+
+    ``creation_rules`` (the app's :attr:`App.asset_validation_rules`) adds the
+    opt-in create-time checks pyatlan no longer runs. The wrapper's
+    ``ModelSource`` carries no asset-specific options, so a non-empty rule set
+    goes straight to the cell, as a multi-part batch already does.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
@@ -310,7 +320,7 @@ async def _warn_on_invalid_transformed_assets(
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
-    if len(targets) == 1 and check_referential_integrity:
+    if len(targets) == 1 and check_referential_integrity and not creation_rules:
         report = await run_best_effort(
             validate_artifact,
             targets[0],
@@ -324,6 +334,7 @@ async def _warn_on_invalid_transformed_assets(
             validate_assets_as_artifact,
             targets,
             check_referential_integrity=check_referential_integrity,
+            creation_rules=creation_rules,
             label="Transformed-asset validation",
             logger=_task_logger,
             timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
@@ -880,6 +891,23 @@ class App(ABC):
     description: ClassVar[str] = ""
     tags: ClassVar[dict[str, str] | None] = None
     passthrough_modules: ClassVar[set[str] | None] = None
+
+    asset_validation_rules: ClassVar["frozenset[AssetCreationRules]"] = frozenset()
+    """Extra create-time checks for the pre-upload transformed-asset validation.
+
+    Empty (default) validates exactly what pyatlan_v9's ``.validate()`` checks.
+    pyatlan 11.5.0 stopped reporting SQL-family assets that lack their schema or
+    database parents; an app whose transform emits those assets opts back in::
+
+        from application_sdk.validation import AssetCreationRules
+
+        class MyApp(App):
+            asset_validation_rules = frozenset({AssetCreationRules.SQL_PARENTS})
+
+    Applies to :meth:`upload` and :meth:`upload_refs`. The validation stays
+    warn-only: a failure is reported on ``ASSET_VALIDATION_EVENT`` and never
+    blocks the handoff. Integration tests declare the same rules on
+    ``BaseIntegrationTest.asset_validation_rules``."""
 
     legacy_workflow_types: ClassVar[Mapping[str, str]] = types.MappingProxyType({})
     """Inbound-only Temporal workflow type aliases: ``{alias: entry-point name}``.
@@ -1631,7 +1659,11 @@ class App(ABC):
         # run in an isolated child process (CNCT-85) so a native decode fault
         # kills only the child and never blocks or crashes the event loop.
         if validate_assets:
-            await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
+            await _warn_on_invalid_transformed_assets(
+                input.local_path,
+                self._app_name,
+                creation_rules=self.asset_validation_rules,
+            )
 
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
@@ -2149,7 +2181,10 @@ class App(ABC):
             else:
                 not_local.append(declared.ref.storage_path or "")
         await _warn_on_invalid_transformed_assets(
-            local, self._app_name, not_local=not_local
+            local,
+            self._app_name,
+            not_local=not_local,
+            creation_rules=self.asset_validation_rules,
         )
 
         delivered: list[FileReference] = []
@@ -3478,6 +3513,48 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
         ) from e
 
 
+def _lift_non_retryable_activity_failure(
+    exc: BaseException,
+) -> _TemporalApplicationError | None:
+    """The non-retryable failure a task raised, lifted to the workflow's top level.
+
+    A ``@task`` that raises a non-retryable error reaches the workflow as
+    ``ActivityError(cause=ApplicationError(non_retryable=True))``. Temporal reads
+    ``non_retryable`` only on the *top-level* failure of a workflow execution, so
+    re-raising the ``ActivityError`` unchanged lets the workflow-level
+    ``RetryPolicy`` re-run the whole workflow, which fails the same way each
+    time. Lifting the cause's type, message and ``details`` onto a top-level
+    non-retryable ``ApplicationError`` ends the run after one attempt; the
+    caller raises it ``from`` the ``ActivityError``, so the original chain (and
+    ``details[0]`` on the cause) is still there for anything that walks it.
+
+    ``WorkerEvicted`` is excluded: it is non-retryable only so the eviction
+    re-dispatch loop sees it at once. An eviction that outlasts that loop is
+    infrastructure, not a deterministic failure, so a workflow retry may still
+    rescue it.
+
+    Returns:
+        The lifted error, or ``None`` when ``exc`` is not an ``ActivityError``
+        whose direct cause is a non-retryable, non-eviction ``ApplicationError``.
+    """
+    # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
+    from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
+
+    if not isinstance(exc, ActivityError):
+        return None
+    cause = exc.cause
+    if not isinstance(cause, _TemporalApplicationError) or not cause.non_retryable:
+        return None
+    if cause.type == WORKER_EVICTED_TYPE:
+        return None
+    return ApplicationError(
+        cause.message,
+        *cause.details,
+        type=cause.type,
+        non_retryable=True,
+    )
+
+
 def generate_workflow_class(
     app_cls: "type[App]",
     ep: "EntryPointMetadata",
@@ -3704,7 +3781,10 @@ def generate_workflow_class(
             # as failed, causing the server to retry the task indefinitely
             # instead of failing the workflow execution.
             # FailureError subclasses (ActivityError, CancelledError, …) are
-            # already handled natively by Temporal and must not be rewrapped.
+            # already handled natively by Temporal and must not be rewrapped —
+            # except an ActivityError whose cause is non-retryable, which is
+            # lifted so the workflow-level RetryPolicy does not re-run the
+            # workflow (see _lift_non_retryable_activity_failure).
             #
             # All raw exceptions are non-retryable: any Python exception raised
             # directly from an entrypoint (not through a @task activity) is
@@ -3715,6 +3795,9 @@ def generate_workflow_class(
                 ApplicationError,
             )
 
+            lifted = _lift_non_retryable_activity_failure(e)
+            if lifted is not None:
+                raise lifted from e
             if isinstance(e, FailureError):
                 raise
             if isinstance(e, _NewAppError):

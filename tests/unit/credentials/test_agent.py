@@ -1170,18 +1170,23 @@ class TestSingleKeyMode:
 
     async def test_walks_nested_extra_dict_one_level(self) -> None:
         """v2-style nested ``extra: {k: ref}`` is also probed."""
-        store = _store_with(DB_NAME="real_db")
+        store = _store_with(ROLE_REF="real_role")
         spec = AgentCredentialSpec.model_validate(
             {
                 "agent-name": "test-agent",
                 "key-type": "single-key",
                 "auth-type": "basic",
-                "extra": {"database": "DB_NAME", "compiled_url": "literal-url"},
+                "extra": {
+                    "database": "real_db",
+                    "compiled_url": "literal-url",
+                    "role": "ROLE_REF",
+                },
             }
         )
 
         resolved = await resolve_agent_credential(spec, store)
 
+        assert resolved["extra"]["role"] == "real_role"
         assert resolved["extra"]["database"] == "real_db"
         assert resolved["extra"]["compiled_url"] == "literal-url"
 

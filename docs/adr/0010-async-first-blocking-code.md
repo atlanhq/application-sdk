@@ -141,6 +141,79 @@ When no async alternative exists, use `self.task_context.run_in_thread()` with a
 - Developers must ensure blocking code has internal timeouts
 - Blocking code without timeout support requires alternatives
 
+## Addendum: containing stranded threads per app (FND-2973)
+
+A call whose caller gives up (an `asyncio.wait_for` / `asyncio.timeout` deadline, a
+cancelled activity, the preflight gate's handler budget) while its thread runs on is
+**stranded**: the thread keeps its pool slot until the driver returns by itself.
+
+- **On the worker** (one app per pod, the process-wide `sdk-blocking` pool) that only
+  hurts the app that caused it.
+- **On the consolidated API host** (many apps in one process), `build_asgi_app` gives
+  each app its own pool of `blocking_threads` threads (`api-<app>-`). One app's hung
+  calls cannot take another app's slots, however many apps hang at once. Within that
+  app they can still take every slot and queue the app's other calls behind them.
+
+`run_in_thread` now contains this per app:
+
+- **Every call is charged to an app.** That is the handler invocation's app when one
+  is bound (`bind_handler_context` binds it), the app a request is for on the host
+  (`build_asgi_app` binds it for every route), and the process's
+  `ATLAN_APPLICATION_NAME`, read at call time, otherwise. On the host that last case
+  is the host's own name, which is right for its startup and background work.
+- **Stranded calls are counted per app.** The count is the
+  `offload.stranded_threads` gauge, labelled `app.name`. Each strand is also logged
+  once at WARNING with the callable's name, and logged again at INFO when the thread
+  finally returns.
+- **An optional per-app cap.** `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` limits the calls
+  one app may have in flight, running or queued. A call past the cap fails at once
+  with a retryable `ResourceExhaustedError` (`resource="offload_threads"`) instead of
+  queueing, so a misbehaving app degrades only itself.
+  - It is **off by default.** Any default would turn today's queueing into failures
+    for fan-outs wider than the cap. The pool width a default would be derived from
+    is not reliable either: `os.cpu_count()` reports the node's cores, not the pod's
+    CPU limit.
+  - On the host, keep it at or below the app's `blocking_threads`. Above that, hung
+    calls fill the app's pool first and its next calls queue behind them until the
+    cap is reached, which is the queueing the cap exists to replace.
+- **A slot is held until the thread finishes, not until the caller stops waiting.**
+  Releasing on the caller's side would let a hung thread give back its quota while
+  still holding its pool slot.
+- **A call still queued when its caller gives up is cancelled and never starts.**
+
+**None of this frees a stranded thread.** The fix is still the one this ADR prescribes:
+a driver-level connect/socket/statement timeout, so the blocking call returns when
+its caller gives up. An asyncio deadline around `run_in_thread` bounds only the
+caller.
+
+### Killable preflight probes: evaluated, not adopted
+
+The alternative that *does* free the slot is to run probes in a child process that
+can be killed: `run_fault_isolated(..., timeout=...)` on a per-app process pool. It
+was evaluated for the preflight gate and not adopted, for now:
+
+- **The unit of work does not cross a process boundary.**
+  - The gate awaits an async `Handler.preflight_check`. It does not call a picklable
+    function.
+  - The handler closes over live driver clients, the per-invocation
+    `HandlerContext`, its credentials and the secret store. ContextVars do not
+    propagate to a spawned child, and sockets and client sessions do not pickle.
+  - Running it in a child means rebuilding all of that there, on every probe.
+- **The cost lands on every probe, not just hung ones.**
+  - A `spawn` child re-imports the app and its driver stack: seconds of startup, and
+    memory charged against the pod limit, per app.
+  - The process pool is width-keyed and discarded whole on a timeout. So it has to be
+    per app, or one app's kill shows up as `BrokenProcessPool` in another app's
+    concurrent probes.
+- **The shared pod has a better place for the boundary.** If apps' handlers there run
+  in separate worker processes, one process per app, a hung app can be restarted
+  without touching the others. That gives the kill and the isolation without
+  pickling each call.
+
+Revisit this if per-app pools on the host prove insufficient. Until then the per-app
+pools isolate apps from each other, the cap and the stranded gauge limit and expose
+the damage within an app, and the driver-level timeout prevents it.
+
 ## Safe Patterns
 
 ```python

@@ -264,6 +264,28 @@ class ApiMetadataOutput(MetadataOutput):
     objects: list[ApiMetadataObject] = []  # for apitree widget
 ```
 
+### ManifestInput and compute_manifest
+
+A manifest that cannot be static (it depends on the submission's `fe_inputs`,
+or on the tenant) is computed by one optional `Handler` method. The worker's
+handler service and the consolidated API host both call it, so it is the form
+of a dynamic manifest that can be hosted:
+
+```python
+class ManifestInput(BaseModel):
+    entrypoint: str                  # the entry point whose manifest is requested
+    manifest: dict[str, Any]         # its generated manifest, tokens resolved
+    fe_inputs: dict[str, Any] = {}   # the decoded setup-form values
+
+async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
+    ...  # return the manifest to serve, or None for the generated one
+```
+
+The default returns `None`. Task-queue templates in the result
+(`atlan-<app>-{deployment_name}`) are stamped with the queue the app's worker
+polls, so build them from `self.context.app_name`. See
+[Apps — Dynamic manifest](apps.md#dynamic-manifest-compute_manifest).
+
 ### Event and Subscription Contracts
 
 For event-driven handlers, additional contracts are available:

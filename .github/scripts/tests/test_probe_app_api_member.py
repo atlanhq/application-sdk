@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 
+import application_sdk.handler.asgi as asgi
+from application_sdk.handler import Handler
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import probe_app_api_member as probe  # noqa: E402
@@ -66,6 +69,19 @@ def test_a_handler_that_fails_for_want_of_a_source_passes(
     assert _problems(probe.run("demo", package, "handler")) == []
 
 
+def test_the_probe_runs_against_an_sdk_without_compute_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Apps run this probe from the SDK's main against the release they pin,
+    whose Handler may predate compute_manifest (and whose host never calls it)."""
+    monkeypatch.delattr(Handler, "compute_manifest")
+    monkeypatch.setattr(
+        asgi, "handler_compute_manifest", lambda *_a, **_k: lambda _ep: None
+    )
+    package = _member(tmp_path, monkeypatch, "raise ConnectionError('no source')")
+    assert _problems(probe.run("demo", package, "handler")) == []
+
+
 class _Answer:
     def __init__(self, status_code: int) -> None:
         self.status_code = status_code
@@ -97,9 +113,157 @@ def test_a_404_fails_when_the_app_ships_contract_files() -> None:
     assert "configmaps" in result.problems[0]
 
 
+class _Manifest:
+    """A host whose ``POST /manifest`` answers *status*, running the hook or not."""
+
+    def __init__(self, status: int, calls: dict[str, int], *, runs_hook: bool):
+        self.status, self.calls, self.runs_hook = status, calls, runs_hook
+
+    def post(self, path: str, json: object = None) -> _Answer:
+        if self.runs_hook:
+            self.calls["compute_manifest"] = self.calls.get("compute_manifest", 0) + 1
+        return _Answer(self.status)
+
+
+@pytest.mark.parametrize(
+    ("status", "runs_hook", "passes"),
+    [
+        (422, True, True),  # the handler refused the probe's empty form inputs
+        (404, False, False),  # no manifest route on the host
+        (405, False, False),
+        (422, False, False),  # a refusal the handler never saw
+        (500, True, False),
+    ],
+)
+def test_a_4xx_passes_only_when_the_handler_gave_it(
+    status: int, runs_hook: bool, passes: bool
+) -> None:
+    calls: dict[str, int] = {}
+    result = probe.Result()
+    probe.check_computed_manifests(
+        _Manifest(status, calls, runs_hook=runs_hook), result, ["demo"], calls
+    )
+    assert (result.problems == []) is passes, result.problems
+
+
 def test_contract_files_are_read_from_the_apps_generated_dir(tmp_path: Path) -> None:
     assert probe.ships_contracts(tmp_path / "app/generated") is False
     (tmp_path / "app/generated").mkdir(parents=True)
     assert probe.ships_contracts(tmp_path / "app/generated") is False
     (tmp_path / "app/generated/demo.json").write_text("{}")
     assert probe.ships_contracts(tmp_path / "app/generated") is True
+
+
+_COMPUTING_HANDLER = """
+from application_sdk.handler import DefaultHandler
+
+
+class ComputingHandler(DefaultHandler):
+    async def compute_manifest(self, input):
+        {body}
+
+
+handler = ComputingHandler()
+
+
+def get_asgi_app():
+    from application_sdk.handler.asgi import build_asgi_app
+
+    return build_asgi_app(handler, app_name="demo", app_package=__name__)
+"""
+
+_GENERATED_MANIFEST = (
+    '{"execution_mode": "automation-engine", "dag": {"extract": {"inputs": '
+    '{"task_queue": "atlan-demo-{deployment_name}"}}}}'
+)
+
+
+def _computing_member(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str, *, flat: bool = False
+) -> str:
+    package = f"probe_computing_{abs(hash((body, flat)))}"
+    root = tmp_path / package
+    if flat:
+        (root / "generated").mkdir(parents=True)
+        (root / "generated" / "manifest.json").write_text(_GENERATED_MANIFEST)
+    for entrypoint in () if flat else ("first", "second"):
+        (root / "generated" / entrypoint).mkdir(parents=True)
+        (root / "generated" / entrypoint / "manifest.json").write_text(
+            _GENERATED_MANIFEST
+        )
+    (root / "__init__.py").write_text(
+        textwrap.dedent(_COMPUTING_HANDLER).format(body=body)
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "probe")
+    return package
+
+
+def test_a_computed_manifest_for_every_entry_point_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "return {**input.manifest, 'triggers': {'http': {'enabled': True}}}",
+    )
+    assert _problems(probe.run("demo", package, "handler")) == []
+
+
+def test_a_worker_only_import_in_compute_manifest_fails_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "import application_sdk_no_such_worker_module",
+    )
+    problems = _problems(probe.run("demo", package, "handler"))
+    assert any("entrypoint second" in p and "HTTP 200" in p for p in problems)
+    assert any(
+        "compute_manifest reached a worker-only import" in p for p in problems
+    ), problems
+
+
+def test_a_worker_only_import_in_a_flat_apps_compute_manifest_fails_the_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A flat manifest names no entry point; the hook must still be requested."""
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "import application_sdk_no_such_worker_module",
+        flat=True,
+    )
+    problems = _problems(probe.run("demo", package, "handler"))
+    assert any("entrypoint demo" in p and "HTTP 200" in p for p in problems)
+    assert any(
+        "compute_manifest reached a worker-only import" in p for p in problems
+    ), problems
+
+
+@pytest.mark.parametrize("flat", [True, False], ids=["flat", "per-entrypoint"])
+def test_a_handler_refusing_empty_form_inputs_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, flat: bool
+) -> None:
+    """The probe sends no form values; a 4xx for them is the handler's answer."""
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "from fastapi import HTTPException; "
+        "raise HTTPException(status_code=422, detail='policy_id is required')",
+        flat=flat,
+    )
+    assert _problems(probe.run("demo", package, "handler")) == []
+
+
+def test_a_flat_apps_computed_manifest_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    package = _computing_member(
+        tmp_path,
+        monkeypatch,
+        "return {**input.manifest, 'triggers': {'http': {'enabled': True}}}",
+        flat=True,
+    )
+    assert _problems(probe.run("demo", package, "handler")) == []

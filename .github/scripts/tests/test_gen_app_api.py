@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -127,6 +128,69 @@ def test_a_git_pinned_sdk_becomes_a_direct_reference(tmp_path: Path) -> None:
         'application-sdk.git@abc123#subdirectory=packages/api",'
     ) in pyproject
     assert "allow-direct-references = true" in pyproject
+
+
+#: A private package pinned by git URL: a bare name would let a public index
+#: satisfy it (dependency confusion), so the app declares the direct reference.
+_PRIVATE_DEP = (
+    "example-private-sdk @ git+https://github.com/example-org/"
+    "example-private-sdk.git@0123456789abcdef0123456789abcdef01234567"
+)
+
+
+def test_a_direct_reference_dependency_ships_as_declared(tmp_path: Path) -> None:
+    """hatchling refuses any direct reference in ``project.dependencies`` without
+    ``allow-direct-references``, not only the api package's own git pin."""
+    root = _app(
+        tmp_path / "repo",
+        "from .client import C\n",
+        _PYPROJECT.replace(
+            'dependencies = ["pymysql>=1.1"]',
+            f'dependencies = ["pymysql>=1.1", {_PRIVATE_DEP!r}]',
+        ),
+    )
+    gen.stage(root, gen.load(root), tmp_path / "staged")
+    parsed = tomllib.loads((tmp_path / "staged/pyproject.toml").read_text())
+    assert parsed["project"]["dependencies"] == [
+        "atlan-application-sdk-api[sql]>=3.40.0,<4.0.0",
+        "pymysql>=1.1",
+        _PRIVATE_DEP,
+    ]
+    assert parsed["tool"]["hatch"]["metadata"] == {"allow-direct-references": True}
+
+
+def test_without_a_direct_reference_direct_references_stay_refused(
+    tmp_path: Path,
+) -> None:
+    root = _app(tmp_path, "from .client import C\n")
+    parsed = tomllib.loads(gen._pyproject(gen.load(root)))  # noqa: SLF001
+    assert "metadata" not in parsed["tool"]["hatch"]
+
+
+@pytest.mark.parametrize(
+    ("requirement", "direct"),
+    [
+        ("pymysql>=1.1", False),
+        ('tomli>=2; python_version < "3.12"', False),
+        ("pymysql (>=1.1)", False),
+        (_PRIVATE_DEP, True),
+        (
+            "example_private.sdk[a,b]@git+ssh://git@github.com/example-org/x.git@v1.2.3",
+            True,
+        ),
+        ('  example-pkg  @  file:///tmp/example ; python_version >= "3.11"', True),
+        # An "@" that is not a URL: arbitrary equality, and a marker value.
+        ("example-pkg===1.0@local", False),
+        ('example-pkg; extra == "a@b"', False),
+    ],
+)
+def test_direct_references_are_read_as_packaging_reads_them(
+    requirement: str, direct: bool
+) -> None:
+    """hatchling decides with ``packaging``'s ``Requirement.url``; the script,
+    which cannot import packaging, must agree with it."""
+    assert (Requirement(requirement).url is not None) is direct
+    assert (gen._DIRECT_REFERENCE.match(requirement) is not None) is direct  # noqa: SLF001
 
 
 def test_a_repo_without_the_config_is_not_using_this_layout(tmp_path: Path) -> None:
@@ -369,10 +433,20 @@ def test_check_refuses_a_compute_manifest_hook(tmp_path: Path) -> None:
     )
     problems = gen.check(root, gen.load(root))
     assert problems == [
-        "app/crawler/core.py: compute_manifest runs app code per request; the "
-        "consolidated host serves static manifests only, so this app cannot be "
-        "hosted yet"
+        "app/crawler/core.py: compute_manifest runs app code per request outside "
+        "the handler, which the consolidated host never runs; make the manifest "
+        "static, or move the hook to the handler's compute_manifest"
     ]
+
+
+def test_check_accepts_a_handler_compute_manifest(tmp_path: Path) -> None:
+    """The handler's own compute_manifest ships with it and runs on the host."""
+    root = _app(
+        tmp_path,
+        "from .client import C\n\n\nclass DemoHandler:\n"
+        "    async def compute_manifest(self, input):\n        return None\n",
+    )
+    assert gen.check(root, gen.load(root)) == []
 
 
 def test_a_relative_import_in_a_package_init_ships_its_sibling(tmp_path: Path) -> None:
