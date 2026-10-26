@@ -258,7 +258,9 @@ every other site stays open until a pyatlan creator produces its string.
 - **gap** — no creator for the type in any usable pyatlan (Step 0.2), a
   creator that produces a different string for a realistic input, a creator
   that needs an input the app does not have (for example `order` or a parent
-  name), or a process identity not rooted at the connection qualifiedName.
+  name), a creator that rejects a reachable non-blank input the app accepts
+  today (for example a parent id that contains `/`), or a process identity
+  not rooted at the connection qualifiedName.
   It waits for pyatlan; changing the string would change asset identity
   (duplicates or orphaned assets).
 
