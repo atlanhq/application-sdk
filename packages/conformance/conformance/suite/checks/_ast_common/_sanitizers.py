@@ -26,12 +26,14 @@ import ast
 #: Substrings that mark a callable as a redaction helper.  Matched
 #: case-insensitively against the call target's simple name (``redact_secrets``)
 #: or attribute leaf (``utils.redact``).  ``sanitiz`` covers
-#: sanitize/sanitizer/sanitised.
+#: sanitize/sanitizer/sanitised; ``safe_exception`` covers
+#: ``safe_exception_frames`` (the frame stack without the message).
 SANITIZER_NAME_WORDS: tuple[str, ...] = (
     "redact",
     "sanitiz",
     "scrub_secret",
     "safe_traceback",
+    "safe_exception",
     "mask_secret",
 )
 

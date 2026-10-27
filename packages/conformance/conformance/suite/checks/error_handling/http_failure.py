@@ -13,7 +13,8 @@ HTTP-response marker (``is_success`` / ``ok`` / ``status_code``) AND failure-sha
 guards, nor on a success-shaped marker check combined with an unrelated failure
 (``resp.is_success and parsed is None`` — HTTP 200 with an empty body). A bounded
 status-code range wholly within 200–299 is also a success check, not a failure
-comparison. Raise a typed error instead of returning an empty sentinel.
+comparison, and ``!=`` against a single non-2xx constant (``status_code != 401``)
+is no failure test at all: its branch also takes every 2xx response. Raise a typed error instead of returning an empty sentinel.
 
 Both polarities are covered: the failure-in-the-test → empty body
 (``if not resp.is_success: return []``) and its mirror, success-in-the-test →
@@ -330,9 +331,19 @@ def _compare_is_failure(node: ast.Compare) -> bool:
     """A failure comparison: ``!= 200``, ``>= 400``, ``is None`` / ``== None``.
 
     NOT failure: ``== 204`` / ``== 200`` (success) and ``is True`` — equality/
-    identity against a non-None constant is a success check.
+    identity against a non-None constant is a success check.  Nor is ``!=``
+    against one non-2xx constant (``status_code != 401``): that branch also
+    takes every 2xx response, so it is not a failure test.
     """
-    for op, comparator in zip(node.ops, node.comparators):
+    operands = [node.left, *node.comparators]
+    for index, (op, comparator) in enumerate(zip(node.ops, node.comparators)):
+        if isinstance(op, ast.NotEq):
+            status = _int_constant(comparator)
+            if status is None:
+                status = _int_constant(operands[index])
+            if status is not None and not 200 <= status <= 299:
+                continue
+            return True
         if isinstance(op, _FAILURE_COMPARE_OPS):
             return True
         if isinstance(op, (ast.Is, ast.Eq)) and (

@@ -7826,3 +7826,684 @@ def test_runner_scans_the_e_series_as_a_whole_repo() -> None:
 
     (registration,) = [c for c in _CHECKS if c.series == error_handling.SERIES]
     assert registration.scan_all is error_handling.scan_all
+
+
+# ── E004: quiet release after a lookup, awaited results, metric emits ─────────
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # look the resource up, release it behind a None guard
+        """\
+async def finish(app):
+    try:
+        state = app.get_app_state("config")
+        if state is not None:
+            await state.close()
+    except Exception:
+        logger.debug("could not close the client", exc_info=True)
+""",
+        # a sync-or-async close whose result is awaited when awaitable
+        """\
+async def _close_quietly(client):
+    close = getattr(client, "close", None)
+    if not callable(close):
+        return
+    try:
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+    except Exception:
+        logger.debug("close raised", exc_info=True)
+""",
+        # a best-effort metric emit through the metrics receiver
+        """\
+def emit(name, value):
+    try:
+        get_metrics().record_metric(name=name, value=value)
+    except Exception:
+        logger.debug("%s dropped", name, exc_info=True)
+""",
+        # a best-effort metric emit by its leaf name
+        """\
+def emit(metrics, name):
+    try:
+        metrics.record_metric(name=name, value=1.0)
+    except Exception:
+        logger.debug("%s dropped", name, exc_info=True)
+""",
+    ],
+)
+def test_e004_no_finding_for_quiet_lookup_release_and_metric_emit(src: str) -> None:
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # DEBUG without the traceback
+        """\
+async def finish(app):
+    try:
+        state = app.get_app_state("config")
+        if state is not None:
+            await state.close()
+    except Exception:
+        logger.debug("could not close the client")
+""",
+        # the guarded call is not a release
+        """\
+async def finish(app):
+    try:
+        state = app.get_app_state("config")
+        if state is not None:
+            await state.refresh()
+    except Exception:
+        logger.debug("could not refresh", exc_info=True)
+""",
+        # the release result is kept, not awaited behind the guard
+        """\
+async def finish(client):
+    try:
+        result = client.close()
+    except Exception:
+        logger.debug("close raised", exc_info=True)
+""",
+        # a looked-up value the code after the try may read
+        """\
+def configure(app):
+    try:
+        config = app.get_config()
+        app.close()
+    except Exception:
+        logger.debug("config unavailable", exc_info=True)
+""",
+        # a computed attribute, not a release
+        """\
+def bind(self):
+    try:
+        self.output_path = TEMPLATE.format(run_id=current_run_id())
+    except Exception:
+        logger.debug("no run context", exc_info=True)
+""",
+        # not a metric emit
+        """\
+def emit(metrics, name):
+    try:
+        metrics.publish(name)
+    except Exception:
+        logger.debug("%s dropped", name, exc_info=True)
+""",
+    ],
+)
+def test_e004_still_fires_for_quiet_shapes_it_cannot_prove(src: str) -> None:
+    assert "E004" in _findings(src)
+
+
+# ── E004: a predicate gated on aliases of the binding ─────────────────────────
+
+_ALIASED_GATED_SKIP = """\
+async def load(key):
+    try:
+        return await store.get(key)
+    except Exception as exc:
+{aliases}
+        if {test}:
+            logger.debug("skip %s", key, exc_info=True)
+            return None
+        raise
+"""
+
+
+@pytest.mark.parametrize(
+    ("aliases", "test"),
+    [
+        (
+            "        msg = str(exc)",
+            "'not found' in msg.lower() or 'AAF-STR-001' in msg",
+        ),
+        (
+            "        msg = str(exc)\n        kind = type(exc).__name__",
+            "kind == 'StorageNotFoundError' or 'not found' in msg",
+        ),
+    ],
+)
+def test_e004_no_finding_for_a_gated_skip_on_binding_aliases(
+    aliases: str, test: str
+) -> None:
+    src = _ALIASED_GATED_SKIP.format(aliases=aliases, test=test)
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("aliases", "test"),
+    [
+        # the alias reads more than the binding
+        ("        msg = f'{key}: {exc}'", "'not found' in msg"),
+        # the alias is rebound before the test
+        ("        msg = str(exc)\n        msg = settings.mode", "'not found' in msg"),
+        # the test reads neither the binding nor an alias
+        ("        msg = str(exc)", "settings.optional"),
+    ],
+)
+def test_e004_still_fires_when_the_alias_gate_is_not_proven(
+    aliases: str, test: str
+) -> None:
+    src = _ALIASED_GATED_SKIP.format(aliases=aliases, test=test)
+    assert "E004" in _findings(src)
+
+
+# ── E004/E007: same-class typed-result helpers ────────────────────────────────
+
+_SAME_CLASS_VERDICT = """\
+class Probe:
+{helper}
+
+    {caller_decorator}
+    async def probe({receiver}, request):
+        try:
+            client = await open_client(request)
+        except Exception as exc:
+            return {call}
+        return client
+"""
+
+_STATIC_VERDICT = """\
+    @staticmethod
+    def verdict(exc: BaseException) -> {annotation}:
+        return CheckResult(passed=False, error=classify(exc))"""
+
+_PLAIN_VERDICT = """\
+    def verdict(self, exc: BaseException) -> CheckResult:
+        return CheckResult(passed=False, error=classify(exc))"""
+
+
+@pytest.mark.parametrize(
+    ("helper", "caller_decorator", "receiver", "call"),
+    [
+        (
+            _STATIC_VERDICT.format(annotation="CheckResult"),
+            "",
+            "self",
+            "self.verdict(exc)",
+        ),
+        (
+            _STATIC_VERDICT.format(annotation="CheckResult"),
+            "",
+            "self",
+            "Probe.verdict(exc)",
+        ),
+        (
+            _STATIC_VERDICT.format(annotation="CheckResult"),
+            "@classmethod",
+            "cls",
+            "cls.verdict(exc)",
+        ),
+        (_PLAIN_VERDICT, "", "self", "self.verdict(exc)"),
+    ],
+)
+def test_e004_e007_no_finding_for_a_same_class_typed_result_helper(
+    helper: str, caller_decorator: str, receiver: str, call: str
+) -> None:
+    found = _findings(
+        _SAME_CLASS_VERDICT.format(
+            helper=helper,
+            caller_decorator=caller_decorator,
+            receiver=receiver,
+            call=call,
+        )
+    )
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+@pytest.mark.parametrize(
+    ("helper", "call"),
+    [
+        # the annotation admits None
+        (
+            _STATIC_VERDICT.format(annotation="Optional[CheckResult]"),
+            "self.verdict(exc)",
+        ),
+        (_STATIC_VERDICT.format(annotation="CheckResult | None"), "self.verdict(exc)"),
+        # the binding is not what the result is built from
+        (_STATIC_VERDICT.format(annotation="CheckResult"), "self.verdict(None)"),
+        # a plain method reached through the class is unbound
+        (_PLAIN_VERDICT, "Probe.verdict(exc)"),
+    ],
+)
+def test_e004_e007_still_fire_when_the_same_class_result_is_not_proven(
+    helper: str, call: str
+) -> None:
+    found = _findings(
+        _SAME_CLASS_VERDICT.format(
+            helper=helper, caller_decorator="", receiver="self", call=call
+        )
+    )
+    assert "E004" in found
+    assert "E007" in found
+
+
+# ── E004/E007: a returned helper that logs through safe_exception_frames ──────
+
+_LOGGING_HELPER_RETURN = """\
+class Checks:
+    def _check_failure(self, check, exc: BaseException) -> dict:
+        friendly, matched = lookup_message(str(exc))
+        logger.{level}(
+            "check failed: check=%s error_class=%s mapped=%s frames=%s",
+            check,
+            type(exc).__name__,
+            matched,
+            {logged},
+        )
+        return {{"passed": False, "message": friendly}}
+
+    @staticmethod
+    def _internal_error(message: str, exc: BaseException) -> InternalError:
+        logger.error(
+            "failed unexpectedly: %s error_class=%s frames=%s",
+            message,
+            type(exc).__name__,
+            safe_exception_frames(exc),
+        )
+        return InternalError(message=message)
+
+    def run_check(self, check, strict):
+        try:
+            return check()
+        except Exception as exc:
+            if strict:
+                raise {guard} from None
+            return self._check_failure(check, exc)
+
+    def probe(self, table, strict):
+        try:
+            return read(table), None
+        except Exception as exc:
+            if strict:
+                raise {guard} from None
+            return None, self._check_failure(table, exc)
+"""
+
+
+def test_e004_e007_no_finding_for_a_returned_helper_that_logs_sanitized() -> None:
+    found = _findings(
+        _LOGGING_HELPER_RETURN.format(
+            level="warning",
+            logged="safe_exception_frames(exc)",
+            guard='self._internal_error("check failed", exc)',
+        )
+    )
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+@pytest.mark.parametrize(
+    ("level", "logged", "guard"),
+    [
+        # the helper logs the raw exception: no redaction boundary
+        ("warning", "exc", 'self._internal_error("check failed", exc)'),
+        # below WARNING outside the preflight scope
+        ("debug", "safe_exception_frames(exc)", 'self._internal_error("x", exc)'),
+        # the strict path severs the cause without logging it
+        ("warning", "safe_exception_frames(exc)", 'InternalError("check failed")'),
+    ],
+)
+def test_e004_still_fires_when_the_returned_helper_is_not_proven(
+    level: str, logged: str, guard: str
+) -> None:
+    found = _findings(
+        _LOGGING_HELPER_RETURN.format(level=level, logged=logged, guard=guard)
+    )
+    assert "E004" in found
+
+
+# ── E004: a sanitized alias logged inside the preflight scope ─────────────────
+
+
+def _sanitized_alias_in_gate(handler: str, *, reached: bool = True) -> str:
+    call = "        self._metadata(input)\n" if reached else ""
+    return (
+        _PREFLIGHT_IMPORTS + "class H(Handler):\n"
+        "    def _metadata(self, input):\n"
+        "        dump = {}\n"
+        "        try:\n"
+        "            dump = input.metadata.model_dump()\n"
+        "        except Exception as exc:\n"
+        f"{handler}"
+        "        return dump\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        f"{call}"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+_SANITIZED_ALIAS_LOG = (
+    "            sanitized = sanitize_cause_repr(exc)\n"
+    "            logger.debug('metadata unreadable: %s', sanitized)\n"
+)
+
+
+def test_e004_no_finding_for_a_sanitized_alias_logged_in_preflight() -> None:
+    assert "E004" not in _findings(_sanitized_alias_in_gate(_SANITIZED_ALIAS_LOG))
+
+
+@pytest.mark.parametrize(
+    ("handler", "reached"),
+    [
+        # outside the preflight scope DEBUG is not enough
+        (_SANITIZED_ALIAS_LOG, False),
+        # the alias is replaced before the log
+        (
+            "            sanitized = sanitize_cause_repr(exc)\n"
+            "            sanitized = 'unavailable'\n"
+            "            logger.debug('metadata unreadable: %s', sanitized)\n",
+            True,
+        ),
+        # the alias is not built by a sanitizer
+        (
+            "            sanitized = describe(exc)\n"
+            "            logger.debug('metadata unreadable: %s', sanitized)\n",
+            True,
+        ),
+    ],
+)
+def test_e004_still_fires_when_the_sanitized_alias_is_not_proven(
+    handler: str, reached: bool
+) -> None:
+    assert "E004" in _findings(_sanitized_alias_in_gate(handler, reached=reached))
+
+
+# ── E004: a typed failure recorded as a preflight check row ───────────────────
+
+_RECORDED_PREFLIGHT_ROW = """\
+class Checks:
+    @staticmethod
+    def _typed_error(exc: Exception, default: type[AppError]) -> {annotation}:
+        if isinstance(exc, AppError):
+            return exc
+        return default(cause=exc)
+
+    async def run_checks(self, client) -> PreflightOutput:
+        checks: list[PreflightCheck] = []
+
+        def _record(name: str, *, passed: bool, error: AppError | None = None) -> None:
+{record_body}
+
+        try:
+            await client.login()
+        except Exception as e:
+            _record("login", passed=False, error={error})
+        failed = False
+        try:
+            await client.list_items()
+        except Exception as e:
+            failed = True
+            _record("items", passed=False, error={error})
+        return PreflightOutput(checks=checks, failed=failed)
+"""
+
+_APPEND_ROW = """\
+            checks.append(
+                PreflightCheck(
+                    name=name,
+                    passed=passed,
+                    error=error.to_failure_details() if error is not None else None,
+                )
+            )"""
+
+
+def test_e004_no_finding_when_the_typed_failure_is_recorded_as_a_check() -> None:
+    src = _RECORDED_PREFLIGHT_ROW.format(
+        annotation="AppError",
+        record_body=_APPEND_ROW,
+        error="self._typed_error(e, AuthRejectedError)",
+    )
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("annotation", "record_body", "error"),
+    [
+        # the classifier may hand back None
+        ("AppError | None", _APPEND_ROW, "self._typed_error(e, AuthRejectedError)"),
+        # the binding is not what the error is built from
+        ("AppError", _APPEND_ROW, "self._typed_error(None, AuthRejectedError)"),
+        # the row lands in a list local to the helper, then vanishes
+        (
+            "AppError",
+            "            rows = []\n"
+            + _APPEND_ROW.replace("checks.append", "rows.append"),
+            "self._typed_error(e, AuthRejectedError)",
+        ),
+        # the helper can return before it records anything
+        (
+            "AppError",
+            "            if not passed:\n                return\n" + _APPEND_ROW,
+            "self._typed_error(e, AuthRejectedError)",
+        ),
+    ],
+)
+def test_e004_still_fires_when_the_recorded_check_is_not_proven(
+    annotation: str, record_body: str, error: str
+) -> None:
+    src = _RECORDED_PREFLIGHT_ROW.format(
+        annotation=annotation, record_body=record_body, error=error
+    )
+    assert "E004" in _findings(src)
+
+
+# ── E004/E007: durable failure records with branches, carriers and loops ──────
+
+_RECOVERED_BRANCH = """\
+async def fetch_columns(element_id):
+    try:
+        return await load_columns(element_id)
+    except Exception as e:
+        fallback = inline_columns(element_id)
+        if fallback:
+            await write_failure(failures_dir, element_id, make_failure_record("fallback", e))
+{branch_tail}
+        await write_failure(failures_dir, element_id, make_failure_record("columns", e))
+        return None
+"""
+
+_CARRIED_RECORD = """\
+async def list_for_project(project_id, fetch):
+    try:
+        return await fetch(project_id)
+    except Exception as e:
+        record = {{"project_id": project_id, "errorType": type(e).__name__, "message": str(e)}}
+        for attr in ("status_code", "error_code"):
+            val = getattr(e, attr, None)
+            if val is not None:
+                record[attr] = val
+{loop_extra}
+        await write_failure(failures_dir, project_id, {written})
+        logger.warning(
+            "listing failed for project %s; continuing: %s", project_id, {logged}
+        )
+        return []
+"""
+
+
+def test_e004_no_finding_for_a_recorded_failure_with_a_recovered_branch() -> None:
+    src = _RECOVERED_BRANCH.format(
+        branch_tail="            return {'elementId': element_id, 'columns': fallback}"
+    )
+    assert "E004" not in _findings(src)
+
+
+def test_e004_still_fires_when_a_recorded_branch_falls_through() -> None:
+    src = _RECOVERED_BRANCH.format(branch_tail="            fallback = None")
+    assert "E004" in _findings(src)
+
+
+def test_e004_e007_no_finding_for_a_carried_record_and_sanitized_warning() -> None:
+    found = _findings(
+        _CARRIED_RECORD.format(
+            loop_extra="", written="record", logged="sanitize_cause_repr(e)"
+        )
+    )
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+@pytest.mark.parametrize(
+    ("loop_extra", "written", "logged"),
+    [
+        # the written record never saw the exception
+        ("", "{'project_id': project_id}", "sanitize_cause_repr(e)"),
+        # the warning carries no sanitized exception
+        ("", "record", "project_id"),
+    ],
+)
+def test_e007_still_fires_when_the_carried_record_is_not_proven(
+    loop_extra: str, written: str, logged: str
+) -> None:
+    found = _findings(
+        _CARRIED_RECORD.format(loop_extra=loop_extra, written=written, logged=logged)
+    )
+    assert "E007" in found
+
+
+_LOOPED_RECORD_SKIP = """\
+def parse_one(item_id):
+    try:
+        return parse(item_id)
+    except Exception as e:
+        record = {{"item_id": item_id, "message": str(e)}}
+        for attr in ("status_code", "error_code"):
+            val = getattr(e, attr, None)
+            if val is not None:
+                record[attr] = val
+{loop_extra}
+        write_failure(failures_dir, item_id, record)
+        return None
+"""
+
+
+def test_e004_no_finding_for_an_assign_only_loop_before_a_carried_record() -> None:
+    assert "E004" not in _findings(_LOOPED_RECORD_SKIP.format(loop_extra=""))
+
+
+def test_e004_still_fires_when_the_loop_before_the_record_does_more() -> None:
+    src = _LOOPED_RECORD_SKIP.format(loop_extra="                notify(attr)")
+    assert "E004" in _findings(src)
+
+
+# ── E004: a sanitized DEBUG before a computed fallback ────────────────────────
+
+_SANITIZED_FALLBACK = """\
+def column_names(cursor, meta):
+    if meta is not None:
+        try:
+            count = int(meta.getColumnCount())
+            names = [str(meta.getColumnLabel(i)).lower() for i in range(1, count + 1)]
+            if names:
+                return names
+        except Exception as exc:
+            logger.debug("labels unreadable; falling back:\\n%s", {logged})
+    return {fallback}
+"""
+
+
+def test_e004_no_finding_for_a_sanitized_debug_before_a_computed_fallback() -> None:
+    src = _SANITIZED_FALLBACK.format(
+        logged="safe_traceback(exc)",
+        fallback="[str(desc[0]).lower() for desc in cursor.description]",
+    )
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("logged", "fallback"),
+    [
+        # the raw exception, not through a sanitizer
+        ("exc", "[str(desc[0]).lower() for desc in cursor.description]"),
+        # a None sentinel
+        ("safe_traceback(exc)", "None"),
+        # an empty literal
+        ("safe_traceback(exc)", "[]"),
+        # a value the failed try body was building
+        ("safe_traceback(exc)", "list(names)"),
+    ],
+)
+def test_e004_still_fires_when_the_fallback_is_not_proven(
+    logged: str, fallback: str
+) -> None:
+    src = _SANITIZED_FALLBACK.format(logged=logged, fallback=fallback)
+    assert "E004" in _findings(src)
+
+
+# ── E004: a converted error re-raised with its cause dropped ──────────────────
+
+_CONVERTED_RERAISE = """\
+async def wrapper(*args, **kwargs):
+    try:
+        return await fn(*args, **kwargs)
+    except AppError:
+        raise
+    except Exception as exc:
+        typed = {converted}
+{extra}
+        if typed.cause is None:
+            raise typed from None
+        raise typed from exc
+"""
+
+
+def test_e004_no_finding_for_a_converted_error_raised_from_none() -> None:
+    src = _CONVERTED_RERAISE.format(converted="to_typed_failure(exc)", extra="")
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("converted", "extra"),
+    [
+        # converted from text, not from the exception
+        ("to_typed_failure(str(exc))", ""),
+        # rebound before the raise
+        ("to_typed_failure(exc)", "        typed = fallback_error()"),
+    ],
+)
+def test_e004_still_fires_when_the_converted_raise_is_not_proven(
+    converted: str, extra: str
+) -> None:
+    src = _CONVERTED_RERAISE.format(converted=converted, extra=extra)
+    assert "E004" in _findings(src)
+
+
+# ── E020: inequality against a single non-2xx status ──────────────────────────
+
+
+def test_e020_no_finding_for_inequality_against_a_single_error_status() -> None:
+    assert "E020" not in _findings(
+        """\
+def challenge(response):
+    if response.status_code != 401:
+        return None
+    return parse_challenge(response.headers)
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "test",
+    [
+        "response.status_code != 200",
+        "response.status_code >= 400",
+        "200 != response.status_code",
+    ],
+)
+def test_e020_still_fires_for_failure_status_comparisons(test: str) -> None:
+    assert "E020" in _findings(
+        f"""\
+def fetch(response):
+    if {test}:
+        return None
+    return response.json()
+"""
+    )
