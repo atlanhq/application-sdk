@@ -7162,3 +7162,91 @@ def test_e004_e007_still_fire_when_an_arm_is_untyped_or_drops_the_failure(
     found = _findings(_STAGED_IFEXP.format(staged=staged))
     assert "E004" in found
     assert "E007" in found
+
+
+# ── E004/E009: an exception stashed for a later re-raise ──────────────────────
+
+_STASH_AND_RERAISE = """\
+def call(func):
+    error = None
+    result = None
+    try:
+        result = func()
+    except BaseException as exc:
+        error = exc
+    cleanup()
+{tail}
+"""
+
+
+def test_e004_e009_no_finding_when_the_stash_is_reraised_after_cleanup() -> None:
+    found = _findings(
+        _STASH_AND_RERAISE.format(
+            tail="    if error is not None:\n        raise error\n    return result"
+        )
+    )
+    assert "E004" not in found
+    assert "E009" not in found
+
+
+def test_e004_no_finding_when_a_worker_thread_hands_the_failure_back() -> None:
+    assert "E004" not in _findings(
+        """\
+def run_in_thread(func):
+    errors = []
+    def target():
+        try:
+            func()
+        except BaseException as exc:
+            errors.append(exc)
+    thread = threading.Thread(target=target)
+    thread.start()
+    thread.join()
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_e004_e009_no_finding_for_a_nonlocal_stash_reraised_by_the_owner() -> None:
+    found = _findings(
+        """\
+def run_in_thread(func):
+    error = None
+    def target():
+        nonlocal error
+        try:
+            func()
+        except Exception as exc:
+            error = exc
+    thread = threading.Thread(target=target)
+    thread.start()
+    thread.join()
+    if error is not None:
+        raise error
+"""
+    )
+    assert "E004" not in found
+    assert "E009" not in found
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        # never re-raised
+        "    return result",
+        # a return on the way skips the re-raise
+        "    return result\n    if error is not None:\n        raise error",
+        "    if result is None:\n        return None\n    if error is not None:\n        raise error",
+        # the stash is overwritten before the re-raise
+        "    error = None\n    if error is not None:\n        raise error",
+        # a different name is raised
+        "    if error is not None:\n        raise RuntimeError('failed')",
+    ],
+)
+def test_e004_e009_still_fire_when_the_stash_is_not_provably_reraised(
+    tail: str,
+) -> None:
+    found = _findings(_STASH_AND_RERAISE.format(tail=tail))
+    assert "E004" in found
+    assert "E009" in found

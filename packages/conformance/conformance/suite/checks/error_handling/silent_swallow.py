@@ -301,6 +301,11 @@ class SilentSwallowMixin:
                         return True
             return False
 
+        # A stash that the owning function provably re-raises after cleanup
+        # (or after a worker thread is joined) defers the failure, not swallows it.
+        if self._handler_stashes_for_reraise(node):
+            return
+
         # Follow only an unconditional direct call to a proven same-module helper.
         # A preceding branch can bypass the helper and leaves this proof incomplete.
         if _handler_logs_through_helper():
@@ -339,6 +344,164 @@ class SilentSwallowMixin:
             f"(worker loops, HTTP handlers) when logged with exc_info=True. "
             f"Narrow the exception type or add exc_info=True logging.",
         )
+
+    # ── E004 / E009: stashed for a later re-raise ─────────────────────────────
+
+    @staticmethod
+    def _stash_target(stmt: ast.stmt, exc_name: str) -> str | None:
+        """The name *stmt* stores the caught exception in, or None.
+
+        ``error = exc`` or ``holder.append(exc)`` — nothing else.
+        """
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.Name)
+            and stmt.value.id == exc_name
+        ):
+            return stmt.targets[0].id
+        if (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Call)
+            and isinstance(stmt.value.func, ast.Attribute)
+            and stmt.value.func.attr == "append"
+            and isinstance(stmt.value.func.value, ast.Name)
+            and len(stmt.value.args) == 1
+            and not stmt.value.keywords
+            and isinstance(stmt.value.args[0], ast.Name)
+            and stmt.value.args[0].id == exc_name
+        ):
+            return stmt.value.func.value.id
+        return None
+
+    @staticmethod
+    def _binds_locally(
+        function: ast.FunctionDef | ast.AsyncFunctionDef, name: str
+    ) -> bool | None:
+        """Whether *name* is local to *function*: True, False, or None when it is
+        declared ``nonlocal``/``global`` there (it then belongs to another scope)."""
+        parameters = [
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        ]
+        local = any(parameter.arg == name for parameter in parameters)
+        for node in _iter_shallow(function):
+            if isinstance(node, (ast.Nonlocal, ast.Global)) and name in node.names:
+                return None
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                local = True
+        return local
+
+    @staticmethod
+    def _raises_name(stmt: ast.stmt, name: str) -> bool:
+        """``raise NAME`` / ``raise NAME[...]``, with or without ``from``."""
+        if not isinstance(stmt, ast.Raise) or stmt.exc is None:
+            return False
+        raised = stmt.exc
+        if isinstance(raised, ast.Subscript):
+            raised = raised.value
+        return isinstance(raised, ast.Name) and raised.id == name
+
+    def _handler_stashes_for_reraise(self, node: ast.ExceptHandler) -> bool:
+        """True when the handler only stashes the exception for a proven later re-raise.
+
+        The handler body may hold nothing but the stash (``error = exc`` or
+        ``holder.append(exc)``), other plain assignments, log calls and
+        ``pass``.  The function that owns the stashed name — the handler's
+        own, or the enclosing one for a worker-thread target that writes a
+        closure list or a ``nonlocal`` — must then, after the ``try`` (or the
+        nested ``def``) and in its own top-level statements, reach ``raise
+        NAME`` / ``raise NAME[i]``, bare or under an ``if`` whose test reads
+        NAME, with no ``return`` and no rebinding of NAME on the way.  The
+        failure is deferred, not swallowed: it leaves the frame with its
+        traceback once the cleanup or the join has run.
+        """
+        if (
+            node.name is None
+            or _handler_rebinds_exception(node)
+            or not self._function_stack
+        ):
+            return False
+        stashed: set[str] = set()
+        for stmt in node.body:
+            target = self._stash_target(stmt, node.name)
+            if target is not None:
+                stashed.add(target)
+                continue
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.Pass)):
+                continue
+            if _is_log_call_stmt(stmt) or (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and isinstance(stmt.value.value, str)
+            ):
+                continue
+            return False
+        if not stashed:
+            return False
+        handler_try = next(
+            (
+                candidate
+                for candidate in _iter_shallow(self._function_stack[-1])
+                if isinstance(candidate, (ast.Try, ast.TryStar))
+                and any(h is node for h in candidate.handlers)
+            ),
+            None,
+        )
+        if handler_try is None:
+            return False
+        return all(
+            self._owner_reraises(name, handler_try) for name in sorted(stashed)
+        )
+
+    def _owner_reraises(self, name: str, handler_try: ast.Try | ast.TryStar) -> bool:
+        # Find the function owning *name*: innermost first, outward through
+        # closures. *anchor* is the statement in the owner after which the
+        # re-raise must come: the ``try`` itself, or the nested ``def``.
+        anchor: ast.AST = handler_try
+        owner = None
+        for depth in range(len(self._function_stack) - 1, -1, -1):
+            function = self._function_stack[depth]
+            local = self._binds_locally(function, name)
+            if local:
+                owner = function
+                break
+            anchor = function
+        if owner is None:
+            return False
+        anchor_end = getattr(anchor, "end_lineno", None) or anchor.lineno
+        for stmt in owner.body:
+            if stmt.lineno <= anchor_end:
+                continue
+            if self._raises_name(stmt, name):
+                return True
+            if (
+                isinstance(stmt, ast.If)
+                and any(
+                    isinstance(n, ast.Name) and n.id == name
+                    for n in ast.walk(stmt.test)
+                )
+                and any(self._raises_name(inner, name) for inner in stmt.body)
+            ):
+                return True
+            if isinstance(stmt, ast.Return) or any(
+                isinstance(n, ast.Return) for n in _iter_shallow(stmt)
+            ):
+                return False
+            if any(
+                isinstance(n, ast.Name)
+                and n.id == name
+                and isinstance(n.ctx, (ast.Store, ast.Del))
+                for n in [stmt, *_iter_shallow(stmt)]
+            ):
+                return False
+        return False
 
     # ── E005 ─────────────────────────────────────────────────────────────────
 
@@ -1207,6 +1370,8 @@ class SilentSwallowMixin:
         ):
             return
         if _any_logging_in(node.body):
+            return
+        if self._handler_stashes_for_reraise(node):
             return
         self._add(
             "E009",
