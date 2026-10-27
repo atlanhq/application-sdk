@@ -38,6 +38,7 @@ SDK_DEPENDENCY_UNAVAILABLE_CLASSES: frozenset[str] = frozenset(
         "AzureServiceError",
         "BindingError",
         "ColdStartRaceError",
+        "CredentialConfigNotFoundError",
         "CredentialVaultError",
         "DaprNotDetectedError",
         "DaprSidecarUnreachableError",
