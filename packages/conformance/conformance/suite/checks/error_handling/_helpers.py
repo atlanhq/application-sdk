@@ -928,6 +928,12 @@ class TypedFailureScope(NamedTuple):
     one (nothing in ``_BROAD_EXCEPT_TYPES``): the binding is then already a typed
     domain error, so handing it to a helper carries it out as typed data too —
     see :func:`_expr_types_cause`.
+
+    ``binding_intact`` is true when ``exc_name`` still names the caught
+    exception at every exit the scope judges: inside a handler that never
+    rebinds it.  Only then does ``return exc`` hand back the failure itself
+    (see :func:`_returns_binding_itself`); below the ``try`` the name is
+    unbound, so the staged-row scope leaves it false.
     """
 
     exc_name: str
@@ -937,6 +943,7 @@ class TypedFailureScope(NamedTuple):
     local_helpers: Mapping[str, ast.FunctionDef] | None = None
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None
     guarded_calls: frozenset[int] = frozenset()
+    binding_intact: bool = False
 
 
 # Calls that turn the caught exception into text.  A string is the failure
@@ -1102,14 +1109,31 @@ def _is_none_constant(node: ast.expr) -> bool:
     return isinstance(node, ast.Constant) and node.value is None
 
 
-def _annotated_error_return(function: ast.FunctionDef) -> bool | None:
+#: Result types that carry a failure as typed data, beside the error classes
+#: themselves: an annotated helper returning one of these, built from the
+#: exception it is given on every path, hands the failure back.
+_TYPED_RESULT_CLASSES: frozenset[str] = frozenset({"PreflightCheck", "PreflightOutput"})
+
+
+def _is_typed_result_name(name: str | None) -> bool:
+    """An error class (:func:`_is_error_class_name`) or a typed preflight result."""
+    leaf = name.rsplit(".", 1)[-1] if name else None
+    return _is_error_class_name(name) or leaf in _TYPED_RESULT_CLASSES
+
+
+def _annotated_error_return(
+    function: ast.FunctionDef, *, allow_results: bool = False
+) -> bool | None:
     """Whether *function*'s return annotation promises an error class.
 
     ``None`` when it does not (no annotation, ``bool``, ``dict``, a result row,
     a string annotation the checker does not parse). Otherwise whether ``None``
     is a possible result too: ``False`` for ``-> AppError``, ``True`` for
-    ``-> AppError | None`` and ``-> Optional[AppError]``.
+    ``-> AppError | None`` and ``-> Optional[AppError]``.  With
+    *allow_results*, the typed preflight results in ``_TYPED_RESULT_CLASSES``
+    (``-> PreflightCheck``) count as well.
     """
+    accepted = _is_typed_result_name if allow_results else _is_error_class_name
     annotation = function.returns
     if annotation is None:
         return None
@@ -1117,7 +1141,7 @@ def _annotated_error_return(function: ast.FunctionDef) -> bool | None:
         "Optional",
         "typing.Optional",
     }:
-        return True if _is_error_class_name(_get_name(annotation.slice)) else None
+        return True if accepted(_get_name(annotation.slice)) else None
     members: list[ast.expr] = []
     pending = [annotation]
     while pending:
@@ -1127,7 +1151,7 @@ def _annotated_error_return(function: ast.FunctionDef) -> bool | None:
         else:
             members.append(node)
     errors = [m for m in members if not _is_none_constant(m)]
-    if not errors or not all(_is_error_class_name(_get_name(m)) for m in errors):
+    if not errors or not all(accepted(_get_name(m)) for m in errors):
         return None
     return len(errors) != len(members)
 
@@ -1153,15 +1177,16 @@ def _helper_typed_parameters(
 
     A straight-line helper is proven from its body (:func:`_typed_helper_parameters`).
     One that branches or loops — a classifier walking the cause chain — is
-    proven from its signature instead: it returns an error class and takes the
-    failure as an exception-annotated parameter. When ``None`` is a possible
+    proven from its signature instead: it returns an error class (or a typed
+    preflight result, ``-> PreflightCheck``) and takes the failure as an
+    exception-annotated parameter. When ``None`` is a possible
     result, *call* must sit behind a guard that exits on ``None`` (see
     :func:`_none_guarded_calls`); otherwise the handler may hand back nothing.
     """
     proven = _typed_helper_parameters(helper)
     if proven:
         return proven
-    optional = _annotated_error_return(helper)
+    optional = _annotated_error_return(helper, allow_results=True)
     if optional is None or (optional and id(call) not in guarded_calls):
         return frozenset()
     return frozenset(
@@ -1480,6 +1505,43 @@ def _expression_uses_typed_helper(
     return False
 
 
+def _is_typed_error_value(
+    value: ast.expr,
+    *,
+    local_helpers: Mapping[str, ast.FunctionDef] | None,
+    enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None,
+) -> bool:
+    """True when *value* is a typed error, whatever it was built from.
+
+    Either an error-class constructor (``AppPermissionDeniedError(...)``), or
+    a call to a proven same-module helper that always hands one back: its
+    return annotation names an error class with no ``None``, or it never falls
+    off its end and every ``return`` in it is an error-class constructor.
+    """
+    if not isinstance(value, ast.Call):
+        return False
+    target = _get_name(value.func)
+    if _is_error_class_name(target):
+        return True
+    if not local_helpers or not isinstance(value.func, ast.Name):
+        return False
+    helper = local_helpers.get(value.func.id)
+    if helper is None or _function_binds_name(enclosing_function, value.func.id):
+        return False
+    if _annotated_error_return(helper) is False:
+        return True
+    returns = [stmt for stmt in _iter_block(helper.body) if isinstance(stmt, ast.Return)]
+    return (
+        _body_always_exits(helper.body)
+        and bool(returns)
+        and all(
+            isinstance(stmt.value, ast.Call)
+            and _is_error_class_name(_get_name(stmt.value.func))
+            for stmt in returns
+        )
+    )
+
+
 def _derives_typed_failure(
     value: ast.expr,
     exc_name: str,
@@ -1490,8 +1552,29 @@ def _derives_typed_failure(
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
     guarded_calls: frozenset[int] = frozenset(),
 ) -> bool:
-    """True when *value* carries the caught exception out as typed data."""
-    return (
+    """True when *value* carries the caught exception out as typed data.
+
+    A conditional expression qualifies when one arm carries the failure and
+    the other is a typed error too (:func:`_is_typed_error_value`)::
+
+        error = admin_denied(user) if is_denied(exc) else _check_error(exc)
+
+    Neither arm may be ``None``, a sentinel, or an opaque value: on that path
+    the failure would leave the handler as nothing.
+    """
+
+    def derives(candidate: ast.expr) -> bool:
+        return _derives_typed_failure(
+            candidate,
+            exc_name,
+            live,
+            typed_binding=typed_binding,
+            local_helpers=local_helpers,
+            enclosing_function=enclosing_function,
+            guarded_calls=guarded_calls,
+        )
+
+    if (
         _expr_types_cause(value, exc_name, typed_binding=typed_binding)
         or _references_any(value, frozenset(live))
         or _expression_uses_typed_helper(
@@ -1502,7 +1585,21 @@ def _derives_typed_failure(
             enclosing_function=enclosing_function,
             guarded_calls=guarded_calls,
         )
-    )
+    ):
+        return True
+    if isinstance(value, ast.IfExp):
+        arms = (value.body, value.orelse)
+        carried = [derives(arm) for arm in arms]
+        return any(carried) and all(
+            carries
+            or _is_typed_error_value(
+                arm,
+                local_helpers=local_helpers,
+                enclosing_function=enclosing_function,
+            )
+            for carries, arm in zip(carried, arms, strict=True)
+        )
+    return False
 
 
 def _typed_failure_deriver(
@@ -1612,13 +1709,34 @@ def typed_failure_scope(
         helper_context,
         enclosing_function,
         guarded_calls,
+        binding_intact=not _handler_rebinds_exception(handler),
     )
+
+
+def _returns_binding_itself(value: ast.expr, exc_name: str) -> bool:
+    """True when *value* is the caught exception, or a literal tuple/list holding it.
+
+    ``return exc`` and ``return (Result(ok=False), exc)`` hand the failure back
+    whole — its type, traceback and cause — for the caller to raise or report.
+    Only the bare binding counts as an element: ``str(exc)`` or
+    ``{"error": exc}`` are other values.
+    """
+    if isinstance(value, ast.Name):
+        return value.id == exc_name
+    if isinstance(value, (ast.Tuple, ast.List)):
+        return any(
+            isinstance(element, ast.Name) and element.id == exc_name
+            for element in value.elts
+        )
+    return False
 
 
 def _return_carries_typed_failure(stmt: ast.Return, scope: TypedFailureScope) -> bool:
     """True when *stmt* hands back a typed value built from the caught exception."""
     if stmt.value is None:
         return False
+    if scope.binding_intact and _returns_binding_itself(stmt.value, scope.exc_name):
+        return True
     return _derives_typed_failure(
         stmt.value,
         scope.exc_name,
@@ -1891,6 +2009,7 @@ def _staged_row_is_returned(
         scope.local_helpers,
         scope.enclosing_function,
         scope.guarded_calls,
+        binding_intact=False,  # Python unbinds the handler's name after it
     )
     returns = [stmt for stmt in _iter_block(trailing) if isinstance(stmt, ast.Return)]
     if not returns:

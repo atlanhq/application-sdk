@@ -7027,3 +7027,138 @@ def check(result):
     return result
 """
     )
+
+
+# ── E004/E007: the caught exception handed back as data ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "returned",
+    ["exc", "(Result(ok=False), exc)", "[Result(ok=False), exc]"],
+)
+def test_e004_e007_no_finding_when_the_binding_itself_is_returned(
+    returned: str,
+) -> None:
+    # The exception object leaves the frame whole — type, traceback and cause —
+    # for the caller to raise or report.
+    found = _findings(
+        f"""\
+def attempt(func):
+    try:
+        return Result(ok=True), None
+    except Exception as exc:
+        return {returned}
+"""
+    )
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "return str(exc)",
+        'return {"error": exc}',
+        "return exc.args",
+        "exc = None\n        return exc",
+    ],
+)
+def test_e004_e007_still_fire_when_the_binding_is_reduced_or_rebound(
+    body: str,
+) -> None:
+    # A string, a dict entry or a rebound name is not the failure itself.
+    found = _findings(
+        f"""\
+def attempt(func):
+    try:
+        func()
+    except Exception as exc:
+        {body}
+"""
+    )
+    assert "E004" in found
+    assert "E007" in found
+
+
+_ANNOTATED_CHECK_HELPER = """\
+def _failed(name: str, exc: Exception) -> PreflightCheck:
+    if isinstance(exc, TimeoutError):
+        return PreflightCheck(name=name, passed=False, error=AppTimeoutError(cause=exc).to_failure_details())
+    return PreflightCheck(name=name, passed=False, error={second})
+
+
+async def probe():
+    try:
+        await run()
+    except Exception as exc:
+        return _failed("auth", exc)
+"""
+
+
+def test_e004_no_finding_for_a_branching_helper_annotated_with_a_typed_result() -> (
+    None
+):
+    src = _ANNOTATED_CHECK_HELPER.format(
+        second="SourceUnavailableError(cause=exc).to_failure_details()"
+    )
+    assert "E004" not in _findings(src)
+
+
+def test_e004_still_fires_when_an_annotated_helper_path_drops_the_failure() -> None:
+    # `-> PreflightCheck` names the type; one return not built from the
+    # exception still loses it on that path.
+    src = _ANNOTATED_CHECK_HELPER.format(second='"unavailable"').replace(
+        "error=AppTimeoutError(cause=exc).to_failure_details()", 'error="timeout"'
+    )
+    assert "E004" in _findings(src)
+
+
+# ── E004/E007: a typed error staged through a conditional expression ─────────
+
+_STAGED_IFEXP = """\
+def _check_error(exc):
+    return SourceUnavailableError(message="unreachable", cause=exc)
+
+
+def admin_denied(user):
+    return AppPermissionDeniedError(message=f"{{user}} lacks admin")
+
+
+async def probe(user):
+    try:
+        await run()
+    except Exception as exc:
+        error = {staged}
+        return PreflightCheck(name="auth", passed=False, error=error)
+"""
+
+
+@pytest.mark.parametrize(
+    "staged",
+    [
+        "admin_denied(user) if is_denied(exc) else _check_error(exc)",
+        'AppPermissionDeniedError(message="denied") if is_denied(exc) else _check_error(exc)',
+    ],
+)
+def test_e004_e007_no_finding_for_a_local_staged_only_with_typed_errors(
+    staged: str,
+) -> None:
+    found = _findings(_STAGED_IFEXP.format(staged=staged))
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+@pytest.mark.parametrize(
+    "staged",
+    [
+        "None if is_denied(exc) else _check_error(exc)",
+        'lookup(user) if is_denied(exc) else _check_error(exc)',
+        "admin_denied(user) if is_denied(exc) else admin_denied(user)",
+    ],
+)
+def test_e004_e007_still_fire_when_an_arm_is_untyped_or_drops_the_failure(
+    staged: str,
+) -> None:
+    found = _findings(_STAGED_IFEXP.format(staged=staged))
+    assert "E004" in found
+    assert "E007" in found
