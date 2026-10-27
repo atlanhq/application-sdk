@@ -36,6 +36,32 @@ from ._helpers import (
     visible_helpers,
 )
 
+#: ``typing`` names that look class-like but promise no typed result object.
+_TYPING_NAMES = frozenset(
+    {
+        "Any",
+        "Optional",
+        "Union",
+        "Dict",
+        "List",
+        "Tuple",
+        "Set",
+        "FrozenSet",
+        "Mapping",
+        "MutableMapping",
+        "Sequence",
+        "Iterable",
+        "Iterator",
+        "Callable",
+        "Type",
+        "Awaitable",
+        "Coroutine",
+        "NoReturn",
+        "Never",
+        "Self",
+    }
+)
+
 #: Verbs that make a ``*failure*`` / ``*residual*`` call a durable writer.
 _RECORD_VERBS = ("write", "record", "store", "persist", "save")
 
@@ -1715,10 +1741,16 @@ class SilentSwallowMixin:
         )
         if helper is None:
             return False
+        # Only a bare class name counts: a subscripted or union annotation
+        # (``Optional[X]``, ``X | None``, ``Dict[str, Any]``) admits values
+        # that are not a typed result, and typing names are not classes.
         annotation = helper.returns
-        annotated = _get_name(annotation) if annotation is not None else None
-        if annotated is not None and _class_like(annotated.rsplit(".", 1)[-1]):
-            return True
+        if isinstance(annotation, (ast.Name, ast.Attribute)):
+            leaf = (
+                annotation.id if isinstance(annotation, ast.Name) else annotation.attr
+            )
+            if _class_like(leaf) and leaf not in _TYPING_NAMES:
+                return True
         returns = [
             stmt for stmt in _iter_block(helper.body) if isinstance(stmt, ast.Return)
         ]
@@ -1811,7 +1843,7 @@ class SilentSwallowMixin:
     def _is_reporter_call(self, stmt: ast.stmt) -> bool:
         """A call that reports the missing module with a message, instead of a log.
 
-        ``_error(12, PATH, "generate_bridge_stub missing; cannot verify")``: the
+        ``_error(path, "optional_codegen missing; cannot verify")``: the
         callee's leaf name says it reports a problem (error/warn/report/fail/
         fatal/abort/die) and one argument is a non-empty message string or
         f-string.  A silent fallback has neither.

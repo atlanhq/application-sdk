@@ -7597,23 +7597,23 @@ def run():
 
 _NARROW_TYPED_RESULT = """\
 def _finish(log, outcome, reason, count, counts){annotation}:
-    log.info("sweep finished: %s", reason)
+    log.info("run finished: %s", reason)
     return {returned}
 
 
-def sweep(log):
+def run(log):
     try:
-        run_sweep()
+        run_batch()
     except {caught}:
-        return _finish(log, SweepOutcome.SKIPPED, "flag_error", 0, SweepCounts())
+        return _finish(log, RunOutcome.SKIPPED, "upstream_error", 0, RunCounts())
 """
 
 
 @pytest.mark.parametrize(
     ("annotation", "returned"),
     [
-        (" -> SweepOutput", "build(outcome)"),
-        ("", "SweepOutput(outcome=outcome, reason=reason, counts=counts)"),
+        (" -> RunOutput", "build(outcome)"),
+        ("", "RunOutput(outcome=outcome, reason=reason, counts=counts)"),
     ],
 )
 def test_e007_no_finding_for_a_typed_result_under_a_narrow_catch(
@@ -7629,11 +7629,14 @@ def test_e007_no_finding_for_a_typed_result_under_a_narrow_catch(
     ("annotation", "returned", "caught"),
     [
         # a broad catch hides every failure behind the same outcome
-        (" -> SweepOutput", "build(outcome)", "Exception"),
+        (" -> RunOutput", "build(outcome)", "Exception"),
         # nothing proves the helper returns typed data
         ("", "build(outcome)", "ActivityError"),
         (" -> dict", "{}", "ActivityError"),
-        (" -> SweepOutput | None", "None", "ActivityError"),
+        (" -> RunOutput | None", "None", "ActivityError"),
+        (" -> Optional[RunOutput]", "None", "ActivityError"),
+        (" -> Dict[str, Any]", "{}", "ActivityError"),
+        (" -> Any", "None", "ActivityError"),
     ],
 )
 def test_e007_still_fires_when_the_result_is_not_proven_typed(
@@ -7705,22 +7708,20 @@ def test_e004_e007_still_fire_on_an_empty_aggregate_after_a_failure_record() -> 
     "handler",
     [
         "    except ImportError:\n"
-        "        # optional: only the bridge self-check needs it\n"
+        "        # optional: only the codegen self-check needs it\n"
         "        return",
-        "    except ImportError:  # optional; the stub check is skipped without it\n"
-        "        return",
-        "    except ImportError:\n"
-        '        _error(12, PATH, "generate_bridge_stub missing; cannot verify")\n'
+        "    except ImportError:  # optional; the codegen check is skipped without it\n"
         "        return",
         "    except ImportError:\n"
-        '        report_failure(f"{PATH}: bridge stub missing")\n'
+        '        _error(path, "optional_codegen missing; cannot verify")\n'
+        "        return",
+        "    except ImportError:\n"
+        '        report_failure(f"{path}: codegen module missing")\n'
         "        return",
     ],
 )
 def test_e008_no_finding_when_the_guard_is_explained_or_reported(handler: str) -> None:
-    src = (
-        "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
-    )
+    src = "def check():\n    try:\n        import optional_codegen\n" + handler + "\n"
     assert "E008" not in _findings(src)
 
 
@@ -7731,14 +7732,12 @@ def test_e008_no_finding_when_the_guard_is_explained_or_reported(handler: str) -
         # a directive is not an explanation
         "    except ImportError:  # noqa: F401\n        return",
         # a call that reports nothing
-        "    except ImportError:\n        _error(12, PATH)\n        return",
+        "    except ImportError:\n        _error(path)\n        return",
         '    except ImportError:\n        fallback("stub")\n        return',
     ],
 )
 def test_e008_still_fires_for_a_silent_guard(handler: str) -> None:
-    src = (
-        "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
-    )
+    src = "def check():\n    try:\n        import optional_codegen\n" + handler + "\n"
     assert "E008" in _findings(src)
 
 
@@ -7746,7 +7745,7 @@ def test_e008_still_fires_for_a_silent_guard(handler: str) -> None:
 
 
 def test_e004_e007_no_finding_for_an_underscore_prefixed_typed_result() -> None:
-    # `_ReadinessAnswer` is as class-like as `ReadinessAnswer` (see _class_like).
+    # `_ProbeAnswer` is as class-like as `ReadinessAnswer` (see _class_like).
     found = _findings(
         """\
 def probe(name):
@@ -7754,7 +7753,7 @@ def probe(name):
         run()
     except Exception as exc:
         error = classify(exc) or SourceUnavailableError(message="down", cause=exc)
-        return _ReadinessAnswer(Probe(name, False, error), exc)
+        return _ProbeAnswer(Probe(name, False, error), exc)
 """
     )
     assert "E004" not in found
@@ -7817,3 +7816,13 @@ def test_e007_still_fires_for_success_codes_or_no_stderr(
     report: str, code: str
 ) -> None:
     assert "E007" in _findings(_CLI_EXIT.format(report=report, code=code))
+
+
+def test_runner_scans_the_e_series_as_a_whole_repo() -> None:
+    # The suite runner must call scan_all, or F005's preflight scope falls back
+    # to one file at a time and a helper in another module is missed.
+    from conformance.suite.checks import error_handling
+    from conformance.suite.runner import _CHECKS
+
+    (registration,) = [c for c in _CHECKS if c.series == error_handling.SERIES]
+    assert registration.scan_all is error_handling.scan_all

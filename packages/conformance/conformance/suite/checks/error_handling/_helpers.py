@@ -970,7 +970,7 @@ def _expr_types_cause(
 
     The marker is a call to a class-like target — a ``Name`` or ``Attribute``
     whose leaf identifier is capitalised, leading underscores aside
-    (``_ReadinessAnswer``; see :func:`_class_like`) — that receives the caught binding among
+    (``_ProbeAnswer``; see :func:`_class_like`) — that receives the caught binding among
     its arguments, at any nesting depth::
 
         SourceUnavailableError(message="…", cause=exc)

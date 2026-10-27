@@ -232,7 +232,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "_check_error(exc)``); a ``None`` or opaque arm still fires.  The\n"
             "annotation route also accepts ``-> PreflightCheck`` / ``->\n"
             "PreflightOutput``, under the same every-return proof.  A class-like name\n"
-            "may start with underscores (``_ReadinessAnswer(...)``).\n"
+            "may start with underscores (``_ProbeAnswer(...)``).\n"
             "\n\nAlso exempt — the failure is deferred, not swallowed: a handler that only\n"
             "stashes the exception (``error = exc`` or ``holder.append(exc)``, plus\n"
             "assignments and logs) when the function owning the stashed name — the\n"
@@ -554,7 +554,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "honoured as this text says (tool directives — ``noqa``, ``type: ignore``,\n"
             "``conformance: ignore`` — do not count), and so is a reporter call that\n"
             "states the problem with a message (a callee named for error/warn/report/\n"
-            'fail/fatal/abort/die with a string argument: ``_error(12, PATH, "...\n'
+            'fail/fatal/abort/die with a string argument: ``_error(path, "...\n'
             'missing")``).\n'
             "\n**Fixing it well**\n\n"
             "* Fix it at the existing ``except ImportError`` site, in the shape this rule describes: "

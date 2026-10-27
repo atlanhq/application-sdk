@@ -83,6 +83,7 @@ __all__ = [
     "is_builtin_raise",
     "main",
     "parse_ignore_directive",
+    "scan_all",
     "scan_path",
     "scan_text",
 ]
@@ -215,6 +216,11 @@ def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
             path, root, preflight_lines=scope.get(_rel(path), frozenset())
         )
     ]
+
+
+#: Whole-repo entry point for the suite runner: same findings as scanning each
+#: path, plus F005's preflight scope followed across files for E004.
+scan_all = _scan_all
 
 
 main = make_cli_main(

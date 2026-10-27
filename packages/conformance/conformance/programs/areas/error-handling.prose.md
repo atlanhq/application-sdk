@@ -389,7 +389,7 @@ outcome mirroring the error-handling shape in the reference app named by
   failure itself, handed back); under a narrow catch, the result of a
   same-module helper proven to return a typed result object (class-like return
   annotation, or a class-like constructor on every path) —
-  `return _finish(log, SweepOutcome.SKIPPED, ...)`; a per-item `return None`
+  `return _finish(log, RunOutcome.SKIPPED, ...)`; a per-item `return None`
   after an app durable failure record handed the binding (`write_failure`,
   `record_failure`); and in a CLI, `return <non-zero int>` after a
   `print(..., file=sys.stderr)` or `sys.stderr.write(...)` in the same
@@ -409,7 +409,7 @@ outcome mirroring the error-handling shape in the reference app named by
   An explanatory comment on the `except` line or inside the handler clears it,
   as the rule text says (tool directives such as `noqa` do not count), and so
   does a reporter call that states the problem with a message
-  (`_error(12, PATH, "... missing; cannot verify")`).
+  (`_error(path, "... missing; cannot verify")`).
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable
   (a flag, a default) and logs nothing, so the failure sets state invisibly.

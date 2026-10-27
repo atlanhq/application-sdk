@@ -231,7 +231,7 @@ is a typed error — an error-class constructor, or a same-module helper that al
 returns one (`admin_denied(u) if denied(exc) else _check_error(exc)`); a `None` or
 opaque arm still fires.  The annotation route also accepts `-> PreflightCheck` / `->
 PreflightOutput`, under the same every-return proof.  A class-like name may start with
-underscores (`_ReadinessAnswer(...)`).
+underscores (`_ProbeAnswer(...)`).
 
 Also exempt — the failure is deferred, not swallowed: a handler that only stashes the
 exception (`error = exc` or `holder.append(exc)`, plus assignments and logs) when the
@@ -476,7 +476,7 @@ need a duplicate log. An explanatory comment on the `except` line or inside the 
 is honoured as this text says (tool directives — `noqa`, `type: ignore`, `conformance:
 ignore` — do not count), and so is a reporter call that states the problem with a
 message (a callee named for error/warn/report/ fail/fatal/abort/die with a string
-argument: `_error(12, PATH, "... missing")`).
+argument: `_error(path, "... missing")`).
 
 **Fixing it well**
 
