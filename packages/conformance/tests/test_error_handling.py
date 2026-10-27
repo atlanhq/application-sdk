@@ -4079,6 +4079,190 @@ class MyModel:
     )
 
 
+@pytest.mark.parametrize(
+    "decorator",
+    [
+        '@model_validator(mode="after")',
+        '@field_validator("name")',
+        "@root_validator(pre=True)",
+        '@validator("name")',
+        "@pydantic.model_validator(mode='before')",
+    ],
+)
+def test_p012_no_finding_in_pydantic_validator(decorator: str) -> None:
+    _none(
+        f"""\
+import pydantic
+from pydantic import BaseModel, field_validator, model_validator, root_validator, validator
+
+class MyModel(BaseModel):
+    name: str
+
+    {decorator}
+    def _check(cls, values):
+        if not values:
+            raise ValueError("name must not be empty")
+        return values
+"""
+    )
+
+
+def test_p012_still_flags_value_error_outside_validator() -> None:
+    # An undecorated method on the same model is ordinary code: the exemption
+    # follows the validator decorator, not the class.
+    _single(
+        """\
+from pydantic import BaseModel, model_validator
+
+class MyModel(BaseModel):
+    name: str
+
+    def resolve(self):
+        raise ValueError("cannot resolve")
+""",
+        "E012",
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "exc_name"),
+    [
+        ("__getitem__", "KeyError"),
+        ("__delitem__", "KeyError"),
+        ("__missing__", "KeyError"),
+        ("__getattr__", "AttributeError"),
+        ("__next__", "StopIteration"),
+    ],
+)
+def test_p012_no_finding_for_protocol_builtin_in_dunder(
+    method: str, exc_name: str
+) -> None:
+    _none(
+        f"""\
+class Registry:
+    def {method}(self, key):
+        raise {exc_name}(key)
+"""
+    )
+
+
+def test_p012_no_finding_for_stop_async_iteration_in_anext() -> None:
+    _none(
+        """\
+class Pages:
+    async def __anext__(self):
+        raise StopAsyncIteration
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    ("method", "exc_name"),
+    [
+        # A builtin the dunder's protocol does not name still escapes as an
+        # opaque string; LookupError is the base, but Mapping.get catches only
+        # KeyError.
+        ("__getitem__", "ValueError"),
+        ("__getitem__", "LookupError"),
+        ("__getitem__", "RuntimeError"),
+        ("__missing__", "TypeError"),
+        ("__getattr__", "ValueError"),
+        ("__getattr__", "KeyError"),
+        ("__next__", "RuntimeError"),
+    ],
+)
+def test_p012_still_flags_non_protocol_builtin_in_dunder(
+    method: str, exc_name: str
+) -> None:
+    _single(
+        f"""\
+class Registry:
+    def {method}(self, key):
+        raise {exc_name}(key)
+""",
+        "E012",
+    )
+
+
+def test_p012_still_flags_key_error_in_ordinary_function() -> None:
+    _single(
+        """\
+def lookup(table, key):
+    if key not in table:
+        raise KeyError(key)
+    return table[key]
+""",
+        "E012",
+    )
+
+
+def test_p012_still_flags_key_error_in_function_nested_in_dunder() -> None:
+    # The exemption is the dunder's own body; a helper defined inside it runs
+    # under whatever calls it.
+    _single(
+        """\
+class Registry:
+    def __getitem__(self, key):
+        def load():
+            raise KeyError(key)
+        return load
+""",
+        "E012",
+    )
+
+
+_TOOLING_SRC = """\
+def main():
+    raise ValueError("bad manifest")
+"""
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        "tools/gen_docs.py",
+        "tools/migrate/rewrite.py",
+        "contract/merge_manifest.py",
+        "contract\\merge_manifest.py",
+    ],
+)
+def test_p012_no_finding_in_repo_root_tooling(file: str) -> None:
+    findings = [f for f in scan_text(_TOOLING_SRC, file) if f.rule_id == "E012"]
+    assert not findings, f"{file} is build tooling: {findings!r}"
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        "fake.py",
+        "tools.py",
+        "contract.py",
+        "app/tools/search.py",
+        "app/contract/models.py",
+        "src/tools/x.py",
+    ],
+)
+def test_p012_still_flags_runtime_files_named_like_tooling(file: str) -> None:
+    findings = [f for f in scan_text(_TOOLING_SRC, file) if f.rule_id == "E012"]
+    assert len(findings) == 1, f"{file} is app code: {findings!r}"
+
+
+def test_p012_tooling_scope_covers_only_e012() -> None:
+    # The tooling roots drop E012 only; every other E-series rule still runs.
+    src = """\
+def main():
+    try:
+        run()
+    except:
+        pass
+    raise ValueError("bad manifest")
+"""
+    tooling = sorted(f.rule_id for f in scan_text(src, "tools/gen.py"))
+    app = sorted(f.rule_id for f in scan_text(src, "app/gen.py"))
+    assert "E012" in app
+    assert tooling and tooling == [r for r in app if r != "E012"]
+
+
 def test_p012_no_finding_for_typed_error() -> None:
     # InternalError is a typed AppError leaf → P012 must not fire.
     # P018 may fire (bare parent leaf) — only assert P012 is absent.

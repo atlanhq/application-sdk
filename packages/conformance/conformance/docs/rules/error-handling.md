@@ -545,8 +545,18 @@ routing is impossible.  Use the typed error leaf from `application_sdk.errors`. 
 builtin used as an internal validation sentinel is acceptable only when a matching
 `except` handler unconditionally translates it into a typed `AppError` before it leaves
 that boundary; swallowing, conditional handling, and re-raising do not qualify. Builtin
-raises are also acceptable inside dataclass `__post_init__` / stdlib validator methods
-where Python semantics require `TypeError` or `ValueError` for stdlib interoperability.
+raises are also acceptable inside dataclass `__post_init__` / `__init__` where Python
+semantics require `TypeError` or `ValueError` for stdlib interoperability, and inside
+Pydantic validators (`@field_validator`, `@model_validator`, `@validator`,
+`@root_validator`), where Pydantic converts a `ValueError` into a `ValidationError` and
+a typed error would escape unconverted. A data-model dunder may raise the builtin its
+protocol names, and only that one: `KeyError`/`IndexError` in
+`__getitem__`/`__delitem__`, `KeyError` in `__missing__`, `AttributeError` in
+`__getattr__`/`__getattribute__`/`__delattr__`/`__get__`/`__set__`, `StopIteration` in
+`__next__` and `StopAsyncIteration` in `__anext__`.  Any other builtin in those methods
+still reports. Files under the repo-root `tools/` and `contract/` directories are build
+and dev tooling that never reaches the error envelope and are not checked; an app
+package with the same name (`app/tools/`) still is.
 
 ---
 

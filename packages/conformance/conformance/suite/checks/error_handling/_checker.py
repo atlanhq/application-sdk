@@ -82,6 +82,7 @@ class Checker(
         raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
         deprecated_module: bool = False,
+        e012_in_scope: bool = True,
     ) -> None:
         self._filename = filename
         self._directives = directives
@@ -92,6 +93,9 @@ class Checker(
         self._exception_helpers = raised_error_helpers or {}
         self._dependency_classes = dependency_classes
         self._deprecated_module = deprecated_module
+        # False for build / dev tooling outside the app runtime (see
+        # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.
+        self._e012_in_scope = e012_in_scope
         self._findings: list[Finding] = []
         self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods

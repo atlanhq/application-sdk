@@ -653,8 +653,20 @@ RULES: tuple[RuleDefinition, ...] = (
             "unconditionally translates it into a typed ``AppError`` before it leaves\n"
             "that boundary; swallowing, conditional handling, and re-raising do not qualify.\n"
             "Builtin raises are also acceptable inside dataclass ``__post_init__`` /\n"
-            "stdlib validator methods where Python semantics require ``TypeError`` or\n"
-            "``ValueError`` for stdlib interoperability.\n"
+            "``__init__`` where Python semantics require ``TypeError`` or ``ValueError``\n"
+            "for stdlib interoperability, and inside Pydantic validators\n"
+            "(``@field_validator``, ``@model_validator``, ``@validator``,\n"
+            "``@root_validator``), where Pydantic converts a ``ValueError`` into a\n"
+            "``ValidationError`` and a typed error would escape unconverted.\n"
+            "A data-model dunder may raise the builtin its protocol names, and only\n"
+            "that one: ``KeyError``/``IndexError`` in ``__getitem__``/``__delitem__``,\n"
+            "``KeyError`` in ``__missing__``, ``AttributeError`` in\n"
+            "``__getattr__``/``__getattribute__``/``__delattr__``/``__get__``/``__set__``,\n"
+            "``StopIteration`` in ``__next__`` and ``StopAsyncIteration`` in\n"
+            "``__anext__``.  Any other builtin in those methods still reports.\n"
+            "Files under the repo-root ``tools/`` and ``contract/`` directories are\n"
+            "build and dev tooling that never reaches the error envelope and are not\n"
+            "checked; an app package with the same name (``app/tools/``) still is.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
         remediation_reference=RemediationReference(

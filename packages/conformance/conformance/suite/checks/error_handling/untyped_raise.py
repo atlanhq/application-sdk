@@ -12,6 +12,7 @@ from ._constants import (
     INTEROP_METHODS,
     LEAF_CLASSES,
     LEGACY_ATLAN_ERRORS,
+    PROTOCOL_DUNDER_BUILTINS,
 )
 from ._helpers import _get_decorator_names, _raise_exc_name
 from ._sdk_errors import names_sdk_error
@@ -123,11 +124,13 @@ class UntypedRaiseMixin:
             for caught_node in caught_nodes
         )
 
-    def _in_interop_context(self) -> bool:
+    def _in_interop_context(self, exc_name: str) -> bool:
         if not self._function_stack:
             return False
         func = self._function_stack[-1]
         if isinstance(func, ast.FunctionDef) and func.name in INTEROP_METHODS:
+            return True
+        if exc_name in PROTOCOL_DUNDER_BUILTINS.get(func.name, frozenset()):
             return True
         return bool(_get_decorator_names(func) & INTEROP_DECORATORS)
 
@@ -186,9 +189,11 @@ class UntypedRaiseMixin:
         if node.exc is None:
             return
         exc_name = _raise_exc_name(node.exc)
-        if exc_name not in BUILTIN_RAISES:
+        if exc_name not in BUILTIN_RAISES or not self._e012_in_scope:
             return
-        if self._in_interop_context() or self._has_typed_translation_boundary(node):
+        if self._in_interop_context(exc_name) or self._has_typed_translation_boundary(
+            node
+        ):
             return
         activity_note = (
             " (NOTE: inside activity/task — AE receives an opaque string, no typed envelope)"

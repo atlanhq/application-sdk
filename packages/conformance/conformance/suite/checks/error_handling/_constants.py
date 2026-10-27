@@ -62,8 +62,32 @@ LEAF_CLASSES: frozenset[str] = frozenset(
 
 # E012 carve-outs: builtin raises acceptable in these method names (stdlib interop)
 INTEROP_METHODS: frozenset[str] = frozenset({"__post_init__", "__init__"})
-# E012 carve-outs: acceptable in Pydantic validator-decorated functions
-INTEROP_DECORATORS: frozenset[str] = frozenset({"field_validator", "validator"})
+# E012 carve-outs: acceptable in Pydantic validator-decorated functions. Pydantic
+# turns a ValueError / AssertionError raised there into a ValidationError; a
+# typed AppError would escape the validator unconverted.
+INTEROP_DECORATORS: frozenset[str] = frozenset(
+    {"field_validator", "model_validator", "validator", "root_validator"}
+)
+# E012 carve-outs: data-model dunders whose protocol names the builtin a caller
+# catches (``Mapping.get`` catches KeyError from ``__getitem__``, ``hasattr``
+# catches AttributeError from ``__getattr__``, ``for`` stops on StopIteration).
+# Only the listed builtin is exempt in each method; any other still reports.
+PROTOCOL_DUNDER_BUILTINS: dict[str, frozenset[str]] = {
+    "__getitem__": frozenset({"KeyError", "IndexError"}),
+    "__delitem__": frozenset({"KeyError", "IndexError"}),
+    "__missing__": frozenset({"KeyError"}),
+    "__getattr__": frozenset({"AttributeError"}),
+    "__getattribute__": frozenset({"AttributeError"}),
+    "__delattr__": frozenset({"AttributeError"}),
+    "__get__": frozenset({"AttributeError"}),
+    "__set__": frozenset({"AttributeError"}),
+    "__next__": frozenset({"StopIteration"}),
+    "__anext__": frozenset({"StopAsyncIteration"}),
+}
+# E012 scope: repo-root directories holding build / dev tooling that never runs
+# inside the app runtime, so a raise there never reaches the Automation Engine
+# error envelope. Anchored at the repo root: ``app/tools/`` is app code.
+E012_TOOLING_ROOTS: frozenset[str] = frozenset({"tools", "contract"})
 # E012 escalation: note when inside Temporal activity body
 ACTIVITY_DECORATORS: frozenset[str] = frozenset({"task", "defn"})
 
