@@ -969,7 +969,8 @@ def _expr_types_cause(
     """True when *expr* builds a typed value *from* the caught exception.
 
     The marker is a call to a class-like target — a ``Name`` or ``Attribute``
-    whose leaf identifier is capitalised — that receives the caught binding among
+    whose leaf identifier is capitalised, leading underscores aside
+    (``_ReadinessAnswer``; see :func:`_class_like`) — that receives the caught binding among
     its arguments, at any nesting depth::
 
         SourceUnavailableError(message="…", cause=exc)
@@ -998,7 +999,7 @@ def _expr_types_cause(
             args = [*node.args, *[kw.value for kw in node.keywords]]
             if any(isinstance(a, ast.Name) and a.id == exc_name for a in args):
                 return True
-        if not target[:1].isupper():
+        if not _class_like(target):
             continue
         for arg in [*node.args, *[kw.value for kw in node.keywords]]:
             for inner in ast.walk(arg):

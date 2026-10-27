@@ -7729,3 +7729,78 @@ def test_e008_no_finding_when_the_guard_is_explained_or_reported(handler: str) -
 def test_e008_still_fires_for_a_silent_guard(handler: str) -> None:
     src = "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
     assert "E008" in _findings(src)
+
+
+# ── E004/E007: underscore-prefixed typed results ──────────────────────────────
+
+
+def test_e004_e007_no_finding_for_an_underscore_prefixed_typed_result() -> None:
+    # `_ReadinessAnswer` is as class-like as `ReadinessAnswer` (see _class_like).
+    found = _findings(
+        """\
+def probe(name):
+    try:
+        run()
+    except Exception as exc:
+        error = classify(exc) or SourceUnavailableError(message="down", cause=exc)
+        return _ReadinessAnswer(Probe(name, False, error), exc)
+"""
+    )
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+def test_e004_e007_still_fire_for_an_underscore_helper_given_the_raw_binding() -> None:
+    # A lowercase helper stays opaque, underscore or not.
+    found = _findings(
+        """\
+def probe(name):
+    try:
+        run()
+    except Exception as exc:
+        return _readiness_answer(name, str(exc))
+"""
+    )
+    assert "E004" in found
+    assert "E007" in found
+
+
+# ── E007: a CLI exit code after the failure went to stderr ────────────────────
+
+_CLI_EXIT = """\
+import sys
+
+
+def main():
+    try:
+        config = load_config()
+    except ConfigError as e:
+        {report}
+        return {code}
+    return 0
+"""
+
+
+@pytest.mark.parametrize(
+    "report",
+    [
+        'print(f"Config error: {e}", file=sys.stderr)',
+        'sys.stderr.write(f"Config error: {e}\\n")',
+    ],
+)
+def test_e007_no_finding_for_a_non_zero_exit_after_stderr(report: str) -> None:
+    assert "E007" not in _findings(_CLI_EXIT.format(report=report, code="3"))
+
+
+@pytest.mark.parametrize(
+    ("report", "code"),
+    [
+        ('print(f"Config error: {e}", file=sys.stderr)', "0"),
+        ('print(f"Config error: {e}", file=sys.stderr)', "None"),
+        ('print(f"Config error: {e}", file=sys.stderr)', "True"),
+        # stdout is not the error channel
+        ('print(f"Config error: {e}")', "3"),
+    ],
+)
+def test_e007_still_fires_for_success_codes_or_no_stderr(report: str, code: str) -> None:
+    assert "E007" in _findings(_CLI_EXIT.format(report=report, code=code))

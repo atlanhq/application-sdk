@@ -16,6 +16,7 @@ from ._helpers import (
     _body_is_only_pass,
     _body_returns_typed_failure,
     _call_argument_for_parameter,
+    _dotted_name,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
@@ -1517,6 +1518,10 @@ class SilentSwallowMixin:
             # shape: the gap is written down as data, not only logged.
             if self._has_residual_failure_record(node, stmt):
                 continue
+            # A CLI exit code after the failure went to stderr is surfaced,
+            # not hidden.
+            if self._is_stderr_exit_code(node.body[:i], stmt):
+                continue
             if not (
                 _any_logging_in(node.body[:i])
                 or self._helper_logs_caught_exception(node, node.body[:i])
@@ -1577,6 +1582,41 @@ class SilentSwallowMixin:
                 self._is_residual_failure_record_call(call)
                 or self._is_app_failure_record_call(call, handler.name)
             ):
+                return True
+        return False
+
+    def _is_stderr_exit_code(
+        self, prefix: list[ast.stmt], stmt: ast.Return
+    ) -> bool:
+        """``return <non-zero int>`` after the handler wrote to stderr.
+
+        ``print(f"Config error: {e}", file=sys.stderr); return 3`` is a CLI
+        reporting the failure on its terminal and in its exit status.  The
+        write must be a top-level statement earlier in the same handler —
+        ``print(..., file=sys.stderr)`` or ``sys.stderr.write(...)``.
+        ``return 0``, ``return None`` and ``return True`` still fire.
+        """
+        value = stmt.value
+        if not (
+            isinstance(value, ast.Constant)
+            and type(value.value) is int
+            and value.value != 0
+        ):
+            return False
+        for previous in prefix:
+            call = self._unwrapped_call(previous)
+            if call is None:
+                continue
+            if (
+                isinstance(call.func, ast.Name)
+                and call.func.id == "print"
+                and any(
+                    kw.arg == "file" and _dotted_name(kw.value) == "sys.stderr"
+                    for kw in call.keywords
+                )
+            ):
+                return True
+            if ast.unparse(call.func) == "sys.stderr.write":
                 return True
         return False
 
