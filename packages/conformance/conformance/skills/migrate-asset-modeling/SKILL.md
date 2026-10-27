@@ -194,7 +194,9 @@ add them (`atlan-metabase-app` `serialize_entity`); never fall back to
    at a P028 site, run
    `uv run python -c 'from pyatlan_v9.model.assets import X; print("creator" in vars(X))'`
    (Process, ColumnProcess and BIProcess: `"generate_qualified_name" in vars(X)`).
-   A type prints `False` when it has no creator in that version. If a newer
+   The check asks whether the class itself defines the creator: one inherited
+   from a parent class is not this type's creator. A type prints `False` when
+   it has no creator in that version. If a newer
    pyatlan release that is at least 7 days old and inside the app's allowed
    range has it, upgrade pyatlan in the lock (no constraint change). If no
    such release has it, the site is a **gap** (Step 1): it waits for pyatlan,
@@ -245,7 +247,10 @@ every other site stays open until a pyatlan creator produces its string.
   description.
 - **process** — a Process, ColumnProcess or BIProcess identity with the
   grammar `{connection_qn}/{suffix}`: `generate_qualified_name(...,
-  process_id=<suffix>)` returns the same string by construction.
+  process_id=<suffix>)` returns the same string by construction. Never pass
+  `process_id=None`: that falls back to an MD5 hash, a different identity. A
+  reachable blank `name` or connection qualifiedName now raises, as for
+  **creator**: record each such input for the PR description.
 - **decode** — code that takes a qualifiedName apart (`split("/")`,
   `"/".join(parts[:-1])`). It does not build an identity, so it is not a
   P028 site. Keep it unchanged, or derive the ids from the source record
@@ -349,18 +354,19 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
 ## Decided defaults
 
 Owner answers for P028 sites, read by remediation tooling. Each row names the
-class from Step 1 as its `fix_shape`.
+class from Step 1 as its `fix_shape`. A row with `block` holds that shape for a
+person, even where a default describes the manual fix.
 
 ```decided-defaults
 {"rule": "P028", "fix_shape": "creator-string", "decision": "Read the string from a memoized helper returning X.creator(...).qualified_name; when only the id is known pass it as name too and never emit that asset.", "why": "Reference shape: atlan-metabase-app app/qualified_names.py collection_qn; atlan-mysql-app app/mysql.py _database_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "creator-blank-raises", "decision": "Use the creator even when a reachable blank or None input makes it raise; add no app-side guard and keep no f-string fallback. List each such input in the PR description.", "why": "The raise replaces a broken identity such as {conn}/table/ or {conn}/None. pyatlan raises on blank identity inputs by design; a blank made by app code is an app bug, a blank the source sends is a pyatlan gap.", "interface": false}
-{"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
+{"rule": "P028", "fix_shape": "process-id", "decision": "generate_qualified_name(name=..., connection_qualified_name=..., inputs=[None], outputs=[None], process_id=<everything after the connection qualifiedName>) for Process, ColumnProcess and BIProcess. A reachable blank name or connection qualifiedName now raises; list each such input in the PR description, as for creator-blank-raises.", "why": "Returns {connection_qualified_name}/{process_id}, the same string by construction. Reference shape: atlan-metabase-app app/qualified_names.py process_qn.", "interface": false}
 {"rule": "P028", "fix_shape": "not-identity-ignore", "decision": "# conformance: ignore[P028] <kind>, not a qualifiedName on the line above, where kind is match prefix, object-store key, lookup key or message text; only after following every reader of the value.", "why": "The rule's terminal state allows an ignore only for a string that is not an asset qualifiedName.", "suppress": true, "reason": "not a qualifiedName", "interface": false}
 {"rule": "P028", "fix_shape": "gap", "decision": "Leave the f-string in one helper per name shape, unsuppressed, and list it in the PR description; do not change the string.", "why": "No creator, a different string, or a missing creator input is a pyatlan gap; changing the string changes asset identity and suppressing hides the gap."}
 {"rule": "P028", "match": "\\bhash\\(", "block": "The qualifiedName is built from Python's builtin hash(), which changes between interpreter processes, so the identity is not stable today. Any stable replacement changes asset identity.", "brief": "Pick the stable id that replaces hash() and accept the one-time identity change; until then the site stays open."}
-{"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName: the type has no creator in a usable pyatlan, the creator produces a different string, rejects an input the app accepts, or needs an input the app does not have. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan, then re-run this site."}
-{"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Wait for the app's dependency update to raise pyatlan; the next run plans the site.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
-{"rule": "P028", "fix_shape": "^creator-blank-raises$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Wait for the app's dependency update to raise pyatlan; the next run plans the site.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
+{"rule": "P028", "fix_shape": "^gap$", "block": "No creator produces this qualifiedName: the type has no creator in a usable pyatlan, the creator produces a different string, rejects an input the app accepts, or needs an input the app does not have. Changing the string changes asset identity.", "brief": "Add or fix the creator in pyatlan, then apply the creator fix to this site."}
+{"rule": "P028", "fix_shape": "^creator-string$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
+{"rule": "P028", "fix_shape": "^creator-blank-raises$", "block": "The app's lock resolves pyatlan below the version that carries the creators these sites need.", "brief": "Raise pyatlan to a version with these creators (a dependency update), then apply the creator fix.", "requires": {"package": "pyatlan", "min": "11.5.0"}}
 ```
 
 ## Agent protocol

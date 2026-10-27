@@ -1527,11 +1527,12 @@ f-string.  A blank made by app code (`.get(k) or ""`) is an   app bug; a blank t
 source really sends is a gap in pyatlan. - `Process` / `ColumnProcess` / `BIProcess`:
 call   `generate_qualified_name(..., process_id=<everything after the   connection
 qualifiedName>)`, which returns   `{connection_qualified_name}/{process_id}`.  A blank
-`process_id`   raises; `None` falls back to a hash.  `inputs` and `outputs` must   be
-non-empty: when only ids are known, pass placeholders. - No creator for the type, a
-creator that produces a different string,   or a creator that needs an input the app
-does not have: keep the   f-string in one helper per name shape and leave it
-unsuppressed. - Not a qualifiedName at all: `# conformance: ignore[P028] <reason>`
+`process_id`   raises; never pass `None`: it falls back to an MD5 hash, a different
+identity.  A blank `name` or connection qualifiedName raises too.   `inputs` and
+`outputs` must be non-empty: when only ids are known,   pass placeholders. - No creator
+for the type, a creator that produces a different string,   or a creator that needs an
+input the app does not have: keep the   f-string in one helper per name shape and leave
+it unsuppressed. - Not a qualifiedName at all: `# conformance: ignore[P028] <reason>`
 (see the terminal state).
 
 Not a fix: `"/".join(...)`, `+`, `.format()` or `%` keep the hand-built grammar and only
