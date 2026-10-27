@@ -310,6 +310,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "counter (``n % N == 0``) or an elapsed-time threshold\n"
             "(``time.monotonic() - last >= S``).  Under ``or``, every other disjunct\n"
             "must be a throttle or an ``==`` comparison such as ``done == total``.\n"
+            "A terminal summary followed by a ``return`` that exits the function is\n"
+            "not flagged either.  Expressions, assignments, and ``if``/``with``\n"
+            "blocks containing no ``break``, ``continue``, ``return``, ``raise``,\n"
+            "``try`` or nested loop may sit between the log and that ``return``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l006",
         remediation_reference=RemediationReference(

@@ -64,13 +64,61 @@ def _is_terminal_break_summary(
     return False
 
 
+_LOOP_REDIRECTS = (
+    ast.Break,
+    ast.Continue,
+    ast.Return,
+    ast.Raise,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.Try,
+    ast.TryStar,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+    ast.ClassDef,
+)
+
+
+def _cannot_redirect_loop(statement: ast.stmt) -> bool:
+    """True when *statement* can neither leave nor re-enter the enclosing loop.
+
+    Plain expressions and assignments always fall through.  An ``if`` or
+    ``with`` does too when nothing inside it breaks, continues, returns,
+    raises, loops, catches or defines a scope.
+    """
+    if isinstance(statement, (ast.Expr, ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        return True
+    if isinstance(statement, (ast.If, ast.With, ast.AsyncWith)):
+        return not any(
+            isinstance(inner, _LOOP_REDIRECTS) for inner in ast.walk(statement)
+        )
+    return False
+
+
+def _following_effective_statement(
+    statement: ast.stmt, parents: dict[ast.AST, ast.AST]
+) -> ast.stmt | None:
+    """The next sibling of *statement* that could redirect control flow.
+
+    Siblings that :func:`_cannot_redirect_loop` are skipped.
+    """
+    following = _following_statement(statement, parents)
+    while following is not None and _cannot_redirect_loop(following):
+        following = _following_statement(following, parents)
+    return following
+
+
 def _is_terminal_return_summary(
     node: ast.Call, outermost: ast.For | ast.AsyncFor | ast.While
 ) -> bool:
     """True when a bare log is followed by a return that exits its function.
 
-    The log may be the last statement in an ``if`` branch when the enclosing
-    ``if`` is immediately followed by the return. A ``finally: continue``
+    Statements that cannot leave or re-enter the loop (expressions,
+    assignments, and ``if``/``with`` blocks with no break, continue, return,
+    raise or nested loop) may sit between the log and the return.  The log
+    may be the last such statement in an ``if`` branch when the enclosing
+    ``if`` is followed by the return in the same way. A ``finally: continue``
     between the return and *outermost* (the function's outermost loop)
     overrides the return and repeats the log. A ``finally: break`` does too
     unless the loop it breaks is *outermost*: then no loop is left to repeat.
@@ -85,13 +133,13 @@ def _is_terminal_return_summary(
         return False
 
     current: ast.stmt = statement
-    following = _following_statement(current, parents)
+    following = _following_effective_statement(current, parents)
     while following is None:
         parent = parents.get(current)
         if not isinstance(parent, ast.If):
             return False
         current = parent
-        following = _following_statement(current, parents)
+        following = _following_effective_statement(current, parents)
     if not isinstance(following, ast.Return):
         return False
 

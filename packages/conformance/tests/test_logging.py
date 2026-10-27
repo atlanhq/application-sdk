@@ -257,6 +257,55 @@ def fetch_with_retries():
     assert "L006" not in _ids(src)
 
 
+def test_l006_silent_for_summary_then_fallthrough_statements_before_return() -> None:
+    src = """
+from loguru import logger
+
+def collect(pages):
+    while True:
+        page = next_page()
+        if page.done:
+            logger.info("collected %d of %d", len(found), len(expected))
+            missing = len(expected) - len(found)
+            if len(found) < len(expected):
+                logger.warning("%d items missing", missing)
+            return Summary(found=found, missing=missing)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_when_statement_between_log_and_return_continues() -> None:
+    src = """
+from loguru import logger
+
+def collect(pages):
+    while True:
+        page = next_page()
+        if page.done:
+            logger.info("collected %d of %d", len(found), len(expected))
+            if len(found) < len(expected):
+                continue
+            return Summary(found=found)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_statement_between_log_and_return_loops() -> None:
+    src = """
+from loguru import logger
+
+def collect(pages):
+    while True:
+        page = next_page()
+        logger.info("fetched page")
+        with lock:
+            for item in page.items:
+                found.append(item)
+        return found
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_page_progress_logs_in_unbounded_loop() -> None:
     src = """
 from loguru import logger

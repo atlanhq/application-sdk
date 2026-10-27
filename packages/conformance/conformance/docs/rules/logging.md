@@ -280,7 +280,10 @@ bounded (≤10 items) before flagging.  A throttled progress log is a milestone 
 flagged: the body of an `if` inside the innermost loop whose test is a modulo counter
 (`n % N == 0`) or an elapsed-time threshold (`time.monotonic() - last >= S`).  Under
 `or`, every other disjunct must be a throttle or an `==` comparison such as `done ==
-total`.
+total`. A terminal summary followed by a `return` that exits the function is not flagged
+either.  Expressions, assignments, and `if`/`with` blocks containing no `break`,
+`continue`, `return`, `raise`, `try` or nested loop may sit between the log and that
+`return`.
 
 ---
 

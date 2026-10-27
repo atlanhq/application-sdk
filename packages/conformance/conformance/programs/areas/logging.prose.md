@@ -369,7 +369,10 @@ report that site the same way.
   loop is already an at-most-once terminal summary; keep it there rather than
   moving or demoting it.  An INFO at the end of a conditional branch immediately
   followed by an unconditional `return` from the same function is also terminal;
-  this does not apply when a `finally: continue` overrides the return.  A break
+  this does not apply when a `finally: continue` overrides the return.  Plain
+  expressions, assignments, and `if`/`with` blocks that contain no `break`,
+  `continue`, `return`, `raise`, `try` or nested loop may sit between that INFO
+  and the `return` (a follow-up `if missing: logger.warning(...)` is fine).  A break
   summary can repeat in an unbounded enclosing loop, while a return exits the
   function.  Mirror `atlan-metabase-app
   app/extracts/process.py`, where the per-dashboard skip inside `process_assets`
