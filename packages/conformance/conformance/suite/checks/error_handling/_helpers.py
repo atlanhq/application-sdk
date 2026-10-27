@@ -1531,7 +1531,9 @@ def _is_typed_error_value(
         return False
     if _annotated_error_return(helper) is False:
         return True
-    returns = [stmt for stmt in _iter_block(helper.body) if isinstance(stmt, ast.Return)]
+    returns = [
+        stmt for stmt in _iter_block(helper.body) if isinstance(stmt, ast.Return)
+    ]
     return (
         _body_always_exits(helper.body)
         and bool(returns)

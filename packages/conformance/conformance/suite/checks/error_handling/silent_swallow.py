@@ -7,15 +7,16 @@ import ast
 from .._ast_common._sanitizers import call_uses_sanitizer, is_sanitizer_call
 from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, _OPTIONAL_IMPORT_TYPES
 from ._helpers import (
+    RedactionScope,
     _any_logging_in,
-    _body_always_raises,
     _body_always_exits,
+    _body_always_raises,
     _body_has_bypassing_exit,
-    _class_like,
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
     _body_returns_typed_failure,
     _call_argument_for_parameter,
+    _class_like,
     _dotted_name,
     _filter_body_wrapped,
     _find_filter_method,
@@ -30,12 +31,10 @@ from ._helpers import (
     _iter_shallow,
     _raise_carries_cause,
     _return_carries_typed_failure,
-    RedactionScope,
     redaction_scope,
     typed_failure_scope,
     visible_helpers,
 )
-
 
 #: Verbs that make a ``*failure*`` / ``*residual*`` call a durable writer.
 _RECORD_VERBS = ("write", "record", "store", "persist", "save")
@@ -342,9 +341,7 @@ class SilentSwallowMixin:
 
         # Best-effort cleanup logged at DEBUG with its traceback, and a skip
         # gated on a predicate of the exception that re-raises everything else.
-        if self._is_quiet_cleanup(node) or self._is_predicate_gated_skip(
-            node, scope
-        ):
+        if self._is_quiet_cleanup(node) or self._is_predicate_gated_skip(node, scope):
             return
 
         # A durable failure record handed the exception, then a per-item skip.
@@ -518,9 +515,7 @@ class SilentSwallowMixin:
         )
         if handler_try is None:
             return False
-        return all(
-            self._owner_reraises(name, handler_try) for name in sorted(stashed)
-        )
+        return all(self._owner_reraises(name, handler_try) for name in sorted(stashed))
 
     def _owner_reraises(self, name: str, handler_try: ast.Try | ast.TryStar) -> bool:
         # Find the function owning *name*: innermost first, outward through
@@ -596,7 +591,9 @@ class SilentSwallowMixin:
         ):
             return None
         helper = self._class_helper(class_node, call.func.attr)
-        if helper is None or (bool(caller.decorator_list) and not helper.decorator_list):
+        if helper is None or (
+            bool(caller.decorator_list) and not helper.decorator_list
+        ):
             return None
         return helper
 
@@ -642,7 +639,9 @@ class SilentSwallowMixin:
             value = value.value
         return value if isinstance(value, ast.Call) else None
 
-    def _is_debug_traceback_only(self, body: list[ast.stmt], exc_name: str | None) -> bool:
+    def _is_debug_traceback_only(
+        self, body: list[ast.stmt], exc_name: str | None
+    ) -> bool:
         """*body* is only log calls (and ``pass``), one at DEBUG/INFO with a traceback."""
         logged = False
         for stmt in body:
@@ -1585,9 +1584,7 @@ class SilentSwallowMixin:
                 return True
         return False
 
-    def _is_stderr_exit_code(
-        self, prefix: list[ast.stmt], stmt: ast.Return
-    ) -> bool:
+    def _is_stderr_exit_code(self, prefix: list[ast.stmt], stmt: ast.Return) -> bool:
         """``return <non-zero int>`` after the handler wrote to stderr.
 
         ``print(f"Config error: {e}", file=sys.stderr); return 3`` is a CLI

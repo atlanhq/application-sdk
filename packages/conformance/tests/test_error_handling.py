@@ -7098,9 +7098,7 @@ async def probe():
 """
 
 
-def test_e004_no_finding_for_a_branching_helper_annotated_with_a_typed_result() -> (
-    None
-):
+def test_e004_no_finding_for_a_branching_helper_annotated_with_a_typed_result() -> None:
     src = _ANNOTATED_CHECK_HELPER.format(
         second="SourceUnavailableError(cause=exc).to_failure_details()"
     )
@@ -7155,7 +7153,7 @@ def test_e004_e007_no_finding_for_a_local_staged_only_with_typed_errors(
     "staged",
     [
         "None if is_denied(exc) else _check_error(exc)",
-        'lookup(user) if is_denied(exc) else _check_error(exc)',
+        "lookup(user) if is_denied(exc) else _check_error(exc)",
         "admin_denied(user) if is_denied(exc) else admin_denied(user)",
     ],
 )
@@ -7364,7 +7362,9 @@ async def load(key):
 
 def test_e004_no_finding_for_a_predicate_gated_skip_that_reraises_the_rest() -> None:
     assert "E004" not in _findings(
-        _PREDICATE_GATED_SKIP.format(test="_is_no_objectstore(exc)", tail="        raise")
+        _PREDICATE_GATED_SKIP.format(
+            test="_is_no_objectstore(exc)", tail="        raise"
+        )
     )
 
 
@@ -7379,7 +7379,9 @@ def test_e004_no_finding_for_a_predicate_gated_skip_that_reraises_the_rest() -> 
         ("_is_no_objectstore(exc)", "        raise StoreError('failed') from None"),
     ],
 )
-def test_e004_still_fires_when_the_gated_skip_is_not_proven(test: str, tail: str) -> None:
+def test_e004_still_fires_when_the_gated_skip_is_not_proven(
+    test: str, tail: str
+) -> None:
     assert "E004" in _findings(_PREDICATE_GATED_SKIP.format(test=test, tail=tail))
 
 
@@ -7479,7 +7481,9 @@ def test_e004_preflight_scope_follows_helpers_across_files(tmp_path: Path) -> No
         # outside the preflight scope DEBUG still does not clear E004
         _preflight_close("debug", reached=False),
         # inside it, the log must carry the exception
-        _preflight_close("debug").replace("'logout failed: %s', exc", "'logout failed'"),
+        _preflight_close("debug").replace(
+            "'logout failed: %s', exc", "'logout failed'"
+        ),
     ],
 )
 def test_e004_still_fires_for_debug_outside_preflight_or_without_the_exception(
@@ -7555,7 +7559,9 @@ def test_e004_still_fires_when_the_same_class_helper_is_not_proven(
 # ── E016: re-raising a member of the caught exception group ───────────────────
 
 
-@pytest.mark.parametrize("clause", ["except BaseExceptionGroup as group:", "except* ValueError as group:"])
+@pytest.mark.parametrize(
+    "clause", ["except BaseExceptionGroup as group:", "except* ValueError as group:"]
+)
 def test_e016_no_finding_when_a_member_of_the_caught_group_is_reraised(
     clause: str,
 ) -> None:
@@ -7684,8 +7690,9 @@ def test_e004_e007_still_fire_when_the_record_is_not_proven(record: str) -> None
 def test_e004_e007_still_fire_on_an_empty_aggregate_after_a_failure_record() -> None:
     # Only a per-item None is the residual shape; `{}` reads as an empty result.
     found = _findings(
-        _FAILURE_RECORD_SKIP.format(record="record_failure(output_path, file_id, e)")
-        .replace("return None", "return {}")
+        _FAILURE_RECORD_SKIP.format(
+            record="record_failure(output_path, file_id, e)"
+        ).replace("return None", "return {}")
     )
     assert "E004" in found
     assert "E007" in found
@@ -7711,7 +7718,9 @@ def test_e004_e007_still_fire_on_an_empty_aggregate_after_a_failure_record() -> 
     ],
 )
 def test_e008_no_finding_when_the_guard_is_explained_or_reported(handler: str) -> None:
-    src = "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
+    src = (
+        "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
+    )
     assert "E008" not in _findings(src)
 
 
@@ -7722,12 +7731,14 @@ def test_e008_no_finding_when_the_guard_is_explained_or_reported(handler: str) -
         # a directive is not an explanation
         "    except ImportError:  # noqa: F401\n        return",
         # a call that reports nothing
-        '    except ImportError:\n        _error(12, PATH)\n        return',
+        "    except ImportError:\n        _error(12, PATH)\n        return",
         '    except ImportError:\n        fallback("stub")\n        return',
     ],
 )
 def test_e008_still_fires_for_a_silent_guard(handler: str) -> None:
-    src = "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
+    src = (
+        "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
+    )
     assert "E008" in _findings(src)
 
 
@@ -7802,5 +7813,7 @@ def test_e007_no_finding_for_a_non_zero_exit_after_stderr(report: str) -> None:
         ('print(f"Config error: {e}")', "3"),
     ],
 )
-def test_e007_still_fires_for_success_codes_or_no_stderr(report: str, code: str) -> None:
+def test_e007_still_fires_for_success_codes_or_no_stderr(
+    report: str, code: str
+) -> None:
     assert "E007" in _findings(_CLI_EXIT.format(report=report, code=code))

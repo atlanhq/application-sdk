@@ -554,8 +554,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "honoured as this text says (tool directives — ``noqa``, ``type: ignore``,\n"
             "``conformance: ignore`` — do not count), and so is a reporter call that\n"
             "states the problem with a message (a callee named for error/warn/report/\n"
-            "fail/fatal/abort/die with a string argument: ``_error(12, PATH, \"...\n"
-            "missing\")``).\n"
+            'fail/fatal/abort/die with a string argument: ``_error(12, PATH, "...\n'
+            'missing")``).\n'
             "\n**Fixing it well**\n\n"
             "* Fix it at the existing ``except ImportError`` site, in the shape this rule describes: "
             "an optional module the code falls back from is logged at ``DEBUG`` with the module "
