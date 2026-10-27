@@ -5869,9 +5869,11 @@ def test_e020_fires_twice_on_sequential_failure_guards() -> None:
     assert (
         _findings(
             """\
-def fetch(a, b):
+def fetch(client):
+    a = client.get("/a")
     if not a.is_success:
         return []
+    b = client.get("/b")
     if not b.is_success:
         return []
 """
@@ -6896,3 +6898,132 @@ def fetch(response, name):
     return response.json()
 """
     assert "E020" not in _findings(src)
+
+
+# ── E020: procedures and non-HTTP result objects ──────────────────────────────
+
+
+def test_e020_no_finding_on_bare_return_in_a_none_procedure() -> None:
+    # `-> None` has no result to publish, so the early exit hands the caller no
+    # sentinel to mistake for an empty success (E007 makes the same carve-out).
+    assert "E020" not in _findings(
+        """\
+def sync() -> None:
+    resp = client.get(url)
+    if not resp.ok:
+        return
+    store(resp.json())
+"""
+    )
+    assert "E020" not in _findings(
+        """\
+def sync() -> None:
+    resp = client.get(url)
+    if resp.is_success:
+        store(resp.json())
+    else:
+        return None
+"""
+    )
+
+
+def test_e020_still_fires_on_empty_value_returned_from_a_none_procedure() -> None:
+    # `return []` is a value, whatever the annotation says.
+    assert "E020" in _findings(
+        """\
+def sync() -> None:
+    resp = client.get(url)
+    if not resp.ok:
+        return []
+"""
+    )
+
+
+def test_e020_still_fires_on_bare_return_without_a_none_annotation() -> None:
+    assert "E020" in _findings(
+        """\
+def sync() -> list[dict]:
+    resp = client.get(url)
+    if not resp.ok:
+        return None
+    return resp.json()
+"""
+    )
+
+
+def test_e020_no_finding_on_ok_of_a_non_http_result() -> None:
+    # `.ok` / `.is_success` are ordinary field names on result dataclasses;
+    # nothing ties `result` to an HTTP response.
+    assert "E020" not in _findings(
+        """\
+def run_stages():
+    result = run_stage("extract")
+    if not result.ok:
+        return None
+    outcome: StageResult = finish(result)
+    if outcome.is_success:
+        return outcome.value
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_still_fires_on_ok_of_an_http_verb_call_result() -> None:
+    assert "E020" in _findings(
+        """\
+async def fetch(session):
+    result = await session.post(url, json=body)
+    if not result.ok:
+        return None
+    return result.json()
+"""
+    )
+
+
+def test_e020_still_fires_on_ok_of_a_with_bound_response() -> None:
+    assert "E020" in _findings(
+        """\
+async def fetch(session):
+    async with session.get(url) as r:
+        if not r.ok:
+            return []
+        return await r.json()
+"""
+    )
+
+
+def test_e020_still_fires_on_ok_of_an_owner_read_for_status_code() -> None:
+    # Reading a response-only attribute on the same owner says it is a response.
+    assert "E020" in _findings(
+        """\
+def fetch(result):
+    logger.debug("HTTP %s", result.status_code)
+    if not result.ok:
+        return {}
+    return result.json()
+"""
+    )
+
+
+def test_e020_still_fires_on_ok_of_a_response_annotated_parameter() -> None:
+    assert "E020" in _findings(
+        """\
+def parse(result: httpx.Response):
+    if not result.is_success:
+        return []
+    return result.json()
+"""
+    )
+
+
+def test_e020_status_code_needs_no_http_evidence() -> None:
+    # `status_code` is HTTP-specific on its own; only `.ok` / `.is_success` are gated.
+    assert "E020" in _findings(
+        """\
+def check(result):
+    if result.status_code != 200:
+        return None
+    return result
+"""
+    )
