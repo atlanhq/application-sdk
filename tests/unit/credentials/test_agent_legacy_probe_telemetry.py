@@ -93,9 +93,17 @@ async def _resolve(store) -> tuple[dict[str, Any], BaseException | None]:
 
 class TestOutcomesPerField:
     async def test_refused_field_is_recorded_even_when_the_run_fails(self) -> None:
-        extra, _ = await _resolve(
+        extra, raised = await _resolve(
             MixedStore(SecretStoreError("AccessDeniedException", retryable=True))
         )
+        refused = dict(
+            pair.split("=")
+            for pair in extra["atlan.agent_json.probe.outcomes"].split(",")
+        )["extra.databaseTerm"]
+        # A strict refusal fails the run; the record must still have been
+        # written. A refusal the legacy bridge keeps (``refused_kept``) is the
+        # only case that may pass.
+        assert (raised is not None) == (refused == "refused")
         outcomes = dict(
             pair.split("=")
             for pair in extra["atlan.agent_json.probe.outcomes"].split(",")

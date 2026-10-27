@@ -290,12 +290,16 @@ def _backend_error(name: str, message: object) -> str:
 
     Dapr's wrapper is stripped and the key removed first, so neither the
     wrapper's words nor a key that itself says "not found" or reads like a
-    throttle can sway the classification.
+    throttle can sway the classification. The key is removed only as a whole
+    token: removing every occurrence of a short name (``e``) would mangle the
+    backend's own wording past recognition.
     """
     if not isinstance(message, str):
         return ""
     backend_error = _DAPR_SECRET_GET_PREFIX_RE.sub("", message, count=1)
-    return backend_error.replace(name, "") if name else backend_error
+    if not name:
+        return backend_error
+    return re.sub(rf"(?<![\w-]){re.escape(name)}(?![\w-])", "", backend_error)
 
 
 def _is_secret_absent_message(name: str, message: object) -> bool:

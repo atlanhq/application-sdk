@@ -262,8 +262,50 @@ class TestPublishedSchema:
             {"extraction_method": "agent", "agent_json": FORM_PAYLOAD},
         )
 
-    def test_typed_app_subclass_schema_accepts_format_2(self) -> None:
-        self._validate(StrictAppSpec.model_json_schema(), FORM_PAYLOAD)
+    def test_typed_app_subclass_schema_matches_runtime(self) -> None:
+        """A strict (``extra="forbid"``) subclass: the published schema and
+        runtime validation must agree, on what they accept and reject alike."""
+        import jsonschema
+
+        declared_only = {
+            "format": 2,
+            "agent-name": "sdr-agent",
+            "secret-manager": "awssecretmanager",
+            "auth-type": "basic",
+            "port": {"value": 1521},
+            "basic.username": {"value": "svc_user"},
+            "basic.password": _ref("prod/oracle"),
+        }
+        self._validate(StrictAppSpec.model_json_schema(), declared_only)
+        StrictAppSpec.model_validate(declared_only)
+
+        # The form's extra envelope keys aren't declared on this subclass:
+        # runtime rejects them, so the schema must too.
+        with pytest.raises(jsonschema.ValidationError):
+            self._validate(StrictAppSpec.model_json_schema(), FORM_PAYLOAD)
+        with pytest.raises(ValueError):
+            StrictAppSpec.model_validate(FORM_PAYLOAD)
+
+    @pytest.mark.parametrize(
+        "field,bad",
+        [
+            ("port", {"value": "not-an-int"}),
+            ("port", _ref("prod/port")),
+            ("host", {"value": 123}),
+        ],
+    )
+    def test_schema_types_values_like_the_model(self, field: str, bad: Any) -> None:
+        """A typed field's ``value`` must match its declared type, and a
+        non-string field can't be a ``secretKeyRef`` (its flat value would be
+        the secret's name, which the typed field rejects). Runtime rejects
+        both, so the schema must too."""
+        import jsonschema
+
+        payload = {**FORM_PAYLOAD, field: bad}
+        with pytest.raises(jsonschema.ValidationError):
+            self._validate(AgentCredentialSpec.model_json_schema(), payload)
+        with pytest.raises(ValueError):
+            AgentCredentialSpec.model_validate(payload)
 
     @pytest.mark.parametrize(
         "bad_field",
@@ -363,6 +405,29 @@ class TestRoundTrip:
         raw["value-sources"] = {"basic.password": {"name": "n"}}
         with pytest.raises(CredentialParseError, match="basic.password"):
             AgentCredentialSpec.model_validate(raw)
+
+    @pytest.mark.parametrize("key", ["value-sources", "value_sources"])
+    def test_a_null_source_marker_is_rejected_not_read_as_legacy(
+        self, key: str
+    ) -> None:
+        """A present-but-null marker must not silently downgrade the payload
+        to legacy probing."""
+        with pytest.raises(CredentialParseError, match=key):
+            AgentCredentialSpec.model_validate(
+                {
+                    "agent-name": "a",
+                    "key-type": "single-key",
+                    key: None,
+                    "basic.username": "literal",
+                }
+            )
+
+    def test_spec_hash_is_stable_if_the_source_map_is_mutated(self) -> None:
+        spec = self._spec()
+        before = hash(spec)
+        assert spec.value_sources is not None
+        spec.value_sources["basic.password"]["name"] = "changed"
+        assert hash(spec) == before
 
     def test_value_sources_naming_a_missing_field_is_rejected(self) -> None:
         raw = self._spec().to_raw_dict()
@@ -702,6 +767,27 @@ class TestPreflight:
         assert result.passed
         assert not result.fatal
         assert store.calls == []
+
+    async def test_all_literal_payload_needs_no_secret_store(self) -> None:
+        """No declared ref means nothing to look up, so a missing store is not
+        a config gap for this payload."""
+        spec = AgentCredentialSpec.model_validate(
+            _v2(**{"basic.username": {"value": "u"}})
+        )
+        result = await check_secret_store_access(spec, None)
+        assert result.passed
+        assert not result.fatal
+        assert result.resolved is not None
+        assert result.resolved["username"] == "u"
+
+    async def test_declared_ref_without_a_secret_store_is_fatal(self) -> None:
+        spec = AgentCredentialSpec.model_validate(
+            _v2(**{"basic.password": _ref("prod/mysql")})
+        )
+        result = await check_secret_store_access(spec, None)
+        assert not result.passed
+        assert result.fatal
+        assert not result.store_down
 
     async def test_declared_ref_not_found_is_fatal_config_gap(self) -> None:
         class EmptyStore:

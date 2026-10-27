@@ -444,6 +444,31 @@ class TestDaprSecretStore:
         assert not isinstance(exc.value, SecretStoreTransientError)
         assert not isinstance(exc.value, SecretNotFoundError)
 
+    @pytest.mark.parametrize("short_key", ["e", "x", "in"])
+    async def test_a_short_key_does_not_erase_the_backend_wording(self, short_key):
+        """The key is stripped only as a whole token. Removing every
+        occurrence of a one-letter name (``e``) would mangle
+        ``ThrottlingException: Rate exceeded`` past recognition, and a
+        throttled declared ref would be routed to the user."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            f"failed getting secret with key {short_key} from secret store "
+            f"secretstore: couldn't get secret {short_key}: api error "
+            "ThrottlingException: Rate exceeded",
+        )
+        with pytest.raises(SecretStoreTransientError):
+            await self.store.get(short_key)
+
+    async def test_a_short_key_does_not_erase_the_not_found_wording(self):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key e from secret store secretstore: "
+            "secret e not found",
+        )
+        assert await self.store.get_optional("e") is None
+
     async def test_key_named_like_a_throttle_does_not_make_a_denial_transient(self):
         """The key is stripped before matching, so a key that reads like a
         throttling wording can't turn an access denial into a transient."""

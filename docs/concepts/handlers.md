@@ -159,13 +159,19 @@ What the logs tell you:
   the run fails with that error.
 - **Every legacy agent single-key resolution** logs one WARNING,
   `agent_json legacy single-key probe outcomes`, even when the run then fails.
-  It is the evidence for migrating the workflow to declared sources
-  (FND-4407).
+  It is evidence for migrating the workflow to declared sources (FND-4407),
+  not a verdict on its own.
   - `atlan.agent_json.probe.outcomes`, e.g.
     `basic.password=resolved,basic.username=refused`, gives each probed
-    field's outcome. `resolved` means a real ref (`secretKeyRef`); `absent` or
-    `refused` means a plain value (`value`). The other outcomes are
-    `transient`, `outage` and `error`.
+    field's outcome. `resolved` means the store returned a secret for the
+    value, so the field is a real ref (`secretKeyRef`).
+  - `absent` and `refused` are **inconclusive**. A missing or denied lookup
+    doesn't show whether the field was meant as a secret ref: `absent` can be
+    a ref whose secret was never created, and `refused` can be a real ref the
+    SDR identity may not read. Before converting such a field to `value`,
+    corroborate it, e.g. the workflow ran successfully with that field as a
+    plain value. If there is no such evidence, ask the customer.
+  - The other outcomes are `transient`, `outage` and `error`.
   - It also carries a count per outcome, `atlan.agent_json.format` and
     `atlan.agent_json.secret_manager`.
   - Field names only, never values or ref names.
