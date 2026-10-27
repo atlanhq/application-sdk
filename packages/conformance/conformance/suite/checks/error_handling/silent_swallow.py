@@ -24,6 +24,7 @@ from ._helpers import (
     _is_gather_call,
     _is_log_call_stmt,
     _iter_shallow,
+    _raise_carries_cause,
     _return_carries_typed_failure,
     RedactionScope,
     redaction_scope,
@@ -252,30 +253,30 @@ class SilentSwallowMixin:
             all_paths = paths[0] | paths[1]
             return bool(all_paths) and all_paths == {True}
 
+        def _is_raising_guard(previous: ast.stmt) -> bool:
+            # `if <cond>: raise <cause-carrying>` with no else: the path it
+            # takes re-raises, the other one reaches the helper.
+            return (
+                isinstance(previous, ast.If)
+                and not previous.orelse
+                and len(previous.body) == 1
+                and isinstance(previous.body[0], ast.Raise)
+                and _raise_carries_cause(previous.body[0], scope)
+            )
+
         def _handler_logs_through_helper() -> bool:
             if node.name is None:
                 return False
             for index, statement in enumerate(node.body):
-                if not isinstance(statement, ast.Expr) or not isinstance(
-                    statement.value, ast.Call
-                ):
-                    continue
-                call = statement.value
-                if not isinstance(call.func, ast.Name):
-                    continue
-                helper = local_helpers.get(call.func.id)
-                if (
-                    helper is None
-                    or helper.decorator_list
-                    or helper.args.vararg is not None
-                    or helper.args.kwarg is not None
-                ):
+                call = self._unwrapped_call(statement)
+                if call is None:
                     continue
                 prefix = node.body[:index]
                 if any(
                     not isinstance(
                         previous, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Pass)
                     )
+                    and not _is_raising_guard(previous)
                     for previous in prefix
                 ):
                     continue
@@ -285,6 +286,30 @@ class SilentSwallowMixin:
                     and isinstance(descendant.ctx, (ast.Store, ast.Del))
                     for previous in prefix
                     for descendant in ast.walk(previous)
+                ):
+                    continue
+                method = self._same_class_method(call)
+                if method is not None:
+                    bound = [*method.args.posonlyargs, *method.args.args][1:]
+                    for parameter in [*bound, *method.args.kwonlyargs]:
+                        passed = self._bound_method_argument(
+                            call, method, parameter.arg
+                        )
+                        if (
+                            isinstance(passed, ast.Name)
+                            and passed.id == node.name
+                            and _helper_logs_parameter(method, parameter.arg)
+                        ):
+                            return True
+                    continue
+                if not isinstance(call.func, ast.Name):
+                    continue
+                helper = local_helpers.get(call.func.id)
+                if (
+                    helper is None
+                    or helper.decorator_list
+                    or helper.args.vararg is not None
+                    or helper.args.kwarg is not None
                 ):
                     continue
                 parameters = [
@@ -527,6 +552,41 @@ class SilentSwallowMixin:
             ):
                 return False
         return False
+
+    def _same_class_method(self, call: ast.Call) -> ast.FunctionDef | None:
+        """The method ``self.<name>(...)`` resolves to on the enclosing class, or None.
+
+        The caller must be a plain (or classmethod) method directly in the
+        class body whose receiver is never rebound; the method must be an
+        unshadowed synchronous one (:meth:`_class_helper`), and a classmethod
+        caller cannot reach a plain method through ``cls``.
+        """
+        if not (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and self._function_stack
+            and self._class_stack
+        ):
+            return None
+        caller = self._function_stack[-1]
+        class_node = self._class_stack[-1]
+        positional = [*caller.args.posonlyargs, *caller.args.args]
+        if (
+            caller not in class_node.body
+            or not positional
+            or not self._supported_method_decorators(caller)
+        ):
+            return None
+        receiver = positional[0].arg
+        if call.func.value.id != receiver or any(
+            self._statement_rebinds_name(statement, receiver)
+            for statement in caller.body
+        ):
+            return None
+        helper = self._class_helper(class_node, call.func.attr)
+        if helper is None or (bool(caller.decorator_list) and not helper.decorator_list):
+            return None
+        return helper
 
     # ── E004: best-effort cleanup, predicate-gated skips, scripts, preflight ──
 
@@ -1400,13 +1460,19 @@ class SilentSwallowMixin:
                 # ``self``, so the descriptor-binding argument shift is wrong.
                 if caller_is_classmethod and not helper.decorator_list:
                     continue
-                argument = self._bound_method_argument(call, helper, handler.name)
-                if (
-                    isinstance(argument, ast.Name)
-                    and argument.id == handler.name
-                    and self._helper_logs_parameter_before_return(helper, handler.name)
-                ):
-                    return True
+                # Any parameter the binding is passed to, not only one that
+                # happens to share the handler's name.
+                bound = [*helper.args.posonlyargs, *helper.args.args][1:]
+                for parameter in [*bound, *helper.args.kwonlyargs]:
+                    argument = self._bound_method_argument(call, helper, parameter.arg)
+                    if (
+                        isinstance(argument, ast.Name)
+                        and argument.id == handler.name
+                        and self._helper_logs_parameter_before_return(
+                            helper, parameter.arg
+                        )
+                    ):
+                        return True
         return False
 
     def _check_p007(self, node: ast.ExceptHandler) -> None:

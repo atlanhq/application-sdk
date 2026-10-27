@@ -1373,8 +1373,9 @@ def probe():
 @pytest.mark.parametrize(
     "src",
     [
-        # A conditional exit before the helper can bypass the log, like the
-        # unclassified arm of the pg_stat_statements probe.
+        # A conditional exit before the helper can bypass the log. (A guard
+        # that re-raises with the cause intact is not a bypass: see
+        # test_p004_no_finding_when_a_raising_guard_precedes_the_helper.)
         """\
 def _report_failure(operation, problem, classification):
     if classification.audience == "owner":
@@ -1389,7 +1390,7 @@ def probe():
     except Exception as caught:
         classification = classify_failure(caught)
         if classification is None:
-            raise
+            return None
         _report_failure("query", caught, classification)
         return None
 """,
@@ -7485,3 +7486,67 @@ def test_e004_still_fires_for_debug_outside_preflight_or_without_the_exception(
     src: str,
 ) -> None:
     assert "E004" in _findings(src)
+
+
+# ── E004/E007: the preflight dispatch boundary (same-class reporting helper) ──
+
+_DISPATCH_BOUNDARY = """\
+class H(Handler):
+    def _report(self, name, problem):
+        logger.{level}("%s failed: %s", name, sanitize_cause_repr(problem))
+
+    async def _probe(self):
+        try:
+            return await run()
+        except Exception as exc:
+            if isinstance(exc, TimeoutError):
+                raise AppTimeoutError(message="probe timed out", cause=exc) from exc
+            {call}
+            return PreflightCheck(name="auth", passed=False)
+"""
+
+
+def test_p004_no_finding_when_a_raising_guard_precedes_the_helper() -> None:
+    src = """\
+def _report_failure(operation, problem):
+    logger.error("%s failed: %s", operation, safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        if classify_failure(caught) is None:
+            raise
+        _report_failure("query", caught)
+        return None
+"""
+    assert "E004" not in _findings(src)
+
+
+def test_e004_e007_no_finding_when_a_same_class_helper_logs_the_binding() -> None:
+    # Other paths raise a typed error chained from the failure; the remaining
+    # one hands the binding to a method of the same class that logs it
+    # sanitized at WARNING before the typed row is returned.
+    found = _findings(
+        _DISPATCH_BOUNDARY.format(level="warning", call='self._report("auth", exc)')
+    )
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+@pytest.mark.parametrize(
+    ("level", "call"),
+    [
+        # DEBUG through the helper is not a warning/error record
+        ("debug", 'self._report("auth", exc)'),
+        # the helper is handed something other than the binding
+        ("warning", 'self._report("auth", None)'),
+        # not a method of this class
+        ("warning", 'other._report("auth", exc)'),
+    ],
+)
+def test_e004_still_fires_when_the_same_class_helper_is_not_proven(
+    level: str, call: str
+) -> None:
+    assert "E004" in _findings(_DISPATCH_BOUNDARY.format(level=level, call=call))
