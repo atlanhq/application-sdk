@@ -149,6 +149,129 @@ class TestLadder:
         assert tuple(LADDER.declared_tiers()) == LADDER.order
 
 
+# Two rungs share 1 GiB and differ only in CPU, as in a real deployment.
+EQUAL_NEIGHBOURS = Ladder(
+    order=("xxs", "xs", "s", "m"),
+    memory_gib={"xxs": 1.0, "xs": 1.0, "s": 1.5, "m": 8.0},
+    sizers={},
+)
+
+
+class TestTierForMemory:
+    """LADDER holds s=6144, m=8192, l=16384, xl=24576 MiB."""
+
+    @pytest.mark.parametrize(
+        ("mib", "expected"),
+        [(1, "s"), (6_144, "s"), (6_145, "m"), (8_192, "m"), (16_000, "l")],
+    )
+    def test_the_smallest_tier_that_holds_the_estimate(
+        self, mib: float, expected: str
+    ) -> None:
+        """An exact fit fits: the bound is inclusive, like a band's."""
+        assert LADDER.tier_for_memory(mib) == expected
+
+    def test_safety_scales_the_estimate_before_the_pick(self) -> None:
+        """5,000 MiB fits s; x1.25 = 6,250 MiB does not."""
+        assert LADDER.tier_for_memory(5_000) == "s"
+        assert LADDER.tier_for_memory(5_000, safety=1.25) == "m"
+
+    @pytest.mark.parametrize("safety", [0.5, 0.0, -2.0, float("nan")])
+    def test_a_safety_below_one_cannot_shrink_the_estimate(self, safety: float) -> None:
+        """8,000 MiB at x0.5 would be s; it is read as x1 and stays m."""
+        assert LADDER.tier_for_memory(8_000, safety=safety) == "m"
+
+    @pytest.mark.parametrize(("mib", "safety"), [(100_000, 1.0), (24_576, 1.25)])
+    def test_nothing_fits_answers_the_top_tier(self, mib: float, safety: float) -> None:
+        """Not None and not a raise: the largest pool is the best start there is."""
+        assert LADDER.tier_for_memory(mib, safety=safety) == "xl"
+
+    @pytest.mark.parametrize("mib", [None, 0, -1, float("nan"), float("inf")])
+    def test_an_unusable_estimate_is_no_answer(self, mib: float | None) -> None:
+        """Zero is not a reading here: no process runs in 0 MiB."""
+        assert LADDER.tier_for_memory(mib) is None
+
+    def test_equal_neighbours_pick_the_lower_rung(self) -> None:
+        assert EQUAL_NEIGHBOURS.tier_for_memory(900) == "xxs"
+        assert EQUAL_NEIGHBOURS.tier_for_memory(1_024) == "xxs"
+        assert EQUAL_NEIGHBOURS.tier_for_memory(1_025) == "s"
+
+
+class TestHighest:
+    def test_the_more_capable_tier_wins_in_either_order(self) -> None:
+        assert LADDER.highest("s", "l") == "l"
+        assert LADDER.highest("l", "s") == "l"
+        assert LADDER.highest("m") == "m"
+
+    @pytest.mark.parametrize("missing", [None, ""])
+    def test_a_missing_answer_is_skipped(self, missing: str | None) -> None:
+        assert LADDER.highest("m", missing) == "m"
+
+    def test_an_undeclared_tier_raises(self) -> None:
+        with pytest.raises(ValueError, match="not a tier of this ladder"):
+            LADDER.highest("s", "huge")
+        with pytest.raises(ValueError, match="not a tier of this ladder"):
+            LADDER.highest("huge")
+
+    @pytest.mark.parametrize(
+        ("rows", "mib", "expected"),
+        [
+            (500_000, 1_000, "l"),  # bands ask more
+            (10, 10_000, "l"),  # memory asks more
+            (10, None, "s"),  # no estimate: the bands' answer stands
+            (2_000, 7_000, "m"),  # both agree
+        ],
+    )
+    def test_the_higher_of_the_size_bands_and_the_memory_estimate(
+        self, rows: int, mib: float | None, expected: str
+    ) -> None:
+        tier = LADDER.highest(
+            LADDER.tier_for("sized", {"rows": rows}), LADDER.tier_for_memory(mib)
+        )
+        assert tier == expected
+
+
+class TestCap:
+    @pytest.mark.parametrize(
+        ("ceiling", "expected"),
+        [("m", "m"), ("l", "l"), ("xl", "l")],
+        ids=["below", "equal", "above"],
+    )
+    def test_a_ceiling_relative_to_the_natural_tier(
+        self, ceiling: str, expected: str
+    ) -> None:
+        natural = LADDER.tier_for("sized", {"rows": 500_000})
+        assert natural == "l"
+        assert LADDER.cap(natural, ceiling) == expected
+
+    def test_a_loose_estimate_takes_a_lower_ceiling(self) -> None:
+        """The caller picks the ceiling: l when the estimate is tight, m when loose."""
+        tier = LADDER.highest(
+            LADDER.tier_for("sized", {"rows": 10}),
+            LADDER.tier_for_memory(12_000, safety=1.25),
+        )
+        assert tier == "l"
+        assert LADDER.cap(tier, "l") == "l"
+        assert LADDER.cap(tier, "m") == "m"
+
+    def test_capping_does_not_trim_the_ladder(self) -> None:
+        """A band naming xl stays valid; only the decision is capped."""
+        tier = LADDER.tier_for("two_axes", {"width": 5_000})
+        assert tier == "xl"
+        assert LADDER.cap(tier, "l") == "l"
+        assert LADDER.order == ("s", "m", "l", "xl")
+
+    def test_the_ceiling_wins_over_a_floor(self) -> None:
+        """pinned's floor is m; an explicit ceiling of s is the caller's limit."""
+        assert LADDER.cap(LADDER.tier_for("pinned"), "s") == "s"
+
+    def test_an_undeclared_tier_or_ceiling_raises(self) -> None:
+        """A ceiling usually comes from config, where a typo must not pass."""
+        with pytest.raises(ValueError, match="not a tier of this ladder"):
+            LADDER.cap("l", "large")
+        with pytest.raises(ValueError, match="not a tier of this ladder"):
+            LADDER.cap("large", "l")
+
+
 def test_the_module_imports_nothing_a_workflow_sandbox_forbids() -> None:
     """ladder.py must stay callable from workflow code.
 
@@ -222,6 +345,22 @@ class TestConstructionIsValidated:
         """next_up orders by declared memory; an absent tier reads as 0 GiB."""
         with pytest.raises(ValueError, match="missing \\['m'\\]"):
             Ladder(order=("s", "m"), memory_gib={"s": 6.0}, sizers={})
+
+    def test_equal_neighbouring_memory_is_allowed(self) -> None:
+        """Non-decreasing, not strictly ascending: tiers may differ only in CPU."""
+        assert EQUAL_NEIGHBOURS.order == ("xxs", "xs", "s", "m")
+        assert EQUAL_NEIGHBOURS.next_up("xxs") == "m"
+        assert list(EQUAL_NEIGHBOURS.climb("xxs")) == ["xxs", "m"]
+
+    def test_memory_must_not_decrease_along_the_order(self) -> None:
+        with pytest.raises(ValueError, match="decreases at 'm'"):
+            Ladder(order=("s", "m"), memory_gib={"s": 8.0, "m": 0.8}, sizers={})
+
+    @pytest.mark.parametrize("bad", [0, -1.0, float("nan"), float("inf"), "8", True])
+    def test_memory_must_be_a_positive_finite_number(self, bad: object) -> None:
+        """Config-built ladders get raw JSON; ValueError is what callers catch."""
+        with pytest.raises(ValueError, match="positive, finite"):
+            Ladder(order=("s",), memory_gib={"s": bad}, sizers={})
 
     def test_an_explicit_fallback_tier_must_be_a_real_rung(self) -> None:
         with pytest.raises(ValueError, match="unknown_activity_tier"):

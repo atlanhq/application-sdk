@@ -174,10 +174,12 @@ class Ladder:
     """An app's tiers, in ascending capability, plus one sizer per activity.
 
     ``memory_gib`` is the declared envelope per tier. It is what :meth:`next_up`
-    reasons about and what ``temporal-activity-rerouter`` re-derives from the
-    pool's ``spec.template``, so it must match the pool resources the app
-    declares in its deployment manifest — an app-side guard test should fail
-    when the two drift.
+    and :meth:`tier_for_memory` reason about and what
+    ``temporal-activity-rerouter`` re-derives from the pool's ``spec.template``,
+    so it must match the pool resources the app declares in its deployment
+    manifest — an app-side guard test should fail when the two drift. It must
+    not decrease along ``order``; equal neighbours are fine, since two tiers can
+    differ only in CPU.
 
     ``sizers`` is keyed by activity and each sizer also names its own activity.
     That looks redundant and is kept deliberately: the key is what
@@ -212,6 +214,30 @@ class Ladder:
                 f"Ladder.memory_gib is missing {missing_memory}. next_up orders escalation by "
                 "declared memory, so an absent tier reads as 0 GiB and is escalated to first."
             )
+        previous = 0.0
+        for tier in self.order:
+            gib = self.memory_gib[tier]
+            # A ladder built from deployment config gets whatever the JSON held;
+            # a ValueError here is what lets the caller fall back.
+            if (
+                isinstance(gib, bool)
+                or not isinstance(gib, (int, float))
+                or not isfinite(gib)
+                or gib <= 0
+            ):
+                raise ValueError(
+                    f"Ladder.memory_gib[{tier!r}] is {gib!r}; it must be a positive, "
+                    "finite number of GiB."
+                )
+            # Non-decreasing, not strictly ascending: equal neighbours that
+            # differ only in CPU are a real ladder.
+            if gib < previous:
+                raise ValueError(
+                    f"Ladder.memory_gib decreases at {tier!r} ({gib} GiB after "
+                    f"{previous} GiB). A smaller pool above a larger one makes "
+                    "tier_for_memory and next_up disagree with the order."
+                )
+            previous = gib
 
         if not self.unknown_activity_tier:
             # Frozen dataclass: this is the documented way to normalise a field
@@ -269,7 +295,7 @@ class Ladder:
         qualified activity name.
 
         The answer is a function of this run's measured inputs and nothing else.
-        There is deliberately no memory parameter: a ladder that could be raised
+        There is deliberately no history parameter: a ladder that could be raised
         by "where this connection ended last time" hides a broken axis instead of
         failing it. In a prior incident a byte-based axis answered the floor for
         an input that needed the top rung, and a per-connection tier memory
@@ -284,6 +310,56 @@ class Ladder:
             if sizer is None
             else sizer.tier_for(signal or {}, self.order)
         )
+
+    def tier_for_memory(self, mib: float | None, *, safety: float = 1.0) -> Tier | None:
+        """The smallest tier whose pod holds ``mib × safety``; the top tier if none does.
+
+        ``mib`` is MiB, compared against ``memory_gib``. Use it for a working-set
+        estimate of this run, or with ``safety=1.0`` for which tier a measured
+        peak needed after a run. Do not route on a previous run's peak: that is
+        the history :meth:`tier_for` refuses to keep.
+
+        ``None``, NaN, inf and 0 or less answer ``None``: no estimate. Unlike an
+        axis, zero is not a real reading, since no process runs in 0 MiB. A
+        ``safety`` below 1 (or NaN) is read as 1, because a margin only widens.
+        """
+        if mib is None or not isfinite(mib) or mib <= 0:
+            return None
+        required = mib * (safety if safety >= 1.0 else 1.0)
+        for tier in self.order:
+            # x1024 is exact in binary floating point, so an exact fit fits.
+            if self.memory_gib[tier] * 1024 >= required:
+                return tier
+        return self.order[-1]
+
+    def highest(self, tier: Tier, *others: Tier | None) -> Tier:
+        """The most capable of ``tier`` and ``others``; an empty or ``None`` other is skipped.
+
+        For "the higher of the two": the bands' :meth:`tier_for`, which always
+        names a tier, and :meth:`tier_for_memory`, which may not.
+
+        Raises:
+            ValueError: if a tier is not one this ladder declares.
+        """
+        best, best_rank = tier, self.rank(tier)
+        for other in others:
+            if other and (rank := self.rank(other)) > best_rank:
+                best, best_rank = other, rank
+        return best
+
+    def cap(self, tier: Tier, ceiling: Tier) -> Tier:
+        """``tier``, or ``ceiling`` when ``tier`` is above it.
+
+        A decision-time cap, so ``order`` stays whole and bands may still name
+        tiers above the ceiling. A caller passes a lower ceiling when the
+        estimate behind ``tier`` is loose. The ceiling also wins over an
+        activity's floor. It limits where a run starts, not where the rerouter
+        moves it after an OOM kill.
+
+        Raises:
+            ValueError: if either tier is not one this ladder declares.
+        """
+        return ceiling if self.rank(tier) > self.rank(ceiling) else tier
 
     def next_up(self, current: Tier, min_growth: float = 2.0) -> Tier | None:
         """The smallest tier worth escalating to, or ``None`` at the top.

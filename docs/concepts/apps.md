@@ -1354,8 +1354,8 @@ with `None` is the ordinary bound-method call — same activity name, same
 options, same command in workflow history. So a build carrying a ladder routes
 nothing until that variable is set, and unsetting it is the rollback.
 
-**The ladder has no memory.** The tier is a function of what this run measured
-and nothing else. Caching "where this connection ended last time" would hide a
+**The ladder has no memory of past runs.** The tier is a function of what this
+run measured and nothing else. Caching "where this connection ended last time" would hide a
 broken axis instead of failing it; a wrong tier has to cost a visible climb,
 because the climb is the only feedback the ladder gets.
 
@@ -1369,6 +1369,75 @@ A per-dispatch queue takes precedence over the task's declared `pool=` for that
 call only. Outside a workflow run — a local run, or a direct unit test of a
 workflow method — the task is not wrapped as an activity, so there is no queue
 to choose and `run_on_queue` ignores the one it is given rather than failing.
+
+#### Sizing by memory, and capping
+
+Bands answer from a measured input. An app that can estimate the working set
+can also ask by memory, and take the higher of the two answers:
+
+```python
+by_size = LADDER.tier_for("transform", {"files": 20_000})  # "m"
+by_memory = LADDER.tier_for_memory(9_000, safety=1.25)  # 11,250 MiB: only "l" holds it
+tier = LADDER.highest(by_size, by_memory)  # "l"
+
+tight = LADDER.cap(tier, "l")  # "l": the configured ceiling
+loose = LADDER.cap(tier, "m")  # "m": a lower ceiling when the estimate is loose
+```
+
+`tier_for_memory(mib, safety=...)` takes MiB and answers the smallest tier
+whose `memory_gib` holds `mib × safety`, or the top tier when none does. An
+estimate it cannot use (`None`, NaN, 0 or less) answers `None`, which `highest`
+skips. A safety below 1 is read as 1. With `safety=1.0` it also says, after a
+run, which tier the measured peak needed. Route on this run's estimate, never
+on a previous run's peak.
+
+`cap(tier, ceiling)` caps where a run starts, at decision time. `order` stays
+whole, so bands can still name tiers above the ceiling. It does not change
+where the rerouter may move a run after an OOM kill.
+
+`memory_gib` must not decrease along `order`. Equal neighbours are fine,
+because two tiers can differ only in CPU.
+
+#### Building the ladder from deployment config
+
+A module-level `LADDER` changes only with a release. To tune bands and
+per-tier memory per deployment, build the ladder inside an activity from
+config. This is a supported pattern: `Ladder` does no I/O, and a malformed
+config raises `ValueError` when the ladder is built, so the activity can fall
+back to the static route. Return the queue, not the ladder:
+
+```python
+@task
+async def size_transform(self, input: SizeInput) -> SizeOutput:
+    try:
+        # build_ladder is the app's own: config -> Band / Axis / ActivitySizer / Ladder.
+        ladder = build_ladder(orjson.loads(os.environ.get("MY_APP_SIZE_TIERS", "")))
+    except (KeyError, TypeError, ValueError):
+        return SizeOutput(task_queue=None)  # bad config: keep the static route
+    tier = ladder.highest(
+        ladder.tier_for("transform", {"files": input.file_count}),
+        ladder.tier_for_memory(input.estimate_mib, safety=1.25),
+    )
+    queue = resolve(ladder.cap(tier, "l"), queue_map_from_env())
+    return SizeOutput(task_queue=queue)
+
+# In the workflow:
+sized = await self.size_transform(SizeInput(...))
+await run_on_queue(self, "transform", args, sized.task_queue)
+```
+
+**Where the queue map is read.** An app that already runs an activity before
+dispatch, such as the size probe above, calls `queue_map_from_env()` there and
+returns the map or the resolved queue on its result. That adds no step to
+workflow history.
+
+**Apps that dispatch activities themselves.** `run_on_queue` goes through the
+SDK's task wrapper, so it cannot take an app's own `activity_id`, per-call
+retry or timeout overrides, or its own `TaskContext`. An app that calls
+`workflow.execute_activity` itself uses `resolve()` for the queue and passes it
+as `task_queue=`, leaving the argument out when `resolve()` answers `None`.
+That app also owns keeping its routed and unrouted calls identical apart from
+`task_queue`.
 
 ## Retry Policies
 

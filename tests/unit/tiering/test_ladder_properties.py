@@ -19,13 +19,24 @@ activity_names = st.text(
 measurements = st.floats(
     min_value=0, max_value=1e12, allow_nan=False, allow_infinity=False
 )
+# Sampled values make equal neighbours common, not a rare float collision.
+memory_values = st.one_of(
+    st.sampled_from((1.0, 1.5, 8.0, 20.0)), st.floats(min_value=0.5, max_value=64)
+)
+estimates_mib = st.one_of(
+    st.none(), st.floats(min_value=-1, max_value=1e6, allow_nan=False)
+)
 
 
 @st.composite
 def ladders(draw: st.DrawFn) -> Ladder:
     """A ladder that satisfies every construction rule, so tests exercise behaviour."""
     order = tuple(draw(st.lists(tier_names, min_size=1, max_size=5, unique=True)))
-    memory = {tier: draw(st.floats(min_value=0.5, max_value=64)) for tier in order}
+    # Sorted, not strictly ascending: memory must not decrease along the order.
+    sizes = sorted(
+        draw(st.lists(memory_values, min_size=len(order), max_size=len(order)))
+    )
+    memory = dict(zip(order, sizes))
 
     sizers: dict[str, ActivitySizer] = {}
     for activity in draw(st.lists(activity_names, max_size=4, unique=True)):
@@ -103,6 +114,47 @@ class TestLadderInvariants:
             else ladder.unknown_activity_tier
         )
         assert ladder.tier_for(activity) == expected
+
+    @given(
+        ladder=ladders(),
+        mib=estimates_mib,
+        safety=st.floats(min_value=0, max_value=4, allow_nan=False),
+    )
+    @settings(max_examples=200)
+    def test_tier_for_memory_is_the_smallest_tier_that_holds_it(
+        self, ladder: Ladder, mib: float | None, safety: float
+    ) -> None:
+        tier = ladder.tier_for_memory(mib, safety=safety)
+        if mib is None or mib <= 0:
+            assert tier is None
+            return
+        required = mib * max(safety, 1.0)
+        holds = [t for t in ladder.order if ladder.memory_gib[t] * 1024 >= required]
+        assert tier == (holds[0] if holds else ladder.order[-1])
+
+    @given(ladder=ladders(), data=st.data())
+    @settings(max_examples=200)
+    def test_cap_is_the_lower_of_the_tier_and_the_ceiling(
+        self, ladder: Ladder, data: st.DataObject
+    ) -> None:
+        tier = data.draw(st.sampled_from(ladder.order))
+        ceiling = data.draw(st.sampled_from(ladder.order))
+        capped = ladder.cap(tier, ceiling)
+        assert ladder.rank(capped) == min(ladder.rank(tier), ladder.rank(ceiling))
+
+    @given(ladder=ladders(), data=st.data())
+    @settings(max_examples=200)
+    def test_highest_is_one_of_its_answers_and_at_least_each(
+        self, ladder: Ladder, data: st.DataObject
+    ) -> None:
+        first = data.draw(st.sampled_from(ladder.order))
+        others = data.draw(
+            st.lists(st.one_of(st.none(), st.sampled_from(ladder.order)), max_size=3)
+        )
+        best = ladder.highest(first, *others)
+        answers = [first, *(t for t in others if t)]
+        assert best in answers
+        assert all(ladder.rank(best) >= ladder.rank(t) for t in answers)
 
 
 class TestQueueInvariants:

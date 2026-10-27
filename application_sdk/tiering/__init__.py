@@ -10,7 +10,8 @@ to need more.
 The split, and what is safe to call from where:
 
 * :mod:`~application_sdk.tiering.ladder` — ``Band`` / ``Axis`` /
-  ``ActivitySizer`` / ``Ladder``. Pure: activity + measured signal → tier, and
+  ``ActivitySizer`` / ``Ladder``. Pure: activity + measured signal → tier,
+  memory estimate → tier, the higher of two tiers, a decision-time cap, and
   tier → next tier. Safe in workflow code.
 * :mod:`~application_sdk.tiering.queues` — tier → task queue, from
   ``ATLAN_APP_SIZE_QUEUE_MAP``. ``queue_map_from_env`` reads the environment and

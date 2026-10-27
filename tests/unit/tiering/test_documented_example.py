@@ -58,3 +58,32 @@ def test_every_name_the_dispatch_example_uses_is_exported(blocks: list[str]) -> 
     for name in ("queue_map_from_env", "resolve", "run_on_queue"):
         assert name in blocks[1], f"the dispatch example stopped showing {name}"
         assert getattr(pkg, name) is not None
+
+
+def test_the_memory_and_cap_example_answers_what_its_comments_say(
+    blocks: list[str],
+) -> None:
+    """Runs on the first block's LADDER, as a reader would."""
+    namespace: dict[str, object] = {}
+    exec(blocks[0], namespace)  # noqa: S102 - executing our own documentation
+    exec(blocks[2], namespace)  # noqa: S102 - executing our own documentation
+
+    assert namespace["by_size"] == "m"
+    assert namespace["by_memory"] == "l"
+    assert namespace["tier"] == "l"
+    assert namespace["tight"] == "l"
+    assert namespace["loose"] == "m"
+
+
+def test_the_config_built_ladder_example_uses_real_names(blocks: list[str]) -> None:
+    """Prose-shaped (it needs an app), so check its symbols rather than run it."""
+    import application_sdk.tiering as pkg
+
+    config_example = blocks[3]
+    for name in ("queue_map_from_env", "resolve", "run_on_queue"):
+        assert name in config_example, f"the config example stopped showing {name}"
+        assert getattr(pkg, name) is not None
+    for method in ("tier_for", "tier_for_memory", "highest", "cap"):
+        assert f".{method}(" in config_example
+        assert callable(getattr(pkg.Ladder, method))
+    assert "ValueError" in config_example, "the fallback on bad config is the point"
