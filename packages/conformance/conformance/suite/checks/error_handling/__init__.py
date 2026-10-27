@@ -47,6 +47,7 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.schema.findings import Finding
 
 from .._deprecated_module import module_is_deprecated
+from ..logging._helpers import is_script_file
 from ._checker import Checker
 from ._collect import _collect_imports, _collect_legacy_aliases
 from ._constants import (
@@ -89,8 +90,21 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+def _preflight_lines_of(text: str, file: str, path: Path | None) -> frozenset[int]:
+    """F005's preflight scope within this one file (no cross-file reach)."""
+    from ..preflight._common import preflight_scope_lines, registry_from_texts
+
+    registry = registry_from_texts([(path or Path(file), file, text)])
+    return preflight_scope_lines(registry).get(file, frozenset())
+
+
 def scan_text(
-    text: str, file: str, *, path: Path | None = None, root: Path | None = None
+    text: str,
+    file: str,
+    *,
+    path: Path | None = None,
+    root: Path | None = None,
+    preflight_lines: frozenset[int] | None = None,
 ) -> list[Finding]:
     """Scan Python source *text* and return all E-series findings.
 
@@ -98,11 +112,18 @@ def scan_text(
     when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
     and :mod:`._dependency_category`), and let E007 see a deprecation marker
     on an enclosing package (see :mod:`.._deprecated_module`).
+
+    *preflight_lines* is F005's preflight scope for this file — the ``def``
+    lines of the functions F005 inspects — which E004 reuses so the two rules
+    agree on where WARNING is barred.  :func:`_scan_all` computes it across
+    the whole repo; without it, the scope is computed from this file alone.
     """
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
         return []
+    if preflight_lines is None:
+        preflight_lines = _preflight_lines_of(text, file, path)
 
     imports = _collect_imports(tree)
     atlan_ioerror = imports.get("IOError") == _ATLAN_LEGACY_MODULE
@@ -124,12 +145,16 @@ def scan_text(
         raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
         deprecated_module=module_is_deprecated(tree, path=path, root=root),
+        script_file=is_script_file(text, tree),
+        preflight_lines=preflight_lines,
     )
     checker.visit(tree)
     return checker._findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
+def scan_path(
+    path: Path, root: Path, *, preflight_lines: frozenset[int] | None = None
+) -> list[Finding]:
     """Scan a single Python file, producing repo-root-relative URIs."""
     try:
         text = path.read_text(encoding="utf-8")
@@ -139,13 +164,32 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         rel = path.relative_to(root)
     except ValueError:
         rel = path
-    return scan_text(text, str(rel), path=path, root=root)
+    return scan_text(
+        text, str(rel), path=path, root=root, preflight_lines=preflight_lines
+    )
 
 
 def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # scan_path, not scan_text: E004 and E021 follow the repo's own imports,
-    # which needs each file's path and the repo root.
-    return [finding for path in paths for finding in scan_path(path, root)]
+    # which needs each file's path and the repo root. F005's preflight scope
+    # follows helpers across files, so it is computed once over every path.
+    from ..preflight._common import build_registry, preflight_scope_lines
+
+    scope = preflight_scope_lines(build_registry(paths, root))
+
+    def _rel(path: Path) -> str:
+        try:
+            return str(path.relative_to(root))
+        except ValueError:
+            return str(path)
+
+    return [
+        finding
+        for path in paths
+        for finding in scan_path(
+            path, root, preflight_lines=scope.get(_rel(path), frozenset())
+        )
+    ]
 
 
 main = make_cli_main(

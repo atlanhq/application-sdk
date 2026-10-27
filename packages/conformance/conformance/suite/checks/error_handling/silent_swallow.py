@@ -25,6 +25,7 @@ from ._helpers import (
     _is_log_call_stmt,
     _iter_shallow,
     _return_carries_typed_failure,
+    RedactionScope,
     redaction_scope,
     typed_failure_scope,
     visible_helpers,
@@ -306,6 +307,24 @@ class SilentSwallowMixin:
         if self._handler_stashes_for_reraise(node):
             return
 
+        # Best-effort cleanup logged at DEBUG with its traceback, and a skip
+        # gated on a predicate of the exception that re-raises everything else.
+        if self._is_quiet_cleanup(node) or self._is_predicate_gated_skip(
+            node, scope
+        ):
+            return
+
+        # A standalone script reports to its terminal: printing the caught
+        # exception is the failure record, the same carve-out L005 makes.
+        if self._script_file and self._handler_prints_binding(node):
+            return
+
+        # Inside F005's preflight scope WARNING is barred, so a DEBUG/INFO log
+        # that carries the exception is the most the handler can do there.
+        in_preflight = bool(self._function_stack) and (
+            self._function_stack[-1].lineno in self._preflight_lines
+        )
+
         # Follow only an unconditional direct call to a proven same-module helper.
         # A preceding branch can bypass the helper and leaves this proof incomplete.
         if _handler_logs_through_helper():
@@ -335,6 +354,12 @@ class SilentSwallowMixin:
             # sanitizer, so its absence must not flag the handler.
             if func.attr in ("warning", "error", "critical") and call_uses_sanitizer(
                 call, handler=node
+            ):
+                return
+            if (
+                in_preflight
+                and func.attr in ("debug", "info")
+                and self._log_carries_binding(call, node.name)
             ):
                 return
         self._add(
@@ -501,6 +526,189 @@ class SilentSwallowMixin:
                 for n in [stmt, *_iter_shallow(stmt)]
             ):
                 return False
+        return False
+
+    # ── E004: best-effort cleanup, predicate-gated skips, scripts, preflight ──
+
+    #: Leading verb of a call that releases a resource (``client.close()``,
+    #: ``engine.dispose()``, ``self._close_session()``).
+    _CLEANUP_VERBS = frozenset(
+        {
+            "close",
+            "aclose",
+            "dispose",
+            "shutdown",
+            "disconnect",
+            "cleanup",
+            "release",
+            "terminate",
+            "stop",
+            "kill",
+            "unlink",
+            "rmtree",
+        }
+    )
+
+    def _log_carries_binding(self, call: ast.Call, exc_name: str | None) -> bool:
+        """The log call attaches the traceback or formats the caught exception."""
+        if _has_exc_info(call, exc_name):
+            return True
+        if exc_name is None:
+            return False
+        return any(
+            self._expression_represents_parameter(value, exc_name)
+            for value in [*call.args, *(keyword.value for keyword in call.keywords)]
+        )
+
+    @staticmethod
+    def _unwrapped_call(stmt: ast.stmt) -> ast.Call | None:
+        """The call a bare expression statement makes (``await`` unwrapped)."""
+        if not isinstance(stmt, ast.Expr):
+            return None
+        value = stmt.value
+        if isinstance(value, ast.Await):
+            value = value.value
+        return value if isinstance(value, ast.Call) else None
+
+    def _is_debug_traceback_only(self, body: list[ast.stmt], exc_name: str | None) -> bool:
+        """*body* is only log calls (and ``pass``), one at DEBUG/INFO with a traceback."""
+        logged = False
+        for stmt in body:
+            if isinstance(stmt, ast.Pass):
+                continue
+            if not _is_log_call_stmt(stmt):
+                return False
+            call = self._unwrapped_call(stmt)
+            assert call is not None and isinstance(call.func, ast.Attribute)
+            if call.func.attr in ("debug", "info") and _has_exc_info(call, exc_name):
+                logged = True
+        return logged
+
+    def _owning_try(self, node: ast.ExceptHandler) -> ast.Try | ast.TryStar | None:
+        scope: ast.AST | None = (
+            self._function_stack[-1] if self._function_stack else self._module
+        )
+        if scope is None:
+            return None
+        for candidate in _iter_shallow(scope):
+            if isinstance(candidate, (ast.Try, ast.TryStar)) and any(
+                handler is node for handler in candidate.handlers
+            ):
+                return candidate
+        return None
+
+    def _inside_finally(self, target: ast.AST) -> bool:
+        """Whether *target* sits in a ``finally`` block of the same function."""
+        scope: ast.AST | None = (
+            self._function_stack[-1] if self._function_stack else self._module
+        )
+        if scope is None:
+            return False
+        for candidate in _iter_shallow(scope):
+            if not isinstance(candidate, (ast.Try, ast.TryStar)):
+                continue
+            for stmt in candidate.finalbody:
+                if stmt is target or any(
+                    inner is target for inner in _iter_shallow(stmt)
+                ):
+                    return True
+        return False
+
+    def _is_cleanup_call(self, call: ast.Call) -> bool:
+        name = _get_name(call.func)
+        leaf = name.rsplit(".", 1)[-1] if name else ""
+        return leaf.lstrip("_").split("_")[0].lower() in self._CLEANUP_VERBS
+
+    def _is_quiet_cleanup(self, node: ast.ExceptHandler) -> bool:
+        """A best-effort release whose failure is logged at DEBUG with its traceback.
+
+        The handler body is only log calls, one of them DEBUG/INFO with a
+        truthy ``exc_info``, and the ``try`` body is only call statements:
+
+        - every one a release (``close``/``aclose``/``dispose``/``shutdown``/
+          ``disconnect``/``cleanup``/``release``/``terminate``/``stop``/
+          ``kill``/``unlink``/``rmtree`` as the call's leading verb); or
+        - any calls at all, when the ``try`` sits in a ``finally`` block.
+
+        A WARNING there would land beside the error actually being reported,
+        and narrowing the catch would let a cleanup failure replace it.
+        Nothing is returned, assigned or computed under the catch, so there is
+        no result the failure could corrupt.
+        """
+        if not self._is_debug_traceback_only(node.body, node.name):
+            return False
+        owner = self._owning_try(node)
+        if owner is None or not owner.body:
+            return False
+        calls = [self._unwrapped_call(stmt) for stmt in owner.body]
+        if any(call is None for call in calls):
+            return False
+        if all(self._is_cleanup_call(call) for call in calls if call is not None):
+            return True
+        return self._inside_finally(owner)
+
+    def _is_predicate_gated_skip(
+        self, node: ast.ExceptHandler, scope: RedactionScope | None
+    ) -> bool:
+        """A skip for failures a predicate on the exception picks out; the rest re-raise.
+
+        ::
+
+            except Exception as exc:
+                if _is_no_objectstore(exc):
+                    logger.debug("no object store configured", exc_info=True)
+                    return None
+                raise
+
+        The handler is one or more ``if`` statements with no ``else``, whose
+        test reads the binding and whose body is only log calls — one with a
+        truthy ``exc_info`` — ending in ``return``/``continue``/``pass``,
+        followed by a cause-preserving re-raise on every remaining path.  The
+        predicate is the narrowing, written as code instead of an ``except``
+        clause; everything it does not pick out still propagates.
+        """
+        if node.name is None or _handler_rebinds_exception(node):
+            return False
+        index = 0
+        for index, stmt in enumerate(node.body):
+            if not isinstance(stmt, ast.If):
+                break
+            if stmt.orelse or not any(
+                isinstance(n, ast.Name) and n.id == node.name
+                for n in ast.walk(stmt.test)
+            ):
+                return False
+            body = stmt.body
+            exit_stmt = body[-1] if body else None
+            if not isinstance(exit_stmt, (ast.Return, ast.Continue, ast.Pass)):
+                return False
+            if not self._is_debug_traceback_only(body[:-1], node.name):
+                return False
+        else:
+            return False
+        if index == 0:
+            return False
+        tail = node.body[index:]
+        return _body_always_raises(tail, scope) and not _body_has_bypassing_exit(
+            tail, scope=scope
+        )
+
+    def _handler_prints_binding(self, node: ast.ExceptHandler) -> bool:
+        """A ``print(...)`` in the handler body formats the caught exception."""
+        if node.name is None or _handler_rebinds_exception(node):
+            return False
+        for stmt in node.body:
+            call = self._unwrapped_call(stmt)
+            if (
+                call is not None
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "print"
+                and any(
+                    self._expression_represents_parameter(arg, node.name)
+                    for arg in [*call.args, *(kw.value for kw in call.keywords)]
+                )
+            ):
+                return True
         return False
 
     # ── E005 ─────────────────────────────────────────────────────────────────

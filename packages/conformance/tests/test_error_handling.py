@@ -6523,11 +6523,13 @@ def test_e004_f005_cleanup_helper_in_preflight_clears_only_at_error(
 ) -> None:
     """FND-2569: a best-effort cleanup helper reached from preflight_check.
 
-    It has no verdict to return, so only a log can clear E004. DEBUG does not
-    (even sanitized) and WARNING trips F005; a sanitized ERROR clears both.
+    It has no verdict to return, so only a log can clear E004. WARNING trips
+    F005, so inside F005's preflight scope E004 accepts a DEBUG/INFO log that
+    carries the exception (here through a sanitizer); a sanitized ERROR clears
+    both too.
     """
     debug = _cleanup_helper_in_gate("debug")
-    assert "E004" in _findings(debug)
+    assert "E004" not in _findings(debug)
     assert "F005" not in _preflight_ids(tmp_path / "debug", debug)
     warning = _cleanup_helper_in_gate("warning")
     assert "E004" not in _findings(warning)
@@ -7250,3 +7252,236 @@ def test_e004_e009_still_fire_when_the_stash_is_not_provably_reraised(
     found = _findings(_STASH_AND_RERAISE.format(tail=tail))
     assert "E004" in found
     assert "E009" in found
+
+
+# ── E004: best-effort cleanup and predicate-gated skips at DEBUG ──────────────
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # a close inside a finally: a WARNING would land beside the real error
+        """\
+def run(client):
+    try:
+        return client.run()
+    finally:
+        try:
+            client.close()
+        except Exception:
+            logger.debug("close failed", exc_info=True)
+""",
+        # any best-effort call inside a finally
+        """\
+async def run(client):
+    try:
+        return await client.run()
+    finally:
+        try:
+            await self._flush_metrics()
+        except Exception:
+            logger.debug("metrics flush failed", exc_info=True)
+""",
+        # a helper whose try body is only a release call
+        """\
+def _dispose_engine_quietly(engine):
+    try:
+        engine.dispose()
+    except Exception:
+        logger.debug("engine dispose failed", exc_info=True)
+""",
+        """\
+async def _close(self):
+    try:
+        await self._client.aclose()
+        await self._close_session()
+    except Exception as exc:
+        logger.debug("close failed", exc_info=exc)
+""",
+    ],
+)
+def test_e004_no_finding_for_best_effort_cleanup_logged_at_debug(src: str) -> None:
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # not a release, not in a finally
+        """\
+def refresh(client):
+    try:
+        client.refresh()
+    except Exception:
+        logger.debug("refresh failed", exc_info=True)
+""",
+        # the try body computes a value the failure would corrupt
+        """\
+def run(client):
+    try:
+        return client.run()
+    finally:
+        try:
+            state = client.close()
+        except Exception:
+            logger.debug("close failed", exc_info=True)
+""",
+        # DEBUG without the traceback
+        """\
+def _dispose(engine):
+    try:
+        engine.dispose()
+    except Exception:
+        logger.debug("engine dispose failed")
+""",
+        # the handler does more than log
+        """\
+def _dispose(engine):
+    try:
+        engine.dispose()
+    except Exception:
+        logger.debug("engine dispose failed", exc_info=True)
+        return False
+""",
+    ],
+)
+def test_e004_still_fires_for_cleanup_shapes_it_cannot_prove(src: str) -> None:
+    assert "E004" in _findings(src)
+
+
+_PREDICATE_GATED_SKIP = """\
+async def load(key):
+    try:
+        return await store.get(key)
+    except Exception as exc:
+        if {test}:
+            logger.debug("no object store configured", exc_info=True)
+            return None
+{tail}
+"""
+
+
+def test_e004_no_finding_for_a_predicate_gated_skip_that_reraises_the_rest() -> None:
+    assert "E004" not in _findings(
+        _PREDICATE_GATED_SKIP.format(test="_is_no_objectstore(exc)", tail="        raise")
+    )
+
+
+@pytest.mark.parametrize(
+    ("test", "tail"),
+    [
+        # the predicate does not read the exception
+        ("settings.optional", "        raise"),
+        # the rest is not re-raised
+        ("_is_no_objectstore(exc)", "        return []"),
+        # the rest is re-raised with the cause dropped
+        ("_is_no_objectstore(exc)", "        raise StoreError('failed') from None"),
+    ],
+)
+def test_e004_still_fires_when_the_gated_skip_is_not_proven(test: str, tail: str) -> None:
+    assert "E004" in _findings(_PREDICATE_GATED_SKIP.format(test=test, tail=tail))
+
+
+# ── E004: standalone scripts report to the terminal ───────────────────────────
+
+_SCRIPT = """\
+{shebang}import sys
+
+
+def step():
+    try:
+        run()
+    except Exception as e:
+        {report}
+        sys.exit(1)
+"""
+
+
+def test_e004_no_finding_when_a_script_prints_the_caught_exception() -> None:
+    assert "E004" not in _findings(
+        _SCRIPT.format(
+            shebang="#!/usr/bin/env python3\n", report='print(f"[STEP] failed: {e}")'
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("shebang", "report"),
+    [
+        # not a script: library code printing is still a broad swallow
+        ("", 'print(f"[STEP] failed: {e}")'),
+        # a script that prints without the exception
+        ("#!/usr/bin/env python3\n", 'print("[STEP] failed")'),
+    ],
+)
+def test_e004_still_fires_for_prints_outside_the_script_carve_out(
+    shebang: str, report: str
+) -> None:
+    assert "E004" in _findings(_SCRIPT.format(shebang=shebang, report=report))
+
+
+# ── E004 vs F005: DEBUG/INFO inside the preflight scope ───────────────────────
+
+
+def _preflight_close(level: str, *, reached: bool = True) -> str:
+    call = "        await self._close(client)\n" if reached else ""
+    return (
+        _PREFLIGHT_IMPORTS + "class H(Handler):\n"
+        "    async def _close(self, client):\n"
+        "        try:\n"
+        "            await client.logout()\n"
+        "        except Exception as exc:\n"
+        f"            logger.{level}('logout failed: %s', exc)\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        "        client = await self._client()\n"
+        f"{call}"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+@pytest.mark.parametrize("level", ["debug", "info"])
+def test_e004_no_finding_for_debug_carrying_the_exception_in_preflight_scope(
+    tmp_path: Path, level: str
+) -> None:
+    src = _preflight_close(level)
+    assert "E004" not in _findings(src)
+    assert "F005" not in _preflight_ids(tmp_path / level, src)
+
+
+def test_e004_preflight_scope_follows_helpers_across_files(tmp_path: Path) -> None:
+    from conformance.suite.checks.error_handling import _scan_all
+
+    (tmp_path / "app").mkdir()
+    handler = tmp_path / "app" / "handler.py"
+    helpers = tmp_path / "app" / "cleanup.py"
+    handler.write_text(
+        _PREFLIGHT_IMPORTS + "from app.cleanup import close_quietly\n"
+        "class H(Handler):\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        "        await close_quietly(object())\n"
+        "        return PreflightOutput(checks=[])\n"
+    )
+    helpers.write_text(
+        "async def close_quietly(client):\n"
+        "    try:\n"
+        "        await client.logout()\n"
+        "    except Exception as exc:\n"
+        "        logger.debug('logout failed: %s', exc)\n"
+    )
+    ids = {f.rule_id for f in _scan_all([handler, helpers], tmp_path)}
+    assert "E004" not in ids
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # outside the preflight scope DEBUG still does not clear E004
+        _preflight_close("debug", reached=False),
+        # inside it, the log must carry the exception
+        _preflight_close("debug").replace("'logout failed: %s', exc", "'logout failed'"),
+    ],
+)
+def test_e004_still_fires_for_debug_outside_preflight_or_without_the_exception(
+    src: str,
+) -> None:
+    assert "E004" in _findings(src)
