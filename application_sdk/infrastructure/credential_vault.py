@@ -64,6 +64,8 @@ class CredentialConfigNotFoundError(CredentialVaultError):
     config from transport failures for callers that enforce credential readiness.
     """
 
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_CREDENTIAL_CONFIG_NOT_FOUND"
+
 
 @runtime_checkable
 class CredentialVault(Protocol):
