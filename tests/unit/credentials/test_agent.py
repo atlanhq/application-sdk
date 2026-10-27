@@ -878,14 +878,17 @@ class TestSingleKeyMode:
         client.get_secret = _get_secret
         return DaprSecretStore(client)
 
-    async def test_dapr_throttled_probe_never_sends_ref_key_as_password(
+    async def test_dapr_rejected_probe_keeps_value_under_the_legacy_bridge(
         self,
     ) -> None:
-        """FND-4077 end to end through the real Dapr adapter: a throttled vault
-        used to classify as "not found", so the password field kept its ref-key
-        and the connector logged in with ``ATLAN_PASS`` as the password. Now
-        resolution stops with a retryable store error; a genuinely absent
-        literal (``analytics``) is still skipped."""
+        """End to end through the real Dapr adapter. FND-4077 made a store
+        answer other than "not found" fatal. The FND-4407 bridge keeps the
+        value for *legacy* single-key payloads, which can't say which fields are
+        ref-keys: stores that reject plain values failed unchanged configs.
+
+        The accepted cost, pinned here so it stays visible: a throttled *real*
+        ref-key (``ATLAN_PASS``) is sent as the value, as on SDK <= 3.49.
+        Declared (format-2) refs never take this path; they fail strictly."""
         store = self._dapr_store_answering(
             {
                 "ATLAN_USER": "value:real_user",
@@ -906,12 +909,11 @@ class TestSingleKeyMode:
             }
         )
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await resolve_agent_json(agent_json, store)
+        resolved = await resolve_agent_json(agent_json, store)
 
-        assert not isinstance(exc_info.value, SecretNotFoundError)
-        assert exc_info.value.effective_retryable is True
-        assert "ATLAN_PASS" not in str(exc_info.value)
+        assert resolved["username"] == "real_user"
+        assert resolved["password"] == "ATLAN_PASS"
+        assert resolved["extra"]["database"] == "analytics"
 
     async def test_dapr_absent_probe_still_falls_through(self) -> None:
         """The other half: a not-found-shaped ``ERR_SECRET_GET`` is still an
@@ -1016,11 +1018,12 @@ class TestSingleKeyMode:
         assert exc_info.value.secret_name != "ATLAN_USER"
         assert exc_info.value.cause is None
 
-    async def test_store_outage_does_not_leak_ref_key_in_logs(self) -> None:
-        """On a store outage during a single-key probe, the WARNING must not
-        leak the raw ref-key. The store error renders the ref-key both as
-        ``secret=<key>`` and echoed inside the message (mirroring real Dapr
-        backends), so a naive ``exc_info=True`` would undo the sha256 hashing.
+    async def test_store_error_does_not_leak_ref_key_in_logs(self) -> None:
+        """When a store error during a single-key probe keeps the value
+        (FND-4407 bridge), the WARNING must not leak the raw ref-key. The
+        store error renders the ref-key both as ``secret=<key>`` and echoed
+        inside the message (mirroring real Dapr backends), so a naive
+        ``exc_info=True`` would undo the sha256 hashing.
         """
         from unittest.mock import patch
 
@@ -1046,17 +1049,12 @@ class TestSingleKeyMode:
             }
         )
 
-        with (
-            patch(
-                "application_sdk.infrastructure._single_key_probe.logger"
-            ) as mock_logger,
-            pytest.raises(SecretStoreError) as exc_info,
-        ):
-            await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
+        with patch(
+            "application_sdk.infrastructure._single_key_probe.logger"
+        ) as mock_logger:
+            resolved = await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
 
-        # Resolution stops instead of sending the ref-key as the password, and
-        # the raised error doesn't carry it either.
-        assert ref_key not in str(exc_info.value)
+        assert resolved["password"] == ref_key  # kept as entered
 
         mock_logger.warning.assert_called_once()
         logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
@@ -1110,16 +1108,11 @@ class TestSingleKeyMode:
             }
         )
 
-        with (
-            patch(
-                "application_sdk.infrastructure._single_key_probe.logger"
-            ) as mock_logger,
-            pytest.raises(SecretStoreError) as exc_info,
-        ):
+        with patch(
+            "application_sdk.infrastructure._single_key_probe.logger"
+        ) as mock_logger:
             await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
 
-        assert ref_key not in str(exc_info.value)
-        assert encoded_key not in str(exc_info.value)
         mock_logger.warning.assert_called_once()
         logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
         assert ref_key not in logged
@@ -1156,12 +1149,9 @@ class TestSingleKeyMode:
             }
         )
 
-        with (
-            patch(
-                "application_sdk.infrastructure._single_key_probe.logger"
-            ) as mock_logger,
-            pytest.raises(SecretStoreError),
-        ):
+        with patch(
+            "application_sdk.infrastructure._single_key_probe.logger"
+        ) as mock_logger:
             await resolve_agent_json(agent_json, OutageStore())  # type: ignore[arg-type]
 
         logged = " ".join(str(arg) for arg in mock_logger.warning.call_args.args)
@@ -1923,10 +1913,15 @@ class TestSingleKeyProbeConcurrency:
         resolved, _ = _substitute(raw, bundle)
         assert resolved["basic.password"] == "hunter2-literal"
 
-    async def test_store_error_raises_even_when_nothing_else_resolves(
+    async def test_store_answers_keep_values_under_the_legacy_bridge(
         self,
     ) -> None:
-        """Every probe failing is a store fault, not "nothing to resolve"."""
+        """FND-4407 bridge: a store *answer* that isn't "not found" (throttled,
+        denied, invalid name) keeps the legacy value as entered rather than
+        failing the run, because the probe can't tell a plain value from a
+        ref-key. Declared payloads and the GUID vault path stay strict (see
+        ``test_agent_json_declared_sources.py`` / ``test_credential_vault.py``).
+        """
 
         class ThrottledStore:
             async def get_optional(self, name: str) -> str | None:
@@ -1940,16 +1935,11 @@ class TestSingleKeyProbeConcurrency:
             **{"basic.username": "u", "basic.password": "p", "database": "db"}
         ).to_raw_dict()
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await _fetch_per_key_bundle(ThrottledStore(), raw)
+        assert await _fetch_per_key_bundle(ThrottledStore(), raw) == {}
 
-        # The retry hint survives the hash-labelled re-raise, so Temporal
-        # retries a throttled vault instead of failing the run as AUTH.
-        assert exc_info.value.effective_retryable is True
-        assert not isinstance(exc_info.value, SecretNotFoundError)
-
-    async def test_non_retryable_store_error_stays_non_retryable(self) -> None:
-        """A definitive rejection keeps its ``retryable=False`` hint."""
+    async def test_definitive_rejection_keeps_the_value_too(self) -> None:
+        """A non-retryable rejection (Dapr 403 ``ERR_PERMISSION_DENIED`` for a
+        name outside a scoped policy) is a store answer as well."""
 
         class RejectingStore:
             async def get_optional(self, name: str) -> str | None:
@@ -1957,14 +1947,11 @@ class TestSingleKeyProbeConcurrency:
 
         raw = self._spec(**{"basic.password": "only-field"}).to_raw_dict()
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await _fetch_per_key_bundle(RejectingStore(), raw)
+        assert await _fetch_per_key_bundle(RejectingStore(), raw) == {}
 
-        assert exc_info.value.effective_retryable is False
-
-    async def test_partial_resolution_with_a_store_error_raises(self) -> None:
-        """One field resolving does not excuse another field's store failure:
-        that field would be sent as its literal ref-key."""
+    async def test_partial_resolution_keeps_the_rejected_field(self) -> None:
+        """A field the store rejects keeps its value; one it resolves is still
+        substituted."""
 
         class FlakyStore:
             async def get_optional(self, name: str) -> str | None:
@@ -1973,17 +1960,19 @@ class TestSingleKeyProbeConcurrency:
                 raise SecretStoreError("vault denied", secret_name=name)
 
         raw = self._spec(
-            **{"basic.password": "real-key", "database": "db-ref"}
+            **{"basic.password": "real-key", "database": "db-literal"}
         ).to_raw_dict()
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await _fetch_per_key_bundle(FlakyStore(), raw)
+        bundle = await _fetch_per_key_bundle(FlakyStore(), raw)
 
-        assert "db-ref" not in str(exc_info.value)
+        assert bundle == {"real-key": "real-value"}
+        resolved, _ = _substitute(raw, bundle)
+        assert resolved["basic.password"] == "real-value"
+        assert resolved["database"] == "db-literal"
 
-    async def test_first_failure_in_candidate_order_is_raised(self) -> None:
-        """Deterministic choice when several probes fail: candidate order,
-        not completion order."""
+    async def test_outage_still_raises_when_another_probe_was_kept(self) -> None:
+        """The bridge never covers an outage: the store gave no answer at all,
+        so the run retries rather than proceeding with unresolved fields."""
         import asyncio
 
         class MixedStore:
@@ -2000,9 +1989,9 @@ class TestSingleKeyProbeConcurrency:
         with pytest.raises(SecretStoreError) as exc_info:
             await _fetch_per_key_bundle(MixedStore(), raw)
 
-        assert not isinstance(exc_info.value, ColdStartRaceError)
+        assert isinstance(exc_info.value, ColdStartRaceError)
         assert exc_info.value.secret_name == (
-            f"sha256:{hashlib.sha256(b'first').hexdigest()[:8]}"
+            f"sha256:{hashlib.sha256(b'second').hexdigest()[:8]}"
         )
 
     async def test_zero_resolved_is_recorded_at_info_not_warning(self) -> None:

@@ -12,6 +12,17 @@ left the ref-key string in place and the connector logged in with it as the
 password: an auth failure blamed on the user, plus a burned lockout attempt at
 the source.
 
+**Deprecated, time-boxed exception (FND-4407):** a caller may pass
+``keep_value_on_store_answer=True`` to keep the value, with a WARNING, when the
+store *answers* with something other than "not found" (an invalid name, access
+denied, throttled). Outages (unreachable, cold start, unavailable) still stop
+resolution. Only legacy agent payloads opt in: the probe can't tell a plain
+username, database name, URL or role ARN from a ref-key, so stores that reject
+those failed runs whose config hadn't changed. The GUID vault path stays
+strict. Delete the flag, and probing with it, once every agent payload declares
+its sources (``"format": 2``, FND-4361); those refs are looked up strictly and
+never probed.
+
 Used by :mod:`application_sdk.credentials.agent` (agent-shape payloads) and
 :mod:`application_sdk.infrastructure._dapr.credential_vault` (GUID configs).
 Each caller keeps its own candidate selection and merge rules; the probing,
@@ -93,11 +104,18 @@ def scrubbed_traceback(exc: BaseException, value: str, label: str) -> str:
 async def probe_single_keys(
     candidates: Sequence[str],
     fetch: ProbeFetch[SecretT],
+    *,
+    keep_value_on_store_answer: bool = False,
 ) -> list[tuple[str, SecretT]]:
     """Probe each candidate as a secret key; return the ones that resolved.
 
     ``objectstore://`` file references are not probed: they are left as-is
     for ``resolve_credential_file`` to fetch.
+
+    ``keep_value_on_store_answer`` opts a caller into the deprecated bridge
+    (FND-4407, see the module docstring): a store answer that isn't "not
+    found" keeps the value instead of failing. Only legacy agent payloads opt
+    in; the GUID vault path stays strict.
 
     Probes run **concurrently**, bounded by
     :data:`MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until BLDX-1594:
@@ -118,7 +136,8 @@ async def probe_single_keys(
             store had already answered once.
         SecretStoreError: The store answered a probe with a failure rather than
             "not found" (throttled, access denied, KMS). Keeps the original
-            ``retryable`` hint.
+            ``retryable`` hint. With ``keep_value_on_store_answer``, raised
+            only for a non-store exception from ``fetch``.
 
         Every raised error is hash-labelled and carries no ``cause`` (see
         :func:`_probe_one`). When several probes fail, the first in candidate
@@ -134,7 +153,9 @@ async def probe_single_keys(
 
     async def _bounded(value: str) -> SecretT | None:
         async with sem:
-            return await _probe_one(fetch, value)
+            return await _probe_one(
+                fetch, value, keep_value_on_store_answer=keep_value_on_store_answer
+            )
 
     # return_exceptions=True: letting gather cancel siblings on the first raise
     # unwinds them mid-backoff and buries the real failure under CancelledError.
@@ -170,7 +191,12 @@ async def probe_single_keys(
     return resolved
 
 
-async def _probe_one(fetch: ProbeFetch[SecretT], value: str) -> SecretT | None:
+async def _probe_one(
+    fetch: ProbeFetch[SecretT],
+    value: str,
+    *,
+    keep_value_on_store_answer: bool = False,
+) -> SecretT | None:
     """Probe one candidate. ``None`` means the store has no such key.
 
     Every failure is re-raised **hash-labelled and cause-free**, never as the
@@ -205,6 +231,24 @@ async def _probe_one(fetch: ProbeFetch[SecretT], value: str) -> SecretT | None:
         # and its message embeds the backend cause, which can echo the raw
         # ref-key — that would undo the hashing in the same log record.
         safe_traceback = scrubbed_traceback(exc, value, label)
+        if keep_value_on_store_answer and isinstance(exc, SecretStoreError):
+            # The store answered, but not with "not found": an invalid name,
+            # access denied, throttled. Deprecated bridge (FND-4407, see the
+            # module docstring): keep the value as entered, as SDK <= 3.49 did,
+            # because a probe can't tell this plain value from a ref-key.
+            logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
+                "DEPRECATED single-key fallback: the secret store rejected a "
+                "lookup of %s (%s), so the value is used as entered. If it is "
+                "a secret name rather than a plain value, the connection will "
+                "fail with it. This fallback is temporary: the workflow's "
+                "credentials will move to the declared-source format, where "
+                "secrets are looked up strictly and plain values never reach "
+                "the store (FND-4361).\n%s",
+                label,
+                type(exc).__name__,
+                safe_traceback,
+            )
+            return None
         # The store answered with a failure, not "not found". Stop: skipping
         # here would send the ref-key itself as the credential value.
         logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline

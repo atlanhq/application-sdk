@@ -115,13 +115,20 @@ reads `{}` and silently falls back to the single-credential path. Apps that
 declare nothing keep the unchanged single-credential path via `input.credentials`.
 
 An agent credential spec routes to agent resolution only when it is
-*populated*: `agent-name` plus a fetch anchor — `secret-path` (bundle fetch) or
-`key-type: single-key` (per-key fetch). A name-only spec (for example the
+*populated*: `agent-name` plus a fetch anchor — `secret-path` (bundle fetch),
+`key-type: single-key` (per-key fetch), or declared value sources (`"format": 2`,
+see [declared sources](credentials.md#declared-sources-format-2)). A name-only spec (for example the
 Automation Engine placeholder `{"agent-name": "agent-name", ...}` stamped on
 non-agent runs) is not populated and falls through to `credential_guid`
 routing.
 
 #### Single-key secret resolution
+
+!!! warning "Deprecated for agent payloads"
+    Probing exists because a legacy `agent_json` can't say which fields are
+    secret names. A `"format": 2` payload declares each field's source and is
+    never probed. Legacy agent payloads log a `DEPRECATED agent_json format`
+    WARNING and will be migrated (FND-4361).
 
 When a credential arrives as a flat dict of fields rather than a named ref, the
 SDK probes each string value to see whether it is a key in the secret store.
@@ -140,12 +147,22 @@ Each probe has one of three outcomes:
   literal value (a host, a database name, an inline credential). "Absent" means
   Dapr's `500`/`ERR_SECRET_GET` with a not-found message (`secret … not found`,
   `ResourceNotFoundException`, `SecretNotFound`, …).
-- **Store error** — anything else: a throttled vault, an IAM or KMS denial, a
+- **Store outage** — the sidecar or store is unreachable, cold-starting or
+  unavailable. Resolution **stops** with a hash-labelled `SecretStoreError`
+  subtype, and the run retries.
+- **Store answer** — anything else: a throttled vault, an IAM or KMS denial, a
   `403` `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an
-  outage. Resolution **stops** with a `SecretStoreError` (hash-labelled,
-  keeping its `retryable` hint) instead of skipping the field. Skipping it used
-  to send the ref-key itself to the source as the password: an auth failure
-  blamed on the user, plus a burned lockout attempt.
+  invalid secret name.
+  - **GUID credential configs:** resolution **stops** with a `SecretStoreError`
+    (hash-labelled, keeping its `retryable` hint). Skipping the field would send
+    the ref-key itself to the source as the password: an auth failure blamed on
+    the user, plus a burned lockout attempt (FND-4077).
+  - **Legacy agent payloads (deprecated, time-boxed):** the field keeps its
+    value, with a WARNING. A probe can't tell a plain username, database name,
+    URL or role ARN from a ref-key, and stores that reject those as names
+    failed runs whose config hadn't changed. The cost is FND-4077's case: a
+    throttled or denied *real* ref-key is sent as the value. The fallback goes
+    away with legacy payloads (FND-4407).
 
 What the logs tell you:
 
@@ -155,8 +172,12 @@ What the logs tell you:
 - **Nothing resolved** also logs INFO ("resolved 0 of N probed fields"). This is
   *not* an error: a credential that carries literal usernames and passwords
   inline rather than ref-keys legitimately resolves nothing.
-- **A probe hit a store error** logs a WARNING with a redacted traceback, then
-  the run fails with that error.
+- **A probe hit a store error** logs a WARNING with a redacted traceback. On a
+  GUID config, or on an outage, the run then fails with that error. On a legacy
+  agent payload a store answer logs `DEPRECATED single-key fallback` and the
+  value is used as entered.
+- **Every legacy agent payload** that reaches the store also logs
+  `DEPRECATED agent_json format` once per resolution.
 
 #### Check tiers and warmup
 
