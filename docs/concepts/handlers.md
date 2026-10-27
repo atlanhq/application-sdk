@@ -157,6 +157,19 @@ What the logs tell you:
   inline rather than ref-keys legitimately resolves nothing.
 - **A probe hit a store error** logs a WARNING with a redacted traceback, then
   the run fails with that error.
+- **Every legacy agent single-key resolution** logs one WARNING,
+  `agent_json legacy single-key probe outcomes`, even when the run then fails.
+  It is the evidence for migrating the workflow to declared sources
+  (FND-4407).
+  - `atlan.agent_json.probe.outcomes`, e.g.
+    `basic.password=resolved,basic.username=refused`, gives each probed
+    field's outcome. `resolved` means a real ref (`secretKeyRef`); `absent` or
+    `refused` means a plain value (`value`). The other outcomes are
+    `transient`, `outage` and `error`.
+  - It also carries a count per outcome, `atlan.agent_json.format` and
+    `atlan.agent_json.secret_manager`.
+  - Field names only, never values or ref names.
+  - The extras are allowlisted, so they survive the SDR log upload to Atlan.
 
 #### Check tiers and warmup
 

@@ -463,8 +463,65 @@ async def _fetch_per_key_bundle(
             component=DAPR_SECRET_STORE_COMPONENT,
         )
 
-    resolved = await probe_single_keys(_probe_candidates(raw), _fetch)
+    outcomes: dict[str, str] = {}
+    try:
+        resolved = await probe_single_keys(
+            _probe_candidates(raw), _fetch, outcomes=outcomes
+        )
+    finally:
+        # In a finally: a sweep that raises still reports what each field was.
+        _log_probe_outcomes(raw, outcomes)
     return dict(resolved)
+
+
+#: Outcomes counted in the legacy probe telemetry, in a fixed order.
+_PROBE_OUTCOMES = ("resolved", "absent", "refused", "transient", "outage", "error")
+
+
+def _log_probe_outcomes(raw: dict[str, Any], outcomes: dict[str, str]) -> None:
+    """One WARNING per legacy single-key resolution: each probed field's outcome.
+
+    This is the evidence for moving a published workflow to declared sources
+    (FND-4407). A ``resolved`` field is a real ref (``secretKeyRef``); an
+    ``absent`` or ``refused`` one is a plain value (``value``). The record also
+    tracks how many runs still use the legacy format. It is a WARNING because
+    the format is deprecated.
+
+    Keyed by *field name* only. ``outcomes`` is keyed by raw value, which may be
+    a credential or a ref name, so it is never logged. The extras are scalar
+    and ``atlan.``-prefixed, so they survive the object-store export an SDR
+    uploads to Atlan.
+    """
+    if not outcomes:
+        return
+    by_field: dict[str, str] = {}
+    for key, value in raw.items():
+        if isinstance(value, str) and value in outcomes:
+            by_field[key] = outcomes[value]
+    extra_dict = raw.get("extra")
+    if isinstance(extra_dict, dict):
+        for field, value in extra_dict.items():
+            if isinstance(value, str) and value in outcomes:
+                by_field[f"extra.{field}"] = outcomes[value]
+    counts = {name: 0 for name in _PROBE_OUTCOMES}
+    for outcome in by_field.values():
+        counts[outcome] = counts.get(outcome, 0) + 1
+    logger.warning(  # conformance: ignore[L009] deprecation telemetry, no exception context
+        "agent_json legacy single-key probe outcomes (deprecated format; "
+        "per-field evidence for migrating to declared sources): %s",
+        ",".join(f"{field}={outcome}" for field, outcome in sorted(by_field.items())),
+        extra={
+            "atlan.agent_json.format": "legacy-single-key",
+            "atlan.agent_json.secret_manager": str(raw.get("secret-manager") or ""),
+            "atlan.agent_json.probe.outcomes": ",".join(
+                f"{field}={outcome}" for field, outcome in sorted(by_field.items())
+            ),
+            **{
+                f"atlan.agent_json.probe.{name}": count
+                for name, count in counts.items()
+            },
+        },
+    )
 
 
 def _probe_candidates(raw: dict[str, Any]) -> list[str]:
