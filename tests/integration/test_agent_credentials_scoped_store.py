@@ -155,6 +155,38 @@ class TestDeclaredSources:
             await resolve_agent_credential(spec, scoped_secret_store)
 
 
+class TestLegacySingleKeyBridge:
+    """The FND-4407 regression, against a real refusing store.
+
+    The census payload is a legacy single-key config with a plain username
+    and one real secret ref. SDK 3.50-3.52 failed it with ``Secret store failed
+    while looking up single-key ref-key ...``. The deprecated bridge keeps the
+    plain value while still resolving the real ref.
+    """
+
+    async def test_census_payload_resolves(
+        self, scoped_secret_store: DaprSecretStore
+    ) -> None:
+        spec = AgentCredentialSpec.model_validate(
+            {
+                "agent-name": "sdr-agent",
+                "secret-manager": "custom",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "host": "db.example.com",
+                "port": 3306,
+                "basic.username": PLAIN_USERNAME,
+                "basic.password": ALLOWED_SECRET,
+                "extra.databaseTerm": "SCHEMA",
+                "role.extra.aws_role_arn": "arn:aws:iam::123456789012:role/atlan",
+            }
+        )
+        resolved = await resolve_agent_credential(spec, scoped_secret_store)
+        assert resolved["username"] == PLAIN_USERNAME
+        assert resolved["password"] == ALLOWED_SECRET_VALUE
+        assert resolved["extra"]["databaseTerm"] == "SCHEMA"
+
+
 def test_fixture_files_are_self_contained() -> None:
     """The harness writes its own store and config; nothing leaks into the
     shared ``tests/integration/secrets.json``."""
