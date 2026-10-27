@@ -7585,3 +7585,107 @@ def run():
         raise {raised}
 """
     )
+
+
+# ── E007: a typed result from a proven helper under a narrow catch ─────────────
+
+_NARROW_TYPED_RESULT = """\
+def _finish(log, outcome, reason, count, counts){annotation}:
+    log.info("sweep finished: %s", reason)
+    return {returned}
+
+
+def sweep(log):
+    try:
+        run_sweep()
+    except {caught}:
+        return _finish(log, SweepOutcome.SKIPPED, "flag_error", 0, SweepCounts())
+"""
+
+
+@pytest.mark.parametrize(
+    ("annotation", "returned"),
+    [
+        (" -> SweepOutput", "build(outcome)"),
+        ("", "SweepOutput(outcome=outcome, reason=reason, counts=counts)"),
+    ],
+)
+def test_e007_no_finding_for_a_typed_result_under_a_narrow_catch(
+    annotation: str, returned: str
+) -> None:
+    src = _NARROW_TYPED_RESULT.format(
+        annotation=annotation, returned=returned, caught="ActivityError"
+    )
+    assert "E007" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("annotation", "returned", "caught"),
+    [
+        # a broad catch hides every failure behind the same outcome
+        (" -> SweepOutput", "build(outcome)", "Exception"),
+        # nothing proves the helper returns typed data
+        ("", "build(outcome)", "ActivityError"),
+        (" -> dict", "{}", "ActivityError"),
+        (" -> SweepOutput | None", "None", "ActivityError"),
+    ],
+)
+def test_e007_still_fires_when_the_result_is_not_proven_typed(
+    annotation: str, returned: str, caught: str
+) -> None:
+    src = _NARROW_TYPED_RESULT.format(
+        annotation=annotation, returned=returned, caught=caught
+    )
+    assert "E007" in _findings(src)
+
+
+# ── E004/E007: an app-defined durable failure record before a skip ─────────────
+
+_FAILURE_RECORD_SKIP = """\
+async def parse_one(file_id):
+    try:
+        return await parse(file_id)
+    except Exception as e:
+        {record}
+        return None
+"""
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        "await write_failure(failures_dir, file_id, _make_failure_record(file_id, e))",
+        "record_failure(output_path, file_id, error=e)",
+        "self._residuals.store_residual(file_id, e)",
+    ],
+)
+def test_e004_e007_no_finding_after_a_durable_failure_record(record: str) -> None:
+    found = _findings(_FAILURE_RECORD_SKIP.format(record=record))
+    assert "E004" not in found
+    assert "E007" not in found
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        # the record never sees the exception
+        "await write_failure(failures_dir, file_id, {})",
+        # not named as a failure record
+        "metrics.record(file_id, e)",
+        "cache.store(file_id, e)",
+    ],
+)
+def test_e004_e007_still_fire_when_the_record_is_not_proven(record: str) -> None:
+    found = _findings(_FAILURE_RECORD_SKIP.format(record=record))
+    assert "E004" in found
+    assert "E007" in found
+
+
+def test_e004_e007_still_fire_on_an_empty_aggregate_after_a_failure_record() -> None:
+    # Only a per-item None is the residual shape; `{}` reads as an empty result.
+    found = _findings(
+        _FAILURE_RECORD_SKIP.format(record="record_failure(output_path, file_id, e)")
+        .replace("return None", "return {}")
+    )
+    assert "E004" in found
+    assert "E007" in found

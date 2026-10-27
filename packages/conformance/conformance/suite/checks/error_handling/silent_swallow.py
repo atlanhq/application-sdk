@@ -9,7 +9,9 @@ from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, _OPTIONAL_IMPORT_TYPE
 from ._helpers import (
     _any_logging_in,
     _body_always_raises,
+    _body_always_exits,
     _body_has_bypassing_exit,
+    _class_like,
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
     _body_returns_typed_failure,
@@ -23,6 +25,7 @@ from ._helpers import (
     _is_empty_sentinel,
     _is_gather_call,
     _is_log_call_stmt,
+    _iter_block,
     _iter_shallow,
     _raise_carries_cause,
     _return_carries_typed_failure,
@@ -31,6 +34,10 @@ from ._helpers import (
     typed_failure_scope,
     visible_helpers,
 )
+
+
+#: Verbs that make a ``*failure*`` / ``*residual*`` call a durable writer.
+_RECORD_VERBS = ("write", "record", "store", "persist", "save")
 
 
 class SilentSwallowMixin:
@@ -337,6 +344,10 @@ class SilentSwallowMixin:
         if self._is_quiet_cleanup(node) or self._is_predicate_gated_skip(
             node, scope
         ):
+            return
+
+        # A durable failure record handed the exception, then a per-item skip.
+        if self._handler_records_failure_then_skips(node):
             return
 
         # A standalone script reports to its terminal: printing the caught
@@ -1491,10 +1502,20 @@ class SilentSwallowMixin:
             if self._function_stack
             else None,
         )
+        narrow = self._is_narrow_catch(node)
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
             if scope is not None and _return_carries_typed_failure(stmt, scope):
+                continue
+            # Under a narrow catch the exception type is the outcome, and a
+            # typed result object saying so (`return _finish(SKIPPED, ...)`)
+            # is not a sentinel the caller can mistake for success.
+            if narrow and self._is_typed_data_value(stmt.value):
+                continue
+            # A per-item `None` after a durable failure record is the residual
+            # shape: the gap is written down as data, not only logged.
+            if self._has_residual_failure_record(node, stmt):
                 continue
             if not (
                 _any_logging_in(node.body[:i])
@@ -1551,13 +1572,130 @@ class SilentSwallowMixin:
         for previous in handler.body:
             if previous is stmt:
                 return False
-            if (
-                isinstance(previous, ast.Expr)
-                and isinstance(previous.value, ast.Call)
-                and self._is_residual_failure_record_call(previous.value)
+            call = self._unwrapped_call(previous)
+            if call is not None and (
+                self._is_residual_failure_record_call(call)
+                or self._is_app_failure_record_call(call, handler.name)
             ):
                 return True
         return False
+
+    @staticmethod
+    def _is_app_failure_record_call(call: ast.Call, exc_name: str | None) -> bool:
+        """An app-defined durable failure-record writer handed the caught exception.
+
+        The callee's leaf name says it durably records a failure: it contains
+        ``failure`` or ``residual`` *and* a write verb (``write``, ``record``,
+        ``store``, ``persist``, ``save``) — ``write_failure``,
+        ``record_failure``, ``store_residual``, not ``_report_failure`` — and its arguments read the binding, directly or
+        inside a value built from it
+        (``write_failure(dir, key, _make_failure_record(..., e))``).  A bare
+        ``record(...)`` or a call that never sees the exception does not count.
+        """
+        if exc_name is None:
+            return False
+        name = _get_name(call.func)
+        leaf = (name.rsplit(".", 1)[-1] if name else "").lower()
+        if "failure" not in leaf and "residual" not in leaf:
+            return False
+        # A durable writer, not a reporter: `_report_failure(exc)` only logs.
+        if not any(verb in leaf for verb in _RECORD_VERBS):
+            return False
+        return any(
+            isinstance(inner, ast.Name) and inner.id == exc_name
+            for argument in [*call.args, *(kw.value for kw in call.keywords)]
+            for inner in ast.walk(argument)
+        )
+
+    def _handler_records_failure_then_skips(self, node: ast.ExceptHandler) -> bool:
+        """E004's residual shape: a durable failure record, then a per-item skip.
+
+        Straight-line only: assignments, log calls and at least one failure
+        record carrying the binding (imported ``record_residual_failure`` or
+        an app writer, :meth:`_is_app_failure_record_call`), optionally ending
+        in ``return`` / ``return None`` / ``continue``.  The failure leaves the
+        frame as a durable record, which is what the E007 prescription asks
+        for at a per-item skip.
+        """
+        if node.name is None or _handler_rebinds_exception(node):
+            return False
+        recorded = False
+        for index, stmt in enumerate(node.body):
+            last = index == len(node.body) - 1
+            call = self._unwrapped_call(stmt)
+            if call is not None and (
+                self._is_residual_failure_record_call(call)
+                or self._is_app_failure_record_call(call, node.name)
+            ):
+                recorded = True
+                continue
+            if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.Pass)) or (
+                _is_log_call_stmt(stmt)
+            ):
+                continue
+            if last and recorded and isinstance(stmt, ast.Continue):
+                continue
+            if (
+                last
+                and recorded
+                and isinstance(stmt, ast.Return)
+                and (
+                    stmt.value is None
+                    or (
+                        isinstance(stmt.value, ast.Constant)
+                        and stmt.value.value is None
+                    )
+                )
+            ):
+                continue
+            return False
+        return recorded
+
+    @staticmethod
+    def _is_narrow_catch(node: ast.ExceptHandler) -> bool:
+        if node.type is None:
+            return False
+        types = node.type.elts if isinstance(node.type, ast.Tuple) else [node.type]
+        return all(
+            (name := _get_name(t)) is not None and name not in _BROAD_EXCEPT_TYPES
+            for t in types
+        )
+
+    def _is_typed_data_value(self, value: ast.expr) -> bool:
+        """The result of a same-module helper proven to return a typed result object.
+
+        The helper is a visible same-module function whose return annotation
+        is a class-like name (no ``None``, no ``Optional``), or which never
+        falls off its end and returns a class-like constructor on every path.
+        A constructor written inline in the handler (``return Verdict()``) is
+        not enough on its own: the existing E007 contract keeps asking for a
+        log there.
+        """
+        if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
+            return False
+        helper = visible_helpers(self._local_helpers, self._function_stack).get(
+            value.func.id
+        )
+        if helper is None:
+            return False
+        annotation = helper.returns
+        annotated = _get_name(annotation) if annotation is not None else None
+        if annotated is not None and _class_like(annotated.rsplit(".", 1)[-1]):
+            return True
+        returns = [
+            stmt for stmt in _iter_block(helper.body) if isinstance(stmt, ast.Return)
+        ]
+        return (
+            _body_always_exits(helper.body)
+            and bool(returns)
+            and all(
+                isinstance(stmt.value, ast.Call)
+                and _class_like(
+                    (_get_name(stmt.value.func) or "").rsplit(".", 1)[-1] or None
+                )
+                for stmt in returns
+            )
+        )
 
     def _is_logged_sentinel_return(
         self, handler: ast.ExceptHandler, stmt: ast.Return
