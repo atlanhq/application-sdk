@@ -7550,3 +7550,38 @@ def test_e004_still_fires_when_the_same_class_helper_is_not_proven(
     level: str, call: str
 ) -> None:
     assert "E004" in _findings(_DISPATCH_BOUNDARY.format(level=level, call=call))
+
+
+# ── E016: re-raising a member of the caught exception group ───────────────────
+
+
+@pytest.mark.parametrize("clause", ["except BaseExceptionGroup as group:", "except* ValueError as group:"])
+def test_e016_no_finding_when_a_member_of_the_caught_group_is_reraised(
+    clause: str,
+) -> None:
+    # The member keeps its own __cause__; `from group` would overwrite it.
+    assert "E016" not in _findings(
+        f"""\
+def run():
+    try:
+        work()
+    {clause}
+        raise group.exceptions[0]
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "raised",
+    ["other.exceptions[0]", "SourceUnavailableError(str(group.exceptions[0]))"],
+)
+def test_e016_still_fires_for_a_new_error_or_another_group_member(raised: str) -> None:
+    assert "E016" in _findings(
+        f"""\
+def run():
+    try:
+        work()
+    except BaseExceptionGroup as group:
+        raise {raised}
+"""
+    )

@@ -480,6 +480,17 @@ class ExceptionChainingMixin:
         if handler.name is None:
             return  # no binding (except SomeError:) — chaining not applicable
         exc_binding = handler.name
+        if (
+            isinstance(node.exc, ast.Subscript)
+            and isinstance(node.exc.value, ast.Attribute)
+            and node.exc.value.attr == "exceptions"
+            and isinstance(node.exc.value.value, ast.Name)
+            and node.exc.value.value.id == exc_binding
+        ):
+            # ``raise group.exceptions[i]`` re-raises a member of the caught
+            # exception group: it keeps its own ``__cause__`` and traceback,
+            # and ``from group`` would overwrite that cause with the wrapper.
+            return
         if self._module is not None and _constructs_sdk_cause(
             node.exc, exc_binding, self._sdk_errors, self._function_stack, self._module
         ):
