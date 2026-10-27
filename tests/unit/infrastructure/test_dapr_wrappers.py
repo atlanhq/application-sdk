@@ -22,6 +22,7 @@ from application_sdk.infrastructure.pubsub import PubSubError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
 )
 from application_sdk.infrastructure.state import StateStoreError
@@ -360,6 +361,101 @@ class TestDaprSecretStore:
         with pytest.raises(SecretStoreError) as exc:
             await self.store.get("not found")
         assert not isinstance(exc.value, SecretNotFoundError)
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            pytest.param(
+                "couldn't get secret: ThrottlingException: Rate exceeded",
+                id="aws-throttling",
+            ),
+            pytest.param(
+                "couldn't get secret: TooManyRequestsException: slow down",
+                id="aws-too-many-requests",
+            ),
+            pytest.param(
+                "rpc error: code = Unavailable desc = the service is unavailable",
+                id="gcp-unavailable",
+            ),
+            pytest.param(
+                "rpc error: code = ResourceExhausted desc = quota",
+                id="gcp-resource-exhausted",
+            ),
+            pytest.param(
+                "GET https://example.vault.azure.net/secrets/x RESPONSE 429: "
+                "429 Too Many Requests",
+                id="azure-429",
+            ),
+            pytest.param(
+                "GET https://example.vault.azure.net/secrets/x RESPONSE 503: "
+                "503 Service Unavailable",
+                id="azure-5xx",
+            ),
+            pytest.param(
+                "the server is currently unable to handle the request",
+                id="kubernetes-unavailable",
+            ),
+            pytest.param("etcdserver: request timed out", id="etcd-timeout"),
+        ],
+    )
+    async def test_transient_backend_wording_is_transient_error(
+        self, backend_error: str
+    ):
+        """A throttle or transient server error is the store answering "try
+        again", not a rejection: the ``SecretStoreTransientError`` subtype,
+        which callers retry rather than keep a value or blame the user."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretStoreTransientError) as exc:
+            await self.store.get("db/creds")
+        assert exc.value.effective_retryable is True
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+        assert exc.value.code == "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            pytest.param(
+                "couldn't get secret: AccessDeniedException: not authorized",
+                id="aws-access-denied",
+            ),
+            pytest.param(
+                "BadParameter: The request URI contains an invalid name",
+                id="azure-invalid-name",
+            ),
+            pytest.param("some wording no backend documents", id="unrecognised"),
+        ],
+    )
+    async def test_non_transient_wording_is_not_transient_error(
+        self, backend_error: str
+    ):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretStoreTransientError)
+        assert not isinstance(exc.value, SecretNotFoundError)
+
+    async def test_key_named_like_a_throttle_does_not_make_a_denial_transient(self):
+        """The key is stripped before matching, so a key that reads like a
+        throttling wording can't turn an access denial into a transient."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key ThrottlingException from secret "
+            "store secretstore: AccessDeniedException: not authorized",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("ThrottlingException")
+        assert not isinstance(exc.value, SecretStoreTransientError)
 
     async def test_403_permission_denied_is_non_retryable_rejection(self):
         """Dapr's secret-scoping denial is the store refusing the request, not

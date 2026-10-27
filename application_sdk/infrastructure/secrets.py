@@ -243,6 +243,20 @@ class SecretStoreError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+class SecretStoreTransientError(SecretStoreError):
+    """The secret store answered, but with a temporary failure (throttling or a
+    transient server error), so a later attempt may succeed.
+
+    Distinct from :class:`SecretStoreUnavailableError`, where the store did not
+    answer at all, and from a plain :class:`SecretStoreError`, where the answer
+    was a rejection that retrying won't change. Callers retry it: it never
+    keeps a probed value, and it is never routed to the user as
+    :class:`AgentSecretReadError`. Retryable.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
+
+
 class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     """The secret store / Dapr sidecar was *unreachable* — a transport failure
     (connection refused, reset mid-handshake, read/write/close error, timeout)
@@ -319,6 +333,44 @@ class SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)
         self.component = component
         self.attempts = attempts
         self.elapsed_seconds = elapsed_seconds
+
+
+@dataclass(kw_only=True)
+class AgentSecretReadError(PreconditionError, SecretStoreError):
+    """The store refused to return a *declared* agent secret.
+
+    Raised for a format-2 ``secretKeyRef`` that the store answers with a
+    failure (access denied, an invalid name, throttled) rather than "not
+    found" or an outage. On an SDR the store, its policy and its identity are
+    the customer's, and the field is known to be a ref, so only the customer
+    can fix it.
+
+    ``PreconditionError`` comes first, so the category is PRECONDITION and the
+    audience USER. Conformance E021 forbids a DEPENDENCY_UNAVAILABLE error with
+    a USER audience. It is still a ``SecretStoreError``, so
+    ``except SecretStoreError:`` catches it. ``secret_name`` is the hashed
+    label, never the raw name, which encodes the customer's store layout.
+    ``retryable`` is carried over from the store's answer, so a throttled read
+    is still retried.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_AGENT_SECRET_READ"
+
+    def __init__(
+        self, label: str, *, fields: str, retryable: bool | None = None
+    ) -> None:
+        SecretStoreError.__init__(
+            self,
+            f"Secret store refused the secret declared for agent_json field "
+            f"'{fields}'.",
+            secret_name=label,
+            retryable=retryable,
+        )
+        self.resource = "agent_json_secret"
+        self.suggested_action = (
+            "Check that the secret named by this field's secretKeyRef exists and "
+            "that the SDR's secret-store identity is allowed to read it."
+        )
 
 
 @dataclass(kw_only=True)

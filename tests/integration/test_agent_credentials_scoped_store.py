@@ -23,9 +23,13 @@ import pytest_asyncio
 from application_sdk.credentials.agent import resolve_agent_credential
 from application_sdk.credentials.errors import CredentialNotFoundError
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.errors.categories import Audience
 from application_sdk.infrastructure._dapr.client import DaprSecretStore
 from application_sdk.infrastructure._dapr.http import AsyncDaprClient
-from application_sdk.infrastructure.secrets import SecretStoreError
+from application_sdk.infrastructure.secrets import (
+    AgentSecretReadError,
+    SecretStoreError,
+)
 
 pytestmark = [pytest.mark.integration]
 
@@ -143,9 +147,14 @@ class TestDeclaredSources:
         """No fallback: the field is known to be a secret, so its name must
         never be sent to the source as the value."""
         spec = _declared(**{"basic.password": _ref("SDR_NOT_ALLOWED")})
-        with pytest.raises(SecretStoreError) as exc_info:
+        with pytest.raises(AgentSecretReadError) as exc_info:
             await resolve_agent_credential(spec, scoped_secret_store)
-        assert "SDR_NOT_ALLOWED" not in str(exc_info.value)
+        err = exc_info.value
+        # The customer's scoping refused it: routed to the user, not retried
+        # (Dapr's 403 is a definitive rejection), and never names the secret.
+        assert err.audience is Audience.USER
+        assert err.effective_retryable is False
+        assert "SDR_NOT_ALLOWED" not in str(err)
 
     async def test_an_absent_declared_ref_is_not_found(
         self, scoped_secret_store: DaprSecretStore
