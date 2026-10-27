@@ -109,6 +109,7 @@ async def probe_single_keys(
     fetch: ProbeFetch[SecretT],
     *,
     keep_value_on_store_answer: bool = False,
+    outcomes: dict[str, str] | None = None,
 ) -> list[tuple[str, SecretT]]:
     """Probe each candidate as a secret key; return the ones that resolved.
 
@@ -119,6 +120,13 @@ async def probe_single_keys(
     (FND-4407, see the module docstring): a store answer that isn't "not
     found" keeps the value instead of failing. Only legacy agent payloads opt
     in; the GUID vault path stays strict.
+
+    *outcomes*, when given, is filled with each probed value's outcome, even
+    when the sweep then raises: ``resolved``, ``absent``, ``refused`` (a store
+    answer other than "not found"), ``refused_kept`` (the same, kept by the
+    bridge), ``transient``, ``outage`` or ``error`` (not a store answer). It is
+    keyed by the raw value, so the caller must map it to field names and never
+    log the keys.
 
     Probes run **concurrently**, bounded by
     :data:`MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until BLDX-1594:
@@ -157,7 +165,10 @@ async def probe_single_keys(
     async def _bounded(value: str) -> SecretT | None:
         async with sem:
             return await _probe_one(
-                fetch, value, keep_value_on_store_answer=keep_value_on_store_answer
+                fetch,
+                value,
+                keep_value_on_store_answer=keep_value_on_store_answer,
+                outcomes=outcomes,
             )
 
     # return_exceptions=True: letting gather cancel siblings on the first raise
@@ -199,6 +210,7 @@ async def _probe_one(
     value: str,
     *,
     keep_value_on_store_answer: bool = False,
+    outcomes: dict[str, str] | None = None,
 ) -> SecretT | None:
     """Probe one candidate. ``None`` means the store has no such key.
 
@@ -208,9 +220,15 @@ async def _probe_one(
     exception) can re-embed it via a percent-encoded request URL.
     """
     label = hash_label(value)
+
+    def _record(outcome: str) -> None:
+        if outcomes is not None:
+            outcomes[value] = outcome
+
     try:
         secret = await fetch(value, label)
     except DaprSidecarUnreachableError as exc:
+        _record("outage")
         # Terminal: the budget was exhausted without one usable answer, so this
         # is not a race that a later attempt warms — keep the terminal type so a
         # persistent outage stays distinguishable from a still-cold one. The
@@ -222,6 +240,7 @@ async def _probe_one(
             elapsed_seconds=exc.elapsed_seconds,
         ) from None
     except ColdStartRaceError:
+        _record("outage")
         # A *steady-state* blip, not an exhausted budget: budget exhaustion
         # always raises DaprSidecarUnreachableError (caught above), so a bare
         # ColdStartRaceError means the retry helper skipped its cold-start wait
@@ -234,11 +253,13 @@ async def _probe_one(
         # and its message embeds the backend cause, which can echo the raw
         # ref-key — that would undo the hashing in the same log record.
         safe_traceback = scrubbed_traceback(exc, value, label)
+        transient = isinstance(exc, SecretStoreTransientError)
         if (
             keep_value_on_store_answer
             and isinstance(exc, SecretStoreError)
-            and not isinstance(exc, SecretStoreTransientError)
+            and not transient
         ):
+            _record("refused_kept")
             # The store answered, but not with "not found": an invalid name,
             # access denied. Deprecated bridge (FND-4407, see the module
             # docstring): keep the value as entered, as SDK <= 3.49 did,
@@ -257,6 +278,12 @@ async def _probe_one(
                 safe_traceback,
             )
             return None
+        if transient:
+            _record("transient")
+        elif isinstance(exc, SecretStoreError):
+            _record("refused")
+        else:
+            _record("error")
         # The store answered with a failure, not "not found". Stop: skipping
         # here would send the ref-key itself as the credential value.
         logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
@@ -265,7 +292,9 @@ async def _probe_one(
             label,
             safe_traceback,
         )
-        raise SecretStoreError(
+        # A recognised throttle keeps its type, so callers still see "retry".
+        error_type = SecretStoreTransientError if transient else SecretStoreError
+        raise error_type(
             f"Secret store failed while looking up single-key ref-key {label} "
             f"({type(exc).__name__})",
             secret_name=label,
@@ -276,6 +305,8 @@ async def _probe_one(
     if not secret:
         # Key not in store — expected for non-secret fields (host, port,
         # region literals).
+        _record("absent")
         logger.debug("single-key probe: %s not found in store", label)
         return None
+    _record("resolved")
     return secret

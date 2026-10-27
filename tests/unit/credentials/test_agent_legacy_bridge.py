@@ -197,6 +197,24 @@ class TestDeprecationNotice:
             await resolve_agent_credential(spec, AnsweringStore(SecretStoreError("x")))  # type: ignore[arg-type]
         assert mock_logger.warning.call_count == 0
 
+    async def test_probe_telemetry_marks_kept_refusals(self) -> None:
+        """The migration evidence distinguishes a refusal the bridge kept, so
+        the field is known to be a plain value whose run still succeeded."""
+        store = AnsweringStore(SecretStoreError("denied"))
+        with patch("application_sdk.credentials.agent.logger") as mock_logger:
+            await resolve_agent_credential(
+                _legacy(**{"basic.username": "svc_reader"}),
+                store,  # type: ignore[arg-type]
+            )
+        (record,) = [
+            c
+            for c in mock_logger.warning.call_args_list
+            if "legacy single-key probe outcomes" in str(c.args[0])
+        ]
+        extra = record.kwargs["extra"]
+        assert extra["atlan.agent_json.probe.outcomes"] == "basic.username=refused_kept"
+        assert extra["atlan.agent_json.probe.refused_kept"] == 1
+
     async def test_fallback_warning_names_the_hash_not_the_value(self) -> None:
         store = AnsweringStore(SecretStoreError("denied"))
         with patch(

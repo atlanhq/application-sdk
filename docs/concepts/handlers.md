@@ -183,6 +183,20 @@ What the logs tell you:
   value is used as entered.
 - **Every legacy agent payload** that reaches the store also logs
   `DEPRECATED agent_json format` once per resolution.
+- **Every legacy agent single-key resolution** logs one WARNING,
+  `agent_json legacy single-key probe outcomes`, even when the run then fails.
+  It is the evidence for migrating the workflow to declared sources
+  (FND-4407).
+  - `atlan.agent_json.probe.outcomes`, e.g.
+    `basic.password=resolved,basic.username=refused`, gives each probed
+    field's outcome. `resolved` means a real ref (`secretKeyRef`); `absent` or
+    `refused` means a plain value (`value`). `refused_kept` is a refusal the
+    bridge kept as the value. The other outcomes are `transient`, `outage` and
+    `error`.
+  - It also carries a count per outcome, `atlan.agent_json.format` and
+    `atlan.agent_json.secret_manager`.
+  - Field names only, never values or ref names.
+  - The extras are allowlisted, so they survive the SDR log upload to Atlan.
 
 #### Check tiers and warmup
 
