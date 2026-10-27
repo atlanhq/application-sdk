@@ -181,15 +181,37 @@ async def resolve_agent_credential(
             secret_store, raw, spec.value_sources
         )
     elif spec.key_type == "single-key":
+        _warn_undeclared_sources()
         bundle = await _fetch_per_key_bundle(secret_store, raw)
         resolved_flat, _ = _substitute(raw, bundle)
     elif spec.secret_path:
+        _warn_undeclared_sources()
         bundle = await _fetch_bundle(secret_store, spec.secret_path)
         resolved_flat, _ = _substitute(raw, bundle)
     else:
         resolved_flat = raw
 
     return transform_agent_credentials(resolved_flat)
+
+
+def _warn_undeclared_sources() -> None:
+    """Deprecation notice for a legacy payload that reaches the secret store.
+
+    Without declared sources the SDK can't tell a secret name from a plain
+    value: single-key looks every field up and guesses from the store's
+    answer, multi-key substitutes any value that matches a bundle key.
+    Support for the format is removed in SDK v4.0.0.
+    """
+    logger.warning(  # conformance: ignore[L009] deprecation notice, no exception context
+        "DEPRECATED agent_json format: this workflow's credential fields don't "
+        "declare their source (a key-type/secret-path payload), so the SDK has "
+        "to guess which values are secret names. Support for this format, "
+        "including the single-key fallback that keeps a value the secret store "
+        "rejects, will be removed in SDK v4.0.0. The declared-source format is "
+        'the way forward: migrate the workflow to "format": 2, where each field '
+        'is {"value": ...} or {"valueFrom": {"secretKeyRef": {"name": ..., '
+        '"key": ...}}} (FND-4361).'
+    )
 
 
 async def _resolve_declared(
@@ -460,19 +482,24 @@ async def _fetch_per_key_bundle(
     carrying a hostname) won't fail the resolution. Unmatched values then take
     the v2-parity fallthrough in :func:`_substitute` (left as-is).
 
-    A store *failure* is never skipped: a throttled or access-denied lookup
-    would otherwise leave the ref-key in place and send it as the credential
-    value. Probing, classification and redaction are shared with the
-    GUID-path vault via
+    A store *outage* (unreachable, cold start, unavailable) fails the
+    resolution. Any other store answer (invalid name, access denied,
+    throttled) keeps the value as entered, with a deprecation WARNING. This is
+    the time-boxed FND-4407 bridge: a legacy payload can't say which fields
+    are ref-keys, and stores that reject plain values failed unchanged
+    configs. A throttled or denied *real* ref-key is therefore sent as the
+    value, as on SDK <= 3.49. Declared (format-2) payloads never come here.
+    Probing, classification and redaction are shared with the GUID-path vault
+    (which stays strict) via
     :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`;
     each probe retries a cold-start race via
     :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`
     (shared with :func:`_fetch_bundle` — both race the same sidecar).
 
     Raises:
-        SecretStoreError: If any probe's store lookup failed (the subtypes
+        SecretStoreError: If a probe hit a store outage (the subtypes
             :class:`SecretStoreUnavailableError` /
-            :class:`SecretStoreUnreachableError` for an outage). Hash-labelled.
+            :class:`SecretStoreUnreachableError`). Hash-labelled.
     """
 
     async def _fetch(value: str, label: str) -> str | None:
@@ -485,7 +512,10 @@ async def _fetch_per_key_bundle(
     outcomes: dict[str, str] = {}
     try:
         resolved = await probe_single_keys(
-            _probe_candidates(raw), _fetch, outcomes=outcomes
+            _probe_candidates(raw),
+            _fetch,
+            keep_value_on_store_answer=True,
+            outcomes=outcomes,
         )
     finally:
         # In a finally: a sweep that raises still reports what each field was.
@@ -494,7 +524,16 @@ async def _fetch_per_key_bundle(
 
 
 #: Outcomes counted in the legacy probe telemetry, in a fixed order.
-_PROBE_OUTCOMES = ("resolved", "absent", "refused", "transient", "outage", "error")
+_PROBE_OUTCOMES = (
+    "resolved",
+    "absent",
+    "refused",
+    "refused_kept",
+    "transient",
+    "transient_kept",
+    "outage",
+    "error",
+)
 
 
 def _log_probe_outcomes(raw: dict[str, Any], outcomes: dict[str, str]) -> None:
@@ -735,6 +774,7 @@ async def check_secret_store_access(
             suggested_action="Set secret-path on the connection's credentials.",
         )
 
+    _warn_undeclared_sources()
     try:
         if spec.key_type == "single-key":
             bundle = await _fetch_per_key_bundle(secret_store, raw)
