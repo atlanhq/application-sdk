@@ -182,15 +182,16 @@ lands at `<prefix>/<label>` (`atlan-metabase-app`).
 Reading data another app or another workflow node wrote (a prefix handed in
 on the entrypoint Input, the connection cache): download it in the
 `@entrypoint` and hand the ref to the task (`atlan-metabase-app`
-`app/connector.py`, `extract_lineage`):
+`app/connector.py`, `extract_lineage`, with this skill's two empty-prefix
+rules added: one trailing `/`, and `None` when nothing was downloaded):
 
 ```python
 qi_records = None
 if input.view_lineage_input_prefix:
     dl = await self.download(
-        DownloadInput(storage_path=input.view_lineage_input_prefix)
+        DownloadInput(storage_path=input.view_lineage_input_prefix.rstrip("/") + "/")
     )
-    qi_records = dl.ref
+    qi_records = dl.ref if dl.ref.file_count else None
 build = await self.build_lineage_records(BuildLineageInput(qi_records=qi_records, ...))
 ```
 
