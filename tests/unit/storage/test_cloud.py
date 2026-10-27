@@ -1317,6 +1317,12 @@ class TestAuthenticationRejected:
         assert err.key == "specs/api.json"
         assert "secret value rather than the secret ID" in str(err)
 
+    def test_exported_from_storage_package(self):
+        import application_sdk.storage as storage
+
+        assert "StorageAuthError" in storage.__all__
+        assert storage.StorageAuthError is StorageAuthError
+
     async def test_auth_error_is_still_a_permission_error(self, monkeypatch):
         """Existing ``except StoragePermissionError`` blocks keep catching a 401."""
 
