@@ -24,8 +24,8 @@ runs for agent-sourced configs (Heracles builds those from an SDR's
 agent_json). The probe can't tell a plain username, database name, URL or role
 ARN from a ref-key, so stores that reject those failed runs whose config hadn't
 changed. Direct (hosted) configs never probe: they fetch one bundle by GUID and
-stay strict. Delete the flag, and probing with it, once every agent payload declares
-its sources (``"format": 2``, FND-4361); those refs are looked up strictly and
+stay strict. Removed in SDK v4.0.0: delete the flag, and probing with it, once
+every agent payload declares its sources (``"format": 2``, FND-4361); those refs are looked up strictly and
 never probed.
 
 Used by :mod:`application_sdk.credentials.agent` (agent-shape payloads) and
@@ -267,10 +267,10 @@ async def _probe_one(
                 "DEPRECATED single-key fallback: the secret store rejected a "
                 "lookup of %s (%s), so the value is used as entered. If it is "
                 "a secret name rather than a plain value, the connection will "
-                "fail with it. This fallback is temporary: the workflow's "
-                "credentials will move to the declared-source format, where "
-                "secrets are looked up strictly and plain values never reach "
-                "the store (FND-4361).\n%s",
+                "fail with it. This fallback is deprecated and will be removed "
+                'in SDK v4.0.0. The declared-source format ("format": 2) is '
+                "the way forward: secrets are looked up strictly and plain "
+                "values never reach the store (FND-4361).\n%s",
                 label,
                 type(exc).__name__,
                 safe_traceback,

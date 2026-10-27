@@ -200,16 +200,17 @@ def _warn_undeclared_sources() -> None:
     Without declared sources the SDK can't tell a secret name from a plain
     value: single-key looks every field up and guesses from the store's
     answer, multi-key substitutes any value that matches a bundle key.
+    Support for the format is removed in SDK v4.0.0.
     """
     logger.warning(  # conformance: ignore[L009] deprecation notice, no exception context
         "DEPRECATED agent_json format: this workflow's credential fields don't "
         "declare their source (a key-type/secret-path payload), so the SDK has "
-        "to guess which values are secret names. The workflow will be migrated "
-        'to the declared-source format ("format": 2: each field is '
-        '{"value": ...} or {"valueFrom": {"secretKeyRef": {"name": ..., '
-        '"key": ...}}}), and support for this format, including the single-key '
-        "fallback that keeps a value the secret store rejects, will then be "
-        "removed (FND-4361)."
+        "to guess which values are secret names. Support for this format, "
+        "including the single-key fallback that keeps a value the secret store "
+        "rejects, will be removed in SDK v4.0.0. The declared-source format is "
+        'the way forward: migrate the workflow to "format": 2, where each field '
+        'is {"value": ...} or {"valueFrom": {"secretKeyRef": {"name": ..., '
+        '"key": ...}}} (FND-4361).'
     )
 
 

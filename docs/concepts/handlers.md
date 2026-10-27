@@ -128,7 +128,9 @@ routing.
     Probing exists because a legacy `agent_json` can't say which fields are
     secret names. A `"format": 2` payload declares each field's source and is
     never probed. Legacy agent payloads log a `DEPRECATED agent_json format`
-    WARNING and will be migrated (FND-4361).
+    WARNING and will be migrated (FND-4361). **Declared sources are the way
+    forward**; legacy payloads, and probing with them, are **removed in SDK
+    v4.0.0**.
 
 When a credential arrives as a flat dict of fields rather than a named ref, the
 SDK probes each string value to see whether it is a key in the secret store.
@@ -154,9 +156,10 @@ Each probe has one of four outcomes:
   `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an invalid
   secret name, a throttle, or wording no backend documents. The field keeps its
   value, with a WARNING. This is SDK <= 3.49 behaviour, restored for legacy
-  payloads as a deprecated, time-boxed fallback (FND-4407). No error wording
-  decides the outcome, so no unrecognised store answer can fail a plain-value
-  config.
+  payloads as a deprecated fallback that is removed in SDK v4.0.0 (FND-4407).
+  No error wording decides the outcome, so no unrecognised store answer can
+  fail a plain-value config. Declared sources (`"format": 2`) are the way
+  forward: new and migrated workflows should use them.
   - Probing only ever runs for legacy SDR payloads: legacy agent_json payloads
     and agent-sourced GUID configs (the form Heracles turns an SDR's
     agent_json into for Test Authentication, preflight and metadata calls).

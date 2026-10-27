@@ -165,7 +165,10 @@ class TestDeprecationNotice:
                 store,  # type: ignore[arg-type]
             )
         messages = [str(c.args[0]) for c in mock_logger.warning.call_args_list]
-        assert any("DEPRECATED agent_json format" in m for m in messages)
+        (notice,) = [m for m in messages if "DEPRECATED agent_json format" in m]
+        # The notice names the removal release and the way forward.
+        assert "removed in SDK v4.0.0" in notice
+        assert '"format": 2' in notice
 
     async def test_legacy_multi_key_logs_the_deprecation(self) -> None:
         class BundleStore:
@@ -227,5 +230,6 @@ class TestDeprecationNotice:
             str(a) for c in mock_logger.warning.call_args_list for a in c.args
         )
         assert "DEPRECATED single-key fallback" in logged
+        assert "removed in SDK v4.0.0" in logged
         assert "svc_reader_plain" not in logged
         assert "sha256:" in logged
