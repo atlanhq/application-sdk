@@ -57,6 +57,14 @@ class CredentialVaultError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+class CredentialConfigNotFoundError(CredentialVaultError):
+    """The object store confirmed absence after the config re-read ladder.
+
+    Keeps the vault's existing exception contract while distinguishing a missing
+    config from transport failures for callers that enforce credential readiness.
+    """
+
+
 @runtime_checkable
 class CredentialVault(Protocol):
     """Protocol for GUID-based runtime credential resolution.

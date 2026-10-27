@@ -272,6 +272,7 @@ class DaprCredentialVault:
             BindingResponse,
         )
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            CredentialConfigNotFoundError,
             CredentialVaultError,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
@@ -339,7 +340,7 @@ class DaprCredentialVault:
             if delay is not None:
                 await asyncio.sleep(delay)
 
-        raise CredentialVaultError(
+        raise CredentialConfigNotFoundError(
             "No credential config found for GUID %s in upstream store "
             "(object store answered not-found on %d attempts over %.0fs)"
             % (credential_guid, attempts, sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS)),
