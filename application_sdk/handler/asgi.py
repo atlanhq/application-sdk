@@ -15,7 +15,8 @@ shared by every app in the process; handler code is async and offloads through
 
 The metadata routes (configmaps, manifest, input contract) are served from the
 ``generated/`` folder ``gen_app_api.py`` ships inside the app's package
-(:mod:`application_sdk.handler.metadata_routes`). The served manifest's task
+(:mod:`application_sdk.handler.metadata_routes`), through the handler's
+``compute_manifest`` when it overrides that. The served manifest's task
 queue is the one the app's worker polls: its ``ATLAN_TASK_QUEUE`` override when
 the host's app-env sync carries one (``ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE``),
 else ``derive_task_queue`` over the app's name and its deployment name, read as
@@ -36,12 +37,13 @@ from typing import TYPE_CHECKING, Literal
 from fastapi import FastAPI
 
 from application_sdk._logging import get_logger
-from application_sdk._runtime.offload import blocking_executor
+from application_sdk._runtime.offload import blocking_executor, offload_owner
 from application_sdk.common.task_queue import derive_task_queue
 from application_sdk.handler.base import Handler
 from application_sdk.handler.metadata_routes import (
     MetadataSource,
     generated_dir_of,
+    handler_compute_manifest,
     register_metadata_routes,
 )
 from application_sdk.handler.object_routes import (
@@ -83,7 +85,7 @@ def app_env(app_name: str, key: str, default: str = "") -> str:
 
 @functools.cache
 def default_object_store() -> S3ObjectStore | None:
-    """The host's object store, built once from ``ATLAN_S3_BUCKET`` / ``ATLAN_S3_REGION``.
+    """The host's object store, built once by :meth:`S3ObjectStore.from_env`.
 
     One bucket and one client for every hosted app: each app's configs live
     under its own ``persistent-artifacts/apps/<app>/`` prefix in that bucket.
@@ -173,14 +175,25 @@ def _package_generated_dir(app_package: str) -> Path | None:
 
 
 class _AppBlockingExecutor:
-    """ASGI middleware: ``run_in_thread`` in this app's requests uses its pool."""
+    """ASGI middleware: ``run_in_thread`` in this app's requests uses its pool.
 
-    def __init__(self, app: ASGIApp, executor: concurrent.futures.Executor) -> None:
+    Every request is also charged to ``app_name`` for the per-app offload cap and
+    the stranded-thread count, including the metadata, config and file routes,
+    which run outside a handler context.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        executor: concurrent.futures.Executor,
+        app_name: str,
+    ) -> None:
         self.app = app
         self.executor = executor
+        self.app_name = app_name
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        with blocking_executor(self.executor):
+        with blocking_executor(self.executor), offload_owner(self.app_name):
             await self.app(scope, receive, send)
 
 
@@ -210,7 +223,7 @@ def build_asgi_app(
         max_workers=blocking_threads, thread_name_prefix=f"api-{app_name}-"
     )
     app.state.blocking_executor = executor
-    app.add_middleware(_AppBlockingExecutor, executor=executor)
+    app.add_middleware(_AppBlockingExecutor, executor=executor, app_name=app_name)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -242,6 +255,7 @@ def build_asgi_app(
                 app_package=app_package,
                 task_queue=lambda: _task_queue(app_name, _deployment),
                 deployment_name=_deployment,
+                compute_manifest=handler_compute_manifest(handler, lambda: app_name),
                 from_process_env=False,
             ),
         )

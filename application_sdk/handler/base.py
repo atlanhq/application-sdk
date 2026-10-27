@@ -12,7 +12,7 @@ from __future__ import annotations
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from application_sdk._context_errors import AppContextError
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
@@ -22,6 +22,7 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
+    ManifestInput,
     MetadataInput,
     MetadataOutput,
     PreflightInput,
@@ -126,7 +127,8 @@ class Handler(ABC):
             raise AppContextError(
                 "Handler context is not set. "
                 "Access self.context only inside a handler method "
-                "(test_auth, preflight_check, fetch_metadata, warmup)."
+                "(test_auth, preflight_check, fetch_metadata, warmup, "
+                "compute_manifest)."
             )
         return ctx
 
@@ -255,6 +257,30 @@ class Handler(ABC):
             What this probe saw.
         """
         return WarmupObservation(state=WarmupState.READY)
+
+    async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
+        """The manifest to serve for this request, when it cannot be static.
+
+        Optional. The default returns ``None``, which serves the generated
+        manifest unchanged. Override it for a manifest that depends on the
+        request's ``fe_inputs`` or on the tenant; return ``None`` for an entry
+        point whose generated manifest is right as it is.
+
+        The worker's handler service and the consolidated API host both call
+        it for a request that names an entry point. Task-queue templates in the
+        result (``atlan-<app>-{deployment_name}``) are stamped with the queue
+        the app's worker polls, as in a generated manifest: build them from
+        ``self.context.app_name``. A request carries no credentials here. On
+        the worker an ``app.<segment>.core.compute_manifest`` hook, where one
+        exists, wins; the host never runs one.
+
+        Args:
+            input: The entry point, its generated manifest and the form values.
+
+        Returns:
+            The manifest to serve, or ``None`` for the generated one.
+        """
+        return None
 
 
 class DefaultHandler(Handler):

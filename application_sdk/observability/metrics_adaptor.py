@@ -101,9 +101,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                     loop = asyncio.get_running_loop()
                     loop.create_task(self._periodic_flush())
                 except RuntimeError:
-                    threading.Thread(
-                        target=self._start_asyncio_flush, daemon=True
-                    ).start()
+                    self._spawn_flush_thread()
                 AtlanMetricsAdapter._flush_task_started = True
             except Exception:
                 logging.error("Failed to start metrics flush task", exc_info=True)
@@ -159,6 +157,14 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     async def _flush_buffer(self, force=False):
         await super()._flush_buffer(force=force)
         await self.segment_client.flush()
+
+    def _spawn_flush_thread(self) -> None:
+        """Spawn a daemon thread to run the asyncio flush loop.
+
+        Extracted for testability — lets tests assert this specific call without
+        patching threading.Thread globally (which would also capture OTel internals).
+        """
+        threading.Thread(target=self._start_asyncio_flush, daemon=True).start()
 
     def _start_asyncio_flush(self):
         """Start an asyncio event loop for periodic metric flushing.

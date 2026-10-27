@@ -1,5 +1,38 @@
 # Changelog
 
+## v3.52.0 (October 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.2...v3.52.0
+
+### Features
+
+- contain stranded run_in_thread calls per app (FND-2973) (#4217) (by @vaibhavatlan in [0aff20a](https://github.com/atlanhq/application-sdk/commit/0aff20a))
+- let apps opt in to SQL-parent creation checks pyatlan 11.5.0 dropped (FND-4325) (#4578) (by @cmgrote in [079d968](https://github.com/atlanhq/application-sdk/commit/079d968))
+- serve the host's config and file routes from GCS on GCP; 503, not an ejection, on Azure Blob (#4572) (by @SanilK2108 in [cc139b3](https://github.com/atlanhq/application-sdk/commit/cc139b3))
+- compute a manifest per request through Handler.compute_manifest, on the worker and the host (#4573) (by @SanilK2108 in [78c5a8c](https://github.com/atlanhq/application-sdk/commit/78c5a8c))
+
+### Bug Fixes
+
+- stop the workflow-level retry on a task's non-retryable failure (FND-4307) (#4546) (by @cmgrote in [cfe44e8](https://github.com/atlanhq/application-sdk/commit/cfe44e8))
+- stop the sizing sink's flush when a test resets it (FND-4334) (#4579) (by @cmgrote in [4651858](https://github.com/atlanhq/application-sdk/commit/4651858))
+- FND-4314 JsonFileReader notice keeps pandas values; run() ids from App context (#4550) (by @sachi-atlan in [95cb1b4](https://github.com/atlanhq/application-sdk/commit/95cb1b4))
+- single-key probing skips objectstore:// file references (#4582) (by @connectivity-ai[bot] in [09bb3b3](https://github.com/atlanhq/application-sdk/commit/09bb3b3))
+
+### Chores
+
+- remove 1 resolved allowlist entry (#4566) (by @atlan-app-fleet[bot] in [3a938c9](https://github.com/atlanhq/application-sdk/commit/3a938c9))
+- lock file maintenance (#4568) (by @renovate[bot] in [de7f275](https://github.com/atlanhq/application-sdk/commit/de7f275))
+- update atlanhq/application-sdk action to v3.51.2 (#4569) (by @renovate[bot] in [5380389](https://github.com/atlanhq/application-sdk/commit/5380389))
+- lock file maintenance (#4570) (by @renovate[bot] in [5b485d2](https://github.com/atlanhq/application-sdk/commit/5b485d2))
+- cut the unit leg's fixed costs — per-chunk gc.collect, fake-source shutdown poll, per-test mktemp — and report timing against a budget (FND-4304) (#4544) (by @cmgrote in [7fe9562](https://github.com/atlanhq/application-sdk/commit/7fe9562))
+- lock file maintenance (#4571) (by @renovate[bot] in [13986f0](https://github.com/atlanhq/application-sdk/commit/13986f0))
+- lock file maintenance (#4580) (by @renovate[bot] in [d4f2864](https://github.com/atlanhq/application-sdk/commit/d4f2864))
+
+### Other Changes
+
+- test(observability): stop test_record_metric_with_various_inputs racing the metrics flush thread (FND-4337) (#4581) (by @cmgrote in [83b6c80](https://github.com/atlanhq/application-sdk/commit/83b6c80))
+
+
 ## v3.51.2 (October 22, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.1...v3.51.2

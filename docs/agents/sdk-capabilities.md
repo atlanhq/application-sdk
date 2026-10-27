@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.50.0
-source-sha:    7ada10d8c3517269378fd4c0e7de5454ad121fdc
-source-date:   2026-10-16T12:15:10+05:30
+sdk-version:   3.51.2
+source-sha:    47e3bf0aaa797cbaf151f3b1d8a270daa29924d0
+source-date:   2026-10-23T10:14:29+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 74 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 27 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 47 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
 
@@ -2605,6 +2605,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Signature:** `class HandlerError(message: str, ...)`
 - **Summary:** Deprecated: use a typed ``AppError`` subclass — removed in v4.0.
 - **Defined in:** `application_sdk/handler/base.py`
+
+#### `ManifestInput`
+
+- **Import:** `from application_sdk.handler import ManifestInput`
+- **Signature:** `class ManifestInput`
+- **Summary:** Input for the optional ``Handler.compute_manifest`` operation.
+- **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataInput`
 
@@ -6443,7 +6450,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `validate_asset`
 
 - **Import:** `from application_sdk.testing.integration import validate_asset`
-- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True, creation_rules: frozenset[AssetCreationRules] = frozenset())`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -6859,6 +6866,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** How one validated hand-off was assembled — context the report cannot know.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `AssetCreationRules`
+
+- **Import:** `from application_sdk.validation import AssetCreationRules`
+- **Signature:** `class AssetCreationRules`
+- **Summary:** Named sets of extra create-time checks, each off unless an app asks for it.
+- **Defined in:** `application_sdk/validation/asset_rules.py`
+
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.validation import AssetValidationFailure`
@@ -7119,7 +7133,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_asset`
 
 - **Import:** `from application_sdk.validation import validate_asset`
-- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True, creation_rules: frozenset[AssetCreationRules] = frozenset())`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -7866,6 +7880,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `key: str` — Credential key (e.g., 'api_key', 'username').
   - `value: str` — Credential value (sensitive — never log this directly).
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `ManifestInput`
+
+- **Import:** `from application_sdk.handler.contracts import ManifestInput`
+- **Summary:** Input for the optional ``Handler.compute_manifest`` operation.
+- **Fields:**
+  - `entrypoint: str` — The entry point whose manifest is requested.
+  - `manifest: dict[str, Any]` — Its generated manifest, tokens already resolved. Open on purpose: the
+  - `fe_inputs: dict[str, Any]` `= Field(default_factory=dict)` — The decoded setup-form values; empty when the request sends none.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataInput`

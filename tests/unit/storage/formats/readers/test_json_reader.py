@@ -402,6 +402,46 @@ async def test_read_returns_pandas_dataframe(tmp_path: Path) -> None:
     assert list(result.columns) == ["id", "val"]
 
 
+@pytest.mark.asyncio
+async def test_read_returns_pandas_values_for_missing_keys(tmp_path: Path) -> None:
+    """A key missing from one row turns the column's ints to float and fills NaN."""
+    import pandas as pd
+
+    json_file = _write_json_file(
+        tmp_path, "data.json", [{"id": "a", "n": 3}, {"id": "b"}]
+    )
+
+    async def dummy_download(path, file_extension, file_names=None):
+        return [json_file]
+
+    with patch(
+        "application_sdk.storage.formats.json._download_files",
+        side_effect=dummy_download,
+    ):
+        reader = JsonFileReader(path=str(tmp_path))
+        rows = (await reader.read()).to_dict(orient="records")
+
+    assert rows[0]["n"] == 3.0 and isinstance(rows[0]["n"], float)
+    assert pd.isna(rows[1]["n"])
+
+
+def test_deprecation_notice_says_to_fix_callers_of_pandas_coercion() -> None:
+    """The notice warns that orjson drops the pandas coercion and names the caller fixes."""
+    with pytest.warns(
+        DeprecationWarning, match="JsonFileReader is deprecated"
+    ) as caught:
+        JsonFileReader(path="/data")
+    message = next(
+        str(w.message)
+        for w in caught
+        if "JsonFileReader is deprecated" in str(w.message)
+    )
+    assert "3 → 3.0" in message
+    assert "NaN" in message
+    assert "row.get(key)" in message
+    assert "pd.DataFrame" not in message
+
+
 # ---------------------------------------------------------------------------
 # Context Manager and Close Tests
 # ---------------------------------------------------------------------------

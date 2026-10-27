@@ -16,6 +16,7 @@ from application_sdk.testing.integration import BaseIntegrationTest, Scenario, e
 from application_sdk.testing.integration import runner as runner_module
 from application_sdk.testing.integration.models import APIType
 from application_sdk.testing.integration.runner import _needs_asset_validation
+from application_sdk.validation import AssetCreationRules
 
 CONN = "default/snow/123"
 SCHEMA_QN = f"{CONN}/DB/SCHEMA"
@@ -117,6 +118,63 @@ class TestRunnerAssetValidation:
         with patch.object(runner_module, "logger") as logger:
             suite._validate_assets(_scenario(), _RESPONSE, str(tmp_path))
             logger.warning.assert_not_called()
+
+
+def _layout_with_bare_schema(base: Path) -> None:
+    # A Schema with no database parent: clean under pyatlan 11.5.0's checks,
+    # flagged once the SQL_PARENTS rules are opted in.
+    _write(
+        base,
+        "Schema",
+        [
+            Schema(
+                name="SCHEMA", qualified_name=SCHEMA_QN, connection_qualified_name=CONN
+            )
+        ],
+    )
+
+
+_SQL = frozenset({AssetCreationRules.SQL_PARENTS})
+
+
+class TestRunnerAssetValidationRules:
+    def test_rules_are_off_by_default(self, tmp_path: Path) -> None:
+        _layout_with_bare_schema(tmp_path)
+
+        class StrictSuite(BaseIntegrationTest):
+            asset_validation_strict = True
+
+        StrictSuite()._validate_assets(_scenario(), _RESPONSE, str(tmp_path))
+
+    def test_class_attr_opts_in(self, tmp_path: Path) -> None:
+        _layout_with_bare_schema(tmp_path)
+
+        class RulesSuite(BaseIntegrationTest):
+            asset_validation_strict = True
+            asset_validation_rules = _SQL
+
+        with pytest.raises(AssertionError, match="database is required for creation"):
+            RulesSuite()._validate_assets(_scenario(), _RESPONSE, str(tmp_path))
+
+    def test_scenario_override_opts_in(self, tmp_path: Path) -> None:
+        _layout_with_bare_schema(tmp_path)
+        with pytest.raises(AssertionError, match="database is required for creation"):
+            BaseIntegrationTest()._validate_assets(
+                _scenario(asset_validation_strict=True, asset_validation_rules=_SQL),
+                _RESPONSE,
+                str(tmp_path),
+            )
+
+    def test_empty_scenario_override_opts_out(self, tmp_path: Path) -> None:
+        _layout_with_bare_schema(tmp_path)
+
+        class RulesSuite(BaseIntegrationTest):
+            asset_validation_strict = True
+            asset_validation_rules = _SQL
+
+        RulesSuite()._validate_assets(
+            _scenario(asset_validation_rules=frozenset()), _RESPONSE, str(tmp_path)
+        )
 
 
 class TestRunnerAssetValidationGuards:

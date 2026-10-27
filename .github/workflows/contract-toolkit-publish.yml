@@ -137,14 +137,42 @@ jobs:
 
   fan-out:
     # After a contract-toolkit release, trigger the self-hosted Renovate runner
-    # so consumers pick up the new app-contract-toolkit version within minutes.
-    # Skipped automatically when `publish` is skipped or fails.
+    # so consumers pick up the new app-contract-toolkit version within minutes,
+    # then re-dispatch the fleet repos that sweep missed. Skipped automatically
+    # when `publish` is skipped or fails.
+    #
+    # KEEP IN STEP with tag-and-publish.yaml's fan-out (FND-4330). This job
+    # joins the same concurrency group and runs the same steps, though it
+    # publishes nothing to PyPI: renovate.yaml coalesces live sweeps, so a
+    # bare dispatch from here would cancel a release sweep whose follow-up then
+    # stands down, leaving nobody to verify the fleet. Running the same wait
+    # and follow-up makes this job the successor instead. The PyPI wait returns
+    # after its first clean rounds when nothing on main is pending.
     name: Fan out Renovate to consumers
     needs: [publish]
     runs-on: ubuntu-latest
+    # Visibility wait (<=15 min) + full sweep + up to two scoped re-runs.
+    timeout-minutes: 120
+    concurrency:
+      group: renovate-release-fanout
+      cancel-in-progress: true
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the release to be visible on PyPI
+        id: pypi
+        continue-on-error: true
+        run: |
+          python3 .github/scripts/wait_for_pypi_release.py \
+            --pyproject pyproject.toml \
+            --pyproject packages/api/pyproject.toml \
+            --pyproject packages/conformance/pyproject.toml
+
       - name: Mint fleet App token
         id: app-token
         continue-on-error: true
@@ -153,13 +181,9 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
-          repositories: application-sdk
-      - name: Trigger the self-hosted Renovate runner
-        # Inherits renovate.yaml's live defaults (full discovery, dry_run=null).
-        # Soft-fail so a fan-out hiccup never fails publish — the 4-hourly
-        # schedule is the backstop.
+
+      - name: Trigger Renovate and re-dispatch repos it missed
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-        run: |
-          gh workflow run renovate.yaml --repo atlanhq/application-sdk \
-          || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."
+          PACKAGES: ${{ steps.pypi.outputs.packages }}
+        run: python3 .github/scripts/renovate_release_followup.py --packages "$PACKAGES"

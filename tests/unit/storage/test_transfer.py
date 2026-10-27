@@ -1349,7 +1349,7 @@ class TestUploadOnTheSharedEngine:
         await _put("cc/key.json", b"{}", store)
         scratch = tmp_path / "tmp"
         scratch.mkdir()
-        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        monkeypatch.setattr("application_sdk.constants.TEMPORARY_PATH", str(scratch))
 
         with (
             patch(
@@ -1363,6 +1363,46 @@ class TestUploadOnTheSharedEngine:
             )
 
         assert list(scratch.iterdir()) == []
+
+    async def test_a_cross_store_copy_stages_under_temporary_path(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The download-and-reupload copy stages on the work volume, not ``/tmp``.
+
+        ``/tmp`` sits on the node's root disk, which is far smaller than the
+        volume mounted at ``TEMPORARY_PATH``: a single large object copied
+        between stores filled it and failed the run's last step.
+        """
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.transfer import _upload_from_store
+
+        await _put("cs/key.json", b"{}", store)
+        work = tmp_path / "work"
+        sys_tmp = tmp_path / "sys"
+        sys_tmp.mkdir()
+        monkeypatch.setattr("application_sdk.constants.TEMPORARY_PATH", str(work))
+        monkeypatch.setattr("tempfile.tempdir", str(sys_tmp))
+
+        from application_sdk.storage import ops
+
+        real_download = ops.download_file_chunked
+        staged: list[Path] = []
+
+        async def recording_download(key, dest, *args, **kwargs):
+            staged.append(Path(dest))
+            return await real_download(key, dest, *args, **kwargs)
+
+        with patch(
+            "application_sdk.storage.ops.download_file_chunked",
+            side_effect=recording_download,
+        ):
+            uploaded, _, _ = await _upload_from_store(
+                store, "cs/key.json", create_memory_store(), "cs/key.json"
+            )
+
+        assert uploaded is True
+        assert len(staged) == 1
+        assert staged[0].resolve().is_relative_to(work.resolve())
 
     async def test_the_manifest_lands_in_the_run_file_refs_namespace(
         self, store, tmp_path

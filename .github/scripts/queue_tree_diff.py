@@ -19,6 +19,11 @@ given check reads. It writes two answers to ``$GITHUB_OUTPUT``:
     on may differ between what the PR's checks tested and the queue commit
     (see :func:`is_image_input`). Build & Scan skips on ``false``.
 
+``pr_head``
+    The PR head SHA compared against, or empty when none was resolved. A
+    later step that trusts a verdict recorded on the head commit reads it
+    from here, so the verdict and the compared tree belong to one commit.
+
 What the PR's checks tested: a ``pull_request`` run builds
 ``refs/pull/N/merge``, the head merged with the base *as it was then*, a base
 commit this script cannot know. Comparing the queue commit with the bare head
@@ -31,16 +36,24 @@ ancestor of the head that second set is empty and the tested tree was the
 head's own, which is the only case ``identical`` may be ``true``.
 
 Where the PR head comes from: a queue branch is named
-``refs/heads/gh-readonly-queue/<base>/pr-<number>-<head sha>``. When a group
-batches several PRs the name carries the LAST one, and the queue commit then
-also holds the PRs queued ahead of it, which shows up as a difference.
+``refs/heads/gh-readonly-queue/<base>/pr-<number>-<sha>``, and that SHA is the
+commit the entry was built ON (the queue commit's parent), not the PR head.
+Reading it as the head compared the queue commit with its own base, so
+``identical`` was never true (FND-4344). The head is fetched instead from
+``refs/pull/<number>/head``, which needs only ``contents: read``. A push to
+the PR removes it from the queue, so during an entry's run that ref is the
+head that was queued; if it moved anyway, its tree no longer matches and
+every check runs. When a group batches several PRs the name carries the LAST
+one, and the queue commit then also holds the PRs queued ahead of it, which
+shows up as a difference.
 
 **Fails safe.** Any event other than ``merge_group``, a branch name that does
-not parse, a base SHA that is missing, a fork point beyond the fetched history,
-or a git command that fails or stalls, yields ``identical=false`` and
-``image_changed=true``: every check runs, exactly as it did before this script
-existed. A wrong ``true`` here would green a required check on a tree nothing
-checked, so the only direction an error may push is towards more work.
+not parse, a base SHA that is missing, a PR head ref that cannot be fetched, a
+fork point beyond the fetched history, or a git command that fails or stalls,
+yields ``identical=false`` and ``image_changed=true``: every check runs,
+exactly as it did before this script existed. A wrong ``true`` here would
+green a required check on a tree nothing checked, so the only direction an
+error may push is towards more work.
 
 Extracted from inline shell per docs/standards/ci.md (no branching logic in
 workflow ``run:`` blocks); unit-tested in tests/test_queue_tree_diff.py. The
@@ -83,6 +96,10 @@ _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _QUEUE_REF_RE = re.compile(
     r"^refs/heads/gh-readonly-queue/.+/pr-(?P<number>[0-9]+)-(?P<sha>[0-9a-f]{40})$"
 )
+
+#: Where the fetched PR head is stored in the checkout, so it is resolved by
+#: name rather than read from ``FETCH_HEAD``, which lists every fetched tip.
+PR_HEAD_LOCAL_REF = "refs/queue-diff/pr-head"
 
 #: Basenames, matched case-insensitively, whose change can change what Trivy or
 #: Endor find in the image. Vulnerability findings come from the OS packages
@@ -139,18 +156,23 @@ class Decision:
     identical: bool
     image_changed: bool
     reason: str
+    pr_head: str = ""
 
 
-def _run_everything(reason: str) -> Decision:
+def _run_everything(reason: str, pr_head: str = "") -> Decision:
     """Every check runs: the answer for anything that is not a queue entry,
     and for any queue entry this script could not reason about."""
-    return Decision(identical=False, image_changed=True, reason=reason)
+    return Decision(identical=False, image_changed=True, reason=reason, pr_head=pr_head)
 
 
-def parse_pr_head(head_ref: str) -> str | None:
-    """The PR head SHA a queue branch was built from, or None."""
+def parse_pr_number(head_ref: str) -> int | None:
+    """The PR number a queue branch was built for, or None.
+
+    The whole name must parse, SHA included, even though the SHA (the
+    entry's parent, not the PR head) is not used: anything else is not a
+    queue branch this script knows."""
     match = _QUEUE_REF_RE.match(head_ref.strip())
-    return match.group("sha") if match else None
+    return int(match.group("number")) if match else None
 
 
 def is_image_input(path: str) -> bool:
@@ -184,13 +206,14 @@ def decide(
     """Compare the queue commit with what the PR's checks could have tested."""
     if event_name != MERGE_GROUP:
         return _run_everything(f"event is {event_name!r}, not a merge-queue entry")
-    pr_head = parse_pr_head(head_ref)
-    if pr_head is None:
-        return _run_everything(f"queue ref {head_ref!r} does not name a PR head")
+    pr_number = parse_pr_number(head_ref)
+    if pr_number is None:
+        return _run_everything(f"queue ref {head_ref!r} does not name a PR")
     if not _SHA_RE.fullmatch(queue_sha):
         return _run_everything(f"queue sha {queue_sha!r} is not a full commit sha")
     if not _SHA_RE.fullmatch(base_sha):
         return _run_everything(f"queue base sha {base_sha!r} is not a full commit sha")
+    pr_head = ""
     try:
         # Commits and trees only (no blobs): enough history behind both tips
         # to find their fork point, and to list what the base touched since.
@@ -201,10 +224,15 @@ def decide(
                 f"--depth={FORK_SEARCH_DEPTH}",
                 "--filter=blob:none",
                 "origin",
-                pr_head,
+                f"+refs/pull/{pr_number}/head:{PR_HEAD_LOCAL_REF}",
                 base_sha,
             ]
         )
+        pr_head = git(["rev-parse", "--verify", PR_HEAD_LOCAL_REF]).strip()
+        if not _SHA_RE.fullmatch(pr_head):
+            return _run_everything(
+                f"PR #{pr_number} head resolved to {pr_head!r}, not a commit sha"
+            )
         pr_tree = git(["rev-parse", f"{pr_head}^{{tree}}"]).strip()
         queue_tree = git(["rev-parse", f"{queue_sha}^{{tree}}"]).strip()
         changed_raw = git(
@@ -214,7 +242,8 @@ def decide(
         if not _SHA_RE.fullmatch(fork):
             return _run_everything(
                 f"no fork point between PR head {pr_head} and base {base_sha} "
-                f"within {FORK_SEARCH_DEPTH} commits"
+                f"within {FORK_SEARCH_DEPTH} commits",
+                pr_head,
             )
         base_raw = git(
             [
@@ -242,12 +271,14 @@ def decide(
                 f"queue commit tree equals PR head {pr_head} tree, and the head "
                 f"already contains base {base_sha}"
             ),
+            pr_head=pr_head,
         )
     if not changed:
         # Different tree ids but an empty diff cannot happen for two commits
         # git just resolved; treat it as "could not tell".
         return _run_everything(
-            f"trees differ but git reported no changed paths vs {pr_head}"
+            f"trees differ but git reported no changed paths vs {pr_head}",
+            pr_head,
         )
     image_inputs = [path for path in changed if is_image_input(path)]
     shown = ", ".join(image_inputs[:10]) + (" ..." if len(image_inputs) > 10 else "")
@@ -264,6 +295,7 @@ def decide(
                 else "none is an image input"
             )
         ),
+        pr_head=pr_head,
     )
 
 
@@ -271,6 +303,7 @@ def _write_outputs(decision: Decision, output_path: str | None) -> None:
     lines = (
         f"identical={'true' if decision.identical else 'false'}\n"
         f"image_changed={'true' if decision.image_changed else 'false'}\n"
+        f"pr_head={decision.pr_head}\n"
     )
     if output_path:
         with open(output_path, "a", encoding="utf-8") as handle:

@@ -2,6 +2,14 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.52.1] - 2026-10-23
+
+### Bug fixes
+
+- FND-4311 K015 and P016 recognise apps on SDK template bases (#4551) ([2ee6f98](https://github.com/atlanhq/application-sdk/commit/2ee6f98))
+- FND-4315 P015 target shape by key set; retirement is one ledger status per merge (#4553) ([93555eb](https://github.com/atlanhq/application-sdk/commit/93555eb))
+- FND-4314 JsonFileReader notice keeps pandas values; run() ids from App context (#4550) ([95cb1b4](https://github.com/atlanhq/application-sdk/commit/95cb1b4))
+
 ## [0.52.0] - 2026-10-22
 
 ### Features

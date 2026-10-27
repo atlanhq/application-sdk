@@ -42,7 +42,11 @@ from application_sdk.app.base import (
     ASSET_VALIDATION_EVENT,
     _warn_on_invalid_transformed_assets,
 )
-from application_sdk.observability.logger_adaptor import ASSET_VALIDATION_MATRIX_KEY
+from application_sdk.observability.logger_adaptor import (
+    ASSET_VALIDATION_MATRIX_KEY,
+    ASSET_VALIDATION_SUMMARY_KEY,
+)
+from application_sdk.validation import AssetCreationRules
 
 APP = "test-app"
 CONN = "default/snow/123"
@@ -229,6 +233,38 @@ class TestWarnOnInvalidTransformedAssets:
             # asset's actual .validate() message — pin a stable substring of it
             # rather than a bare truthiness check.
             assert "qualified_name is required" in invalid_rows[0]["error"]
+
+    async def test_creation_rules_flag_a_missing_sql_parent(
+        self, tmp_path: Path
+    ) -> None:
+        # Off by default (pyatlan 11.5.0 no longer checks a Schema's database);
+        # the app's asset_validation_rules turn it back on for the upload hook.
+        _write_transformed(
+            tmp_path,
+            "Schema",
+            [
+                Schema(
+                    name="SCHEMA",
+                    qualified_name=SCHEMA_QN,
+                    connection_qualified_name=CONN,
+                )
+            ],
+        )
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(str(tmp_path), APP)
+            assert _outcome_event(logger)["outcome"] == "clean"
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(
+                str(tmp_path),
+                APP,
+                creation_rules=frozenset({AssetCreationRules.SQL_PARENTS}),
+            )
+            ev = _outcome_event(logger)
+            assert ev["outcome"] == "flagged"
+            details = {
+                row["detail"] for row in json.loads(ev[ASSET_VALIDATION_SUMMARY_KEY])
+            }
+            assert "required_for_creation:database" in details
 
     async def test_orphan_assets_warn_but_do_not_raise(self, tmp_path: Path) -> None:
         # BLDX-1555 decision: the upload hook runs the full referential pass by
