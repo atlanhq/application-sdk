@@ -508,6 +508,33 @@ entry rather than a comment:
   `[""]` is AE's fire-and-forget form. Suppressing it needs the AE change
   shipped first — the same ordering as the first bullet.
 
+## The declared-source `agent_json` (format 2)
+
+| | |
+|---|---|
+| **Produced by** | The SDR setup form (Agent widget) through Heracles, and any one-off migration that rewrites a published workflow's `agent_json` (create-version → publish) |
+| **Read by** | `AgentCredentialSpec` (`application_sdk/credentials/spec.py`) at ingress; resolution in `application_sdk/credentials/agent.py` |
+| **Key** | Top-level `"format": 2`; every non-envelope field is `{"value": X}` or `{"valueFrom": {"secretKeyRef": {"name", "key"}}}` / `{"valueFrom": {"fileRef": {"path"}}}`; internal round-trip key `value-sources` |
+| **Pinned by** | `tests/unit/credentials/test_agent_json_declared_sources.py` |
+
+The full field rules are in [credentials](../concepts/credentials.md#declared-sources-format-2).
+This entry is about rollout, because the producer and the reader ship
+separately:
+
+- **The reader must ship first.** An SDK without this parser receives
+  `{"value": 3306}` where `port: int` expects an int and fails typed
+  validation; it would also probe the `format` value. Emit format 2 only for
+  an app whose SDK reads it. The contract toolkit's generated credential config
+  is the planned gate (FND-4361).
+- **Migrating a published workflow** has the same ordering: bump and deploy
+  the app first, then publish the new version.
+- **`value-sources` is internal.** It is the normalized form a re-parsed spec
+  carries (`to_raw_dict()`, serialized workflow inputs). Producers never write
+  it; a producer that sends it alongside `"format": 2` is rejected.
+- **A legacy payload is unchanged on the wire**, and its serialized form gains
+  no key. Legacy probing, and the FND-4407 single-key fallback that keeps a
+  value the store rejects, are removed only once no legacy payload remains.
+
 ## The PR test-command statuses and dispatch inputs (`/e2e`, `/gate-check`)
 
 | | |

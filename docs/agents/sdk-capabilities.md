@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.52.0
-source-sha:    2bdc086a45cfab0535a9ed27c732ff626de98950
-source-date:   2026-10-25T14:08:55Z
+source-sha:    ceb8a22d9d759347423105132ab8c83faa44127d
+source-date:   2026-10-27T15:56:40+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -27,7 +27,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 75 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
@@ -2726,6 +2726,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 
 ### Classes
 
+#### `AgentSecretReadError`
+
+- **Import:** `from application_sdk.infrastructure import AgentSecretReadError`
+- **Signature:** `class AgentSecretReadError(label: str, *, fields: str, retryable: bool | None = None)`
+- **Summary:** The store refused to return a *declared* agent secret.
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `AsyncDaprClient`
 
 - **Import:** `from application_sdk.infrastructure import AsyncDaprClient`
@@ -2892,6 +2899,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Import:** `from application_sdk.infrastructure import SecretStoreError`
 - **Signature:** `class SecretStoreError(message: str, ...)`
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
+#### `SecretStoreTransientError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreTransientError`
+- **Signature:** `class SecretStoreTransientError`
+- **Summary:** The secret store answered, but with a temporary failure (throttling or a
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `SecretStoreUnavailableError`
@@ -7767,6 +7781,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `aws_region: str` `= Field(default='', alias='aws-region')` — AWS region for the secret manager.
   - `aws_auth_method: str` `= Field(default='', alias='aws-auth-method')` — AWS auth method: ``iam``, ``iam-assume-role``, ``access-key``.
   - `azure_auth_method: str` `= Field(default='', alias='azure-auth-method')` — Azure auth method: ``managed_identity``, ``service_principal``.
+  - `value_sources: dict[str, dict[str, str]] | None` `= Field(default=None, alias=VALUE_SOURCES_KEY)` — Declared ``secretKeyRef`` sources, ``{field: {"name", "key"}}``, of a
 - **Defined in:** `application_sdk/credentials/spec.py`
 
 #### `ApiMetadataObject`
