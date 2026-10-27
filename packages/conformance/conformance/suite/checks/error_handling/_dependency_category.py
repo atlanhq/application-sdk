@@ -53,6 +53,7 @@ SDK_DEPENDENCY_UNAVAILABLE_CLASSES: frozenset[str] = frozenset(
         "RedisLockError",
         "RedisProtocolError",
         "SecretStoreError",
+        "SecretStoreTransientError",
         "SecretStoreUnavailableError",
         "SecretStoreUnreachableError",
         "StateDownloadError",

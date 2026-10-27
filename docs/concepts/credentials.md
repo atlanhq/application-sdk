@@ -322,10 +322,19 @@ In `"format": 2` every field declares its source, modelled on Kubernetes
 - **`secretKeyRef`** is looked up strictly. Each `name` is fetched once; `key`
   picks the field from a bundle secret (Kubernetes, Vault, an AWS JSON secret).
   For a single-value secret (Azure Key Vault, GCP, a plain AWS string), set
-  `key` equal to `name`. A missing secret or key raises
-  `CredentialNotFoundError` (USER); any other store failure raises
-  `SecretStoreError`, keeping its outage subtype and `retryable` hint. There is
-  no fallback, because the field is known to be a secret.
+  `key` equal to `name`. There is no fallback, because the field is known to
+  be a secret. Each failure goes to whoever can fix it:
+
+  | Store answer | Error | Audience |
+  |---|---|---|
+  | Secret, or the key inside it, absent | `CredentialNotFoundError` | USER |
+  | Refused: access denied, invalid name, Dapr 403 scoping | `AgentSecretReadError` (PRECONDITION, `suggested_action`, `retryable` from the store) | USER |
+  | Throttled or a transient server error | `SecretStoreTransientError` (retryable) | PLATFORM |
+  | Outage: unreachable, cold start | `SecretStoreUnreachableError` / `SecretStoreUnavailableError` | PLATFORM |
+
+  On an SDR the store and its identity are the customer's, so a refused
+  declared ref is theirs to fix. The preflight row reports it as a config gap,
+  not a store outage.
 - **`fileRef`** is handed to `resolve_credential_file` like any
   `objectstore://` value.
 

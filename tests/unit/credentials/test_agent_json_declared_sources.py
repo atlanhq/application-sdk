@@ -31,8 +31,10 @@ from application_sdk.credentials.errors import (
     CredentialParseError,
 )
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.handler.contracts import HandlerCredential
 from application_sdk.infrastructure.secrets import (
+    AgentSecretReadError,
     SecretNotFoundError,
     SecretStoreError,
     SecretStoreUnavailableError,
@@ -511,10 +513,59 @@ class TestResolve:
         spec = AgentCredentialSpec.model_validate(
             _v2(**{"basic.password": _ref("prod/denied")})
         )
-        with pytest.raises(SecretStoreError) as exc_info:
+        with pytest.raises(AgentSecretReadError) as exc_info:
             await resolve_agent_credential(spec, RecordingStore())  # type: ignore[arg-type]
-        assert exc_info.value.effective_retryable is True
-        assert "prod/denied" not in str(exc_info.value)
+        err = exc_info.value
+        # The customer's store refused a field known to be a ref: theirs to fix.
+        assert err.category is FailureCategory.PRECONDITION
+        assert err.audience is Audience.USER
+        assert err.suggested_action
+        assert "basic.password" in str(err)
+        assert "prod/denied" not in str(err)
+        # Still a store error for existing handlers, and a throttle still retries.
+        assert isinstance(err, SecretStoreError)
+        assert err.effective_retryable is True
+
+    async def test_a_throttled_declared_ref_retries_not_blamed_on_the_user(
+        self,
+    ) -> None:
+        """A throttle is the store saying "try again": retryable, and not a
+        USER "fix your grants" error."""
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
+
+        class ThrottledStore:
+            async def get(self, name: str) -> str:
+                raise SecretStoreTransientError(
+                    "ThrottlingException: Rate exceeded",
+                    secret_name=name,
+                    retryable=True,
+                )
+
+        spec = AgentCredentialSpec.model_validate(
+            _v2(**{"basic.password": _ref("prod/mysql")})
+        )
+        with pytest.raises(SecretStoreTransientError) as exc_info:
+            await resolve_agent_credential(spec, ThrottledStore())  # type: ignore[arg-type]
+        err = exc_info.value
+        assert not isinstance(err, AgentSecretReadError)
+        assert err.effective_retryable is True
+        assert "prod/mysql" not in str(err)
+        assert "basic.password" in str(err)
+
+    async def test_a_non_store_failure_stays_platform(self) -> None:
+        """A bug in the fetch path is not the customer's to fix."""
+
+        class BrokenStore:
+            async def get(self, name: str) -> str:
+                raise TypeError("unexpected payload shape")
+
+        spec = AgentCredentialSpec.model_validate(
+            _v2(**{"basic.password": _ref("prod/mysql")})
+        )
+        with pytest.raises(SecretStoreError) as exc_info:
+            await resolve_agent_credential(spec, BrokenStore())  # type: ignore[arg-type]
+        assert not isinstance(exc_info.value, AgentSecretReadError)
+        assert exc_info.value.audience is not Audience.USER
 
     async def test_declared_ref_outage_keeps_its_type(self) -> None:
         class DownStore:
@@ -573,11 +624,28 @@ class TestPreflight:
         assert not result.store_down
         assert "basic.password" in result.message
 
-    async def test_declared_ref_store_failure_is_store_down(self) -> None:
+    async def test_declared_ref_refused_is_a_config_gap_not_store_down(self) -> None:
+        """A refused declared ref is the customer's grant to fix, so the row is
+        a PRECONDITION config gap, not a store outage."""
         spec = AgentCredentialSpec.model_validate(
             _v2(**{"basic.password": _ref("prod/denied")})
         )
         result = await check_secret_store_access(spec, RecordingStore())  # type: ignore[arg-type]
         assert not result.passed
+        assert result.fatal
+        assert not result.store_down
+        assert "basic.password" in result.message
+        assert "prod/denied" not in result.message
+        assert result.suggested_action
+
+    async def test_declared_ref_outage_is_store_down(self) -> None:
+        class DownStore:
+            async def get(self, name: str) -> str:
+                raise SecretStoreUnavailableError(name)
+
+        spec = AgentCredentialSpec.model_validate(
+            _v2(**{"basic.password": _ref("prod/mysql")})
+        )
+        result = await check_secret_store_access(spec, DownStore())  # type: ignore[arg-type]
         assert result.fatal
         assert result.store_down

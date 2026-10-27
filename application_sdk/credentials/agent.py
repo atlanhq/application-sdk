@@ -71,8 +71,10 @@ from application_sdk.infrastructure._single_key_probe import (
     scrubbed_traceback,
 )
 from application_sdk.infrastructure.secrets import (
+    AgentSecretReadError,
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
 )
@@ -294,10 +296,25 @@ def _declared_store_error(label: str, fields: str, exc: Exception) -> SecretStor
         )
     if isinstance(exc, ColdStartRaceError):
         return SecretStoreUnavailableError(label)
+    if isinstance(exc, SecretStoreTransientError):
+        # Throttled or a transient server error: the store said "try again",
+        # so retry it; nobody has a grant to fix.
+        return SecretStoreTransientError(
+            f"Secret store was temporarily unable to return the secret declared "
+            f"for field '{fields}'.",
+            secret_name=label,
+            retryable=True,
+        )
+    if isinstance(exc, SecretStoreError):
+        # The store answered and refused a field known to be a ref: the
+        # customer's store or grants must change, so it goes to the user.
+        return AgentSecretReadError(
+            label, fields=fields, retryable=exc.effective_retryable
+        )
+    # Not a store answer (a bug in the fetch path): the platform's to fix.
     return SecretStoreError(
-        f"Secret store failed to return the secret declared for field "
-        f"'{fields}' ({type(exc).__name__}). Check that the secret exists and "
-        "that the SDR's secret-store identity can read it.",
+        f"Secret store lookup for the secret declared for field '{fields}' "
+        f"failed ({type(exc).__name__}).",
         secret_name=label,
         retryable=exc.effective_retryable if isinstance(exc, AppError) else None,
     )
@@ -704,10 +721,11 @@ async def _check_declared_sources(
 ) -> SecretStoreCheckResult:
     """The secret-store preflight row for a format-2 payload.
 
-    Only declared refs are looked up, so a failure is never ambiguous: a
-    missing secret is the user's config (fatal, not ``store_down``), and any
-    other failure is the store's (fatal, ``store_down``). A payload declaring
-    no refs passes without touching the store.
+    Only declared refs are looked up, so a failure is never ambiguous. A
+    missing secret, or one the store refuses (access denied), is the user's
+    config: fatal, not ``store_down``, rendered as a PRECONDITION row. An
+    outage is the store's: fatal and ``store_down``. A payload declaring no
+    refs passes without touching the store.
     """
     sources = spec.value_sources or {}
     try:
@@ -728,6 +746,18 @@ async def _check_declared_sources(
                 "Check that each field's secretKeyRef names a secret, and a key "
                 "inside it, that exist in the secret store."
             ),
+        )
+    except AgentSecretReadError as exc:
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=True,
+            substituted=0,
+            message=(
+                "Configured secret store is reachable, but it refused a declared "
+                f"secret reference: {exc.message}"
+            ),
+            suggested_action=exc.suggested_action,
         )
     except (DependencyUnavailableError, CredentialError):
         return SecretStoreCheckResult(
