@@ -123,6 +123,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "discovery).  Block-tier since CNCT-108 (parent CNCT-93): a\n"
             "rolled-own logger loses correlation IDs and source provenance,\n"
             "making its records unfindable on the tenant UI.\n"
+            "\n"
+            "The finding is file-level and reported on line 1, or on the first\n"
+            "line after a shebang and/or PEP 263 coding line, so a\n"
+            "``# conformance: ignore[L002] reason`` directive on that line\n"
+            "suppresses it.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
         remediation_reference=RemediationReference(
@@ -300,7 +305,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "degrades performance.  INFO is for lifecycle milestones, not per-item\n"
             "events.  Use DEBUG per-item and INFO for the loop summary.  The checker\n"
             "should inspect whether the loop is clearly bounded (≤10 items) before\n"
-            "flagging.\n"
+            "flagging.  A throttled progress log is a milestone and is not flagged:\n"
+            "the body of an ``if`` inside the innermost loop whose test is a modulo\n"
+            "counter (``n % N == 0``) or an elapsed-time threshold\n"
+            "(``time.monotonic() - last >= S``).  Under ``or``, every other disjunct\n"
+            "must be a throttle or an ``==`` comparison such as ``done == total``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l006",
         remediation_reference=RemediationReference(
@@ -425,6 +434,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "Logging an error immediately before re-raising creates duplicate records in\n"
             "the log stream, inflating error counts in dashboards.  Acceptable only\n"
             "when adding context not available to the caller.  Otherwise: just re-raise.\n"
+            "The checker exempts the provable form of that context: outside any\n"
+            "``except`` handler, a log whose non-constant value arguments share no\n"
+            "name or attribute with the arguments of the ``raise Err(...)`` it\n"
+            "precedes.  A bare ``raise``, constant-only arguments, or any log inside\n"
+            "a handler (an L004/E005 site) still fires.\n"
+            "A ``raise HTTPException(...)`` (fastapi/starlette) is exempt anywhere:\n"
+            "the framework never logs it, so the preceding log is the only record.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l009",
         remediation_reference=RemediationReference(

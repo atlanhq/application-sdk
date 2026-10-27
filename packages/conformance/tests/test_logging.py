@@ -747,7 +747,8 @@ def outer(extra):
     assert "L006" in _ids(src)
 
 
-def test_l006_fires_for_producer_progress_in_unbounded_async_for() -> None:
+def test_l006_silent_for_modulo_throttled_producer_progress() -> None:
+    """Progress gated by ``count % N == 0`` is a milestone, not per-item volume."""
     src = """
 from loguru import logger
 
@@ -761,10 +762,10 @@ async def list_sources(client, writer, queue):
         await queue.put(source)
     logger.info("Producer done: %s sources listed", source_count)
 """
-    assert _ids_unsorted(src).count("L006") == 1
+    assert "L006" not in _ids(src)
 
 
-def test_l006_fires_for_stream_progress_in_unbounded_async_for() -> None:
+def test_l006_silent_for_modulo_throttled_stream_progress() -> None:
     src = """
 from loguru import logger
 
@@ -775,6 +776,136 @@ async def stream_records(records):
         if total_count % 10000 == 0:
             logger.info("Streamed %s records so far", total_count)
     logger.info("Finished streaming %s records", total_count)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_silent_for_elapsed_time_throttle_in_while_loop() -> None:
+    src = """
+import time
+from loguru import logger
+
+def drain(queue):
+    last_log = time.monotonic()
+    while queue:
+        queue.pop()
+        if time.monotonic() - last_log >= 600:
+            logger.info("still draining: %d left", len(queue))
+            last_log = time.monotonic()
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_silent_for_combined_modulo_time_and_final_throttle() -> None:
+    src = """
+import time
+from loguru import logger
+
+def run(items, total):
+    completed = 0
+    last = time.monotonic()
+    for item in items:
+        completed += 1
+        now = time.monotonic()
+        if completed % 500 == 0 or (now - last) >= 30 or completed == total:
+            logger.info("Loop progress %d/%d", completed, total)
+            last = now
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_silent_for_elif_and_datetime_throttles() -> None:
+    src = """
+from datetime import datetime
+from loguru import logger
+
+def run(items, start):
+    for n, item in enumerate(items):
+        if item is None:
+            continue
+        elif (datetime.now() - start).total_seconds() > 60:
+            logger.info("progress: %d", n)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_info_in_else_of_modulo_throttle() -> None:
+    """The else branch of a throttle runs on every other item."""
+    src = """
+from loguru import logger
+
+def run(items):
+    for n, item in enumerate(items):
+        if n % 100 == 0:
+            pass
+        else:
+            logger.info("item %s", item)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_for_unthrottled_info_beside_throttled_one() -> None:
+    src = """
+from loguru import logger
+
+def run(items):
+    for n, item in enumerate(items):
+        logger.info("item %s", item)
+        if n % 100 == 0:
+            logger.info("progress %d", n)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_when_throttle_if_wraps_an_inner_loop() -> None:
+    """A throttle outside the innermost loop does not limit that loop."""
+    src = """
+from loguru import logger
+
+def run(batches):
+    for n, batch in enumerate(batches):
+        if n % 10 == 0:
+            for item in batch:
+                logger.info("item %s", item)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_when_a_disjunct_admits_every_item() -> None:
+    src = """
+from loguru import logger
+
+def run(items):
+    for n, item in enumerate(items):
+        if item.failed or n % 100 == 0:
+            logger.info("item %s", item)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_for_per_item_duration_filter() -> None:
+    """A time difference read from the loop item filters items; it is no throttle."""
+    src = """
+from loguru import logger
+
+def run(queries):
+    for q in queries:
+        if q.end_time - q.start_time > 5:
+            logger.info("slow query %s", q.id)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_for_non_zero_modulo_or_non_time_subtraction() -> None:
+    src = """
+from loguru import logger
+
+def run(items, size):
+    for n, item in enumerate(items):
+        if n % 100 == 1:
+            pass
+        if size - n >= 0:
+            logger.info("item %s", item)
 """
     assert _ids_unsorted(src).count("L006") == 1
 
@@ -883,6 +1014,131 @@ def test_l009_suppressed_with_directive() -> None:
     findings = scan_text(src, "x.py")
     l009 = [f for f in findings if f.rule_id == "L009"]
     assert all(f.suppressed for f in l009)
+
+
+def test_l009_silent_when_log_adds_context_the_raise_lacks() -> None:
+    src = (
+        "from loguru import logger\n"
+        "def validate(connection, attrs):\n"
+        "    if 'host' not in connection:\n"
+        "        logger.error('bad connection: keys=%s attrs=%s',"
+        " list(connection.keys()), list(attrs.keys()))\n"
+        "        raise RequestInvalid('Connection is missing required properties')\n"
+    )
+    assert "L009" not in _ids(src)
+
+
+def test_l009_silent_for_distinct_attribute_on_shared_receiver() -> None:
+    src = (
+        "from loguru import logger\n"
+        "class C:\n"
+        "    def f(self):\n"
+        "        logger.warning('unreachable host %s', self.host)\n"
+        "        raise ConnError(f'connection {self.name} failed')\n"
+    )
+    assert "L009" not in _ids(src)
+
+
+def test_l009_fires_for_context_log_inside_except_handler() -> None:
+    """In a handler the same line is an L004/E005 site; the carve-out applies."""
+    src = (
+        "from loguru import logger\n"
+        "def f(connection):\n"
+        "    try:\n"
+        "        connect()\n"
+        "    except KeyError:\n"
+        "        logger.error('bad keys %s', list(connection.keys()))\n"
+        "        raise RequestInvalid('missing')\n"
+    )
+    assert "L009" in _ids(src)
+
+
+def test_l009_fires_when_raise_carries_the_logged_value() -> None:
+    src = (
+        "from loguru import logger\n"
+        "def f(table):\n"
+        "    logger.error('cannot read table %s', table)\n"
+        "    raise ReadError(f'cannot read {table}')\n"
+    )
+    assert "L009" in _ids(src)
+
+
+def test_l009_fires_when_raise_carries_the_logged_attribute() -> None:
+    src = (
+        "from loguru import logger\n"
+        "class C:\n"
+        "    def f(self):\n"
+        "        logger.warning('unreachable host %s', self.host)\n"
+        "        raise ConnError(self.host)\n"
+    )
+    assert "L009" in _ids(src)
+
+
+def test_l009_fires_for_constant_only_log_arguments() -> None:
+    src = (
+        "from loguru import logger\n"
+        "def f():\n"
+        "    logger.error('failed: %s', 'config')\n"
+        "    raise ValueError('bad')\n"
+    )
+    assert "L009" in _ids(src)
+
+
+def test_l009_fires_for_bare_reraise_with_context_args() -> None:
+    src = (
+        "from loguru import logger\n"
+        "def f(table):\n"
+        "    logger.error('cannot read table %s', table)\n"
+        "    raise\n"
+    )
+    assert "L009" in _ids(src)
+
+
+@pytest.mark.parametrize(
+    ("imports", "raised"),
+    [
+        ("from fastapi import HTTPException\n", "HTTPException(status_code=500)"),
+        ("from starlette.exceptions import HTTPException as HE\n", "HE(500)"),
+        ("import fastapi\n", "fastapi.HTTPException(status_code=500)"),
+        ("", "HTTPException(status_code=500)"),
+    ],
+    ids=["fastapi", "starlette-alias", "module-attribute", "bare-name"],
+)
+def test_l009_silent_before_http_exception(imports: str, raised: str) -> None:
+    """The framework never logs an HTTPException; the log is the only record."""
+    src = (
+        "from loguru import logger\n" + imports + "def f():\n"
+        "    try:\n"
+        "        run()\n"
+        "    except Exception as e:\n"
+        "        logger.error('check result refused: %s', e, exc_info=True)\n"
+        f"        raise {raised} from None\n"
+    )
+    assert "L009" not in _ids(src)
+
+
+def test_l009_fires_for_http_exception_named_on_another_module() -> None:
+    src = (
+        "from loguru import logger\n"
+        "import mylib\n"
+        "def f():\n"
+        "    logger.error('refused')\n"
+        "    raise mylib.HTTPException(500)\n"
+    )
+    assert "L009" in _ids(src)
+
+
+def test_l009_fires_for_earlier_duplicate_behind_a_context_log() -> None:
+    """A context log closest to the raise does not hide a duplicate before it."""
+    src = (
+        "from loguru import logger\n"
+        "def f(attrs):\n"
+        "    logger.error('validation failed')\n"
+        "    logger.error('attrs=%s', list(attrs))\n"
+        "    raise ValueError('bad')\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "L009"]
+    assert [f.line for f in findings] == [3]
 
 
 # ---------------------------------------------------------------------------
@@ -1473,6 +1729,52 @@ def test_l002_suppression_directive(tmp_path: Path) -> None:
     findings = _scan_files(tmp_path, {"legacy.py": src})
     l002 = [f for f in findings if f.rule_id == "L002"]
     assert all(f.suppressed for f in l002)
+
+
+@pytest.mark.parametrize(
+    ("header", "line"),
+    [
+        ("#!/usr/bin/env python3\n", 2),
+        ("#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n", 3),
+        ("# -*- coding: utf-8 -*-\n", 2),
+    ],
+    ids=["shebang", "shebang-and-coding", "coding"],
+)
+def test_l002_suppression_after_shebang_or_coding_header(
+    tmp_path: Path, header: str, line: int
+) -> None:
+    """A directive on the first line after a shebang/coding header suppresses L002.
+
+    Neither header line can carry a directive, so a finding pinned to line 1
+    of a shebang script could never be suppressed.
+    """
+    src = (
+        header + "# conformance: ignore[L002] standalone CLI, runs outside workflows\n"
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+    )
+    findings = _scan_files(tmp_path, {"tool.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert len(l002) == 1
+    assert l002[0].line == line
+    assert l002[0].suppressed
+
+
+def test_l002_fires_after_shebang_without_directive(tmp_path: Path) -> None:
+    src = (
+        "#!/usr/bin/env python3\nimport logging\nlogger = logging.getLogger(__name__)\n"
+    )
+    findings = _scan_files(tmp_path, {"tool.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert len(l002) == 1
+    assert l002[0].line == 2
+    assert not l002[0].suppressed
+
+
+def test_l002_reported_at_line_1_without_header(tmp_path: Path) -> None:
+    src = "import logging\nlogger = logging.getLogger(__name__)\n"
+    findings = _scan_files(tmp_path, {"a.py": src})
+    assert [f.line for f in findings if f.rule_id == "L002"] == [1]
 
 
 def test_l002_is_block_tier() -> None:

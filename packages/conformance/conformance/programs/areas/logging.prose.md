@@ -71,7 +71,10 @@ within the three statements before a `raise` in the same block is an **L009
 site**, and the same line is usually reported by L004 and E005 as well.  The
 test: L009 also reports the line, or, reading the code, the call is one of
 the three statements immediately preceding a `raise` in the same statement
-list (a `raise` inside a nested `if`/`with` does not count).
+list (a `raise` inside a nested `if`/`with` does not count).  A
+`raise HTTPException(...)` (fastapi/starlette) is never an L009 site: the
+framework answers the request from it without logging it, so the log is the
+only server-side record; resolve L004/E005 there as usual.
 
 At an L009 site, **do not enrich the log**: add neither `exc_info=True` nor
 the sanitized `sanitize_cause_repr(exc)` / `safe_traceback(exc)` arguments.
@@ -262,7 +265,9 @@ report that site the same way.
      other usages remain in the file.
   Classification is always `"judgment"` — the import change affects the whole
   file and requires verifying that no other symbols from the removed import
-  are still in use.
+  are still in use.  The finding is file-level: it sits on line 1, or on the
+  first line after a shebang and/or coding line, and a suppression directive
+  belongs on that same line.
 
 - **L005 PrintInProductionCode** — replace `print(...)` with a logger call.
   Choose level from context:
@@ -369,7 +374,12 @@ report that site the same way.
   function.  Mirror `atlan-metabase-app
   app/extracts/process.py`, where the per-dashboard skip inside `process_assets`
   logs at DEBUG.  Do not simply delete a per-item call: the record is still
-  wanted at DEBUG.
+  wanted at DEBUG.  A throttled progress log is already a milestone and is
+  not reported: an INFO in the body of an `if` inside the loop whose test is
+  a modulo counter (`if count % 1000 == 0:`) or an elapsed-time threshold
+  (`if time.monotonic() - last_log >= 600:`), optionally `or`-ed with an `==`
+  final check (`or completed == total`).  The `else` of such an `if` is still
+  per-item.
 
 - **L008 UnguardedExpensiveDebug** — an argument to `logger.debug()` is
   computed before the call, so it runs at every level.  Prefer making the
@@ -432,6 +442,19 @@ report that site the same way.
   exception genuinely cannot (a loop index, the URL being retried) — then the
   honest fix is to move that context into the exception and delete the log.
   Say in the edit description which of the three cases you found.
+
+  The checker already exempts the provable form of that context, so a log
+  that matches it is never reported: outside any `except` handler, a log
+  whose non-constant value arguments share no name or attribute with the
+  arguments of the `raise Err(...)` right after it (`logger.error("bad
+  connection: keys=%s", list(connection.keys()))` before
+  `raise RequestInvalid("Connection is missing required properties")`).
+  Inside a handler the same line is still an L009 site, and the pre-raise
+  carve-out above applies unchanged.
+
+  A `raise HTTPException(...)` from fastapi or starlette is exempt wherever it
+  sits, handler or not: the framework turns it into a response and never logs
+  it, so the line before it is the only server-side record.  Keep that log.
 
 - **L010 CredentialInLogOutput** — BLOCK, and a security finding.  Log the
   credential's *name* or *type*, never its value: drop the offending argument

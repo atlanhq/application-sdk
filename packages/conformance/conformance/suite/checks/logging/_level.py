@@ -144,6 +144,192 @@ def _continues_enclosing_loop(
     return False
 
 
+# ── L006 throttle recognition ────────────────────────────────────────────────
+#
+# A progress log gated by a modulo counter or an elapsed-time threshold fires
+# once per N items or once per S seconds — a milestone, not per-item volume.
+# Recognition is purely structural so it stays provable from the AST.
+
+# Calls whose result is a clock reading: ``time.monotonic()``, ``time()``,
+# ``datetime.now()``, ``loop.time()`` and the ``_ns`` variants.
+_CLOCK_CALLS: frozenset[str] = frozenset(
+    {
+        "time",
+        "time_ns",
+        "monotonic",
+        "monotonic_ns",
+        "perf_counter",
+        "perf_counter_ns",
+        "now",
+        "utcnow",
+    }
+)
+
+# ``_``-separated tokens that mark a name as holding a clock reading
+# (``now``, ``last_log``, ``start_ts``, ``last_progress_time``).
+_CLOCK_NAME_TOKENS: frozenset[str] = frozenset(
+    {
+        "now",
+        "time",
+        "ts",
+        "timestamp",
+        "last",
+        "start",
+        "started",
+        "clock",
+        "tick",
+        "elapsed",
+        "monotonic",
+        "t0",
+    }
+)
+
+
+def _is_clock_operand(node: ast.expr) -> bool:
+    """True when *node* is a clock reading: a clock call or a time-ish name."""
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = (
+            func.attr
+            if isinstance(func, ast.Attribute)
+            else func.id
+            if isinstance(func, ast.Name)
+            else None
+        )
+        return name in _CLOCK_CALLS
+    name = (
+        node.attr
+        if isinstance(node, ast.Attribute)
+        else node.id
+        if isinstance(node, ast.Name)
+        else None
+    )
+    if name is None:
+        return False
+    return any(token in _CLOCK_NAME_TOKENS for token in name.lower().split("_"))
+
+
+def _reads_item_field(node: ast.expr, item_names: frozenset[str]) -> bool:
+    """True for an attribute/subscript rooted at a loop target (``q.start_time``)."""
+    if not isinstance(node, (ast.Attribute, ast.Subscript)):
+        return False
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return isinstance(node, ast.Name) and node.id in item_names
+
+
+def _is_elapsed(node: ast.expr, item_names: frozenset[str]) -> bool:
+    """True for ``a - b`` with a clock operand, or ``(a - b).total_seconds()``.
+
+    A field of the loop item (``q.end_time - q.start_time``) is a per-item
+    filter, not a throttle, so an operand read from the item disqualifies it.
+    """
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "total_seconds"
+        and not node.args
+    ):
+        node = node.func.value
+    return (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Sub)
+        and (_is_clock_operand(node.left) or _is_clock_operand(node.right))
+        and not _reads_item_field(node.left, item_names)
+        and not _reads_item_field(node.right, item_names)
+    )
+
+
+def _is_zero(node: ast.expr) -> bool:
+    return (
+        isinstance(node, ast.Constant)
+        and type(node.value) is int  # excludes bool
+        and node.value == 0
+    )
+
+
+def _is_throttle_compare(node: ast.expr, item_names: frozenset[str]) -> bool:
+    """True for ``n % N == 0`` or an elapsed-time threshold comparison."""
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1:
+        return False
+    left, op, right = node.left, node.ops[0], node.comparators[0]
+    if isinstance(op, ast.Eq):
+        for mod, other in ((left, right), (right, left)):
+            if (
+                isinstance(mod, ast.BinOp)
+                and isinstance(mod.op, ast.Mod)
+                and not isinstance(mod.left, (ast.Constant, ast.JoinedStr))
+                and _is_zero(other)
+            ):
+                return True
+        return False
+    if isinstance(op, (ast.Gt, ast.GtE)):
+        return _is_elapsed(left, item_names)
+    if isinstance(op, (ast.Lt, ast.LtE)):
+        return _is_elapsed(right, item_names)
+    return False
+
+
+def _is_throttle_test(test: ast.expr, item_names: frozenset[str]) -> bool:
+    """True when an ``if`` test only lets a throttled subset of iterations in.
+
+    ``and`` narrows, so one throttle conjunct is enough.  ``or`` widens, so
+    every disjunct must be a throttle or an ``==`` comparison (the one-shot
+    ``completed == total`` final report); any other disjunct can admit every
+    item.
+    """
+    if _is_throttle_compare(test, item_names):
+        return True
+    if isinstance(test, ast.BoolOp):
+        if isinstance(test.op, ast.And):
+            return any(_is_throttle_test(value, item_names) for value in test.values)
+        return any(
+            _is_throttle_test(value, item_names) for value in test.values
+        ) and all(
+            _is_throttle_test(value, item_names)
+            or (
+                isinstance(value, ast.Compare)
+                and len(value.ops) == 1
+                and isinstance(value.ops[0], ast.Eq)
+            )
+            for value in test.values
+        )
+    return False
+
+
+def _is_throttled(node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While) -> bool:
+    """True when *node* sits in the body of a throttling ``if`` inside *loop*.
+
+    Only ``if`` statements between the call and its innermost loop count: an
+    ``if`` outside the loop does not limit how often the loop body runs, and
+    the ``else`` branch of a throttle is the per-item path.
+    """
+    parents = {
+        child: parent
+        for parent in ast.walk(loop)
+        for child in ast.iter_child_nodes(parent)
+    }
+    item_names = frozenset(
+        target.id
+        for target in (
+            ast.walk(loop.target) if isinstance(loop, (ast.For, ast.AsyncFor)) else ()
+        )
+        if isinstance(target, ast.Name)
+    )
+    child: ast.AST = node
+    ancestor = parents.get(node)
+    while ancestor is not None and ancestor is not loop:
+        if (
+            isinstance(ancestor, ast.If)
+            and any(child is statement for statement in ancestor.body)
+            and _is_throttle_test(ancestor.test, item_names)
+        ):
+            return True
+        child = ancestor
+        ancestor = parents.get(ancestor)
+    return False
+
+
 class LevelMixin(_MixinBase):
     """Rule methods for L006, L007, L017 (log-level category)."""
 
@@ -156,8 +342,11 @@ class LevelMixin(_MixinBase):
         monitor, drowning lifecycle signals in noise and inflating storage cost.
         INFO is for milestones; per-item progress belongs at DEBUG.
 
-        Exempt: loops bounded to ≤ 10 iterations and terminal logs that end with
-        a break (when outer loops do not repeat them) or an unconditional return.
+        Exempt: loops bounded to ≤ 10 iterations, terminal logs that end with
+        a break (when outer loops do not repeat them) or an unconditional return,
+        and throttled progress logs — the body of an ``if`` inside the innermost
+        loop whose test is a modulo counter (``n % N == 0``) or an elapsed-time
+        threshold (``now - last >= S``).
         """
         if not self._loop_stack:
             return
@@ -178,6 +367,8 @@ class LevelMixin(_MixinBase):
         if _is_terminal_return_summary(node, self._loop_stack[0]):
             return
         if enclosing_loops_are_bounded and _is_terminal_break_summary(node, innermost):
+            return
+        if _is_throttled(node, innermost):
             return
         self._add(
             "L006",

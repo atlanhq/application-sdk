@@ -123,6 +123,10 @@ and `run_dev*.py` never run inside a workflow, so the provenance argument does n
 CNCT-93): a rolled-own logger loses correlation IDs and source provenance, making its
 records unfindable on the tenant UI.
 
+The finding is file-level and reported on line 1, or on the first line after a shebang
+and/or PEP 263 coding line, so a `# conformance: ignore[L002] reason` directive on that
+line suppresses it.
+
 ---
 
 ## L003 — `ExtraKwargsWrongFramework` {#l003}
@@ -272,7 +276,11 @@ per-item progress belongs at DEBUG.
 Per-item INFO logging in a large loop drowns meaningful signals and degrades
 performance.  INFO is for lifecycle milestones, not per-item events.  Use DEBUG per-item
 and INFO for the loop summary.  The checker should inspect whether the loop is clearly
-bounded (≤10 items) before flagging.
+bounded (≤10 items) before flagging.  A throttled progress log is a milestone and is not
+flagged: the body of an `if` inside the innermost loop whose test is a modulo counter
+(`n % N == 0`) or an elapsed-time threshold (`time.monotonic() - last >= S`).  Under
+`or`, every other disjunct must be a throttle or an `==` comparison such as `done ==
+total`.
 
 ---
 
@@ -367,7 +375,12 @@ without dedup logic.
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
-available to the caller.  Otherwise: just re-raise.
+available to the caller.  Otherwise: just re-raise. The checker exempts the provable
+form of that context: outside any `except` handler, a log whose non-constant value
+arguments share no name or attribute with the arguments of the `raise Err(...)` it
+precedes.  A bare `raise`, constant-only arguments, or any log inside a handler (an
+L004/E005 site) still fires. A `raise HTTPException(...)` (fastapi/starlette) is exempt
+anywhere: the framework never logs it, so the preceding log is the only record.
 
 ---
 
