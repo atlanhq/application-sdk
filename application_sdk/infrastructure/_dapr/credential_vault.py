@@ -447,19 +447,27 @@ class DaprCredentialVault:
 
         Probing, classification and redaction are shared with the agent-shape
         resolver via
-        :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`:
-        a definitively-absent key is skipped (:meth:`_get_secret` returns
-        ``{}``), any store failure stops resolution rather than leaving the
-        ref-key in place as the credential value.
+        :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`.
+        A definitively-absent key is skipped (:meth:`_get_secret` returns
+        ``{}``). An outage or a recognised throttle stops resolution.
+
+        Single-key mode only runs for agent-sourced configs (direct configs
+        always fetch one bundle by GUID), so the store probed here is the
+        customer's SDR store. Heracles turns an SDR's agent_json into such a
+        config for Test Authentication, preflight and metadata calls. A store
+        refusal therefore keeps the value, with a WARNING: this is the same
+        deprecated, time-boxed bridge as the agent_json path (FND-4407), since
+        the probe can't tell a plain value from a ref-key either.
 
         Each probe's *inner* keys merge into one dict in **candidate order**, so
         a key returned by two probes is last-writer-wins with serial probing's
         tiebreak.
 
         Raises:
-            SecretStoreError: If any probe's store lookup failed (the subtypes
+            SecretStoreError: If a probe hit an outage (the subtypes
                 :class:`SecretStoreUnavailableError` /
-                :class:`SecretStoreUnreachableError` for an outage).
+                :class:`SecretStoreUnreachableError`). Any store answer,
+                throttles included, keeps the value as SDK <= 3.49 did.
                 Hash-labelled.
         """
         logger.debug("Single-key mode: fetching secrets per field")
@@ -468,7 +476,9 @@ class DaprCredentialVault:
             return await self._get_secret(value, log_label=label)
 
         resolved = await probe_single_keys(
-            _single_key_candidates(credential_config), _fetch
+            _single_key_candidates(credential_config),
+            _fetch,
+            keep_value_on_store_answer=True,
         )
 
         collected: dict[str, Any] = {}

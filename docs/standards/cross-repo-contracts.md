@@ -532,7 +532,8 @@ separately:
   carries (`to_raw_dict()`, serialized workflow inputs). Producers never write
   it; a producer that sends it alongside `"format": 2` is rejected.
 - **A legacy payload is unchanged on the wire**, and its serialized form gains
-  no key. Legacy probing is removed only once no legacy payload remains.
+  no key. Legacy probing, and the FND-4407 single-key fallback that keeps a
+  value the store rejects, are removed only once no legacy payload remains.
 
 ## The PR test-command statuses and dispatch inputs (`/e2e`, `/gate-check`)
 

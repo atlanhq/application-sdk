@@ -12,8 +12,10 @@ from obstore.store import GCSStore, LocalStore, MemoryStore
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
+    StorageAuthError,
     StorageConfigError,
     StorageError,
+    StorageGatewayAuthUnavailableError,
     StorageNotFoundError,
     StoragePermissionError,
 )
@@ -1195,7 +1197,7 @@ class TestListPermissionDenied:
         store = CloudStore(
             GCSStore("example-bucket", skip_signature=True), provider="gcs"
         )
-        with pytest.raises(StoragePermissionError) as ei:
+        with pytest.raises(StorageAuthError) as ei:
             await getattr(store, list_fn)("prefix/")
         assert ei.value.http_status == 401
         assert ei.value.provider_code is None
@@ -1269,3 +1271,97 @@ class TestReadWritePermissionDenied:
         with pytest.raises(StorageError) as ei:
             await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
         assert ei.value is original
+
+
+# An Azure service-principal secret the identity provider refused. obstore
+# reports the failed token request as a GenericError, so only the status text
+# says it was a 401.
+_AZURE_TOKEN_401 = (
+    "Generic MicrosoftAzure error: Error performing token request: Error "
+    "performing POST https://login.microsoftonline.com/example-tenant/oauth2/v2.0/"
+    "token in 77ms - Server returned non-2xx status code: 401 Unauthorized: "
+    '{"error":"invalid_client","error_description":"AADSTS7000215: Invalid '
+    'client secret provided.","error_codes":[7000215]}'
+)
+_GATEWAY_1005_401 = (
+    "Generic S3 error: Error performing GET request: non-2xx status code: 401 "
+    '{"code": 1005, "error": "Invalid Client"}'
+)
+
+
+def _wrapped(message: str, key: str) -> StorageError:
+    """A driver error as the head path delivers it: a StorageError chained to it."""
+    try:
+        raise RuntimeError(message)
+    except RuntimeError as driver:
+        err = StorageError(f"Failed to head key '{key}'", key=key, cause=driver)
+        err.__cause__ = driver
+        return err
+
+
+class TestAuthenticationRejected:
+    """A 401 is the credential itself being rejected: AUTH, not PERMISSION."""
+
+    async def test_download_single_azure_token_401(self, monkeypatch, tmp_path):
+        async def _boom(key, *_a, **_k):
+            raise _wrapped(_AZURE_TOKEN_401, key)
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StorageAuthError) as ei:
+            await _gcs_store().download(key="specs/api.json", output_dir=tmp_path)
+        err = ei.value
+        assert err.category.name == "AUTH"
+        assert err.audience.name == "USER"
+        assert err.effective_retryable is False
+        assert err.http_status == 401
+        assert err.key == "specs/api.json"
+        assert "secret value rather than the secret ID" in str(err)
+
+    def test_exported_from_storage_package(self):
+        import application_sdk.storage as storage
+
+        assert "StorageAuthError" in storage.__all__
+        assert storage.StorageAuthError is StorageAuthError
+
+    async def test_auth_error_is_still_a_permission_error(self, monkeypatch):
+        """Existing ``except StoragePermissionError`` blocks keep catching a 401."""
+
+        async def _boom(*_a, **_k):
+            raise RuntimeError(_AZURE_TOKEN_401)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StoragePermissionError):
+            await _gcs_store().get_bytes("specs/api.json")
+
+    async def test_403_stays_permission_not_auth(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise PermissionDeniedError(_GCS_VPC_SC_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert not isinstance(ei.value, StorageAuthError)
+        assert ei.value.category.name == "PERMISSION"
+
+    async def test_gateway_leaf_is_reraised_unchanged(self, monkeypatch, tmp_path):
+        original = StorageGatewayAuthUnavailableError(
+            "gateway lookup failed", key="data/a.json", http_status=401
+        )
+
+        async def _boom(*_a, **_k):
+            raise original
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value is original
+
+    async def test_raw_gateway_1005_is_not_a_credential_error(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(_GATEWAY_1005_401)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert not isinstance(ei.value, StoragePermissionError)
+        assert ei.value.effective_retryable is True

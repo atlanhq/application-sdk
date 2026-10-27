@@ -115,13 +115,22 @@ reads `{}` and silently falls back to the single-credential path. Apps that
 declare nothing keep the unchanged single-credential path via `input.credentials`.
 
 An agent credential spec routes to agent resolution only when it is
-*populated*: `agent-name` plus a fetch anchor — `secret-path` (bundle fetch) or
-`key-type: single-key` (per-key fetch). A name-only spec (for example the
+*populated*: `agent-name` plus a fetch anchor — `secret-path` (bundle fetch),
+`key-type: single-key` (per-key fetch), or declared value sources (`"format": 2`,
+see [declared sources](credentials.md#declared-sources-format-2)). A name-only spec (for example the
 Automation Engine placeholder `{"agent-name": "agent-name", ...}` stamped on
 non-agent runs) is not populated and falls through to `credential_guid`
 routing.
 
 #### Single-key secret resolution
+
+!!! warning "Deprecated for agent payloads"
+    Probing exists because a legacy `agent_json` can't say which fields are
+    secret names. A `"format": 2` payload declares each field's source and is
+    never probed. Legacy agent payloads log a `DEPRECATED agent_json format`
+    WARNING and will be migrated (FND-4361). **Declared sources are the way
+    forward**; legacy payloads, and probing with them, are **removed in SDK
+    v4.0.0**.
 
 When a credential arrives as a flat dict of fields rather than a named ref, the
 SDK probes each string value to see whether it is a key in the secret store.
@@ -133,19 +142,36 @@ bounded by a small fan-out cap (`MAX_CONCURRENT_SINGLE_KEY_PROBES = 8`) so a wid
 credential does not pay one full store retry ladder per field. Results are
 merged in candidate order, so resolution is byte-identical to serial probing.
 
-Each probe has one of three outcomes:
+Each probe has one of four outcomes:
 
 - **Resolved** — the field's value is replaced with the secret.
 - **Absent** — the store definitively has no such key, so the field keeps its
   literal value (a host, a database name, an inline credential). "Absent" means
   Dapr's `500`/`ERR_SECRET_GET` with a not-found message (`secret … not found`,
   `ResourceNotFoundException`, `SecretNotFound`, …).
-- **Store error** — anything else: a throttled vault, an IAM or KMS denial, a
-  `403` `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an
-  outage. Resolution **stops** with a `SecretStoreError` (hash-labelled,
-  keeping its `retryable` hint) instead of skipping the field. Skipping it used
-  to send the ref-key itself to the source as the password: an auth failure
-  blamed on the user, plus a burned lockout attempt.
+- **Store outage** — the sidecar or store is unreachable, cold-starting or
+  unavailable. Resolution **stops** with a hash-labelled `SecretStoreError`
+  subtype, and the run retries.
+- **Store answer** — anything else: an IAM or KMS denial, a `403`
+  `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an invalid
+  secret name, a throttle, or wording no backend documents. The field keeps its
+  value, with a WARNING. This is SDK <= 3.49 behaviour, restored for legacy
+  payloads as a deprecated fallback that is removed in SDK v4.0.0 (FND-4407).
+  No error wording decides the outcome, so no unrecognised store answer can
+  fail a plain-value config. Declared sources (`"format": 2`) are the way
+  forward: new and migrated workflows should use them.
+  - Probing only ever runs for legacy SDR payloads: legacy agent_json payloads
+    and agent-sourced GUID configs (the form Heracles turns an SDR's
+    agent_json into for Test Authentication, preflight and metadata calls).
+    Both read the customer's SDR store. Direct (hosted) configs fetch one
+    bundle by GUID and never probe.
+  - A probe can't tell a plain username, database name, URL or role ARN from a
+    ref-key, and stores that reject those as names failed runs whose config
+    hadn't changed (SDK 3.50 to 3.5x).
+  - The known cost, as in 3.49: a *real* ref-key that the store denies or
+    throttles is sent as the value, so the connection fails with an auth error.
+    Declared sources (`"format": 2`, below) remove both problems: plain values
+    never reach the store, and refs are looked up strictly.
 
 What the logs tell you:
 
@@ -155,8 +181,11 @@ What the logs tell you:
 - **Nothing resolved** also logs INFO ("resolved 0 of N probed fields"). This is
   *not* an error: a credential that carries literal usernames and passwords
   inline rather than ref-keys legitimately resolves nothing.
-- **A probe hit a store error** logs a WARNING with a redacted traceback, then
-  the run fails with that error.
+- **A probe hit a store error** logs a WARNING with a redacted traceback. On an
+  outage the run then fails with that error. A store answer logs
+  `DEPRECATED single-key fallback` and the value is used as entered.
+- **Every legacy agent payload** that reaches the store also logs
+  `DEPRECATED agent_json format` once per resolution.
 - **Every legacy agent single-key resolution** logs one WARNING,
   `agent_json legacy single-key probe outcomes`, even when the run then fails.
   It is evidence for migrating the workflow to declared sources (FND-4407),
@@ -165,13 +194,15 @@ What the logs tell you:
     `basic.password=resolved,basic.username=refused`, gives each probed
     field's outcome. `resolved` means the store returned a secret for the
     value, so the field is a real ref (`secretKeyRef`).
-  - `absent` and `refused` are **inconclusive**. A missing or denied lookup
-    doesn't show whether the field was meant as a secret ref: `absent` can be
-    a ref whose secret was never created, and `refused` can be a real ref the
-    SDR identity may not read. Before converting such a field to `value`,
-    corroborate it, e.g. the workflow ran successfully with that field as a
-    plain value. If there is no such evidence, ask the customer.
-  - The other outcomes are `transient`, `outage` and `error`.
+  - `absent`, `refused` and `refused_kept` (a refusal the legacy bridge kept as
+    the value) are **inconclusive**. A missing or denied lookup doesn't show
+    whether the field was meant as a secret ref: `absent` can be a ref whose
+    secret was never created, and a refusal can be a real ref the SDR identity
+    may not read. Before converting such a field to `value`, corroborate it,
+    e.g. the run succeeded with the kept value. If there is no such evidence,
+    ask the customer.
+  - `transient_kept` is a throttle the legacy bridge kept as the value. The
+    other outcomes are `outage` and `error`.
   - It also carries a count per outcome, `atlan.agent_json.format` and
     `atlan.agent_json.secret_manager`.
   - Field names only, never values or ref names.

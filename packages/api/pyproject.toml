@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk-api"
-version = "3.52.0"
+version = "3.53.0"
 description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
 license = "Apache-2.0"
 authors = [

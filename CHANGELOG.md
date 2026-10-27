@@ -1,5 +1,32 @@
 # Changelog
 
+## v3.53.0 (October 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.52.0...v3.53.0
+
+### Features
+
+- declared-source agent_json (format 2), normalized at ingress so apps need no change; refused refs go to the user [FND-4407] (#4610) (by @vaibhavatlan in [a276a30](https://github.com/atlanhq/application-sdk/commit/a276a30))
+
+### Bug Fixes
+
+- treat a store-rejected secret name as a literal in single-key probing (#4596) (by @SwarnadeepChatterjee in [b4252d3](https://github.com/atlanhq/application-sdk/commit/b4252d3))
+- stage the cross-store copy under TEMPORARY_PATH, not /tmp (#4594) (by @connectivity-ai[bot] in [2bdc086](https://github.com/atlanhq/application-sdk/commit/2bdc086))
+- time-boxed legacy single-key bridge keeps values the store rejects, with a deprecation warning [FND-4407] (#4611) (by @vaibhavatlan in [58ed83e](https://github.com/atlanhq/application-sdk/commit/58ed83e))
+
+### Chores
+
+- lock file maintenance (#4583) (by @renovate[bot] in [99d2a9d](https://github.com/atlanhq/application-sdk/commit/99d2a9d))
+- sync daprd pin to 1.18.9 (#4587) (by @atlan-app-fleet[bot] in [cffbe16](https://github.com/atlanhq/application-sdk/commit/cffbe16))
+- update atlanhq/application-sdk action to v3.52.0 (#4589) (by @renovate[bot] in [5dcd4b4](https://github.com/atlanhq/application-sdk/commit/5dcd4b4))
+- update github-actions (#4591) (by @renovate[bot] in [2eaa597](https://github.com/atlanhq/application-sdk/commit/2eaa597))
+- update dependency ubuntu to v26 (#4537) (by @renovate[bot] in [adb566a](https://github.com/atlanhq/application-sdk/commit/adb566a))
+- lock file maintenance (#4590) (by @renovate[bot] in [c0b8968](https://github.com/atlanhq/application-sdk/commit/c0b8968))
+- update the pinned pkl toolchain to v0.32.2 (#4539) (by @renovate[bot] in [77412e1](https://github.com/atlanhq/application-sdk/commit/77412e1))
+- advance the drain test's clock only after the drain records each finish (FND-4359) (#4599) (by @cmgrote in [72aac03](https://github.com/atlanhq/application-sdk/commit/72aac03))
+- lock file maintenance (#4600) (by @renovate[bot] in [7e5a4b2](https://github.com/atlanhq/application-sdk/commit/7e5a4b2))
+
+
 ## v3.52.0 (October 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.2...v3.52.0
