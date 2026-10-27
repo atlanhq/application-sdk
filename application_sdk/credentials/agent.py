@@ -96,6 +96,7 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
         "auth-type",
         "agent-type",
         "key-type",
+        "sdk-version",
     }
 )
 

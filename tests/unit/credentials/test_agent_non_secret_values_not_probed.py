@@ -5,7 +5,8 @@ An mTLS or Kerberos agent config carries companion files as
 store. Probed as a secret name, the path is rejected by a store that forbids
 ``/`` in names (the Kubernetes secret store), and that rejection is not a
 "not found" answer, so the whole resolution failed. Connection settings
-under ``extra`` (a compiled URL, a database name) are literals in the same way.
+under ``extra`` (a compiled URL, a database name) are literals in the same way,
+and so is the agent's SDK version.
 """
 
 import json
@@ -96,6 +97,34 @@ async def test_connection_literal_is_not_probed(
     assert literal in rendered
     assert "resolved-role" in rendered
     assert "resolved-user" in rendered
+
+
+async def test_sdk_version_is_not_probed() -> None:
+    """The agent's SDK version is a literal: a store that rejects ``.`` in a
+    secret name (Azure Key Vault) must not stop resolution."""
+
+    class DotRejectingStore(MockSecretStore):
+        async def get_optional(self, name: str) -> str | None:
+            if "." in name:
+                raise SecretStoreError("invalid name", secret_name=name)
+            return await super().get_optional(name)
+
+    store = DotRejectingStore({"USER_REF": "resolved-user"})
+    raw = {
+        "agent-name": "example-agent",
+        "agent-type": "new-app-framework",
+        "auth-type": "basic",
+        "key-type": "single-key",
+        "sdk-version": "3.52.0",
+        "basic.username": "USER_REF",
+    }
+
+    resolved = await resolve_agent_credential(
+        AgentCredentialSpec.model_validate(raw), store
+    )
+
+    assert "3.52.0" not in store.get_get_optional_calls()
+    assert "resolved-user" in json.dumps(resolved)
 
 
 async def test_probe_skips_file_refs_for_every_caller() -> None:
