@@ -40,6 +40,14 @@ VALUE_SOURCES_KEY = "value-sources"
 
 _FORMAT_KEY = "format"
 
+#: Keys whose presence means a payload opted into declared sources: the wire
+#: ``format`` or the normalized round-trip ``value-sources`` (either spelling).
+DECLARED_SOURCE_KEYS: tuple[str, ...] = (
+    _FORMAT_KEY,
+    VALUE_SOURCES_KEY,
+    "value_sources",
+)
+
 #: Keys that describe the agent rather than a credential field. Format 2 takes
 #: them as plain values; every other key must declare a source.
 _ENVELOPE_KEYS: frozenset[str] = frozenset(

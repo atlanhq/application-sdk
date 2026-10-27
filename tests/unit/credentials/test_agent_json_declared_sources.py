@@ -276,6 +276,64 @@ class TestRoundTrip:
             AgentCredentialSpec.model_validate(raw)
 
 
+class TestIngress:
+    """Through the real ingress, not just ``model_validate``: workflow inputs
+    reach the spec via ``normalize_agent_json`` inside the input model."""
+
+    def _payload(self) -> dict[str, Any]:
+        return _v2(
+            port={"value": 3306},
+            **{
+                "basic.username": {"value": "svc_user"},
+                "basic.password": _ref("prod/mysql", "password"),
+            },
+        )
+
+    def test_normalize_agent_json_keeps_the_sources(self) -> None:
+        from application_sdk.credentials import normalize_agent_json
+
+        spec = normalize_agent_json(json.dumps(self._payload()))
+        assert spec is not None
+        assert spec.is_populated()
+        assert spec.value_sources == {
+            "basic.password": {"name": "prod/mysql", "key": "password"}
+        }
+
+    def test_extraction_input_round_trip(self) -> None:
+        """The workflow input is serialized between activities; the nested
+        spec must come back still declaring its sources."""
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+        first = ExtractionInput.model_validate(
+            {"extraction_method": "agent", "agent_json": self._payload()}
+        )
+        assert first.agent_json is not None
+        again = ExtractionInput.model_validate(first.model_dump(mode="json"))
+        assert again.agent_json is not None
+        assert again.agent_json.value_sources == first.agent_json.value_sources
+        assert again.agent_json.port == 3306
+
+    def test_malformed_declared_payload_is_loud_not_absent(self) -> None:
+        """Ingress reads an invalid legacy blob as "no agent reference" (the
+        marketplace placeholder). A payload that opted into declared sources
+        is never a placeholder: reading it as absent would silently route the
+        run to the GUID path."""
+        from application_sdk.credentials import normalize_agent_json
+
+        broken = _v2(**{"basic.password": "not-a-source-object"})
+        with pytest.raises(CredentialParseError, match="basic.password"):
+            normalize_agent_json(broken)
+        with pytest.raises(CredentialParseError):
+            normalize_agent_json(json.dumps(broken))
+
+    def test_invalid_legacy_placeholder_is_still_absent(self) -> None:
+        from application_sdk.credentials import normalize_agent_json
+
+        assert (
+            normalize_agent_json({"agent-name": "agent-name", "port": "port"}) is None
+        )
+
+
 class StrictAppSpec(AgentCredentialSpec):
     """An app-owned spec: declared, typed fields and ``extra="forbid"``."""
 
