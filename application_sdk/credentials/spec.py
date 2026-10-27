@@ -49,19 +49,81 @@ DECLARED_SOURCE_KEYS: tuple[str, ...] = (
 )
 
 #: Keys that describe the agent rather than a credential field. Format 2 takes
-#: them as plain values; every other key must declare a source.
+#: them as plain values, of any JSON type; every other key must declare a
+#: source. Includes everything the v2 form's Agent widget and the vendored
+#: ``atlan-connectors-agent`` configmap send alongside the credential fields.
+#: ``agent-type`` must survive as-is, because Heracles and AE route SDR runs on
+#: ``agent-type == "new-app-framework"``.
 _ENVELOPE_KEYS: frozenset[str] = frozenset(
     {
         "agent-name",
+        "agent-type",
+        "agent-custom-config",
+        "sdk-version",
         "secret-manager",
         "aws-region",
         "aws-auth-method",
+        "aws-assume-role-arn",
         "azure-auth-method",
+        "azure-vault-name",
         "auth-type",
-        "agent-type",
         "connectBy",
     }
 )
+
+
+def _declared_sources_json_schema() -> dict[str, Any]:
+    """JSON schema of a format-2 payload, as published in input contracts.
+
+    Heracles validates workflow inputs against the app's input contract on
+    create and update, so this is what lets a format-2 ``agent_json`` be saved
+    at all. Built fresh per call, because pydantic may mutate what it emits.
+    """
+
+    def _strict_object(required: str, schema: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": [required],
+            "properties": {required: schema},
+            "additionalProperties": False,
+        }
+
+    def _non_empty_strings(*names: str) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "required": list(names),
+            "properties": {name: {"type": "string", "minLength": 1} for name in names},
+            "additionalProperties": False,
+        }
+
+    field_source = {
+        "oneOf": [
+            _strict_object("value", {}),
+            _strict_object(
+                "valueFrom",
+                {
+                    "oneOf": [
+                        _strict_object(
+                            "secretKeyRef", _non_empty_strings("name", "key")
+                        ),
+                        _strict_object("fileRef", _non_empty_strings("path")),
+                    ]
+                },
+            ),
+        ]
+    }
+    return {
+        "title": "AgentCredentialSpec (format 2)",
+        "type": "object",
+        "required": ["format"],
+        "properties": {
+            "format": {"const": DECLARED_SOURCES_FORMAT},
+            **{key: {} for key in sorted(_ENVELOPE_KEYS)},
+        },
+        "not": {"anyOf": [{"required": [key]} for key in _LEGACY_ANCHORS]},
+        "additionalProperties": field_source,
+    }
+
 
 #: Legacy fetch anchors. Format 2 replaces both with per-field sources, so a
 #: payload carrying either would be ambiguous.
@@ -237,7 +299,21 @@ class AgentCredentialSpec(BaseModel):
         # The wrap serializer above returns ``Any``, which would blank the
         # serialization schema of every input model embedding this spec. It
         # only omits a ``None`` field, so publish the field-derived schema.
-        return handler(_without_serializer(core_schema))
+        json_schema = handler(_without_serializer(core_schema))
+        if handler.mode != "validation":
+            return json_schema
+        # Validation (the published input contract) accepts either wire
+        # format: the legacy flat shape, or format 2. Typed fields such as
+        # ``host: str`` and ``port: int`` would otherwise reject a format-2
+        # ``{"value": ...}`` before the SDK ever normalizes it.
+        target = handler.resolve_ref_schema(json_schema)
+        legacy = dict(target)
+        target.clear()
+        for key in ("title", "description"):
+            if key in legacy:
+                target[key] = legacy.pop(key)
+        target["anyOf"] = [legacy, _declared_sources_json_schema()]
+        return json_schema
 
     # ---- Convenience methods ----
 
