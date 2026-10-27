@@ -190,6 +190,99 @@ class TestParse:
         assert "hunter2-literal" not in str(exc_info.value)
 
 
+#: A format-2 payload shaped like the real v2 form's output: besides the
+#: envelope keys, the form and the vendored agent configmap send ``agent-type``,
+#: ``sdk-version``, ``aws-assume-role-arn``, ``azure-vault-name`` and
+#: ``agent-custom-config`` as plain values.
+FORM_PAYLOAD: dict[str, Any] = {
+    "format": 2,
+    "agent-name": "sdr-agent",
+    "agent-type": "new-app-framework",
+    "sdk-version": "3.53.0",
+    "secret-manager": "awssecretmanager",
+    "aws-region": "us-east-1",
+    "aws-auth-method": "iam-assume-role",
+    "aws-assume-role-arn": "arn:aws:iam::123456789012:role/sdr",
+    "azure-vault-name": "",
+    "agent-custom-config": {"images": {"app": "example"}},
+    "auth-type": "basic",
+    "connectBy": "host",
+    "host": {"value": "db.example.com"},
+    "port": {"value": 3306},
+    "basic.username": {"value": "svc_user"},
+    "basic.password": _ref("prod/mysql", "password"),
+    "extra.ca_cert": {"valueFrom": {"fileRef": {"path": "objectstore://ca.pem"}}},
+}
+
+
+class TestFormPayload:
+    def test_the_forms_extra_envelope_keys_pass_through(self) -> None:
+        spec = AgentCredentialSpec.model_validate(FORM_PAYLOAD)
+        raw = spec.to_raw_dict()
+        assert raw["agent-type"] == "new-app-framework"
+        assert raw["sdk-version"] == "3.53.0"
+        assert raw["aws-assume-role-arn"] == "arn:aws:iam::123456789012:role/sdr"
+        assert raw["agent-custom-config"] == {"images": {"app": "example"}}
+        assert spec.value_sources == {
+            "basic.password": {"name": "prod/mysql", "key": "password"}
+        }
+
+
+class TestPublishedSchema:
+    """Heracles validates workflow inputs against the app's published input
+    contract (the SDK's JSON schema) on create and update. A format-2
+    ``agent_json`` must pass that validation, or no form can save one."""
+
+    @staticmethod
+    def _validate(schema: dict[str, Any], instance: Any) -> None:
+        import jsonschema
+
+        jsonschema.validate(instance, schema)
+
+    def test_spec_schema_accepts_format_2(self) -> None:
+        self._validate(AgentCredentialSpec.model_json_schema(), FORM_PAYLOAD)
+
+    def test_spec_schema_still_accepts_legacy(self) -> None:
+        self._validate(
+            AgentCredentialSpec.model_json_schema(),
+            {
+                "agent-name": "a",
+                "key-type": "single-key",
+                "host": "db",
+                "port": 3306,
+                "basic.username": "u",
+            },
+        )
+
+    def test_extraction_input_contract_accepts_format_2(self) -> None:
+        from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+        self._validate(
+            ExtractionInput.model_json_schema(),
+            {"extraction_method": "agent", "agent_json": FORM_PAYLOAD},
+        )
+
+    def test_typed_app_subclass_schema_accepts_format_2(self) -> None:
+        self._validate(StrictAppSpec.model_json_schema(), FORM_PAYLOAD)
+
+    @pytest.mark.parametrize(
+        "bad_field",
+        [
+            {"bogus": 1},
+            {"value": 1, "valueFrom": {"fileRef": {"path": "p"}}},
+            {"valueFrom": {"secretKeyRef": {"name": "n"}}},
+        ],
+    )
+    def test_schema_rejects_a_malformed_source(self, bad_field: Any) -> None:
+        import jsonschema
+
+        with pytest.raises(jsonschema.ValidationError):
+            self._validate(
+                AgentCredentialSpec.model_json_schema(),
+                {**FORM_PAYLOAD, "basic.password": bad_field},
+            )
+
+
 class TestRoundTrip:
     """Apps re-serialize the spec (``to_raw_dict``, Temporal payloads) and
     re-parse it in later activities. The declared sources must survive, or the
