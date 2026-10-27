@@ -1289,6 +1289,156 @@ See [ADR-0016](../adr/0016-multi-pool-worker-routing.md) for the full design inc
 
 Picking a pool means guessing a resource profile unless you have measured one. Activity sizing telemetry records peak container memory, CPU throttling and input bytes per execution, which is what turns "this feels memory-intensive" into a number you can size against. It is off by default and opt-in per activity — see [Monitoring → Activity Sizing Telemetry](monitoring.md#activity-sizing-telemetry).
 
+### Size tiers
+
+`pool=` fixes a queue at decoration time. That is the right shape when a task's
+resource profile is a property of the *task*. It cannot express one that is a
+property of the **run** — the same activity needing 0.5 GiB for one input and
+20 GiB for another, which is the usual shape across a fleet.
+
+`application_sdk.tiering` covers that case. An app declares a ladder: its tiers,
+the memory each one's pool holds, and one sizer per activity. At dispatch the
+workflow asks the ladder for a tier, resolves it to a queue, and passes the
+queue to the task.
+
+The ladder is a declaration, and it is checked when you build it — a
+floor or band naming a tier the ladder does not declare, bands out of order, a
+sizer keyed under one name while declaring another, all raise at construction
+rather than mis-routing in production:
+
+```python
+from application_sdk.tiering import INF, ActivitySizer, Axis, Band, Ladder
+
+LADDER = Ladder(
+    order=("s", "m", "l"),
+    memory_gib={"s": 6.0, "m": 8.0, "l": 16.0},
+    sizers={
+        "transform": ActivitySizer(
+            activity="transform",
+            floor="s",
+            why="measured: steady under 3 GiB except on file-heavy inputs",
+            axes=(Axis("files", (Band(12_000, "s"), Band(32_000, "m"), Band(INF, "l"))),),
+        ),
+    },
+)
+```
+
+Routing then happens at two sites. The queue map is read once per run, from an
+activity, because reading the environment is not allowed in workflow code; the
+resolved map travels on that activity's result:
+
+```python
+# In an activity, once per run:
+queues = queue_map_from_env()
+
+# In the workflow, with that map in hand:
+tier = LADDER.tier_for("transform", {"files": discovered.file_count})
+await run_on_queue(self, "transform", args, resolve(tier, queues))
+```
+
+Import the ladder names from `application_sdk.tiering` in workflow modules and
+the queue helpers where you use them: the package resolves each export lazily,
+so importing `Ladder` does not pull in the activity-side half (and the ~800
+modules its logger brings with it).
+
+Three properties are worth knowing before you adopt it.
+
+**Classification is total.** Every activity always names a tier; an activity with
+no tier is one `temporal-activity-rerouter` will not escalate, because it only
+moves work *out of* a declared tier. An activity with no registered sizer gets
+the smallest rung and climbs.
+
+**Inertness is a deployment property, not a code one.** `resolve` answers `None`
+for every tier while `ATLAN_APP_SIZE_QUEUE_MAP` is unset, and `run_on_queue`
+with `None` is the ordinary bound-method call — same activity name, same
+options, same command in workflow history. So a build carrying a ladder routes
+nothing until that variable is set, and unsetting it is the rollback.
+
+**The ladder has no memory of past runs.** The tier is a function of what this
+run measured and nothing else. Caching "where this connection ended last time" would hide a
+broken axis instead of failing it; a wrong tier has to cost a visible climb,
+because the climb is the only feedback the ladder gets.
+
+The variable name is a shared contract: `temporal-activity-rerouter` reads the
+same `ATLAN_APP_SIZE_QUEUE_MAP` off the pod template to build its escalation
+ladder, so the app and the watcher cannot disagree about which pools form a
+series. Turn the escalation lane on *before* setting the queue map —
+pin-and-climb with nothing to climb to is worse than not routing at all.
+
+A per-dispatch queue takes precedence over the task's declared `pool=` for that
+call only. Outside a workflow run — a local run, or a direct unit test of a
+workflow method — the task is not wrapped as an activity, so there is no queue
+to choose and `run_on_queue` ignores the one it is given rather than failing.
+
+#### Sizing by memory, and capping
+
+Bands answer from a measured input. An app that can estimate the working set
+can also ask by memory, and take the higher of the two answers:
+
+```python
+by_size = LADDER.tier_for("transform", {"files": 20_000})  # "m"
+by_memory = LADDER.tier_for_memory(9_000, safety=1.25)  # 11,250 MiB: only "l" holds it
+tier = LADDER.highest(by_size, by_memory)  # "l"
+
+tight = LADDER.cap(tier, "l")  # "l": the configured ceiling
+loose = LADDER.cap(tier, "m")  # "m": a lower ceiling when the estimate is loose
+```
+
+`tier_for_memory(mib, safety=...)` takes MiB and answers the smallest tier
+whose `memory_gib` holds `mib × safety`, or the top tier when none does. An
+estimate it cannot use (`None`, NaN, 0 or less) answers `None`, which `highest`
+skips. A safety below 1 is read as 1. With `safety=1.0` it also says, after a
+run, which tier the measured peak needed. Route on this run's estimate, never
+on a previous run's peak.
+
+`cap(tier, ceiling)` caps where a run starts, at decision time. `order` stays
+whole, so bands can still name tiers above the ceiling. It does not change
+where the rerouter may move a run after an OOM kill.
+
+`memory_gib` must not decrease along `order`. Equal neighbours are fine,
+because two tiers can differ only in CPU.
+
+#### Building the ladder from deployment config
+
+A module-level `LADDER` changes only with a release. To tune bands and
+per-tier memory per deployment, build the ladder inside an activity from
+config. This is a supported pattern: `Ladder` does no I/O, and a malformed
+config raises `ValueError` when the ladder is built, so the activity can fall
+back to the static route. Return the queue, not the ladder:
+
+```python
+@task
+async def size_transform(self, input: SizeInput) -> SizeOutput:
+    try:
+        # build_ladder is the app's own: config -> Band / Axis / ActivitySizer / Ladder.
+        ladder = build_ladder(orjson.loads(os.environ.get("MY_APP_SIZE_TIERS", "")))
+    except (KeyError, TypeError, ValueError):
+        return SizeOutput(task_queue=None)  # bad config: keep the static route
+    tier = ladder.highest(
+        ladder.tier_for("transform", {"files": input.file_count}),
+        ladder.tier_for_memory(input.estimate_mib, safety=1.25),
+    )
+    queue = resolve(ladder.cap(tier, "l"), queue_map_from_env())
+    return SizeOutput(task_queue=queue)
+
+# In the workflow:
+sized = await self.size_transform(SizeInput(...))
+await run_on_queue(self, "transform", args, sized.task_queue)
+```
+
+**Where the queue map is read.** An app that already runs an activity before
+dispatch, such as the size probe above, calls `queue_map_from_env()` there and
+returns the map or the resolved queue on its result. That adds no step to
+workflow history.
+
+**Apps that dispatch activities themselves.** `run_on_queue` goes through the
+SDK's task wrapper, so it cannot take an app's own `activity_id`, per-call
+retry or timeout overrides, or its own `TaskContext`. An app that calls
+`workflow.execute_activity` itself uses `resolve()` for the queue and passes it
+as `task_queue=`, leaving the argument out when `resolve()` answers `None`.
+That app also owns keeping its routed and unrouted calls identical apart from
+`task_queue`.
+
 ## Retry Policies
 
 Pass a `RetryPolicy` to `@task` via `retry_policy` to override the default (3 attempts, exponential backoff: initial 1s, coefficient 2.0, capped at 5 minutes):
