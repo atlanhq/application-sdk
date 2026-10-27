@@ -522,6 +522,7 @@ _PROBE_OUTCOMES = (
     "refused",
     "refused_kept",
     "transient",
+    "transient_kept",
     "outage",
     "error",
 )

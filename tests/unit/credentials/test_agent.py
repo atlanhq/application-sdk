@@ -878,15 +878,17 @@ class TestSingleKeyMode:
         client.get_secret = _get_secret
         return DaprSecretStore(client)
 
-    async def test_dapr_throttled_probe_never_sends_ref_key_as_password(
+    async def test_dapr_throttled_probe_keeps_value_under_the_legacy_bridge(
         self,
     ) -> None:
-        """FND-4077 end to end through the real Dapr adapter, kept under the
-        FND-4407 bridge. A throttled vault used to read as "not found", so the
-        password field kept its ref-key and the connector logged in with
-        ``ATLAN_PASS`` as the password. A recognised throttle is a
-        ``SecretStoreTransientError``: resolution stops and retries, and the
-        bridge never keeps the value."""
+        """End to end through the real Dapr adapter. The FND-4407 bridge
+        restores SDK <= 3.49 for legacy single-key payloads: a throttle is a
+        store answer, so the value is kept like any other refusal.
+
+        The accepted cost, pinned here so it stays visible: a throttled *real*
+        ref-key (``ATLAN_PASS``) is sent as the value, the FND-4077 case.
+        Declared (format-2) refs never take this path; a throttle there stops
+        resolution and retries."""
         store = self._dapr_store_answering(
             {
                 "ATLAN_USER": "value:real_user",
@@ -907,12 +909,11 @@ class TestSingleKeyMode:
             }
         )
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await resolve_agent_json(agent_json, store)
+        resolved = await resolve_agent_json(agent_json, store)
 
-        assert not isinstance(exc_info.value, SecretNotFoundError)
-        assert exc_info.value.effective_retryable is True
-        assert "ATLAN_PASS" not in str(exc_info.value)
+        assert resolved["username"] == "real_user"
+        assert resolved["password"] == "ATLAN_PASS"
+        assert resolved["extra"]["database"] == "analytics"
 
     async def test_dapr_rejected_probe_keeps_value_under_the_legacy_bridge(
         self,

@@ -465,8 +465,9 @@ class DaprCredentialVault:
         Raises:
             SecretStoreError: If a probe hit an outage (the subtypes
                 :class:`SecretStoreUnavailableError` /
-                :class:`SecretStoreUnreachableError`) or a recognised throttle
-                (:class:`SecretStoreTransientError`). Hash-labelled.
+                :class:`SecretStoreUnreachableError`). Any store answer,
+                throttles included, keeps the value as SDK <= 3.49 did.
+                Hash-labelled.
         """
         logger.debug("Single-key mode: fetching secrets per field")
 

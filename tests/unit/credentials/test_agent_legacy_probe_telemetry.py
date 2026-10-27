@@ -119,7 +119,10 @@ class TestOutcomesPerField:
     @pytest.mark.parametrize(
         "answer,outcome",
         [
-            (SecretStoreTransientError("Rate exceeded", retryable=True), "transient"),
+            (
+                SecretStoreTransientError("Rate exceeded", retryable=True),
+                "transient_kept",
+            ),
             (SecretStoreUnavailableError("x"), "outage"),
         ],
     )
@@ -127,7 +130,8 @@ class TestOutcomesPerField:
         self, answer: Exception, outcome: str
     ) -> None:
         extra, raised = await _resolve(MixedStore(answer))
-        assert raised is not None
+        # Only an outage fails the run; a throttle is kept, as on SDK <= 3.49.
+        assert (raised is not None) == (outcome == "outage")
         assert (
             f"extra.databaseTerm={outcome}" in extra["atlan.agent_json.probe.outcomes"]
         )

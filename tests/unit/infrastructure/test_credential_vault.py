@@ -934,14 +934,10 @@ class TestSingleKeyProbeConcurrency:
         assert "sha256:" in str(err)
         assert err.cause is None
 
-    async def test_throttle_on_one_field_stops_resolution(self) -> None:
-        """A throttle on one field is fatal even when another field resolved
-        (FND-4077): skipping it would send that field's ref-key as its value.
-        The FND-4407 bridge never covers a recognised throttle."""
-        from application_sdk.infrastructure.secrets import (
-            SecretStoreError,
-            SecretStoreTransientError,
-        )
+    async def test_throttle_on_one_field_keeps_the_value(self) -> None:
+        """FND-4407 bridge, SDK <= 3.49 behaviour: a throttle is a store
+        answer, so the field is kept and the resolved field still merges."""
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
 
         async def _get_secret(value: str, *, log_label: str | None = None):
             if value == "real-key":
@@ -952,11 +948,9 @@ class TestSingleKeyProbeConcurrency:
 
         config = {"a": "real-key", "b": "throttled-key"}
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await self._vault(_get_secret)._fetch_single_key_secrets(config)
+        result = await self._vault(_get_secret)._fetch_single_key_secrets(config)
 
-        assert exc_info.value.effective_retryable is True
-        assert "throttled-key" not in str(exc_info.value)
+        assert result == {"password": "resolved"}
 
     async def test_refusal_on_one_field_keeps_the_value(self) -> None:
         """FND-4407 bridge on the SDR vault path. Single-key mode only runs

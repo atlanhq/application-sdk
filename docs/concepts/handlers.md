@@ -140,7 +140,7 @@ bounded by a small fan-out cap (`MAX_CONCURRENT_SINGLE_KEY_PROBES = 8`) so a wid
 credential does not pay one full store retry ladder per field. Results are
 merged in candidate order, so resolution is byte-identical to serial probing.
 
-Each probe has one of three outcomes:
+Each probe has one of four outcomes:
 
 - **Resolved** — the field's value is replaced with the secret.
 - **Absent** — the store definitively has no such key, so the field keeps its
@@ -150,24 +150,25 @@ Each probe has one of three outcomes:
 - **Store outage** — the sidecar or store is unreachable, cold-starting or
   unavailable. Resolution **stops** with a hash-labelled `SecretStoreError`
   subtype, and the run retries.
-- **Temporary failure** — a throttle or transient server error in a backend's
-  documented wording (`SecretStoreTransientError`). Resolution **stops** and the
-  run retries, on every path. A throttled real ref-key is never sent as the
-  value.
 - **Store answer** — anything else: an IAM or KMS denial, a `403`
   `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an invalid
-  secret name, or wording no backend documents.
-  - **Legacy SDR payloads (deprecated, time-boxed):** both legacy agent_json
-    payloads and agent-sourced GUID configs (the form Heracles turns an SDR's
+  secret name, a throttle, or wording no backend documents. The field keeps its
+  value, with a WARNING. This is SDK <= 3.49 behaviour, restored for legacy
+  payloads as a deprecated, time-boxed fallback (FND-4407). No error wording
+  decides the outcome, so no unrecognised store answer can fail a plain-value
+  config.
+  - Probing only ever runs for legacy SDR payloads: legacy agent_json payloads
+    and agent-sourced GUID configs (the form Heracles turns an SDR's
     agent_json into for Test Authentication, preflight and metadata calls).
-    Single-key probing only ever runs against the customer's SDR store, and
-    direct (hosted) configs fetch one bundle by GUID and never probe. The field
-    keeps its value, with a WARNING. A probe can't tell a plain username, database name,
-    URL or role ARN from a ref-key, and stores that reject those as names
-    failed runs whose config hadn't changed. The remaining cost is a *real*
-    ref-key that the store denies, or that hits a throttle in wording no
-    backend documents: it is sent as the value. The fallback goes away with
-    legacy payloads (FND-4407).
+    Both read the customer's SDR store. Direct (hosted) configs fetch one
+    bundle by GUID and never probe.
+  - A probe can't tell a plain username, database name, URL or role ARN from a
+    ref-key, and stores that reject those as names failed runs whose config
+    hadn't changed (SDK 3.50 to 3.5x).
+  - The known cost, as in 3.49: a *real* ref-key that the store denies or
+    throttles is sent as the value, so the connection fails with an auth error.
+    Declared sources (`"format": 2`, below) remove both problems: plain values
+    never reach the store, and refs are looked up strictly.
 
 What the logs tell you:
 
@@ -177,10 +178,9 @@ What the logs tell you:
 - **Nothing resolved** also logs INFO ("resolved 0 of N probed fields"). This is
   *not* an error: a credential that carries literal usernames and passwords
   inline rather than ref-keys legitimately resolves nothing.
-- **A probe hit a store error** logs a WARNING with a redacted traceback. On a
-  GUID config, or on an outage, the run then fails with that error. On a legacy
-  agent payload a store answer logs `DEPRECATED single-key fallback` and the
-  value is used as entered.
+- **A probe hit a store error** logs a WARNING with a redacted traceback. On an
+  outage the run then fails with that error. A store answer logs
+  `DEPRECATED single-key fallback` and the value is used as entered.
 - **Every legacy agent payload** that reaches the store also logs
   `DEPRECATED agent_json format` once per resolution.
 - **Every legacy agent single-key resolution** logs one WARNING,
@@ -198,7 +198,8 @@ What the logs tell you:
     may not read. Before converting such a field to `value`, corroborate it,
     e.g. the run succeeded with the kept value. If there is no such evidence,
     ask the customer.
-  - The other outcomes are `transient`, `outage` and `error`.
+  - `transient_kept` is a throttle the legacy bridge kept as the value. The
+    other outcomes are `outage` and `error`.
   - It also carries a count per outcome, `atlan.agent_json.format` and
     `atlan.agent_json.secret_manager`.
   - Field names only, never values or ref names.

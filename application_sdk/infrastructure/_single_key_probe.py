@@ -13,12 +13,12 @@ password: an auth failure blamed on the user, plus a burned lockout attempt at
 the source.
 
 **Deprecated, time-boxed exception (FND-4407):** a caller may pass
-``keep_value_on_store_answer=True`` to keep the value, with a WARNING, when the
-store *answers* with something other than "not found" (an invalid name, access
-denied). Outages (unreachable, cold start, unavailable) and recognised
-temporary failures (:class:`SecretStoreTransientError`: throttling, transient
-5xx) still stop resolution and retry, so FND-4077's transient case never keeps
-a value. Both callers opt in, and both probe only the customer's SDR store:
+``keep_value_on_store_answer=True`` to restore SDK <= 3.49 behaviour: when the
+store *answers* with anything other than "not found" (an invalid name, access
+denied, a throttle), the value is kept with a WARNING. No error wording decides
+the outcome, so no unrecognised store answer can fail a plain-value config.
+Only outages (unreachable, cold start, unavailable), where the store never
+answered, stop resolution and retry, exactly as in 3.49. Both callers opt in, and both probe only the customer's SDR store:
 legacy agent_json payloads, and the GUID vault's single-key mode, which only
 runs for agent-sourced configs (Heracles builds those from an SDR's
 agent_json). The probe can't tell a plain username, database name, URL or role
@@ -127,7 +127,7 @@ async def probe_single_keys(
     *outcomes*, when given, is filled with each probed value's outcome, even
     when the sweep then raises: ``resolved``, ``absent``, ``refused`` (a store
     answer other than "not found"), ``refused_kept`` (the same, kept by the
-    bridge), ``transient``, ``outage`` or ``error`` (not a store answer). It is
+    bridge), ``transient``, ``transient_kept`` (a throttle the bridge kept), ``outage`` or ``error`` (not a store answer). It is
     keyed by the raw value, so the caller must map it to field names and never
     log the keys.
 
@@ -257,17 +257,12 @@ async def _probe_one(
         # ref-key — that would undo the hashing in the same log record.
         safe_traceback = scrubbed_traceback(exc, value, label)
         transient = isinstance(exc, SecretStoreTransientError)
-        if (
-            keep_value_on_store_answer
-            and isinstance(exc, SecretStoreError)
-            and not transient
-        ):
-            _record("refused_kept")
+        if keep_value_on_store_answer and isinstance(exc, SecretStoreError):
+            _record("transient_kept" if transient else "refused_kept")
             # The store answered, but not with "not found": an invalid name,
-            # access denied. Deprecated bridge (FND-4407, see the module
-            # docstring): keep the value as entered, as SDK <= 3.49 did,
-            # because a probe can't tell this plain value from a ref-key. A
-            # recognised throttle is excluded: it retries below instead.
+            # access denied, a throttle. Deprecated bridge (FND-4407, see the
+            # module docstring): keep the value as entered, as SDK <= 3.49
+            # did, because a probe can't tell this plain value from a ref-key.
             logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
                 "DEPRECATED single-key fallback: the secret store rejected a "
                 "lookup of %s (%s), so the value is used as entered. If it is "
