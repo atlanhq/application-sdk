@@ -154,20 +154,16 @@ root-cause analysis impossible.
   exits are closed by other rules. The checker accepts logger.exception(), or
   warning/error/critical carrying exc_info=True, or warning/error/critical routed
   through a redaction helper. logger.exception() is not available: L017 forbids it under
-  ADR-0011. And DEBUG is accepted by none of the three, even with exc_info=True — while
-  E005 never inspects a DEBUG line at all. So a handler that deliberately logs a broad
-  catch at DEBUG with a full traceback satisfies E005 and cannot satisfy E004. Raising
-  the level is the only way through, which is a real decision on a cleanup path that
-  runs inside a finally: the WARNING lands beside the error actually being reported.
-  Reported from a consumer app in FND-2542; whether DEBUG should join the accepted set
-  is an owner call, not a mechanical fix. The same gap meets F005 inside a
-  preflight_check override, including helpers it calls: a best-effort cleanup handler
-  (close a client, release a session) has no verdict to return, DEBUG does not clear
-  E004 even through a redaction helper, and WARNING is what F005 forbids there. The
-  recommended log that satisfies both is logger.error (logger.critical also clears both)
-  with the exception routed through a redaction helper (safe_traceback,
-  sanitize_cause_repr); the alternative is to return the failure as typed data. Found in
-  a consumer app in FND-2569.
+  ADR-0011. DEBUG is accepted only in the shapes that prove a WARNING would be wrong
+  (FND-2542, decided): best-effort cleanup with exc_info=True, a predicate-gated skip
+  that re-raises everything else, and anywhere inside F005's preflight scope when the
+  log carries the exception. Elsewhere a DEBUG line, even with exc_info=True, still does
+  not clear E004 while satisfying E005. Inside a preflight_check override and the
+  helpers F005 follows from it (FND-2569), E004 reuses F005's own scope predicate, so
+  the two rules agree: DEBUG/INFO carrying the exception clears E004 there, and WARNING
+  is what F005 forbids. Never raise such a line to WARNING; logger.error through a
+  redaction helper still clears both, and returning the failure as typed data remains
+  the preferred shape for a probe arm.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -228,9 +224,52 @@ the call must be assigned to a name that the very next statement exits on when i
 
 `except Exception:` with no `as` binding still fires.
 
-The three exemptions are one principle: the exception must leave the frame in some
-inspectable form — re-raised with its trace, re-raised with a redacted cause, or
-returned as typed data.
+The binding itself is typed data too: `return exc`, or a literal tuple/list holding it
+(`return (Result(ok=False), exc)`), while the handler never rebinds it.  A local staged
+through a conditional expression counts when one arm carries the failure and the other
+is a typed error — an error-class constructor, or a same-module helper that always
+returns one (`admin_denied(u) if denied(exc) else _check_error(exc)`); a `None` or
+opaque arm still fires.  The annotation route also accepts `-> PreflightCheck` / `->
+PreflightOutput`, under the same every-return proof.  A class-like name may start with
+underscores (`_ReadinessAnswer(...)`).
+
+Also exempt — the failure is deferred, not swallowed: a handler that only stashes the
+exception (`error = exc` or `holder.append(exc)`, plus assignments and logs) when the
+function owning the stashed name — the handler's own, or the enclosing one for a
+worker-thread target writing a closure list or `nonlocal` — reaches `raise NAME` /
+`raise NAME[i]` after the `try` in its own top-level statements (bare, or under an `if`
+that reads NAME), with no `return` and no rebinding of NAME on the way.  E009 uses the
+same predicate.
+
+Also exempt, each a shape where a WARNING would be wrong:
+
+- best-effort cleanup: the handler is only log calls, one at DEBUG/INFO   with a truthy
+`exc_info`, and the `try` body is only release calls   (leading verb
+`close`/`aclose`/`dispose`/`shutdown`/
+`disconnect`/`cleanup`/`release`/`terminate`/`stop`/`kill`/   `unlink`/`rmtree`), or
+only call statements when the `try` sits in   a `finally`.  A WARNING there lands beside
+the error actually being   reported, and narrowing would let a cleanup failure mask it;
+- a predicate-gated skip: one or more `if <test reading the binding>:`   blocks (no
+`else`) holding only log calls — one with `exc_info` —   and ending in
+`return`/`continue`/`pass`, followed by a   cause-preserving re-raise on every other
+path; - inside F005's preflight scope (the functions F005's
+`reachable_preflight_sites` inspects, followed across files in a   repo scan), a
+DEBUG/INFO log carrying the exception (`exc_info`, or   the binding formatted raw, via
+`str`/`repr`, an f-string or a   sanitizer): F005 bars the WARNING E004 would otherwise
+demand; - an app durable failure record handed the binding — a callee whose   name holds
+`failure`/`residual` and a write verb (`write`,   `record`, `store`, `persist`, `save`)
+— in a straight-line   handler ending in a per-item `return None` or `continue`; - in a
+standalone script (L005's `is_script_file`: a shebang or a   `__main__` guard), a
+`print(...)` of the caught exception.
+
+The sanitized-helper exemption also resolves a same-class method (`self._report(name,
+exc)`), and a preceding `if ...: raise <cause-preserving>` guard does not count as a
+bypass.
+
+The exemptions are one principle: the exception must leave the frame in some inspectable
+form — re-raised with its trace, re-raised with a redacted cause, returned as typed
+data, deferred to a proven re-raise, or recorded where a WARNING is barred or would
+mislead.
 
 **Fixing it well**
 
@@ -376,7 +415,17 @@ domain-specific exception instead.
 
 A return that hands the caught exception back as typed data is not flagged: the failure
 leaves the frame for the caller to report. This is the same typed-failure predicate E004
-uses.
+uses, so `return exc` and a tuple/list holding the binding count too.
+
+Also not flagged: under a narrow catch, a return of a same-module helper proven to
+return a typed result (a class-like return annotation, or a class-like constructor on
+every path), such as `return _finish(log, Outcome.SKIPPED, ...)` — an inline constructor
+still needs a log; a per-item `return None` after an app durable failure record handed
+the binding (`write_failure`, `record_failure`; a name holding `failure`/`residual` and
+a write verb); and a `return <non-zero int>` after a top-level `print(...,
+file=sys.stderr)` or `sys.stderr.write(...)` in the same handler, a CLI surfacing the
+failure in its exit status. `return 0` / `None` / `True` still fire.  A same-class
+helper that logs the binding counts whatever its parameter is named.
 
 Under a broad catch (`Exception`, `BaseException`, bare `except:`) logging first does
 not clear it: `logger.<level>(...); return None` (or `[]`, `{}`, `()`, `""`, `dict()`
@@ -423,7 +472,11 @@ fallback path is correct AND there is a comment.  Log at DEBUG if the module is
 preferred but not required.  Flag if the module is expected to be present (will fail
 later with a confusing AttributeError). A cause-preserving re-raise on every path
 (including a typed error raised from the ImportError) surfaces the failure and does not
-need a duplicate log.
+need a duplicate log. An explanatory comment on the `except` line or inside the handler
+is honoured as this text says (tool directives — `noqa`, `type: ignore`, `conformance:
+ignore` — do not count), and so is a reporter call that states the problem with a
+message (a callee named for error/warn/report/ fail/fatal/abort/die with a string
+argument: `_error(12, PATH, "... missing")`).
 
 **Fixing it well**
 
@@ -459,6 +512,10 @@ under production conditions where it produces wrong results at scale.
 
 Exception sets a flag or default value with no trace.  Combines P007's error-hiding with
 no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
+
+Not flagged: a stash the owning function provably re-raises (`error = exc` ... `if error
+is not None: raise error`), the same predicate E004 uses — the failure is deferred, not
+hidden.
 
 ---
 
@@ -666,7 +723,9 @@ also pass `cause=e`.  Use `from None` only when intentionally hiding the origina
 top-level function in this module or imported from the scanned repo whose every return
 either passes through `e` already proven to be an SDK error or builds an SDK error with
 `cause=e`.  A cause the rule cannot prove (`cause=str(e)`, an app-defined class, an
-opaque helper) still needs `from e`.
+opaque helper) still needs `from e`.  `raise group.exceptions[i]` inside `except
+BaseExceptionGroup as group` (or `except*`) is accepted: the member keeps its own
+`__cause__`, which `from group` would overwrite.
 
 ---
 
@@ -840,6 +899,16 @@ typed error in the tolerating function.  The handler logs with `exc_info=True`, 
 a residual and returns the empty sentinel, and the run declares the gap as
 `PARTIAL_SUCCESS`.  Anchored on HTTP-response markers and a failure-shaped test to avoid
 flagging ordinary `if x is None: return None` guards.
+
+`.ok` and `.is_success` are also plain field names on non-HTTP result objects (a
+`StageResult` dataclass), so they count only on an owner that is plausibly an HTTP
+response: its name says so (`resp`), the same function reads a response-only attribute
+on it (`.status_code`, `.json()`, `.headers`), it is a parameter annotated
+`...Response`, or the function binds it (`=`, `:=`, `with ... as`) from an httpx /
+requests / aiohttp call, an HTTP verb (`.get` / `.post` / `.request` ...) or a callee
+named for `http` / `request`.  `status_code` needs no such evidence.  A bare `return` /
+`return None` inside a function annotated `-> None` is not reported either: a procedure
+has no result to publish, the same carve-out E007 makes.  `return []` there still fires.
 
 Raise versus skip.  Raise the typed error for a failure of the whole request, and for
 transient outcomes (no response, 408, 429, 5xx).  A permanent rejection of ONE object

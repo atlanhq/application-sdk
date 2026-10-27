@@ -122,6 +122,11 @@ Three things to get right, because all three fail silently:
   E004-clearing but duplicate the gate's outcome row, so preflight still
   uses the typed-return shape below, not its log line — keep that line at
   `debug` with the sanitizer, as `atlan-mysql-app app/handler.py` does.
+  Two narrow exceptions accept `debug`/`info` (see E004's already-clearing
+  list): inside F005's preflight scope, a `debug`/`info` call that carries the
+  exception (sanitized or with `exc_info`) clears E004, because F005 bars the
+  WARNING that would otherwise be required; and a best-effort cleanup handler
+  logging at `debug` with `exc_info=True` clears it anywhere.
 
 Never propose an inline `ignore[...]` here.  A suppression records that the
 rule was skipped; the sanitized form records that the credential was handled.
@@ -163,7 +168,9 @@ Only the second is true, and only the second survives review.
 - **E016 MissingExceptionChaining** — add `from exc` (or `from e`, matching
   the existing except clause variable) to the bare `raise X(...)` inside the
   except block.  Example: `raise ValueError(msg)` → `raise ValueError(msg)
-  from exc`.
+  from exc`.  `raise group.exceptions[i]` inside `except BaseExceptionGroup as
+  group` (or `except*`) is already clear: the member keeps its own cause, and
+  `from group` would overwrite it.
 
 **Judgment rules** (`autofixable = true` — the lane applies the prescription;
 `classification = "judgment"` — every result is routed to residue for audit,
@@ -237,6 +244,35 @@ outcome mirroring the error-handling shape in the reference app named by
     data** — `return PreflightCheck(passed=False,
     error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row
     staged in a local that the enclosing function returns below the `try`.
+    The binding itself counts (`return exc`, `return (Result(ok=False), exc)`),
+    and so does a local staged through a conditional whose arms are both typed
+    errors (`error = admin_denied(user) if denied(exc) else _check_error(exc)`);
+  - a stash the owning function provably re-raises: the handler only does
+    `error = exc` or `holder.append(exc)` (a worker-thread target writing a
+    closure list or `nonlocal` counts), and the function owning the name
+    reaches `raise error` / `raise holder[0]` after the `try` with no `return`
+    or rebinding on the way;
+  - **best-effort cleanup** logged at `debug`/`info` with `exc_info=True` and
+    nothing else: the `try` body is only release calls (`close`, `aclose`,
+    `dispose`, `shutdown`, `disconnect`, `cleanup`, `release`, `terminate`,
+    `stop`, `kill`, `unlink`, `rmtree`), or only calls when it sits in a
+    `finally`.  A WARNING there lands beside the real error, and narrowing
+    would let a cleanup failure mask it;
+  - a **predicate-gated skip**: `if <predicate reading exc>: <debug log with
+    exc_info>; return/continue`, followed by a cause-preserving re-raise for
+    everything else;
+  - inside **F005's preflight scope** (a `preflight_check` override and the
+    helpers F005 follows from it), a `debug`/`info` log that carries the
+    exception — `exc_info`, or the binding formatted raw or sanitized;
+  - a direct call to a same-module or **same-class** (`self._report(exc)`)
+    helper that logs the binding through a sanitizer at
+    `warning`/`error`/`critical` on every path, optionally behind
+    `if ...: raise <cause-preserving>` guards;
+  - an app **durable failure record** handed the binding — a callee named for
+    `failure`/`residual` and a write verb (`write_failure`, `record_failure`)
+    — followed by a per-item `return None` or `continue`;
+  - in a standalone script (shebang or `__main__` guard, L005's predicate), a
+    `print(...)` of the caught exception.
 
   That last shape is the one to watch in an unattended lane.  It is the
   last-resort arm of a preflight probe, which deliberately fails *closed* with
@@ -271,15 +307,13 @@ outcome mirroring the error-handling shape in the reference app named by
   exception into a typed `PreflightCheck` row and returns it, with no
   suppression and no log above DEBUG.
 
-  **Best-effort cleanup reached from `preflight_check` is the other trap.**  A
+  **Best-effort cleanup reached from `preflight_check` is already clear.**  A
   helper such as `try: await client.aclose() except Exception:
-  logger.debug(...)` that the gate calls has no verdict to return, and the
-  levels close in on it: DEBUG (even through a redaction helper) does not
-  clear E004, and WARNING trips F005 because the helper runs inside the gate.
-  The recommended log that satisfies both is
-  `logger.error("<what failed>: %s", safe_traceback(exc))` — or
-  `sanitize_cause_repr(exc)`; `logger.critical` also clears both — or return the failure as typed data if the
-  caller can carry it.  Do not narrow the clause automatically; see above.
+  logger.debug(..., exc_info=True)` that the gate calls has no verdict to
+  return.  WARNING trips F005 there, so E004 accepts `debug`/`info` carrying
+  the exception (sanitized, or with `exc_info`) anywhere in F005's preflight
+  scope, and the cleanup shape anywhere.  Never raise such a line to WARNING.
+  Do not narrow the clause automatically; see above.
 
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel
   (`None`, `{}`, `[]`, `False`) with no logging before the `return`, so the
@@ -351,6 +385,17 @@ outcome mirroring the error-handling shape in the reference app named by
   `.format(exc)`) still fire.  A string is the failure laundered into a plain
   value.
 
+  Also already clear: `return exc` or a tuple/list holding the binding (the
+  failure itself, handed back); under a narrow catch, the result of a
+  same-module helper proven to return a typed result object (class-like return
+  annotation, or a class-like constructor on every path) —
+  `return _finish(log, SweepOutcome.SKIPPED, ...)`; a per-item `return None`
+  after an app durable failure record handed the binding (`write_failure`,
+  `record_failure`); and in a CLI, `return <non-zero int>` after a
+  `print(..., file=sys.stderr)` or `sys.stderr.write(...)` in the same
+  handler.  An inline constructor under a narrow catch (`return Verdict()`)
+  still needs a log.
+
 - **E008 ImportErrorWithoutLogging** — `except ImportError` that hides a
   missing or broken dependency, so it reads as a normal skip.  When the handler
   takes a fallback or returns without surfacing the failure, bind the exception
@@ -361,6 +406,10 @@ outcome mirroring the error-handling shape in the reference app named by
   error (`raise MissingExtraError(cause=exc) from exc`), already surfaces the
   failure and does not need a duplicate log.  A correct fallback still needs a
   trace; correctness alone does not make the missing-import event visible.
+  An explanatory comment on the `except` line or inside the handler clears it,
+  as the rule text says (tool directives such as `noqa` do not count), and so
+  does a reporter call that states the problem with a message
+  (`_error(12, PATH, "... missing; cannot verify")`).
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable
   (a flag, a default) and logs nothing, so the failure sets state invisibly.
@@ -368,6 +417,9 @@ outcome mirroring the error-handling shape in the reference app named by
   assignment; the checker clears on any logging call in the block.  Mirror
   `atlan-metabase-app app/credentials.py`'s `build_credential_ref`, which
   binds the routing error, logs it, then takes the inline-credentials path.
+  A stash that the owning function re-raises later (`error = exc` …
+  `if error is not None: raise error`) is already clear: the failure is
+  deferred, not hidden.
   A bound name that is never read afterwards is the tell that the handler is
   a placeholder — say so in the edit description rather than inventing a use
   for it.  These handlers sit on credential paths more often than most, so
@@ -489,6 +541,12 @@ outcome mirroring the error-handling shape in the reference app named by
   `app/extracts/databases.py` show the shape.  A site that already records
   and declares its gap under an `ignore[E020]` is converted to that typed
   catch.  Never give it a raise-only edit, which deletes the degradation.
+  Not reported: a bare `return` / `return None` in a function annotated
+  `-> None` (no result to publish), and `.ok` / `.is_success` on an object
+  nothing ties to an HTTP response (a `StageResult` dataclass) — those two
+  markers count only on a response-named owner, one the function reads
+  `.status_code` / `.json()` / `.headers` on, one annotated `...Response`, or
+  one bound from an HTTP call.
 
   **Raise versus skip — read before editing a per-object fetch.**  Raise the
   typed error for a failure of the whole request, and for transient outcomes
