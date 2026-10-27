@@ -53,6 +53,7 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
+from application_sdk.credentials.spec import VALUE_SOURCES_KEY
 from application_sdk.errors import (
     AppError,
     ColdStartRaceError,
@@ -64,7 +65,11 @@ from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
     retry_past_dapr_cold_start,
 )
-from application_sdk.infrastructure._single_key_probe import probe_single_keys
+from application_sdk.infrastructure._single_key_probe import (
+    hash_label,
+    probe_single_keys,
+    scrubbed_traceback,
+)
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
@@ -169,7 +174,11 @@ async def resolve_agent_credential(
     """
     raw = spec.to_raw_dict()
 
-    if spec.key_type == "single-key":
+    if spec.value_sources is not None:
+        resolved_flat, _ = await _resolve_declared(
+            secret_store, raw, spec.value_sources
+        )
+    elif spec.key_type == "single-key":
         bundle = await _fetch_per_key_bundle(secret_store, raw)
         resolved_flat, _ = _substitute(raw, bundle)
     elif spec.secret_path:
@@ -179,6 +188,119 @@ async def resolve_agent_credential(
         resolved_flat = raw
 
     return transform_agent_credentials(resolved_flat)
+
+
+async def _resolve_declared(
+    secret_store: SecretStore,
+    raw: dict[str, Any],
+    sources: dict[str, dict[str, str]],
+) -> tuple[dict[str, Any], int]:
+    """Substitute the declared ``secretKeyRef`` fields of a format-2 payload.
+
+    Only those fields reach the store; every other field is a literal (or a
+    file reference) and is never looked up or replaced. Returns the flat dict
+    without the ``value-sources`` marker, and the number of fields resolved.
+    """
+    flat = {k: v for k, v in raw.items() if k != VALUE_SOURCES_KEY}
+    values = await _fetch_declared_refs(secret_store, sources)
+    flat.update(values)
+    return flat, len(values)
+
+
+async def _fetch_declared_refs(
+    secret_store: SecretStore, sources: dict[str, dict[str, str]]
+) -> dict[str, Any]:
+    """Fetch each declared secret once and read each field's ``key`` from it.
+
+    A declared ref is known to be a ref, so every failure is final: there is
+    no literal to fall back to (FND-4077). Not-found (the secret, or the key
+    inside it) is the user's config; anything else is the store's, keeping its
+    outage subtype and ``retryable`` hint. Secret names are hash-labelled in
+    every message and log, as on the probing path.
+
+    Raises:
+        CredentialNotFoundError: A declared secret, or the key inside it, is
+            absent. Names the field and the hashed secret name.
+        SecretStoreError: The store failed to answer (the subtypes
+            :class:`SecretStoreUnavailableError` /
+            :class:`SecretStoreUnreachableError` for an outage).
+    """
+    by_name: dict[str, list[tuple[str, str]]] = {}
+    for field, ref in sources.items():
+        by_name.setdefault(ref["name"], []).append((field, ref["key"]))
+
+    resolved: dict[str, Any] = {}
+    for name, wanted in by_name.items():
+        label = hash_label(name)
+        fields = ", ".join(field for field, _ in wanted)
+        try:
+            secret = await retry_past_dapr_cold_start(
+                lambda name=name: secret_store.get(name),
+                description=f"declared secret lookup for {label}",
+                component=DAPR_SECRET_STORE_COMPONENT,
+            )
+        except SecretNotFoundError:
+            raise CredentialNotFoundError(
+                f"secret {label} declared for field '{fields}'"
+            ) from None
+        except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here; a hash-labelled, cause-free SecretStoreError is raised
+            logger.warning(  # conformance: ignore[L009,L004] the raise below drops the raw exception (`from None`), so this scrubbed dump is the only record of the cause; exc_info would re-log it unscrubbed
+                "declared secret lookup for %s (field '%s') failed — secret "
+                "store error:\n%s",
+                label,
+                fields,
+                scrubbed_traceback(exc, name, label),
+            )
+            raise _declared_store_error(label, fields, exc) from None
+        for field, key in wanted:
+            resolved[field] = _pick_key(secret, name, key, field)
+    return resolved
+
+
+def _pick_key(secret: Any, name: str, key: str, field: str) -> Any:
+    """Read *key* from a fetched secret.
+
+    A bundle (Kubernetes, Vault, an AWS JSON secret) is a JSON object, and
+    ``key`` picks the field. A single-value secret (Azure Key Vault, GCP, a
+    plain AWS string) has ``key`` equal to ``name``, as Dapr documents, and
+    the whole value is the secret.
+    """
+    bundle: Any = secret
+    if isinstance(secret, str):
+        try:
+            bundle = orjson.loads(secret)
+        except (
+            orjson.JSONDecodeError
+        ):  # conformance: ignore[E002] not JSON: a single-value secret, handled below
+            bundle = None
+    if isinstance(bundle, dict) and key in bundle:
+        return bundle[key]
+    if key == name and isinstance(secret, str):
+        return secret
+    raise CredentialNotFoundError(
+        f"key {hash_label(key)} in secret {hash_label(name)} declared for "
+        f"field '{field}'"
+    )
+
+
+def _declared_store_error(label: str, fields: str, exc: Exception) -> SecretStoreError:
+    """Clean, cause-free store error for a failed declared lookup."""
+    if isinstance(exc, DaprSidecarUnreachableError):
+        return SecretStoreUnreachableError(
+            label,
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        )
+    if isinstance(exc, ColdStartRaceError):
+        return SecretStoreUnavailableError(label)
+    return SecretStoreError(
+        f"Secret store failed to return the secret declared for field "
+        f"'{fields}' ({type(exc).__name__}). Check that the secret exists and "
+        "that the SDR's secret-store identity can read it.",
+        secret_name=label,
+        retryable=exc.effective_retryable if isinstance(exc, AppError) else None,
+    )
 
 
 # Keep backward-compatible alias for existing callers and tests
@@ -494,6 +616,9 @@ async def check_secret_store_access(
             suggested_action="Configure a secret store on the SDR deployment.",
         )
 
+    if spec.value_sources is not None:
+        return await _check_declared_sources(spec, secret_store)
+
     raw = spec.to_raw_dict()
     if spec.key_type != "single-key" and not spec.secret_path:
         # Multi-key (non single-key) resolution fetches the bundle from a
@@ -570,5 +695,65 @@ async def check_secret_store_access(
             f"Configured secret store is accessible - {substituted} secret(s) "
             "retrieved."
         ),
+        resolved=resolved,
+    )
+
+
+async def _check_declared_sources(
+    spec: AgentCredentialSpec, secret_store: SecretStore
+) -> SecretStoreCheckResult:
+    """The secret-store preflight row for a format-2 payload.
+
+    Only declared refs are looked up, so a failure is never ambiguous: a
+    missing secret is the user's config (fatal, not ``store_down``), and any
+    other failure is the store's (fatal, ``store_down``). A payload declaring
+    no refs passes without touching the store.
+    """
+    sources = spec.value_sources or {}
+    try:
+        resolved_flat, substituted = await _resolve_declared(
+            secret_store, spec.to_raw_dict(), sources
+        )
+    except CredentialNotFoundError as exc:
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=True,
+            substituted=0,
+            message=(
+                "Configured secret store is accessible, but a declared secret "
+                f"reference was not found: {exc.credential_name}."
+            ),
+            suggested_action=(
+                "Check that each field's secretKeyRef names a secret, and a key "
+                "inside it, that exist in the secret store."
+            ),
+        )
+    except (DependencyUnavailableError, CredentialError):
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=True,
+            fatal=True,
+            substituted=0,
+            message="Configured secret store is not accessible.",
+            suggested_action=(
+                "Check that the secret store is running and that the SDR's "
+                "secret-store identity can read the declared secrets."
+            ),
+        )
+    resolved = transform_agent_credentials(resolved_flat)
+    if not sources:
+        message = "No secret references declared - all values are used as entered."
+    else:
+        message = (
+            f"Configured secret store is accessible - {substituted} secret(s) "
+            "retrieved."
+        )
+    return SecretStoreCheckResult(
+        passed=True,
+        store_down=False,
+        fatal=False,
+        substituted=substituted,
+        message=message,
         resolved=resolved,
     )

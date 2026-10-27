@@ -74,6 +74,22 @@ def hash_label(value: str) -> str:
     return f"sha256:{hashlib.sha256(value.encode()).hexdigest()[:8]}"
 
 
+def scrubbed_traceback(exc: BaseException, value: str, label: str) -> str:
+    """*exc*'s traceback, safe to log next to the hashed *label*.
+
+    Redacts known secret patterns, then replaces the raw *value* (which
+    ``redact_secrets`` can't know) with *label*. Bounded to standalone tokens
+    so a short key like "DB" doesn't corrupt "DB_CONNECTION". Also scrubs the
+    percent-encoded form: the httpx exception's str() can embed the request
+    URL, which encodes the key via quote(key, safe="") (see
+    AsyncDaprClient.get_secret).
+    """
+    safe = redact_secrets("".join(traceback.format_exception(exc)))
+    for candidate in {value, quote(value, safe="")}:
+        safe = re.sub(rf"(?<![\w-]){re.escape(candidate)}(?![\w-])", label, safe)
+    return safe
+
+
 async def probe_single_keys(
     candidates: Sequence[str],
     fetch: ProbeFetch[SecretT],
@@ -185,25 +201,12 @@ async def _probe_one(fetch: ProbeFetch[SecretT], value: str) -> SecretT | None:
         raise SecretStoreUnavailableError(label) from None
     # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
     except Exception as exc:
-        # The store answered with a failure, not "not found". Stop: skipping
-        # here would send the ref-key itself as the credential value.
-        #
         # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
         # and its message embeds the backend cause, which can echo the raw
-        # ref-key — that would undo the hashing in the same log record. Format
-        # the traceback ourselves, redact known secret patterns, and scrub the
-        # literal ref-key (which redact_secrets can't know), bounded to
-        # standalone tokens so a short key like "DB" doesn't corrupt
-        # "DB_CONNECTION". Also scrub the percent-encoded form: the httpx
-        # exception's str() can embed the request URL, which encodes the
-        # ref-key via quote(key, safe="") (see AsyncDaprClient.get_secret).
-        safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
-        for candidate in {value, quote(value, safe="")}:
-            safe_traceback = re.sub(
-                rf"(?<![\w-]){re.escape(candidate)}(?![\w-])",
-                label,
-                safe_traceback,
-            )
+        # ref-key — that would undo the hashing in the same log record.
+        safe_traceback = scrubbed_traceback(exc, value, label)
+        # The store answered with a failure, not "not found". Stop: skipping
+        # here would send the ref-key itself as the credential value.
         logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
             "single-key probe for ref-key %s failed — secret store error, "
             "not a missing key; stopping credential resolution.\n%s",

@@ -12,10 +12,52 @@ example.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import orjson
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    GetJsonSchemaHandler,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema
+
+#: ``agent_json`` wire format in which every field declares its own source
+#: (FND-4361). Without it, ``key-type: single-key`` has to look every value up
+#: as a secret name and guess from the store's answer.
+DECLARED_SOURCES_FORMAT = 2
+
+#: Reserved key carrying the declared ``secretKeyRef`` sources of a normalized
+#: format-2 payload: ``{field: {"name": ..., "key": ...}}``. Present (even
+#: empty) means every field declared its source; absent means a legacy payload.
+VALUE_SOURCES_KEY = "value-sources"
+
+_FORMAT_KEY = "format"
+
+#: Keys that describe the agent rather than a credential field. Format 2 takes
+#: them as plain values; every other key must declare a source.
+_ENVELOPE_KEYS: frozenset[str] = frozenset(
+    {
+        "agent-name",
+        "secret-manager",
+        "aws-region",
+        "aws-auth-method",
+        "azure-auth-method",
+        "auth-type",
+        "agent-type",
+        "connectBy",
+    }
+)
+
+#: Legacy fetch anchors. Format 2 replaces both with per-field sources, so a
+#: payload carrying either would be ambiguous.
+_LEGACY_ANCHORS: tuple[str, ...] = ("key-type", "secret-path")
 
 
 class AgentCredentialSpec(BaseModel):
@@ -118,6 +160,14 @@ class AgentCredentialSpec(BaseModel):
     azure_auth_method: str = Field(default="", alias="azure-auth-method")
     """Azure auth method: ``managed_identity``, ``service_principal``."""
 
+    value_sources: dict[str, dict[str, str]] | None = Field(
+        default=None, alias=VALUE_SOURCES_KEY
+    )
+    """Declared ``secretKeyRef`` sources, ``{field: {"name", "key"}}``, of a
+    format-2 payload. ``None`` for a legacy payload; an empty dict when every
+    field is a literal or a file reference. Resolution looks up only these
+    fields and never probes the rest."""
+
     # ---- Wire-format acceptance ----
 
     @model_validator(mode="before")
@@ -155,8 +205,31 @@ class AgentCredentialSpec(BaseModel):
                 raise CredentialParseError(
                     f"agent_json must be a JSON object, got {type(parsed).__name__}",
                 )
-            return parsed
+            data = parsed
+        if isinstance(data, dict):
+            if _FORMAT_KEY in data:
+                return _normalize_declared(data)
+            _check_value_sources(data)
         return data
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_sources(self, handler: SerializerFunctionWrapHandler) -> Any:
+        """Leave a legacy payload's serialized form exactly as it was: apps and
+        older SDKs in child workflows read it, and must not see a new key."""
+        data = handler(self)
+        if self.value_sources is None and isinstance(data, dict):
+            data.pop(VALUE_SOURCES_KEY, None)
+            data.pop("value_sources", None)
+        return data
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: CoreSchema, handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        # The wrap serializer above returns ``Any``, which would blank the
+        # serialization schema of every input model embedding this spec. It
+        # only omits a ``None`` field, so publish the field-derived schema.
+        return handler(_without_serializer(core_schema))
 
     # ---- Convenience methods ----
 
@@ -174,9 +247,150 @@ class AgentCredentialSpec(BaseModel):
 
     def is_populated(self) -> bool:
         """True if this spec can resolve: a name plus a fetch anchor
-        (secret_path, or key_type "single-key"). Rejects the name-only AE
-        placeholder that would otherwise resolve to empty credentials.
+        (secret_path, key_type "single-key", or declared value sources).
+        Rejects the name-only AE placeholder that would otherwise resolve to
+        empty credentials.
         """
         return bool(self.agent_name) and (
-            bool(self.secret_path) or self.key_type == "single-key"
+            bool(self.secret_path)
+            or self.key_type == "single-key"
+            or self.value_sources is not None
         )
+
+    def declares_sources(self) -> bool:
+        """True for a format-2 payload, whose fields each declare their source."""
+        return self.value_sources is not None
+
+    def __hash__(self) -> int:
+        # pydantic's frozen hash hashes field values, and ``value_sources`` is
+        # a dict. Hash the canonical dump instead: equal specs dump equally.
+        return hash(
+            orjson.dumps(self.model_dump(mode="json"), option=orjson.OPT_SORT_KEYS)
+        )
+
+
+def _without_serializer(core_schema: CoreSchema) -> CoreSchema:
+    """*core_schema* minus its custom serializer, at whichever level it sits."""
+    schema: dict[str, Any] = {
+        k: v for k, v in core_schema.items() if k != "serialization"
+    }
+    inner = schema.get("schema")
+    if isinstance(inner, dict) and "serialization" in inner:
+        schema["schema"] = {k: v for k, v in inner.items() if k != "serialization"}
+    return cast("CoreSchema", schema)
+
+
+def _parse_error(message: str) -> Exception:
+    from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        CredentialParseError,
+    )
+
+    return CredentialParseError(message)
+
+
+def _source_error(field: str, problem: str) -> Exception:
+    # Names the field only: field names aren't secret, their values may be.
+    return _parse_error(f"agent_json field '{field}' {problem}")
+
+
+def _non_empty_str(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _secret_key_ref(field: str, ref: Any) -> dict[str, str]:
+    if (
+        not isinstance(ref, dict)
+        or set(ref) != {"name", "key"}
+        or not _non_empty_str(ref["name"])
+        or not _non_empty_str(ref["key"])
+    ):
+        raise _source_error(
+            field, "has a 'secretKeyRef' without a non-empty 'name' and 'key'"
+        )
+    return {"name": ref["name"], "key": ref["key"]}
+
+
+def _read_source(field: str, declared: Any) -> tuple[Any, dict[str, str] | None]:
+    """``(flat value, secretKeyRef or None)`` for one format-2 field."""
+    one_of = "must be an object with exactly one of 'value' or 'valueFrom'"
+    if not isinstance(declared, dict) or len(declared) != 1:
+        raise _source_error(field, one_of)
+    ((kind, body),) = declared.items()
+    if kind == "value":
+        return body, None
+    if kind != "valueFrom":
+        raise _source_error(field, one_of)
+    if not isinstance(body, dict) or len(body) != 1:
+        raise _source_error(
+            field, "must hold exactly one of 'secretKeyRef' or 'fileRef' in 'valueFrom'"
+        )
+    ((source, ref),) = body.items()
+    if source == "secretKeyRef":
+        secret_ref = _secret_key_ref(field, ref)
+        # The flat value is the secret's name, exactly what a legacy payload
+        # carried in this field, until resolution replaces it.
+        return secret_ref["name"], secret_ref
+    if source == "fileRef":
+        if (
+            not isinstance(ref, dict)
+            or set(ref) != {"path"}
+            or not _non_empty_str(ref["path"])
+        ):
+            raise _source_error(field, "has a 'fileRef' without a non-empty 'path'")
+        return ref["path"], None
+    raise _source_error(
+        field, "has an unsupported 'valueFrom' source; use 'secretKeyRef' or 'fileRef'"
+    )
+
+
+def _normalize_declared(data: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a format-2 payload into the legacy shape plus ``value-sources``.
+
+    Apps keep reading the same flat keys and types (``port`` stays an int, a
+    typed ``extra="forbid"`` subclass validates unchanged); only resolution
+    reads the declared sources.
+    """
+    fmt = data[_FORMAT_KEY]
+    if isinstance(fmt, bool) or fmt != DECLARED_SOURCES_FORMAT:
+        raise _parse_error(
+            f"agent_json format {fmt!r} is not supported; "
+            f"expected {DECLARED_SOURCES_FORMAT}"
+        )
+    flat: dict[str, Any] = {}
+    sources: dict[str, dict[str, str]] = {}
+    for key, declared in data.items():
+        if key == _FORMAT_KEY:
+            continue
+        if key in _LEGACY_ANCHORS:
+            raise _parse_error(
+                f"agent_json format {DECLARED_SOURCES_FORMAT} does not take "
+                f"'{key}': each field declares its own source"
+            )
+        if key in (VALUE_SOURCES_KEY, "value_sources"):
+            raise _parse_error(f"agent_json key '{key}' is reserved")
+        if key in _ENVELOPE_KEYS:
+            flat[key] = declared
+            continue
+        flat[key], secret_ref = _read_source(key, declared)
+        if secret_ref is not None:
+            sources[key] = secret_ref
+    flat[VALUE_SOURCES_KEY] = sources
+    return flat
+
+
+def _check_value_sources(data: dict[str, Any]) -> None:
+    """Validate the ``value-sources`` of an already-normalized payload.
+
+    That is the round-trip shape (``to_raw_dict``, a serialized workflow
+    input) that a later activity or child workflow re-parses.
+    """
+    for key in (VALUE_SOURCES_KEY, "value_sources"):
+        sources = data.get(key)
+        if sources is None:
+            continue
+        if not isinstance(sources, dict):
+            raise _parse_error(f"agent_json '{key}' must be an object")
+        for field, ref in sources.items():
+            _secret_key_ref(field, ref)
+            if not isinstance(data.get(field), str):
+                raise _source_error(field, f"is named in '{key}' but carries no value")
