@@ -157,12 +157,12 @@ Each probe has one of three outcomes:
 - **Store answer** — anything else: an IAM or KMS denial, a `403`
   `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an invalid
   secret name, or wording no backend documents.
-  - **GUID credential configs:** resolution **stops** with a `SecretStoreError`
-    (hash-labelled, keeping its `retryable` hint). Skipping the field would send
-    the ref-key itself to the source as the password: an auth failure blamed on
-    the user, plus a burned lockout attempt (FND-4077).
-  - **Legacy agent payloads (deprecated, time-boxed):** the field keeps its
-    value, with a WARNING. A probe can't tell a plain username, database name,
+  - **Legacy SDR payloads (deprecated, time-boxed):** both legacy agent_json
+    payloads and agent-sourced GUID configs (the form Heracles turns an SDR's
+    agent_json into for Test Authentication, preflight and metadata calls).
+    Single-key probing only ever runs against the customer's SDR store, and
+    direct (hosted) configs fetch one bundle by GUID and never probe. The field
+    keeps its value, with a WARNING. A probe can't tell a plain username, database name,
     URL or role ARN from a ref-key, and stores that reject those as names
     failed runs whose config hadn't changed. The remaining cost is a *real*
     ref-key that the store denies, or that hits a throttle in wording no

@@ -289,13 +289,13 @@ class TestDaprCredentialVaultGetCredentials:
         # _try_fetch, not the original SecretStoreUnavailableError("secret_key_ref").
         assert "secret_key_ref" not in str(exc_info.value)
 
-    async def test_single_key_store_error_raises_without_leaking_ref_key(
+    async def test_single_key_refusal_keeps_value_without_leaking_ref_key(
         self,
     ) -> None:
         """A definitive (non-cold-start) rejection during single-key probing
-        stops resolution (FND-4077) rather than leaving the ref-key in place as
-        the password — and neither the WARNING log nor the raised error leaks
-        the raw ref-key."""
+        of an agent-sourced config keeps the value (FND-4407 bridge: the store
+        is the customer's SDR store, and the probe can't tell a plain value
+        from a ref-key), and the WARNING log never leaks the raw ref-key."""
         ref_key = "SNOWFLAKE_PROD_PASSWORD"
         expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
         config = {"credentialSource": "agent", "password": ref_key}
@@ -314,15 +314,11 @@ class TestDaprCredentialVaultGetCredentials:
             patch(
                 "application_sdk.infrastructure._single_key_probe.logger"
             ) as mock_logger,
-            pytest.raises(CredentialVaultError) as exc_info,
         ):
             vault = self._make_vault(mock_client)
-            await vault.get_credentials("my-guid")
+            credentials = await vault.get_credentials("my-guid")
 
-        # The first failing candidate in config order is raised (here the
-        # ``credentialSource`` value, which this path also probes).
-        assert ref_key not in str(exc_info.value)
-        assert "sha256:" in str(exc_info.value)
+        assert credentials["password"] == ref_key  # kept as entered
 
         logged = " ".join(
             str(arg) for call in mock_logger.warning.call_args_list for arg in call.args
@@ -938,17 +934,19 @@ class TestSingleKeyProbeConcurrency:
         assert "sha256:" in str(err)
         assert err.cause is None
 
-    async def test_store_error_on_one_field_stops_resolution(self) -> None:
-        """A store error on one field is fatal even when another field resolved
+    async def test_throttle_on_one_field_stops_resolution(self) -> None:
+        """A throttle on one field is fatal even when another field resolved
         (FND-4077): skipping it would send that field's ref-key as its value.
-        A key the store definitively lacks is still skipped (``_get_secret``
-        returns ``{}`` for it, covered above)."""
-        from application_sdk.infrastructure.secrets import SecretStoreError
+        The FND-4407 bridge never covers a recognised throttle."""
+        from application_sdk.infrastructure.secrets import (
+            SecretStoreError,
+            SecretStoreTransientError,
+        )
 
         async def _get_secret(value: str, *, log_label: str | None = None):
             if value == "real-key":
                 return {"password": "resolved"}
-            raise SecretStoreError(
+            raise SecretStoreTransientError(
                 "ThrottlingException", secret_name=value, retryable=True
             )
 
@@ -959,6 +957,23 @@ class TestSingleKeyProbeConcurrency:
 
         assert exc_info.value.effective_retryable is True
         assert "throttled-key" not in str(exc_info.value)
+
+    async def test_refusal_on_one_field_keeps_the_value(self) -> None:
+        """FND-4407 bridge on the SDR vault path. Single-key mode only runs
+        for agent-sourced configs, whose store is the customer's SDR store,
+        so a refused plain value is kept, exactly as on the agent_json path."""
+        from application_sdk.infrastructure.secrets import SecretStoreError
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            if value == "real-key":
+                return {"password": "resolved"}
+            raise SecretStoreError("AccessDenied", secret_name=value, retryable=True)
+
+        config = {"a": "real-key", "b": "plain-value"}
+
+        secrets = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert secrets == {"password": "resolved"}
 
 
 def test_outage_types_stay_importable_from_this_module() -> None:

@@ -18,10 +18,13 @@ store *answers* with something other than "not found" (an invalid name, access
 denied). Outages (unreachable, cold start, unavailable) and recognised
 temporary failures (:class:`SecretStoreTransientError`: throttling, transient
 5xx) still stop resolution and retry, so FND-4077's transient case never keeps
-a value. Only legacy agent payloads opt in: the probe can't tell a plain
-username, database name, URL or role ARN from a ref-key, so stores that reject
-those failed runs whose config hadn't changed. The GUID vault path stays
-strict. Delete the flag, and probing with it, once every agent payload declares
+a value. Both callers opt in, and both probe only the customer's SDR store:
+legacy agent_json payloads, and the GUID vault's single-key mode, which only
+runs for agent-sourced configs (Heracles builds those from an SDR's
+agent_json). The probe can't tell a plain username, database name, URL or role
+ARN from a ref-key, so stores that reject those failed runs whose config hadn't
+changed. Direct (hosted) configs never probe: they fetch one bundle by GUID and
+stay strict. Delete the flag, and probing with it, once every agent payload declares
 its sources (``"format": 2``, FND-4361); those refs are looked up strictly and
 never probed.
 
@@ -118,8 +121,8 @@ async def probe_single_keys(
 
     ``keep_value_on_store_answer`` opts a caller into the deprecated bridge
     (FND-4407, see the module docstring): a store answer that isn't "not
-    found" keeps the value instead of failing. Only legacy agent payloads opt
-    in; the GUID vault path stays strict.
+    found" keeps the value instead of failing. Both callers opt in; both probe
+    only the customer's SDR store.
 
     *outcomes*, when given, is filled with each probed value's outcome, even
     when the sweep then raises: ``resolved``, ``absent``, ``refused`` (a store
