@@ -320,15 +320,22 @@ def _pick_key(secret: Any, name: str, key: str, field: str) -> Any:
 
 
 def _declared_store_error(label: str, fields: str, exc: Exception) -> SecretStoreError:
-    """Clean, cause-free store error for a failed declared lookup."""
-    if isinstance(exc, DaprSidecarUnreachableError):
+    """Clean, cause-free store error for a failed declared lookup.
+
+    Outages are matched first, so they never reach the user-refusal branch
+    below: the store never answered, so there is no grant for the user to fix.
+    """
+    # The store's own outage subtypes are named explicitly, although they also
+    # subclass the Dapr leaves, so this ordering can't silently depend on the
+    # class hierarchy.
+    if isinstance(exc, (SecretStoreUnreachableError, DaprSidecarUnreachableError)):
         return SecretStoreUnreachableError(
             label,
             component=exc.component,
             attempts=exc.attempts,
             elapsed_seconds=exc.elapsed_seconds,
         )
-    if isinstance(exc, ColdStartRaceError):
+    if isinstance(exc, (SecretStoreUnavailableError, ColdStartRaceError)):
         return SecretStoreUnavailableError(label)
     if isinstance(exc, SecretStoreTransientError):
         # Throttled or a transient server error: the store said "try again",
