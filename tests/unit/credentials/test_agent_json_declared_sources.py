@@ -828,3 +828,23 @@ class TestPreflight:
         result = await check_secret_store_access(spec, DownStore())  # type: ignore[arg-type]
         assert result.fatal
         assert result.store_down
+
+
+@pytest.mark.parametrize(
+    "outage",
+    [
+        SecretStoreUnavailableError("prod/mysql"),
+        SecretStoreUnreachableError(
+            "prod/mysql", component="secretstore", attempts=3, elapsed_seconds=1.0
+        ),
+    ],
+)
+def test_store_outage_is_never_mapped_to_a_user_refusal(outage: Exception) -> None:
+    """A store outage keeps its outage type: the store never answered, so
+    there is no grant for the user to fix (AgentSecretReadError is USER)."""
+    from application_sdk.credentials.agent import _declared_store_error
+
+    mapped = _declared_store_error("sha256:00000000", "basic.password", outage)
+
+    assert type(mapped) is type(outage)
+    assert not isinstance(mapped, AgentSecretReadError)
