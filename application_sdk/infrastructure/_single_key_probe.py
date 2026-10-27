@@ -15,8 +15,10 @@ the source.
 **Deprecated, time-boxed exception (FND-4407):** a caller may pass
 ``keep_value_on_store_answer=True`` to keep the value, with a WARNING, when the
 store *answers* with something other than "not found" (an invalid name, access
-denied, throttled). Outages (unreachable, cold start, unavailable) still stop
-resolution. Only legacy agent payloads opt in: the probe can't tell a plain
+denied). Outages (unreachable, cold start, unavailable) and recognised
+temporary failures (:class:`SecretStoreTransientError`: throttling, transient
+5xx) still stop resolution and retry, so FND-4077's transient case never keeps
+a value. Only legacy agent payloads opt in: the probe can't tell a plain
 username, database name, URL or role ARN from a ref-key, so stores that reject
 those failed runs whose config hadn't changed. The GUID vault path stays
 strict. Delete the flag, and probing with it, once every agent payload declares
@@ -47,6 +49,7 @@ from application_sdk.errors.leaves import (
 )
 from application_sdk.infrastructure.secrets import (
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
 )
@@ -231,11 +234,16 @@ async def _probe_one(
         # and its message embeds the backend cause, which can echo the raw
         # ref-key — that would undo the hashing in the same log record.
         safe_traceback = scrubbed_traceback(exc, value, label)
-        if keep_value_on_store_answer and isinstance(exc, SecretStoreError):
+        if (
+            keep_value_on_store_answer
+            and isinstance(exc, SecretStoreError)
+            and not isinstance(exc, SecretStoreTransientError)
+        ):
             # The store answered, but not with "not found": an invalid name,
-            # access denied, throttled. Deprecated bridge (FND-4407, see the
-            # module docstring): keep the value as entered, as SDK <= 3.49 did,
-            # because a probe can't tell this plain value from a ref-key.
+            # access denied. Deprecated bridge (FND-4407, see the module
+            # docstring): keep the value as entered, as SDK <= 3.49 did,
+            # because a probe can't tell this plain value from a ref-key. A
+            # recognised throttle is excluded: it retries below instead.
             logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
                 "DEPRECATED single-key fallback: the secret store rejected a "
                 "lookup of %s (%s), so the value is used as entered. If it is "

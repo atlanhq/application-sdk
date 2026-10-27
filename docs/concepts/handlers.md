@@ -150,9 +150,13 @@ Each probe has one of three outcomes:
 - **Store outage** — the sidecar or store is unreachable, cold-starting or
   unavailable. Resolution **stops** with a hash-labelled `SecretStoreError`
   subtype, and the run retries.
-- **Store answer** — anything else: a throttled vault, an IAM or KMS denial, a
-  `403` `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an
-  invalid secret name.
+- **Temporary failure** — a throttle or transient server error in a backend's
+  documented wording (`SecretStoreTransientError`). Resolution **stops** and the
+  run retries, on every path. A throttled real ref-key is never sent as the
+  value.
+- **Store answer** — anything else: an IAM or KMS denial, a `403`
+  `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an invalid
+  secret name, or wording no backend documents.
   - **GUID credential configs:** resolution **stops** with a `SecretStoreError`
     (hash-labelled, keeping its `retryable` hint). Skipping the field would send
     the ref-key itself to the source as the password: an auth failure blamed on
@@ -160,9 +164,10 @@ Each probe has one of three outcomes:
   - **Legacy agent payloads (deprecated, time-boxed):** the field keeps its
     value, with a WARNING. A probe can't tell a plain username, database name,
     URL or role ARN from a ref-key, and stores that reject those as names
-    failed runs whose config hadn't changed. The cost is FND-4077's case: a
-    throttled or denied *real* ref-key is sent as the value. The fallback goes
-    away with legacy payloads (FND-4407).
+    failed runs whose config hadn't changed. The remaining cost is a *real*
+    ref-key that the store denies, or that hits a throttle in wording no
+    backend documents: it is sent as the value. The fallback goes away with
+    legacy payloads (FND-4407).
 
 What the logs tell you:
 

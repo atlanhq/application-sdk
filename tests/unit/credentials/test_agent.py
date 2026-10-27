@@ -878,6 +878,42 @@ class TestSingleKeyMode:
         client.get_secret = _get_secret
         return DaprSecretStore(client)
 
+    async def test_dapr_throttled_probe_never_sends_ref_key_as_password(
+        self,
+    ) -> None:
+        """FND-4077 end to end through the real Dapr adapter, kept under the
+        FND-4407 bridge. A throttled vault used to read as "not found", so the
+        password field kept its ref-key and the connector logged in with
+        ``ATLAN_PASS`` as the password. A recognised throttle is a
+        ``SecretStoreTransientError``: resolution stops and retries, and the
+        bridge never keeps the value."""
+        store = self._dapr_store_answering(
+            {
+                "ATLAN_USER": "value:real_user",
+                "ATLAN_PASS": "couldn't get secret: api error "
+                "ThrottlingException: Rate exceeded",
+                "analytics": "couldn't get secret: ResourceNotFoundException: "
+                "Secrets Manager can't find the specified secret.",
+            }
+        )
+        agent_json = json.dumps(
+            {
+                "agent-name": "test-agent",
+                "key-type": "single-key",
+                "auth-type": "basic",
+                "basic.username": "ATLAN_USER",
+                "basic.password": "ATLAN_PASS",
+                "extra.database": "analytics",
+            }
+        )
+
+        with pytest.raises(SecretStoreError) as exc_info:
+            await resolve_agent_json(agent_json, store)
+
+        assert not isinstance(exc_info.value, SecretNotFoundError)
+        assert exc_info.value.effective_retryable is True
+        assert "ATLAN_PASS" not in str(exc_info.value)
+
     async def test_dapr_rejected_probe_keeps_value_under_the_legacy_bridge(
         self,
     ) -> None:
@@ -886,14 +922,15 @@ class TestSingleKeyMode:
         value for *legacy* single-key payloads, which can't say which fields are
         ref-keys: stores that reject plain values failed unchanged configs.
 
-        The accepted cost, pinned here so it stays visible: a throttled *real*
-        ref-key (``ATLAN_PASS``) is sent as the value, as on SDK <= 3.49.
-        Declared (format-2) refs never take this path; they fail strictly."""
+        The accepted cost, pinned here so it stays visible: a *real* ref-key
+        (``ATLAN_PASS``) that the store denies is sent as the value, as on
+        SDK <= 3.49. Declared (format-2) refs never take this path; they fail
+        strictly."""
         store = self._dapr_store_answering(
             {
                 "ATLAN_USER": "value:real_user",
-                "ATLAN_PASS": "couldn't get secret: api error "
-                "ThrottlingException: Rate exceeded",
+                "ATLAN_PASS": "couldn't get secret: AccessDeniedException: "
+                "not authorized to perform secretsmanager:GetSecretValue",
                 "analytics": "couldn't get secret: ResourceNotFoundException: "
                 "Secrets Manager can't find the specified secret.",
             }

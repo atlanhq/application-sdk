@@ -123,6 +123,27 @@ class TestCensusClassesKeepTheirValues:
         assert result.resolved is not None
 
 
+class TestTransientStillFails:
+    """FND-4077's transient case stays protected under the bridge: a
+    recognised throttle retries and never keeps the value."""
+
+    async def test_throttled_probe_raises_and_keeps_nothing(self) -> None:
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
+
+        store = AnsweringStore(
+            SecretStoreTransientError(
+                "ThrottlingException: Rate exceeded", retryable=True
+            )
+        )
+        with pytest.raises(SecretStoreError) as exc_info:
+            await resolve_agent_credential(
+                _legacy(**{"basic.password": "prod/mysql-password"}),
+                store,  # type: ignore[arg-type]
+            )
+        assert exc_info.value.effective_retryable is True
+        assert "prod/mysql-password" not in str(exc_info.value)
+
+
 class TestOutagesStillFail:
     async def test_unreachable_store_fails_the_run(self) -> None:
         class DownStore:
