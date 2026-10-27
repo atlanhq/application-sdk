@@ -214,7 +214,7 @@ def _warn_undeclared_sources() -> None:
 
 
 async def _resolve_declared(
-    secret_store: SecretStore,
+    secret_store: SecretStore | None,
     raw: dict[str, Any],
     sources: dict[str, dict[str, str]],
 ) -> tuple[dict[str, Any], int]:
@@ -223,8 +223,20 @@ async def _resolve_declared(
     Only those fields reach the store; every other field is a literal (or a
     file reference) and is never looked up or replaced. Returns the flat dict
     without the ``value-sources`` marker, and the number of fields resolved.
+    A payload declaring no refs needs no store.
+
+    Raises:
+        DependencyUnavailableError: Refs are declared but no secret store is
+            available to resolve them.
     """
     flat = {k: v for k, v in raw.items() if k != VALUE_SOURCES_KEY}
+    if not sources:
+        return flat, 0
+    if secret_store is None:
+        raise DependencyUnavailableError(
+            message="No secret store available to resolve declared agent secrets",
+            service="secret_store",
+        )
     values = await _fetch_declared_refs(secret_store, sources)
     flat.update(values)
     return flat, len(values)
@@ -518,11 +530,14 @@ _PROBE_OUTCOMES = (
 def _log_probe_outcomes(raw: dict[str, Any], outcomes: dict[str, str]) -> None:
     """One WARNING per legacy single-key resolution: each probed field's outcome.
 
-    This is the evidence for moving a published workflow to declared sources
-    (FND-4407). A ``resolved`` field is a real ref (``secretKeyRef``); an
-    ``absent`` or ``refused`` one is a plain value (``value``). The record also
-    tracks how many runs still use the legacy format. It is a WARNING because
-    the format is deprecated.
+    This is evidence for moving a published workflow to declared sources
+    (FND-4407), not a verdict on its own. A ``resolved`` field is a real ref
+    (``secretKeyRef``). ``absent`` and ``refused`` are inconclusive: a missing
+    or denied lookup can also be a ref whose secret was never created, or one
+    the SDR identity may not read. Before calling such a field a plain value,
+    corroborate it (e.g. the workflow succeeded with it as a plain value). The
+    record also tracks how many runs still use the legacy format. It is a
+    WARNING because the format is deprecated.
 
     Keyed by *field name* only. ``outcomes`` is keyed by raw value, which may be
     a credential or a ref name, so it is never logged. The extras are scalar
@@ -713,6 +728,13 @@ async def check_secret_store_access(
     On any non-fatal outcome ``resolved`` carries the substituted credential dict
     so the caller can build credentials without a second store fetch.
     """
+    if spec.value_sources is not None and (
+        secret_store is not None or not spec.value_sources
+    ):
+        # A format-2 payload declaring no secret refs needs no store at all,
+        # so a missing store is not a gap for it.
+        return await _check_declared_sources(spec, secret_store)
+
     if secret_store is None:
         # No secret store configured is a permanent deployment config gap, not a
         # transient outage — the store doesn't exist, it isn't "down". So this is
@@ -726,9 +748,6 @@ async def check_secret_store_access(
             message="Secret store is not configured for the SDR deployment.",
             suggested_action="Configure a secret store on the SDR deployment.",
         )
-
-    if spec.value_sources is not None:
-        return await _check_declared_sources(spec, secret_store)
 
     raw = spec.to_raw_dict()
     if spec.key_type != "single-key" and not spec.secret_path:
@@ -812,7 +831,7 @@ async def check_secret_store_access(
 
 
 async def _check_declared_sources(
-    spec: AgentCredentialSpec, secret_store: SecretStore
+    spec: AgentCredentialSpec, secret_store: SecretStore | None
 ) -> SecretStoreCheckResult:
     """The secret-store preflight row for a format-2 payload.
 

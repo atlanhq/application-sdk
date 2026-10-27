@@ -72,12 +72,23 @@ _ENVELOPE_KEYS: frozenset[str] = frozenset(
 )
 
 
-def _declared_sources_json_schema() -> dict[str, Any]:
+def _declared_sources_json_schema(legacy: dict[str, Any]) -> dict[str, Any]:
     """JSON schema of a format-2 payload, as published in input contracts.
 
     Heracles validates workflow inputs against the app's input contract on
     create and update, so this is what lets a format-2 ``agent_json`` be saved
     at all. Built fresh per call, because pydantic may mutate what it emits.
+
+    Derived from the model's own *legacy* schema, so the published contract
+    accepts exactly what runtime accepts:
+
+    * a declared field's ``value`` carries that field's own type
+      (``port: {"value": 1521}`` but not ``{"value": "x"}``);
+    * only a string-typed (or untyped) field may be a ``secretKeyRef`` or a
+      ``fileRef``. Its flat value becomes the ref's name or path, which a
+      typed non-string field would reject;
+    * a strict (``extra="forbid"``) model publishes a closed object; an open
+      one accepts the envelope keys and any other source-declared field.
     """
 
     def _strict_object(required: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -96,32 +107,54 @@ def _declared_sources_json_schema() -> dict[str, Any]:
             "additionalProperties": False,
         }
 
-    field_source = {
-        "oneOf": [
-            _strict_object("value", {}),
-            _strict_object(
-                "valueFrom",
-                {
-                    "oneOf": [
-                        _strict_object(
-                            "secretKeyRef", _non_empty_strings("name", "key")
-                        ),
-                        _strict_object("fileRef", _non_empty_strings("path")),
-                    ]
-                },
-            ),
-        ]
-    }
+    def _field_source(value_schema: dict[str, Any], *, refs: bool) -> dict[str, Any]:
+        value = _strict_object("value", value_schema)
+        if not refs:
+            return value
+        return {
+            "oneOf": [
+                value,
+                _strict_object(
+                    "valueFrom",
+                    {
+                        "oneOf": [
+                            _strict_object(
+                                "secretKeyRef", _non_empty_strings("name", "key")
+                            ),
+                            _strict_object("fileRef", _non_empty_strings("path")),
+                        ]
+                    },
+                ),
+            ]
+        }
+
+    def _value_schema(prop: dict[str, Any]) -> dict[str, Any]:
+        # The field's own type, without what only describes the flat field.
+        return {k: v for k, v in prop.items() if k not in ("default", "title")}
+
+    properties: dict[str, Any] = {"format": {"const": DECLARED_SOURCES_FORMAT}}
+    for key, prop in legacy.get("properties", {}).items():
+        if key in (VALUE_SOURCES_KEY, "value_sources") or key in _LEGACY_ANCHORS:
+            continue
+        if key in _ENVELOPE_KEYS:
+            properties[key] = _value_schema(prop)
+            continue
+        value_schema = _value_schema(prop)
+        properties[key] = _field_source(
+            value_schema, refs=value_schema.get("type", "string") == "string"
+        )
+
+    closed = legacy.get("additionalProperties") is False
+    if not closed:
+        for key in _ENVELOPE_KEYS:
+            properties.setdefault(key, {})
     return {
         "title": "AgentCredentialSpec (format 2)",
         "type": "object",
         "required": ["format"],
-        "properties": {
-            "format": {"const": DECLARED_SOURCES_FORMAT},
-            **{key: {} for key in sorted(_ENVELOPE_KEYS)},
-        },
+        "properties": properties,
         "not": {"anyOf": [{"required": [key]} for key in _LEGACY_ANCHORS]},
-        "additionalProperties": field_source,
+        "additionalProperties": False if closed else _field_source({}, refs=True),
     }
 
 
@@ -312,7 +345,7 @@ class AgentCredentialSpec(BaseModel):
         for key in ("title", "description"):
             if key in legacy:
                 target[key] = legacy.pop(key)
-        target["anyOf"] = [legacy, _declared_sources_json_schema()]
+        target["anyOf"] = [legacy, _declared_sources_json_schema(legacy)]
         return json_schema
 
     # ---- Convenience methods ----
@@ -348,9 +381,16 @@ class AgentCredentialSpec(BaseModel):
     def __hash__(self) -> int:
         # pydantic's frozen hash hashes field values, and ``value_sources`` is
         # a dict. Hash the canonical dump instead: equal specs dump equally.
-        return hash(
-            orjson.dumps(self.model_dump(mode="json"), option=orjson.OPT_SORT_KEYS)
-        )
+        # Computed once: ``frozen`` stops rebinding a field, not mutating a
+        # nested dict, and a hash that moved would strand the spec in any set
+        # or dict that holds it.
+        cached = self.__dict__.get("_hash_cache")
+        if cached is None:
+            cached = hash(
+                orjson.dumps(self.model_dump(mode="json"), option=orjson.OPT_SORT_KEYS)
+            )
+            object.__setattr__(self, "_hash_cache", cached)
+        return cached
 
 
 def _without_serializer(core_schema: CoreSchema) -> CoreSchema:
@@ -469,9 +509,12 @@ def _check_value_sources(data: dict[str, Any]) -> None:
     input) that a later activity or child workflow re-parses.
     """
     for key in (VALUE_SOURCES_KEY, "value_sources"):
-        sources = data.get(key)
-        if sources is None:
+        if key not in data:
             continue
+        sources = data[key]
+        # A present-but-null marker is rejected, not read as "legacy": that
+        # would silently re-enable probing. The SDK never serializes a null
+        # marker (it omits an absent one), so only a hand-built payload has it.
         if not isinstance(sources, dict):
             raise _parse_error(f"agent_json '{key}' must be an object")
         for field, ref in sources.items():
