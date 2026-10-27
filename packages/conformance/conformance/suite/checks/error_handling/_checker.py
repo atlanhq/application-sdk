@@ -84,6 +84,7 @@ class Checker(
         deprecated_module: bool = False,
         script_file: bool = False,
         preflight_lines: frozenset[int] = frozenset(),
+        comment_lines: frozenset[int] = frozenset(),
     ) -> None:
         self._filename = filename
         self._directives = directives
@@ -101,6 +102,9 @@ class Checker(
         # preflight._common.preflight_scope_lines): E004 accepts a DEBUG/INFO
         # log carrying the exception there, where F005 bars WARNING.
         self._preflight_lines = preflight_lines
+        # Lines holding an explanatory comment (not a directive): E008 accepts
+        # one on an optional-import guard, as its own text says.
+        self._comment_lines = comment_lines
         self._findings: list[Finding] = []
         self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods

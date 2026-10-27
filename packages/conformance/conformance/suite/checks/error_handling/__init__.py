@@ -33,7 +33,10 @@ Rule implementations are split by category:
 from __future__ import annotations
 
 import ast
+import io
+import re
 import sys
+import tokenize
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
@@ -88,6 +91,27 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Public check API
 # ---------------------------------------------------------------------------
+
+
+_NON_EXPLANATORY_COMMENT = re.compile(
+    r"#\s*(conformance\s*:|noqa\b|type\s*:\s*ignore|pragma\b|pyright\s*:|fmt\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _comment_lines_of(text: str) -> frozenset[int]:
+    """Lines carrying an explanatory comment — tool directives do not count."""
+    lines: set[int] = set()
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type == tokenize.COMMENT and not _NON_EXPLANATORY_COMMENT.match(
+                token.string
+            ):
+                if token.string.lstrip("#").strip():
+                    lines.add(token.start[0])
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return frozenset()
+    return frozenset(lines)
 
 
 def _preflight_lines_of(text: str, file: str, path: Path | None) -> frozenset[int]:
@@ -147,6 +171,7 @@ def scan_text(
         deprecated_module=module_is_deprecated(tree, path=path, root=root),
         script_file=is_script_file(text, tree),
         preflight_lines=preflight_lines,
+        comment_lines=_comment_lines_of(text),
     )
     checker.visit(tree)
     return checker._findings

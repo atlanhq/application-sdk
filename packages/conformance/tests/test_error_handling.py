@@ -7689,3 +7689,43 @@ def test_e004_e007_still_fire_on_an_empty_aggregate_after_a_failure_record() -> 
     )
     assert "E004" in found
     assert "E007" in found
+
+
+# ── E008: a commented or reported optional-import guard ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "    except ImportError:\n"
+        "        # optional: only the bridge self-check needs it\n"
+        "        return",
+        "    except ImportError:  # optional; the stub check is skipped without it\n"
+        "        return",
+        "    except ImportError:\n"
+        '        _error(12, PATH, "generate_bridge_stub missing; cannot verify")\n'
+        "        return",
+        "    except ImportError:\n"
+        '        report_failure(f"{PATH}: bridge stub missing")\n'
+        "        return",
+    ],
+)
+def test_e008_no_finding_when_the_guard_is_explained_or_reported(handler: str) -> None:
+    src = "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
+    assert "E008" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "handler",
+    [
+        "    except ImportError:\n        return",
+        # a directive is not an explanation
+        "    except ImportError:  # noqa: F401\n        return",
+        # a call that reports nothing
+        '    except ImportError:\n        _error(12, PATH)\n        return',
+        '    except ImportError:\n        fallback("stub")\n        return',
+    ],
+)
+def test_e008_still_fires_for_a_silent_guard(handler: str) -> None:
+    src = "def check():\n    try:\n        import generate_bridge_stub\n" + handler + "\n"
+    assert "E008" in _findings(src)

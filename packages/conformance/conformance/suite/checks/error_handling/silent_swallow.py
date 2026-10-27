@@ -1754,12 +1754,42 @@ class SilentSwallowMixin:
             return
         if _any_logging_in(node.body):
             return
+        # The rule's own text accepts an explanatory comment on the guard.
+        end = getattr(node, "end_lineno", None) or node.lineno
+        if any(node.lineno <= line <= end for line in self._comment_lines):
+            return
+        if any(self._is_reporter_call(stmt) for stmt in node.body):
+            return
         self._add(
             "E008",
             node,
             f"'except {exc_type}' with no logging — import failures are silently hidden. "
             f"Log at DEBUG if the module is preferred but not required, or add a comment "
             f"explaining the optional dependency and use the suppression directive.",
+        )
+
+    #: Leaf-name fragments of a call that reports a problem to its user.
+    _REPORTER_WORDS = ("error", "warn", "report", "fail", "fatal", "abort", "die")
+
+    def _is_reporter_call(self, stmt: ast.stmt) -> bool:
+        """A call that reports the missing module with a message, instead of a log.
+
+        ``_error(12, PATH, "generate_bridge_stub missing; cannot verify")``: the
+        callee's leaf name says it reports a problem (error/warn/report/fail/
+        fatal/abort/die) and one argument is a non-empty message string or
+        f-string.  A silent fallback has neither.
+        """
+        call = self._unwrapped_call(stmt)
+        if call is None:
+            return False
+        name = _get_name(call.func)
+        leaf = (name.rsplit(".", 1)[-1] if name else "").lstrip("_").lower()
+        if not any(word in leaf for word in self._REPORTER_WORDS):
+            return False
+        return any(
+            (isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value)
+            or isinstance(arg, ast.JoinedStr)
+            for arg in [*call.args, *(kw.value for kw in call.keywords)]
         )
 
     # ── E009 ─────────────────────────────────────────────────────────────────
