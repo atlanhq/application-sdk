@@ -61,6 +61,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     PreflightClassification,
     PreflightGateInput,
     PreflightRowOutcome,
+    _is_definitive_credential_absence,
     build_preflight_gate_activity,
     coerce_gate_mode,
     gate_attempts,
@@ -79,6 +80,8 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
 )
+from application_sdk.infrastructure._dapr.credential_vault import DaprCredentialVault
+from application_sdk.infrastructure.credential_vault import CredentialVaultError
 from application_sdk.observability.logger_adaptor import (
     _KNOWN_EXTRA_KEYS,
     GATE_ATTEMPTS_KEY,
@@ -89,6 +92,7 @@ from application_sdk.observability.logger_adaptor import (
     PREFLIGHT_SURFACE_KEY,
 )
 from application_sdk.testing.preflight import outcome_rows, single_outcome
+from tests.unit.infrastructure._credential_vault_fakes import binding_500, vault_sleep
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
 
@@ -488,6 +492,74 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
             _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
             == PreflightClassification.SOURCE_UNVERIFIABLE
         )
+
+    @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
+    async def test_exhausted_missing_config_ladder_applies_mode(
+        self, mode: PreflightGateMode
+    ) -> None:
+        # The object store answers "not found" for the credential config on
+        # every re-read: that is an absence the run can be blamed for, so it
+        # takes the mode — not a vault outage that fails open. Drives the real
+        # vault and resolver, so the typed leaf must survive both layers.
+        client = mock.MagicMock()
+        client.close = mock.AsyncMock()
+        client.invoke_binding = mock.AsyncMock(
+            side_effect=binding_500("error invoking output binding: BlobNotFound")
+        )
+        vault = DaprCredentialVault(
+            client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+        handler = _RecordingHandler()
+        gate = _gate(handler, mode=mode)
+        envelope = PreflightGateInput(
+            extraction_method="direct", credential_guid="example-guid"
+        )
+        with (
+            vault_sleep() as sleep,
+            mock.patch(
+                "application_sdk.infrastructure.DaprCredentialVault",
+                return_value=vault,
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.AsyncDaprClient", return_value=client
+            ),
+            mock.patch(f"{_GATE}._require_secret_store", return_value=mock.MagicMock()),
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+        ):
+            if mode is PreflightGateMode.HARD:
+                with pytest.raises(ApplicationError) as excinfo:
+                    await gate(envelope)
+                assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+                assert excinfo.value.non_retryable is True
+                primary = _primary_details(excinfo.value)
+                assert primary.category is FailureCategory.NOT_FOUND
+                assert primary.code == "NOT_FOUND_CREDENTIAL"
+            else:
+                result = await gate(envelope)
+                assert result.status is PreflightStatus.NOT_READY
+
+        assert client.invoke_binding.await_count == 4
+        assert [call.args[0] for call in sleep.await_args_list] == [2.0, 5.0, 10.0]
+        client.close.assert_awaited_once()
+        assert handler.preflight_input is None, "handler ran without a credential"
+        row = _outcome(mock_logger)
+        assert row["outcome"] == (
+            "blocked" if mode is PreflightGateMode.HARD else "would_block"
+        )
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
+
+    def test_vault_outage_is_not_a_definitive_absence(self) -> None:
+        # The umbrella vault error still means "could not tell", so a not-found
+        # collapsed from it stays plumbing; only the typed leaf is a config fact.
+        collapsed = CredentialNotFoundError("example-guid")
+        collapsed.__cause__ = CredentialVaultError(
+            "store unavailable", cause=ConnectionResetError()
+        )
+        assert _is_definitive_credential_absence(collapsed) is False
 
 
 class TestHandlerRaisedBlockPassesThrough:

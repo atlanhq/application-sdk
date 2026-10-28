@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +19,12 @@ from application_sdk.infrastructure._secret_utils import (
     process_secret_data as _process_secret_data,
 )
 from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from tests.unit.infrastructure._credential_vault_fakes import (
+    binding_500 as _binding_500,
+)
+from tests.unit.infrastructure._credential_vault_fakes import (
+    vault_sleep as _vault_sleep,
+)
 from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
@@ -984,28 +988,6 @@ def test_outage_types_stay_importable_from_this_module() -> None:
     assert credential_vault.DaprSidecarUnreachableError is DaprSidecarUnreachableError
     assert credential_vault.SecretStoreUnavailableError is SecretStoreUnavailableError
     assert credential_vault.SecretStoreUnreachableError is SecretStoreUnreachableError
-
-
-@contextmanager
-def _vault_sleep() -> Iterator[AsyncMock]:
-    """No-op the vault's own ``asyncio.sleep``, and only the vault's."""
-    with (
-        private_stdlib(
-            "application_sdk.infrastructure._dapr.credential_vault", "asyncio"
-        ) as local_asyncio,
-        patch.object(local_asyncio, "sleep", new_callable=AsyncMock) as sleep,
-    ):
-        yield sleep
-
-
-def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
-    """A Dapr binding GET answered with HTTP 500 and Dapr's JSON error body."""
-    req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/upstream")
-    body = {"errorCode": "ERR_INVOKE_OUTPUT_BINDING", "message": dapr_message}
-    resp = httpx.Response(500, request=req, content=json.dumps(body).encode())
-    return httpx.HTTPStatusError(
-        "Server error '500 Internal Server Error'", request=req, response=resp
-    )
 
 
 class TestDaprCredentialVaultMissingConfigBlob:
