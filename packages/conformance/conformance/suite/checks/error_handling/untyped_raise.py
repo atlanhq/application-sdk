@@ -13,6 +13,7 @@ from ._constants import (
     LEAF_CLASSES,
     LEGACY_ATLAN_ERRORS,
     PROTOCOL_DUNDER_BUILTINS,
+    VALIDATOR_DECORATOR_BUILTINS,
 )
 from ._helpers import _get_decorator_names, _raise_exc_name
 from ._sdk_errors import names_sdk_error
@@ -124,15 +125,34 @@ class UntypedRaiseMixin:
             for caught_node in caught_nodes
         )
 
-    def _in_interop_context(self, exc_name: str) -> bool:
+    def _in_interop_context(self, node: ast.Raise) -> bool:
         if not self._function_stack:
             return False
         func = self._function_stack[-1]
         if isinstance(func, ast.FunctionDef) and func.name in INTEROP_METHODS:
             return True
-        if exc_name in PROTOCOL_DUNDER_BUILTINS.get(func.name, frozenset()):
+        decorators = _get_decorator_names(func)
+        if decorators & INTEROP_DECORATORS:
             return True
-        return bool(_get_decorator_names(func) & INTEROP_DECORATORS)
+        # The remaining carve-outs exempt one named builtin, so the raise must
+        # provably be that builtin (not a same-named module class).
+        raised = self._builtin_type(node.exc) if node.exc is not None else None
+        if raised is None:
+            return False
+        if raised.__name__ in PROTOCOL_DUNDER_BUILTINS.get(
+            func.name, frozenset()
+        ) and self._is_class_method(func):
+            return True
+        return any(
+            raised.__name__ in VALIDATOR_DECORATOR_BUILTINS.get(name, frozenset())
+            for name in decorators
+        )
+
+    def _is_class_method(self, func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        """True when *func* is defined directly in the innermost class body."""
+        return bool(self._class_stack) and any(
+            stmt is func for stmt in self._class_stack[-1].body
+        )
 
     def _in_activity_context(self) -> bool:
         for func in self._function_stack:
@@ -191,9 +211,7 @@ class UntypedRaiseMixin:
         exc_name = _raise_exc_name(node.exc)
         if exc_name not in BUILTIN_RAISES or not self._e012_in_scope:
             return
-        if self._in_interop_context(exc_name) or self._has_typed_translation_boundary(
-            node
-        ):
+        if self._in_interop_context(node) or self._has_typed_translation_boundary(node):
             return
         activity_note = (
             " (NOTE: inside activity/task — AE receives an opaque string, no typed envelope)"

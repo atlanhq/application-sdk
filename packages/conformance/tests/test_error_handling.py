@@ -4211,6 +4211,95 @@ class Registry:
     )
 
 
+def test_p012_still_flags_key_error_in_module_level_dunder() -> None:
+    # A module-level function named like a dunder implements no protocol.
+    _single(
+        """\
+def __getitem__(key):
+    raise KeyError(key)
+""",
+        "E012",
+    )
+
+
+def test_p012_still_flags_shadowed_key_error_in_dunder() -> None:
+    # A module class named KeyError is not the builtin Mapping.get catches.
+    src = """\
+class KeyError(Exception):
+    pass
+
+class Registry:
+    def __getitem__(self, key):
+        raise KeyError(key)
+"""
+    assert [f.rule_id for f in scan_text(src, "fake.py")].count("E012") == 1
+
+
+def test_p012_no_finding_for_builtins_module_key_error_in_dunder() -> None:
+    _none(
+        """\
+import builtins
+
+class Registry:
+    def __getitem__(self, key):
+        raise builtins.KeyError(key)
+"""
+    )
+
+
+@pytest.mark.parametrize("method", ["__getitem__", "__delitem__"])
+def test_p012_no_finding_for_index_error_in_sequence_dunder(method: str) -> None:
+    # E012 never reports IndexError, so sequence implementations stay clean.
+    _none(
+        f"""\
+class Rows:
+    def {method}(self, index):
+        raise IndexError(index)
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "decorator", ['@model_validator(mode="after")', "@root_validator"]
+)
+@pytest.mark.parametrize("exc_name", ["TypeError", "RuntimeError", "KeyError"])
+def test_p012_still_flags_unconverted_builtin_in_model_validator(
+    decorator: str, exc_name: str
+) -> None:
+    # Pydantic v2 converts only ValueError / AssertionError raised in a model
+    # validator; any other builtin escapes the validator unconverted.
+    _single(
+        f"""\
+from pydantic import BaseModel, model_validator, root_validator
+
+class MyModel(BaseModel):
+    name: str
+
+    {decorator}
+    def _check(cls, values):
+        raise {exc_name}("bad values")
+""",
+        "E012",
+    )
+
+
+def test_p012_still_flags_shadowed_value_error_in_model_validator() -> None:
+    src = """\
+from pydantic import BaseModel, model_validator
+
+class ValueError(Exception):
+    pass
+
+class MyModel(BaseModel):
+    name: str
+
+    @model_validator(mode="after")
+    def _check(self):
+        raise ValueError("bad values")
+"""
+    assert [f.rule_id for f in scan_text(src, "fake.py")].count("E012") == 1
+
+
 _TOOLING_SRC = """\
 def main():
     raise ValueError("bad manifest")
