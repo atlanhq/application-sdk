@@ -61,7 +61,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.13.5"
+          version: "0.13.6"
 
       # pytest comes from the locked `test` group (a default group, as is
       # `dev`, which carries the conformance workspace package several of these
