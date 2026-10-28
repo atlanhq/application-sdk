@@ -105,6 +105,18 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # application-sdk requires the approval; it keeps its own caller and the
 # reusable, which are not bootstrap-managed.
 #
+# ``porter-bundle-cnab.yaml``: never bootstrap-managed. It came in with the
+# original app template. It pins ``runs-on: [self-hosted, phoenix]`` and no
+# such runner picks up jobs from app repos, so every push to main queues a run
+# that the next push cancels: about 99 of the last 100 runs in each consumer
+# that carries it ended cancelled, and none succeeded. It could not succeed
+# even with a runner, because it runs ``porter build`` and none of those repos
+# has a
+# ``porter.yaml``. Releases go through ``build-and-publish.yaml``. Its helper
+# ``.github/scripts/registry-login.sh`` is left alone on purpose: a repo
+# outside bootstrap still calls it from another workflow, and an orphaned
+# script costs nothing.
+#
 # ``.github/dependabot.yml`` / ``.yaml``: never bootstrap-managed, but
 # superseded by it. Some apps hand-added a Dependabot config for ``pip`` and
 # ``github-actions`` before adopting the Renovate preset, which covers both
@@ -122,6 +134,7 @@ RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/auto-fix.yml",
     ".github/workflows/update-dashboard.yml",
     ".github/workflows/renovate-auto-approve.yml",
+    ".github/workflows/porter-bundle-cnab.yaml",
     ".github/dependabot.yml",
     ".github/dependabot.yaml",
 )
