@@ -165,39 +165,27 @@ _PUBLIC_DESPITE_UNDERSCORE = frozenset(
 )
 
 
-#: Private SDK modules whose names a public module re-exports as the same
-#: objects: private module -> {name: (public module, first SDK version that
-#: exports it)}. An import of only these names, from the private module, at
-#: module level, is a safe swap to the public module. Each entry is pinned by a
-#: test that imports both paths and checks they are the same object.
-PUBLIC_REEXPORTS: dict[str, dict[str, tuple[str, str]]] = {
-    "application_sdk.execution._temporal.activity_utils": {
-        "build_output_path": ("application_sdk.execution", "3.0.0"),
-        "get_object_store_prefix": ("application_sdk.execution", "3.0.0"),
-    },
+#: Private module -> (public module re-exporting the same objects, first SDK version with them, names).
+PUBLIC_REEXPORTS: dict[str, tuple[str, str, frozenset[str]]] = {
+    "application_sdk.execution._temporal.activity_utils": (
+        "application_sdk.execution",
+        "3.0.0",
+        frozenset({"build_output_path", "get_object_store_prefix"}),
+    ),
 }
 
 
 def _reexport_swap(node: ast.ImportFrom, module: str) -> SafeSwap | None:
-    """The safe swap for a private ``from`` import whose names all have one public home."""
-    homes = PUBLIC_REEXPORTS.get(module)
-    if not homes or any(alias.name not in homes for alias in node.names):
+    entry = PUBLIC_REEXPORTS.get(module)
+    if entry is None or any(alias.name not in entry[2] for alias in node.names):
         return None
-    targets = {homes[alias.name] for alias in node.names}
-    if len({public for public, _ in targets}) != 1:
-        return None
-    public = next(iter(targets))[0]
-    minimum = max((since for _, since in targets), key=_version_key)
+    public, since, _ = entry
     return SafeSwap(
         id="public-reexport",
         find=module,
         replace=public,
-        requires=SafeSwapRequires(package="atlan-application-sdk", min=minimum),
+        requires=SafeSwapRequires(package="atlan-application-sdk", min=since),
     )
-
-
-def _version_key(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
 
 
 def _private_component(dotted: str) -> str | None:

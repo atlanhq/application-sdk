@@ -17,8 +17,8 @@ from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
 from conformance.suite.checks.deprecation._consumer import (
     PUBLIC_RENAMES,
-    app_method_index,
     scan_consumer,
+    unsafe_renames,
 )
 from conformance.suite.checks.deprecation._extractor import (
     extract_notices,
@@ -1828,8 +1828,8 @@ def test_b008_leaves_an_import_with_a_name_lacking_a_public_home_unmarked() -> N
 
 
 def test_b008_public_reexports_are_the_same_objects() -> None:
-    for private, names in PUBLIC_REEXPORTS.items():
-        for name, (public, _since) in names.items():
+    for private, (public, _since, names) in PUBLIC_REEXPORTS.items():
+        for name in names:
             assert getattr(importlib.import_module(public), name) is getattr(
                 importlib.import_module(private), name
             )
@@ -1845,27 +1845,41 @@ def test_b001_public_renames_delegate_with_the_same_signature() -> None:
         assert public in inspect.getsource(getattr(SqlApp, deprecated))
 
 
-def _b001_app(files: dict[str, str]) -> dict[str, list]:
-    manifest = load_manifest()
-    trees = {name: _tree_and_directives(src) for name, src in files.items()}
-    methods = app_method_index(tree for tree, _ in trees.values())
-    return {
-        name: scan_consumer(tree, name, manifest, directives, methods)
-        for name, (tree, directives) in trees.items()
-    }
+_RENAME_CALLER = (
+    "from application_sdk.templates import SqlApp\n"
+    "class MyConnector(SqlApp):\n"
+    "    async def run(self, input):\n"
+    "        ref = self._resolve_credential_ref(input)\n"
+    "        return SqlApp._build_transform_input(input, None)\n"
+)
 
 
-def test_b001_marks_a_call_of_a_renamed_method_the_app_does_not_define() -> None:
-    src = (
-        "from application_sdk.templates import SqlApp\n"
-        "class MyConnector(SqlApp):\n"
-        "    async def run(self, input):\n"
-        "        ref = self._resolve_credential_ref(input)\n"
-        "        return SqlApp._build_transform_input(input, None)\n"
+def _repo(tmp_path, files: dict[str, str]):
+    for name, src in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(src)
+    return tmp_path
+
+
+def _b001_in(root, file: str) -> list:
+    tree, directives = _tree_and_directives((root / file).read_text())
+    return scan_consumer(tree, file, load_manifest(), directives, unsafe_renames(root))
+
+
+def test_b001_marks_a_rename_call_when_the_repo_defines_and_tests_neither_name(
+    tmp_path,
+) -> None:
+    root = _repo(
+        tmp_path,
+        {
+            "app/connector.py": _RENAME_CALLER,
+            "tests/test_x.py": "def test_x():\n    pass\n",
+        },
     )
-    findings = _b001_app({"app/connector.py": src})["app/connector.py"]
+    findings = _b001_in(root, "app/connector.py")
     assert [f.rule_id for f in findings] == ["B001", "B001"]
-    fixed = src
+    fixed = _RENAME_CALLER
     for finding in findings:
         swap = SafeSwap.from_properties(finding.properties)
         assert swap is not None and swap.id == "public-rename"
@@ -1873,54 +1887,62 @@ def test_b001_marks_a_call_of_a_renamed_method_the_app_does_not_define() -> None
         fixed = _apply_swap(fixed, finding)
     assert "self.resolve_credential_ref(input)" in fixed
     assert "SqlApp.build_transform_input(input, None)" in fixed
-    assert _b001_app({"app/connector.py": fixed})["app/connector.py"] == []
+    (root / "app/connector.py").write_text(fixed)
+    assert _b001_in(root, "app/connector.py") == []
 
 
-def test_b001_keeps_an_overridden_renamed_method_unmarked() -> None:
-    src = (
-        "from application_sdk.templates import SqlApp\n"
-        "class MyConnector(SqlApp):\n"
-        "    def _resolve_credential_ref(self, input):\n"
-        "        return super()._resolve_credential_ref(input)\n"
-        "    async def run(self, input):\n"
-        "        return self._resolve_credential_ref(input)\n"
+def test_b001_leaves_a_rename_call_unmarked_when_the_app_overrides_either_name(
+    tmp_path,
+) -> None:
+    for override in ("_resolve_credential_ref", "resolve_credential_ref"):
+        root = _repo(
+            tmp_path / override,
+            {
+                "app/connector.py": _RENAME_CALLER,
+                "app/base.py": f"class Base:\n    def {override}(self, input):\n        return None\n",
+            },
+        )
+        found = {
+            f.message.split("'")[1]: SafeSwap.from_properties(f.properties)
+            for f in _b001_in(root, "app/connector.py")
+        }
+        assert found["_resolve_credential_ref"] is None
+        assert found["_build_transform_input"] is not None
+
+
+def test_b001_leaves_a_rename_call_unmarked_when_a_test_names_the_old_method(
+    tmp_path,
+) -> None:
+    root = _repo(
+        tmp_path,
+        {
+            "app/connector.py": _RENAME_CALLER,
+            "tests/unit/test_connector.py": 'PATCH = ("SqlApp", "_build_transform_input")\n',
+        },
     )
-    findings = _b001_app({"app/connector.py": src})["app/connector.py"]
-    assert len(findings) == 2
-    assert all(SafeSwap.from_properties(f.properties) is None for f in findings)
-
-
-def test_b001_silent_on_a_call_of_the_apps_own_task_of_the_same_name() -> None:
-    files = {
-        "app/tasks.py": (
-            "class SharedTasks:\n"
-            "    async def upload_to_atlan(self, input):\n"
-            "        return input\n"
-        ),
-        "app/connector.py": (
-            "from application_sdk.app import App\n"
-            "from app.tasks import SharedTasks\n"
-            "class MyConnector(App, SharedTasks):\n"
-            "    async def run(self, input):\n"
-            "        return await self.upload_to_atlan(input)\n"
-        ),
-        "app/flow.py": "async def go(app, input):\n    return await app.upload_to_atlan(input)\n",
+    found = {
+        f.message.split("'")[1]: SafeSwap.from_properties(f.properties)
+        for f in _b001_in(root, "app/connector.py")
     }
-    assert all(found == [] for found in _b001_app(files).values())
+    assert found["_build_transform_input"] is None
+    assert found["_resolve_credential_ref"] is not None
 
 
-def test_b001_still_fires_on_the_sdk_task_inherited_or_overridden() -> None:
-    inherited = (
-        "from application_sdk.templates import BaseMetadataExtractor\n"
-        "class MyConnector(BaseMetadataExtractor):\n"
-        "    async def run(self, input):\n"
-        "        return await self.upload_to_atlan(input)\n"
+def test_b001_rename_marks_do_not_depend_on_which_files_are_scanned(tmp_path) -> None:
+    from conformance.suite.checks.deprecation import scan_all
+
+    root = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[project]\nname = "atlan-example-app"\nversion = "0.1.0"\n',
+            "app/connector.py": _RENAME_CALLER,
+            "app/base.py": "class Base:\n    def _resolve_credential_ref(self, input):\n        return None\n",
+        },
     )
-    overridden = inherited + (
-        "    async def upload_to_atlan(self, input):\n"
-        "        return await super().upload_to_atlan(input)\n"
-    )
-    for src in (inherited, overridden):
-        found = _b001_app({"app/connector.py": src})["app/connector.py"]
-        assert sum("Calls deprecated SDK method" in f.message for f in found) >= 1
-        assert any("Subclasses" in f.message for f in found)
+    only = [
+        f for f in scan_all([root / "app/connector.py"], root) if f.rule_id == "B001"
+    ]
+    marked = {
+        f.message.split("'")[1] for f in only if SafeSwap.from_properties(f.properties)
+    }
+    assert marked == {"_build_transform_input"}

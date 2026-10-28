@@ -42,7 +42,7 @@ false positives at WARN.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
+from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
@@ -72,80 +72,63 @@ def _module_matches(import_mod: str, entry_module: str) -> bool:
     return entry_module == import_mod or entry_module.startswith(import_mod + ".")
 
 
-#: Deprecated SDK methods whose public replacement takes the same arguments and
-#: is what the deprecated name delegates to: deprecated name -> (public name,
-#: first SDK version with the public name). Pinned by a test that compares the
-#: two signatures on the SDK class.
+#: Deprecated SqlApp method -> (public method it delegates to, first SDK version with it).
 PUBLIC_RENAMES: dict[str, tuple[str, str]] = {
     "_resolve_credential_ref": ("resolve_credential_ref", "3.33.2"),
     "_build_transform_input": ("build_transform_input", "3.33.2"),
 }
 
-AppMethods = dict[str, list[frozenset[str]]]
+_SKIP_DIRS = frozenset(
+    {".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist"}
+)
 
 
-def _sdk_import_modules(tree: ast.Module) -> dict[str, str]:
-    """Local name -> the application_sdk module it was imported from or binds."""
-    bound: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and _is_sdk_module(node.module or ""):
-            for alias in node.names:
-                bound[alias.asname or alias.name] = node.module or ""
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                if _is_sdk_module(alias.name):
-                    bound[alias.asname or alias.name.split(".")[0]] = alias.name
-    return bound
+def unsafe_renames(root: Path) -> frozenset[str]:
+    """Deprecated names in :data:`PUBLIC_RENAMES` whose call is not a safe swap in *root*.
 
-
-def app_method_index(trees: Iterable[ast.Module]) -> AppMethods:
-    """Every method name the app defines -> one entry per defining class: the
-    application_sdk modules that class's bases were imported from.
-
-    A base the file does not import from application_sdk (``App`` re-exported
-    by the app, a mixin, an app base class) contributes nothing, so a class
-    deriving from an SDK class only through an app-owned base reads as owning
-    the method; the deprecated base is still reported where it is subclassed.
+    Unsafe when any Python file in the repo, tests included, defines a function
+    with the old or the new name (an override changes which body runs), or a
+    file under ``tests/`` mentions the old name (a patch of it stops reaching
+    the call). The whole repo is read, so a scan of a few files gives the same
+    answer as a full one.
     """
-    index: AppMethods = {}
-    for tree in trees:
-        bound = _sdk_import_modules(tree)
+    watched = {
+        name for pair in PUBLIC_RENAMES.items() for name in (pair[0], pair[1][0])
+    }
+    unsafe: set[str] = set()
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).parts
+        if any(part in _SKIP_DIRS for part in rel):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        present = {name for name in watched if name in text}
+        if not present:
+            continue
+        if "tests" in rel[:-1]:
+            unsafe |= present & PUBLIC_RENAMES.keys()
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            unsafe |= present & PUBLIC_RENAMES.keys()
+            continue
         for node in ast.walk(tree):
-            if not isinstance(node, ast.ClassDef):
-                continue
-            modules: set[str] = set()
-            for base in node.bases:
-                if isinstance(base, ast.Name) and base.id in bound:
-                    modules.add(bound[base.id])
-                elif (
-                    isinstance(base, ast.Attribute)
-                    and isinstance(base.value, ast.Name)
-                    and base.value.id in bound
-                ):
-                    modules.add(bound[base.value.id])
-            for item in node.body:
-                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    index.setdefault(item.name, []).append(frozenset(modules))
-    return index
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in present
+            ):
+                unsafe |= {
+                    old
+                    for old, (new, _) in PUBLIC_RENAMES.items()
+                    if node.name in (old, new)
+                }
+    return frozenset(unsafe)
 
 
-def _calls_own_method(
-    name: str, record: DeprecatedSymbol, app_methods: AppMethods
-) -> bool:
-    """True when every class in the app that defines *name* inherits nothing from
-    the module that declares the deprecated method: the call reaches the app's
-    own method, not the SDK's."""
-    owners = app_methods.get(name)
-    return bool(owners) and not any(
-        _module_matches(module, record.module)
-        for modules in owners
-        for module in modules
-    )
-
-
-def _rename_swap(name: str, app_methods: AppMethods) -> SafeSwap | None:
-    """The safe swap for a call of a deprecated method the app does not define itself."""
-    if name not in PUBLIC_RENAMES or name in app_methods:
+def _rename_swap(name: str, unsafe: frozenset[str]) -> SafeSwap | None:
+    if name not in PUBLIC_RENAMES or name in unsafe:
         return None
     public, since = PUBLIC_RENAMES[name]
     return SafeSwap(
@@ -161,15 +144,13 @@ def scan_consumer(
     file: str,
     manifest: Manifest,
     directives: dict[int, _IgnoreDirective],
-    app_methods: AppMethods | None = None,
+    unsafe: frozenset[str] | None = None,
 ) -> list[Finding]:
     """Return B001 findings for *tree* against the deprecated-symbol *manifest*.
 
-    *app_methods* (from :func:`app_method_index` over the whole app) drops a
-    method call that reaches the app's own method of the same name, and marks
-    a call of a renamed method the app does not define as a safe swap.
+    A call of a :data:`PUBLIC_RENAMES` method is marked as a safe swap only when
+    *unsafe* (from :func:`unsafe_renames`) is given and does not name it.
     """
-    methods_in_app = app_methods or {}
     if not manifest.symbols:
         return []
     class_func: dict[str, list[DeprecatedSymbol]] = {}
@@ -315,9 +296,7 @@ def scan_consumer(
             and node.func.attr in method
         ):
             record = method[node.func.attr]
-            if _calls_own_method(node.func.attr, record, methods_in_app):
-                continue
-            swap = _rename_swap(node.func.attr, methods_in_app)
+            swap = None if unsafe is None else _rename_swap(node.func.attr, unsafe)
             findings.append(
                 make_finding(
                     filename=file,

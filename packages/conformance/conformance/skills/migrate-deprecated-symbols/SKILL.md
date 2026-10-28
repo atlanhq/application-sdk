@@ -60,12 +60,10 @@ one private module, and every app that imported it stopped collecting tests.
 | B001 | a symbol in the SDK's deprecation manifest: `from application_sdk.x import Name`, a subclass of it, a call `x.<method>()`, or an enum member such as `PreflightStatus.PARTIAL` | the site uses the replacement the notice names, or carries a justified ignore |
 | B008 | an import of a `_`-prefixed module or name from a package the app does not own (SDK or third-party), or a reach-through `alias._private.x` | the import names a public module and name, or carries a justified ignore |
 
-B001 matches method calls by name (`x.upload_to_atlan(...)`). It skips a
-call when every class in the app that defines a method of that name
-inherits nothing from the SDK module that declares the deprecated one: that
-call reaches the app's own method. Another unrelated object with the same
-method name can still fire it; that is a false positive, ignore it with
-that reason. B008 never fires on relative imports,
+B001 matches method calls by name only (`x.upload_to_atlan(...)`), so a
+call of an unrelated object's method, or of the app's own method of the same
+name, can fire it; that is a false positive, ignore it with that reason.
+B008 never fires on relative imports,
 on names that exist in the repo, or on dunders.
 
 `detect` does not scan `tests/`, but test code breaks on the same SDK
@@ -92,13 +90,15 @@ A finding whose fix is one fixed text change that keeps behaviour carries
 - `public-reexport` (B008): a module-level `from <private> import ...` whose
   names a public module re-exports as the same objects.
 - `public-rename` (B001): a call of a deprecated SDK method whose public
-  name takes the same arguments, in an app that defines no method of the
-  old name.
+  name takes the same arguments, in a repo where no file defines a function
+  of the old or the new name and no file under `tests/` names the old one.
 
 Apply it on the finding's line only: `find` occurs there exactly once;
 replace it with `replace`. Apply it only when `uv.lock` pins `package` at or
 above `requires.min`; otherwise the site is a **swap** that needs the SDK
-raised first. Nothing else changes, and no test changes are needed. A
+raised first. Nothing else changes: a module-level import swap leaves every
+patch target as it was, and a rename is marked only when no test names the
+old method. A
 finding without the property is never a safe swap, even when it looks like
 one.
 
@@ -149,15 +149,15 @@ fixed in this skill, except the **owner decisions**.
     function, exported publicly; `atlan-mysql-app` `app/mysql.py:19`). In a
     function-local import keep it local, and move any test
     `patch("application_sdk.execution._temporal.activity_utils.<name>")` to
-    the name the app now binds (`patch("app.<module>.<name>")`): the private
-    path no longer reaches the app's lookup. Replacing the call with
+    `patch("application_sdk.execution.<name>")`: the function now looks the
+    name up on the public module when it runs. A module-level import needs no
+    test change. Replacing the call with
     FileReference outputs is a storage migration, not part of this swap.
   - `SqlApp._resolve_credential_ref` → `SqlApp.resolve_credential_ref`, and
     `SqlApp._build_transform_input` → `SqlApp.build_transform_input` (same
     signature; the old names delegate; `atlan-mysql-app` `app/mysql.py:521`).
-    When the app **defines** a method of the old name on an `SqlApp`
-    subclass, rename the definition and every call together: the SDK calls
-    the public name, so an override left on the old name is never reached.
+    When the app defines a method of either name, it is an **owner
+    decision** (below), not a swap.
   - `DataframeType.daft` → `DataframeType.pandas`.
   - `fetch_marker_from_storage` → `fetch_marker`, `persist_marker_to_storage`
     → `persist_marker` (SDK ≥ 3.41.0): same arguments, but the results are
@@ -260,6 +260,11 @@ fixed in this skill, except the **owner decisions**.
     layout and the transform change together. Hand it to the developer with
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
     (in the `atlanhq/application-sdk` repo, not shipped with this package).
+  - **SqlApp override** — the app defines `_resolve_credential_ref` or
+    `_build_transform_input` (or the public name) on an `SqlApp` subclass.
+    The SDK's `run()` and preflight gate call only the public name, so an
+    override on the old name is not reached today; renaming it to the
+    public name makes the SDK start calling the app's body.
   - **preflight status** — `PreflightStatus.PARTIAL` → `READY` keeps the
     gate's behaviour (the gate already treats PARTIAL as READY);
     `NOT_READY` blocks the run. Either way the status label in the UI, Pulse
@@ -286,9 +291,9 @@ fixed in this skill, except the **owner decisions**.
   the SDK's own behaviour is not a plain value: copying it changes nothing
   the SDK reads, so it is this class.
 - **false positive** — a B001 method-name match on an object that is not
-  the SDK's. B001 already skips a call of a method the app defines itself on
-  a class that does not inherit the SDK's; ignore any other with that
-  reason.
+  the SDK's, for example a call of an `upload_to_atlan` task the app defines
+  itself on an `App` subclass or a mixin with no deprecated base above it in
+  the class's base order. Ignore it with that reason.
 
 Order the inventory by urgency: an entry whose `removal_version` is at or
 below the SDK version locked in `uv.lock` (compare as versions: `4.0` equals
@@ -340,7 +345,8 @@ Two stops, developer decides at each:
 Owner answers for the choices a fixer meets in this skill, read by
 remediation tooling. A default keeps what the app does today. Each row names
 a fix shape for a Step 1 class as its `fix_shape`: `public-reexport` and
-`public-rename` (safe swap, swap), `base-to-app` (base),
+`public-rename` (safe swap, swap), `own-method-ignore` (false positive),
+`base-to-app` (base),
 `transformer-wrapper`, `workflow-identity` (identity), `writer-rolling` and
 `reader-file-reference` (storage). A row with `block` is an owner decision:
 `match` is a pattern on the finding message or source line, `fix_shape` a
@@ -348,8 +354,8 @@ pattern on the planned shape; such a site waits for the person the `brief`
 asks.
 
 ```decided-defaults
-{"rule": "B008", "fix_shape": "public-reexport", "decision": "Import the same names from the public module that re-exports them (application_sdk.execution for get_object_store_prefix and build_output_path). A module-level import stays module level; a function-local import stays local. Move every test patch target that names the private path to the name the app now binds (patch(\"app.<module>.<name>\")).", "why": "The public module re-exports the same objects, so behaviour cannot change; a patch of the private path no longer reaches the app's lookup."}
-{"rule": "B001", "fix_shape": "public-rename", "decision": "Call the public SqlApp method (resolve_credential_ref, build_transform_input). When the app defines a method of the old name, rename the definition and every call in the same edit and keep its body.", "why": "The deprecated names delegate to the public ones with the same signature, and the SDK itself calls only the public names, so an override left on the old name is never reached."}
+{"rule": "B008", "fix_shape": "public-reexport", "decision": "Import the same names from the public module that re-exports them (application_sdk.execution for get_object_store_prefix and build_output_path). A module-level import stays module level and needs no test change; a function-local import stays local, and a test patch of the private path moves to the public module path (patch(\"application_sdk.execution.<name>\")).", "why": "The public module re-exports the same objects, so behaviour cannot change; a function-local import now looks the name up on the public module when it runs."}
+{"rule": "B001", "fix_shape": "public-rename", "decision": "Change the call to the public SqlApp method (resolve_credential_ref, build_transform_input) and move test patches of the old name to the public one. Only when the app defines no method of either name; otherwise the site is the sql-app-override owner decision.", "why": "The deprecated names delegate to the public ones with the same signature, so a call changes nothing."}
 {"rule": "B001", "fix_shape": "base-to-app", "decision": "class X(App) in place of class X(BaseMetadataExtractor) when the app does not read the source with SQL through an SDK SQL client. First change every call of the SDK upload_to_atlan task to self.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED)) and read the same count from its UploadOutput; a method of that name the app defines itself stays. Update tests that assert the task is inherited.", "why": "The base adds only the deprecated upload_to_atlan task. Reference shape: atlan-metabase-app app/connector.py MetabaseApp(App) and its self.upload call."}
 {"rule": "B001", "fix_shape": "transformer-wrapper", "decision": "Drop the TransformerInterface or QueryBasedTransformer base from a class that does its own mapping (no call reaches the base transform_metadata, no YAML template, no super() call). Delete an override that exists only to satisfy the base, with the error class and the test that only covered it. An annotation of the base becomes the app's own class.", "why": "Nothing the app runs uses the base, so removing it changes no output."}
 {"rule": "B008", "fix_shape": "workflow-identity", "decision": "get_workflow_id() becomes input.workflow_id when the task's typed Input is in scope, else self.context.workflow_id; get_workflow_run_id() becomes self.run_id or self.context.run_id. Keep every key, path and log field built from the value.", "why": "App.run_id is the workflow run id and the task context carries the same workflow and run ids the private helpers read, so the values do not change."}
@@ -361,4 +367,6 @@ asks.
 {"rule": "B001", "fix_shape": "^live-transformer$", "block": "QueryBasedTransformer or AtlasTransformer builds the published assets from YAML templates or entity classes. Asset mappers change what the app publishes unless each asset type is proven equal.", "brief": "Should this transformer be rewritten as map_<entity>() asset mappers with a per-type equality proof, or kept until v4?"}
 {"rule": "B001", "match": "PreflightStatus\\.PARTIAL", "block": "PreflightStatus.PARTIAL becomes READY or NOT_READY; either changes the status label the UI, Pulse and the Automation Engine show.", "brief": "READY (the gate behaves as today) or NOT_READY (the run blocks)? Either way keep the undetermined-readiness message."}
 {"rule": "B008", "fix_shape": "^no-public-equivalent$", "block": "The private name has no public equivalent, or the app rebinds it to change the owner's own behaviour. The end state is an ignore that names a tracking issue.", "brief": "Which issue asks the owner (atlanhq/application-sdk for an SDK name) for a public API? The ignore then reads '# conformance: ignore[B008] no public equivalent — tracked in <id>'."}
+{"rule": "B001", "fix_shape": "own-method-ignore", "suppress": true, "reason": "calls the app's own method of this name, not the SDK's deprecated one", "decision": "Add # conformance: ignore[B001] calls the app's own method of this name, not the SDK's deprecated one on the call line. Only when the receiver is self (or the app's own instance) and the first class in that class's base order that defines the method is an app class with no deprecated SDK base above it.", "why": "B001 matches method calls by name only; the rule names a reasoned ignore as the end state for a call that is not the SDK's."}
+{"rule": "B001", "fix_shape": "^sql-app-override$", "block": "The app defines _resolve_credential_ref or _build_transform_input (or the public name) on an SqlApp subclass. The SDK's run() and preflight gate call only the public name, so renaming the override makes the SDK start calling the app's body.", "brief": "Should the SDK call this app's credential or transform-input override (rename it to the public name), or should the override be removed?"}
 ```
