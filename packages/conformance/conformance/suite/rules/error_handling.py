@@ -240,8 +240,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "handler's own, or the enclosing one for a worker-thread target writing a\n"
             "closure list or ``nonlocal`` — reaches ``raise NAME`` / ``raise\n"
             "NAME[i]`` after the ``try`` in its own top-level statements (bare, or\n"
-            "under an ``if`` that reads NAME), with no ``return`` and no rebinding of\n"
-            "NAME on the way.  E009 uses the same predicate.\n"
+            "under an ``if`` whose test is only a presence check on NAME: ``NAME``,\n"
+            "``NAME is not None``, ``len(NAME)``, ``len(NAME) > 0``), with no\n"
+            "``return`` and no rebinding of NAME on the way.  A compound guard\n"
+            "(``if error is not None and should_reraise:``) still fires: its false\n"
+            "branch can drop the stash.  E009 uses the same predicate.\n"
             "\n\nAlso exempt, each a shape where a WARNING would be wrong:\n"
             "\n"
             "- best-effort cleanup: the handler is only log calls, one at DEBUG/INFO\n"
@@ -615,7 +618,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "``conformance: ignore`` — do not count), and so is a reporter call that\n"
             "states the problem with a message (a callee named for error/warn/report/\n"
             'fail/fatal/abort/die with a string argument: ``_error(path, "...\n'
-            'missing")``).\n'
+            'missing")``) made directly in the handler body — one nested under an\n'
+            "``if`` or a loop is not recognised.\n"
             "\n**Fixing it well**\n\n"
             "* Fix it at the existing ``except ImportError`` site, in the shape this rule describes: "
             "an optional module the code falls back from is logged at ``DEBUG`` with the module "
@@ -955,6 +959,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "helper) still needs ``from e``.  ``raise group.exceptions[i]`` inside\n"
             "``except BaseExceptionGroup as group`` (or ``except*``) is accepted: the\n"
             "member keeps its own ``__cause__``, which ``from group`` would overwrite.\n"
+            "Only a proven group counts: an app class that merely exposes an\n"
+            "``exceptions`` sequence (``except AggregateError as group``) still fires.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
         remediation_reference=RemediationReference(
@@ -1203,10 +1209,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "annotated ``...Response``, or the function binds it (``=``, ``:=``,\n"
             "``with ... as``) from an httpx / requests / aiohttp call, an HTTP verb\n"
             "(``.get`` / ``.post`` / ``.request`` ...) or a callee named for\n"
-            "``http`` / ``request``.  ``status_code`` needs no such evidence.  A bare\n"
+            "``http`` / ``request``; or it is that HTTP call itself\n"
+            "(``httpx.get(url).ok``).  ``status_code`` needs no such evidence.  A bare\n"
             "``return`` / ``return None`` inside a function annotated ``-> None`` is\n"
-            "not reported either: a procedure has no result to publish, the same\n"
-            "carve-out E007 makes.  ``return []`` there still fires.\n"
+            "not reported either: a procedure has no result to publish.  This is\n"
+            "E020's own carve-out: E007 still flags such a handler when it does not\n"
+            "log the caught exception.  ``return []`` there still fires.\n"
             "\n"
             "Raise versus skip.  Raise the typed error for a failure of the whole\n"
             "request, and for transient outcomes (no response, 408, 429, 5xx).  A\n"

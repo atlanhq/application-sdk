@@ -238,8 +238,10 @@ exception (`error = exc` or `holder.append(exc)`, plus assignments and logs) whe
 function owning the stashed name — the handler's own, or the enclosing one for a
 worker-thread target writing a closure list or `nonlocal` — reaches `raise NAME` /
 `raise NAME[i]` after the `try` in its own top-level statements (bare, or under an `if`
-that reads NAME), with no `return` and no rebinding of NAME on the way.  E009 uses the
-same predicate.
+whose test is only a presence check on NAME: `NAME`, `NAME is not None`, `len(NAME)`,
+`len(NAME) > 0`), with no `return` and no rebinding of NAME on the way.  A compound
+guard (`if error is not None and should_reraise:`) still fires: its false branch can
+drop the stash.  E009 uses the same predicate.
 
 Also exempt, each a shape where a WARNING would be wrong:
 
@@ -519,7 +521,8 @@ need a duplicate log. An explanatory comment on the `except` line or inside the 
 is honoured as this text says (tool directives — `noqa`, `type: ignore`, `conformance:
 ignore` — do not count), and so is a reporter call that states the problem with a
 message (a callee named for error/warn/report/ fail/fatal/abort/die with a string
-argument: `_error(path, "... missing")`).
+argument: `_error(path, "... missing")`) made directly in the handler body — one nested
+under an `if` or a loop is not recognised.
 
 **Fixing it well**
 
@@ -768,7 +771,9 @@ either passes through `e` already proven to be an SDK error or builds an SDK err
 `cause=e`.  A cause the rule cannot prove (`cause=str(e)`, an app-defined class, an
 opaque helper) still needs `from e`.  `raise group.exceptions[i]` inside `except
 BaseExceptionGroup as group` (or `except*`) is accepted: the member keeps its own
-`__cause__`, which `from group` would overwrite.
+`__cause__`, which `from group` would overwrite. Only a proven group counts: an app
+class that merely exposes an `exceptions` sequence (`except AggregateError as group`)
+still fires.
 
 ---
 
@@ -951,9 +956,11 @@ response: its name says so (`resp`), the same function reads a response-only att
 on it (`.status_code`, `.json()`, `.headers`), it is a parameter annotated
 `...Response`, or the function binds it (`=`, `:=`, `with ... as`) from an httpx /
 requests / aiohttp call, an HTTP verb (`.get` / `.post` / `.request` ...) or a callee
-named for `http` / `request`.  `status_code` needs no such evidence.  A bare `return` /
-`return None` inside a function annotated `-> None` is not reported either: a procedure
-has no result to publish, the same carve-out E007 makes.  `return []` there still fires.
+named for `http` / `request`; or it is that HTTP call itself (`httpx.get(url).ok`).
+`status_code` needs no such evidence.  A bare `return` / `return None` inside a function
+annotated `-> None` is not reported either: a procedure has no result to publish.  This
+is E020's own carve-out: E007 still flags such a handler when it does not log the caught
+exception.  `return []` there still fires.
 
 Raise versus skip.  Raise the typed error for a failure of the whole request, and for
 transient outcomes (no response, 408, 429, 5xx).  A permanent rejection of ONE object

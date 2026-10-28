@@ -148,6 +148,8 @@ def _is_plausible_response(owner: ast.expr, scope: ast.AST | None) -> bool:
     Any one of:
 
     - its leaf name says so (``response``, ``resp``, ``self._http_resp``);
+    - it is itself a call that plausibly returns a response
+      (``httpx.get(url).ok``, ``(await client.get(url)).ok``);
     - *scope* (the enclosing function, or the module) reads a response-only
       attribute on it (``x.status_code``, ``x.json()``, ``x.headers`` …);
     - it is a parameter annotated ``…Response`` (``httpx.Response``,
@@ -161,6 +163,10 @@ def _is_plausible_response(owner: ast.expr, scope: ast.AST | None) -> bool:
         leaf = owner.id
     elif isinstance(owner, ast.Attribute):
         leaf = owner.attr
+    elif isinstance(owner, (ast.Call, ast.Await)):
+        # ``httpx.get(url).ok`` / ``(await client.get(url)).ok``: the call
+        # itself is the response.
+        return _call_returns_response(owner)
     else:
         return False
     if "resp" in leaf.lower():

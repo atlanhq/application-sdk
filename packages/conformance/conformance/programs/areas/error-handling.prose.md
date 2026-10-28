@@ -172,7 +172,8 @@ Only the second is true, and only the second survives review.
   except block.  Example: `raise ValueError(msg)` → `raise ValueError(msg)
   from exc`.  `raise group.exceptions[i]` inside `except BaseExceptionGroup as
   group` (or `except*`) is already clear: the member keeps its own cause, and
-  `from group` would overwrite it.
+  `from group` would overwrite it.  Only a proven group counts — an app
+  class exposing an `exceptions` sequence still fires.
 
 **Judgment rules** (`autofixable = true` — the lane applies the prescription;
 `classification = "judgment"` — every result is routed to residue for audit,
@@ -252,8 +253,10 @@ outcome mirroring the error-handling shape in the reference app named by
   - a stash the owning function provably re-raises: the handler only does
     `error = exc` or `holder.append(exc)` (a worker-thread target writing a
     closure list or `nonlocal` counts), and the function owning the name
-    reaches `raise error` / `raise holder[0]` after the `try` with no `return`
-    or rebinding on the way;
+    reaches `raise error` / `raise holder[0]` after the `try` — bare, or under
+    an `if` that only checks the stash is present (`if error is not None:`,
+    `if holder:`; a compound guard like `... and should_reraise` does not
+    count) — with no `return` or rebinding on the way;
   - **best-effort cleanup** logged at `debug`/`info` with `exc_info=True` and
     nothing else: the `try` body is only release calls (`close`, `aclose`,
     `dispose`, `shutdown`, `disconnect`, `cleanup`, `release`, `terminate`,
@@ -445,7 +448,8 @@ outcome mirroring the error-handling shape in the reference app named by
   An explanatory comment on the `except` line or inside the handler clears it,
   as the rule text says (tool directives such as `noqa` do not count), and so
   does a reporter call that states the problem with a message
-  (`_error(path, "... missing; cannot verify")`).
+  (`_error(path, "... missing; cannot verify")`) made directly in the handler
+  body; one nested under an `if` or a loop is not recognised.
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable
   (a flag, a default) and logs nothing, so the failure sets state invisibly.
@@ -583,8 +587,8 @@ outcome mirroring the error-handling shape in the reference app named by
   `-> None` (no result to publish), and `.ok` / `.is_success` on an object
   nothing ties to an HTTP response (a `StageResult` dataclass) — those two
   markers count only on a response-named owner, one the function reads
-  `.status_code` / `.json()` / `.headers` on, one annotated `...Response`, or
-  one bound from an HTTP call.
+  `.status_code` / `.json()` / `.headers` on, one annotated `...Response`,
+  one bound from an HTTP call, or the HTTP call itself (`httpx.get(url).ok`).
 
   **Raise versus skip — read before editing a per-object fetch.**  Raise the
   typed error for a failure of the whole request, and for transient outcomes

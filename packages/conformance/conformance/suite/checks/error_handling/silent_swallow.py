@@ -628,6 +628,47 @@ class SilentSwallowMixin:
             raised = raised.value
         return isinstance(raised, ast.Name) and raised.id == name
 
+    @staticmethod
+    def _tests_stash_present(test: ast.expr, name: str) -> bool:
+        """Whether *test* is true exactly when the stash *name* holds a failure.
+
+        ``NAME``, ``NAME is not None``, ``len(NAME)`` and ``len(NAME) > 0`` /
+        ``!= 0`` / ``>= 1``: the false branch then proves nothing was stashed.
+        A compound test (``NAME is not None and should_reraise``) is refused —
+        its false branch can still drop a stashed failure.
+        """
+
+        def is_name(node: ast.expr) -> bool:
+            return isinstance(node, ast.Name) and node.id == name
+
+        def is_len(node: ast.expr) -> bool:
+            return (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "len"
+                and len(node.args) == 1
+                and not node.keywords
+                and is_name(node.args[0])
+            )
+
+        if is_name(test) or is_len(test):
+            return True
+        if not (isinstance(test, ast.Compare) and len(test.ops) == 1):
+            return False
+        op, right = test.ops[0], test.comparators[0]
+        if is_name(test.left):
+            return (
+                isinstance(op, ast.IsNot)
+                and isinstance(right, ast.Constant)
+                and right.value is None
+            )
+        if is_len(test.left) and isinstance(right, ast.Constant):
+            bound = right.value
+            return (isinstance(op, (ast.Gt, ast.NotEq)) and bound == 0) or (
+                isinstance(op, ast.GtE) and bound == 1
+            )
+        return False
+
     def _handler_stashes_for_reraise(self, node: ast.ExceptHandler) -> bool:
         """True when the handler only stashes the exception for a proven later re-raise.
 
@@ -637,8 +678,8 @@ class SilentSwallowMixin:
         own, or the enclosing one for a worker-thread target that writes a
         closure list or a ``nonlocal`` — must then, after the ``try`` (or the
         nested ``def``) and in its own top-level statements, reach ``raise
-        NAME`` / ``raise NAME[i]``, bare or under an ``if`` whose test reads
-        NAME, with no ``return`` and no rebinding of NAME on the way.  The
+        NAME`` / ``raise NAME[i]``, bare or under an ``if`` whose test is
+        only a presence check on NAME (:meth:`_tests_stash_present`), with no ``return`` and no rebinding of NAME on the way.  The
         failure is deferred, not swallowed: it leaves the frame with its
         traceback once the cleanup or the join has run.
         """
@@ -701,10 +742,7 @@ class SilentSwallowMixin:
                 return True
             if (
                 isinstance(stmt, ast.If)
-                and any(
-                    isinstance(n, ast.Name) and n.id == name
-                    for n in ast.walk(stmt.test)
-                )
+                and self._tests_stash_present(stmt.test, name)
                 and any(self._raises_name(inner, name) for inner in stmt.body)
             ):
                 return True

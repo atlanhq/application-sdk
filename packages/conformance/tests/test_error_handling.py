@@ -6650,7 +6650,7 @@ def test_typed_failure_still_flags_helper_annotated_with_a_non_error_type(
         "    if isinstance(exc, DeniedError):\n"
         '        return AccessDeniedError(message="denied", cause=exc)\n',
         # The parameter itself is rebound: its name no longer holds the failure.
-        "    exc = None\n" '    return AppError(message="probe failed", cause=exc)\n',
+        '    exc = None\n    return AppError(message="probe failed", cause=exc)\n',
         # A name copied from the rebound parameter carries nothing either.
         "    exc = None\n"
         "    detail = exc\n"
@@ -6984,6 +6984,32 @@ async def fetch(session):
     )
 
 
+@pytest.mark.parametrize(
+    "test",
+    ["not httpx.get(url).ok", "not (await client.get(url)).is_success"],
+)
+def test_e020_still_fires_on_ok_of_a_direct_http_call(test: str) -> None:
+    assert "E020" in _findings(
+        f"""\
+async def fetch(client, url):
+    if {test}:
+        return []
+    return [1]
+"""
+    )
+
+
+def test_e020_no_finding_on_ok_of_a_non_http_call() -> None:
+    assert "E020" not in _findings(
+        """\
+def stage(batch):
+    if not finish(batch).ok:
+        return []
+    return [1]
+"""
+    )
+
+
 def test_e020_still_fires_on_ok_of_a_with_bound_response() -> None:
     assert "E020" in _findings(
         """\
@@ -7251,6 +7277,46 @@ def test_e004_e009_still_fire_when_the_stash_is_not_provably_reraised(
     found = _findings(_STASH_AND_RERAISE.format(tail=tail))
     assert "E004" in found
     assert "E009" in found
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        "if error is not None and should_reraise:",
+        "if should_reraise or error:",
+        "if error is None:",
+        "if isinstance(error, ValueError):",
+    ],
+)
+def test_e004_e009_still_fire_when_the_reraise_guard_is_not_a_presence_check(
+    guard: str,
+) -> None:
+    # The false branch of these guards can drop a stashed failure.
+    found = _findings(
+        _STASH_AND_RERAISE.format(tail=f"    {guard}\n        raise error")
+    )
+    assert "E004" in found
+    assert "E009" in found
+
+
+@pytest.mark.parametrize(
+    "guard",
+    ["if errors:", "if len(errors):", "if len(errors) > 0:", "if len(errors) >= 1:"],
+)
+def test_e004_no_finding_for_a_list_stash_under_a_presence_check(guard: str) -> None:
+    assert "E004" not in _findings(
+        f"""\
+def call(funcs):
+    errors = []
+    for func in funcs:
+        try:
+            func()
+        except Exception as exc:
+            errors.append(exc)
+    {guard}
+        raise errors[0]
+"""
+    )
 
 
 # ── E004: best-effort cleanup and predicate-gated skips at DEBUG ──────────────
@@ -7572,6 +7638,38 @@ def run():
     try:
         work()
     {clause}
+        raise group.exceptions[0]
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "except AggregateError as group:",
+        "except (BaseExceptionGroup, AggregateError) as group:",
+    ],
+)
+def test_e016_still_fires_for_exceptions_member_of_a_non_group(clause: str) -> None:
+    # An app class exposing an ``exceptions`` sequence is not a proven group.
+    assert "E016" in _findings(
+        f"""\
+def run():
+    try:
+        work()
+    {clause}
+        raise group.exceptions[0]
+"""
+    )
+
+
+def test_e016_no_finding_for_a_member_of_a_qualified_group_type() -> None:
+    assert "E016" not in _findings(
+        """\
+def run():
+    try:
+        work()
+    except (builtins.ExceptionGroup, BaseExceptionGroup) as group:
         raise group.exceptions[0]
 """
     )
@@ -8158,6 +8256,37 @@ def test_e004_still_fires_when_the_returned_helper_is_not_proven(
         _LOGGING_HELPER_RETURN.format(level=level, logged=logged, guard=guard)
     )
     assert "E004" in found
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("safe_exception_frames", True),
+        ("_safe_exception_frames", True),
+        ("utils_safe_traceback", True),
+        ("unsafe_exception_text", False),
+        ("unsafe_traceback", False),
+    ],
+)
+def test_safe_sanitizer_words_must_start_a_name_token(
+    name: str, expected: bool
+) -> None:
+    from conformance.suite.checks._ast_common._sanitizers import _name_is_sanitizer
+
+    assert _name_is_sanitizer(name) is expected
+
+
+def test_e005_still_fires_for_an_unsafe_named_exception_helper() -> None:
+    src = """\
+def run():
+    try:
+        work()
+    except Exception as exc:
+        logger.error("failed: %s", {helper}(exc))
+        raise
+"""
+    assert "E005" in _findings(src.format(helper="unsafe_exception_text"))
+    assert "E005" not in _findings(src.format(helper="safe_exception_frames"))
 
 
 # ── E004: a sanitized alias logged inside the preflight scope ─────────────────

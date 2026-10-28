@@ -469,6 +469,31 @@ class ExceptionChainingMixin:
 
     # ── E016 ─────────────────────────────────────────────────────────────────
 
+    _GROUP_TYPES: frozenset[str] = frozenset({"ExceptionGroup", "BaseExceptionGroup"})
+
+    def _catches_exception_group(self, handler: ast.ExceptHandler) -> bool:
+        """Whether *handler* provably binds an exception group.
+
+        Either it is an ``except*`` clause (its binding is always a group), or
+        every type it names is ``ExceptionGroup`` / ``BaseExceptionGroup``.  An
+        app class that merely exposes an ``exceptions`` sequence
+        (``except AggregateError as group``) does not count.
+        """
+        caught = handler.type
+        names = caught.elts if isinstance(caught, ast.Tuple) else [caught]
+        if names and all(
+            n is not None and _get_name(n) in self._GROUP_TYPES for n in names
+        ):
+            return True
+        scope: ast.AST | None = (
+            self._function_stack[-1] if self._function_stack else self._module
+        )
+        return scope is not None and any(
+            isinstance(candidate, ast.TryStar)
+            and any(h is handler for h in candidate.handlers)
+            for candidate in ast.walk(scope)
+        )
+
     def _check_p016(self, node: ast.Raise) -> None:
         if node.exc is None:
             return  # bare re-raise — always acceptable
@@ -486,6 +511,7 @@ class ExceptionChainingMixin:
             and node.exc.value.attr == "exceptions"
             and isinstance(node.exc.value.value, ast.Name)
             and node.exc.value.value.id == exc_binding
+            and self._catches_exception_group(handler)
         ):
             # ``raise group.exceptions[i]`` re-raises a member of the caught
             # exception group: it keeps its own ``__cause__`` and traceback,

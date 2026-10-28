@@ -55,9 +55,19 @@ _SANITIZED_VALUE_WORDS: tuple[str, ...] = (
 
 
 def _name_is_sanitizer(name: str) -> bool:
-    """True if *name* looks like a redaction-helper *callable*."""
+    """True if *name* looks like a redaction-helper *callable*.
+
+    A ``safe_*`` word must start a name token: ``unsafe_exception_text`` and
+    ``unsafe_traceback`` say the opposite of what the word means.
+    """
     lowered = name.lower()
-    return any(word in lowered for word in SANITIZER_NAME_WORDS)
+    for word in SANITIZER_NAME_WORDS:
+        start = lowered.find(word)
+        while start != -1:
+            if not word.startswith("safe_") or start == 0 or lowered[start - 1] == "_":
+                return True
+            start = lowered.find(word, start + 1)
+    return False
 
 
 def _name_is_sanitized_value(name: str) -> bool:
