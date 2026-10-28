@@ -106,7 +106,8 @@ fires it.
 Three things to get right, because all three fail silently:
 
 - **Recognition is by name.**  The callable must contain `redact`,
-  `sanitiz`, `scrub_secret`, `mask_secret` or `safe_traceback`, or the
+  `sanitiz`, `scrub_secret`, `mask_secret`, `safe_traceback` or
+  `safe_exception` (`safe_exception_frames`), or the
   argument must be a variable named for redacted output (`safe_traceback`,
   `redacted`, `sanitized`, `masked`, `scrubbed`).  `redact_secrets`,
   `sanitize_cause_repr`, `safe_traceback` and `redact_wire_value` are public
@@ -122,6 +123,11 @@ Three things to get right, because all three fail silently:
   E004-clearing but duplicate the gate's outcome row, so preflight still
   uses the typed-return shape below, not its log line — keep that line at
   `debug` with the sanitizer, as `atlan-mysql-app app/handler.py` does.
+  Two narrow exceptions accept `debug`/`info` (see E004's already-clearing
+  list): inside F005's preflight scope, a `debug`/`info` call that carries the
+  exception (sanitized or with `exc_info`) clears E004, because F005 bars the
+  WARNING that would otherwise be required; and a best-effort cleanup handler
+  logging at `debug` with `exc_info=True` clears it anywhere.
 
 Never propose an inline `ignore[...]` here.  A suppression records that the
 rule was skipped; the sanitized form records that the credential was handled.
@@ -153,7 +159,8 @@ Only the second is true, and only the second survives review.
 
   **Contraindication — redaction boundaries.** Never add `exc_info=True` when
   the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
-  `safe_traceback`, `scrub_secret*`, `mask_secret*`) or an adjacent comment
+  `safe_traceback`, `safe_exception*`, `scrub_secret*`, `mask_secret*`) or an
+  adjacent comment
   says traceback capture is omitted on purpose: driver/API exception text can
   embed credentials (JDBC URLs, Authorization headers, OAuth bodies), and the
   separately-serialized traceback bypasses the redaction the code performs.
@@ -163,7 +170,10 @@ Only the second is true, and only the second survives review.
 - **E016 MissingExceptionChaining** — add `from exc` (or `from e`, matching
   the existing except clause variable) to the bare `raise X(...)` inside the
   except block.  Example: `raise ValueError(msg)` → `raise ValueError(msg)
-  from exc`.
+  from exc`.  `raise group.exceptions[i]` inside `except BaseExceptionGroup as
+  group` (or `except*`) is already clear: the member keeps its own cause, and
+  `from group` would overwrite it.  Only a proven group counts — an app
+  class exposing an `exceptions` sequence still fires.
 
 **Judgment rules** (`autofixable = true` — the lane applies the prescription;
 `classification = "judgment"` — every result is routed to residue for audit,
@@ -237,6 +247,66 @@ outcome mirroring the error-handling shape in the reference app named by
     data** — `return PreflightCheck(passed=False,
     error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row
     staged in a local that the enclosing function returns below the `try`.
+    The binding itself counts (`return exc`, `return (Result(ok=False), exc)`),
+    and so does a local staged through a conditional whose arms are both typed
+    errors (`error = admin_denied(user) if denied(exc) else _check_error(exc)`);
+  - a stash the owning function provably re-raises: the handler only does
+    `error = exc` or `holder.append(exc)` (a worker-thread target writing a
+    closure list or `nonlocal` counts), and the function owning the name
+    reaches `raise error` / `raise holder[0]` after the `try` — bare, or under
+    an `if` that only checks the stash is present (`if error is not None:`,
+    `if holder:`; a compound guard like `... and should_reraise` does not
+    count) — with no `return` or rebinding on the way;
+  - **best-effort cleanup** logged at `debug`/`info` with `exc_info=True` and
+    nothing else: the `try` body is only release calls (`close`, `aclose`,
+    `dispose`, `shutdown`, `disconnect`, `cleanup`, `release`, `terminate`,
+    `stop`, `kill`, `unlink`, `rmtree`) or metric emits (`record_metric`, or
+    anything on `get_metrics()`), or a lookup then release
+    (`state = app.get_app_state(...)` / `if state is not None: await
+    state.close()`, or `result = close()` / `if hasattr(result, "__await__"):
+    await result`), or only calls when it sits in a `finally`.  A WARNING
+    there lands beside the real error, and narrowing would let a cleanup
+    failure mask it.  Without `exc_info` it still fires: add it, keep DEBUG;
+  - a **predicate-gated skip**: `if <predicate reading exc>: <debug log with
+    exc_info>; return/continue`, followed by a cause-preserving re-raise for
+    everything else.  Leading aliases that only read the binding
+    (`msg = str(exc)`, `kind = type(exc).__name__`) may come first, and the
+    predicate may test them;
+  - inside **F005's preflight scope** (a `preflight_check` override and the
+    helpers F005 follows from it), a `debug`/`info` log that carries the
+    exception — `exc_info`, or the binding formatted raw or sanitized, or a
+    local assigned from a sanitizer of it earlier in the handler
+    (`sanitized = sanitize_cause_repr(exc)`);
+  - outside it, a `debug`/`info` log of the binding through a sanitizer when
+    the handler falls through to a **computed fallback** — the statement after
+    the `try` returns a call or comprehension that reads nothing the `try`
+    assigned (`return [str(d[0]) for d in cursor.description]`).  A
+    `return None`, `return []` or a pre-set result still fires;
+  - a direct call to a same-module or **same-class** (`self._report(exc)`,
+    static methods too) helper that logs the binding through a sanitizer
+    (`safe_exception_frames` counts) at `warning`/`error`/`critical` on every
+    path, as a statement or as the returned value (`return
+    self._failure(check, exc)`, `return None, self._failure(check, exc)`),
+    optionally behind `if ...: raise <cause-preserving>` guards or
+    `if ...: raise helper(..., exc) from None` where that helper logs the same
+    way;
+  - a same-class method annotated with a bare class-like return type, returned
+    with the bare binding (`return self.connectivity_verdict(exc)`);
+  - an app **durable failure record** handed the binding — a callee named for
+    `failure`/`residual` and a write verb (`write_failure`, `record_failure`),
+    directly or through a local built from it (`record = {"message": str(e)}`)
+    — followed by a per-item `return None` or `continue`, or by `return []`
+    when a sanitized `warning`/`error` also logged it.  Assign-only `for`
+    loops may build the record, and an `if` branch that records may return a
+    recovered value;
+  - a typed failure **recorded as a preflight check row**: the handler's only
+    call hands `self._typed_error(e, Default)` (a same-class method annotated
+    `-> SomeError`) to a nested helper that appends a `PreflightCheck` built
+    from it to an enclosing list;
+  - `raise typed from None` where `typed = to_typed(exc)` was bound once,
+    earlier in the handler, from a call receiving the binding;
+  - in a standalone script (shebang or `__main__` guard, L005's predicate), a
+    `print(...)` of the caught exception.
 
   That last shape is the one to watch in an unattended lane.  It is the
   last-resort arm of a preflight probe, which deliberately fails *closed* with
@@ -271,15 +341,13 @@ outcome mirroring the error-handling shape in the reference app named by
   exception into a typed `PreflightCheck` row and returns it, with no
   suppression and no log above DEBUG.
 
-  **Best-effort cleanup reached from `preflight_check` is the other trap.**  A
+  **Best-effort cleanup reached from `preflight_check` is already clear.**  A
   helper such as `try: await client.aclose() except Exception:
-  logger.debug(...)` that the gate calls has no verdict to return, and the
-  levels close in on it: DEBUG (even through a redaction helper) does not
-  clear E004, and WARNING trips F005 because the helper runs inside the gate.
-  The recommended log that satisfies both is
-  `logger.error("<what failed>: %s", safe_traceback(exc))` — or
-  `sanitize_cause_repr(exc)`; `logger.critical` also clears both — or return the failure as typed data if the
-  caller can carry it.  Do not narrow the clause automatically; see above.
+  logger.debug(..., exc_info=True)` that the gate calls has no verdict to
+  return.  WARNING trips F005 there, so E004 accepts `debug`/`info` carrying
+  the exception (sanitized, or with `exc_info`) anywhere in F005's preflight
+  scope, and the cleanup shape anywhere.  Never raise such a line to WARNING.
+  Do not narrow the clause automatically; see above.
 
 - **E007 ErrorToReturnValue** — the `except` block returns a sentinel
   (`None`, `{}`, `[]`, `False`) with no logging before the `return`, so the
@@ -351,6 +419,22 @@ outcome mirroring the error-handling shape in the reference app named by
   `.format(exc)`) still fire.  A string is the failure laundered into a plain
   value.
 
+  Also already clear: `return exc` or a tuple/list holding the binding (the
+  failure itself, handed back); under a narrow catch, the result of a
+  same-module helper proven to return a typed result object (class-like return
+  annotation, or a class-like constructor on every path) —
+  `return _finish(log, RunOutcome.SKIPPED, ...)`; under any catch, a
+  same-class method with a bare class-like return annotation called with the
+  binding (`return self.connectivity_verdict(exc)`); a returned call to a
+  helper that logs the binding (`return self._failure(check, exc)`); a
+  per-item `return None` after an app durable failure record handed the
+  binding (`write_failure`, `record_failure`, or a local built from it), or
+  `return []` there when a sanitized `warning`/`error` also logged it; and in
+  a CLI, `return <non-zero int>` after a
+  `print(..., file=sys.stderr)` or `sys.stderr.write(...)` in the same
+  handler.  An inline constructor under a narrow catch (`return Verdict()`)
+  still needs a log.
+
 - **E008 ImportErrorWithoutLogging** — `except ImportError` that hides a
   missing or broken dependency, so it reads as a normal skip.  When the handler
   takes a fallback or returns without surfacing the failure, bind the exception
@@ -361,6 +445,11 @@ outcome mirroring the error-handling shape in the reference app named by
   error (`raise MissingExtraError(cause=exc) from exc`), already surfaces the
   failure and does not need a duplicate log.  A correct fallback still needs a
   trace; correctness alone does not make the missing-import event visible.
+  An explanatory comment on the `except` line or inside the handler clears it,
+  as the rule text says (tool directives such as `noqa` do not count), and so
+  does a reporter call that states the problem with a message
+  (`_error(path, "... missing; cannot verify")`) made directly in the handler
+  body; one nested under an `if` or a loop is not recognised.
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable
   (a flag, a default) and logs nothing, so the failure sets state invisibly.
@@ -368,6 +457,9 @@ outcome mirroring the error-handling shape in the reference app named by
   assignment; the checker clears on any logging call in the block.  Mirror
   `atlan-metabase-app app/credentials.py`'s `build_credential_ref`, which
   binds the routing error, logs it, then takes the inline-credentials path.
+  A stash that the owning function re-raises later (`error = exc` …
+  `if error is not None: raise error`) is already clear: the failure is
+  deferred, not hidden.
   A bound name that is never read afterwards is the tell that the handler is
   a placeholder — say so in the edit description rather than inventing a use
   for it.  These handlers sit on credential paths more often than most, so
@@ -505,6 +597,14 @@ outcome mirroring the error-handling shape in the reference app named by
   `app/extracts/databases.py` show the shape.  A site that already records
   and declares its gap under an `ignore[E020]` is converted to that typed
   catch.  Never give it a raise-only edit, which deletes the degradation.
+  Not reported: `status_code != <one non-2xx constant>` (`!= 401` also takes
+  every 2xx response, so it is not a failure test), a bare `return` /
+  `return None` in a function annotated
+  `-> None` (no result to publish), and `.ok` / `.is_success` on an object
+  nothing ties to an HTTP response (a `StageResult` dataclass) — those two
+  markers count only on a response-named owner, one the function reads
+  `.status_code` / `.json()` / `.headers` on, one annotated `...Response`,
+  one bound from an HTTP call, or the HTTP call itself (`httpx.get(url).ok`).
 
   **Raise versus skip — read before editing a per-object fetch.**  Raise the
   typed error for a failure of the whole request, and for transient outcomes

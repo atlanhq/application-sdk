@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,7 +18,16 @@ from application_sdk.infrastructure._dapr.credential_vault import (
 from application_sdk.infrastructure._secret_utils import (
     process_secret_data as _process_secret_data,
 )
-from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.infrastructure.credential_vault import (
+    CredentialConfigNotFoundError,
+    CredentialVaultError,
+)
+from tests.unit.infrastructure._credential_vault_fakes import (
+    binding_500 as _binding_500,
+)
+from tests.unit.infrastructure._credential_vault_fakes import (
+    vault_sleep as _vault_sleep,
+)
 from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
@@ -986,28 +993,6 @@ def test_outage_types_stay_importable_from_this_module() -> None:
     assert credential_vault.SecretStoreUnreachableError is SecretStoreUnreachableError
 
 
-@contextmanager
-def _vault_sleep() -> Iterator[AsyncMock]:
-    """No-op the vault's own ``asyncio.sleep``, and only the vault's."""
-    with (
-        private_stdlib(
-            "application_sdk.infrastructure._dapr.credential_vault", "asyncio"
-        ) as local_asyncio,
-        patch.object(local_asyncio, "sleep", new_callable=AsyncMock) as sleep,
-    ):
-        yield sleep
-
-
-def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
-    """A Dapr binding GET answered with HTTP 500 and Dapr's JSON error body."""
-    req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/upstream")
-    body = {"errorCode": "ERR_INVOKE_OUTPUT_BINDING", "message": dapr_message}
-    resp = httpx.Response(500, request=req, content=json.dumps(body).encode())
-    return httpx.HTTPStatusError(
-        "Server error '500 Internal Server Error'", request=req, response=resp
-    )
-
-
 class TestDaprCredentialVaultMissingConfigBlob:
     """Some object-store bindings (Azure Blob among them) answer a GET for a
     key that does not exist with HTTP 500 and a "not found" Dapr error body,
@@ -1099,6 +1084,36 @@ class TestDaprCredentialVaultMissingConfigBlob:
         message = str(exc_info.value)
         assert "No credential config found for GUID example-credential" in message
         assert "not-found on 4 attempts over 17s" in message
+        assert isinstance(exc_info.value, CredentialConfigNotFoundError)
+        # Code-keyed consumers must see the same code as before the subtype.
+        assert exc_info.value.code == CredentialVaultError.code
+
+    async def test_empty_config_reply_is_not_reported_as_confirmed_absence(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A successful but empty reply is not the store saying "not found"."""
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=[
+                _binding_500("error invoking output binding: object not found"),
+                BindingResult(data=b"", metadata={}),
+                _binding_500("error invoking output binding: object not found"),
+                _binding_500("error invoking output binding: object not found"),
+            ]
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep(),
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert not isinstance(exc_info.value, CredentialConfigNotFoundError)
+        assert "empty reply within 4 attempts" in str(exc_info.value)
 
     async def test_binding_500_without_not_found_is_still_retried(
         self, deterministic_dapr_cold_start_deadline

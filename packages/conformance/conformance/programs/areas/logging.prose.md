@@ -71,7 +71,10 @@ within the three statements before a `raise` in the same block is an **L009
 site**, and the same line is usually reported by L004 and E005 as well.  The
 test: L009 also reports the line, or, reading the code, the call is one of
 the three statements immediately preceding a `raise` in the same statement
-list (a `raise` inside a nested `if`/`with` does not count).
+list (a `raise` inside a nested `if`/`with` does not count).  A
+`raise HTTPException(...)` (fastapi/starlette) is never an L009 site: the
+framework answers the request from it without logging it, so the log is the
+only server-side record; resolve L004/E005 there as usual.
 
 At an L009 site, **do not enrich the log**: add neither `exc_info=True` nor
 the sanitized `sanitize_cause_repr(exc)` / `safe_traceback(exc)` arguments.
@@ -159,7 +162,8 @@ recognised sanitizer name, so the call clears the rule the same way.
 whose arguments flow through a sanitizer as a deliberate no-traceback
 boundary (`suite/checks/_ast_common/_sanitizers.py`).  Recognition is **by
 name**: the callable must contain `redact`, `sanitiz`, `scrub_secret`,
-`mask_secret` or `safe_traceback`, or the argument must be a variable named
+`mask_secret`, `safe_traceback` or `safe_exception` (`safe_exception_frames`),
+or the argument must be a variable named
 for redacted output (`safe_traceback`, `redacted`, `sanitized`, `masked`,
 `scrubbed`).  The `application_sdk.errors` helpers above are public API and
 already match; an app-local helper named `clean_message` redacts correctly
@@ -209,7 +213,8 @@ report that site the same way.
 
   **Contraindication — redaction boundaries.** Never add `exc_info=True` when
   the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
-  `safe_traceback`, `scrub_secret*`, `mask_secret*`) or an adjacent comment
+  `safe_traceback`, `safe_exception*`, `scrub_secret*`, `mask_secret*`) or an
+  adjacent comment
   says traceback capture is omitted on purpose: driver/API exception text can
   embed credentials (JDBC URLs, Authorization headers, OAuth bodies), and the
   separately-serialized traceback bypasses the redaction the code performs.
@@ -262,7 +267,10 @@ report that site the same way.
      other usages remain in the file.
   Classification is always `"judgment"` — the import change affects the whole
   file and requires verifying that no other symbols from the removed import
-  are still in use.
+  are still in use.  The finding is file-level: it sits on line 1, or on the
+  first line after a shebang and/or coding line (a coding line 2 also skips a
+  plain comment or blank line 1), and a suppression directive
+  belongs on that same line.
 
 - **L005 PrintInProductionCode** — replace `print(...)` with a logger call.
   Choose level from context:
@@ -364,12 +372,23 @@ report that site the same way.
   loop is already an at-most-once terminal summary; keep it there rather than
   moving or demoting it.  An INFO at the end of a conditional branch immediately
   followed by an unconditional `return` from the same function is also terminal;
-  this does not apply when a `finally: continue` overrides the return.  A break
+  this does not apply when a `finally: continue` overrides the return.  Plain
+  expressions, assignments, and `if`/`with` blocks that contain no `break`,
+  `continue`, `return`, `raise`, `try`, nested loop or nested scope (`def`/`class`) may sit between that INFO
+  and the `return` (a follow-up `if missing: logger.warning(...)` is fine).  A break
   summary can repeat in an unbounded enclosing loop, while a return exits the
   function.  Mirror `atlan-metabase-app
   app/extracts/process.py`, where the per-dashboard skip inside `process_assets`
   logs at DEBUG.  Do not simply delete a per-item call: the record is still
-  wanted at DEBUG.
+  wanted at DEBUG.  A throttled progress log is already a milestone and is
+  not reported: an INFO in the body of an `if` inside the loop whose test is
+  a modulo counter (`if count % 1000 == 0:`) or an elapsed-time threshold
+  (`if time.monotonic() - last_log >= 600:`), optionally `or`-ed with an `==`
+  final check (`or completed == total`).  The `else` of such an `if` is still
+  per-item, and so is an `or`-ed per-item filter: an `==` against a string,
+  `None` or `bool` literal or a field of the loop item
+  (`or item.status == "failed"`), or a time difference read from the loop item
+  itself (`now - ts > 5` for `ts` in the loop).
 
 - **L008 UnguardedExpensiveDebug** — an argument to `logger.debug()` is
   computed before the call, so it runs at every level.  Prefer making the
@@ -432,6 +451,19 @@ report that site the same way.
   exception genuinely cannot (a loop index, the URL being retried) — then the
   honest fix is to move that context into the exception and delete the log.
   Say in the edit description which of the three cases you found.
+
+  The checker already exempts the provable form of that context, so a log
+  that matches it is never reported: outside any `except` handler, a log
+  whose non-constant value arguments share no name or attribute with the
+  arguments of the `raise Err(...)` right after it (`logger.error("bad
+  connection: keys=%s", list(connection.keys()))` before
+  `raise RequestInvalid("Connection is missing required properties")`).
+  Inside a handler the same line is still an L009 site, and the pre-raise
+  carve-out above applies unchanged.
+
+  A `raise HTTPException(...)` from fastapi or starlette is exempt wherever it
+  sits, handler or not: the framework turns it into a response and never logs
+  it, so the line before it is the only server-side record.  Keep that log.
 
 - **L010 CredentialInLogOutput** — BLOCK, and a security finding.  Log the
   credential's *name* or *type*, never its value: drop the offending argument

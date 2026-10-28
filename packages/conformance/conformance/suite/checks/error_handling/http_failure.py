@@ -13,11 +13,25 @@ HTTP-response marker (``is_success`` / ``ok`` / ``status_code``) AND failure-sha
 guards, nor on a success-shaped marker check combined with an unrelated failure
 (``resp.is_success and parsed is None`` — HTTP 200 with an empty body). A bounded
 status-code range wholly within 200–299 is also a success check, not a failure
-comparison. Raise a typed error instead of returning an empty sentinel.
+comparison, and ``!=`` against a single non-2xx constant (``status_code != 401``)
+is no failure test at all: its branch also takes every 2xx response. Raise a typed error instead of returning an empty sentinel.
 
 Both polarities are covered: the failure-in-the-test → empty body
 (``if not resp.is_success: return []``) and its mirror, success-in-the-test →
 empty ``else`` (``if resp.is_success: ... else: return []``).
+
+``.ok`` and ``.is_success`` are also ordinary field names on non-HTTP result
+objects (a ``StageResult`` dataclass), so those two markers count only on an
+owner that is plausibly an HTTP response: its name says so (``resp``), the
+function reads a response-only attribute on it (``.status_code``, ``.json()``,
+``.headers``), it is a parameter annotated ``…Response``, or the function binds
+it from an httpx / requests / aiohttp call, an HTTP verb (``.get`` /
+``.post`` / ``.request`` …) or a callee named for ``http`` / ``request``.
+``status_code`` needs no such evidence.
+
+Not reported: a bare ``return`` / ``return None`` inside a function annotated
+``-> None``.  A procedure has no result to publish, so the early exit hands the
+caller no sentinel; E007's logged-sentinel arm makes the same carve-out.
 
 Exempt: a per-object skip on a *permanent* client rejection.  An empty return
 is not reported when the ``if`` whose body directly holds it tests the status
@@ -52,9 +66,167 @@ _HTTP_MARKERS: frozenset[str] = frozenset({"is_success", "ok", "status_code"})
 _FAILURE_COMPARE_OPS = (ast.NotEq, ast.Gt, ast.GtE, ast.Lt, ast.LtE)
 
 
-def _references_http_marker(test: ast.expr) -> bool:
+#: Markers that are also ordinary field names on non-HTTP result objects
+#: (``StageResult.ok``, ``Outcome.is_success``).  They count only on an owner
+#: that is plausibly an HTTP response — see :func:`_is_plausible_response`.
+_GENERIC_MARKERS: frozenset[str] = frozenset({"is_success", "ok"})
+
+
+def _references_http_marker(
+    test: ast.expr, ignored: frozenset[str] = frozenset()
+) -> bool:
+    """Whether *test* reads an HTTP marker on an owner not in *ignored*.
+
+    *ignored* holds the ``ast.dump`` of owners whose ``.ok`` / ``.is_success``
+    is not an HTTP marker (see :func:`_non_response_owners`).
+    """
     return any(
-        isinstance(n, ast.Attribute) and n.attr in _HTTP_MARKERS for n in ast.walk(test)
+        isinstance(n, ast.Attribute)
+        and n.attr in _HTTP_MARKERS
+        and not (n.attr in _GENERIC_MARKERS and ast.dump(n.value) in ignored)
+        for n in ast.walk(test)
+    )
+
+
+# Leaf names of calls that plausibly return an HTTP response: the verbs of
+# httpx / requests / aiohttp clients and their wrappers.  A leaf containing
+# ``http`` or ``request`` also counts (``execute_http_get``, ``_request``).
+_HTTP_CALL_VERBS: frozenset[str] = frozenset(
+    {
+        "get",
+        "post",
+        "put",
+        "patch",
+        "delete",
+        "head",
+        "options",
+        "request",
+        "send",
+        "stream",
+        "fetch",
+        "urlopen",
+    }
+)
+_HTTP_CLIENT_MODULES: frozenset[str] = frozenset({"requests", "httpx", "aiohttp"})
+# Attributes only an HTTP response carries: reading one on the same owner in
+# the same function says the owner is a response.
+_RESPONSE_ONLY_ATTRS: frozenset[str] = frozenset(
+    {"status_code", "raise_for_status", "headers", "json", "reason_phrase"}
+)
+
+
+def _call_returns_response(value: ast.expr) -> bool:
+    """Whether *value* (``await`` unwrapped) is a call that plausibly returns a response."""
+    if isinstance(value, ast.Await):
+        value = value.value
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Attribute):
+        leaf = func.attr
+        root: ast.expr = func
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, ast.Name) and root.id in _HTTP_CLIENT_MODULES:
+            return True
+    elif isinstance(func, ast.Name):
+        leaf = func.id
+    else:
+        return False
+    lowered = leaf.lower()
+    return (
+        lowered in _HTTP_CALL_VERBS
+        or "http" in lowered
+        or "request" in lowered
+        or "response" in lowered
+    )
+
+
+def _is_plausible_response(owner: ast.expr, scope: ast.AST | None) -> bool:
+    """Whether *owner* (``x`` in ``x.ok``) is plausibly an HTTP response.
+
+    Any one of:
+
+    - its leaf name says so (``response``, ``resp``, ``self._http_resp``);
+    - it is itself a call that plausibly returns a response
+      (``httpx.get(url).ok``, ``(await client.get(url)).ok``);
+    - *scope* (the enclosing function, or the module) reads a response-only
+      attribute on it (``x.status_code``, ``x.json()``, ``x.headers`` …);
+    - it is a parameter annotated ``…Response`` (``httpx.Response``,
+      ``ClientResponse``);
+    - *scope* binds it — ``=``, ``:=``, or ``with … as`` — from a call that
+      plausibly returns a response: an httpx / requests / aiohttp call, an
+      HTTP verb (``.get`` / ``.post`` / ``.request`` …), or a callee whose
+      name says ``http`` / ``request`` / ``response``.
+    """
+    if isinstance(owner, ast.Name):
+        leaf = owner.id
+    elif isinstance(owner, ast.Attribute):
+        leaf = owner.attr
+    elif isinstance(owner, (ast.Call, ast.Await)):
+        # ``httpx.get(url).ok`` / ``(await client.get(url)).ok``: the call
+        # itself is the response.
+        return _call_returns_response(owner)
+    else:
+        return False
+    if "resp" in leaf.lower():
+        return True
+    if scope is None:
+        return False
+    # Compared as source text: a binding target carries a Store context that
+    # ``ast.dump`` would tell apart from the Load the marker reads.
+    wanted = ast.unparse(owner)
+    nested = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+    pending: list[ast.AST] = list(ast.iter_child_nodes(scope))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, nested):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+        if (
+            isinstance(node, ast.Attribute)
+            and node.attr in _RESPONSE_ONLY_ATTRS
+            and ast.unparse(node.value) == wanted
+        ):
+            return True
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value:
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            targets, value = [node.optional_vars], node.context_expr
+        else:
+            continue
+        if any(ast.unparse(t) == wanted for t in targets) and _call_returns_response(
+            value
+        ):
+            return True
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) and isinstance(
+        owner, ast.Name
+    ):
+        args = scope.args
+        for parameter in [*args.posonlyargs, *args.args, *args.kwonlyargs]:
+            annotation = parameter.annotation
+            name = (
+                annotation.attr
+                if isinstance(annotation, ast.Attribute)
+                else annotation.id
+                if isinstance(annotation, ast.Name)
+                else None
+            )
+            if parameter.arg == owner.id and name and name.endswith("Response"):
+                return True
+    return False
+
+
+def _non_response_owners(test: ast.expr, scope: ast.AST | None) -> frozenset[str]:
+    """Owners whose ``.ok`` / ``.is_success`` in *test* is not an HTTP marker."""
+    return frozenset(
+        ast.dump(n.value)
+        for n in ast.walk(test)
+        if isinstance(n, ast.Attribute)
+        and n.attr in _GENERIC_MARKERS
+        and not _is_plausible_response(n.value, scope)
     )
 
 
@@ -165,9 +337,19 @@ def _compare_is_failure(node: ast.Compare) -> bool:
     """A failure comparison: ``!= 200``, ``>= 400``, ``is None`` / ``== None``.
 
     NOT failure: ``== 204`` / ``== 200`` (success) and ``is True`` — equality/
-    identity against a non-None constant is a success check.
+    identity against a non-None constant is a success check.  Nor is ``!=``
+    against one non-2xx constant (``status_code != 401``): that branch also
+    takes every 2xx response, so it is not a failure test.
     """
-    for op, comparator in zip(node.ops, node.comparators):
+    operands = [node.left, *node.comparators]
+    for index, (op, comparator) in enumerate(zip(node.ops, node.comparators)):
+        if isinstance(op, ast.NotEq):
+            status = _int_constant(comparator)
+            if status is None:
+                status = _int_constant(operands[index])
+            if status is not None and not 200 <= status <= 299:
+                continue
+            return True
         if isinstance(op, _FAILURE_COMPARE_OPS):
             return True
         if isinstance(op, (ast.Is, ast.Eq)) and (
@@ -177,7 +359,9 @@ def _compare_is_failure(node: ast.Compare) -> bool:
     return False
 
 
-def _is_http_failure_predicate(node: ast.expr) -> bool:
+def _is_http_failure_predicate(
+    node: ast.expr, ignored: frozenset[str] = frozenset()
+) -> bool:
     """True if *node* tests an HTTP response for failure, anchored to the marker.
 
     The failure shape must apply to the SAME sub-expression that references the
@@ -195,17 +379,19 @@ def _is_http_failure_predicate(node: ast.expr) -> bool:
         values = node.values
         if isinstance(node.op, ast.And):
             values = _split_2xx_range_terms(values)
-        return any(_is_http_failure_predicate(v) for v in values)
+        return any(_is_http_failure_predicate(v, ignored) for v in values)
     # ``not <expr-touching-an-http-marker>`` — negation of a truthy marker.
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return _references_http_marker(node.operand)
+        return _references_http_marker(node.operand, ignored)
     # A comparison that both uses a failure op AND touches an HTTP marker.
     if isinstance(node, ast.Compare):
-        return _compare_is_failure(node) and _references_http_marker(node)
+        return _compare_is_failure(node) and _references_http_marker(node, ignored)
     return False
 
 
-def _is_http_success_predicate(node: ast.expr) -> bool:
+def _is_http_success_predicate(
+    node: ast.expr, ignored: frozenset[str] = frozenset()
+) -> bool:
     """True if *node* is a pure HTTP *success* check (so its ``else`` is failure).
 
     Only unambiguous forms qualify — a bare truthy marker (``if resp.is_success`` /
@@ -217,7 +403,7 @@ def _is_http_success_predicate(node: ast.expr) -> bool:
     a remote-failure path.
     """
     if isinstance(node, ast.Attribute) and node.attr in _HTTP_MARKERS:
-        return True
+        return _references_http_marker(node, ignored)
     if _is_bounded_2xx_status_range(node):
         return True
     if isinstance(node, ast.Compare):
@@ -227,7 +413,7 @@ def _is_http_success_predicate(node: ast.expr) -> bool:
                 and isinstance(comparator, ast.Constant)
                 and comparator.value is not None
             ):
-                return _references_http_marker(node)
+                return _references_http_marker(node, ignored)
     return False
 
 
@@ -488,8 +674,19 @@ def _empty_returns(
                 yield from _empty_returns(nested.body, None, [])
 
 
+def _is_none_return(ret: ast.Return) -> bool:
+    """``return`` or ``return None`` — no value a caller could read as a result."""
+    return ret.value is None or (
+        isinstance(ret.value, ast.Constant) and ret.value.value is None
+    )
+
+
 def _branch_returns_empty(
-    body: list[ast.stmt], failed: set[str], guard: ast.If | None = None
+    body: list[ast.stmt],
+    failed: set[str],
+    guard: ast.If | None = None,
+    *,
+    procedure: bool = False,
 ) -> ast.Return | None:
     """The first empty-sentinel return in *body* that is not an exempt skip.
 
@@ -497,9 +694,13 @@ def _branch_returns_empty(
     skip is only exempt when it guards one of those.  *guard* is the ``if``
     that owns *body* when *body* is its own ``body`` list (the failure
     polarity), so a failure test that is itself an ``and``-ed
-    permanent-rejection guard is judged too.
+    permanent-rejection guard is judged too.  *procedure* is true inside a
+    function annotated ``-> None``, where a bare ``return`` / ``return None``
+    is a plain early exit with no result to publish.
     """
     for ret, owner, preceding in _empty_returns(body, guard, []):
+        if procedure and _is_none_return(ret):
+            continue
         if owner is not None and _is_logged_permanent_rejection_skip(
             owner, ret, preceding, failed
         ):
@@ -512,16 +713,32 @@ class HttpFailureMixin:
     """Rule method for E020 (HTTP-failure-to-empty-return)."""
 
     def _check_e020(self, node: ast.If) -> None:
+        function = self._function_stack[-1] if self._function_stack else None
+        scope: ast.AST | None = function if function is not None else self._module
+        ignored = _non_response_owners(node.test, scope)
+        # A bare ``return`` / ``return None`` in a function annotated
+        # ``-> None`` hands the caller no sentinel it could mistake for an
+        # empty success — the same carve-out E007's logged-sentinel arm makes.
+        # ``return []`` there still fires: it is a value, whatever the
+        # annotation says.
+        returns = function.returns if function is not None else None
+        procedure = isinstance(returns, ast.Constant) and returns.value is None
         # Failure in the if-test → the body is the failure branch.
-        if _is_http_failure_predicate(node.test):
-            ret = _branch_returns_empty(node.body, _failed_responses(node.test), node)
+        if _is_http_failure_predicate(node.test, ignored):
+            ret = _branch_returns_empty(
+                node.body, _failed_responses(node.test), node, procedure=procedure
+            )
             if ret is not None:
                 self._emit_e020(ret)
             return
         # Success in the if-test → the else is the failure branch (polarity mirror):
         #   if resp.is_success: ...success... else: return []
-        if _is_http_success_predicate(node.test) and _is_plain_else(node.orelse):
-            ret = _branch_returns_empty(node.orelse, _failed_responses(node.test))
+        if _is_http_success_predicate(node.test, ignored) and _is_plain_else(
+            node.orelse
+        ):
+            ret = _branch_returns_empty(
+                node.orelse, _failed_responses(node.test), procedure=procedure
+            )
             if ret is not None:
                 self._emit_e020(ret)
 

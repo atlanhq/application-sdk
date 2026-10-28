@@ -1655,9 +1655,13 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
 
     So a not-found is only source-attributable when it is *provably* an absence:
     no cause at all, or a cause that is itself a definitive
-    ``SecretNotFoundError``. Anything else is a collapsed plumbing failure and
-    fails open.
+    ``SecretNotFoundError`` or ``CredentialConfigNotFoundError``. The latter is
+    raised only after the object store's not-found re-read ladder is exhausted.
+    Anything else is a collapsed plumbing failure and fails open.
     """
+    from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — avoid import cycle at module load
+        CredentialConfigNotFoundError,
+    )
     from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — avoid import cycle at module load
         SecretNotFoundError,
     )
@@ -1665,7 +1669,9 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
     if not isinstance(exc, CredentialNotFoundError):
         return False
     cause = exc.__cause__ or exc.cause
-    return cause is None or isinstance(cause, SecretNotFoundError)
+    return cause is None or isinstance(
+        cause, (SecretNotFoundError, CredentialConfigNotFoundError)
+    )
 
 
 def _current_attempt() -> int:

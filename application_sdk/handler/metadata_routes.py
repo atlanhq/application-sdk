@@ -404,7 +404,6 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
                     if len(candidates) > 1 and not names_entrypoint(
                         target.stem, ep_name
                     ):
-                        # conformance: ignore[L009] logs caller-invisible context (the rejected candidates) that no HTTP response carries.
                         log.warning(
                             "ConfigMap form chosen alphabetically for entrypoint "
                             "%s: %d generated files are eligible and none is "
@@ -442,7 +441,6 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
                 )
             )
 
-        # conformance: ignore[L009] logs caller-invisible context (the available configmaps) that the generic 404 HTTPException detail does not carry.
         log.warning(
             "ConfigMap not found: requested=%s available=%s",
             config_map_id,
@@ -587,7 +585,6 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
             ):
                 computed = await compute(manifest_dict, fe_inputs_decoded)
             if not isinstance(computed, dict):
-                # conformance: ignore[L009] logs caller-invisible context (the actual returned type) that the generic 500 HTTPException detail omits.
                 log.error(
                     "compute_manifest for entrypoint %r returned %s, expected dict",
                     entrypoint_name,

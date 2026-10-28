@@ -530,7 +530,7 @@ always the attributed failure. HTTP `/check` and SDR attribute the same failure.
 | Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `CANCELLED`; `RATE_LIMITED` left it in FND-3774), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
-| Credential provably absent | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
+| Credential provably absent (the secret store answers not-found, or the object store still has no credential config after its re-read ladder) | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
 | No worker ever ran the attempt (`SCHEDULE_TO_START`) | `gate_broken` | fail open | fail open |

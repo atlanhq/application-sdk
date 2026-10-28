@@ -123,6 +123,10 @@ and `run_dev*.py` never run inside a workflow, so the provenance argument does n
 CNCT-93): a rolled-own logger loses correlation IDs and source provenance, making its
 records unfindable on the tenant UI.
 
+The finding is file-level and reported on line 1, or on the first line after a shebang
+and/or PEP 263 coding line (a coding line 2 also skips a plain comment or blank line 1),
+so a `# conformance: ignore[L002] reason` directive on that line suppresses it.
+
 ---
 
 ## L003 — `ExtraKwargsWrongFramework` {#l003}
@@ -189,16 +193,16 @@ after this same handler logged its caught exception's sanitized traceback.
 `.exception()` is exempt.
 
 Exempt: calls whose arguments flow through a recognised redaction helper
-(redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
-no-traceback boundary where exc_info=True would serialize the raw exception past the
-sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies). A
-later status-only warning/error call that does not expose the raw exception also needs
-no duplicate trace after a prior straight-line call at the same level or higher (an
-ERROR is not covered by a WARNING, which a `LOG_LEVEL=ERROR` filter drops) has logged
-that same exception's sanitized traceback — inline, as `safe_traceback(e)`, or through a
-local assigned from it earlier in the handler. A cause-only sanitizer, a trace for a
-different exception, or a trace inside a different handler does not satisfy this
-condition.
+(redact*/sanitiz*/safe_traceback/safe_exception*/scrub_secret*/mask_secret*) — these
+mark a deliberate no-traceback boundary where exc_info=True would serialize the raw
+exception past the sanitizer and can leak credentials (JDBC URLs, Authorization headers,
+OAuth bodies). A later status-only warning/error call that does not expose the raw
+exception also needs no duplicate trace after a prior straight-line call at the same
+level or higher (an ERROR is not covered by a WARNING, which a `LOG_LEVEL=ERROR` filter
+drops) has logged that same exception's sanitized traceback — inline, as
+`safe_traceback(e)`, or through a local assigned from it earlier in the handler. A
+cause-only sanitizer, a trace for a different exception, or a trace inside a different
+handler does not satisfy this condition.
 
 **Fixing it well**
 
@@ -272,7 +276,16 @@ per-item progress belongs at DEBUG.
 Per-item INFO logging in a large loop drowns meaningful signals and degrades
 performance.  INFO is for lifecycle milestones, not per-item events.  Use DEBUG per-item
 and INFO for the loop summary.  The checker should inspect whether the loop is clearly
-bounded (≤10 items) before flagging.
+bounded (≤10 items) before flagging.  A throttled progress log is a milestone and is not
+flagged: the body of an `if` inside the innermost loop whose test is a modulo counter
+(`n % N == 0`) or an elapsed-time threshold (`time.monotonic() - last >= S`).  Under
+`or`, every other disjunct must be a throttle or a one-shot `==` comparison such as
+`done == total` — not one against a string/`None`/`bool` literal or a field of the loop
+item, which can hold on every iteration.  A time difference read from the loop item
+itself is a per-item filter, not a throttle. A terminal summary followed by a `return`
+that exits the function is not flagged either.  Expressions, assignments, and
+`if`/`with` blocks containing no `break`, `continue`, `return`, `raise`, `try`, nested
+loop or nested scope may sit between the log and that `return`.
 
 ---
 
@@ -367,7 +380,12 @@ without dedup logic.
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
-available to the caller.  Otherwise: just re-raise.
+available to the caller.  Otherwise: just re-raise. The checker exempts the provable
+form of that context: outside any `except` handler, a log whose non-constant value
+arguments share no name or attribute with the arguments of the `raise Err(...)` it
+precedes.  A bare `raise`, constant-only arguments, or any log inside a handler (an
+L004/E005 site) still fires. A `raise HTTPException(...)` (fastapi/starlette) is exempt
+anywhere: the framework never logs it, so the preceding log is the only record.
 
 ---
 

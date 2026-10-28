@@ -83,6 +83,9 @@ class Checker(
         dependency_classes: frozenset[str] = frozenset(),
         deprecated_module: bool = False,
         e012_in_scope: bool = True,
+        script_file: bool = False,
+        preflight_lines: frozenset[int] = frozenset(),
+        comment_lines: frozenset[int] = frozenset(),
     ) -> None:
         self._filename = filename
         self._directives = directives
@@ -96,6 +99,16 @@ class Checker(
         # False for build / dev tooling outside the app runtime (see
         # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.
         self._e012_in_scope = e012_in_scope
+        # A standalone script/CLI (L005's is_script_file): E004 accepts a
+        # print() of the caught exception there.
+        self._script_file = script_file
+        # ``def`` lines of the functions in F005's preflight scope (see
+        # preflight._common.preflight_scope_lines): E004 accepts a DEBUG/INFO
+        # log carrying the exception there, where F005 bars WARNING.
+        self._preflight_lines = preflight_lines
+        # Lines holding an explanatory comment (not a directive): E008 accepts
+        # one on an optional-import guard, as its own text says.
+        self._comment_lines = comment_lines
         self._findings: list[Finding] = []
         self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
