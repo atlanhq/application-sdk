@@ -79,8 +79,32 @@ PUBLIC_RENAMES: dict[str, tuple[str, str]] = {
 }
 
 _SKIP_DIRS = frozenset(
-    {".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist"}
+    {
+        "venv",
+        "env",
+        "node_modules",
+        "__pycache__",
+        "build",
+        "dist",
+        "site-packages",
+        "dist-packages",
+    }
 )
+
+
+def _skipped(dirs: tuple[str, ...]) -> bool:
+    return any(part in _SKIP_DIRS or part.startswith(".") for part in dirs)
+
+
+def _is_test_file(parts: tuple[str, ...]) -> bool:
+    name = parts[-1]
+    return (
+        "tests" in parts[:-1]
+        or "test" in parts[:-1]
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or name == "conftest.py"
+    )
 
 
 def unsafe_renames(root: Path) -> frozenset[str]:
@@ -88,7 +112,7 @@ def unsafe_renames(root: Path) -> frozenset[str]:
 
     Unsafe when any Python file in the repo, tests included, defines a function
     with the old or the new name (an override changes which body runs), or a
-    file under ``tests/`` mentions the old name (a patch of it stops reaching
+    test file mentions the old name (a patch of it stops reaching
     the call). The whole repo is read, so a scan of a few files gives the same
     answer as a full one.
     """
@@ -98,7 +122,7 @@ def unsafe_renames(root: Path) -> frozenset[str]:
     unsafe: set[str] = set()
     for path in root.rglob("*.py"):
         rel = path.relative_to(root).parts
-        if any(part in _SKIP_DIRS for part in rel):
+        if _skipped(rel[:-1]):
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -107,7 +131,7 @@ def unsafe_renames(root: Path) -> frozenset[str]:
         present = {name for name in watched if name in text}
         if not present:
             continue
-        if "tests" in rel[:-1]:
+        if _is_test_file(rel):
             unsafe |= present & PUBLIC_RENAMES.keys()
         try:
             tree = ast.parse(text)

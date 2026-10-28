@@ -1946,3 +1946,24 @@ def test_b001_rename_marks_do_not_depend_on_which_files_are_scanned(tmp_path) ->
         f.message.split("'")[1] for f in only if SafeSwap.from_properties(f.properties)
     }
     assert marked == {"_build_transform_input"}
+
+
+def test_b001_rename_check_ignores_installed_packages_and_reads_root_test_files(
+    tmp_path,
+) -> None:
+    sdk_copy = "class SqlApp:\n    def _resolve_credential_ref(self, input):\n        return None\n"
+    root = _repo(
+        tmp_path,
+        {
+            "app/connector.py": _RENAME_CALLER,
+            ".venv311/lib/application_sdk/templates/sql_app.py": sdk_copy,
+            "pyenv311/lib/python3.11/site-packages/application_sdk/templates/sql_app.py": sdk_copy,
+            "test_connector.py": 'PATCH = ("SqlApp", "_build_transform_input")\n',
+        },
+    )
+    found = {
+        f.message.split("'")[1]: SafeSwap.from_properties(f.properties)
+        for f in _b001_in(root, "app/connector.py")
+    }
+    assert found["_resolve_credential_ref"] is not None
+    assert found["_build_transform_input"] is None
