@@ -510,6 +510,22 @@ outcome mirroring the error-handling shape in the reference app named by
   subclass-with-a-`code` shape matters: raising the bare category leaf trips
   E018.
 
+  Leave these raises as builtins; the rule does not report them, and a
+  typed error would break the caller:
+
+  - Inside a Pydantic validator (`@field_validator`, `@validator`), where
+    Pydantic needs a `ValueError` to build its `ValidationError`.  In
+    `@model_validator` / `@root_validator` only `ValueError` is left alone;
+    a `TypeError` or `RuntimeError` there escapes unconverted, so convert
+    it as above.
+  - `KeyError` from `__getitem__` / `__delitem__` / `__missing__` defined
+    in a class body (`Mapping.get` and `in` catch it).  A different
+    builtin in the same method, such as `ValueError` in `__getitem__`,
+    still reports and is converted as above.  The rule never reports
+    `IndexError`, `AttributeError` or `StopIteration`.
+  - Files under the repo-root `tools/` or `contract/` directories (build
+    and dev tooling).  `app/tools/` is app code and still reports.
+
 - **E014 ExceptLoopControlSwallow** — an `except` block inside a loop whose
   body is only `continue` / `break` / `pass`, with no logging, so a shrinking
   result set has no explanation.  Explain a tolerated skip before the

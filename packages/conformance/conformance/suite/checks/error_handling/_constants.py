@@ -64,6 +64,27 @@ LEAF_CLASSES: frozenset[str] = frozenset(
 INTEROP_METHODS: frozenset[str] = frozenset({"__post_init__", "__init__"})
 # E012 carve-outs: acceptable in Pydantic validator-decorated functions
 INTEROP_DECORATORS: frozenset[str] = frozenset({"field_validator", "validator"})
+# E012 carve-outs: Pydantic validator decorators where only the builtins Pydantic
+# converts into a ValidationError are exempt. Under Pydantic v2 a TypeError or
+# RuntimeError raised in a model validator propagates unconverted.
+VALIDATOR_DECORATOR_BUILTINS: dict[str, frozenset[str]] = {
+    "model_validator": frozenset({"ValueError"}),
+    "root_validator": frozenset({"ValueError"}),
+}
+# E012 carve-outs: mapping dunders whose protocol names KeyError as the builtin
+# a caller catches (``Mapping.get`` and ``in`` catch KeyError from
+# ``__getitem__``). Only KeyError is exempt, and only in a method defined in a
+# class body; any other builtin still reports. IndexError, AttributeError and
+# StopIteration need no entry: E012 never reports them (see BUILTIN_RAISES).
+PROTOCOL_DUNDER_BUILTINS: dict[str, frozenset[str]] = {
+    "__getitem__": frozenset({"KeyError"}),
+    "__delitem__": frozenset({"KeyError"}),
+    "__missing__": frozenset({"KeyError"}),
+}
+# E012 scope: repo-root directories holding build / dev tooling that never runs
+# inside the app runtime, so a raise there never reaches the Automation Engine
+# error envelope. Anchored at the repo root: ``app/tools/`` is app code.
+E012_TOOLING_ROOTS: frozenset[str] = frozenset({"tools", "contract"})
 # E012 escalation: note when inside Temporal activity body
 ACTIVITY_DECORATORS: frozenset[str] = frozenset({"task", "defn"})
 

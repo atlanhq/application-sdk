@@ -82,6 +82,7 @@ class Checker(
         raised_error_helpers: dict[str, ExceptionHelper] | None = None,
         dependency_classes: frozenset[str] = frozenset(),
         deprecated_module: bool = False,
+        e012_in_scope: bool = True,
         script_file: bool = False,
         preflight_lines: frozenset[int] = frozenset(),
         comment_lines: frozenset[int] = frozenset(),
@@ -95,6 +96,9 @@ class Checker(
         self._exception_helpers = raised_error_helpers or {}
         self._dependency_classes = dependency_classes
         self._deprecated_module = deprecated_module
+        # False for build / dev tooling outside the app runtime (see
+        # E012_TOOLING_ROOTS): its raises never reach the AE error envelope.
+        self._e012_in_scope = e012_in_scope
         # A standalone script/CLI (L005's is_script_file): E004 accepts a
         # print() of the caught exception there.
         self._script_file = script_file

@@ -37,7 +37,7 @@ import io
 import re
 import sys
 import tokenize
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from conformance.suite.checks._ast_common import (
     EXCLUDE_DIRS,
@@ -57,10 +57,12 @@ from ._constants import (
     _ATLAN_LEGACY_MODULE,
     ACTIVITY_DECORATORS,
     BUILTIN_RAISES,
+    E012_TOOLING_ROOTS,
     INTEROP_DECORATORS,
     INTEROP_METHODS,
     LEAF_CLASSES,
     LEGACY_ATLAN_ERRORS,
+    PROTOCOL_DUNDER_BUILTINS,
     SERIES,
 )
 from ._dependency_category import dependency_unavailable_classes
@@ -71,11 +73,13 @@ from .exception_chaining import exception_helpers
 __all__ = [
     "ACTIVITY_DECORATORS",
     "BUILTIN_RAISES",
+    "E012_TOOLING_ROOTS",
     "EXCLUDE_DIRS",
     "INTEROP_DECORATORS",
     "INTEROP_METHODS",
     "LEAF_CLASSES",
     "LEGACY_ATLAN_ERRORS",
+    "PROTOCOL_DUNDER_BUILTINS",
     "SERIES",
     "_IgnoreDirective",
     "discover",
@@ -92,6 +96,16 @@ __all__ = [
 # ---------------------------------------------------------------------------
 # Public check API
 # ---------------------------------------------------------------------------
+
+
+def _is_build_tooling(file: str) -> bool:
+    """True when repo-relative *file* sits under a tooling root (``tools/``, ``contract/``).
+
+    Only the first path component counts, so an app package such as
+    ``app/tools/`` stays in scope.
+    """
+    parts = PurePosixPath(file.replace("\\", "/")).parts
+    return len(parts) > 1 and parts[0] in E012_TOOLING_ROOTS
 
 
 _NON_EXPLANATORY_COMMENT = re.compile(
@@ -170,6 +184,7 @@ def scan_text(
         raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
         deprecated_module=module_is_deprecated(tree, path=path, root=root),
+        e012_in_scope=not _is_build_tooling(file),
         script_file=is_script_file(text, tree),
         preflight_lines=preflight_lines,
         comment_lines=_comment_lines_of(text),
