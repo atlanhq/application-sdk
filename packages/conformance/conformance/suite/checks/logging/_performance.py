@@ -214,16 +214,40 @@ def _log_adds_context(call: ast.Call, raise_stmt: ast.Raise) -> bool:
 _HTTP_EXCEPTION_MODULES: frozenset[str] = frozenset({"fastapi", "starlette"})
 
 
-def _http_exception_names(tree: ast.AST) -> tuple[frozenset[str], frozenset[str]]:
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _scope_nodes(scope: ast.AST) -> list[ast.AST]:
+    """Return the nodes of *scope*'s own body, without nested function/class scopes."""
+    nodes: list[ast.AST] = []
+    pending: list[ast.AST] = list(ast.iter_child_nodes(scope))
+    while pending:
+        current = pending.pop()
+        nodes.append(current)
+        if not isinstance(current, _NESTED_SCOPES):
+            pending.extend(ast.iter_child_nodes(current))
+    return nodes
+
+
+def _http_exception_names(
+    scope: ast.AST,
+    inherited: tuple[frozenset[str], frozenset[str]] | None = None,
+) -> tuple[frozenset[str], frozenset[str]]:
     """Return (local names bound to ``HTTPException``, names bound to its modules).
 
     The bare name ``HTTPException`` always counts; aliases come from
     ``from fastapi|starlette... import HTTPException as X`` and module
-    aliases from ``import fastapi|starlette... as m``.
+    aliases from ``import fastapi|starlette... as m`` in *scope*'s own body
+    (not nested scopes), added to the *inherited* names of the enclosing
+    scopes.  An alias imported in one function therefore never exempts a
+    ``raise`` of the same name in another.
     """
     names = {"HTTPException"}
     modules = set(_HTTP_EXCEPTION_MODULES)
-    for node in ast.walk(tree):
+    if inherited is not None:
+        names |= inherited[0]
+        modules |= inherited[1]
+    for node in _scope_nodes(scope):
         if isinstance(node, ast.ImportFrom):
             if (node.module or "").split(".")[0] not in _HTTP_EXCEPTION_MODULES:
                 continue
@@ -341,10 +365,13 @@ class WarnThenRaiseVisitor(ast.NodeVisitor):
     def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         # A nested function body is not inside the enclosing handler.
         saved = self._handler_depth
+        saved_http = self._http_names, self._http_modules
         self._handler_depth = 0
+        self._http_names, self._http_modules = _http_exception_names(node, saved_http)
         self._scan_stmts(node.body)
         self.generic_visit(node)
         self._handler_depth = saved
+        self._http_names, self._http_modules = saved_http
 
     def visit_If(self, node: ast.If) -> None:
         self._scan_stmts(node.body)

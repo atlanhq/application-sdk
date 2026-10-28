@@ -266,7 +266,8 @@ report that site the same way.
   Classification is always `"judgment"` — the import change affects the whole
   file and requires verifying that no other symbols from the removed import
   are still in use.  The finding is file-level: it sits on line 1, or on the
-  first line after a shebang and/or coding line, and a suppression directive
+  first line after a shebang and/or coding line (a coding line 2 also skips a
+  plain comment or blank line 1), and a suppression directive
   belongs on that same line.
 
 - **L005 PrintInProductionCode** — replace `print(...)` with a logger call.
@@ -371,7 +372,7 @@ report that site the same way.
   followed by an unconditional `return` from the same function is also terminal;
   this does not apply when a `finally: continue` overrides the return.  Plain
   expressions, assignments, and `if`/`with` blocks that contain no `break`,
-  `continue`, `return`, `raise`, `try` or nested loop may sit between that INFO
+  `continue`, `return`, `raise`, `try`, nested loop or nested scope (`def`/`class`) may sit between that INFO
   and the `return` (a follow-up `if missing: logger.warning(...)` is fine).  A break
   summary can repeat in an unbounded enclosing loop, while a return exits the
   function.  Mirror `atlan-metabase-app
@@ -382,7 +383,10 @@ report that site the same way.
   a modulo counter (`if count % 1000 == 0:`) or an elapsed-time threshold
   (`if time.monotonic() - last_log >= 600:`), optionally `or`-ed with an `==`
   final check (`or completed == total`).  The `else` of such an `if` is still
-  per-item.
+  per-item, and so is an `or`-ed per-item filter: an `==` against a string,
+  `None` or `bool` literal or a field of the loop item
+  (`or item.status == "failed"`), or a time difference read from the loop item
+  itself (`now - ts > 5` for `ts` in the loop).
 
 - **L008 UnguardedExpensiveDebug** — an argument to `logger.debug()` is
   computed before the call, so it runs at every level.  Prefer making the

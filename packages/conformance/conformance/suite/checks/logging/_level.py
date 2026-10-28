@@ -116,7 +116,8 @@ def _is_terminal_return_summary(
 
     Statements that cannot leave or re-enter the loop (expressions,
     assignments, and ``if``/``with`` blocks with no break, continue, return,
-    raise or nested loop) may sit between the log and the return.  The log
+    raise, ``try``, nested loop or nested scope) may sit between the log and
+    the return.  The log
     may be the last such statement in an ``if`` branch when the enclosing
     ``if`` is followed by the return in the same way. A ``finally: continue``
     between the return and *outermost* (the function's outermost loop)
@@ -257,20 +258,26 @@ def _is_clock_operand(node: ast.expr) -> bool:
     return any(token in _CLOCK_NAME_TOKENS for token in name.lower().split("_"))
 
 
-def _reads_item_field(node: ast.expr, item_names: frozenset[str]) -> bool:
-    """True for an attribute/subscript rooted at a loop target (``q.start_time``)."""
-    if not isinstance(node, (ast.Attribute, ast.Subscript)):
-        return False
+def _reads_loop_item(node: ast.expr, item_names: frozenset[str]) -> bool:
+    """True for a loop target (``ts``) or a field rooted at one (``q.start_time``)."""
     while isinstance(node, (ast.Attribute, ast.Subscript)):
         node = node.value
     return isinstance(node, ast.Name) and node.id in item_names
 
 
+def _reads_item_field(node: ast.expr, item_names: frozenset[str]) -> bool:
+    """True for an attribute/subscript rooted at a loop target (``q.status``)."""
+    return isinstance(node, (ast.Attribute, ast.Subscript)) and _reads_loop_item(
+        node, item_names
+    )
+
+
 def _is_elapsed(node: ast.expr, item_names: frozenset[str]) -> bool:
     """True for ``a - b`` with a clock operand, or ``(a - b).total_seconds()``.
 
-    A field of the loop item (``q.end_time - q.start_time``) is a per-item
-    filter, not a throttle, so an operand read from the item disqualifies it.
+    The loop item or a field of it (``q.end_time - q.start_time``,
+    ``now - ts`` for ``ts`` in timestamps) is a per-item filter, not a
+    throttle, so an operand read from the item disqualifies it.
     """
     if (
         isinstance(node, ast.Call)
@@ -283,8 +290,8 @@ def _is_elapsed(node: ast.expr, item_names: frozenset[str]) -> bool:
         isinstance(node, ast.BinOp)
         and isinstance(node.op, ast.Sub)
         and (_is_clock_operand(node.left) or _is_clock_operand(node.right))
-        and not _reads_item_field(node.left, item_names)
-        and not _reads_item_field(node.right, item_names)
+        and not _reads_loop_item(node.left, item_names)
+        and not _reads_loop_item(node.right, item_names)
     )
 
 
@@ -318,13 +325,34 @@ def _is_throttle_compare(node: ast.expr, item_names: frozenset[str]) -> bool:
     return False
 
 
+def _is_one_shot_equality(node: ast.expr, item_names: frozenset[str]) -> bool:
+    """True for an ``==`` that can hold on only one iteration (``done == total``).
+
+    A comparison against a non-integer literal (``status == "failed"``) or one
+    reading a field of the loop item (``item.status == ...``) is a per-item
+    filter that can hold on every iteration, so it does not qualify.
+    """
+    if not (
+        isinstance(node, ast.Compare)
+        and len(node.ops) == 1
+        and isinstance(node.ops[0], ast.Eq)
+    ):
+        return False
+    for operand in (node.left, node.comparators[0]):
+        if isinstance(operand, ast.Constant) and type(operand.value) is not int:
+            return False
+        if _reads_item_field(operand, item_names):
+            return False
+    return True
+
+
 def _is_throttle_test(test: ast.expr, item_names: frozenset[str]) -> bool:
     """True when an ``if`` test only lets a throttled subset of iterations in.
 
     ``and`` narrows, so one throttle conjunct is enough.  ``or`` widens, so
-    every disjunct must be a throttle or an ``==`` comparison (the one-shot
-    ``completed == total`` final report); any other disjunct can admit every
-    item.
+    every disjunct must be a throttle or a one-shot ``==`` comparison (the
+    ``completed == total`` final report, see :func:`_is_one_shot_equality`);
+    any other disjunct can admit every item.
     """
     if _is_throttle_compare(test, item_names):
         return True
@@ -335,11 +363,7 @@ def _is_throttle_test(test: ast.expr, item_names: frozenset[str]) -> bool:
             _is_throttle_test(value, item_names) for value in test.values
         ) and all(
             _is_throttle_test(value, item_names)
-            or (
-                isinstance(value, ast.Compare)
-                and len(value.ops) == 1
-                and isinstance(value.ops[0], ast.Eq)
-            )
+            or _is_one_shot_equality(value, item_names)
             for value in test.values
         )
     return False

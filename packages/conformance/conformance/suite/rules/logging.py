@@ -125,7 +125,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "making its records unfindable on the tenant UI.\n"
             "\n"
             "The finding is file-level and reported on line 1, or on the first\n"
-            "line after a shebang and/or PEP 263 coding line, so a\n"
+            "line after a shebang and/or PEP 263 coding line (a coding line 2 also\n"
+            "skips a plain comment or blank line 1), so a\n"
             "``# conformance: ignore[L002] reason`` directive on that line\n"
             "suppresses it.\n"
         ),
@@ -309,11 +310,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "the body of an ``if`` inside the innermost loop whose test is a modulo\n"
             "counter (``n % N == 0``) or an elapsed-time threshold\n"
             "(``time.monotonic() - last >= S``).  Under ``or``, every other disjunct\n"
-            "must be a throttle or an ``==`` comparison such as ``done == total``.\n"
+            "must be a throttle or a one-shot ``==`` comparison such as\n"
+            "``done == total`` — not one against a string/``None``/``bool`` literal\n"
+            "or a field of the loop item, which can hold on every iteration.  A\n"
+            "time difference read from the loop item itself is a per-item filter,\n"
+            "not a throttle.\n"
             "A terminal summary followed by a ``return`` that exits the function is\n"
             "not flagged either.  Expressions, assignments, and ``if``/``with``\n"
             "blocks containing no ``break``, ``continue``, ``return``, ``raise``,\n"
-            "``try`` or nested loop may sit between the log and that ``return``.\n"
+            "``try``, nested loop or nested scope may sit between the log and that\n"
+            "``return``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l006",
         remediation_reference=RemediationReference(

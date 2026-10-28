@@ -124,8 +124,8 @@ CNCT-93): a rolled-own logger loses correlation IDs and source provenance, makin
 records unfindable on the tenant UI.
 
 The finding is file-level and reported on line 1, or on the first line after a shebang
-and/or PEP 263 coding line, so a `# conformance: ignore[L002] reason` directive on that
-line suppresses it.
+and/or PEP 263 coding line (a coding line 2 also skips a plain comment or blank line 1),
+so a `# conformance: ignore[L002] reason` directive on that line suppresses it.
 
 ---
 
@@ -279,11 +279,13 @@ and INFO for the loop summary.  The checker should inspect whether the loop is c
 bounded (≤10 items) before flagging.  A throttled progress log is a milestone and is not
 flagged: the body of an `if` inside the innermost loop whose test is a modulo counter
 (`n % N == 0`) or an elapsed-time threshold (`time.monotonic() - last >= S`).  Under
-`or`, every other disjunct must be a throttle or an `==` comparison such as `done ==
-total`. A terminal summary followed by a `return` that exits the function is not flagged
-either.  Expressions, assignments, and `if`/`with` blocks containing no `break`,
-`continue`, `return`, `raise`, `try` or nested loop may sit between the log and that
-`return`.
+`or`, every other disjunct must be a throttle or a one-shot `==` comparison such as
+`done == total` — not one against a string/`None`/`bool` literal or a field of the loop
+item, which can hold on every iteration.  A time difference read from the loop item
+itself is a per-item filter, not a throttle. A terminal summary followed by a `return`
+that exits the function is not flagged either.  Expressions, assignments, and
+`if`/`with` blocks containing no `break`, `continue`, `return`, `raise`, `try`, nested
+loop or nested scope may sit between the log and that `return`.
 
 ---
 

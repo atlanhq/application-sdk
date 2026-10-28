@@ -306,6 +306,23 @@ def collect(pages):
     assert "L006" in _ids(src)
 
 
+def test_l006_fires_when_statement_between_log_and_return_defines_a_scope() -> None:
+    """A nested ``def``/``class`` between the log and the return is not skipped."""
+    src = """
+from loguru import logger
+
+def collect(pages):
+    while True:
+        page = next_page()
+        logger.info("fetched page")
+        if missing:
+            def helper():
+                pass
+        return found
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_page_progress_logs_in_unbounded_loop() -> None:
     src = """
 from loguru import logger
@@ -932,6 +949,38 @@ def run(items):
     assert _ids_unsorted(src).count("L006") == 1
 
 
+@pytest.mark.parametrize(
+    "disjunct",
+    ['item.status == "failed"', 'status == "failed"', "item.retries == 3"],
+    ids=["item-field-vs-literal", "string-literal", "item-field-vs-int"],
+)
+def test_l006_fires_when_or_equality_is_a_per_item_filter(disjunct: str) -> None:
+    """An ``==`` that can hold on every item does not keep a throttle throttled."""
+    src = f"""
+from loguru import logger
+
+def run(items, status):
+    for n, item in enumerate(items):
+        if n % 100 == 0 or {disjunct}:
+            logger.info("item %s", item)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
+def test_l006_fires_for_elapsed_filter_on_the_loop_item_itself() -> None:
+    """``now - ts`` for each ``ts`` in the loop filters items; it is no throttle."""
+    src = """
+import time
+from loguru import logger
+
+def run(timestamps):
+    for timestamp in timestamps:
+        if time.time() - timestamp > 5:
+            logger.info("stale entry %s", timestamp)
+"""
+    assert _ids_unsorted(src).count("L006") == 1
+
+
 def test_l006_fires_for_per_item_duration_filter() -> None:
     """A time difference read from the loop item filters items; it is no throttle."""
     src = """
@@ -1175,6 +1224,34 @@ def test_l009_fires_for_http_exception_named_on_another_module() -> None:
         "    raise mylib.HTTPException(500)\n"
     )
     assert "L009" in _ids(src)
+
+
+def test_l009_fires_for_name_aliased_to_http_exception_in_another_function() -> None:
+    """An ``HTTPException`` alias imported in one function exempts only that function."""
+    src = (
+        "from loguru import logger\n"
+        "class HE(Exception):\n"
+        "    pass\n"
+        "def route():\n"
+        "    from fastapi import HTTPException as HE\n"
+        "    raise HE(500)\n"
+        "def domain():\n"
+        "    logger.error('refused')\n"
+        "    raise HE('refused')\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "L009"]
+    assert [f.line for f in findings] == [8]
+
+
+def test_l009_silent_for_http_exception_alias_imported_in_the_same_function() -> None:
+    src = (
+        "from loguru import logger\n"
+        "def route():\n"
+        "    from fastapi import HTTPException as HE\n"
+        "    logger.error('refused')\n"
+        "    raise HE(500)\n"
+    )
+    assert "L009" not in _ids(src)
 
 
 def test_l009_fires_for_earlier_duplicate_behind_a_context_log() -> None:
@@ -1786,8 +1863,16 @@ def test_l002_suppression_directive(tmp_path: Path) -> None:
         ("#!/usr/bin/env python3\n", 2),
         ("#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n", 3),
         ("# -*- coding: utf-8 -*-\n", 2),
+        ("# script\n# -*- coding: utf-8 -*-\n", 3),
+        ("\n# -*- coding: utf-8 -*-\n", 3),
     ],
-    ids=["shebang", "shebang-and-coding", "coding"],
+    ids=[
+        "shebang",
+        "shebang-and-coding",
+        "coding",
+        "comment-and-coding",
+        "blank-and-coding",
+    ],
 )
 def test_l002_suppression_after_shebang_or_coding_header(
     tmp_path: Path, header: str, line: int
@@ -1807,6 +1892,29 @@ def test_l002_suppression_after_shebang_or_coding_header(
     assert len(l002) == 1
     assert l002[0].line == line
     assert l002[0].suppressed
+
+
+def test_l002_line_1_directive_before_coding_line_still_suppresses(
+    tmp_path: Path,
+) -> None:
+    """A directive already on line 1 keeps the finding there."""
+    src = (
+        "# conformance: ignore[L002] legacy module, migrating in next sprint\n"
+        "# -*- coding: utf-8 -*-\n"
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+    )
+    findings = _scan_files(tmp_path, {"legacy.py": src})
+    l002 = [f for f in findings if f.rule_id == "L002"]
+    assert len(l002) == 1
+    assert l002[0].line == 1
+    assert l002[0].suppressed
+
+
+def test_l002_stays_on_line_1_for_comment_without_coding_line(tmp_path: Path) -> None:
+    src = "# generated\nimport logging\nlogger = logging.getLogger(__name__)\n"
+    findings = _scan_files(tmp_path, {"a.py": src})
+    assert [f.line for f in findings if f.rule_id == "L002"] == [1]
 
 
 def test_l002_fires_after_shebang_without_directive(tmp_path: Path) -> None:

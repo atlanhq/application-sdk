@@ -153,7 +153,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         rel_str = str(rel)
         directives = _parse_directives(text)
         directives_by_file[rel_str] = directives
-        report_line_by_file[rel_str] = _file_level_report_line(text)
+        report_line_by_file[rel_str] = _file_level_report_line(text, directives)
 
         # Per-file rules
         result = build_checker(text, rel_str, directives)
