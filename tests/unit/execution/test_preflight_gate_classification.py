@@ -495,7 +495,7 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
 
     @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
     async def test_exhausted_missing_config_ladder_applies_mode(
-        self, mode: PreflightGateMode
+        self, mode: PreflightGateMode, capture_preflight_outcomes
     ) -> None:
         # The object store answers "not found" for the credential config on
         # every re-read: that is an absence the run can be blamed for, so it
@@ -526,7 +526,6 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
                 "application_sdk.infrastructure.AsyncDaprClient", return_value=client
             ),
             mock.patch(f"{_GATE}._require_secret_store", return_value=mock.MagicMock()),
-            mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
             if mode is PreflightGateMode.HARD:
                 with pytest.raises(ApplicationError) as excinfo:
@@ -544,7 +543,7 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
         assert [call.args[0] for call in sleep.await_args_list] == [2.0, 5.0, 10.0]
         client.close.assert_awaited_once()
         assert handler.preflight_input is None, "handler ran without a credential"
-        row = _outcome(mock_logger)
+        row = capture_preflight_outcomes.one
         assert row["outcome"] == (
             "blocked" if mode is PreflightGateMode.HARD else "would_block"
         )

@@ -304,7 +304,8 @@ class DaprCredentialVault:
             "blobName": normalized_key,
         }
 
-        async def _fetch() -> BindingResponse:
+        async def _fetch() -> BindingResponse | None:
+            """Return ``None`` only for the object store's explicit not-found."""
             try:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
             except BindingError as exc:
@@ -312,7 +313,7 @@ class DaprCredentialVault:
                 # rather than the cold-start budget, which would delay the
                 # failure and relabel it as an unreachable sidecar.
                 if exc.cause is not None and _is_missing_object_error(exc.cause):
-                    return BindingResponse(data=None, metadata={})
+                    return None
                 if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
                     # str() of a dropped connection (e.g. ReadError) is empty,
                     # so name the cause by type as well.
@@ -326,6 +327,10 @@ class DaprCredentialVault:
                 raise
 
         attempts = 0
+        # An empty successful reply also arrives as data=None (DaprBinding
+        # maps b"" to None) but is not the store confirming absence, so it
+        # keeps the generic, fail-open vault error.
+        saw_empty_reply = False
         for delay in (*_MISSING_CONFIG_RETRY_DELAYS_SECONDS, None):
             # A transport error or any other 5xx raises out of this loop on
             # the cold-start path; only the not-found answer is re-read here.
@@ -335,11 +340,24 @@ class DaprCredentialVault:
                 component=DAPR_UPSTREAM_BINDING_COMPONENT,
             )
             attempts += 1
-            if response.data is not None:
-                return orjson.loads(response.data)
+            if response is not None:
+                if response.data is not None:
+                    return orjson.loads(response.data)
+                saw_empty_reply = True
             if delay is not None:
                 await asyncio.sleep(delay)
 
+        if saw_empty_reply:
+            raise CredentialVaultError(
+                "No credential config read for GUID %s from upstream store "
+                "(empty reply within %d attempts over %.0fs)"
+                % (
+                    credential_guid,
+                    attempts,
+                    sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS),
+                ),
+                credential_guid=credential_guid,
+            )
         raise CredentialConfigNotFoundError(
             "No credential config found for GUID %s in upstream store "
             "(object store answered not-found on %d attempts over %.0fs)"

@@ -62,9 +62,10 @@ class CredentialConfigNotFoundError(CredentialVaultError):
 
     Keeps the vault's existing exception contract while distinguishing a missing
     config from transport failures for callers that enforce credential readiness.
+    The code is deliberately inherited: fleet consumers key on
+    ``DEPENDENCY_UNAVAILABLE_CREDENTIAL_VAULT``, so only ``isinstance`` callers
+    (the preflight gate) see the distinction.
     """
-
-    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_CREDENTIAL_CONFIG_NOT_FOUND"
 
 
 @runtime_checkable

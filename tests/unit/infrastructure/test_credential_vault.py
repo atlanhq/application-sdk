@@ -18,7 +18,10 @@ from application_sdk.infrastructure._dapr.credential_vault import (
 from application_sdk.infrastructure._secret_utils import (
     process_secret_data as _process_secret_data,
 )
-from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.infrastructure.credential_vault import (
+    CredentialConfigNotFoundError,
+    CredentialVaultError,
+)
 from tests.unit.infrastructure._credential_vault_fakes import (
     binding_500 as _binding_500,
 )
@@ -1081,6 +1084,36 @@ class TestDaprCredentialVaultMissingConfigBlob:
         message = str(exc_info.value)
         assert "No credential config found for GUID example-credential" in message
         assert "not-found on 4 attempts over 17s" in message
+        assert isinstance(exc_info.value, CredentialConfigNotFoundError)
+        # Code-keyed consumers must see the same code as before the subtype.
+        assert exc_info.value.code == CredentialVaultError.code
+
+    async def test_empty_config_reply_is_not_reported_as_confirmed_absence(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A successful but empty reply is not the store saying "not found"."""
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=[
+                _binding_500("error invoking output binding: object not found"),
+                BindingResult(data=b"", metadata={}),
+                _binding_500("error invoking output binding: object not found"),
+                _binding_500("error invoking output binding: object not found"),
+            ]
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep(),
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert not isinstance(exc_info.value, CredentialConfigNotFoundError)
+        assert "empty reply within 4 attempts" in str(exc_info.value)
 
     async def test_binding_500_without_not_found_is_still_retried(
         self, deterministic_dapr_cold_start_deadline
