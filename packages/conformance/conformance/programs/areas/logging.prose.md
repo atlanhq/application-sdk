@@ -159,7 +159,8 @@ recognised sanitizer name, so the call clears the rule the same way.
 whose arguments flow through a sanitizer as a deliberate no-traceback
 boundary (`suite/checks/_ast_common/_sanitizers.py`).  Recognition is **by
 name**: the callable must contain `redact`, `sanitiz`, `scrub_secret`,
-`mask_secret` or `safe_traceback`, or the argument must be a variable named
+`mask_secret`, `safe_traceback` or `safe_exception` (`safe_exception_frames`),
+or the argument must be a variable named
 for redacted output (`safe_traceback`, `redacted`, `sanitized`, `masked`,
 `scrubbed`).  The `application_sdk.errors` helpers above are public API and
 already match; an app-local helper named `clean_message` redacts correctly
@@ -209,7 +210,8 @@ report that site the same way.
 
   **Contraindication — redaction boundaries.** Never add `exc_info=True` when
   the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
-  `safe_traceback`, `scrub_secret*`, `mask_secret*`) or an adjacent comment
+  `safe_traceback`, `safe_exception*`, `scrub_secret*`, `mask_secret*`) or an
+  adjacent comment
   says traceback capture is omitted on purpose: driver/API exception text can
   embed credentials (JDBC URLs, Authorization headers, OAuth bodies), and the
   separately-serialized traceback bypasses the redaction the code performs.
