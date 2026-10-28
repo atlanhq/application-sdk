@@ -8,12 +8,49 @@ as pure public-API orchestration.
 from __future__ import annotations
 
 import ast
+import re
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
 from ._constants import FACTORY_PATTERNS
 from ._helpers import main_block_lines
+
+# PEP 263 source-encoding declaration; only honoured on line 1 or 2.
+_CODING_RE = re.compile(r"^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+")
+
+
+def _file_level_report_line(
+    text: str, directives: dict[int, _IgnoreDirective] | None = None
+) -> int:
+    """Return the line a file-level finding (L002) is reported on.
+
+    That is line 1, unless the file opens with a shebang and/or a PEP 263
+    coding line: then it is the first line after them.  Neither header line
+    can carry a ``# conformance: ignore[...]`` directive (a shebang is one
+    ``#!`` comment token), so a finding pinned to line 1 of a shebang script
+    could never be suppressed.  Files without those headers keep line 1, so
+    existing line-1 suppressions are unaffected.  A cookie on line 2 after a
+    comment-only or blank line 1 counts too, unless line 1 is a directive
+    (*directives*, keyed by line) — that keeps line 1.
+    """
+    lines = text.splitlines()
+    line = 1
+    if lines and lines[0].startswith("#!"):
+        line = 2
+    # A coding cookie is only valid on line 1 or 2 (PEP 263); on line 2 only
+    # after a comment-only or blank line 1, which cannot carry a directive
+    # unless it is one.
+    elif (
+        len(lines) >= 2
+        and _CODING_RE.match(lines[1])
+        and (not lines[0].strip() or lines[0].lstrip().startswith("#"))
+        and 1 not in (directives or {})
+    ):
+        line = 2
+    if line <= 2 and len(lines) >= line and _CODING_RE.match(lines[line - 1]):
+        line += 1
+    return line
 
 
 def _detect_factory(tree: ast.Module) -> str | None:
