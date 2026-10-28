@@ -9,11 +9,17 @@ are guarded.
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 
 from conformance.suite.checks._ast_common import _parse_directives
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
-from conformance.suite.checks.deprecation._consumer import scan_consumer
+from conformance.suite.checks.deprecation._consumer import (
+    PUBLIC_RENAMES,
+    app_method_index,
+    scan_consumer,
+)
 from conformance.suite.checks.deprecation._extractor import (
     extract_notices,
     extract_sites,
@@ -24,11 +30,13 @@ from conformance.suite.checks.deprecation._manifest import (
     load_manifest,
 )
 from conformance.suite.checks.deprecation._private_imports import (
+    PUBLIC_REEXPORTS,
     own_import_roots,
     scan_private_imports,
 )
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from conformance.suite.schema.extensions import SafeSwap
 
 
 def _tree_and_directives(src: str) -> tuple[ast.Module, dict]:
@@ -1761,3 +1769,158 @@ def test_b007_comprehension_of_reader_method_chains_still_fires() -> None:
         + "rows = [col.to_pylist() for col in columns]\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+# ── Safe-swap markers (atlan/safeSwap) ──────────────────────────────────────────
+
+
+def _apply_swap(src: str, finding) -> str:
+    swap = SafeSwap.from_properties(finding.properties)
+    assert swap is not None
+    lines = src.splitlines(keepends=True)
+    line = lines[finding.line - 1]
+    assert line.count(swap.find) == 1
+    lines[finding.line - 1] = line.replace(swap.find, swap.replace)
+    return "".join(lines)
+
+
+def test_b008_marks_a_module_level_public_reexport_import_as_a_safe_swap() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    build_output_path,\n"
+        "    get_object_store_prefix as prefix,\n"
+        ")\n"
+    )
+    findings = _b008(src)
+    swap = SafeSwap.from_properties(findings[0].properties)
+    assert swap is not None
+    assert swap.id == "public-reexport"
+    assert swap.requires.package == "atlan-application-sdk"
+    assert swap.requires.min == "3.0.0"
+    fixed = _apply_swap(src, findings[0])
+    assert fixed.startswith("from application_sdk.execution import (\n")
+    assert _b008(fixed) == []
+
+
+def test_b008_leaves_a_function_local_reexport_import_unmarked() -> None:
+    src = (
+        "def f():\n"
+        "    from application_sdk.execution._temporal.activity_utils import (\n"
+        "        get_object_store_prefix,\n"
+        "    )\n"
+        "    return get_object_store_prefix\n"
+    )
+    findings = _b008(src)
+    assert [f.rule_id for f in findings] == ["B008"]
+    assert SafeSwap.from_properties(findings[0].properties) is None
+
+
+def test_b008_leaves_an_import_with_a_name_lacking_a_public_home_unmarked() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    get_object_store_prefix,\n"
+        "    get_workflow_id,\n"
+        ")\n"
+    )
+    findings = _b008(src)
+    assert [f.rule_id for f in findings] == ["B008"]
+    assert SafeSwap.from_properties(findings[0].properties) is None
+
+
+def test_b008_public_reexports_are_the_same_objects() -> None:
+    for private, names in PUBLIC_REEXPORTS.items():
+        for name, (public, _since) in names.items():
+            assert getattr(importlib.import_module(public), name) is getattr(
+                importlib.import_module(private), name
+            )
+
+
+def test_b001_public_renames_delegate_with_the_same_signature() -> None:
+    from application_sdk.templates.sql_app import SqlApp
+
+    for deprecated, (public, _since) in PUBLIC_RENAMES.items():
+        assert inspect.signature(getattr(SqlApp, deprecated)) == inspect.signature(
+            getattr(SqlApp, public)
+        )
+        assert public in inspect.getsource(getattr(SqlApp, deprecated))
+
+
+def _b001_app(files: dict[str, str]) -> dict[str, list]:
+    manifest = load_manifest()
+    trees = {name: _tree_and_directives(src) for name, src in files.items()}
+    methods = app_method_index(tree for tree, _ in trees.values())
+    return {
+        name: scan_consumer(tree, name, manifest, directives, methods)
+        for name, (tree, directives) in trees.items()
+    }
+
+
+def test_b001_marks_a_call_of_a_renamed_method_the_app_does_not_define() -> None:
+    src = (
+        "from application_sdk.templates import SqlApp\n"
+        "class MyConnector(SqlApp):\n"
+        "    async def run(self, input):\n"
+        "        ref = self._resolve_credential_ref(input)\n"
+        "        return SqlApp._build_transform_input(input, None)\n"
+    )
+    findings = _b001_app({"app/connector.py": src})["app/connector.py"]
+    assert [f.rule_id for f in findings] == ["B001", "B001"]
+    fixed = src
+    for finding in findings:
+        swap = SafeSwap.from_properties(finding.properties)
+        assert swap is not None and swap.id == "public-rename"
+        assert swap.requires.min == "3.33.2"
+        fixed = _apply_swap(fixed, finding)
+    assert "self.resolve_credential_ref(input)" in fixed
+    assert "SqlApp.build_transform_input(input, None)" in fixed
+    assert _b001_app({"app/connector.py": fixed})["app/connector.py"] == []
+
+
+def test_b001_keeps_an_overridden_renamed_method_unmarked() -> None:
+    src = (
+        "from application_sdk.templates import SqlApp\n"
+        "class MyConnector(SqlApp):\n"
+        "    def _resolve_credential_ref(self, input):\n"
+        "        return super()._resolve_credential_ref(input)\n"
+        "    async def run(self, input):\n"
+        "        return self._resolve_credential_ref(input)\n"
+    )
+    findings = _b001_app({"app/connector.py": src})["app/connector.py"]
+    assert len(findings) == 2
+    assert all(SafeSwap.from_properties(f.properties) is None for f in findings)
+
+
+def test_b001_silent_on_a_call_of_the_apps_own_task_of_the_same_name() -> None:
+    files = {
+        "app/tasks.py": (
+            "class SharedTasks:\n"
+            "    async def upload_to_atlan(self, input):\n"
+            "        return input\n"
+        ),
+        "app/connector.py": (
+            "from application_sdk.app import App\n"
+            "from app.tasks import SharedTasks\n"
+            "class MyConnector(App, SharedTasks):\n"
+            "    async def run(self, input):\n"
+            "        return await self.upload_to_atlan(input)\n"
+        ),
+        "app/flow.py": "async def go(app, input):\n    return await app.upload_to_atlan(input)\n",
+    }
+    assert all(found == [] for found in _b001_app(files).values())
+
+
+def test_b001_still_fires_on_the_sdk_task_inherited_or_overridden() -> None:
+    inherited = (
+        "from application_sdk.templates import BaseMetadataExtractor\n"
+        "class MyConnector(BaseMetadataExtractor):\n"
+        "    async def run(self, input):\n"
+        "        return await self.upload_to_atlan(input)\n"
+    )
+    overridden = inherited + (
+        "    async def upload_to_atlan(self, input):\n"
+        "        return await super().upload_to_atlan(input)\n"
+    )
+    for src in (inherited, overridden):
+        found = _b001_app({"app/connector.py": src})["app/connector.py"]
+        assert sum("Calls deprecated SDK method" in f.message for f in found) >= 1
+        assert any("Subclasses" in f.message for f in found)

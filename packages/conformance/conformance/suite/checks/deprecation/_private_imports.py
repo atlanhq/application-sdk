@@ -77,6 +77,7 @@ import ast
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
 from conformance.suite.schema.findings import Finding
 
 _RULE_ID = "B008"
@@ -164,6 +165,41 @@ _PUBLIC_DESPITE_UNDERSCORE = frozenset(
 )
 
 
+#: Private SDK modules whose names a public module re-exports as the same
+#: objects: private module -> {name: (public module, first SDK version that
+#: exports it)}. An import of only these names, from the private module, at
+#: module level, is a safe swap to the public module. Each entry is pinned by a
+#: test that imports both paths and checks they are the same object.
+PUBLIC_REEXPORTS: dict[str, dict[str, tuple[str, str]]] = {
+    "application_sdk.execution._temporal.activity_utils": {
+        "build_output_path": ("application_sdk.execution", "3.0.0"),
+        "get_object_store_prefix": ("application_sdk.execution", "3.0.0"),
+    },
+}
+
+
+def _reexport_swap(node: ast.ImportFrom, module: str) -> SafeSwap | None:
+    """The safe swap for a private ``from`` import whose names all have one public home."""
+    homes = PUBLIC_REEXPORTS.get(module)
+    if not homes or any(alias.name not in homes for alias in node.names):
+        return None
+    targets = {homes[alias.name] for alias in node.names}
+    if len({public for public, _ in targets}) != 1:
+        return None
+    public = next(iter(targets))[0]
+    minimum = max((since for _, since in targets), key=_version_key)
+    return SafeSwap(
+        id="public-reexport",
+        find=module,
+        replace=public,
+        requires=SafeSwapRequires(package="atlan-application-sdk", min=minimum),
+    )
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
 def _private_component(dotted: str) -> str | None:
     """The first underscore-prefixed component of *dotted*, if any.
 
@@ -202,10 +238,13 @@ def scan_private_imports(
     """Return B008 findings for every foreign-private reach in *tree*."""
     findings: list[Finding] = []
     reported: set[tuple[int, str]] = set()
+    top_level = {id(n) for n in tree.body}
     # Local name -> dotted module it is bound to, for `import x as y` chains.
     module_aliases: dict[str, str] = {}
 
-    def emit(node: ast.AST, path: str, component: str) -> None:
+    def emit(
+        node: ast.AST, path: str, component: str, swap: SafeSwap | None = None
+    ) -> None:
         key = (node.lineno, path)
         if key in reported:
             return
@@ -217,6 +256,7 @@ def scan_private_imports(
                 node=node,
                 message=_message(path, component),
                 directives=directives,
+                properties=swap.to_properties() if swap else None,
             )
         )
 
@@ -243,7 +283,8 @@ def scan_private_imports(
                 continue
             component = _private_component(module)
             if component:
-                emit(node, module, component)
+                swap = _reexport_swap(node, module) if id(node) in top_level else None
+                emit(node, module, component, swap)
                 continue
             # Public module, private member:
             # `from application_sdk.app.base import _helper`.

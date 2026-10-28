@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from conformance.suite.schema.builder import ReportBuilder
 from conformance.suite.schema.sarif import SarifReport, Suppression
@@ -33,6 +34,12 @@ class Finding:
     matrix is defined.  Nothing is executed: the test gate is what proves the
     scenarios pass.  The empty default means no scenario can close the gap —
     the analysis never found the code to begin with — so the finding stands.
+
+    ``properties`` holds extra ``atlan/*`` result properties for this one
+    finding, copied into ``result.properties``.  A checker sets
+    ``atlan/safeSwap`` (see :class:`~conformance.suite.schema.extensions.SafeSwap`)
+    when the fix for this finding is one fixed text change that keeps
+    behaviour.
     """
 
     rule_id: str
@@ -49,6 +56,7 @@ class Finding:
     cleared_by: frozenset[str] = field(
         default_factory=frozenset, compare=False, hash=False
     )
+    properties: dict[str, Any] = field(default_factory=dict, compare=False, hash=False)
 
 
 def findings_to_report(
@@ -102,5 +110,6 @@ def findings_to_report(
             snippet=f.snippet,
             suppressions=suppressions,
             discriminator=f.discriminator,
+            extra_properties=f.properties or None,
         )
     return builder.build(excluded_paths=excluded_paths)
