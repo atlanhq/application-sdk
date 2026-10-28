@@ -337,8 +337,15 @@ Two stops, developer decides at each:
 
 ## Decided defaults
 
-Answers to the choices a fixer meets in this skill, for every app. The
-remediation loop reads this block.
+Owner answers for the choices a fixer meets in this skill, read by
+remediation tooling. A default keeps what the app does today. Each row names
+a fix shape for a Step 1 class as its `fix_shape`: `public-reexport` and
+`public-rename` (safe swap, swap), `base-to-app` (base),
+`transformer-wrapper`, `workflow-identity` (identity), `writer-rolling` and
+`reader-file-reference` (storage). A row with `block` is an owner decision:
+`match` is a pattern on the finding message or source line, `fix_shape` a
+pattern on the planned shape; such a site waits for the person the `brief`
+asks.
 
 ```decided-defaults
 {"rule": "B008", "fix_shape": "public-reexport", "decision": "Import the same names from the public module that re-exports them (application_sdk.execution for get_object_store_prefix and build_output_path). A module-level import stays module level; a function-local import stays local. Move every test patch target that names the private path to the name the app now binds (patch(\"app.<module>.<name>\")).", "why": "The public module re-exports the same objects, so behaviour cannot change; a patch of the private path no longer reaches the app's lookup."}
@@ -349,4 +356,9 @@ remediation loop reads this block.
 {"rule": "B001", "fix_shape": "writer-rolling", "decision": "Replace ParquetFileWriter / JsonFileWriter with RollingFileWriter and a flush_fn that writes one chunk per batch, or with a local write, in the task's own scratch directory; return FileReference.from_local(<dir>, tier=StorageTier.RETAINED) on the task Output. Keep the counts the task returned (count the rows appended; RollingFileWriter.chunk_count). RollingFileWriter chunk names and no statistics sidecar are kept only where no reader matches file names; where one does, write the old names with a local write. Files a reader outside the run reads are delivered from run() with upload_refs at the same prefix.", "why": "The deprecated writers wrote and uploaded each chunk; the interceptor now persists the returned ref, and the explicit delivery keeps the same keys for outside readers."}
 {"rule": "B001", "fix_shape": "reader-file-reference", "decision": "The reading task declares the producer's FileReference on its typed Input and reads the chunk files from .local_path with pandas.read_parquet or an orjson line loop through run_in_thread. Data already in the store before this run is downloaded in run() and its ref handed to the task. A reader that caught the missing-prefix error today keeps that behaviour for a missing ref.", "why": "The interceptor materialises the ref before the task runs; the old reader downloaded the prefix itself."}
 {"rule": "B008", "fix_shape": "reader-file-reference", "decision": "For a _download_files use: The reading task declares the producer's FileReference on its typed Input and reads the chunk files from .local_path with pandas.read_parquet or an orjson line loop through run_in_thread. Data already in the store before this run is downloaded in run() and its ref handed to the task. A reader that caught the missing-prefix error today keeps that behaviour for a missing ref.", "why": "The interceptor materialises the ref before the task runs; the old reader downloaded the prefix itself."}
+{"rule": "B001", "match": "'(?:Incremental)?SqlMetadataExtractor'", "block": "The replacement is SqlApp, which runs extract_* / transform_* tasks and writes raw JSONL where the deprecated base ran fetch_* tasks and wrote parquet: task names, raw layout and the transform change together.", "brief": "Should this app move to SqlApp now (task names, raw layout and transform together, with upgrade-v3), or keep the deprecated base until v4?"}
+{"rule": "B001", "fix_shape": "^sql-extractor$", "block": "BaseMetadataExtractor on a source read with SQL: the replacement is SqlApp, which changes task names, raw layout and the transform together.", "brief": "Should this app move to SqlApp now with upgrade-v3, or keep the deprecated base until v4?"}
+{"rule": "B001", "fix_shape": "^live-transformer$", "block": "QueryBasedTransformer or AtlasTransformer builds the published assets from YAML templates or entity classes. Asset mappers change what the app publishes unless each asset type is proven equal.", "brief": "Should this transformer be rewritten as map_<entity>() asset mappers with a per-type equality proof, or kept until v4?"}
+{"rule": "B001", "match": "PreflightStatus\\.PARTIAL", "block": "PreflightStatus.PARTIAL becomes READY or NOT_READY; either changes the status label the UI, Pulse and the Automation Engine show.", "brief": "READY (the gate behaves as today) or NOT_READY (the run blocks)? Either way keep the undetermined-readiness message."}
+{"rule": "B008", "fix_shape": "^no-public-equivalent$", "block": "The private name has no public equivalent, or the app rebinds it to change the owner's own behaviour. The end state is an ignore that names a tracking issue.", "brief": "Which issue asks the owner (atlanhq/application-sdk for an SDK name) for a public API? The ignore then reads '# conformance: ignore[B008] no public equivalent — tracked in <id>'."}
 ```
