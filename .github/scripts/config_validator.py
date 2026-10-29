@@ -588,7 +588,7 @@ def _resolve_server_vpa_max(
     errs: list[Violation] = []
     sv = cfg.get("serverVpa") or {}
     if not isinstance(sv, dict):
-        return None, None, errs
+        return None, None, [_server_vpa_not_mapping("serverVpa", sv)]
     if (
         sv.get("enabled") is False
         or cfg.get("routeToCommonAPIServer") is True
@@ -596,6 +596,12 @@ def _resolve_server_vpa_max(
     ):
         return None, None, errs
     max_allowed = sv.get("maxAllowed") or {}
+    if not isinstance(max_allowed, dict):
+        return (
+            None,
+            None,
+            [_server_vpa_not_mapping("serverVpa.maxAllowed", max_allowed)],
+        )
     cpu_milli = (
         _safe_parse_cpu(max_allowed["cpu"], "serverVpa.maxAllowed.cpu", errs)
         if "cpu" in max_allowed
@@ -607,6 +613,21 @@ def _resolve_server_vpa_max(
         else None
     )
     return cpu_milli, mem_bytes, errs
+
+
+def _server_vpa_not_mapping(field: str, value: Any) -> Violation:
+    """A non-mapping serverVpa block can't be merged by the chart; report it
+    rather than silently skipping the server cap check."""
+    return Violation(
+        field=field,
+        actual=value,
+        expected="mapping",
+        rule="invalid_type",
+        fix=(
+            f"Make {field} a YAML mapping (got {type(value).__name__}). "
+            "The chart merges it per key; a non-mapping fails at render."
+        ),
+    )
 
 
 def _check_keda(cfg: dict, label: str = "keda") -> list[Violation]:

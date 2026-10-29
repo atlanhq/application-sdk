@@ -410,6 +410,39 @@ serverResources:
     def test_server_vpa_not_clamping_skips_rule(self, extra):
         validate_config(self._SPLIT_SERVER + extra, sdk_version="3.6.0")
 
+    @pytest.mark.parametrize(
+        ("extra", "field"),
+        [
+            ('serverVpa: "100m"\n', "serverVpa"),
+            ("serverVpa: [cpu]\n", "serverVpa"),
+            ("serverVpa:\n  maxAllowed: 100\n", "serverVpa.maxAllowed"),
+            ('serverVpa:\n  maxAllowed: "100m"\n', "serverVpa.maxAllowed"),
+        ],
+    )
+    def test_server_vpa_not_a_mapping_reports_invalid_type(self, extra, field):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(self._SPLIT_SERVER + extra, sdk_version="3.6.0")
+        (v,) = exc.value.violations
+        assert v.rule == "invalid_type"
+        assert v.field == field
+
+    @pytest.mark.parametrize(
+        ("max_allowed", "field"),
+        [
+            ("{cpu: abc}", "serverVpa.maxAllowed.cpu"),
+            ("{memory: 1Zz}", "serverVpa.maxAllowed.memory"),
+        ],
+    )
+    def test_server_vpa_invalid_quantity_reported(self, max_allowed, field):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                self._SPLIT_SERVER + f"serverVpa:\n  maxAllowed: {max_allowed}\n",
+                sdk_version="3.6.0",
+            )
+        assert [(v.rule, v.field) for v in exc.value.violations] == [
+            ("invalid_quantity", field)
+        ]
+
     def test_worker_request_still_checked_against_vpa_max(self):
         cfg = self._SPLIT_SERVER.replace(
             "workerResources:\n  requests: {cpu: 50m",
