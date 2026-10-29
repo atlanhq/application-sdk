@@ -40,13 +40,13 @@ dependencies = [
 sql = [
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "httpx>=0.27.0,<0.29.0",
-    "python-dotenv>=1.1.0,<2.0.0",
+    "python-dotenv>=1.2.2,<2.0.0",  # CVE-2026-28684
 ]
 pandas = ["pandas>=2.2.3,<3.0.0"]
 aws = [
     "boto3>=1.38.6,<2.0.0",
     "httpx>=0.27.0,<0.29.0",
-    "python-dotenv>=1.1.0,<2.0.0",
+    "python-dotenv>=1.2.2,<2.0.0",  # CVE-2026-28684
 ]
 # Never needed to serve a handler: the input-contract models import pyatlan_v9
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
