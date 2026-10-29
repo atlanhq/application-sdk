@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.53.1 (October 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.53.0...v3.53.1
+
+### Bug Fixes
+
+- report a 401 from a customer store as AUTH, not PERMISSION (FND-4409) (#4613) (by @vaibhavatlan in [0510fc8](https://github.com/atlanhq/application-sdk/commit/0510fc8))
+- block on a credential config the object store confirms missing (#4615) (by @mothership-ai[bot] in [81a2dec](https://github.com/atlanhq/application-sdk/commit/81a2dec))
+
+### Chores
+
+- update github-actions (#4609) (by @renovate[bot] in [f1b54c7](https://github.com/atlanhq/application-sdk/commit/f1b54c7))
+- update astral-sh/setup-uv action to v10.3.3 (#4622) (by @renovate[bot] in [e7a7bbc](https://github.com/atlanhq/application-sdk/commit/e7a7bbc))
+- allowlist CVE-2026-115905 (CRITICAL 7d SLA) (#4624) (by @atlan-app-fleet[bot] in [f00287d](https://github.com/atlanhq/application-sdk/commit/f00287d))
+- require temporalio>=1.35.0 to clear the bundled zip crate CVE (BLDX-1670) (#4625) (by @vaibhavatlan in [6f362c8](https://github.com/atlanhq/application-sdk/commit/6f362c8))
+- keep the LoopProbe bound until the load() budget worker records (FND-4438) (#4627) (by @vaibhavatlan in [3e39840](https://github.com/atlanhq/application-sdk/commit/3e39840))
+- allowlist CVE-2026-116587 (HIGH 30d SLA) (#4634) (by @atlan-app-fleet[bot] in [bea5cc1](https://github.com/atlanhq/application-sdk/commit/bea5cc1))
+- check serverResources against serverVpa, not the worker vpa (AUT-1232) (#4633) (by @OnkarVO7 in [e53f233](https://github.com/atlanhq/application-sdk/commit/e53f233))
+
+
 ## v3.53.0 (October 27, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.52.0...v3.53.0
