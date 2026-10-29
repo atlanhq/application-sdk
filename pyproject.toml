@@ -52,7 +52,8 @@ dependencies = [
     "azure-identity>=1.15.0",
     "google-auth>=2.0.0,<3.0.0",
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
-    "temporalio>=1.25.0,<2.0.0",
+    # >=1.35.0: older wheels bundle the zip crate <9.0.5 (CVE-2026-115905)
+    "temporalio>=1.35.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
     # Disk-backed SpillableDict. Core (not the [storage] extra) because the
     # upload hook's referential-integrity (orphan) pass needs it: as an extra,
@@ -73,7 +74,7 @@ Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 [project.optional-dependencies]
 # Backwards-compatibility shims (dapr/temporalio/orjson promoted to core in v3.1)
 workflows = [
-    "temporalio>=1.25.0,<2.0.0",
+    "temporalio>=1.35.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
 ]
 # SQL connectors: SqlMetadataExtractor, SqlQueryExtractor, and any SQL-based connector

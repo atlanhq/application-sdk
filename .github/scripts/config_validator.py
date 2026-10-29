@@ -13,7 +13,9 @@ Rules enforced:
   6. When vpa.enabled=true AND updateMode != "Off": requests.{cpu,memory}
      <= effective vpa.maxAllowed (chart defaults cpu=2000m, memory=18Gi
      when not declared). Skipped in updateMode=Off — VPA only emits
-     recommendations there and doesn't clamp admission.
+     recommendations there and doesn't clamp admission. serverResources is
+     checked against serverVpa.maxAllowed instead (keys the app declares),
+     since the app vpa never targets the server.
   7. requests <= limits per resource.
   8. vpa.minAllowed         <= vpa.maxAllowed per resource.
   9. keda.minReplicaCount   <= keda.maxReplicaCount.
@@ -561,9 +563,71 @@ def _check_resources(
     )
     errs = _check_resource_block(cfg, "resources", vpa_cpu, vpa_mem)
     if bools.get("splitDeploymentEnabled") is True:
-        for k in ("serverResources", "workerResources"):
-            errs += _check_resource_block(cfg, k, vpa_cpu, vpa_mem)
+        errs += _check_resource_block(cfg, "workerResources", vpa_cpu, vpa_mem)
+        # The app `vpa` targets the worker only; the server has its own VPA
+        # built from `serverVpa` (templates/vpa.yaml), so check it against that.
+        srv_cpu, srv_mem, srv_errs = _resolve_server_vpa_max(cfg)
+        errs += srv_errs
+        errs += _check_resource_block(
+            cfg, "serverResources", srv_cpu, srv_mem, vpa_label="serverVpa"
+        )
     return errs
+
+
+def _resolve_server_vpa_max(
+    cfg: dict,
+) -> tuple[int | None, int | None, list[Violation]]:
+    """Effective serverVpa.maxAllowed (cpu_milli, mem_bytes) for serverResources.
+
+    The chart merges serverVpa per key over global.atlan_app.serverVpa (fleet
+    values, not visible here) over a 300m/500Mi default, so only a key the app
+    declares itself is known in CI; undeclared keys return None (rule skipped).
+    Also None when the server VPA is not rendered (serverVpa.enabled=false,
+    routeToCommonAPIServer=true) or does not clamp (updateMode Off).
+    """
+    errs: list[Violation] = []
+    sv = cfg.get("serverVpa") or {}
+    if not isinstance(sv, dict):
+        return None, None, [_server_vpa_not_mapping("serverVpa", sv)]
+    if (
+        sv.get("enabled") is False
+        or cfg.get("routeToCommonAPIServer") is True
+        or _vpa_update_mode_is_off(sv.get("updateMode"))
+    ):
+        return None, None, errs
+    max_allowed = sv.get("maxAllowed") or {}
+    if not isinstance(max_allowed, dict):
+        return (
+            None,
+            None,
+            [_server_vpa_not_mapping("serverVpa.maxAllowed", max_allowed)],
+        )
+    cpu_milli = (
+        _safe_parse_cpu(max_allowed["cpu"], "serverVpa.maxAllowed.cpu", errs)
+        if "cpu" in max_allowed
+        else None
+    )
+    mem_bytes = (
+        _safe_parse_memory(max_allowed["memory"], "serverVpa.maxAllowed.memory", errs)
+        if "memory" in max_allowed
+        else None
+    )
+    return cpu_milli, mem_bytes, errs
+
+
+def _server_vpa_not_mapping(field: str, value: Any) -> Violation:
+    """A non-mapping serverVpa block can't be merged by the chart; report it
+    rather than silently skipping the server cap check."""
+    return Violation(
+        field=field,
+        actual=value,
+        expected="mapping",
+        rule="invalid_type",
+        fix=(
+            f"Make {field} a YAML mapping (got {type(value).__name__}). "
+            "The chart merges it per key; a non-mapping fails at render."
+        ),
+    )
 
 
 def _check_keda(cfg: dict, label: str = "keda") -> list[Violation]:
