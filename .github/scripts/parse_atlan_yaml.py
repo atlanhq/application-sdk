@@ -18,6 +18,8 @@ Outputs (single-line, append-safe):
     release_model      ``cd`` (default) or ``semver`` — controls publish-to-all gating
     sdk_version        atlan-application-sdk version pinned in uv.lock (or empty)
     entrypoints  JSON-encoded list (single line) or empty string
+    app_sync_body      JSON body for ``POST /marketplace/apps`` (single line) when
+                       ``tags`` is set, else empty string
     deploy_config      YAML-dumped ``deploy:`` block (multiline; heredoc'd by caller)
 
 Validation errors are emitted as ``::error::`` annotations and exit non-zero.
@@ -136,6 +138,38 @@ def _validate_entrypoints(wp_val: Any) -> str:
     return json.dumps(wp_val, separators=(",", ":"))
 
 
+def _app_sync_body(d: dict[str, Any]) -> str:
+    """Return the ``POST /marketplace/apps`` body that syncs ``tags``, or ``""``.
+
+    The publish route creates a version and has no ``tags`` field, so app-level
+    tags reach the marketplace only through this app update. Local marketplace
+    requires ``name``, ``display_name`` and ``app_type`` on every call, so they
+    ride along unchanged from atlan.yaml. Apps without ``tags`` get no body and
+    publish exactly as before.
+    """
+    tags = d.get("tags")
+    if not tags:
+        return ""
+    if not isinstance(tags, list) or not all(
+        isinstance(t, str) and t.strip() for t in tags
+    ):
+        _err("atlan.yaml tags must be a list of non-empty strings")
+    for key in ("app_id", "display_name", "type"):
+        value = d.get(key)
+        if not isinstance(value, str) or not value.strip():
+            _err(f'atlan.yaml tags need a non-empty "{key}" to sync')
+    return json.dumps(
+        {
+            "app_id": d["app_id"],
+            "name": d["name"],
+            "display_name": d["display_name"],
+            "app_type": d["type"],
+            "tags": tags,
+        },
+        separators=(",", ":"),
+    )
+
+
 def _validate_env_overrides(deploy_val: Any) -> None:
     """Validate ``deploy.env_overrides`` shape, if present.
 
@@ -248,6 +282,7 @@ def parse(
     )
 
     entrypoints = _validate_entrypoints(d.get("entrypoints"))
+    app_sync_body = _app_sync_body(d)
     sdk_version = _read_sdk_version_from_uv_lock(uv_lock_path)
 
     return {
@@ -259,6 +294,7 @@ def parse(
         "release_model": release_model,
         "sdk_version": sdk_version,
         "entrypoints": entrypoints,
+        "app_sync_body": app_sync_body,
         "deploy_config": deploy_config,
     }
 

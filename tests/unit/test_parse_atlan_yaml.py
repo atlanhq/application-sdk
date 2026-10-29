@@ -55,6 +55,7 @@ def test_parse_minimal_atlan_yaml(tmp_path, monkeypatch):
         out["entrypoints"] == ""
     )  # absent → consumers fall back to argo_package_names
     assert out["deploy_config"] == ""
+    assert out["app_sync_body"] == ""  # no tags → publish never calls /marketplace/apps
 
 
 def test_parse_emits_deploy_config_yaml(tmp_path, monkeypatch):
@@ -358,3 +359,63 @@ def test_env_overrides_with_no_deploy_block_is_fine(tmp_path, monkeypatch):
     _write(tmp_path, {"name": "x", "app_id": "1"})
     out = parse_atlan_yaml.parse()
     assert out["deploy_config"] == ""
+
+
+# ── tags → app sync body ────────────────────────────────────────────────────
+
+
+def test_tags_emit_app_sync_body(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        {
+            "name": "Propagator-Uber",
+            "app_id": "019c",
+            "display_name": "Propagator Uber",
+            "type": "utility",
+            "tags": ["lineage", "custom metadata"],
+        },
+    )
+    out = parse_atlan_yaml.parse()
+    assert "\n" not in out["app_sync_body"]  # single-line GITHUB_OUTPUT value
+    # name is the GM identity, so it is sent as written, not lowercased like app_name.
+    assert json.loads(out["app_sync_body"]) == {
+        "app_id": "019c",
+        "name": "Propagator-Uber",
+        "display_name": "Propagator Uber",
+        "app_type": "utility",
+        "tags": ["lineage", "custom metadata"],
+    }
+
+
+@pytest.mark.parametrize("bad_tags", ["lineage", ["lineage", ""], ["lineage", 3]])
+def test_tags_must_be_list_of_non_empty_strings(tmp_path, monkeypatch, bad_tags):
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        {
+            "name": "x",
+            "app_id": "1",
+            "display_name": "X",
+            "type": "connector",
+            "tags": bad_tags,
+        },
+    )
+    with pytest.raises(AtlanYamlError, match="tags must be a list"):
+        parse_atlan_yaml.parse()
+
+
+@pytest.mark.parametrize("missing", ["app_id", "display_name", "type"])
+def test_tags_require_update_fields(tmp_path, monkeypatch, missing):
+    monkeypatch.chdir(tmp_path)
+    payload = {
+        "name": "x",
+        "app_id": "1",
+        "display_name": "X",
+        "type": "connector",
+        "tags": ["google"],
+    }
+    del payload[missing]
+    _write(tmp_path, payload)
+    with pytest.raises(AtlanYamlError, match=f'non-empty "{missing}"'):
+        parse_atlan_yaml.parse()
