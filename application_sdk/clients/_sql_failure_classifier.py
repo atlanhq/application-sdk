@@ -53,6 +53,12 @@ _AUTH_MSG_HINTS = (
     "login failed",
     "password authentication failed",
     "invalid credentials",
+    # Oracle rejects logins with a generic DatabaseError class.
+    "ora-01017",
+    "invalid username/password",
+    "ora-28000",
+    "ora-28001",
+    "ora-01005",
     # Thrift SASL handshake (impyla, PyHive): the server refused the sign-in.
     # Its transport error class says nothing about auth, so only the message can.
     # "TSocket read 0 bytes" and "Bad status: 3" are left out: impalad sends
