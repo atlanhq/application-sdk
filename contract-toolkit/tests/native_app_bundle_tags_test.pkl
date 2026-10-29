@@ -1,0 +1,26 @@
+// NativeAppBundle.pkl had no `tags`, so multi-entrypoint apps on the legacy
+// bundle could not declare marketplace search tags the way App.pkl apps can.
+
+amends "pkl:test"
+
+import "fixtures/native_app_bundle.pkl" as nativeBundle
+
+local defaultYaml: String = nativeBundle.output.files["atlan.yaml"].text
+
+local taggedYaml: String = (nativeBundle) {
+  tags { "google"; "custom metadata" }
+}.output.files["atlan.yaml"].text
+
+facts {
+  ["A bundle without tags emits no tags key"] {
+    !defaultYaml.contains("tags")
+  }
+
+  ["Bundle tags render as a top-level list right after visibility"] {
+    taggedYaml.contains("visibility: public\ntags:\n- google\n- custom metadata\nbuild_tag: v1\n")
+  }
+
+  ["Tags leave the rest of atlan.yaml unchanged"] {
+    taggedYaml.replaceFirst("tags:\n- google\n- custom metadata\n", "") == defaultYaml
+  }
+}
