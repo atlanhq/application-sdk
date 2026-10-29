@@ -4,9 +4,8 @@
 ``build-and-publish-app.yaml`` certifies every app by running its
 ``tests/unit`` before publish. On one 2-vCPU runner a large suite outgrows the
 job's 30-minute cap, and publish waits on certify long after the image is
-built. This script holds the three decisions the sharded layout needs, so each
-branch has a test (``tests/test_certify_unit_shards.py``; see
-``docs/standards/ci.md``):
+built. This script holds the three decisions the sharded layout needs, out of
+the workflow's ``run:`` blocks (see ``docs/standards/ci.md``):
 
 ``plan``
     How many shards. An explicit ``--override`` wins; otherwise the app's
