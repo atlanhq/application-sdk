@@ -2,6 +2,20 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.53.0] - 2026-10-28
+
+### Features
+
+- declared-source agent_json (format 2), normalized at ingress so apps need no change; refused refs go to the user [FND-4407] (#4610) ([a276a30](https://github.com/atlanhq/application-sdk/commit/a276a30))
+
+### Bug fixes
+
+- retire the Porter CNAB workflow that never ran (FND-4422) (#4623) ([ddaa95b](https://github.com/atlanhq/application-sdk/commit/ddaa95b))
+- stop E012 flagging validators, protocol dunders and build tooling (#4616) ([6e5caef](https://github.com/atlanhq/application-sdk/commit/6e5caef))
+- fix L006, L009 and L002 false positives (#4617) ([e25752b](https://github.com/atlanhq/application-sdk/commit/e25752b))
+- stop E004/E007/E009/E020 false positives with provable exemptions (#4619) ([d6750c1](https://github.com/atlanhq/application-sdk/commit/d6750c1))
+- block on a credential config the object store confirms missing (#4615) ([81a2dec](https://github.com/atlanhq/application-sdk/commit/81a2dec))
+
 ## [0.52.1] - 2026-10-23
 
 ### Bug fixes
