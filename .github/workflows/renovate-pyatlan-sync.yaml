@@ -1,0 +1,176 @@
+name: Sync the conformance lock to a pyatlan floor bump
+
+# FND-4439. renovate.json's `pyatlan` rule raises the SDK's published
+# `pyatlan>=X` floor on every pyatlan release and Mend relocks the ROOT project.
+# The conformance package's own lock is out of Renovate's reach (it does not
+# declare pyatlan; it gets it through atlan-application-sdk from PyPI), and that
+# lock is what relationship_directions.json is built from and pinned to. This
+# moves that lock's pyatlan up to the root's and regenerates the table, so the
+# bump lands as one self-contained PR.
+#
+# Same shape as renovate-lock-cooldown.yaml, for the same reasons:
+#   - Mend stays the PR author, so renovate-auto-approve-reusable.yml's author
+#     condition holds unchanged; the table path is added to this repo's
+#     extra_dep_file_pattern in renovate-auto-approve.yml.
+#   - Two jobs: `sync` resolves and imports the new pyatlan with a read-only
+#     GITHUB_TOKEN; `publish`, the only job that sees the App token, copies the
+#     declared outputs out of the artifact, commits and pushes.
+#   - An App-token push, because a GITHUB_TOKEN push triggers no CI.
+#   - carry_artifact_status.py carries `renovate/artifacts` onto our commit.
+#
+# Majors (renovate/major-pyatlan) are deliberately not handled: the conformance
+# lock cannot take a pyatlan major until an SDK release raises its `<N+1` cap.
+#
+# All branching logic lives in the tested .github/scripts/renovate_pyatlan_sync.py.
+
+on:
+  push:
+    branches:
+      - renovate/pyatlan
+    paths:
+      - "uv.lock"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pyatlan-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync the conformance lock and table to the locked pyatlan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # ACTOR: the same Renovate identities the approval gate accepts as PR
+    # authors (renovate_approval_conditions.RENOVATE_AUTHORS, pinned by a drift
+    # test). Defence in depth, not a control — see renovate-lock-cooldown.yaml.
+    # RE-ENTRANCY: our own push arrives as atlan-app-fleet[bot]; it changes no
+    # root uv.lock so the paths filter already skips it, and the subject check
+    # is the belt to that brace.
+    if: >-
+      ${{ contains(fromJSON('["atlan-app-fleet[bot]", "renovate[bot]"]'), github.actor)
+      && !startsWith(github.event.head_commit.message, 'chore(deps): sync the conformance lock') }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Fetch the base branch
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+
+      # Same uv as renovate-lock-cooldown.yaml, so both lanes write the same
+      # lock format.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+
+      # `--with packaging`, pinned: the up-only comparison needs PEP 440
+      # parsing. `--no-project` keeps this off the repo's own environment.
+      - name: Sync the conformance lock
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          uv run --no-project --with 'packaging==26.3' \
+            python .github/scripts/renovate_pyatlan_sync.py \
+            --baseline-ref "origin/$BASE_BRANCH" \
+            --no-commit
+
+      # Exactly the script's OUTPUT_PATHS — a test pins the two together.
+      - name: Upload the synced outputs
+        id: upload-outputs
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: pyatlan-sync
+          path: |
+            packages/conformance/uv.lock
+            packages/conformance/conformance/data/relationship_directions.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+      - name: Wait before the upload retry
+        if: steps.upload-outputs.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload the synced outputs (retry)
+        if: steps.upload-outputs.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: pyatlan-sync-retry
+          path: |
+            packages/conformance/uv.lock
+            packages/conformance/conformance/data/relationship_directions.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish:
+    name: Commit and push the synced outputs
+    needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # For the renovate/artifacts carry-forward, written with GITHUB_TOKEN.
+      statuses: write
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+          # Contents only, as in renovate-lock-cooldown.yaml (FND-395).
+          permission-contents: write
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.sha }}
+
+      - name: Download the synced outputs
+        id: download-outputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
+        with:
+          pattern: pyatlan-sync*
+          merge-multiple: true
+          path: ${{ runner.temp }}/pyatlan-sync
+
+      - name: Wait before the download retry
+        if: steps.download-outputs.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download the synced outputs (retry)
+        if: steps.download-outputs.outcome == 'failure'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: pyatlan-sync*
+          merge-multiple: true
+          path: ${{ runner.temp }}/pyatlan-sync
+
+      # Stdlib only: nothing from the new dependency set runs beside the token.
+      - name: Commit the synced outputs
+        run: python3 .github/scripts/renovate_pyatlan_sync.py --apply-from "$RUNNER_TEMP/pyatlan-sync"
+
+      # Unchanged outputs commit nothing, so this is a no-op push.
+      - name: Push
+        run: git push origin "HEAD:$GITHUB_REF"
+
+      - name: Carry renovate/artifacts forward
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/carry_artifact_status.py \
+            --target-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
