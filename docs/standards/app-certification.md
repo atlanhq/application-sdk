@@ -26,6 +26,23 @@ These are the layers that are **identical for every app**. App-specific layers
 app's own live stack (databases, Dapr, Temporal) and secrets, so they stay in
 the app's own CI (`tests.yaml`, the marketplace-releases e2e reusables, …).
 
+## Sharded unit tests
+
+Unit tests run in parallel `certify-unit` legs, then `certify` folds the legs'
+results and combined coverage into the verdict:
+
+```
+certify-plan ─> certify-unit (1..N in parallel) ─> certify (v3 shape, contract drift, verdict)
+```
+
+- **N is automatic.** `certify-plan` reads the app's committed pytest-split
+  `.test_durations` and gives one leg per ~5 minutes of recorded
+  `tests/unit` time, capped at 10. An app with no durations file gets one leg.
+- **Pin it** with the `unit_test_shards` input (1–10). 0 means auto.
+- **Generate the file** with `uv run --with pytest-split pytest tests/unit --store-durations`
+  and commit it. A stale file only unbalances the legs, never skips a test.
+- A leg with no result (crashed, timed out, upload lost) counts as failed.
+
 ## Why centralized (no per-app wiring)
 
 The earlier model required each app to opt in by passing
