@@ -28,6 +28,11 @@ order is load-bearing for cost as well as for the log):
      ``/gate-check`` (FND-4175, :func:`releases_in_flight`), unless overridden
      by ``RELEASE_FREEZE``
 
+A PR by ``connectivity-ai[bot]`` on a ``vuln-agent/`` branch in application-sdk
+(the connector-pulse vuln agent, FND-4439) replaces (a) with
+:func:`is_vuln_agent_pr` and skips (f), which only Renovate stamps; (b)–(e) and
+(g)–(i) apply unchanged.
+
 A PR by ``atlan-conformance-sync[bot]`` on ``bot/conformance-resync`` never reaches
 (a)–(g): :func:`process_pr` hands it to ``resync_approval_conditions``, whose
 approval rests on an independent byte-identical ``bootstrap --resync`` render
@@ -127,6 +132,23 @@ RENOVATE_AUTHORS = (FLEET_AUTHOR, MEND_AUTHOR)
 #: lock. Naming the engine per repo means a Mend PR in a fleet repo is refused
 #: on identity, before the question of whether it happens to look green.
 MEND_REPOS = frozenset({"atlanhq/application-sdk"})
+
+#: The connector-pulse vuln agent (FND-4439): the GitHub App that opens
+#: dependency-fix PRs for findings it traced to this SDK. It is not a Renovate
+#: engine, so it never passes condition (a); :func:`is_vuln_agent_pr` gives its
+#: PRs their own entry, narrowed three ways because the same App also opens
+#: non-dependency PRs elsewhere (conformance remediation, preflight fixes).
+VULN_AGENT_AUTHOR = "connectivity-ai[bot]"
+
+#: Head-ref prefix every vuln-agent PR is opened on. Another of the App's lanes
+#: on a different branch never reaches the vuln-agent path.
+VULN_AGENT_BRANCH_PREFIX = "vuln-agent/"
+
+#: Repos where vuln-agent PRs may be approved, compared case-insensitively.
+#: Only application-sdk: app repos need no code-owner approval to merge, and
+#: this script runs at ``@main`` for every consumer repo, so the allowance must
+#: not travel with it.
+VULN_AGENT_REPOS = frozenset({"atlanhq/application-sdk"})
 
 #: Renovate's own artifact-update status context (condition f).
 ARTIFACT_CONTEXT = "renovate/artifacts"
@@ -244,6 +266,18 @@ APPROVAL_BODY = (
     "HEAD's required checks are green."
 )
 
+#: Same stable signature as :data:`APPROVAL_BODY`, so condition (g) and the
+#: fleet dashboard scanner treat both alike; only the explanation differs.
+VULN_AGENT_APPROVAL_BODY = (
+    f"{APPROVAL_SIGNATURE} all required CI checks passed.\n"
+    "\n"
+    "This is an automated code-owner approval posted by `atlan-ci` for a\n"
+    "dependency-only vulnerability-fix PR opened by the connector-pulse vuln\n"
+    f"agent (`{VULN_AGENT_AUTHOR}`, `{VULN_AGENT_BRANCH_PREFIX}*`). It is\n"
+    "automatically dismissed on any new push and re-posted once the new\n"
+    "HEAD's required checks are green."
+)
+
 #: ``gh pr checks`` exit code for "checks pending" (``gh pr checks --help``,
 #: "Additional exit codes"). The only exit the fan-in wait keeps polling on;
 #: pass (0) and fail (1) both end the wait and are judged by condition (e).
@@ -354,6 +388,25 @@ def check_author(pr: str, author: str, repo: str) -> tuple[bool, str]:
             "the Mend app is still installed on this repo and should not be.",
         )
     return True, ""
+
+
+def is_vuln_agent_pr(meta: dict[str, Any], repo: str) -> bool:
+    """True iff ``meta`` is a vuln-agent PR this repo may approve: the vuln
+    agent's App, on a ``vuln-agent/`` branch, in a :data:`VULN_AGENT_REPOS` repo.
+
+    All three, or the PR takes the Renovate path and fails condition (a). The
+    head must also be this repo, not a fork: a fork can name its branch freely.
+    """
+    author = str(((meta.get("user") or {}).get("login")) or "")
+    head = meta.get("head") or {}
+    ref = str(head.get("ref") or "")
+    head_repo = str(((head.get("repo") or {}).get("full_name")) or "")
+    return (
+        author == VULN_AGENT_AUTHOR
+        and ref.startswith(VULN_AGENT_BRANCH_PREFIX)
+        and repo.lower() in VULN_AGENT_REPOS
+        and head_repo.lower() == repo.lower()
+    )
 
 
 def check_open(pr: str, state: str, draft: bool) -> tuple[bool, str]:
@@ -1045,7 +1098,9 @@ def fetch_reviews(repo: str, pr: str, runner: Runner) -> list[Any]:
     return payload
 
 
-def approve(repo: str, pr: str, eval_sha: str, runner: Runner) -> None:
+def approve(
+    repo: str, pr: str, eval_sha: str, runner: Runner, *, body: str = APPROVAL_BODY
+) -> None:
     """Post the atlan-ci code-owner approval ON ``eval_sha``. A failure aborts
     the step.
 
@@ -1068,7 +1123,7 @@ def approve(repo: str, pr: str, eval_sha: str, runner: Runner) -> None:
             "-f",
             "event=APPROVE",
             "-f",
-            f"body={APPROVAL_BODY}",
+            f"body={body}",
         ],
         check=True,
     )
@@ -1103,13 +1158,16 @@ def process_pr(
     # other PR falls through to the Renovate conditions below, unchanged.
     if resync.is_candidate(meta):
         return resync.process_resync_pr(repo, pr, eval_sha, meta, runner)
+    # Vuln-agent PRs replace condition (a) with is_vuln_agent_pr and skip (f),
+    # a Renovate-only status; every other condition applies to them unchanged.
+    vuln_agent = is_vuln_agent_pr(meta, repo)
     author = str(((meta.get("user") or {}).get("login")) or "")
     state = str(meta.get("state") or "")
     draft = bool(meta.get("draft"))
     head_sha = str(((meta.get("head") or {}).get("sha")) or "")
 
     for ok, message in (
-        check_author(pr, author, repo),
+        (True, "") if vuln_agent else check_author(pr, author, repo),
         check_open(pr, state, draft),
         check_head_unchanged(pr, head_sha, eval_sha),
     ):
@@ -1161,15 +1219,16 @@ def process_pr(
         return False
     print(f"PR #{pr}: all required checks are green.")
 
-    # f. Renovate's artifact status must be green.
-    artifact_state = fetch_artifact_state(repo, eval_sha, runner)
-    if artifact_state != "success":
-        print(
-            f"PR #{pr}: {ARTIFACT_CONTEXT} is '{artifact_state}', "
-            "not 'success' — skipping."
-        )
-        return False
-    print(f"PR #{pr}: {ARTIFACT_CONTEXT} is green.")
+    # f. Renovate's artifact status must be green (Renovate PRs only).
+    if not vuln_agent:
+        artifact_state = fetch_artifact_state(repo, eval_sha, runner)
+        if artifact_state != "success":
+            print(
+                f"PR #{pr}: {ARTIFACT_CONTEXT} is '{artifact_state}', "
+                "not 'success' — skipping."
+            )
+            return False
+        print(f"PR #{pr}: {ARTIFACT_CONTEXT} is green.")
 
     # g. Idempotency.
     if count_signature_approvals(fetch_reviews(repo, pr, runner)):
@@ -1194,8 +1253,12 @@ def process_pr(
         print(message)
         return False
 
-    approve(repo, pr, eval_sha, runner)
-    print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
+    if vuln_agent:
+        approve(repo, pr, eval_sha, runner, body=VULN_AGENT_APPROVAL_BODY)
+        print(f"✅ Approved PR #{pr} as atlan-ci (vuln-agent auto-approval).")
+    else:
+        approve(repo, pr, eval_sha, runner)
+        print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
     return True
 
 

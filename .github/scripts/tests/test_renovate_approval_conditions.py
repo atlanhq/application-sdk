@@ -1807,3 +1807,95 @@ class TestReleaseFreeze:
         # A PR that fails an earlier condition never costs the freeze lookup.
         _, fake, _ = run_main(monkeypatch, files=file_payload("src/app.py"))
         assert not any("/pulls?state=open" in p for p in fake.api_paths)
+
+
+# ---------------------------------------------------------------------------
+# Vuln-agent PRs (FND-4439)
+# ---------------------------------------------------------------------------
+
+
+SDK_REPO = "atlanhq/application-sdk"
+
+
+def vuln_payload(
+    *,
+    author=gate.VULN_AGENT_AUTHOR,
+    ref="vuln-agent/fix-cve-2026-1",
+    head_repo=SDK_REPO,
+):
+    meta = pr_payload(author=author)
+    meta["head"] = {"sha": SHA, "ref": ref, "repo": {"full_name": head_repo}}
+    return meta
+
+
+class TestVulnAgent:
+    def test_a_dependency_only_vuln_pr_in_the_sdk_is_approved(
+        self, monkeypatch, capsys
+    ):
+        # No renovate/artifacts status at all: condition (f) is Renovate-only.
+        code, fake, log = run_main(
+            monkeypatch,
+            env={"REPO": SDK_REPO},
+            capsys=capsys,
+            meta=vuln_payload(),
+            files=file_payload(
+                "pyproject.toml", "uv.lock", "packages/api/pyproject.toml"
+            ),
+            status=status_payload(),
+        )
+        assert code == 0
+        assert fake.approved_prs == ["7"]
+        assert "vuln-agent auto-approval" in log
+        body = next(a for a in fake.approvals[0] if a.startswith("body="))
+        assert body.startswith(f"body={gate.APPROVAL_SIGNATURE}")
+        assert gate.VULN_AGENT_AUTHOR in body
+
+    @pytest.mark.parametrize(
+        ("repo", "meta"),
+        [
+            # The script runs @main fleet-wide; the allowance must not travel.
+            ("atlanhq/atlan-gcs-app", vuln_payload(head_repo="atlanhq/atlan-gcs-app")),
+            # The same App's other lanes open PRs on other branches.
+            (SDK_REPO, vuln_payload(ref="fix/preflight-probe")),
+            # Any other author on the branch is not the vuln agent.
+            (SDK_REPO, vuln_payload(author="someone")),
+            # A fork can name its branch freely.
+            (SDK_REPO, vuln_payload(head_repo="someone/application-sdk")),
+        ],
+    )
+    def test_anything_short_of_all_three_takes_the_renovate_path(
+        self, monkeypatch, repo, meta
+    ):
+        _, fake, _ = run_main(
+            monkeypatch,
+            env={"REPO": repo},
+            meta=meta,
+            files=file_payload("uv.lock"),
+            status=status_payload(),
+        )
+        assert fake.approved_prs == []
+
+    def test_a_non_dependency_file_still_withholds(self, monkeypatch):
+        _, fake, _ = run_main(
+            monkeypatch,
+            env={"REPO": SDK_REPO},
+            meta=vuln_payload(),
+            files=file_payload("uv.lock", "application_sdk/main.py"),
+            status=status_payload(),
+        )
+        assert fake.approved_prs == []
+
+    def test_red_required_checks_still_withhold(self, monkeypatch):
+        _, fake, _ = run_main(
+            monkeypatch,
+            env={"REPO": SDK_REPO},
+            meta=vuln_payload(),
+            files=file_payload("uv.lock"),
+            status=status_payload(),
+            checks_exit=1,
+        )
+        assert fake.approved_prs == []
+
+    def test_is_vuln_agent_pr_compares_repo_names_case_insensitively(self):
+        meta = vuln_payload(head_repo="AtlanHQ/Application-SDK")
+        assert gate.is_vuln_agent_pr(meta, "AtlanHQ/application-sdk")
