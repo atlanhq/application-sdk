@@ -8,15 +8,6 @@
     "HIGH": 30
   },
   "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
-  "CVE-2026-115905": {
-    "package": "zip",
-    "severity": "CRITICAL",
-    "reason": "Case 2: zip is vendored inside temporalio; clears when temporalio ships zip >= 9.0.5.",
-    "expires": "2026-11-05",
-    "added_by": "@atlan-app-fleet (vuln-triage)",
-    "case": 2,
-    "ticket": "BLDX-1670"
-  },
   "CVE-2026-116587": {
     "package": "dapr-daprd-1.18",
     "severity": "HIGH",
