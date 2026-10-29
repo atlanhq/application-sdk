@@ -257,7 +257,7 @@ jobs:
         # each successful sync, which is what makes a failed sync self-healing
         # (see the soft-fail note above). Leaving base_ref pinned here would
         # defeat that and re-attach the same issues to every later release.
-        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # v0.18.1
+        uses: linear/linear-release-action@dd4fc407f860b9460d2cf0b3fb1edd8985cf443f # v0.18.2
         with:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
           version: ${{ steps.meta.outputs.version }}
