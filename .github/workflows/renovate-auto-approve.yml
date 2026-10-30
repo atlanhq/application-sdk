@@ -83,5 +83,11 @@ jobs:
       # packages/conformance/ source, outside the built-in allowlist, so declare
       # them here as auto-approvable dependency files. Kept in this repo's caller
       # rather than the shared reusable workflow — the path is SDK-specific.
-      extra_dep_file_pattern: 'packages/conformance/conformance/bootstrap/templates/.+\.ya?ml'
+      # relationship_directions.json (FND-4439) is regenerated from the locked
+      # pyatlan by the pyatlan floor lane and the lock refresh. Safe to approve
+      # because it is not trusted on its own: the drift test
+      # packages/conformance/tests/test_relationship_direction.py::test_committed_table_matches_pinned_pyatlan
+      # rebuilds the table from the locked pyatlan inside SDK Gate (a required
+      # check), so a hand-edited table fails before this gate ever approves.
+      extra_dep_file_pattern: 'packages/conformance/conformance/bootstrap/templates/.+\.ya?ml|packages/conformance/conformance/data/relationship_directions\.json'
     secrets: inherit
