@@ -52,7 +52,7 @@ aws = [
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
 # calls. Declared so those function-level imports are an extra's, as on the worker.
 pyatlan = [
-    "pyatlan>=11.5.0,<12",
+    "pyatlan>=11.6.0,<12",
     # pyatlan 11.5.0 already requires authlib~=1.9.1 on Python >=3.10. Published
     # here too so a resolver that ignores requires-python cannot pick pyatlan's
     # py3.9 authlib branch for this wheel.
