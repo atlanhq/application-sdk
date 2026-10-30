@@ -18,9 +18,9 @@ there a verdict on the live head that should carry an approval, and is that
 approval missing? Everything after that is shared: the dry-run stop, the quota
 pre-flight, the staleness rule, and reporting.
 
-The second adapter (`GateSource`, FND-4439) covers the dependency-PR gate
-(`renovate_approval_conditions.py`): Renovate PRs and the connector-pulse vuln
-agent's `vuln-agent/` PRs. The gate posts its approval from runs that fire only
+The second adapter (`GateSource`, FND-4439) covers the connector-pulse vuln
+agent's `vuln-agent/` PRs, which the dependency-PR gate
+(`renovate_approval_conditions.py`) approves. The gate posts its approval from runs that fire only
 when a check on the head completes, so an approval it lost was never retried.
 `GateSource` approves nothing itself: it re-runs the gate's own `process_pr`
 on the head, so every gate condition decides exactly as it would have.
@@ -145,15 +145,16 @@ SKIPPED = "skipped"
 
 # The review sources whose `atlan-ci` approvals this sweep restores.
 LENS = "lens"
-# The dependency-PR gate (renovate_approval_conditions.py): Renovate PRs and the
-# vuln agent's PRs. Its approval is posted by the gate's own run, which fires
-# only when a check on the head completes, so one lost to a spent quota or a
-# failed POST is never retried unless another check happens to finish.
+# The dependency-PR gate (renovate_approval_conditions.py), for the vuln agent's
+# PRs. Its approval is posted by the gate's own run, which fires only when a
+# check on the head completes, so one lost to a spent quota or a failed POST is
+# never retried unless another check happens to finish.
 GATE = "dependency gate"
 
-# Head-ref prefixes whose PRs the gate can approve. Anything else is never
-# handed to it, so the sweep spends nothing on ordinary PRs.
-GATE_BRANCH_PREFIXES = ("renovate/", "vuln-agent/")
+# Head-ref prefixes this sweep re-drives the gate for: the vuln agent's only.
+# Renovate PRs are left to the gate's own runs. Anything else is never handed
+# to the gate, so the sweep spends nothing on ordinary PRs.
+GATE_BRANCH_PREFIXES = ("vuln-agent/",)
 
 # How long after the head commit the gate's own run is given before the sweep
 # re-drives it. Racing it is harmless (condition g makes a second approval a

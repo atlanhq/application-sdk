@@ -1410,9 +1410,10 @@ def run_gate_sweep(gh, stub, **kwargs):
     return run_sweep(gh, gate=gate, **kwargs)
 
 
-def test_gate_candidates_need_a_gate_branch_a_green_rollup_and_no_draft():
+def test_gate_candidates_need_a_vuln_agent_branch_a_green_rollup_and_no_draft():
     gh = gate_gh(
         nodes=[
+            # Renovate PRs are left to the gate's own runs.
             gate_node(number=1, ref="renovate/lock-file-maintenance"),
             gate_node(number=2, ref="vuln-agent/fix-deps"),
             gate_node(number=3, ref="feat/something"),
@@ -1422,7 +1423,7 @@ def test_gate_candidates_need_a_gate_branch_a_green_rollup_and_no_draft():
         ]
     )
     heads = reconcile.gate_candidate_heads(REPO, gh)
-    assert sorted(n for n, _ in heads) == [1, 2]
+    assert sorted(n for n, _ in heads) == [2]
 
 
 def test_a_lost_gate_approval_is_re_driven_through_the_gate_itself():
