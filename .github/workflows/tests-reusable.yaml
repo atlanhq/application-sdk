@@ -977,8 +977,10 @@ jobs:
   api-member:
     name: Hosted api member
     needs: detect-api-member
+    # Implicit success() spans queue-proof, which skips outside a merge queue.
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      !cancelled() && needs.detect-api-member.result == 'success' &&
       needs.detect-api-member.outputs.present == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
