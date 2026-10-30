@@ -18,7 +18,14 @@ there a verdict on the live head that should carry an approval, and is that
 approval missing? Everything after that is shared: the dry-run stop, the quota
 pre-flight, the staleness rule, and reporting.
 
-sdk-review used to be a second adapter here. Its verdict path is retired
+The second adapter (`GateSource`, FND-4439) covers the dependency-PR gate
+(`renovate_approval_conditions.py`): Renovate PRs and the connector-pulse vuln
+agent's `vuln-agent/` PRs. The gate posts its approval from runs that fire only
+when a check on the head completes, so an approval it lost was never retried.
+`GateSource` approves nothing itself: it re-runs the gate's own `process_pr`
+on the head, so every gate condition decides exactly as it would have.
+
+sdk-review used to be a further adapter here. Its verdict path is retired
 (#4138), and the workflows that cleared its `sdk-review-approved` label when an
 approval stopped counting are gone, so a reconciler still acting on that label
 would have no invalidators behind it. It was removed rather than kept as a
@@ -90,6 +97,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -99,6 +107,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+import renovate_approval_conditions as dep_gate  # noqa: E402
 
 # All of these need the sys.path bootstrap above.
 from lens import approve as lens_approve  # noqa: E402
@@ -133,8 +143,22 @@ FAILED = "failed"
 DEFERRED = "deferred"
 SKIPPED = "skipped"
 
-# The review source whose `atlan-ci` approvals this sweep restores.
+# The review sources whose `atlan-ci` approvals this sweep restores.
 LENS = "lens"
+# The dependency-PR gate (renovate_approval_conditions.py): Renovate PRs and the
+# vuln agent's PRs. Its approval is posted by the gate's own run, which fires
+# only when a check on the head completes, so one lost to a spent quota or a
+# failed POST is never retried unless another check happens to finish.
+GATE = "dependency gate"
+
+# Head-ref prefixes whose PRs the gate can approve. Anything else is never
+# handed to it, so the sweep spends nothing on ordinary PRs.
+GATE_BRANCH_PREFIXES = ("renovate/", "vuln-agent/")
+
+# How long after the head commit the gate's own run is given before the sweep
+# re-drives it. Racing it is harmless (condition g makes a second approval a
+# no-op), so this only saves a wasted evaluation per fresh push.
+GATE_MIN_AGE = timedelta(minutes=15)
 
 # A dry run's reason for a PR it would have approved. The job summary lists these.
 DRY_RUN_REASON = "would reconcile (dry run)"
@@ -142,6 +166,7 @@ DRY_RUN_REASON = "would reconcile (dry run)"
 # How the source's standing verdict is named in annotations.
 VERDICT_NAMES = {
     LENS: "a lens ready-to-merge verdict",
+    GATE: "a green dependency-only PR",
 }
 
 
@@ -607,6 +632,234 @@ class LensSource:
         return Owed(number, LENS, age, post)
 
 
+# One GraphQL query for every open PR's head ref, draft flag and the combined
+# check state of its head commit: the gate source's free prefilter.
+GATE_CANDIDATES_QUERY = """
+query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: 100, after: $endCursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        isDraft
+        headRefName
+        headRefOid
+        commits(last: 1) {
+          nodes { commit { oid committedDate statusCheckRollup { state } } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def gate_candidate_heads(repo: str, runner: Runner) -> dict[tuple[int, str], str]:
+    """When the head was committed, keyed by (PR number, head SHA), for every
+    open, non-draft PR on a :data:`GATE_BRANCH_PREFIXES` branch whose head's
+    combined check state is SUCCESS.
+
+    SUCCESS of every check, not just the required ones, is deliberately
+    stricter than the gate's condition (e): a PR with any red check is left to
+    the gate's own runs rather than re-evaluated every tick. A failed read reds
+    the run, as the PR listing does.
+    """
+    owner, name = repo.split("/", 1)
+    result = run_gh(
+        runner,
+        [
+            "gh",
+            "api",
+            "graphql",
+            "--paginate",
+            "-f",
+            f"query={GATE_CANDIDATES_QUERY}",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"name={name}",
+            "--jq",
+            ".data.repository.pullRequests.nodes[] | tojson",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(
+            f"::error::failed to list dependency-PR heads for {repo}: {result.stderr}"
+        )
+    heads: dict[tuple[int, str], str] = {}
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        node = json.loads(line)
+        head = node.get("headRefOid") or ""
+        ref = node.get("headRefName") or ""
+        if not head or node.get("isDraft") or not ref.startswith(GATE_BRANCH_PREFIXES):
+            continue
+        for commit_node in (node.get("commits") or {}).get("nodes") or []:
+            commit = commit_node.get("commit") or {}
+            rollup = (commit.get("statusCheckRollup") or {}).get("state")
+            if commit.get("oid") == head and rollup == "SUCCESS":
+                heads[(int(node["number"]), head)] = commit.get("committedDate") or ""
+    return heads
+
+
+#: The caller whose ``extra_dep_file_pattern`` the gate runs with in this repo.
+GATE_CALLER_WORKFLOW = Path(".github/workflows/renovate-auto-approve.yml")
+
+_EXTRA_PATTERN_RE = re.compile(
+    r"^\s*extra_dep_file_pattern:\s*(['\"])(?P<pattern>.*)\1\s*$", re.MULTILINE
+)
+
+
+def caller_extra_pattern(path: Path = GATE_CALLER_WORKFLOW) -> str:
+    """The ``extra_dep_file_pattern`` the gate's caller passes, read from the
+    workflow file itself so the sweep can never drift from the gate's own run.
+
+    Empty when the file or the line is missing. That is the strict direction:
+    the built-in allowlist is a subset of the extended one, so the sweep can
+    only decline more than the gate would, never approve more.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = _EXTRA_PATTERN_RE.search(text)
+    return match.group("pattern") if match else ""
+
+
+def approver_runner(runner: Runner, approver_token: str) -> Runner:
+    """``runner`` with the one gate APPROVE routed to the ``atlan-ci`` PAT.
+
+    Every read the gate makes stays on the fleet App token already in GH_TOKEN,
+    so the sweep spends ``atlan-ci``'s quota only on the approval itself, the
+    same split lens uses.
+    """
+
+    def run(cmd, **kwargs):
+        if (
+            cmd[1:4] == ["api", "-X", "POST"]
+            and len(cmd) > 4
+            and cmd[4].endswith("/reviews")
+        ):
+            kwargs["env"] = {**os.environ, "GH_TOKEN": approver_token}
+        return runner(cmd, **kwargs)
+
+    return run
+
+
+class GateSource:
+    """Re-drives the dependency-PR gate for a PR whose approval went missing.
+
+    Owed only when the prefilter passed (gate branch, not a draft, every check
+    on the head green, head at least :data:`GATE_MIN_AGE` old) and no gate-signed
+    ``atlan-ci`` review on the head is APPROVED (healthy: a no-op) or DISMISSED
+    (withdrawn: only a new gate run may approve it again).
+
+    The post does not approve anything itself. It runs the gate's own
+    ``process_pr`` on the head, so every gate condition (author or vuln-agent
+    identity, dependency files only, required checks, artifacts, release
+    freeze, idempotency) decides exactly as it does in the gate's own run.
+    """
+
+    def __init__(
+        self,
+        repo: str,
+        runner: Runner,
+        *,
+        approver_token: str,
+        extra_pattern: str = "",
+        freeze_mode: str = dep_gate.FREEZE_AUTO,
+        process_pr: Callable[..., bool] = dep_gate.process_pr,
+    ) -> None:
+        self.repo = repo
+        self.runner = runner
+        self.approver_token = approver_token
+        self.extra_pattern = extra_pattern
+        self.freeze_mode = freeze_mode
+        self.process_pr = process_pr
+
+    @classmethod
+    def from_env(cls, repo: str, runner: Runner) -> GateSource:
+        return cls(
+            repo,
+            runner,
+            approver_token=os.environ.get("APPROVER_TOKEN", ""),
+            extra_pattern=caller_extra_pattern(),
+            freeze_mode=dep_gate.parse_freeze_mode(
+                os.environ.get("RELEASE_FREEZE", "")
+            ),
+        )
+
+    def verdict(
+        self,
+        pr: dict,
+        candidates: dict[tuple[int, str], str],
+        *,
+        stale_after: timedelta,
+        now: datetime,
+    ) -> Verdict:
+        """None when the prefilter did not pass, or when the head is approved."""
+        number = pr["number"]
+        head = ((pr.get("head") or {}).get("sha") or "").strip()
+        if not head or (number, head) not in candidates:
+            return None
+        age = comment_age({"created_at": candidates[(number, head)]}, now)
+        if age is None or age < GATE_MIN_AGE:
+            return None
+
+        try:
+            reviews = dep_gate.fetch_reviews(self.repo, str(number), self.runner)
+        except dep_gate.resync.GhError:
+            return _blocked_outcome(
+                number,
+                "the review listing is unreadable, so it is unknowable "
+                "whether an approval already exists",
+                age,
+                stale_after,
+                GATE,
+            )
+        on_head = [
+            r
+            for r in reviews
+            if (r.get("user") or {}).get("login") == dep_gate.APPROVER_LOGIN
+            and r.get("commit_id") == head
+            and (r.get("body") or "").startswith(dep_gate.APPROVAL_SIGNATURE)
+        ]
+        if any(r.get("state") == "APPROVED" for r in on_head):
+            return None
+        if any(r.get("state") == "DISMISSED" for r in on_head):
+            return Outcome(
+                number,
+                SKIPPED,
+                "a gate approval on this head was withdrawn; only a new gate "
+                "run may approve it again",
+                GATE,
+            )
+
+        def post() -> tuple[str, str]:
+            try:
+                approved = self.process_pr(
+                    self.repo,
+                    str(number),
+                    head,
+                    self.extra_pattern,
+                    approver_runner(self.runner, self.approver_token),
+                    freeze_mode=self.freeze_mode,
+                )
+            except dep_gate.resync.GhError as exc:
+                return FAILED, f"the gate run failed: {exc}"
+            except subprocess.CalledProcessError as exc:
+                return FAILED, f"the approval POST failed: {exc}"
+            if approved:
+                return RECONCILED, "the gate re-ran and approved the head"
+            return SKIPPED, "the gate re-ran and declined (its reason is logged above)"
+
+        return Owed(number, GATE, age, post)
+
+
 def sweep(
     repo: str,
     *,
@@ -615,6 +868,7 @@ def sweep(
     now: datetime | None = None,
     dry_run: bool = False,
     lens: LensSource | None = None,
+    gate: GateSource | None = None,
     only_pr: int | None = None,
 ) -> list[Outcome]:
     """Reconcile every open PR whose standing verdict lost its approval.
@@ -634,6 +888,8 @@ def sweep(
     prs = list_open_prs(repo, runner)
     lens_ready = lens_ready_heads(repo, runner)
     lens_source = lens or LensSource.from_env(repo)
+    gate_candidates = gate_candidate_heads(repo, runner)
+    gate_source = gate or GateSource.from_env(repo, runner)
 
     for pr in prs:
         number = pr.get("number")
@@ -642,6 +898,7 @@ def sweep(
 
         verdicts: list[Verdict] = [
             lens_source.verdict(pr, lens_ready, stale_after=stale_after, now=now),
+            gate_source.verdict(pr, gate_candidates, stale_after=stale_after, now=now),
         ]
         for verdict in verdicts:
             if verdict is None:

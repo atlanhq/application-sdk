@@ -100,7 +100,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: .github/scripts
+          # The gate caller is read for its extra_dep_file_pattern, so the
+          # dependency-gate source runs with exactly the gate's own allowlist.
+          sparse-checkout: |
+            .github/scripts
+            .github/workflows/renovate-auto-approve.yml
           sparse-checkout-cone-mode: false
 
       - name: Mint fleet App token
@@ -126,6 +130,9 @@ jobs:
           LENS_BOT_LOGIN: atlan-app-fleet[bot]
           # Through env, not interpolated into the script: it is free text.
           PR_INPUT: ${{ inputs.pr }}
+          # The dependency gate's release-freeze override (condition i), the
+          # same variable its own runs read.
+          RELEASE_FREEZE: ${{ vars.RENOVATE_RELEASE_FREEZE }}
         run: |
           python3 .github/scripts/review_approval_reconcile.py \
             --repo "${{ github.repository }}" \
