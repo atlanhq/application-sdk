@@ -732,11 +732,17 @@ def caller_extra_pattern(path: Path = GATE_CALLER_WORKFLOW) -> str:
 
 
 def approver_runner(runner: Runner, approver_token: str) -> Runner:
-    """``runner`` with the one gate APPROVE routed to the ``atlan-ci`` PAT.
+    """``runner`` as the gate needs it here: every call bounded by
+    GH_TIMEOUT_SECONDS, and the one APPROVE routed to the ``atlan-ci`` PAT.
 
     Every read the gate makes stays on the fleet App token already in GH_TOKEN,
     so the sweep spends ``atlan-ci``'s quota only on the approval itself, the
     same split lens uses.
+
+    The gate's own calls carry no timeout, so a stalled CLI inside it would hold
+    the sweep to the job timeout; :func:`run_gh` bounds each one. A timeout comes
+    back as exit 124, so a ``check=True`` call (the APPROVE) is re-raised here
+    rather than read as success.
     """
 
     def run(cmd, **kwargs):
@@ -746,7 +752,13 @@ def approver_runner(runner: Runner, approver_token: str) -> Runner:
             and cmd[4].endswith("/reviews")
         ):
             kwargs["env"] = {**os.environ, "GH_TOKEN": approver_token}
-        return runner(cmd, **kwargs)
+        check = kwargs.pop("check", False)
+        result = run_gh(runner, cmd, **kwargs)
+        if check and result.returncode != 0:
+            raise subprocess.CalledProcessError(
+                result.returncode, cmd, result.stdout, result.stderr
+            )
+        return result
 
     return run
 
@@ -812,7 +824,11 @@ class GateSource:
             return None
 
         try:
-            reviews = dep_gate.fetch_reviews(self.repo, str(number), self.runner)
+            reviews = dep_gate.fetch_reviews(
+                self.repo,
+                str(number),
+                approver_runner(self.runner, self.approver_token),
+            )
         except dep_gate.resync.GhError:
             return _blocked_outcome(
                 number,

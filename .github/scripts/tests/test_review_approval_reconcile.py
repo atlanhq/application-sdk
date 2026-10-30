@@ -1514,3 +1514,23 @@ def test_the_extra_pattern_is_read_from_the_gate_caller(tmp_path):
 def test_the_real_caller_pattern_is_readable():
     caller = SCRIPTS.parent / "workflows" / "renovate-auto-approve.yml"
     assert reconcile.caller_extra_pattern(caller)
+
+
+def test_every_gate_call_is_bounded_and_a_stalled_approve_is_not_a_success():
+    """F-cbc6ca: the gate's own calls carry no timeout; the reconciler adds one."""
+    seen = []
+
+    def stalls_on_post(cmd, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        if "POST" in cmd:
+            raise subprocess.TimeoutExpired(cmd="gh", timeout=kwargs["timeout"])
+        return ok()
+
+    routed = reconcile.approver_runner(stalls_on_post, PAT)
+    routed(["gh", "api", f"repos/{REPO}/pulls/{PR}/files"], capture_output=True)
+    with pytest.raises(subprocess.CalledProcessError):
+        routed(
+            ["gh", "api", "-X", "POST", f"repos/{REPO}/pulls/{PR}/reviews"],
+            check=True,
+        )
+    assert seen == [reconcile.GH_TIMEOUT_SECONDS] * 2
