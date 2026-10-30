@@ -25,9 +25,9 @@ on:
     # leaving the PR permanently waiting for approval.
     workflows: [SDK Gate, PR Checks, Conformance, Capability Manifest Check, CodeQL Advanced]
     types: [completed]
-    # Limit to Renovate branches at trigger level — avoids spending a runner on
-    # every workflow completion across the repo.
-    branches: ['renovate/**']
+    # Limit to Renovate and vuln-agent (FND-4439) branches at trigger level —
+    # avoids spending a runner on every workflow completion across the repo.
+    branches: ['renovate/**', 'vuln-agent/**']
   workflow_dispatch:
     inputs:
       pr_number:
