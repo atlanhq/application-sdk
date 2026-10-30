@@ -9,8 +9,9 @@ Rules in this check module:
   installed ``atlan-application-sdk`` distribution must not be redeclared in
   the app's ``[project.dependencies]`` or any
   ``[project.optional-dependencies.*]`` array.
-* **D004 RedeclaredSdkManagedDependencyInGroups** — same redeclaration check,
-  extended to PEP 735 ``[dependency-groups]`` (D002's coverage gap).
+* **D004 RedeclaredSdkManagedDependencyInGroups** — D002's coverage gap in PEP 735
+  ``[dependency-groups]``; direct imports from app-owned test source are treated as
+  app test dependencies rather than redundant SDK tooling pins.
 * **D005 UnknownSdkExtra** — an ``atlan-application-sdk[extra]`` reference must
   name an extra the SDK actually publishes (uv silently drops unknown extras).
 * **D006 IncompatibleRequiresPython** — the app's ``[project].requires-python``
@@ -85,6 +86,9 @@ from conformance.suite.checks._ast_common import (
     make_cli_main,
     parse_toml_suppressions,
     safe_read_text,
+)
+from conformance.suite.checks._ast_common._discovery import (
+    EXCLUDE_DIRS as _SOURCE_EXCLUDE_DIRS,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -799,6 +803,7 @@ def scan_text(
     *,
     sdk_managed_packages: Iterable[str] | None = None,
     sdk_published_extras: Iterable[str] | None = None,
+    test_imported_packages: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Scan a pyproject.toml text and return D-series findings.
 
@@ -816,6 +821,10 @@ def scan_text(
         Override for the SDK's published extras set (test injection). When
         ``None``, looked up via ``importlib.metadata`` ``Provides-Extra``; when
         the SDK is not importable, D005 is skipped silently.
+    test_imported_packages:
+        Distribution names directly imported by app-owned test sources. The
+        full-repository scan supplies this context so D004 can distinguish a
+        direct test dependency from redundant SDK-managed tooling.
     """
     data = _safe_load(text)
     if data is None:
@@ -988,6 +997,9 @@ def scan_text(
         managed = {_normalise_name(p) for p in sdk_managed_packages}
 
     group_entries = list(_iter_dependency_group_entries(text, data=data))
+    test_imported = {
+        _normalise_name(package) for package in (test_imported_packages or ())
+    }
 
     if managed is not None:
         # D002 — [project.dependencies] + [project.optional-dependencies.*]
@@ -1014,7 +1026,7 @@ def scan_text(
         for entry in group_entries:
             if entry.name == sdk_norm:
                 continue
-            if entry.name in managed:
+            if entry.name in managed and entry.name not in test_imported:
                 findings.append(
                     _make_finding(
                         rule_id=RULE_D004,
@@ -1109,6 +1121,7 @@ def scan_path(
     *,
     sdk_managed_packages: Iterable[str] | None = None,
     sdk_published_extras: Iterable[str] | None = None,
+    test_imported_packages: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Scan a single pyproject.toml on disk."""
     text = safe_read_text(path)
@@ -1123,6 +1136,7 @@ def scan_path(
         str(rel),
         sdk_managed_packages=sdk_managed_packages,
         sdk_published_extras=sdk_published_extras,
+        test_imported_packages=test_imported_packages,
     )
 
 
@@ -2716,6 +2730,57 @@ def _credentialed(url: str) -> bool:
     return bool(parts.username or parts.password)
 
 
+def _discover_test_sources(root: Path) -> list[Path]:
+    """Find test-only Python sources without changing shared source discovery.
+
+    The common AST walk intentionally excludes tests. D004 needs their imports
+    to tell an app-owned test dependency from a redundant SDK tooling pin, so it
+    makes a separate, test-scoped walk here.
+    """
+    test_dirs = frozenset({"test", "tests"})
+    excluded_dirs = _SOURCE_EXCLUDE_DIRS - test_dirs
+    paths: list[Path] = []
+    for path in root.rglob("*.py"):
+        relative_parts = path.relative_to(root).parts
+        directory_parts = relative_parts[:-1]
+        is_test_source = (
+            any(part in test_dirs for part in directory_parts)
+            or path.name == "conftest.py"
+            or path.name.startswith("test_")
+            or path.name.endswith("_test.py")
+        )
+        if not is_test_source:
+            continue
+        if set(directory_parts) & excluded_dirs:
+            continue
+        if any(part.startswith(".") for part in directory_parts):
+            continue
+        paths.append(path)
+    return sorted(paths)
+
+
+def _test_imported_distributions(root: Path) -> set[str]:
+    """Return uniquely-owned distributions directly imported by test sources."""
+    test_sources = _discover_test_sources(root)
+    if not test_sources:
+        return set()
+    imported_modules, _, _ = _collect_source_usage(test_sources)
+    if not imported_modules:
+        return set()
+
+    distributions_by_module = importlib_metadata.packages_distributions()
+    direct: set[str] = set()
+    for module in imported_modules:
+        owners = {
+            _normalise_name(name) for name in distributions_by_module.get(module, ())
+        }
+        # A shared namespace (e.g. ``google``) does not prove which individual
+        # distribution the test uses, so only credit an unambiguous owner.
+        if len(owners) == 1:
+            direct.update(owners)
+    return direct
+
+
 def scan_all(
     paths: list[Path],
     root: Path,
@@ -2732,10 +2797,12 @@ def scan_all(
     plus the repo's Python sources — see :func:`discover`).
 
     D001/D002 run per ``pyproject.toml`` via :func:`scan_path` (the SDK and its
-    sibling packages remain self-exempt).  D003 is computed here *outside* that
-    self-check guard — it is ``scope=both`` and so applies to the SDK itself —
-    by mapping each core dependency to the import names it provides and flagging
-    any whose modules never appear in the collected source imports.
+    sibling packages remain self-exempt). D004 also reads test-only Python
+    sources separately: a package directly imported there is an app-owned test
+    dependency, not a redundant SDK tooling re-pin. D003 is computed here
+    *outside* that self-check guard — it is ``scope=both`` and so applies to the
+    SDK itself — by mapping each core dependency to the import names it provides
+    and flagging any whose modules never appear in the collected source imports.
 
     Test seams: ``dist_import_map`` injects the dependency -> import-name map
     (default: resolved from installed metadata) and ``imported_modules`` injects
@@ -2745,10 +2812,17 @@ def scan_all(
     """
     pyprojects = [p for p in paths if p.name == "pyproject.toml"]
     py_files = [p for p in paths if p.suffix == ".py"]
+    test_imported_packages = _test_imported_distributions(root) if pyprojects else set()
 
     findings: list[Finding] = []
     for pyproject in pyprojects:
-        findings.extend(scan_path(pyproject, root))
+        findings.extend(
+            scan_path(
+                pyproject,
+                root,
+                test_imported_packages=test_imported_packages,
+            )
+        )
 
     root_pyproject = root / "pyproject.toml"
     if not root_pyproject.is_file():

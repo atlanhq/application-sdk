@@ -8,8 +8,8 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
-import conformance.suite.checks.dependency_conformance as dependency_conformance
 import pytest
+from conformance.suite.checks import dependency_conformance
 from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
     _LOCK_URL_RE,
@@ -33,6 +33,7 @@ from conformance.suite.checks.dependency_conformance import (
 )
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition
+from conformance.suite.schema.findings import Finding
 
 #: The ``[[tool.uv.index]]`` stanza D012 requires. Fixtures that assert an
 #: exact rule-id set append it, because D012 fires on its *absence* and would
@@ -573,6 +574,73 @@ def test_d004_does_not_fire_when_group_dep_unmanaged() -> None:
     assert findings == []
 
 
+def _d004_scan_all_with_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sources: dict[str, str],
+) -> list[Finding]:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        'dependencies = ["atlan-application-sdk>=3.17.2,<4.0.0"]\n\n'
+        '[dependency-groups]\ntest = ["sample-transport>=1,<2"]\n',
+        encoding="utf-8",
+    )
+    for relative, source in sources.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+
+    monkeypatch.setattr(
+        dependency_conformance,
+        "_sdk_managed_packages",
+        lambda: {"sample-transport"},
+    )
+    monkeypatch.setattr(
+        dependency_conformance.importlib_metadata,
+        "packages_distributions",
+        lambda: {"sample_transport": ["sample-transport"]},
+    )
+    return [
+        finding
+        for finding in scan_all([pyproject], tmp_path)
+        if finding.rule_id == "D004"
+    ]
+
+
+def test_d004_allows_sdk_managed_package_directly_imported_by_test_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    findings = _d004_scan_all_with_sources(
+        tmp_path,
+        monkeypatch,
+        {"tests/conftest.py": "import sample_transport\n"},
+    )
+    assert findings == []
+
+
+def test_d004_still_fires_when_group_package_is_not_used_by_tests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    findings = _d004_scan_all_with_sources(
+        tmp_path,
+        monkeypatch,
+        {"tests/test_seed.py": "import os\n"},
+    )
+    assert [finding.rule_id for finding in findings] == ["D004"]
+
+
+def test_d004_still_fires_when_group_package_is_imported_only_by_app_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    findings = _d004_scan_all_with_sources(
+        tmp_path,
+        monkeypatch,
+        {"app/client.py": "import sample_transport\n"},
+    )
+    assert [finding.rule_id for finding in findings] == ["D004"]
+
+
 # ── D005: unknown SDK extra ──────────────────────────────────────────────────
 
 
@@ -1029,7 +1097,7 @@ def _d003_scan(
     dialect_names: set[str] | None = None,
     dialect_entry_points: dict[str, set[str]] | None = None,
     name: str = "my-connector",
-) -> list:
+) -> list[Finding]:
     """Write a pyproject and run scan_all with injected import data (no env/AST).
 
     Returns only the D003 findings so D001/D002 noise is filtered out.
@@ -3734,7 +3802,7 @@ _CONSTRAINTS = (
 )
 
 
-def _floored(findings: list) -> list[str]:
+def _floored(findings: list[Finding]) -> list[str]:
     return sorted(f.message.split("'")[1] for f in findings)
 
 
