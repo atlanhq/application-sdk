@@ -27,8 +27,12 @@ on:
   push:
     branches:
       - renovate/pyatlan
+    # The manifests too: a floor raised to the version the root lock already
+    # pins changes no uv.lock, but the conformance lock and table may still lag.
     paths:
       - "uv.lock"
+      - "pyproject.toml"
+      - "packages/api/pyproject.toml"
 
 permissions:
   contents: read
