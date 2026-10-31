@@ -43,7 +43,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build-and-publish-app.yaml"
 #: carries the gate's meaning, is what gets evaluated.
 FAILURE_PREFIX = "!failure() && "
 
-GATED_JOBS = ("certify", "leak-scan", "prepare")
+GATED_JOBS = ("certify-plan", "certify-unit", "certify", "leak-scan", "prepare")
 #: Jobs that only run behind `prepare`, directly or through `merge`.
 CHAIN_JOBS = ("build", "merge", "security-scan", "app-deployment-dispatcher", "publish")
 
@@ -129,7 +129,9 @@ def test_gated_jobs_skip_only_on_false(job_id: str, answer: str) -> None:
     assert evaluate(body, contexts) is (answer != "false")
 
 
-@pytest.mark.parametrize("job_id", ("certify", "leak-scan"))
+@pytest.mark.parametrize(
+    "job_id", ("certify-plan", "certify-unit", "certify", "leak-scan")
+)
 @pytest.mark.parametrize(
     ("ref", "publish", "runs"),
     [

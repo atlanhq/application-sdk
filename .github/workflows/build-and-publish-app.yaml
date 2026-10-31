@@ -112,6 +112,11 @@ on:
         required: false
         type: boolean
         default: false
+      unit_test_shards:
+        description: "How many parallel runners the certify gate splits `tests/unit` across (1-10). Default 0 = auto: sized from the app's committed pytest-split `.test_durations` file (one shard per ~5 minutes of recorded unit-test time, max 10); an app with no such file runs one shard, as before. Set it to pin the count. See docs/standards/app-certification.md."
+        required: false
+        type: number
+        default: 0
       use_ghcr_base:
         description: "Resolve the SDK base image from GHCR directly during the image build, instead of through the registry gateway at registry.atlan.com that serves the same GHCR package. Default TRUE. The preflight pins the GHCR digest for `FROM registry.atlan.com/public/app-runtime-base:3`; a Dockerfile it cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from the Dockerfile's reference as written. Pass false to skip the preflight and build from the Dockerfile's reference as written (a `FROM ghcr.io/atlanhq/app-runtime-base` still pulls from GHCR). See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the registry layout."
         required: false
@@ -480,9 +485,156 @@ jobs:
   # A main push that builds no image (non-SDR, publish off — see
   # build-decision) has nothing to certify, so it skips here too; the release
   # that ships the image certifies it.
+  #
+  # Unit tests run in `certify-unit`, split across `certify-plan`'s shard count;
+  # this job folds their results into the verdict. Publish waits on this job
+  # while the image build does not, so on a single 2-vCPU runner a large suite
+  # set the whole run's wall time — and neared the 30-minute cap.
+  # `certify_unit_shards.py` holds the plan / per-shard / fan-in logic.
+  certify-plan:
+    name: Certify plan
+    needs: build-decision
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      total: ${{ steps.plan.outputs.total }}
+      shards: ${{ steps.plan.outputs.shards }}
+    steps:
+      - name: Checkout pytest-split durations
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          sparse-checkout: /.test_durations
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Plan unit-test shards
+        id: plan
+        env:
+          OVERRIDE: ${{ inputs.unit_test_shards }}
+        run: python3 .sdk-entrypoint/.github/scripts/certify_unit_shards.py plan --durations app/.test_durations --override "${OVERRIDE}"
+
+  # One leg per shard. A failing test does NOT fail the leg (continue-on-error
+  # on the run step): `certify` must still run to render every layer in one
+  # verdict, and `!failure()` on it would skip it if a leg went red. The leg's
+  # result file carries the outcome instead, and `certify` enforces it. A leg
+  # that crashes or times out leaves no result, which `certify` reads as failed
+  # — or, if the whole job fails, `!failure()` skips certify and publish.
+  certify-unit:
+    name: Certify unit tests (${{ matrix.shard }}/${{ needs.certify-plan.outputs.total }})
+    needs: [build-decision, certify-plan]
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.certify-plan.outputs.shards) }}
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          fetch-depth: 1
+
+      - name: Mint fleet App token
+        # Same as certify's: authenticates the app's private atlanhq deps.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: sdk
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+
+      - name: Configure git auth for private dependencies
+        if: ${{ inputs.private_git_auth }}
+        env:
+          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      - name: Install app dependencies
+        id: app_install
+        continue-on-error: true
+        working-directory: app
+        run: uv sync --all-extras --frozen
+
+      # --all-groups (inside the script) so the app's test dependency group
+      # (pytest plugins like pytest-asyncio) is installed: `uv run` otherwise
+      # re-syncs to the default groups only and silently breaks such suites.
+      - name: "Unit tests (shard)"
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        working-directory: app
+        env:
+          SHARD: ${{ matrix.shard }}
+          TOTAL: ${{ needs.certify-plan.outputs.total }}
+          COVERAGE_SOURCE: ${{ inputs.coverage_source }}
+          INSTALL_OUTCOME: ${{ steps.app_install.outcome }}
+        run: python3 ../sdk/.github/scripts/certify_unit_shards.py run --shard "${SHARD}" --total "${TOTAL}" --coverage-source "${COVERAGE_SOURCE}" --install-outcome "${INSTALL_OUTCOME}" --results-dir ../certify-shard
+
+      - name: Upload shard result
+        id: upload-shard
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: certify-shard-${{ matrix.shard }}
+          path: certify-shard/
+          retention-days: 1
+          # Overwrite on the first attempt too: a re-run attempt must not 409
+          # and leave two live artifacts for `certify`'s glob to merge.
+          overwrite: true
+
+      # A finalize 403 comes from an intermediary having a moment; wait it out
+      # so the two attempts fail independently (docs/standards/ci.md).
+      - name: Wait before the upload retry
+        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
+        run: sleep 20
+
+      - name: Upload shard result (retry)
+        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          # A DISTINCT name: a failed finalize holds the first name for the
+          # run. `certify` downloads by `certify-shard-*` glob, so either lands.
+          name: certify-shard-${{ matrix.shard }}-retry
+          path: certify-shard/
+          retention-days: 1
+          overwrite: true
+
   certify:
     name: Certify app
-    needs: build-decision
+    needs: [build-decision, certify-plan, certify-unit]
     if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -600,8 +752,8 @@ jobs:
 
       # ── 3. Contract drift (enforced) ─────────────────────────────────────────
       # Failure here exits non-zero and (via the standard step-fail cascade)
-      # also fails the job. Unit tests + coverage below use `always() &&` so
-      # they still run and report — the user sees every signal in one pass —
+      # also fails the job. The unit-test fan-in + coverage below use `always()`
+      # so they still run and report — the user sees every signal in one pass —
       # even though the job's final status is already failed.
       - name: "Contract drift — poe generate must be a no-op"
         id: contract_drift
@@ -624,36 +776,50 @@ jobs:
           fi
 
       # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
+      # The tests ran in the `certify-unit` legs; fold their result files here.
+      # Glob, not exact names: a leg's retried upload lands as `-retry`. With
+      # `pattern:` an empty match is a success, so a missing leg surfaces in the
+      # verdict script (absent result = failed), not in this step.
+      - name: Download unit-test shard results
+        id: download-shards
+        if: always()
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: certify-shard-*
+          merge-multiple: true
+          path: certify-shards
+
+      - name: Wait before the download retry
+        if: always() && steps.download-shards.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download unit-test shard results (retry)
+        if: always() && steps.download-shards.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: certify-shard-*
+          merge-multiple: true
+          path: certify-shards
+
       - name: "Unit tests"
         id: unit
-        if: always() && steps.app_install.outcome == 'success'
-        continue-on-error: true
-        working-directory: app
-        run: |
-          set -euo pipefail
-          if [ ! -d tests/unit ]; then
-            echo "No tests/unit/ — skipping."
-            exit 0
-          fi
-          # --all-groups so the app's test dependency group (pytest plugins like
-          # pytest-asyncio, etc.) is installed. `uv run` otherwise re-syncs to only
-          # the default groups, pruning any test deps an app keeps in a non-default
-          # group — which silently breaks async/plugin-dependent suites and trips
-          # this gate on a packaging gap rather than a real failure.
-          uv run --all-groups --with pytest-cov pytest tests/unit --cov=${{ inputs.coverage_source }} --cov-report=term
+        if: always()
+        env:
+          TOTAL: ${{ needs.certify-plan.outputs.total }}
+        run: python3 sdk/.github/scripts/certify_unit_shards.py verdict --results-dir certify-shards --total "${TOTAL}"
 
+      # Each leg measured its own slice; combine them before the threshold.
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
-        if: always() && steps.unit.outcome == 'success'
+        if: always() && steps.unit.outputs.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
-          if [ ! -f .coverage ]; then
-            echo "No .coverage data (unit tests skipped) — skipping threshold check."
-            exit 0
-          fi
-          uv run coverage report --data-file=.coverage --fail-under=85
+          uv run --all-groups --with coverage coverage combine --data-file=.coverage ../certify-shards/coverage.shard-*
+          uv run --all-groups --with coverage coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
       # Unit test pass/fail (UT) and contract drift (CD) ENFORCE: a ❌ exits
@@ -667,7 +833,7 @@ jobs:
         env:
           CM: ${{ steps.check_migration.outcome }}
           CD: ${{ steps.contract_drift.outcome }}
-          UT: ${{ steps.unit.outcome }}
+          UT: ${{ steps.unit.outputs.outcome }}
           COV: ${{ steps.coverage_threshold.outcome }}
           SDK_INSTALL: ${{ steps.sdk_install.outcome }}
           APP_INSTALL: ${{ steps.app_install.outcome }}
