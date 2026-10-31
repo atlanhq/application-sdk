@@ -86,6 +86,17 @@ class InterceptorSettings:
     no RPC; ``0`` disables polling and collects no peak on kernels before 6.8.
     """
 
+    enable_dynamic_do_not_disrupt: bool = False
+    """Set ``karpenter.sh/do-not-disrupt`` on this pod only while an activity is in
+    flight, instead of relying on a static annotation for the pod's whole life.
+    Needs ``get`` and ``patch`` on pods for the worker's service account.
+    """
+
+    dynamic_do_not_disrupt_idle_seconds: float = 60.0
+    """How long the worker must be idle before the annotation is removed, so
+    back-to-back activities don't flap it.
+    """
+
     enable_cleanup_interceptor: bool = False
     """Enable temp-directory cleanup interceptor.
 
@@ -180,6 +191,12 @@ def load_interceptor_settings() -> InterceptorSettings:
         ),
         sizing_telemetry_poll_seconds=_float(
             "APPLICATION_SDK_SIZING_TELEMETRY_POLL_SECONDS", 1.0
+        ),
+        enable_dynamic_do_not_disrupt=_bool(
+            "APPLICATION_SDK_ENABLE_DYNAMIC_DO_NOT_DISRUPT", default=False
+        ),
+        dynamic_do_not_disrupt_idle_seconds=_float(
+            "APPLICATION_SDK_DYNAMIC_DO_NOT_DISRUPT_IDLE_SECONDS", 60.0
         ),
         enable_cleanup_interceptor=_bool("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR"),
     )
