@@ -131,11 +131,13 @@ fix.  The re-detection gate is authoritative for this area — see
   empty array rather than removing the table.
 
 - **D004 RedeclaredSdkManagedDependencyInGroups** — same as D002 but the
-  redeclaration is in a `[dependency-groups.*]` table.  Delete the entire
-  redeclaring line; if the SDK-managed package was dev/test tooling the app
-  genuinely needs, prefer pulling it in via `atlan-application-sdk[tests]`
-  instead (note that as a follow-up in the edit description).  Remove only that
-  one entry.
+  redeclaration is in a `[dependency-groups.*]` table. First check whether
+  app-owned test source directly imports the package: if it does, keep the
+  entry because it is a direct test dependency, not redundant SDK tooling. A
+  production-only import does not qualify. For any other D004 finding, delete
+  the entire redeclaring line; if the SDK-managed package is SDK test tooling
+  the app genuinely needs, prefer pulling it in via
+  `atlan-application-sdk[tests]` instead. Remove only that one entry.
 
 - **D011 ConformanceDependencyContract** (`classification = "mechanical"` for
   branches 1, 2 and 3) — BLOCK-tier, no suppress path in default mode, same as
