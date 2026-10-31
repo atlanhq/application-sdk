@@ -3038,6 +3038,61 @@ def test_p026_fires_on_getattr_with_default_on_typed_param() -> None:
     assert "P026" in _ids(src)
 
 
+def test_p026_ignores_undeclared_optional_extension_on_open_contract(
+    tmp_path: Path,
+) -> None:
+    files = {
+        "contracts.py": (
+            "from application_sdk.templates.contracts import ExtractionInput\n"
+            "class MetricsInput(ExtractionInput, allow_unbounded_fields=True):\n"
+            "    pass\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS
+            + "from contracts import MetricsInput\n"
+            + "class MetricsApp:\n"
+            + "    @entrypoint\n"
+            + "    async def collect(self, input: MetricsInput):\n"
+            + '        window = getattr(input, "retention_window", None)\n'
+            + "        return None\n"
+        ),
+    }
+    findings = [f for f in _scan_files(tmp_path, files) if f.rule_id == "P026"]
+    assert findings == []
+
+
+def test_p026_still_fires_on_declared_own_and_inherited_fields(tmp_path: Path) -> None:
+    files = {
+        "contracts.py": (
+            "from application_sdk.templates.contracts import ExtractionInput\n"
+            "class MetricsInput(ExtractionInput, allow_unbounded_fields=True):\n"
+            "    custom_label: str = ''\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS
+            + "from contracts import MetricsInput\n"
+            + "class MetricsApp:\n"
+            + "    @entrypoint\n"
+            + "    async def collect(self, input: MetricsInput):\n"
+            + '        label = getattr(input, "custom_label", None)\n'
+            + '        method = getattr(input, "extraction_method", "")\n'
+            + '        agent = getattr(input, "agent_json", None)\n'
+            + '        connection = getattr(input, "connection", None)\n'
+            + '        extension = getattr(input, "retention_window", None)\n'
+            + "        return None\n"
+        ),
+    }
+    findings = [f for f in _scan_files(tmp_path, files) if f.rule_id == "P026"]
+    expected = {"custom_label", "extraction_method", "agent_json", "connection"}
+    flagged = {
+        field
+        for field in expected | {"retention_window"}
+        if any(f"getattr(input, {field!r}, <default>)" in f.message for f in findings)
+    }
+    assert flagged == expected
+    assert len(findings) == len(expected)
+
+
 def test_p026_fires_on_entrypoint_too() -> None:
     src = (
         "class MyApp:\n"

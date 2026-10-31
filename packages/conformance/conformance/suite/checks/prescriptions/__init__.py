@@ -203,9 +203,12 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Multi-pass scan over *paths*, emitting all P-series findings.
 
     Pass 1 — parse every file once, run the per-file rules (P001, P002,
-    P008–P012, P015, P026, P028, P044, P052, P055, P058), collect every ``ClassDef`` into a name-keyed
+    P008–P012, P015, P028, P044, P052, P055, P058), collect every ``ClassDef`` into a name-keyed
     registry along with its base names and any literal ``code`` declaration.
-    Store each parsed tree for the P013/P014 and P027 cross-file passes.
+    Store each parsed tree for the cross-file passes.
+
+    After Pass 1 — emit P026 with the full class registry so declared contract
+    fields can be distinguished from optional extension attributes.
 
     Pass 2 — for each registered class, walk its (transitive) base chain to
     find the deepest ancestor that names one of the 15 leaves in
@@ -233,7 +236,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     file_directives: dict[Path, dict[int, _IgnoreDirective]] = {}
     file_records: dict[Path, list[ClassRecord]] = {}
     file_trees: dict[Path, ast.AST] = {}
+    file_aliases: dict[str, dict[str, str]] = {}
+    file_names: dict[Path, str] = {}
     by_name: dict[str, ClassRecord] = {}
+    by_name_all: dict[str, list[ClassRecord]] = {}
     alias_targets: dict[str, str] = {}
     code_consts: dict[str, str] = {}
 
@@ -254,6 +260,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         directives = _parse_directives(text)
         file_directives[path] = directives
         file_trees[path] = tree
+        file_names[path] = rel_str
 
         # P001 (per-file)
         checker = UnboundedContractFieldsChecker(
@@ -274,14 +281,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         p002_checker.visit(tree)
         findings.extend(p002_checker._findings)
 
-        # P008–P012, P015, P026, P028, P044, P052, P055, P058 (per-file)
+        # P008–P012, P015, P028, P044, P052, P055, P058 (per-file)
         findings.extend(check_p008(tree, rel_str, directives))
         findings.extend(check_p009(tree, rel_str, directives))
         findings.extend(check_p010(tree, rel_str, directives))
         findings.extend(check_p011(tree, rel_str, directives))
         findings.extend(check_p012(tree, rel_str, directives))
         findings.extend(check_p015(tree, rel_str, directives))
-        findings.extend(check_p026(tree, rel_str, directives))
         findings.extend(check_p028(tree, rel_str, directives))
         findings.extend(check_p044(tree, rel_str, directives))
         findings.extend(check_p052(tree, rel_str, directives))
@@ -291,6 +297,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         # Class registry for P003 and P013/P014 — de-alias base names so aliased
         # imports of leaf/base classes don't hide the real ancestry.
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        file_aliases[rel_str] = aliases
         records = collect_classes(tree, rel_str, aliases)
         file_records[path] = records
         # App-wide, because the codes module is a different file from the
@@ -298,8 +305,24 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         code_consts.update(module_code_constants(tree))
         for rec in records:
             by_name.setdefault(rec.name, rec)
+            by_name_all.setdefault(rec.name, []).append(rec)
         for local, target in collect_module_alias_targets(tree, aliases).items():
             alias_targets.setdefault(local, target)
+
+    # P026 needs the app-wide contract registry to distinguish declared fields
+    # from optional extension attributes on an otherwise typed contract.
+    for path, tree in file_trees.items():
+        findings.extend(
+            check_p026(
+                tree,
+                file_names[path],
+                file_directives[path],
+                aliases=file_aliases[file_names[path]],
+                aliases_by_file=file_aliases,
+                by_name=by_name,
+                by_name_all=by_name_all,
+            )
+        )
 
     # Pass 2 + 3 — resolve and emit P003
     # Codes reached through a module-level constant are declared, just not
