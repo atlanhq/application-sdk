@@ -1,5 +1,29 @@
 # Changelog
 
+## v3.53.2 (October 31, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.53.1...v3.53.2
+
+### Chores
+
+- publish the SDK's CVE floors so apps inherit them (FND-4439) (#4628) (by @vaibhavatlan in [63f643f](https://github.com/atlanhq/application-sdk/commit/63f643f))
+- remove 1 resolved allowlist entry (#4637) (by @atlan-app-fleet[bot] in [aec4504](https://github.com/atlanhq/application-sdk/commit/aec4504))
+- update github-actions (#4630) (by @renovate[bot] in [85de30f](https://github.com/atlanhq/application-sdk/commit/85de30f))
+- lock file maintenance (#4601) (by @renovate[bot] in [c8f7ad9](https://github.com/atlanhq/application-sdk/commit/c8f7ad9))
+- remove 1 resolved allowlist entry (#4639) (by @atlan-app-fleet[bot] in [37ac75f](https://github.com/atlanhq/application-sdk/commit/37ac75f))
+- lock file maintenance (#4640) (by @renovate[bot] in [da51734](https://github.com/atlanhq/application-sdk/commit/da51734))
+- lock file maintenance (#4641) (by @renovate[bot] in [57b1eeb](https://github.com/atlanhq/application-sdk/commit/57b1eeb))
+- allowlist CVE-2026-114613 (HIGH 30d SLA) (#4642) (by @atlan-app-fleet[bot] in [e3201ab](https://github.com/atlanhq/application-sdk/commit/e3201ab))
+- lock file maintenance (#4643) (by @renovate[bot] in [1d0a335](https://github.com/atlanhq/application-sdk/commit/1d0a335))
+- update dependency pyatlan to >=11.6.0,<12 (#4646) (by @renovate[bot] in [8fb2a6b](https://github.com/atlanhq/application-sdk/commit/8fb2a6b))
+- lock file maintenance (#4644) (by @renovate[bot] in [5f8b4e7](https://github.com/atlanhq/application-sdk/commit/5f8b4e7))
+- lock file maintenance (#4647) (by @renovate[bot] in [e8e18d7](https://github.com/atlanhq/application-sdk/commit/e8e18d7))
+- sync daprd pin to 1.19.0 (#4653) (by @atlan-app-fleet[bot] in [bca3079](https://github.com/atlanhq/application-sdk/commit/bca3079))
+- lock file maintenance (#4649) (by @renovate[bot] in [194933b](https://github.com/atlanhq/application-sdk/commit/194933b))
+- allowlist CVE-2026-111943 (HIGH 30d SLA) (#4657) (by @atlan-app-fleet[bot] in [5bdef54](https://github.com/atlanhq/application-sdk/commit/5bdef54))
+- lock file maintenance (#4655) (by @renovate[bot] in [41e0482](https://github.com/atlanhq/application-sdk/commit/41e0482))
+
+
 ## v3.53.1 (October 29, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.53.0...v3.53.1
