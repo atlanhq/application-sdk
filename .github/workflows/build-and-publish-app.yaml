@@ -1397,7 +1397,7 @@ jobs:
           context: .
           file: ${{ needs.prepare.outputs.dockerfile }}
           platforms: ${{ matrix.platform }}
-          push: true
+          outputs: type=registry,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
           # Resolve the SDK base image from GHCR directly (use_ghcr_base,
           # default on). Empty (a run where the preflight declined, or the flag
           # is off) leaves the build resolving the Dockerfile's reference.
