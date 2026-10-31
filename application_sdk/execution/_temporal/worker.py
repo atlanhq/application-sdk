@@ -17,6 +17,7 @@ from temporalio.client import Client
 from temporalio.worker import Interceptor as TemporalInterceptor
 from temporalio.worker import Worker, WorkerDeploymentConfig, WorkerDeploymentVersion
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner
+from temporalio.workflow import NondeterminismError
 from typing_extensions import deprecated
 
 from application_sdk.app.registry import (
@@ -48,8 +49,12 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Fails the workflow RUN rather than the retryable workflow TASK. Matched by
-# type, so only never-retryable types belong here.
-_WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (ValidationError,)
+# type, so only never-retryable types belong here. Replay mismatches fail the run
+# with the real error instead of waiting for its timeout; rollback cannot heal it.
+_WORKFLOW_FAILURE_EXCEPTION_TYPES: tuple[type[BaseException], ...] = (
+    ValidationError,
+    NondeterminismError,
+)
 
 # Depth cap for rendering an exception's cause chain. temporalio's poll fatal is
 # two links deep; anything much longer is a runaway chain, not diagnostics.
