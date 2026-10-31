@@ -107,10 +107,8 @@ def check_p028(
                     rule_id="P028",
                     node=node,
                     message=(
-                        "qualifiedName built by hand with an f-string — Atlan's "
-                        "qualifiedName grammar should not be duplicated across "
-                        "connectors. Construct assets via the pyatlan asset "
-                        ".creator() factories, which own the grammar."
+                        "qualifiedName built by hand with an f-string; see the P028 "
+                        "rule definition for the fix by site."
                     ),
                     directives=directives,
                 )
