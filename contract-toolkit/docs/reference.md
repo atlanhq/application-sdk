@@ -100,7 +100,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `shortDescription` | String | `""` | One-line marketplace card description. Emitted as top-level `short_description` (omitted when empty). |
 | `longDescription` | String | `""` | Long-form marketplace detail-page description (markdown). Emitted as top-level `long_description` (omitted when empty); multi-line strings render as YAML literal blocks. |
-| `tags` | Listing\<String\> | `[]` | Free-form marketplace category tags. Emitted as top-level `tags` (omitted when empty). |
+| `tags` | Listing\<String\> | `[]` | Marketplace search tags. Emitted as top-level `tags` (omitted when empty). Build & Publish syncs them to the marketplace after each publish, which serves them as the app's keywords on every card; marketplace search matches on them. Tags are app-level: there is no per-entrypoint override. |
 
 ### Workflow & Manifest
 
@@ -1428,6 +1428,7 @@ Each `{entrypoint}/_input.py` uses the same per-entrypoint class naming and `App
 | `type` | String | `"connector"` | Root marketplace type. |
 | `iconUrl` | String? | null | Root `icon_url`. |
 | `visibility` | String | `"public"` | Marketplace visibility. |
+| `tags` | Listing<String> | `[]` | Marketplace search tags, same contract as `App.pkl` `tags`. Emitted as top-level `tags` after `visibility`; omitted when empty, so existing bundles render unchanged. |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
 | `selfDeployedRuntime` | Boolean | `true` | Emitted as `self_deployed_runtime`. |
 | `metadata` | Mapping<String, Any> | `{}` | Extra top-level `atlan.yaml` fields. |
