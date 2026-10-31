@@ -49,6 +49,66 @@ def test_o001_silent_on_orjson() -> None:
     assert _ids(src) == []
 
 
+def test_o001_silent_on_json_dumps_typeerror_fallback() -> None:
+    src = (
+        "import json\n"
+        "import orjson\n\n"
+        "def write_record(data):\n"
+        "    try:\n"
+        "        orjson.dumps(data, option=orjson.OPT_APPEND_NEWLINE)\n"
+        "    except TypeError as exc:\n"
+        "        return json.dumps(data)\n"
+    )
+    assert _ids(src) == []
+
+
+def test_o001_fires_for_non_fallback_json_serialization() -> None:
+    src = (
+        "import json\n"
+        "import orjson\n\n"
+        "def mismatched_argument(data, fallback):\n"
+        "    try:\n"
+        "        orjson.dumps(data)\n"
+        "    except TypeError:\n"
+        "        return json.dumps(fallback)\n\n"
+        "def no_orjson_attempt(data):\n"
+        "    try:\n"
+        "        validate(data)\n"
+        "    except TypeError:\n"
+        "        return json.dumps(data)\n\n"
+        "def still_loads(data, encoded):\n"
+        "    try:\n"
+        "        orjson.dumps(data)\n"
+        "    except TypeError:\n"
+        "        return json.loads(encoded)\n\n"
+        "def ordinary_serialization(data):\n"
+        "    return json.dumps(data)\n"
+    )
+    assert _ids(src) == ["O001", "O001", "O001", "O001"]
+
+
+def test_o001_prescription_names_the_accepted_typeerror_fallback() -> None:
+    prescription_file = (
+        Path(__file__).parents[1]
+        / "conformance"
+        / "programs"
+        / "areas"
+        / "optimizations.prose.md"
+    )
+    text = prescription_file.read_text()
+    start = text.index("**O001 OrjsonOverStdlibJson**")
+    bullet = " ".join(text[start : text.index("**O002", start)].split())
+    for needle in (
+        "compatibility fallback is already compliant",
+        "`except TypeError` handler",
+        "`orjson.dumps(obj)`",
+        "same argument expression",
+        "integers above 64 bits",
+        "does not cover `json.loads`",
+    ):
+        assert needle in bullet, f"O001's prescription does not say {needle!r}"
+
+
 def test_o001_silent_on_response_json_method() -> None:
     # resp.json() is an attribute call on an arbitrary object, not stdlib json.
     src = "def f(resp):\n    return resp.json()\n"
