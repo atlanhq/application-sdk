@@ -61,6 +61,16 @@ live from the collaborator-permission API, because a comment's
 member, even one with only Read). Bots are refused (no comment loops), and fork
 PRs are refused (a fork's branch is not in this repository to dispatch on).
 
+One bot is honoured, for one command (FND-4037): the release train posts a
+plain `/gate-check` on a `bump-version*` PR as the fleet GitHub App. That
+comment is accepted only when it is a Bot comment whose
+`performed_via_github_app.id` equals ``--trusted-app-id`` — an id GitHub sets
+from the token that posted the comment, which no commenter can forge — and the
+PR's head branch is a bump branch. The App has no collaborator role to read, so
+its identity is the authorisation; the role check is skipped for it alone.
+`/gate-check force`, `/e2e`, any other bot, any other App, and every request
+when no trusted id is configured stay refused. The verdict path is unchanged.
+
 The dispatch alone is made as the fleet GitHub App (``DISPATCH_TOKEN``, minted
 by the caller for this one repository with `actions: write` only); every other
 call uses the job's GITHUB_TOKEN. GitHub starts no workflow from an event
@@ -99,6 +109,11 @@ ROLE_REFUSAL = (
 ADMIN_REFUSAL = (
     "only people with the Admin role on this repository can request the " "release gate"
 )
+
+TRUSTED_APP_REFUSAL = (
+    "the fleet App may only request `/gate-check` on a `bump-version*` PR"
+)
+BOT_REFUSAL = "bots cannot request test runs"
 
 NO_APP_REFUSAL = (
     "`/gate-check` needs this repository's `test-commands.yaml` to pass the fleet "
@@ -171,10 +186,36 @@ class Request:
     comment_id: int = 0
     actor: str = ""
     reason: str = ""
+    #: Posted by the trusted fleet App (FND-4037). Its identity is proven by
+    #: ``performed_via_github_app.id``, so no collaborator role is read for it,
+    #: but the PR must still be a bump PR (:func:`_role_allows`).
+    via_trusted_app: bool = False
 
 
-def decide(event_name: str, event: dict) -> Request:
-    """Whether a GitHub event is an honoured test command, and which."""
+def _is_trusted_app_gate_check(comment: dict, words: list, trusted_app_id: str) -> bool:
+    """A plain `/gate-check` posted by the configured trusted GitHub App.
+
+    Fails closed: no configured id, a non-numeric id, any word after the
+    command (so never `force`), or a missing App attribution is "no".
+    """
+    trusted = (trusted_app_id or "").strip()
+    if not trusted.isdigit():
+        return False
+    if words != [GATE_CHECK]:
+        return False
+    app = comment.get("performed_via_github_app") or {}
+    app_id = app.get("id")
+    if not isinstance(app_id, int) or isinstance(app_id, bool):
+        return False
+    return str(app_id) == trusted
+
+
+def decide(event_name: str, event: dict, trusted_app_id: str = "") -> Request:
+    """Whether a GitHub event is an honoured test command, and which.
+
+    ``trusted_app_id`` is the GitHub App whose plain `/gate-check` is honoured
+    (FND-4037); empty turns that off.
+    """
     if event_name != "issue_comment":
         return Request(False, reason=f"event {event_name!r} is not a PR comment")
     issue = event.get("issue") or {}
@@ -182,7 +223,8 @@ def decide(event_name: str, event: dict) -> Request:
     if event.get("action") != "created" or "pull_request" not in issue:
         return Request(False, reason="not a new PR comment")
     words = (comment.get("body") or "").strip().split()
-    command = words[0].lower() if words else ""
+    words = [w.lower() for w in words]
+    command = words[0] if words else ""
     if command not in COMMANDS:
         return Request(False, reason="comment is not a test command")
     pr = int(issue["number"])
@@ -190,13 +232,17 @@ def decide(event_name: str, event: dict) -> Request:
     user = comment.get("user") or {}
     actor = str(user.get("login") or "")
     if user.get("type") == "Bot":
+        if _is_trusted_app_gate_check(comment, words, trusted_app_id):
+            return Request(
+                True, command, pr, False, comment_id, actor, via_trusted_app=True
+            )
         return Request(
             False,
             command,
             pr,
             comment_id=comment_id,
             actor=actor,
-            reason="bots cannot request test runs",
+            reason=BOT_REFUSAL,
         )
     if comment.get("author_association") not in TRUSTED:
         return Request(
@@ -207,7 +253,7 @@ def decide(event_name: str, event: dict) -> Request:
             actor=actor,
             reason=ROLE_REFUSAL,
         )
-    force = len(words) > 1 and words[1].lower() == FORCE
+    force = len(words) > 1 and words[1] == FORCE
     return Request(True, command, pr, force, comment_id, actor)
 
 
@@ -1041,11 +1087,18 @@ def main(argv: list | None = None) -> int:
         "gate_check_authorized; read-only, posts nothing. The caller mints the "
         "App dispatch token only when it is true (FND-3934).",
     )
+    parser.add_argument(
+        "--trusted-app-id",
+        default="",
+        help="The GitHub App id whose plain `/gate-check` on a bump-version* PR "
+        "is honoured without a collaborator-role check (FND-4037). Empty "
+        "disables it.",
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     with open(args.event_path, encoding="utf-8") as handle:
         event = json.load(handle)
-    request = decide(args.event_name, event)
+    request = decide(args.event_name, event, args.trusted_app_id)
     admin_only = args.gate_check_requires_admin and request.command == GATE_CHECK
     if args.authorize_only:
         return _authorize_only(GitHub(args.repo), request, admin_only)
@@ -1076,7 +1129,10 @@ def main(argv: list | None = None) -> int:
         print(f"::error::{error}", file=sys.stderr)
         return 1
     if not allowed:
-        refusal = ADMIN_REFUSAL if admin_only else ROLE_REFUSAL
+        if request.via_trusted_app:
+            refusal = TRUSTED_APP_REFUSAL
+        else:
+            refusal = ADMIN_REFUSAL if admin_only else ROLE_REFUSAL
         github.react(request.comment_id, "confused")
         github.comment(request.pr, f"`{request.command}` ignored: {refusal}.")
         return 0
@@ -1150,6 +1206,14 @@ def main(argv: list | None = None) -> int:
 
 
 def _role_allows(github: GitHub, request: Request, admin_only: bool) -> bool:
+    if request.via_trusted_app:
+        # The App has no collaborator role; its id was matched in decide().
+        # Its scope is a bump PR's release gate only, and never the
+        # Admin-only gate (application-sdk's own release).
+        if admin_only or request.command != GATE_CHECK:
+            return False
+        pr = github.pull(request.pr)
+        return pr.is_bump and not pr.is_fork and pr.state == "open"
     return (
         github.is_admin(request.actor) if admin_only else github.can_push(request.actor)
     )
