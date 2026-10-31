@@ -6,6 +6,8 @@ description: >
   remediation: for each finding the model drafts a proposed fix, but the
   proposal is recorded for human review and never auto-applied — because
   P-series rules currently have no orthogonal gate that can validate a fix.
+  The one exception is the worker-disk sub-group (P060–P062), whose fixes the
+  gates can check and which this area applies through the full loop.
 ---
 
 ### Maintains
@@ -57,6 +59,26 @@ gate (`orthogonal_gate = "tests"`), unlike P001.  They are suggest-only here for
 architectural consistency with the rest of this area, but they are strong
 candidates to graduate to the `detect-fix-recheck` loop once the area
 differentiates sub-groups by gate status.
+
+**The worker-disk sub-group (P060–P062) is the first to graduate.**  It runs
+through the full `detect-fix-recheck` loop in every mode, ahead of the
+suggest-only pass, because both gates check its fixes rather than passing any
+edit:
+
+- the recheck is the fix's own shape, not an arbitrary value: P060 clears only
+  when a removal of the uploaded path follows the upload (or
+  `retain_local_copy=False` is passed), P061 only when `dir=` names something
+  other than the system temp dir (`None`, `gettempdir()` and a literal
+  `"/tmp"` all still fail), and P062 only when the scratch is removed in a
+  `finally` (or by a registered callback, or on both the error and success
+  paths);
+- the orthogonal test gate bites on the failure mode: deleting a file or a
+  scratch directory something still reads raises `FileNotFoundError` in any test
+  that reaches it, and a `dir=` that does not exist fails at the call.
+
+What no gate can see — that the file is not read by a caller or a later step —
+is why the prescriptions below route those sites to `judgment` (applied only
+with that read ruled out) or to a justified directive, never to a blind edit.
 
 The orchestration-seam rules (P004–P007, BLDX-1417) are also P-series and also
 suggest-only here, for their own reasons: the app-side import rewrites (P004/P005)
@@ -192,6 +214,19 @@ Input-driven: re-render when any `*.py` file under `scope` changes.
 ### Execution
 
 ```prose
+# Worker-disk sub-group (P060–P062): applied through the full gated loop in
+# every mode — see "The worker-disk sub-group" above.  `intersect(rule_ids,
+# group)` is the group itself when `rule_ids` is empty (every rule) and the ids
+# common to both otherwise, so it narrows a --rule run and never widens one;
+# when it is empty the call is skipped.
+if intersect(rule_ids, ["P060", "P061", "P062"]) is not empty:
+  call detect-fix-recheck
+    scope: scope
+    series: "P"
+    rule_ids: intersect(rule_ids, ["P060", "P061", "P062"])
+    mode: mode
+    max_attempts: 5
+
 if apply_unverifiable:
   # Caller-accepted unverifiable mode.  The loop still runs both gates, but the
   # gates are BLIND here (see the note below), so passing them proves nothing.
@@ -203,6 +238,9 @@ if apply_unverifiable:
   #      the contract schema or a documented upstream limit, cited as a
   #      checkable path/identifier. An arbitrary bound is NOT a fix; return
   #      empty evidence and let the loop residue it un-applied.
+  # P060–P062 sites the worker-disk pass left in residue reach this loop too;
+  # their prescriptions do not depend on the mode, so they residue again with
+  # the same reason rather than being applied blind.
   call detect-fix-recheck
     scope: scope
     series: "P"
@@ -224,6 +262,9 @@ else:
     target: if mode == "strict" then "failing+warning" else "failing"
 
   for each finding in violations:
+    if finding.rule_id in ["P060", "P061", "P062"]:
+      continue  # the worker-disk pass above already handled it
+
     let proposal = call remediate-finding
       finding: finding
       mode: mode
@@ -1556,3 +1597,64 @@ path component, and this rule governs that package's sources too).
   `# conformance: ignore[P053] <reason>` naming what is resolved, and return
   `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
   the tier is already WARN for that.
+
+**Worker-disk rules (P060–P062)** — BLOCK, auto-fixable, scope=app; backed by
+`suite.checks.worker_disk`.  **Applied**, not proposed: this sub-group runs
+through `detect-fix-recheck` (see **The worker-disk sub-group** above).
+Return `outcome = "fix"` with `classification = "mechanical"` for the standard
+shapes below; return `classification = "judgment"` (still applied, then
+residued for review) only where a bullet says so, and `not_remediable = true`
+with the drafted edit in `migration_brief` where the bullet says the edit must
+not be made.  The re-check is
+`atlan-application-sdk-conformance detect --rule <P060|P061|P062>`.
+
+- **P060 UploadedFileNotDeleted** — an SDK `upload_file` / `upload_prefix` whose
+  local source is not removed after the upload.
+  - **Mechanical:** add the removal on the line after the upload, inside the
+    same block — `os.remove(<path>)` or `Path(<path>).unlink(missing_ok=True)`
+    for `upload_file`, `shutil.rmtree(<dir>, ignore_errors=True)` for
+    `upload_prefix` (wrap it in `asyncio.to_thread`/`self.run_in_thread` when the
+    directory can be large, as the surrounding code does for blocking calls).
+    Add `import os` / `import shutil` if missing.  Prefer the explicit removal:
+    `retain_local_copy=False` is only equivalent when the path is visibly built
+    from `TEMPORARY_PATH` in this function — the SDK deletes nothing outside it,
+    so on any other path the keyword clears the finding and deletes nothing.
+  - **Read again later in this function** (the message names the line): put the
+    removal after that last read — still mechanical.  When the reads sit in
+    different branches or loop iterations, use `try` / `finally` around them.
+  - **Judgment — the path is a parameter** (the message says so): read every
+    caller of this function.  If no caller reads the path after the call,
+    apply the removal here and say so in residue.  If any caller still needs
+    it, return `not_remediable = true` with a `migration_brief` that moves the
+    removal to the callers and suppresses this site with
+    `# conformance: ignore[P060] <reason naming the callers that remove it>`.
+  - **Not applied — the file has a later reader the checker cannot see** (an
+    explicit `retain_local_copy=True` with a comment saying why, an
+    `App.upload` in `run()`, a second upload in another function): return
+    `not_remediable = true`; the brief is the justified directive naming that
+    reader and what removes the file afterwards (the rule's terminal state).
+- **P061 TempFileOutsideWorkerVolume** — a stdlib `tempfile` constructor is
+  given no directory (`dir=` omitted, `None`, `gettempdir()`, or a literal
+  `"/tmp"`).
+  - **Mechanical:** pass `dir=` a directory under `TEMPORARY_PATH`, as a keyword,
+    replacing any `None` / `gettempdir()` / `"/tmp"` value and keeping every
+    other argument — `from application_sdk.constants import TEMPORARY_PATH`,
+    and since `tempfile` does not create a missing `dir`, make sure it exists
+    first (`os.makedirs(TEMPORARY_PATH, exist_ok=True)` before the call).  If
+    the app already has a scratch-root helper that resolves under
+    `TEMPORARY_PATH`, use it instead of a new constant.  When the same call also
+    trips P062, make one edit that fixes both.
+- **P062 TempScratchNotCleanedUp** — `tempfile.mkdtemp` / `mkstemp` scratch is
+  not removed on every exit path.
+  - **Mechanical:** wrap the scratch's use in `try` / `finally` and remove it
+    in the `finally` — `shutil.rmtree(<dir>, ignore_errors=True)` for a
+    `mkdtemp` directory, `os.remove(<path>)` (after `os.close(fd)`, both under
+    `contextlib.suppress(OSError)`) for a `mkstemp` file.  Move an existing
+    happy-path removal into the `finally` rather than adding a second one.  For
+    a directory used only inside one block, switching to
+    `with tempfile.TemporaryDirectory(dir=<under TEMPORARY_PATH>) as <dir>:` is
+    equivalent and also clears P061.
+  - **Not applied — the scratch outlives the function through a call** (handed
+    to a writer, cache or cleanup registry that removes it later): return
+    `not_remediable = true`; the brief is
+    `# conformance: ignore[P062] <reason naming that owner>`.

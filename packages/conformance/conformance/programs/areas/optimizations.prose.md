@@ -48,7 +48,8 @@ Postcondition (deterministic validator — never render-attested):
 
 ### Continuity
 
-Input-driven: re-render this node when any `*.py` file under `scope` changes.
+Input-driven: re-render this node when any `*.py` file under `scope` changes,
+or `atlan.yaml` (O009 grades its `deploy:` storage entries).
 This is the Reactor-ready wake source — in the Claude Code skill path, the
 skill caller re-invokes on demand rather than watching the filesystem.
 
@@ -71,14 +72,15 @@ Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
 **Judgment rules** (`classification = "judgment"`; always route to residue).
-Two flags apply in this area: **O001 and O005 are `autofixable = true`** — the
-lane applies the prescription below and residues the result for audit —
-while **O002, O003, O004 and O006 are `autofixable = false`**, *migration*
-rules: for those, apply nothing and return `not_remediable = true` with a
-`migration_brief` built from the reference app named by
+Two flags apply in this area: **O001, O005 and O009 are `autofixable = true`**
+— the lane applies the prescription below and residues the result for audit —
+while **O002, O003, O004, O006 and O010 are `autofixable = false`**,
+*migration* rules: for those, apply nothing and return `not_remediable = true`
+with a `migration_brief` built from the reference app named by
 `finding.canonical_reference` (see `remediate-finding`'s *Reference apps,
 impact analysis and verification*).  Produce a `"fix"` outcome only for the
-two auto-fixable rules:
+three auto-fixable rules.  (O007 and O008 are vacant: they graduated to the
+mandatory P060/P061, whose prescriptions live in `areas/prescriptions.prose.md`.)
 
 - **O001 OrjsonOverStdlibJson** — the site calls `json.dumps(...)` or
   `json.loads(...)` on the stdlib module.  `orjson` is **not** a drop-in, so
@@ -332,6 +334,44 @@ two auto-fixable rules:
     downstream can interpolate it either.
   - Never "resolve" the token by hardcoding a concrete app name: that hides
     the finding while freezing the wrong value into every other tenant.
+
+- **O009 WorkerVolumeWithoutAutoresize** (worker-disk) — a `deploy.storage` /
+  `deploy.storageWorker` entry in `atlan.yaml` has no
+  `resize.topolvm.io/storage_limit` annotation.  WARN, so the lane reaches it
+  in strict mode only.
+  - **Mechanical — the annotations:** add whichever of the three is missing,
+    keep any already present, and leave the entry's `size` exactly as it is:
+    `resize.topolvm.io/storage_limit: 192Gi` (twice the declared size when that
+    is already 192Gi or more — the message spells the value out),
+    `resize.topolvm.io/threshold: "50%"`, `resize.topolvm.io/increase: 8Gi`.
+    Where the edit goes is decided by the K014 emission test: run
+    `pkl eval -m <tmpdir> contract/app.pkl`; if it emits `atlan.yaml`, add the
+    annotations to the entry in the contract's `deploy` → `overrides`
+    `["storage"]` / `["storageWorker"]` listing and regenerate with the repo's
+    generate task (`touched_files` lists `contract/app.pkl` and the regenerated
+    `atlan.yaml`); otherwise edit `atlan.yaml` directly.  Never hand-edit a
+    generated `atlan.yaml`.
+  - **Residue — the base size:** lowering `size` is not part of the fix.  Add
+    a residue note: once P060–P062 and O010 are clean for the app, take each
+    pod's 30-day disk peak and lower the base toward `8Gi` so that about 1% of
+    pods need to grow (roughly the p99 peak).  Never invent the number.
+- **O010 WholePrefixStagedOnDisk** (worker-disk) — a `download_prefix` into a
+  local directory followed by `upload_prefix` of that tree, so the whole prefix
+  sits on disk at once.  Migration: apply nothing; draft the change in the
+  `migration_brief`, in this order of preference:
+  1. **Bounded batches** — list the keys, group them into batches capped by
+     bytes (256 MiB is a proven slice size), and per batch download, upload
+     (the bulk helpers keep `max_concurrency=4` within a batch) and delete the
+     batch's local files before the next.
+  2. **A bounded pipeline** — single files with about 4 in flight (download →
+     upload → delete each), matching the bulk helpers' `max_concurrency=4`; a
+     strictly serial loop is up to 4x slower on many small files.  It overlaps
+     download and upload and holds only a few files on disk.
+  Mention an in-store copy only when the message says both calls use the same
+  store.  A move across stores through the worker is expected and is never the
+  problem.  When the step genuinely needs every file at once (a merge, a
+  baseline build), the brief is
+  `# conformance: ignore[O010] <reason naming why>` instead.
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**:
 
