@@ -42,8 +42,10 @@ false positives at WARN.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
 from conformance.suite.schema.findings import Finding
 
 from ._manifest import SDK_IMPORT_ROOT, DeprecatedSymbol, Manifest
@@ -70,13 +72,109 @@ def _module_matches(import_mod: str, entry_module: str) -> bool:
     return entry_module == import_mod or entry_module.startswith(import_mod + ".")
 
 
+#: Deprecated SqlApp method -> (public method it delegates to, first SDK version with it).
+PUBLIC_RENAMES: dict[str, tuple[str, str]] = {
+    "_resolve_credential_ref": ("resolve_credential_ref", "3.33.2"),
+    "_build_transform_input": ("build_transform_input", "3.33.2"),
+}
+
+_SKIP_DIRS = frozenset(
+    {
+        "venv",
+        "env",
+        "node_modules",
+        "__pycache__",
+        "build",
+        "dist",
+        "site-packages",
+        "dist-packages",
+    }
+)
+
+
+def _skipped(dirs: tuple[str, ...]) -> bool:
+    return any(part in _SKIP_DIRS or part.startswith(".") for part in dirs)
+
+
+def _is_test_file(parts: tuple[str, ...]) -> bool:
+    name = parts[-1]
+    return (
+        "tests" in parts[:-1]
+        or "test" in parts[:-1]
+        or name.startswith("test_")
+        or name.endswith("_test.py")
+        or name == "conftest.py"
+    )
+
+
+def unsafe_renames(root: Path) -> frozenset[str]:
+    """Deprecated names in :data:`PUBLIC_RENAMES` whose call is not a safe swap in *root*.
+
+    Unsafe when any Python file in the repo, tests included, defines a function
+    with the old or the new name (an override changes which body runs), or a
+    test file mentions the old name (a patch of it stops reaching
+    the call). The whole repo is read, so a scan of a few files gives the same
+    answer as a full one.
+    """
+    watched = {
+        name for pair in PUBLIC_RENAMES.items() for name in (pair[0], pair[1][0])
+    }
+    unsafe: set[str] = set()
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).parts
+        if _skipped(rel[:-1]):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        present = {name for name in watched if name in text}
+        if not present:
+            continue
+        if _is_test_file(rel):
+            unsafe |= present & PUBLIC_RENAMES.keys()
+        try:
+            tree = ast.parse(text)
+        except SyntaxError:
+            unsafe |= present & PUBLIC_RENAMES.keys()
+            continue
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name in present
+            ):
+                unsafe |= {
+                    old
+                    for old, (new, _) in PUBLIC_RENAMES.items()
+                    if node.name in (old, new)
+                }
+    return frozenset(unsafe)
+
+
+def _rename_swap(name: str, unsafe: frozenset[str]) -> SafeSwap | None:
+    if name not in PUBLIC_RENAMES or name in unsafe:
+        return None
+    public, since = PUBLIC_RENAMES[name]
+    return SafeSwap(
+        id="public-rename",
+        find=f".{name}(",
+        replace=f".{public}(",
+        requires=SafeSwapRequires(package="atlan-application-sdk", min=since),
+    )
+
+
 def scan_consumer(
     tree: ast.Module,
     file: str,
     manifest: Manifest,
     directives: dict[int, _IgnoreDirective],
+    unsafe: frozenset[str] | None = None,
 ) -> list[Finding]:
-    """Return B001 findings for *tree* against the deprecated-symbol *manifest*."""
+    """Return B001 findings for *tree* against the deprecated-symbol *manifest*.
+
+    A call of a :data:`PUBLIC_RENAMES` method is marked as a safe swap only when
+    *unsafe* (from :func:`unsafe_renames`) is given and does not name it.
+    """
     if not manifest.symbols:
         return []
     class_func: dict[str, list[DeprecatedSymbol]] = {}
@@ -222,6 +320,7 @@ def scan_consumer(
             and node.func.attr in method
         ):
             record = method[node.func.attr]
+            swap = None if unsafe is None else _rename_swap(node.func.attr, unsafe)
             findings.append(
                 make_finding(
                     filename=file,
@@ -232,6 +331,7 @@ def scan_consumer(
                         f"({record.module}).{_hint(record.message)}"
                     ),
                     directives=directives,
+                    properties=swap.to_properties() if swap else None,
                 )
             )
         elif isinstance(node, ast.Attribute):

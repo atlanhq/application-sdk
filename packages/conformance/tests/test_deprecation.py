@@ -9,11 +9,17 @@ are guarded.
 from __future__ import annotations
 
 import ast
+import importlib
+import inspect
 
 from conformance.suite.checks._ast_common import _parse_directives
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
-from conformance.suite.checks.deprecation._consumer import scan_consumer
+from conformance.suite.checks.deprecation._consumer import (
+    PUBLIC_RENAMES,
+    scan_consumer,
+    unsafe_renames,
+)
 from conformance.suite.checks.deprecation._extractor import (
     extract_notices,
     extract_sites,
@@ -24,11 +30,13 @@ from conformance.suite.checks.deprecation._manifest import (
     load_manifest,
 )
 from conformance.suite.checks.deprecation._private_imports import (
+    PUBLIC_REEXPORTS,
     own_import_roots,
     scan_private_imports,
 )
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from conformance.suite.schema.extensions import SafeSwap
 
 
 def _tree_and_directives(src: str) -> tuple[ast.Module, dict]:
@@ -1761,3 +1769,201 @@ def test_b007_comprehension_of_reader_method_chains_still_fires() -> None:
         + "rows = [col.to_pylist() for col in columns]\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+# ── Safe-swap markers (atlan/safeSwap) ──────────────────────────────────────────
+
+
+def _apply_swap(src: str, finding) -> str:
+    swap = SafeSwap.from_properties(finding.properties)
+    assert swap is not None
+    lines = src.splitlines(keepends=True)
+    line = lines[finding.line - 1]
+    assert line.count(swap.find) == 1
+    lines[finding.line - 1] = line.replace(swap.find, swap.replace)
+    return "".join(lines)
+
+
+def test_b008_marks_a_module_level_public_reexport_import_as_a_safe_swap() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    build_output_path,\n"
+        "    get_object_store_prefix as prefix,\n"
+        ")\n"
+    )
+    findings = _b008(src)
+    swap = SafeSwap.from_properties(findings[0].properties)
+    assert swap is not None
+    assert swap.id == "public-reexport"
+    assert swap.requires.package == "atlan-application-sdk"
+    assert swap.requires.min == "3.0.0"
+    fixed = _apply_swap(src, findings[0])
+    assert fixed.startswith("from application_sdk.execution import (\n")
+    assert _b008(fixed) == []
+
+
+def test_b008_leaves_a_function_local_reexport_import_unmarked() -> None:
+    src = (
+        "def f():\n"
+        "    from application_sdk.execution._temporal.activity_utils import (\n"
+        "        get_object_store_prefix,\n"
+        "    )\n"
+        "    return get_object_store_prefix\n"
+    )
+    findings = _b008(src)
+    assert [f.rule_id for f in findings] == ["B008"]
+    assert SafeSwap.from_properties(findings[0].properties) is None
+
+
+def test_b008_leaves_an_import_with_a_name_lacking_a_public_home_unmarked() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    get_object_store_prefix,\n"
+        "    get_workflow_id,\n"
+        ")\n"
+    )
+    findings = _b008(src)
+    assert [f.rule_id for f in findings] == ["B008"]
+    assert SafeSwap.from_properties(findings[0].properties) is None
+
+
+def test_b008_public_reexports_are_the_same_objects() -> None:
+    for private, (public, _since, names) in PUBLIC_REEXPORTS.items():
+        for name in names:
+            assert getattr(importlib.import_module(public), name) is getattr(
+                importlib.import_module(private), name
+            )
+
+
+def test_b001_public_renames_delegate_with_the_same_signature() -> None:
+    from application_sdk.templates.sql_app import SqlApp
+
+    for deprecated, (public, _since) in PUBLIC_RENAMES.items():
+        assert inspect.signature(getattr(SqlApp, deprecated)) == inspect.signature(
+            getattr(SqlApp, public)
+        )
+        assert public in inspect.getsource(getattr(SqlApp, deprecated))
+
+
+_RENAME_CALLER = (
+    "from application_sdk.templates import SqlApp\n"
+    "class MyConnector(SqlApp):\n"
+    "    async def run(self, input):\n"
+    "        ref = self._resolve_credential_ref(input)\n"
+    "        return SqlApp._build_transform_input(input, None)\n"
+)
+
+
+def _repo(tmp_path, files: dict[str, str]):
+    for name, src in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(src)
+    return tmp_path
+
+
+def _b001_in(root, file: str) -> list:
+    tree, directives = _tree_and_directives((root / file).read_text())
+    return scan_consumer(tree, file, load_manifest(), directives, unsafe_renames(root))
+
+
+def test_b001_marks_a_rename_call_when_the_repo_defines_and_tests_neither_name(
+    tmp_path,
+) -> None:
+    root = _repo(
+        tmp_path,
+        {
+            "app/connector.py": _RENAME_CALLER,
+            "tests/test_x.py": "def test_x():\n    pass\n",
+        },
+    )
+    findings = _b001_in(root, "app/connector.py")
+    assert [f.rule_id for f in findings] == ["B001", "B001"]
+    fixed = _RENAME_CALLER
+    for finding in findings:
+        swap = SafeSwap.from_properties(finding.properties)
+        assert swap is not None and swap.id == "public-rename"
+        assert swap.requires.min == "3.33.2"
+        fixed = _apply_swap(fixed, finding)
+    assert "self.resolve_credential_ref(input)" in fixed
+    assert "SqlApp.build_transform_input(input, None)" in fixed
+    (root / "app/connector.py").write_text(fixed)
+    assert _b001_in(root, "app/connector.py") == []
+
+
+def test_b001_leaves_a_rename_call_unmarked_when_the_app_overrides_either_name(
+    tmp_path,
+) -> None:
+    for override in ("_resolve_credential_ref", "resolve_credential_ref"):
+        root = _repo(
+            tmp_path / override,
+            {
+                "app/connector.py": _RENAME_CALLER,
+                "app/base.py": f"class Base:\n    def {override}(self, input):\n        return None\n",
+            },
+        )
+        found = {
+            f.message.split("'")[1]: SafeSwap.from_properties(f.properties)
+            for f in _b001_in(root, "app/connector.py")
+        }
+        assert found["_resolve_credential_ref"] is None
+        assert found["_build_transform_input"] is not None
+
+
+def test_b001_leaves_a_rename_call_unmarked_when_a_test_names_the_old_method(
+    tmp_path,
+) -> None:
+    root = _repo(
+        tmp_path,
+        {
+            "app/connector.py": _RENAME_CALLER,
+            "tests/unit/test_connector.py": 'PATCH = ("SqlApp", "_build_transform_input")\n',
+        },
+    )
+    found = {
+        f.message.split("'")[1]: SafeSwap.from_properties(f.properties)
+        for f in _b001_in(root, "app/connector.py")
+    }
+    assert found["_build_transform_input"] is None
+    assert found["_resolve_credential_ref"] is not None
+
+
+def test_b001_rename_marks_do_not_depend_on_which_files_are_scanned(tmp_path) -> None:
+    from conformance.suite.checks.deprecation import scan_all
+
+    root = _repo(
+        tmp_path,
+        {
+            "pyproject.toml": '[project]\nname = "atlan-example-app"\nversion = "0.1.0"\n',
+            "app/connector.py": _RENAME_CALLER,
+            "app/base.py": "class Base:\n    def _resolve_credential_ref(self, input):\n        return None\n",
+        },
+    )
+    only = [
+        f for f in scan_all([root / "app/connector.py"], root) if f.rule_id == "B001"
+    ]
+    marked = {
+        f.message.split("'")[1] for f in only if SafeSwap.from_properties(f.properties)
+    }
+    assert marked == {"_build_transform_input"}
+
+
+def test_b001_rename_check_ignores_installed_packages_and_reads_root_test_files(
+    tmp_path,
+) -> None:
+    sdk_copy = "class SqlApp:\n    def _resolve_credential_ref(self, input):\n        return None\n"
+    root = _repo(
+        tmp_path,
+        {
+            "app/connector.py": _RENAME_CALLER,
+            ".venv311/lib/application_sdk/templates/sql_app.py": sdk_copy,
+            "pyenv311/lib/python3.11/site-packages/application_sdk/templates/sql_app.py": sdk_copy,
+            "test_connector.py": 'PATCH = ("SqlApp", "_build_transform_input")\n',
+        },
+    )
+    found = {
+        f.message.split("'")[1]: SafeSwap.from_properties(f.properties)
+        for f in _b001_in(root, "app/connector.py")
+    }
+    assert found["_resolve_credential_ref"] is not None
+    assert found["_build_transform_input"] is None

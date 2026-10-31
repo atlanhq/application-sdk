@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from typing import Any
 
 from conformance.suite.schema.findings import Finding
 
@@ -17,6 +18,7 @@ def make_finding(
     message: str,
     directives: dict[int, _IgnoreDirective],
     cleared_by: frozenset[str] = frozenset(),
+    properties: dict[str, Any] | None = None,
 ) -> Finding:
     """Build a :class:`Finding` for *node*, honouring inline suppression directives.
 
@@ -28,7 +30,7 @@ def make_finding(
 
     ``cleared_by`` is carried through to the :class:`Finding` unchanged; see
     its docstring for what naming a scenario rule there commits a checker
-    to.
+    to.  ``properties`` become the finding's extra ``result.properties``.
     """
     line: int = getattr(node, "lineno", 1)
     col: int = getattr(node, "col_offset", 0) + 1
@@ -52,4 +54,5 @@ def make_finding(
         suppressed=suppressed,
         suppression_justification=justification,
         cleared_by=cleared_by,
+        properties=properties or {},
     )

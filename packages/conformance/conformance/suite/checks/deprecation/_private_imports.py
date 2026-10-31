@@ -77,6 +77,7 @@ import ast
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
 from conformance.suite.schema.findings import Finding
 
 _RULE_ID = "B008"
@@ -164,6 +165,29 @@ _PUBLIC_DESPITE_UNDERSCORE = frozenset(
 )
 
 
+#: Private module -> (public module re-exporting the same objects, first SDK version with them, names).
+PUBLIC_REEXPORTS: dict[str, tuple[str, str, frozenset[str]]] = {
+    "application_sdk.execution._temporal.activity_utils": (
+        "application_sdk.execution",
+        "3.0.0",
+        frozenset({"build_output_path", "get_object_store_prefix"}),
+    ),
+}
+
+
+def _reexport_swap(node: ast.ImportFrom, module: str) -> SafeSwap | None:
+    entry = PUBLIC_REEXPORTS.get(module)
+    if entry is None or any(alias.name not in entry[2] for alias in node.names):
+        return None
+    public, since, _ = entry
+    return SafeSwap(
+        id="public-reexport",
+        find=module,
+        replace=public,
+        requires=SafeSwapRequires(package="atlan-application-sdk", min=since),
+    )
+
+
 def _private_component(dotted: str) -> str | None:
     """The first underscore-prefixed component of *dotted*, if any.
 
@@ -202,10 +226,13 @@ def scan_private_imports(
     """Return B008 findings for every foreign-private reach in *tree*."""
     findings: list[Finding] = []
     reported: set[tuple[int, str]] = set()
+    top_level = {id(n) for n in tree.body}
     # Local name -> dotted module it is bound to, for `import x as y` chains.
     module_aliases: dict[str, str] = {}
 
-    def emit(node: ast.AST, path: str, component: str) -> None:
+    def emit(
+        node: ast.AST, path: str, component: str, swap: SafeSwap | None = None
+    ) -> None:
         key = (node.lineno, path)
         if key in reported:
             return
@@ -217,6 +244,7 @@ def scan_private_imports(
                 node=node,
                 message=_message(path, component),
                 directives=directives,
+                properties=swap.to_properties() if swap else None,
             )
         )
 
@@ -243,7 +271,8 @@ def scan_private_imports(
                 continue
             component = _private_component(module)
             if component:
-                emit(node, module, component)
+                swap = _reexport_swap(node, module) if id(node) in top_level else None
+                emit(node, module, component, swap)
                 continue
             # Public module, private member:
             # `from application_sdk.app.base import _helper`.
