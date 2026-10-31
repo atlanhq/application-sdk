@@ -131,6 +131,8 @@ The SDK provides pre-built `App` subclasses for common patterns. Override only t
 
 ### SqlMetadataExtractor
 
+Deprecated (removal in v4.0.0): subclass `SqlApp` instead (reference: atlan-mysql-app).
+
 Extracts metadata (databases, schemas, tables, columns, procedures) from SQL sources:
 
 ```python
@@ -175,6 +177,8 @@ class MyQueryExtractor(SqlQueryExtractor):
 ```
 
 ### IncrementalSqlMetadataExtractor
+
+Deprecated (removal in v4.0.0): subclass `SqlApp` and override `run()` with the incremental phases as `@task` methods.
 
 Runs a 5-phase incremental extraction:
 

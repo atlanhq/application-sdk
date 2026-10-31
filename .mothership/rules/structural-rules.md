@@ -146,7 +146,7 @@ When reviewing connector migration PRs, check for v2 symbols that should have be
 | `HandlerInterface` subclass | `application_sdk.handler.Handler` |
 | Direct `DaprClient` usage | `application_sdk.infrastructure` protocols |
 | Direct `temporalio` imports | `application_sdk.execution` public API |
-| `BaseSQLMetadataExtractionActivities` | `application_sdk.templates.SqlMetadataExtractor` |
+| `BaseSQLMetadataExtractionActivities` | `application_sdk.templates.SqlApp` |
 | Dict-based credential access | `application_sdk.handler` typed contracts |
 
 **Review action:**

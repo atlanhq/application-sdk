@@ -151,26 +151,26 @@ For SQL connectors, `fetch_metadata` should use the SQL client to list databases
 ### 7. Generate `app/connector.py` (SQL variant)
 
 ```python
-from application_sdk.templates import SqlMetadataExtractor
-from application_sdk.templates.contracts.sql_metadata import (
-    ExtractionInput, ExtractionOutput,
-    FetchDatabasesInput, FetchDatabasesOutput,
-)
-from application_sdk.app import task
+from typing import Any
 
-class {Name}App(SqlMetadataExtractor):
+from application_sdk.templates import SqlApp
+
+class {Name}App(SqlApp):
     sql_client_class = {Name}Client
 
-    @task(timeout_seconds=1800)
-    async def fetch_databases(self, input: FetchDatabasesInput) -> FetchDatabasesOutput:
-        client = await self._load_sql_client(input)
-        async for batch in client.run_query(self.fetch_database_sql):
-            # process batch
-            pass
-        return FetchDatabasesOutput(chunk_count=1, total_record_count=10)
+    fetch_database_sql = "SELECT ..."
+    fetch_schema_sql = "SELECT ..."
+    fetch_table_sql = "SELECT ..."
+    fetch_column_sql = "SELECT ..."
+
+    def map_database(self, record: dict[str, Any], connection_qn: str):
+        from pyatlan_v9.model.assets import Database
+        return Database.creator(name=record["database_name"], connection_qualified_name=connection_qn)
+
+    # map_schema / map_table / map_column likewise
 ```
 
-The `SqlMetadataExtractor` base `run()` already calls `App.upload()` to hand off artifacts to Atlan. Do not override `run()` without also calling `super().run(input)` or explicitly calling `await self.upload(...)` — omitting the upload is a silent failure in SDR deployments.
+Reference app: atlan-mysql-app. The `SqlApp` base `run()` extracts, transforms with the `map_*` methods, and uploads. If a query needs another query's result, override `run()` with the public helpers the `SqlApp` docstring lists (`resolve_credential_ref`, `build_task_input`, `build_transform_input`, `finalize_extraction`); do not reach for underscore-prefixed members.
 
 For REST connectors, subclass `App` directly with custom `@task` methods and an explicit `App.upload()` call in `run()`:
 

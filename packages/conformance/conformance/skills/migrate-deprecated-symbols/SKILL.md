@@ -167,8 +167,10 @@ use), because each use changes with the migration.
     FileReference field on the typed Input read with `pandas.read_parquet`
     through `run_in_thread`).
   - `QueryBasedTransformer`, `TransformerInterface` (→ the asset-mapper
-    pattern), and `SqlMetadataExtractor` or `BaseMetadataExtractor` on a SQL
-    source (→ `templates.SqlApp`) are structural v3 migrations no packaged skill
+    pattern), `SqlMetadataExtractor` or `BaseMetadataExtractor` on a SQL
+    source (→ `templates.SqlApp`) and `IncrementalSqlMetadataExtractor`
+    (→ `templates.SqlApp` with a custom `run()`) are
+    structural v3 migrations no packaged skill
     performs: hand them to the developer with
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
     (in the `atlanhq/application-sdk` repo, not shipped with this package).
