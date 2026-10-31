@@ -47,14 +47,29 @@ from __future__ import annotations
 
 import asyncio
 import os
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover — no flock on Windows; the sweep is then a no-op
+    fcntl = None  # type: ignore[assignment]
+import queue
+import shutil
+import sys
+import threading
+import uuid
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import (
+    drain_offloads,
+    run_in_thread,
+    tracking_offloads,
+)
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.contracts.types import FileReference, Lazy, StoreTarget
 from application_sdk.observability.logger_adaptor import get_logger
@@ -137,6 +152,49 @@ def iter_named_file_refs(
 def _find_file_refs(data: Any) -> list[FileReference]:
     """Recursively find all FileReference instances in a BaseModel/dataclass tree."""
     return [named.ref for named in iter_named_file_refs(data)]
+
+
+def _is_lazy(node: BaseModel, name: str) -> bool:
+    """Return True if field *name* on *node* carries the ``Lazy`` marker."""
+    return any(isinstance(m, Lazy) for m in type(node).model_fields[name].metadata)
+
+
+def _materialize_candidates(
+    data: Any, *, log_lazy: bool = False
+) -> list[FileReference]:
+    """The refs ``materialize_file_refs`` considers in *data*, in tree order.
+
+    Skips refs with ``auto_materialize=False`` (the app owns them) and refs on a
+    ``Lazy`` field (the task fetches them itself).
+    """
+    found: list[FileReference] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, FileReference):
+            if node.auto_materialize:
+                found.append(node)
+            return
+        if isinstance(node, BaseModel):
+            for name in type(node).model_fields:
+                value = getattr(node, name)
+                if isinstance(value, FileReference) and _is_lazy(node, name):
+                    if log_lazy:
+                        # conformance: ignore[L018] storage_path is in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes it to an indexed OTLP attribute — %-style would lose the promotion
+                        logger.debug(
+                            "file_ref.materialize.lazy_skipped",
+                            storage_path=value.storage_path,
+                        )
+                    continue
+                _walk(value)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                _walk(item)
+        elif isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+
+    _walk(data)
+    return found
 
 
 class _LocalCopy(Enum):
@@ -306,6 +364,18 @@ def _materialize_key(ref: FileReference) -> str:
     return f"{ref.store.value}:{ref.storage_path}"
 
 
+def _empty_directories(paths: set[str]) -> set[str]:
+    empty: set[str] = set()
+    for path in paths:
+        try:
+            with os.scandir(path) as it:
+                if next(it, None) is None:
+                    empty.add(path)
+        except OSError:
+            continue
+    return empty
+
+
 async def _replace_refs(
     data: Any,
     store: ObjectStore,
@@ -313,6 +383,7 @@ async def _replace_refs(
     output_path: str | None = None,
     *,
     upstream_store: ObjectStore | None = None,
+    download_dir: str | None = None,
 ) -> Any:
     """Replace FileReference instances in a data tree using concurrent execution.
 
@@ -338,10 +409,19 @@ async def _replace_refs(
             ``persist_file_reference`` for ``RETAINED``-tier refs.
         upstream_store: Store a ref with ``store=UPSTREAM`` materialises
             from. ``None`` falls back to *store*.
+        download_dir: When set, every ref that needs a download is
+            downloaded to ``<download_dir>/<storage_path>`` instead of its own
+            ``local_path`` or a system temp name, so the caller deletes every
+            copy, finished or not, by deleting one folder. A ref whose local
+            copy is current is used where it is and never moved.
 
     Returns:
         A new object tree with replaced FileReference instances (original
         objects are never mutated).
+
+    If one operation fails, the others are cancelled, and they and the
+    threads they started have finished before the error propagates, so
+    nothing keeps writing after the caller has moved on.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
         MAX_CONCURRENT_STORAGE_TRANSFERS,
@@ -361,20 +441,13 @@ async def _replace_refs(
     # may hash a multi-GB file, so it must not run per pass (FND-4081).
     _candidates: list[FileReference] = []
     _needs: dict[int, bool] = {}
-
-    def _is_lazy(node: BaseModel, name: str) -> bool:
-        """Return True if field *name* on *node* carries the ``Lazy`` marker."""
-        return any(isinstance(m, Lazy) for m in type(node).model_fields[name].metadata)
+    _empty_dirs: set[str] = set()
 
     def _collect(node: Any) -> None:
         if isinstance(node, FileReference):
             if not node.auto_materialize:
                 return  # app owns the lifecycle for this ref — skip
-            if (
-                mode == "persist"
-                and node.local_path is not None
-                and not node.is_durable
-            ):
+            if node.local_path is not None and not node.is_durable:
                 key = str(id(node))
                 if key not in _factories:
                     _ref = node
@@ -382,24 +455,10 @@ async def _replace_refs(
                         store, r, output_path=output_path
                     )
                     _winners[key] = node
-            elif mode == "materialize":
-                _candidates.append(node)
             return
         if isinstance(node, BaseModel):
             for name in type(node).model_fields:
-                value = getattr(node, name)
-                if (
-                    mode == "materialize"
-                    and isinstance(value, FileReference)
-                    and _is_lazy(node, name)
-                ):
-                    # conformance: ignore[L018] storage_path is in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes it to an indexed OTLP attribute — %-style would lose the promotion
-                    logger.debug(
-                        "file_ref.materialize.lazy_skipped",
-                        storage_path=value.storage_path,
-                    )
-                    continue
-                _collect(value)
+                _collect(getattr(node, name))
         elif isinstance(node, (list, tuple)):
             for item in node:
                 _collect(item)
@@ -407,7 +466,10 @@ async def _replace_refs(
             for v in node.values():
                 _collect(v)
 
-    _collect(data)
+    if mode == "materialize":
+        _candidates = _materialize_candidates(data, log_lazy=True)
+    else:
+        _collect(data)
 
     if _candidates:
         check_sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
@@ -420,14 +482,34 @@ async def _replace_refs(
         unique = list({id(ref): ref for ref in _candidates}.values())
         verdicts = await asyncio.gather(*[_check(ref) for ref in unique])
         _needs = {id(ref): needs for ref, needs in zip(unique, verdicts)}
+        if download_dir is not None:
+            probe = {
+                node.local_path
+                for node in _candidates
+                if _needs[id(node)]
+                and node.file_count == 0
+                and node.local_path is not None
+            }
+            if probe:
+                _empty_dirs = await run_in_thread(_empty_directories, probe)
         for node in _candidates:
             if not _needs[id(node)]:
                 continue
             key = _materialize_key(node)
             if key not in _factories:
-                _factories[key] = lambda r=node: materialize_file_reference(
-                    _resolve_ref_store(r, store, upstream_store), r
-                )
+                keep_empty_dir = node.local_path in _empty_dirs
+                if download_dir is not None and not keep_empty_dir:
+                    target = _download_target(download_dir, node, len(_factories))
+                    _factories[key] = lambda r=node, t=target: (
+                        materialize_file_reference(
+                            _resolve_ref_store(r, store, upstream_store),
+                            r.model_copy(update={"local_path": t}),
+                        )
+                    )
+                else:
+                    _factories[key] = lambda r=node: materialize_file_reference(
+                        _resolve_ref_store(r, store, upstream_store), r
+                    )
                 _winners[key] = node
 
     if not _factories:
@@ -449,7 +531,18 @@ async def _replace_refs(
         current_progress_tracker().mark_progress(f"file_ref.{mode}")
         return key, result
 
-    pairs = await asyncio.gather(*[_run(k, f) for k, f in _factories.items()])
+    with tracking_offloads() as offloads:
+        runs = [asyncio.ensure_future(_run(k, f)) for k, f in _factories.items()]
+        try:
+            pairs = await asyncio.gather(*runs)
+        except BaseException:
+            for run in runs:
+                run.cancel()
+            try:
+                await asyncio.gather(*runs, return_exceptions=True)
+            finally:
+                await drain_offloads(offloads)
+            raise
     _results: dict[str, FileReference] = dict(pairs)
 
     # ── Pass 3: scatter results back through the tree ─────────────────────────
@@ -529,7 +622,11 @@ async def persist_file_refs(
 
 
 async def materialize_file_refs(
-    store: ObjectStore, data: Any, *, upstream_store: ObjectStore | None = None
+    store: ObjectStore,
+    data: Any,
+    *,
+    upstream_store: ObjectStore | None = None,
+    download_dir: str | None = None,
 ) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
 
@@ -550,5 +647,358 @@ async def materialize_file_refs(
         ones (``local_path`` set, ``.sha256`` sidecar written).
     """
     return await _replace_refs(
-        data, store, "materialize", upstream_store=upstream_store
+        data,
+        store,
+        "materialize",
+        upstream_store=upstream_store,
+        download_dir=download_dir,
+    )
+
+
+_LOCK_NAME = ".owner.lock"
+_CREATING_SUFFIX = ".creating"
+
+_pending_removals: set[asyncio.Future[None]] = set()
+_held_lock_fds: set[int] = set()
+_held_lock_fds_guard = threading.Lock()
+_removal_queue: queue.SimpleQueue[
+    tuple[str, int, asyncio.AbstractEventLoop, asyncio.Future[None]]
+] = queue.SimpleQueue()
+_REMOVAL_THREADS = 2
+_removal_threads: list[threading.Thread] = []
+_removal_thread_guard = threading.Lock()
+
+
+@dataclass(frozen=True)
+class TaskInputDir:
+    """One task's download folder and the lock that marks its owner alive."""
+
+    path: str
+    lock_fd: int
+
+
+def _task_inputs_root() -> str:
+    from application_sdk.constants import (  # noqa: PLC0415 — circular: constants imported transitively across the SDK
+        TEMPORARY_PATH,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        TASK_INPUTS_DIRNAME,
+    )
+
+    return os.path.abspath(os.path.join(TEMPORARY_PATH, TASK_INPUTS_DIRNAME))
+
+
+def _close_lock(fd: int) -> None:
+    with _held_lock_fds_guard:
+        _held_lock_fds.discard(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        logger.debug("Task input lock fd was already closed", exc_info=True)
+
+
+def _close_held_locks_in_child() -> None:
+    global _removal_queue, _removal_thread_guard
+    _held_lock_fds_guard.release()
+    for fd in list(_held_lock_fds):
+        try:
+            os.close(fd)
+        except OSError:  # conformance: ignore[E002] forked child: an inherited fd may already be closed, and logging after fork can deadlock on a lock another thread held
+            pass
+    _held_lock_fds.clear()
+    _removal_queue = queue.SimpleQueue()
+    _removal_thread_guard = threading.Lock()
+    _removal_threads.clear()
+    _pending_removals.clear()
+
+
+_fork_hooks_registered = globals().get("_fork_hooks_registered", False)
+if hasattr(os, "register_at_fork") and not _fork_hooks_registered:
+    _fork_hooks_registered = True
+    os.register_at_fork(
+        before=lambda: _held_lock_fds_guard.acquire(),
+        after_in_parent=lambda: _held_lock_fds_guard.release(),
+        after_in_child=_close_held_locks_in_child,
+    )
+
+
+def _create_owned_dir(path: str) -> int:
+    """Create *path* with its owner lock already held, then make it visible.
+
+    The folder is built under a hidden ``.<id>.creating`` name, which the
+    sweep never touches, and renamed into place only once its lock is held:
+    a visible folder therefore always has a held lock until its owner
+    deletes it.
+    """
+    parent, name = os.path.split(path)
+    staging = os.path.join(parent, f".{name}{_CREATING_SUFFIX}")
+    os.makedirs(staging)
+    fd: int | None = None
+    try:
+        with _held_lock_fds_guard:
+            fd = os.open(
+                os.path.join(staging, _LOCK_NAME), os.O_RDWR | os.O_CREAT, 0o600
+            )
+            _held_lock_fds.add(fd)
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        os.rename(staging, path)
+    except BaseException:
+        if fd is not None:
+            _close_lock(fd)
+        _remove_tree(staging)
+        raise
+    return fd
+
+
+async def open_task_input_dir() -> TaskInputDir:
+    """Create one task's download folder and hold its owner lock (FND-4310).
+
+    Lives under ``TEMPORARY_PATH``, the SDK's working volume, so downloads land
+    where they always did. ``materialize_file_refs(..., download_dir=...)``
+    downloads into it; :func:`remove_task_input_dir` deletes it when the task
+    ends. The exclusive ``flock`` on its lock file lasts as long as the task,
+    so :func:`sweep_dead_task_inputs` can tell a live folder from a dead one.
+    A cancel while the folder is being created still deletes it once the
+    creation finishes.
+    """
+    path = os.path.join(_task_inputs_root(), uuid.uuid4().hex)
+    creating = asyncio.ensure_future(run_in_thread(_create_owned_dir, path))
+    try:
+        fd = await asyncio.shield(creating)
+    except asyncio.CancelledError:
+
+        def _discard(done: asyncio.Future[int]) -> None:
+            if not done.cancelled() and done.exception() is None:
+                remove_task_input_dir(TaskInputDir(path=path, lock_fd=done.result()))
+
+        creating.add_done_callback(_discard)
+        raise
+    return TaskInputDir(path=path, lock_fd=fd)
+
+
+def _download_target(download_dir: str, ref: FileReference, slot: int) -> str:
+    """``<download_dir>/<slot>/<storage_path>``, or a fresh name in the slot.
+
+    One slot per distinct object (store + key), so the same key in two stores,
+    or keys that nest (``a`` and ``a/b``), never share a path. Keeping the
+    store key as the relative path keeps the layout readers rely on (a
+    ``transformed`` segment, sibling files). A key that would leave the slot
+    gets a fresh name with the key's suffix.
+    """
+    base = os.path.join(download_dir, str(slot))
+    key = ref.storage_path or ""
+    target = os.path.normpath(os.path.join(base, key.lstrip("/")))
+    try:
+        inside = target != base and os.path.commonpath([base, target]) == base
+    except ValueError:  # conformance: ignore[E009] os.path.commonpath raises on mixed Windows drives; such a key leaves the folder
+        inside = False
+    if inside:
+        return target
+    return os.path.join(base, uuid.uuid4().hex + PurePosixPath(key).suffix)
+
+
+def _ignore_missing(func: Any, path: str, exc: BaseException) -> None:
+    if not isinstance(exc, FileNotFoundError):
+        raise exc
+
+
+def _rmtree(path: str) -> None:
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_ignore_missing)
+    else:
+        shutil.rmtree(path, onerror=lambda f, p, info: _ignore_missing(f, p, info[1]))
+
+
+def _remove_tree(path: str) -> bool:
+    try:
+        _rmtree(path)
+    except FileNotFoundError:
+        logger.debug("Task download folder already gone: %s", path)
+    except OSError:
+        logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
+        return False
+    return True
+
+
+def _remove_owned(path: str, lock_fd: int | None) -> bool:
+    """Delete *path*'s content first and its lock file last, then release the lock.
+
+    If the content cannot all be deleted, the lock file stays: once the lock
+    is released, the next sweep finds the folder dead and retries. Without
+    ``flock`` (Windows) the lock is only a file, and an open file cannot be
+    deleted there, so it is closed first.
+    """
+    if fcntl is None and lock_fd is not None:
+        _close_lock(lock_fd)
+        lock_fd = None
+    try:
+        try:
+            entries = list(os.scandir(path))
+        except FileNotFoundError:
+            return True
+        except OSError:
+            logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
+            return False
+        complete = True
+        for entry in entries:
+            if entry.name == _LOCK_NAME:
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    _rmtree(entry.path)
+                else:
+                    os.remove(entry.path)
+            except FileNotFoundError:
+                logger.debug("Task download entry already gone: %s", entry.path)
+            except OSError:
+                complete = False
+                logger.warning(
+                    "Could not delete a task's downloaded inputs", exc_info=True
+                )
+        if complete:
+            complete = _remove_tree(path)
+        return complete
+    finally:
+        if lock_fd is not None:
+            _close_lock(lock_fd)
+
+
+def _removal_worker() -> None:
+    while True:
+        path, lock_fd, loop, done = _removal_queue.get()
+        try:
+            if not _remove_owned(path, lock_fd):
+                _remove_owned(path, None)
+        except Exception:
+            logger.warning("Could not delete a task's downloaded inputs", exc_info=True)
+        finally:
+            try:
+                loop.call_soon_threadsafe(_finish_removal, done)
+            except RuntimeError:
+                logger.debug("Event loop closed before a task download delete ended")
+
+
+def _finish_removal(done: asyncio.Future[None]) -> None:
+    if not done.done():
+        done.set_result(None)
+
+
+def _start_removal_thread() -> None:
+    with _removal_thread_guard:
+        _removal_threads[:] = [t for t in _removal_threads if t.is_alive()]
+        while len(_removal_threads) < _REMOVAL_THREADS:
+            thread = threading.Thread(
+                target=_removal_worker, name="sdk-task-input-removal", daemon=True
+            )
+            thread.start()
+            _removal_threads.append(thread)
+
+
+def remove_task_input_dir(owned: TaskInputDir) -> None:
+    """Queue a task's download folder for deletion. Never raises.
+
+    A small pool of daemon threads deletes queued folders: never the loop's default
+    executor (Temporal uses it) nor the SDK's blocking pool (downloads need
+    it, and its threads are joined at exit, so a long delete would hold a
+    stopping pod up). A delete cut short by process exit is finished by the
+    next worker's sweep. Not awaited, so the wrapper's ``finally`` has no
+    cancellation point here and never replaces the error the task ends with.
+    The owner lock is released after the folder is gone; if the folder cannot
+    all be deleted, that folder is retried once, and after that it is left to
+    the next worker's sweep. If the delete cannot be queued,
+    the lock is released, so the next sweep deletes the folder.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+        done: asyncio.Future[None] = loop.create_future()
+        _start_removal_thread()
+        _removal_queue.put((owned.path, owned.lock_fd, loop, done))
+    except Exception:
+        _close_lock(owned.lock_fd)
+        logger.warning(
+            "Could not start deleting a task's downloaded inputs", exc_info=True
+        )
+        return
+    _pending_removals.add(done)
+    done.add_done_callback(_pending_removals.discard)
+
+
+async def wait_for_task_input_removals(timeout: float) -> None:
+    """Wait up to *timeout* seconds for queued folder deletions. Never raises.
+
+    For worker shutdown: an unfinished deletion is logged and left to the next
+    worker's sweep.
+    """
+    pending = list(_pending_removals)
+    if not pending or timeout <= 0:
+        if pending:
+            logger.warning(
+                "Shutdown left %d task download folders to the next sweep",
+                len(pending),
+            )
+        return
+    _, unfinished = await asyncio.wait(pending, timeout=timeout)
+    if unfinished:
+        logger.warning(
+            "Shutdown left %d task download folders to the next sweep",
+            len(unfinished),
+        )
+
+
+def _sweep_dead_task_inputs() -> None:
+    if fcntl is None:
+        return
+    root = _task_inputs_root()
+    try:
+        entries = list(os.scandir(root))
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.warning("Could not list leftover task downloads", exc_info=True)
+        return
+    for entry in entries:
+        if entry.name.startswith("."):
+            continue
+        try:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            with _held_lock_fds_guard:
+                fd = os.open(os.path.join(entry.path, _LOCK_NAME), os.O_RDWR)
+                _held_lock_fds.add(fd)
+        except FileNotFoundError:
+            _remove_owned(entry.path, None)
+            continue
+        except OSError:
+            continue
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            _close_lock(fd)
+            continue
+        _remove_owned(entry.path, fd)
+
+
+async def sweep_dead_task_inputs() -> None:
+    """Delete task download folders whose owner is dead. Never raises.
+
+    A worker killed mid-task (OOM, SIGKILL) never reaches its ``finally``; the
+    kernel drops its ``flock`` when the process dies. A visible folder whose
+    lock this sweep can take, or that has no lock file at all, has no live
+    owner in any process on the node, so it goes; a folder whose lock is held
+    belongs to a running task and is skipped. Folders still being created
+    (``.<id>.creating``) are never touched.
+    """
+    await run_in_thread(_sweep_dead_task_inputs)
+
+
+def needs_task_input_dir(data: Any) -> bool:
+    """True when materialise may download something for *data*.
+
+    Same walk as materialise (``Lazy`` and ``auto_materialize=False`` refs are
+    never downloaded), so a task with nothing to download gets no folder.
+    """
+    return any(
+        _local_copy(ref) is not _LocalCopy.CURRENT
+        for ref in _materialize_candidates(data)
     )
