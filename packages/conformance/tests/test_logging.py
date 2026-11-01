@@ -209,6 +209,45 @@ def test_l006_fires_in_while_loop() -> None:
     assert "L006" in _ids(src)
 
 
+def test_l006_silent_for_async_for_else_completion_summary() -> None:
+    src = """
+from loguru import logger
+
+async def process_batches(batches):
+    async for batch in batches:
+        consume(batch)
+    else:
+        logger.info("ingest complete")
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_per_item_info_with_loop_else_summary() -> None:
+    src = """
+from loguru import logger
+
+for item in items:
+    logger.info("processing item")
+else:
+    logger.info("processing complete")
+"""
+    findings = scan_text(src, "x.py")
+    assert sum(f.rule_id == "L006" for f in findings) == 1
+
+
+def test_l006_fires_for_inner_loop_else_repeated_by_outer_loop() -> None:
+    src = """
+from loguru import logger
+
+for batch in batches:
+    for item in batch:
+        consume(item)
+    else:
+        logger.info("batch complete")
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_silent_for_mutually_exclusive_terminal_break_summaries() -> None:
     src = """
 from loguru import logger
