@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from conformance.tools.generate_rule_docs import _split_literal_blocks
+from conformance.tools.generate_rule_docs import _fill_paragraph, _split_literal_blocks
 
 
 def test_plain_prose_is_a_single_non_code_chunk() -> None:
@@ -99,6 +99,27 @@ def test_reassembled_prose_has_no_leftover_double_colons() -> None:
 
 
 # ── per-rule files (by-id/) — the context-squeezed single-rule view ────────
+
+
+def test_list_items_in_one_paragraph_stay_separate_items() -> None:
+    para = "- first item that\n  continues\n- second item\n* third\n1. fourth"
+    assert _fill_paragraph(para).split("\n") == [
+        "- first item that continues",
+        "- second item",
+        "* third",
+        "1. fourth",
+    ]
+
+
+def test_long_list_item_wraps_with_a_hanging_indent() -> None:
+    lines = _fill_paragraph("- " + "word " * 30).split("\n")
+    assert len(lines) > 1
+    assert lines[0].startswith("- ")
+    assert all(line.startswith("  ") for line in lines[1:])
+
+
+def test_paragraph_without_a_list_fills_as_one_paragraph() -> None:
+    assert _fill_paragraph("one\ntwo\nthree") == "one two three"
 
 
 def test_by_id_files_are_generated_for_every_rule(tmp_path) -> None:

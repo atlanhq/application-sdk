@@ -377,7 +377,10 @@ report that site the same way.
   `continue`, `return`, `raise`, `try`, nested loop or nested scope (`def`/`class`) may sit between that INFO
   and the `return` (a follow-up `if missing: logger.warning(...)` is fine).  A break
   summary can repeat in an unbounded enclosing loop, while a return exits the
-  function.  Mirror `atlan-metabase-app
+  function.  A completion summary in the `else` suite of the outermost active
+  `for`, `async for` or `while` loop runs at most once on natural exhaustion (and
+  is skipped after `break`).  An inner-loop `else` under an unbounded outer loop
+  repeats and is still per-item.  Mirror `atlan-metabase-app
   app/extracts/process.py`, where the per-dashboard skip inside `process_assets`
   logs at DEBUG.  Do not simply delete a per-item call: the record is still
   wanted at DEBUG.  A throttled progress log is already a milestone and is

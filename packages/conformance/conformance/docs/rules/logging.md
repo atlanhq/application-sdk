@@ -111,10 +111,10 @@ logger = get_logger(__name__)
 Direct use of `logging.getLogger()`, `structlog.get_logger()`, or `from loguru import
 logger` bypasses the adapter that:
 
-* injects Temporal context fields (`workflow_id`, `run_id`,   `activity_type`,
-`task_queue`, `attempt`) as top-level indexed   columns in ClickHouse/Grafana; * routes
-log records through OTel so they appear in the observability   store; * enforces the
-project's five-level model   (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+* injects Temporal context fields (`workflow_id`, `run_id`, `activity_type`,
+  `task_queue`, `attempt`) as top-level indexed columns in ClickHouse/Grafana;
+* routes log records through OTel so they appear in the observability store;
+* enforces the project's five-level model (DEBUG/INFO/WARNING/ERROR/CRITICAL).
 
 Adapter definition files are exempt — the file that defines `AtlanLoggerAdapter` or
 `get_logger` itself is skipped.  Dev harnesses are exempt too: files under `scripts/`
@@ -207,24 +207,24 @@ handler does not satisfy this condition.
 **Fixing it well**
 
 * At a catch around credential resolution, auth or a JDBC/driver call, raw
-`exc_info=True` can print a connection string or password held in the exception: log the
-sanitized traceback instead, as the reference apps do — `logger.error("... failed: %s",
-safe_traceback(e))`, with `sanitize_cause_repr(e)` for the message.
+  `exc_info=True` can print a connection string or password held in the exception: log
+  the sanitized traceback instead, as the reference apps do — `logger.error("... failed:
+  %s", safe_traceback(e))`, with `sanitize_cause_repr(e)` for the message.
 
 * The sanitized form carries no `exc_info`, so ruff BLE001 (in ruff's default rule set)
-flags it when the catch is a broad `except Exception`. Narrow the catch to what the
-`try` actually raises, as E004 prescribes, and the sanitized log stands as it is. Where
-the catch genuinely must stay broad, leave the site as it is and report it for a person
-to decide; do not suppress BLE001. Never add `exc_info=True` here to quiet BLE001, and
-never re-raise `from e` for the same reason: the chained cause carries the raw exception
-to whichever log prints it next. An app that selects `TRY` or `ALL` also gets TRY400 on
-the sanitized call, narrowed or not: report that site the same way.
+  flags it when the catch is a broad `except Exception`. Narrow the catch to what the
+  `try` actually raises, as E004 prescribes, and the sanitized log stands as it is.
+  Where the catch genuinely must stay broad, leave the site as it is and report it for a
+  person to decide; do not suppress BLE001. Never add `exc_info=True` here to quiet
+  BLE001, and never re-raise `from e` for the same reason: the chained cause carries the
+  raw exception to whichever log prints it next. An app that selects `TRY` or `ALL` also
+  gets TRY400 on the sanitized call, narrowed or not: report that site the same way.
 
 * Everywhere else, `exc_info=True` on the existing log call is the fix.
 
 * A site that already logs a sanitized traceback
-(`redact_secrets("".join(traceback.format_exception(exc)))` passed to the logger)
-delivers the rationale: leave it.
+  (`redact_secrets("".join(traceback.format_exception(exc)))` passed to the logger)
+  delivers the rationale: leave it.
 
 ---
 
@@ -282,10 +282,13 @@ flagged: the body of an `if` inside the innermost loop whose test is a modulo co
 `or`, every other disjunct must be a throttle or a one-shot `==` comparison such as
 `done == total` — not one against a string/`None`/`bool` literal or a field of the loop
 item, which can hold on every iteration.  A time difference read from the loop item
-itself is a per-item filter, not a throttle. A terminal summary followed by a `return`
-that exits the function is not flagged either.  Expressions, assignments, and
-`if`/`with` blocks containing no `break`, `continue`, `return`, `raise`, `try`, nested
-loop or nested scope may sit between the log and that `return`.
+itself is a per-item filter, not a throttle. A completion summary in the `else` suite of
+the outermost active loop also runs only once on natural exhaustion and is skipped after
+`break`; an inner-loop `else` repeated by an outer loop is still per-item. A terminal
+summary followed by a `return` that exits the function is not flagged either.
+Expressions, assignments, and `if`/`with` blocks containing no `break`, `continue`,
+`return`, `raise`, `try`, nested loop or nested scope may sit between the log and that
+`return`.
 
 ---
 
@@ -732,10 +735,11 @@ rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equival
 The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
 rules (or their category prefixes, or `ALL`):
 
-* `G001` — `logging.warn()` deprecated (overlaps L020) * `G003` — string concatenation
-in log message (overlaps L011) * `G004` — f-string in log message (overlaps L001) *
-`T201` — `print()` statement (overlaps L005) * `LOG009` — `logging.warn()` deprecated
-(overlaps L020)
+* `G001` — `logging.warn()` deprecated (overlaps L020)
+* `G003` — string concatenation in log message (overlaps L011)
+* `G004` — f-string in log message (overlaps L001)
+* `T201` — `print()` statement (overlaps L005)
+* `LOG009` — `logging.warn()` deprecated (overlaps L020)
 
 A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed rules),
 or `ALL` appears in `select` or `extend-select` and is not in `ignore` /

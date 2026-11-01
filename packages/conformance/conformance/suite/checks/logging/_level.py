@@ -64,6 +64,46 @@ def _is_terminal_break_summary(
     return False
 
 
+def _is_loop_else_summary(
+    node: ast.Call, outermost: ast.For | ast.AsyncFor | ast.While
+) -> bool:
+    """True when a log is in the outermost active loop's ``else`` suite.
+
+    That suite runs once on natural exhaustion. A nested loop or scope can make
+    the call repeat or defer it, so those nodes disqualify the summary.
+    """
+    parents = {
+        child: parent
+        for parent in ast.walk(outermost)
+        for child in ast.iter_child_nodes(parent)
+    }
+    child: ast.AST = node
+    ancestor = parents.get(node)
+    while ancestor is not None and ancestor is not outermost:
+        if isinstance(
+            ancestor,
+            (
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+                ast.ClassDef,
+                ast.Lambda,
+                ast.ListComp,
+                ast.SetComp,
+                ast.DictComp,
+                ast.GeneratorExp,
+            ),
+        ):
+            return False
+        child = ancestor
+        ancestor = parents.get(ancestor)
+    return ancestor is outermost and any(
+        child is statement for statement in outermost.orelse
+    )
+
+
 _LOOP_REDIRECTS = (
     ast.Break,
     ast.Continue,
@@ -414,15 +454,18 @@ class LevelMixin(_MixinBase):
         monitor, drowning lifecycle signals in noise and inflating storage cost.
         INFO is for milestones; per-item progress belongs at DEBUG.
 
-        Exempt: loops bounded to ≤ 10 iterations, terminal logs that end with
-        a break (when outer loops do not repeat them) or an unconditional return,
-        and throttled progress logs — the body of an ``if`` inside the innermost
+        Exempt: loops bounded to ≤ 10 iterations, one-shot completion summaries
+        in an outermost loop's ``else`` suite, terminal logs that end with a break
+        (when outer loops do not repeat them) or an unconditional return, and
+        throttled progress logs — the body of an ``if`` inside the innermost
         loop whose test is a modulo counter (``n % N == 0``) or an elapsed-time
         threshold (``now - last >= S``).
         """
         if not self._loop_stack:
             return
         if get_logger_method(node, self._logging_module_names) != "info":
+            return
+        if _is_loop_else_summary(node, self._loop_stack[0]):
             return
         # Check if the innermost loop is clearly bounded
         innermost = self._loop_stack[-1]
