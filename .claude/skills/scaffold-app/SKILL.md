@@ -167,7 +167,8 @@ class {Name}App(SqlApp):
         from pyatlan_v9.model.assets import Database
         return Database.creator(name=record["database_name"], connection_qualified_name=connection_qn)
 
-    # map_schema / map_table / map_column likewise
+    # map_schema / map_table / map_column likewise. All four are required for
+    # the default run(): the base ones raise Map*UnimplementedError.
 ```
 
 Reference app: atlan-mysql-app. The `SqlApp` base `run()` extracts, transforms with the `map_*` methods, and uploads. If a query needs another query's result, override `run()` with the public helpers the `SqlApp` docstring lists (`resolve_credential_ref`, `build_task_input`, `build_transform_input`, `finalize_extraction`); do not reach for underscore-prefixed members.

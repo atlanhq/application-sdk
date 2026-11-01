@@ -140,6 +140,9 @@ class MyMetadataExtractor(SqlApp):
     def map_database(self, record, connection_qn):
         from pyatlan_v9.model.assets import Database
         return Database.creator(name=record["database_name"], connection_qualified_name=connection_qn)
+
+    # map_schema / map_table / map_column likewise. All four are required for
+    # the default run(): the base ones raise Map*UnimplementedError.
 ```
 
 Key changes:
