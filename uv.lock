@@ -709,16 +709,16 @@ wheels = [
 
 [[package]]
 name = "boto3-stubs"
-version = "1.43.121"
+version = "1.43.122"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "botocore-stubs" },
     { name = "types-s3transfer" },
     { name = "typing-extensions", marker = "python_full_version < '3.12'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/63/44/ab4679decaf697c09c566c73ce5b55b7490dcbc04259c95cb6721f63057f/boto3_stubs-1.43.121.tar.gz", hash = "sha256:814ea5e005846704d638891fd6418b3227f56301d82c76e4b69fe8fb74da1212", size = 105509, upload-time = "2026-10-28T19:36:01.995Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c7/b0/9ce65ac4737230adf4ff9ed7124ec1ebc39aa81a2df9e3af5263daeb2fe2/boto3_stubs-1.43.122.tar.gz", hash = "sha256:984cc791495ef49304ad12f0461255f9b21a42759d56623b2086a3979227337d", size = 105529, upload-time = "2026-10-29T21:08:41.863Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/e4/a7e69be4515b19e2fb4693720e03401d962fe9cea4bcc8af0110976bd691/boto3_stubs-1.43.121-py3-none-any.whl", hash = "sha256:7727c6de8e76e8ddf7544f0183520482e69bfb05f940cfdb55e5ba64ee5954b5", size = 72010, upload-time = "2026-10-28T19:35:54.018Z" },
+    { url = "https://files.pythonhosted.org/packages/92/f4/233cfe0b09e019a6c103e0fb8249c5eb676e9019de16866891c4d4123bb8/boto3_stubs-1.43.122-py3-none-any.whl", hash = "sha256:acc62d7210492ca66c6bbef42699db26e5aeefa970d5b571946141e1144c3125", size = 72011, upload-time = "2026-10-29T21:08:37.701Z" },
 ]
 
 [[package]]
@@ -3475,11 +3475,11 @@ wheels = [
 
 [[package]]
 name = "nodeenv"
-version = "1.11.0"
+version = "1.11.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/9a/8e/105de02c1322cfada6d9710d9146ef8026419d433c9d08359a2d35805811/nodeenv-1.11.0.tar.gz", hash = "sha256:3ce8fe5b71d16e8af7039ca65257354100bc772965d6bc549070649e53b1b146", size = 99301, upload-time = "2026-09-26T11:29:21.367Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ab/27/79acfd3d6f526a4a16f3d209dedcf7b5bc1ea15c5bf2bbb82f2c2285057e/nodeenv-1.11.1.tar.gz", hash = "sha256:d7fa027c1df437bdd974b0502a8dc76fa1b3183e369ac9539602bc6bab9100ba", size = 99853, upload-time = "2026-10-29T20:54:04.261Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/54/c8/12811c9b48fde162bb72b6f2e78fada9a247a09d7bb5be2050a5d099c77b/nodeenv-1.11.0-py2.py3-none-any.whl", hash = "sha256:edaa16e6c14d7cf395d75d4bbd5a26390f4dc06501a33b4e76282b02cc688a25", size = 34277, upload-time = "2026-09-26T11:29:19.933Z" },
+    { url = "https://files.pythonhosted.org/packages/40/35/a09e0b1dac4027e35b872e4f123a9f9e7bbc39e6424bdc9776920d3a6491/nodeenv-1.11.1-py2.py3-none-any.whl", hash = "sha256:bc0fb085d8ed0d67a6471892535f3d9b795eb911b7cd129d3a24967aab7a538f", size = 34473, upload-time = "2026-10-29T20:54:02.752Z" },
 ]
 
 [[package]]
