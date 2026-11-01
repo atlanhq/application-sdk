@@ -389,6 +389,47 @@ def _split_literal_blocks(text: str) -> list[tuple[str, bool, str]]:
     return segments
 
 
+_LIST_ITEM_RE = re.compile(r"^(?:[-*]|\d+\.)\s")
+
+
+def _fill_paragraph(para: str) -> str:
+    """Rewrap one prose paragraph to 88 chars, keeping list items apart.
+
+    A paragraph whose lines start ``- ``, ``* `` or ``1. `` is a list: each
+    item (its marker line plus the indented continuation lines under it) is
+    filled on its own with a two-space hanging indent.  Filling the whole
+    paragraph at once would join every item into one Markdown paragraph.
+    """
+    groups: list[list[str]] = []
+    for line in para.split("\n"):
+        if _LIST_ITEM_RE.match(line) or not groups:
+            groups.append([line])
+        else:
+            groups[-1].append(line)
+    filled: list[str] = []
+    for group in groups:
+        if _LIST_ITEM_RE.match(group[0]):
+            filled.append(
+                textwrap.fill(
+                    " ".join(part.strip() for part in group),
+                    width=88,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                    subsequent_indent="  ",
+                )
+            )
+        else:
+            filled.append(
+                textwrap.fill(
+                    "\n".join(group),
+                    width=88,
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
+    return "\n".join(filled)
+
+
 def _tier_badge(tier: EnforcementTier) -> str:
     return f"`{tier.value}`"
 
@@ -517,10 +558,7 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
                 continue
             # Rewrap each prose paragraph individually to 88 chars for clean diff
             for para in re.split(r"\n{2,}", chunk):
-                wrapped = textwrap.fill(
-                    para, width=88, break_long_words=False, break_on_hyphens=False
-                )
-                lines.append(wrapped)
+                lines.append(_fill_paragraph(para))
                 lines.append("")
 
     return lines

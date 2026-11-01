@@ -249,17 +249,19 @@ identifier, and flagging it just teaches people to suppress the rule.
 
 Not flagged:
 
-* part of a *resolving* f-string (`f"...{app_name}..."` interpolates   at parse time and
-no `{app_name}` text survives into its pieces), * the receiver of a `.format(...)` call
-whose keywords include   `app_name=` (a proper, already-resolving substitution site), *
-**documentation** — the value of any bare string expression statement.   This covers
-module/class/function docstrings *and* PEP 257 attribute   docstrings, which are not the
-first statement of their class body, * **diagnostic text** — inside the arguments of a
-logging call,   `warnings.warn(...)`, or a `raise`; reporting on the token requires
-quoting it, * **a token sentinel or message constant** — bound to an `ALL_CAPS`   name
-where the literal is exactly the token (the token's own   definition, e.g.
-`APP_NAME_TOKEN`) or the name ends in a prose   segment (`_MESSAGE`, `START_MESSAGE`,
-`VALIDATION_RATIONALE`).
+* part of a *resolving* f-string (`f"...{app_name}..."` interpolates at parse time and
+  no `{app_name}` text survives into its pieces),
+* the receiver of a `.format(...)` call whose keywords include `app_name=` (a proper,
+  already-resolving substitution site),
+* **documentation** — the value of any bare string expression statement. This covers
+  module/class/function docstrings *and* PEP 257 attribute docstrings, which are not the
+  first statement of their class body,
+* **diagnostic text** — inside the arguments of a logging call, `warnings.warn(...)`, or
+  a `raise`; reporting on the token requires quoting it,
+* **a token sentinel or message constant** — bound to an `ALL_CAPS` name where the
+  literal is exactly the token (the token's own definition, e.g. `APP_NAME_TOKEN`) or
+  the name ends in a prose segment (`_MESSAGE`, `START_MESSAGE`,
+  `VALIDATION_RATIONALE`).
 
 The exclusions stay narrow: an `ALL_CAPS` name holding a real queue template
 (`TASK_QUEUE = "atlan-{app_name}-prod"`) is still flagged — and so is one whose name

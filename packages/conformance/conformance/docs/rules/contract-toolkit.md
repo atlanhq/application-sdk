@@ -74,22 +74,22 @@ modules are frozen (no new features) and are scheduled for hard removal at v1.0.
 1. Change the `amends` line to `amends "@app-contract-toolkit/App.pkl"`.
 
 2. Resolve `workflowType`.  NativeApp.pkl paired a PascalCase `workflowType` with an
-optional `workflowTypeOverride` and applied automatic kebab-casing.  App.pkl takes a
-**verbatim** string — set it to the exact string the legacy contract would have emitted
-(apply PascalCase→kebab-case manually if needed), then drop `workflowTypeOverride`.
-Omit `workflowType` entirely when it would equal the `name` field (App.pkl defaults to
-kebab-casing `name`).
+  optional `workflowTypeOverride` and applied automatic kebab-casing.  App.pkl takes a
+  **verbatim** string — set it to the exact string the legacy contract would have
+  emitted (apply PascalCase→kebab-case manually if needed), then drop
+  `workflowTypeOverride`.  Omit `workflowType` entirely when it would equal the `name`
+  field (App.pkl defaults to kebab-casing `name`).
 
 3. Make `connector` nullable if it is a utility app with no connector type
-(NativeApp.pkl required `connector`; App.pkl allows `null`).
+  (NativeApp.pkl required `connector`; App.pkl allows `null`).
 
 4. For `NativeAppBundle.pkl` migrations: move each per-entrypoint contract into
-App.pkl's typed `entrypoints` block.  Each child contract file that also amends
-`NativeApp.pkl` will produce its own K001 finding and must be migrated separately.
+  App.pkl's typed `entrypoints` block.  Each child contract file that also amends
+  `NativeApp.pkl` will produce its own K001 finding and must be migrated separately.
 
 5. Run `pkl eval -m . contract/app.pkl` (or `uv run poe generate`) to regenerate
-`app/generated/**` and `atlan.yaml`.  Never hand-edit generated artifacts — K004/K005
-and the generated-artifact freshness gate catch staleness.
+  `app/generated/**` and `atlan.yaml`.  Never hand-edit generated artifacts — K004/K005
+  and the generated-artifact freshness gate catch staleness.
 
 **Suppress** with `// conformance: ignore[K001] <reason>` on the `amends` line or the
 comment-only line directly above it when a deliberate delay is justified (e.g. phased
@@ -136,19 +136,20 @@ The `contract/**/*.pkl` file contains one or more NativeApp-only properties or i
 that do not exist in `App.pkl`:
 
 * `flatManifestArgs` / `manifestMetadataArgs` — control how workflow params are nested
-in the manifest `args` object.  App.pkl always emits flat top-level args; these flags
-have no counterpart and must be removed.
+  in the manifest `args` object.  App.pkl always emits flat top-level args; these flags
+  have no counterpart and must be removed.
 
 * `workflowTypeOverride` — companion to NativeApp.pkl's PascalCase `workflowType` field.
-App.pkl takes a verbatim string; resolve the final kebab-cased value and set it as
-App.pkl's `workflowType`, then remove `workflowTypeOverride`.
+  App.pkl takes a verbatim string; resolve the final kebab-cased value and set it as
+  App.pkl's `workflowType`, then remove `workflowTypeOverride`.
 
 * `import "…Config.pkl"` — Config.pkl provides widget types for NativeApp.pkl.  App.pkl
-re-exports all widget types as typealiases (`TextInput`, `UIConfig`, etc.) — remove the
-import and switch `Config.UIConfig` → `UIConfig`, `Config.TextInput` → `TextInput`, etc.
+  re-exports all widget types as typealiases (`TextInput`, `UIConfig`, etc.) — remove
+  the import and switch `Config.UIConfig` → `UIConfig`, `Config.TextInput` →
+  `TextInput`, etc.
 
 * `import "…Credential.pkl"` and `import "…Renderers.pkl"` (Argo-era modules) — no
-longer used by App.pkl; remove both.
+  longer used by App.pkl; remove both.
 
 Note: `import "…Connectors.pkl"` is **not** flagged — the Connectors registry is still
 imported explicitly by App.pkl consumers (App.pkl imports it internally and types
@@ -276,7 +277,9 @@ set, so the remedy could never produce one.
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
 expected to produce is absent:
 
-* `atlan.yaml` * `manifest.json` * `_input.py`
+* `atlan.yaml`
+* `manifest.json`
+* `_input.py`
 
 These are the outputs the deployment pipeline and the SDK read at runtime; a missing one
 means the contract was never generated (or an output was deleted).
@@ -895,10 +898,11 @@ entry-point` pairs and the same expiry.
 
 The rule fires on four shapes:
 
-* an alias declared in code that the manifest does not carry; * an alias declared in the
-manifest that the `App` does not; * a `removal_version` that differs between the two
-sites; * per-entry-point manifests that disagree with each other (the block is
-app-level, so every copy must be identical).
+* an alias declared in code that the manifest does not carry;
+* an alias declared in the manifest that the `App` does not;
+* a `removal_version` that differs between the two sites;
+* per-entry-point manifests that disagree with each other (the block is app-level, so
+  every copy must be identical).
 
 A `legacy_workflow_types` assignment the scan cannot read statically -- a variable, a
 comprehension -- is reported too: the comparison cannot be made at all, so neither
@@ -1062,13 +1066,14 @@ app's own writer for the same `FileReference` contract field.
 Two disagreements are reported:
 
 * **Format.** The writer builds the field's `FileReference` from a path whose extension
-the declared `format` cannot be -- a `.parquet` path declared `ndjson`, or a
-`.jsonl`/`.ndjson`/`.json` path declared `parquet`. Any other extension, and a reference
-to a directory, is skipped: a partitioned-parquet directory has no extension to disagree
-with. * **Fields.** The record class the writer serialises into the artifact declares a
-field -- directly or inherited -- that the declaration does not describe. Declared
-nested paths (`attributes.columns[].name`) are compared at their top-level segment,
-since that is the level a record class exposes.
+  the declared `format` cannot be -- a `.parquet` path declared `ndjson`, or a
+  `.jsonl`/`.ndjson`/`.json` path declared `parquet`. Any other extension, and a
+  reference to a directory, is skipped: a partitioned-parquet directory has no extension
+  to disagree with.
+* **Fields.** The record class the writer serialises into the artifact declares a field
+  -- directly or inherited -- that the declaration does not describe. Declared nested
+  paths (`attributes.columns[].name`) are compared at their top-level segment, since
+  that is the level a record class exposes.
 
 **What the rule will not do.** Resolution is module-scoped and deliberately narrow. A
 path variable is followed only within the file it is assigned in; a name assigned two
@@ -1186,11 +1191,12 @@ does not clear an app of that one.
 
 **Fix** — any one of:
 
-* declare the field on the entrypoint's `Input` model; * mix in the SDK base that
-already supplies it — `application_sdk.templates.contracts.sql_metadata.ExtractionInput`
-provides `include_filter`, `exclude_filter`, `temp_table_regex` and `extraction_method`;
+* declare the field on the entrypoint's `Input` model;
+* mix in the SDK base that already supplies it —
+  `application_sdk.templates.contracts.sql_metadata.ExtractionInput` provides
+  `include_filter`, `exclude_filter`, `temp_table_regex` and `extraction_method`;
 * or set `model_config = ConfigDict(extra='allow')` when the app genuinely wants to read
-arbitrary AE-supplied keys off `model_extra`.
+  arbitrary AE-supplied keys off `model_extra`.
 
 **Do not** add a `@model_validator(mode='before')` that folds the flat keys back into a
 `metadata` dict. It makes the value reachable again, so it looks like a fix, but it
@@ -1314,13 +1320,14 @@ The `extract` node of a committed `app/generated/**/manifest.json` carries an
 with no configuration at all. There are two ways to end up nested, and the fix differs:
 
 * **Explicit opt-out** — `contract/app.pkl` sets `flatManifestArgs = false`. Remove the
-override rather than setting it `true` (the default already is), move whatever the app
-reads out of `args.metadata` onto declared flat fields on its `Input` contract, and
-regenerate with `pkl eval -m . contract/app.pkl`. A contract that also sets
-`manifestMetadataArgs` is pinning specific keys into the envelope and has to unpick that
-in the same change. * **Stale artifact** — the contract does not set the flag, so it
-would render flat today; the committed manifest predates the flattening and was never
-regenerated. Regenerate and commit the result.
+  override rather than setting it `true` (the default already is), move whatever the app
+  reads out of `args.metadata` onto declared flat fields on its `Input` contract, and
+  regenerate with `pkl eval -m . contract/app.pkl`. A contract that also sets
+  `manifestMetadataArgs` is pinning specific keys into the envelope and has to unpick
+  that in the same change.
+* **Stale artifact** — the contract does not set the flag, so it would render flat
+  today; the committed manifest predates the flattening and was never regenerated.
+  Regenerate and commit the result.
 
 **Regenerating is the risky moment, so do it deliberately.** Published workflow versions
 carry the nested shape. The platform's workflow re-render recovers config by matching
@@ -1391,15 +1398,16 @@ K018's fail-open dropped-key case. This is the CONNECT-1333 / CONNECT-1389 class
 **Fix** — make the field accept the string, any one of:
 
 * **union with `str`** — `include_filter: FilterMap | str` (or `dict[str, list[str]] |
-str`). Pydantic then tries the `str` arm and the JSON string validates; * **mix in
-`ExtractionInput` without redeclaring a strict dict** —
-`application_sdk.templates.contracts.sql_metadata.ExtractionInput` already types the
-fields as `FilterMap | str`. A type override (`include_filter: dict[str, Any]`) drops
-the SDK `json_schema_extra` the live `_coerce_filter` keys on, so the inherited
-validator does **not** coerce the AE string; or * **add your own before-validator** — a
-`@field_validator("<field>", mode="before")` (or a `mode="before"` `@model_validator`)
-on the contract that coerces the string yourself. An `after`-mode validator does **not**
-count: it runs after field validation, so the string is already rejected.
+  str`). Pydantic then tries the `str` arm and the JSON string validates;
+* **mix in `ExtractionInput` without redeclaring a strict dict** —
+  `application_sdk.templates.contracts.sql_metadata.ExtractionInput` already types the
+  fields as `FilterMap | str`. A type override (`include_filter: dict[str, Any]`) drops
+  the SDK `json_schema_extra` the live `_coerce_filter` keys on, so the inherited
+  validator does **not** coerce the AE string; or
+* **add your own before-validator** — a `@field_validator("<field>", mode="before")` (or
+  a `mode="before"` `@model_validator`) on the contract that coerces the string
+  yourself. An `after`-mode validator does **not** count: it runs after field
+  validation, so the string is already rejected.
 
 This is the type half of the same hand-off K018 guards by field name; an app can pass
 K018 (the field is declared) and still fail K021 (the declared type is wrong). Both are
