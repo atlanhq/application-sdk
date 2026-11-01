@@ -2730,26 +2730,54 @@ def _credentialed(url: str) -> bool:
     return bool(parts.username or parts.password)
 
 
+_TEST_DIRS: frozenset[str] = frozenset({"test", "tests"})
+
+
+def _relative_parts(path: Path, root: Path) -> tuple[str, ...]:
+    try:
+        return path.relative_to(root).parts
+    except ValueError:
+        return path.parts
+
+
+def _is_test_source(path: Path, root: Path) -> bool:
+    """Whether *path* is a test-only Python source (D004's import context)."""
+    parts = _relative_parts(path, root)
+    return (
+        any(part in _TEST_DIRS for part in parts[:-1])
+        or path.name == "conftest.py"
+        or path.name.startswith("test_")
+        or path.name.endswith("_test.py")
+    )
+
+
+def _is_app_source(path: Path, root: Path) -> bool:
+    """Whether *path* is in the shared (non-test) AST walk's scope.
+
+    Mirrors :func:`_discover_sources`, so D003/D010 read the same files they
+    did before :func:`discover` started also returning test sources for D004.
+    """
+    parts = _relative_parts(path, root)
+    return not (
+        any(part in _TEST_DIRS for part in parts[:-1])
+        or path.name.startswith("test_")
+        or path.name.endswith("_test.py")
+    )
+
+
 def _discover_test_sources(root: Path) -> list[Path]:
     """Find test-only Python sources without changing shared source discovery.
 
     The common AST walk intentionally excludes tests. D004 needs their imports
     to tell an app-owned test dependency from a redundant SDK tooling pin, so it
-    makes a separate, test-scoped walk here.
+    makes a separate, test-scoped walk here. Returned through :func:`discover`
+    so the runner's ``--exclude`` prefixes apply to these files too.
     """
-    test_dirs = frozenset({"test", "tests"})
-    excluded_dirs = _SOURCE_EXCLUDE_DIRS - test_dirs
+    excluded_dirs = _SOURCE_EXCLUDE_DIRS - _TEST_DIRS
     paths: list[Path] = []
     for path in root.rglob("*.py"):
-        relative_parts = path.relative_to(root).parts
-        directory_parts = relative_parts[:-1]
-        is_test_source = (
-            any(part in test_dirs for part in directory_parts)
-            or path.name == "conftest.py"
-            or path.name.startswith("test_")
-            or path.name.endswith("_test.py")
-        )
-        if not is_test_source:
+        directory_parts = path.relative_to(root).parts[:-1]
+        if not _is_test_source(path, root):
             continue
         if set(directory_parts) & excluded_dirs:
             continue
@@ -2759,9 +2787,19 @@ def _discover_test_sources(root: Path) -> list[Path]:
     return sorted(paths)
 
 
-def _test_imported_distributions(root: Path) -> set[str]:
-    """Return uniquely-owned distributions directly imported by test sources."""
-    test_sources = _discover_test_sources(root)
+def _owning_pyproject(path: Path, pyprojects: list[Path]) -> Path | None:
+    """Return the nearest ``pyproject.toml`` whose directory contains *path*."""
+    owner: Path | None = None
+    for pyproject in pyprojects:
+        if not path.is_relative_to(pyproject.parent):
+            continue
+        if owner is None or len(pyproject.parent.parts) > len(owner.parent.parts):
+            owner = pyproject
+    return owner
+
+
+def _test_imported_distributions(test_sources: list[Path]) -> set[str]:
+    """Return uniquely-owned distributions directly imported by *test_sources*."""
     if not test_sources:
         return set()
     imported_modules, _, _ = _collect_source_usage(test_sources)
@@ -2811,8 +2849,17 @@ def scan_all(
     names and each dependency's ``sqlalchemy.dialects`` entry points.
     """
     pyprojects = [p for p in paths if p.name == "pyproject.toml"]
-    py_files = [p for p in paths if p.suffix == ".py"]
-    test_imported_packages = _test_imported_distributions(root) if pyprojects else set()
+    all_py_files = [p for p in paths if p.suffix == ".py"]
+    py_files = [p for p in all_py_files if _is_app_source(p, root)]
+
+    # D004 test context, scoped per project: a test file only vouches for the
+    # nearest pyproject that contains it, and only files the caller passed in
+    # (so runner ``--exclude`` prefixes and CLI scan dirs are honoured).
+    tests_by_pyproject: dict[Path, list[Path]] = {}
+    for test_file in (p for p in all_py_files if _is_test_source(p, root)):
+        owner = _owning_pyproject(test_file, pyprojects)
+        if owner is not None:
+            tests_by_pyproject.setdefault(owner, []).append(test_file)
 
     findings: list[Finding] = []
     for pyproject in pyprojects:
@@ -2820,7 +2867,9 @@ def scan_all(
             scan_path(
                 pyproject,
                 root,
-                test_imported_packages=test_imported_packages,
+                test_imported_packages=_test_imported_distributions(
+                    tests_by_pyproject.get(pyproject, [])
+                ),
             )
         )
 
@@ -2947,13 +2996,17 @@ def discover(root: Path) -> list[Path]:
 
     D001/D002 need the ``pyproject.toml``; D003 additionally needs every source
     file's imports.  Source discovery reuses the shared AST walk, which already
-    excludes tests, build dirs, virtualenvs, and dot-directories.
+    excludes tests, build dirs, virtualenvs, and dot-directories.  Test sources
+    are appended separately for D004's test-import context.
     """
     paths: list[Path] = []
     candidate = root / "pyproject.toml"
     if candidate.is_file():
         paths.append(candidate)
     paths.extend(_discover_sources(root))
+    # Test sources feed D004 only; scan_all partitions them back out of D003.
+    seen = set(paths)
+    paths.extend(p for p in _discover_test_sources(root) if p not in seen)
     return paths
 
 

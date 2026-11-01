@@ -603,7 +603,7 @@ def _d004_scan_all_with_sources(
     )
     return [
         finding
-        for finding in scan_all([pyproject], tmp_path)
+        for finding in scan_all(dependency_conformance.discover(tmp_path), tmp_path)
         if finding.rule_id == "D004"
     ]
 
@@ -639,6 +639,75 @@ def test_d004_still_fires_when_group_package_is_imported_only_by_app_code(
         {"app/client.py": "import sample_transport\n"},
     )
     assert [finding.rule_id for finding in findings] == ["D004"]
+
+
+def test_d004_ignores_test_sources_the_caller_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A test file dropped by ``--exclude`` must not grant the exemption."""
+    _d004_scan_all_with_sources(
+        tmp_path, monkeypatch, {"tests/conftest.py": "import sample_transport\n"}
+    )
+    paths = [
+        p
+        for p in dependency_conformance.discover(tmp_path)
+        if not p.is_relative_to(tmp_path / "tests")
+    ]
+    findings = [f for f in scan_all(paths, tmp_path) if f.rule_id == "D004"]
+    assert [finding.rule_id for finding in findings] == ["D004"]
+
+
+def test_d004_test_imports_do_not_leak_across_projects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Project B's test import must not exempt project A's group pin."""
+    pyproject_body = (
+        '[project]\nname = "{name}"\nversion = "0.1.0"\n'
+        'dependencies = ["atlan-application-sdk>=3.17.2,<4.0.0"]\n\n'
+        '[dependency-groups]\ntest = ["sample-transport>=1,<2"]\n'
+    )
+    for name in ("a", "b"):
+        (tmp_path / name / "tests").mkdir(parents=True)
+        (tmp_path / name / "pyproject.toml").write_text(
+            pyproject_body.format(name=f"app-{name}"), encoding="utf-8"
+        )
+    (tmp_path / "b" / "tests" / "test_seed.py").write_text(
+        "import sample_transport\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        dependency_conformance, "_sdk_managed_packages", lambda: {"sample-transport"}
+    )
+    monkeypatch.setattr(
+        dependency_conformance.importlib_metadata,
+        "packages_distributions",
+        lambda: {"sample_transport": ["sample-transport"]},
+    )
+    paths = [
+        *dependency_conformance.discover(tmp_path / "a"),
+        *dependency_conformance.discover(tmp_path / "b"),
+    ]
+    findings = [f for f in scan_all(paths, tmp_path) if f.rule_id == "D004"]
+    assert [f.file for f in findings] == ["a/pyproject.toml"]
+
+
+def test_d003_still_ignores_test_source_imports(tmp_path: Path) -> None:
+    """discover() now returns test files for D004; D003 must not read them."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        'dependencies = ["sample-transport>=1,<2"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "tests" / "test_seed.py").write_text(
+        "import sample_transport\n", encoding="utf-8"
+    )
+    findings = scan_all(
+        dependency_conformance.discover(tmp_path),
+        tmp_path,
+        dist_import_map={"sample-transport": {"sample_transport"}},
+        dialect_entry_points={},
+    )
+    assert "D003" in [f.rule_id for f in findings]
 
 
 # ── D005: unknown SDK extra ──────────────────────────────────────────────────
