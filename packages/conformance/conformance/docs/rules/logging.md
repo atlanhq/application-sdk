@@ -282,10 +282,13 @@ flagged: the body of an `if` inside the innermost loop whose test is a modulo co
 `or`, every other disjunct must be a throttle or a one-shot `==` comparison such as
 `done == total` — not one against a string/`None`/`bool` literal or a field of the loop
 item, which can hold on every iteration.  A time difference read from the loop item
-itself is a per-item filter, not a throttle. A terminal summary followed by a `return`
-that exits the function is not flagged either.  Expressions, assignments, and
-`if`/`with` blocks containing no `break`, `continue`, `return`, `raise`, `try`, nested
-loop or nested scope may sit between the log and that `return`.
+itself is a per-item filter, not a throttle. A completion summary in the `else` suite of
+the outermost active loop also runs only once on natural exhaustion and is skipped after
+`break`; an inner-loop `else` repeated by an outer loop is still per-item. A terminal
+summary followed by a `return` that exits the function is not flagged either.
+Expressions, assignments, and `if`/`with` blocks containing no `break`, `continue`,
+`return`, `raise`, `try`, nested loop or nested scope may sit between the log and that
+`return`.
 
 ---
 
