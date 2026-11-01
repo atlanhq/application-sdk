@@ -47,7 +47,9 @@ predates that template is refused with "rebase onto main", for the same reason.
 same collision, so the request is posted as a marker status and the runs on the
 commit that started before the marker are re-run; they read the marker live.
 A `/e2e` there also re-runs SDK Gate, whose integration tier otherwise runs only
-in the merge queue (FND-4306).
+in the merge queue (FND-4306). There the `gate-check` status is only the opt-in
+marker, `success` before any test has run; the verdict is the required checks
+(SDK Gate, and Connector Tests Gate, which includes the SDR leg — FND-4486).
 
 Security
 --------
@@ -530,7 +532,9 @@ def plan_rerun(request: Request, pr: PullRequest, statuses: dict) -> RerunPlan:
         )
     return RerunPlan(
         True,
-        f"Opted `{sha7}` in to the release gate; its gated checks are re-running.",
+        f"Opted `{sha7}` in to the release gate; its gated checks are re-running. "
+        "The `gate-check` status only records the opt-in: SDK Gate and Connector "
+        "Tests Gate carry the verdict.",
         marker=(GATE_CHECK_CONTEXT, "success", f"opted in by @{request.actor}"),
         workflows=SDK_GATE_CHECK_WORKFLOWS,
     )

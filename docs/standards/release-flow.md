@@ -114,6 +114,13 @@ may comment `/gate-check` here (app repos accept Write, Maintain or Admin). It p
 the status live (`bump_pr_opt_in.py check --sha`), since a re-run replays the original event
 payload.
 
+In the SDK repo that `gate-check` status is an **opt-in marker, not a verdict**: it is posted
+`success` ("opted in by @…") the moment the comment lands, before anything has run, and
+nothing settles it later. The SDK bump PR's verdict is its required checks: SDK Gate, and
+Connector Tests Gate, which rolls up the connector e2e checks **and the SDR K8s E2E (LM) leg**
+(FND-4486). A red SDR leg therefore keeps the PR out of the merge queue, and the queue waits on
+it too. Read the green `gate-check` on an SDK bump PR as "opted in", never as "passed".
+
 **Release Gate passes a release PR only on a `success` `gate-check` status on its head**
 (`.github/scripts/release_gate.py`, vendored by bootstrap). In an app repo `/gate-check` posts
 it as `pending` with the list of workflows it dispatched; `gate_check_verdict.py`, run by

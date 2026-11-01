@@ -241,10 +241,10 @@ class TestSdkE2eState:
         state = tcc.sdk_e2e_state(sha=SHA, checks=checks, run_url=RUN_URL)
         assert (state.stage, state.summary) == (
             tcc.FAILED,
-            "1 of 2 connector(s) failed",
+            "1 of 2 e2e leg(s) failed",
         )
         assert state.details.splitlines() == [
-            "| connector | result |",
+            "| leg | result |",
             "|---|---|",
             "| metabase | ❌ |",
             "| mysql | [✅](https://x.invalid/1) |",
@@ -253,13 +253,41 @@ class TestSdkE2eState:
     def test_all_passed(self) -> None:
         checks = [self._check("Connector E2E run / mysql", "success")]
         state = tcc.sdk_e2e_state(sha=SHA, checks=checks, run_url=RUN_URL)
-        assert (state.stage, state.summary) == (tcc.PASSED, "1 connector(s) passed")
+        assert (state.stage, state.summary) == (tcc.PASSED, "1 e2e leg(s) passed")
 
     @pytest.mark.parametrize("checks", [[], [{"name": "Unit tests"}, {"name": None}]])
     def test_none_reported_is_no_verdict(self, checks: list) -> None:
         state = tcc.sdk_e2e_state(sha=SHA, checks=checks, run_url=RUN_URL)
         assert state.stage == tcc.NO_VERDICT
         assert state.details == ""
+
+    def test_a_red_sdr_leg_fails_an_all_green_connector_set(self) -> None:
+        """PR #4638: every connector passed, SDR failed, the sticky said passed."""
+        checks = [
+            self._check("Connector E2E run / metabase", "success"),
+            self._check("Connector E2E run / mysql", "success"),
+        ]
+        state = tcc.sdk_e2e_state(
+            sha=SHA, checks=checks, run_url=RUN_URL, sdr_result="failure"
+        )
+        assert (state.stage, state.summary) == (tcc.FAILED, "1 of 3 e2e leg(s) failed")
+        assert f"| {tcc.SDR_ROW} | [❌]({RUN_URL}) |" in state.details.splitlines()
+
+    def test_a_green_sdr_leg_counts_as_a_pass(self) -> None:
+        checks = [self._check("Connector E2E run / mysql", "success")]
+        state = tcc.sdk_e2e_state(
+            sha=SHA, checks=checks, run_url=RUN_URL, sdr_result="success"
+        )
+        assert (state.stage, state.summary) == (tcc.PASSED, "2 e2e leg(s) passed")
+
+    @pytest.mark.parametrize("sdr_result", ["", "skipped"])
+    def test_an_sdr_leg_that_did_not_run_adds_no_row(self, sdr_result: str) -> None:
+        checks = [self._check("Connector E2E run / mysql", "success")]
+        state = tcc.sdk_e2e_state(
+            sha=SHA, checks=checks, run_url=RUN_URL, sdr_result=sdr_result
+        )
+        assert tcc.SDR_ROW not in state.details
+        assert state.summary == "1 e2e leg(s) passed"
 
     def test_an_unfinished_check_is_not_a_pass(self) -> None:
         checks = [
@@ -454,6 +482,15 @@ class TestCli:
         assert comment_id == 3
         assert "✅ passed" in body and "| mysql | ✅ |" in body
 
+    def test_sdk_e2e_verdict_reports_the_sdr_leg(self, cli) -> None:
+        api = FakeApi(
+            comments=[{"id": 3, "body": tcc.marker(tcc.E2E)}],
+            checks=[{"name": "Connector E2E run / mysql", "conclusion": "success"}],
+        )
+        assert cli(api, "sdk-e2e-verdict", "--sdr-result", "failure") == 0
+        ((_, body),) = api.patched
+        assert "❌ failed" in body and tcc.SDR_ROW in body
+
     def test_sdk_e2e_verdict_with_unreadable_checks_writes_nothing(
         self, cli, capsys
     ) -> None:
@@ -573,4 +610,6 @@ class TestWiring:
         assert "steps.upstream.outputs.dispatched == 'true'" in condition
         assert step["continue-on-error"] is True
         assert "sdk-e2e-verdict" in step["run"]
+        assert '--sdr-result "$SDR_RESULT"' in step["run"]
+        assert step["env"]["SDR_RESULT"] == "${{ needs.sdr-k8s-e2e.result }}"
         assert any(s.get("id") == "upstream" for s in job["steps"])
