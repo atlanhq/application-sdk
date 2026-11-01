@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk.errors import (
+    STORAGE_AUTH,
     STORAGE_CONFIG,
     STORAGE_DISK_FULL,
     STORAGE_EMPTY_UPLOAD,
@@ -31,6 +32,7 @@ from application_sdk.errors import (
 from application_sdk.errors.categories import Audience
 from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
+    AuthError,
     DataIntegrityError,
     DependencyUnavailableError,
     DiskFullError,
@@ -383,6 +385,46 @@ class StoragePermissionError(AppPermissionDeniedError, StorageError):
         if self.cause:
             parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
         return " | ".join(parts)
+
+
+@dataclass(kw_only=True)
+class StorageAuthError(AuthError, StoragePermissionError):
+    """The store rejected the credential itself (HTTP 401).
+
+    Categorical parent is ``AuthError`` (category=AUTH): a 401 means the store
+    could not authenticate the caller at all — a wrong secret, an expired
+    token, a client secret ID pasted where the secret value belongs — which is
+    a different fix from the 403 "authenticated but not allowed" that
+    :class:`StoragePermissionError` reports. ``StoragePermissionError`` is the
+    second base so ``except StoragePermissionError:`` blocks written before
+    the split keep catching both.
+    """
+
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_AUTH
+    code: ClassVar[str] = "AUTH_STORAGE"
+    default_retryable: ClassVar[bool] = False
+    audience: ClassVar[Audience] = Audience.USER
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+        target: str | None = None,
+        http_status: int | None = None,
+        provider_code: str | None = None,
+    ) -> None:
+        AuthError.__init__(self, message=message, cause=cause)
+        _init_storage_evidence(
+            self,
+            key=key,
+            target=target,
+            http_status=http_status,
+            provider_code=provider_code,
+            error_code=error_code,
+        )
 
 
 @dataclass(kw_only=True)

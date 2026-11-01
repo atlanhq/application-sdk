@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from dataclasses import dataclass
 from unittest import mock
 
@@ -849,6 +850,22 @@ class TestCreateWorker:
 
 class TestAppWorker:
     """Tests for AppWorker wrapper."""
+
+    @pytest.fixture(autouse=True)
+    def _no_dapr_sidecar(self) -> Iterator[None]:
+        """Answer the worker_start binding-type read without a sidecar.
+
+        ``_emit_worker_start_event`` asks the live Dapr sidecar for its
+        component types. Unpatched, every test here opened a real connection
+        to ``localhost:3500``: refused at once on Linux, but ~1s per address on
+        Windows, which runs without the socket guard (FND-4304). An empty map
+        is what the best-effort read returns when no sidecar answers.
+        """
+        with mock.patch(
+            "application_sdk.infrastructure._dapr.http.get_dapr_component_types",
+            new=mock.AsyncMock(return_value={}),
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_run_emits_worker_start_event_before_delegating(self) -> None:

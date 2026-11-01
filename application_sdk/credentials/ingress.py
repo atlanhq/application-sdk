@@ -40,11 +40,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any, Final, TypeVar, get_args
 
+import orjson
 from pydantic import BaseModel, ValidationError
 
 from application_sdk._logging import get_logger
-from application_sdk.credentials.errors import CredentialError
-from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.credentials.errors import CredentialError, CredentialParseError
+from application_sdk.credentials.spec import DECLARED_SOURCE_KEYS, AgentCredentialSpec
 
 logger = get_logger(__name__)
 
@@ -123,6 +124,14 @@ def normalize_agent_json(
             if isinstance(exc, ValidationError)
             else str(exc)
         )
+        if _declares_sources(value):
+            # A payload that opts into declared sources is never a placeholder:
+            # a malformed one is a producer bug, and reading it as "no agent
+            # reference" would silently route the run elsewhere.
+            raise CredentialParseError(
+                f"agent_json declares its value sources but is not a valid "
+                f"{spec_type.__name__}: {details}"
+            ) from None
         logger.debug(
             "agent_json is not a valid %s; treating the request as having no "
             "agent reference (typically a marketplace-package placeholder "
@@ -131,6 +140,18 @@ def normalize_agent_json(
             details,
         )
         return None
+
+
+def _declares_sources(value: Any) -> bool:
+    """Whether *value* opts into declared sources (``format`` / ``value-sources``)."""
+    if isinstance(value, str):
+        try:
+            value = orjson.loads(value)
+        except (
+            orjson.JSONDecodeError
+        ):  # conformance: ignore[E002] not JSON: not a declared payload
+            return False
+    return isinstance(value, dict) and any(key in value for key in DECLARED_SOURCE_KEYS)
 
 
 def declared_agent_spec_type(model_cls: type[BaseModel]) -> type[AgentCredentialSpec]:

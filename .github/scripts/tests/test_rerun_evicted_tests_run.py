@@ -492,8 +492,19 @@ def test_the_gate_job_still_always_reports() -> None:
     the duplicate label runs would let their newest suite override a genuine
     `failure` from the `opened` run, and the required context would become
     decorative on exactly the auto-merge path it guards (FND-2167).
+
+    The one skip is a proven merge-queue entry (FND-4344): `queue-proof` runs
+    only on `merge_group`, and a queue commit belongs to one entry, so no other
+    suite shares its SHA. On every other event `queue-proof` is skipped, its
+    output is empty, and the gate runs.
     """
-    assert without_bump_skip(_gate_job().get("if")) == "always()"
+    gate = without_bump_skip(_gate_job().get("if"))
+    assert gate == "always() && needs.queue-proof.outputs.proven != 'true'"
+    for proven in ("", "false"):
+        needs = {"queue-proof": {"outputs": {"proven": proven}}}
+        assert evaluate(gate, {"needs": needs}) is True
+    needs = {"queue-proof": {"outputs": {"proven": "true"}}}
+    assert evaluate(gate, {"needs": needs}) is False
 
 
 def test_a_dispatched_e2e_run_is_never_a_sibling() -> None:

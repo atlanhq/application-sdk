@@ -70,6 +70,7 @@ from application_sdk.storage.binding import (
 from application_sdk.storage.cloud import CloudStore
 from application_sdk.storage.errors import (
     ObjectStorePreflightError,
+    StorageAuthError,
     StorageBindingBrokenError,
     StorageBindingNotFoundError,
     StorageBucketRelocationError,
@@ -138,6 +139,7 @@ __all__ = [
     "StorageIntegrityError",
     "StorageNotFoundError",
     "StoragePermissionError",
+    "StorageAuthError",
     "StorageBucketRelocationError",
     "StorageGatewayAuthUnavailableError",
     "StorageGatewayNoRouteError",

@@ -1,8 +1,10 @@
 """Tests for .github/scripts/queue_tree_diff.py.
 
 The comparison runs against real git repositories in ``tmp_path``: an origin
-holding a PR head and a queue commit, and a depth-1 clone of the queue commit,
-the same shape the workflow's checkout leaves. The fail-safe paths stub the
+holding a PR head (at ``refs/pull/42/head``, as GitHub keeps it) and a queue
+commit, and a depth-1 clone of the queue commit, the same shape the workflow's
+checkout leaves. The queue branch name carries the entry's BASE sha, as
+GitHub's does, never the PR head (FND-4344). The fail-safe paths stub the
 module's ``git`` seam, because the point there is what happens when git does
 not answer.
 """
@@ -19,9 +21,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import queue_tree_diff  # noqa: E402
-from queue_tree_diff import decide, is_image_input, main, parse_pr_head  # noqa: E402
+from queue_tree_diff import decide, is_image_input, main, parse_pr_number  # noqa: E402
 
 PR_SHA = "a" * 40
+PR_NUMBER = 42
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -86,6 +89,7 @@ def _queue_entry(
     """
     _git(origin, "checkout", "-q", "-b", "pr")
     pr_sha = _commit(origin, {"app/feature.py": "x = 1\n"}, "pr")
+    _git(origin, "update-ref", f"refs/pull/{PR_NUMBER}/head", pr_sha)
     _git(origin, "checkout", "-q", "main")
     if base_change:
         _commit(origin, base_change, "base moved")
@@ -99,19 +103,21 @@ def _queue_entry(
     return pr_sha, queue_sha, base_sha, _clone_queue(origin, tmp_path)
 
 
-def _ref(pr_sha: str) -> str:
-    return f"refs/heads/gh-readonly-queue/main/pr-42-{pr_sha}"
+def _ref(parent_sha: str, number: int = PR_NUMBER) -> str:
+    """A queue branch name as GitHub writes it: the SHA is the commit the
+    entry was built on (the queue commit's parent), not the PR head."""
+    return f"refs/heads/gh-readonly-queue/main/pr-{number}-{parent_sha}"
 
 
 def _decide_in(
     clone: Path,
-    pr_sha: str,
     queue_sha: str,
     base_sha: str,
     monkeypatch: pytest.MonkeyPatch,
+    number: int = PR_NUMBER,
 ):
     monkeypatch.chdir(clone)
-    return decide("merge_group", _ref(pr_sha), queue_sha, base_sha)
+    return decide("merge_group", _ref(base_sha, number), queue_sha, base_sha)
 
 
 # ── against real repositories ────────────────────────────────────────────────
@@ -125,14 +131,38 @@ def test_identical_tree_skips_everything(
     base_sha = _git(origin, "rev-parse", "main")
     _git(origin, "checkout", "-q", "-b", "pr")
     pr_sha = _commit(origin, {"app/feature.py": "x = 1\n"}, "pr")
+    _git(origin, "update-ref", f"refs/pull/{PR_NUMBER}/head", pr_sha)
     tree = _git(origin, "rev-parse", f"{pr_sha}^{{tree}}")
     squash = _git(origin, "commit-tree", tree, "-p", "main", "-m", "squash")
     _git(origin, "branch", "-q", "queue", squash)
     clone = _clone_queue(origin, tmp_path)
     assert squash != pr_sha
-    decision = _decide_in(clone, pr_sha, squash, base_sha, monkeypatch)
+    decision = _decide_in(clone, squash, base_sha, monkeypatch)
     assert decision.identical is True
     assert decision.image_changed is False
+    # The head compared is the PR's, read from refs/pull/N/head; the SHA in
+    # the queue branch name is the base, which an earlier version mistook for
+    # the head and so never matched (FND-4344).
+    assert decision.pr_head == pr_sha != base_sha
+
+
+def test_pr_head_pushed_after_queueing_is_not_identical(
+    origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """refs/pull/N/head moved on after the queue commit was built: its tree is
+    no longer the queue's, so everything runs."""
+    base_sha = _git(origin, "rev-parse", "main")
+    _git(origin, "checkout", "-q", "-b", "pr")
+    pr_sha = _commit(origin, {"app/feature.py": "x = 1\n"}, "pr")
+    tree = _git(origin, "rev-parse", f"{pr_sha}^{{tree}}")
+    squash = _git(origin, "commit-tree", tree, "-p", "main", "-m", "squash")
+    _git(origin, "branch", "-q", "queue", squash)
+    newer = _commit(origin, {"app/feature.py": "x = 2\n"}, "pushed later")
+    _git(origin, "update-ref", f"refs/pull/{PR_NUMBER}/head", newer)
+    clone = _clone_queue(origin, tmp_path)
+    decision = _decide_in(clone, squash, base_sha, monkeypatch)
+    assert decision.identical is False
+    assert decision.pr_head == newer
 
 
 def test_reverted_base_change_is_not_identical(
@@ -153,7 +183,7 @@ def test_reverted_base_change_is_not_identical(
     assert _git(origin, "rev-parse", f"{queue_sha}^{{tree}}") == _git(
         origin, "rev-parse", f"{pr_sha}^{{tree}}"
     )
-    decision = _decide_in(clone, pr_sha, queue_sha, base_sha, monkeypatch)
+    decision = _decide_in(clone, queue_sha, base_sha, monkeypatch)
     assert decision.identical is False
     assert decision.image_changed is True
     assert "uv.lock" in decision.reason
@@ -162,10 +192,10 @@ def test_reverted_base_change_is_not_identical(
 def test_source_only_base_change_reruns_tree_checks_not_the_scan(
     origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pr_sha, queue_sha, base_sha, clone = _queue_entry(
+    _, queue_sha, base_sha, clone = _queue_entry(
         origin, tmp_path, {"app/other.py": "y = 2\n"}
     )
-    decision = _decide_in(clone, pr_sha, queue_sha, base_sha, monkeypatch)
+    decision = _decide_in(clone, queue_sha, base_sha, monkeypatch)
     assert decision.identical is False
     assert decision.image_changed is False
     assert "none is an image input" in decision.reason
@@ -174,10 +204,10 @@ def test_source_only_base_change_reruns_tree_checks_not_the_scan(
 def test_lock_change_from_the_base_reruns_the_scan(
     origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    pr_sha, queue_sha, base_sha, clone = _queue_entry(
+    _, queue_sha, base_sha, clone = _queue_entry(
         origin, tmp_path, {"uv.lock": "v2\n", "app/other.py": "y = 2\n"}
     )
-    decision = _decide_in(clone, pr_sha, queue_sha, base_sha, monkeypatch)
+    decision = _decide_in(clone, queue_sha, base_sha, monkeypatch)
     assert decision.identical is False
     assert decision.image_changed is True
     assert "uv.lock" in decision.reason
@@ -195,10 +225,10 @@ def test_a_deleted_image_input_counts(
         _git(repo, "mv", "Dockerfile", "docker/Image")
         _git(repo, "commit", "-q", "-m", "move")
 
-    pr_sha, queue_sha, base_sha, clone = _queue_entry(
+    _, queue_sha, base_sha, clone = _queue_entry(
         origin, tmp_path, mutate_base=move_dockerfile
     )
-    decision = _decide_in(clone, pr_sha, queue_sha, base_sha, monkeypatch)
+    decision = _decide_in(clone, queue_sha, base_sha, monkeypatch)
     assert decision.image_changed is True
 
 
@@ -209,21 +239,22 @@ def test_fork_beyond_fetched_history_fails_safe(
         for n in range(3):
             _commit(repo, {f"app/b{n}.py": "z = 0\n"}, f"base {n}")
 
-    pr_sha, queue_sha, base_sha, clone = _queue_entry(
+    _, queue_sha, base_sha, clone = _queue_entry(
         origin, tmp_path, mutate_base=three_commits
     )
     monkeypatch.setattr(queue_tree_diff, "FORK_SEARCH_DEPTH", 1)
-    decision = _decide_in(clone, pr_sha, queue_sha, base_sha, monkeypatch)
+    decision = _decide_in(clone, queue_sha, base_sha, monkeypatch)
     assert (decision.identical, decision.image_changed) == (False, True)
 
 
 def test_unfetchable_pr_head_fails_safe(
     origin: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """No refs/pull/43/head on the remote: the head cannot be fetched."""
     _, queue_sha, base_sha, clone = _queue_entry(
         origin, tmp_path, {"app/other.py": "y = 2\n"}
     )
-    decision = _decide_in(clone, "b" * 40, queue_sha, base_sha, monkeypatch)
+    decision = _decide_in(clone, queue_sha, base_sha, monkeypatch, number=43)
     assert decision.identical is False
     assert decision.image_changed is True
     assert "git failed" in decision.reason
@@ -284,18 +315,27 @@ def test_stalled_git_fails_safe() -> None:
 
 
 def test_differing_trees_with_empty_diff_fails_safe() -> None:
-    # fetch, pr tree, queue tree, head diff, merge-base, base log
-    answers = iter(["", "tree-a", "tree-b", "", "d" * 40, ""])
+    # fetch, pr head, pr tree, queue tree, head diff, merge-base, base log
+    answers = iter(["", PR_SHA, "tree-a", "tree-b", "", "d" * 40, ""])
     decision = decide(
         "merge_group", _ref(PR_SHA), "c" * 40, "d" * 40, git=lambda _a: next(answers)
     )
     assert (decision.identical, decision.image_changed) == (False, True)
 
 
-def test_parse_pr_head_reads_nested_base_branches() -> None:
+def test_unresolvable_pr_head_fails_safe() -> None:
+    # fetch succeeds, but the local ref resolves to something that is not a sha
+    answers = iter(["", "not-a-sha"])
+    decision = decide(
+        "merge_group", _ref(PR_SHA), "c" * 40, "d" * 40, git=lambda _a: next(answers)
+    )
+    assert (decision.identical, decision.image_changed) == (False, True)
+    assert decision.pr_head == ""
+
+
+def test_parse_pr_number_reads_nested_base_branches() -> None:
     assert (
-        parse_pr_head(f"refs/heads/gh-readonly-queue/release/v3/pr-7-{PR_SHA}")
-        == PR_SHA
+        parse_pr_number(f"refs/heads/gh-readonly-queue/release/v3/pr-7-{PR_SHA}") == 7
     )
 
 
@@ -341,4 +381,4 @@ def test_main_writes_both_outputs(tmp_path: Path) -> None:
         git=_never_called,
     )
     assert rc == 0
-    assert output.read_text() == "identical=false\nimage_changed=true\n"
+    assert output.read_text() == "identical=false\nimage_changed=true\npr_head=\n"

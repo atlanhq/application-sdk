@@ -79,6 +79,10 @@ from application_sdk.validation.artifacts import (
     ArtifactValidationReport,
     ModelDeclaration,
 )
+from application_sdk.validation.asset_rules import (
+    AssetCreationRules,
+    creation_rule_errors,
+)
 from application_sdk.validation.ndjson import iter_ndjson_lines
 
 logger = get_logger(__name__)
@@ -504,7 +508,12 @@ def _decode_reason(exc: BaseException) -> str:
 # ---------------------------------------------------------------------------
 
 
-def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
+def validate_asset(
+    asset: Asset,
+    *,
+    for_creation: bool = True,
+    creation_rules: frozenset[AssetCreationRules] = frozenset(),
+) -> list[str]:
     """Run pyatlan_v9's ``.validate()`` and return its error messages.
 
     Returns an empty list when the asset is valid. Never raises — a failed
@@ -516,12 +525,19 @@ def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
             checks. Connector runs currently assume a first-time run against a
             source, so everything they emit as transformed output is for initial
             creation.
+        creation_rules: Extra create-time checks pyatlan no longer runs (see
+            :mod:`application_sdk.validation.asset_rules`). Applied only with
+            ``for_creation``; empty (default) keeps pyatlan's behaviour.
     """
     try:
         asset.validate(for_creation=for_creation)
     except Exception as exc:  # noqa: BLE001 — "Never raises": any validate() error surfaces as a message, never aborts the batch
-        return [str(exc)]
-    return []
+        errors = [str(exc)]
+    else:
+        errors = []
+    if for_creation and creation_rules:
+        errors += creation_rule_errors(asset, creation_rules)
+    return errors
 
 
 def validate_transformed_dir(
@@ -529,6 +545,7 @@ def validate_transformed_dir(
     *,
     for_creation: bool = True,
     check_referential_integrity: bool = True,
+    creation_rules: frozenset[AssetCreationRules] = frozenset(),
 ) -> AssetValidationReport:
     """Validate every transformed-output asset under ``path``.
 
@@ -564,6 +581,8 @@ def validate_transformed_dir(
             (FND-3414).
         for_creation: Passed through to each asset's ``.validate()``.
         check_referential_integrity: Run the referential second pass.
+        creation_rules: Extra create-time checks, passed through to
+            :func:`validate_asset`.
 
     Returns:
         An :class:`AssetValidationReport` aggregating all axes of failure.
@@ -636,7 +655,9 @@ def validate_transformed_dir(
             )
             refs = tuple(_iter_relationship_refs(asset))
 
-            errors = validate_asset(asset, for_creation=for_creation)
+            errors = validate_asset(
+                asset, for_creation=for_creation, creation_rules=creation_rules
+            )
             errors += _connection_prefix_errors(
                 qualified_name, connection_qn, type_name, refs
             )
@@ -831,6 +852,7 @@ def validate_assets_as_artifact(
     *,
     for_creation: bool = True,
     check_referential_integrity: bool = True,
+    creation_rules: frozenset[AssetCreationRules] = frozenset(),
 ) -> AssetArtifactReport:
     """The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
     in the shared shape.
@@ -854,6 +876,8 @@ def validate_assets_as_artifact(
             Defaults on, as the upload hook has always run it: extracts and
             transforms are full by design, so the batch is complete and the pass is
             accurate.
+        creation_rules: Extra create-time checks, passed through to
+            :func:`validate_transformed_dir`.
 
     Returns:
         An :class:`AssetArtifactReport`. ``absent`` when the scan found no records at
@@ -879,6 +903,7 @@ def validate_assets_as_artifact(
         path,
         for_creation=for_creation,
         check_referential_integrity=check_referential_integrity,
+        creation_rules=creation_rules,
     )
 
     if assets.total == 0:

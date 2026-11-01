@@ -305,8 +305,11 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   an assumption wearing the costume of a verification.
 
   **Classify the class first.**  Generated (`app/generated/`) classes are
-  fixed at their source; see step 7.  `@entrypoint` contracts are recorded in
-  the contract ledger, so a retype there is B005-guarded.  Task contracts are
+  fixed at their source; see step 7.  Entrypoint contracts (the `Input` and
+  `Output` of an `@entrypoint` method, or of `async def run()` on a
+  subclass of `App` or an SDK App class (for example `SqlApp`,
+  `BaseMetadataExtractor`)) are recorded in the contract ledger, so a retype there
+  is B005-guarded.  Task contracts are
   not in the ledger and can be narrowed freely.  The finding lists the fields
   this class declares that block removing the opt-out, those the check
   accepts that still bound nothing, and any whose type it cannot resolve;
@@ -364,16 +367,27 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      only keys and counts cross the task boundary.
 
   6. **Retire a field nothing populates** — before concluding that an
-     `@entrypoint` field is immovable, check whether it is *live*.  Grep the
+     entrypoint-contract field is immovable, check whether it is *live*.  Grep the
      generated `manifest.json` `dag.<node>.inputs.args` for the field name and
      grep the repo for constructions of the contract.  A field absent from the
      manifest and constructed nowhere is dead weight (a defensive
      `getattr(input, "x", {})` at the read site is the usual tell).
-     Retirement is **two steps, in order**: mark it
-     `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`,
-     regenerate the ledger, **then remove the field from source**.  B005 skips a
+     Retirement moves the ledger entry one status per merge, **in order**:
+     mark it `Field(..., deprecated=True)` and regenerate the ledger
+     (`active` → `deprecated`); in a later change mark it
+     `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`
+     and regenerate (`deprecated` → `sunset`); **then remove the field from
+     source**.  An `active` field takes three merges; a field already
+     `deprecated` takes the last two.  A skipped step fails: regeneration
+     keeps an `active` entry `active` and B005 reports the skip, and
+     `ledger-guard` refuses a hand-edited `active` → `sunset`.  B005 skips a
      sunset field only when it is *absent* from source, so marking it alone
      changes nothing, and an **unmarked** removal fires B005 at BLOCK tier.
+     When several fields of one contract are being retired, move all of them
+     through each step in the same change.  On a contract generated from
+     `app.pkl`, the lifecycle is set in the Pkl source, and the
+     contract-toolkit lifecycle docs govern removal; see them.  Never edit
+     `app/generated/`.
 
   7. **Generated contract with `Any`: fix the source, never the file.**  The
      `contract/*.pkl` widget decides the shape, and the toolkit emits
@@ -398,7 +412,7 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   the shape from the check and bounds nothing.  A tree-widget selection has a
   known shape; type it `TreeSelection`.
 
-  **Verify before proposing:** import the module; for an `@entrypoint` field
+  **Verify before proposing:** import the module; for an entrypoint-contract field
   run the `gen-contract-ledger` / `ledger-guard` commands shown under step 8;
   re-detect; and run
   `tools/migrate_v3/check_migration.py`, which fails on any remaining
@@ -683,14 +697,28 @@ The lane applies nothing: return `not_remediable = true` with a
   of a scalar primitive (`str`, `int`, `float`, `bool`, `bytes`) or a
   `Literal`, optional items included, such
   as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
-  are exempt too: they have no keys to model.  Target shape, from
-  `atlan-metabase-app` `app/contracts.py`:
+  are exempt too: they have no keys to model.  The target shape depends on
+  the key set, read off the writers.  **Fixed keys** (the app writes a literal
+  key set): one typed field per key on the contract itself.  Context passed
+  to a task, from `atlan-metabase-app` `app/contracts.py`:
+  `TransformTaskInput.connection_qualified_name: str = ""` and
+  `connection_name: str = ""`; per-type counts on an `Output`, from
+  `atlan-openapi-app` `app/contracts.py`:
+  `OpenAPIConnectorOutput.api_spec_count: int = 0` and
+  `api_path_count: int = 0` (the SDK `ExtractionOutput` does the same with
+  `tables_extracted`, `columns_extracted`, …).  **Open keys with a structured
+  value**: a bounded dict of a model, from `atlan-metabase-app`
+  `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
-  where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
-  model (its fields read off how the app uses the container) and every reader
-  and writer of the field.  Keep the `MaxItems` bound: payload safety still requires it on the
-  container.
-  When the key set is genuinely open, propose
+  where `CollectionSelection` is a `BaseModel`; keep the `MaxItems` bound:
+  payload safety still requires it on the container.  The brief names the
+  fields and lists every reader and writer of the old field.  On a ledgered
+  contract (P001 above, "Classify the class first"), add the typed fields
+  under new names with defaults, move every writer and reader onto them,
+  then retire the old one through P001 step 6.  A contract used only by
+  `@task` methods, and not inherited by a ledgered contract, changes in
+  place.
+  When the key set is genuinely open and the values are plain, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).
 

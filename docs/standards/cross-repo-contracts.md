@@ -66,6 +66,20 @@ What this means in practice:
   effective_retryable` on the `ApplicationError`, so it *is* Temporal's retry
   decision. Flipping it for an existing failure class changes production retry
   behaviour, not just a dashboard label — coordinate it before landing.
+- **A non-retryable task failure is non-retryable for the whole workflow.**
+  Temporal reads `non_retryable` only on a workflow's *top-level* failure, and
+  a task's error arrives wrapped in an `ActivityError`. So the generated
+  workflow (`_lift_non_retryable_activity_failure()` in
+  `application_sdk/app/base.py`) re-raises a non-retryable cause as a
+  top-level `ApplicationError` with the same `type`, `message` and `details`,
+  `non_retryable=True`, chained `from` the `ActivityError`. A workflow-level
+  `RetryPolicy` then stops after one attempt instead of re-running a run that
+  fails the same way each time. The workflow's terminal failure therefore
+  carries the envelope at `details[0]` on the top level as well as on the
+  wrapped activity failure underneath. A consumer may read either, but must
+  not assume the top level is an `ActivityError`. `WorkerEvicted` is not
+  lifted: it is non-retryable only so the eviction re-dispatch loop sees it at
+  once. A retryable cause that used up its task retries is not lifted either.
 
 ## The served manifest's resolved `task_queue`
 
@@ -493,6 +507,33 @@ entry rather than a comment:
   AE's `_validate_event_ack_paths` rejects an event trigger with a falsy value.
   `[""]` is AE's fire-and-forget form. Suppressing it needs the AE change
   shipped first — the same ordering as the first bullet.
+
+## The declared-source `agent_json` (format 2)
+
+| | |
+|---|---|
+| **Produced by** | The SDR setup form (Agent widget) through Heracles, and any one-off migration that rewrites a published workflow's `agent_json` (create-version → publish) |
+| **Read by** | `AgentCredentialSpec` (`application_sdk/credentials/spec.py`) at ingress; resolution in `application_sdk/credentials/agent.py` |
+| **Key** | Top-level `"format": 2`; every non-envelope field is `{"value": X}` or `{"valueFrom": {"secretKeyRef": {"name", "key"}}}` / `{"valueFrom": {"fileRef": {"path"}}}`; internal round-trip key `value-sources` |
+| **Pinned by** | `tests/unit/credentials/test_agent_json_declared_sources.py` |
+
+The full field rules are in [credentials](../concepts/credentials.md#declared-sources-format-2).
+This entry is about rollout, because the producer and the reader ship
+separately:
+
+- **The reader must ship first.** An SDK without this parser receives
+  `{"value": 3306}` where `port: int` expects an int and fails typed
+  validation; it would also probe the `format` value. Emit format 2 only for
+  an app whose SDK reads it. The contract toolkit's generated credential config
+  is the planned gate (FND-4361).
+- **Migrating a published workflow** has the same ordering: bump and deploy
+  the app first, then publish the new version.
+- **`value-sources` is internal.** It is the normalized form a re-parsed spec
+  carries (`to_raw_dict()`, serialized workflow inputs). Producers never write
+  it; a producer that sends it alongside `"format": 2` is rejected.
+- **A legacy payload is unchanged on the wire**, and its serialized form gains
+  no key. Legacy probing, and the FND-4407 single-key fallback that keeps a
+  value the store rejects, are removed only once no legacy payload remains.
 
 ## The PR test-command statuses and dispatch inputs (`/e2e`, `/gate-check`)
 

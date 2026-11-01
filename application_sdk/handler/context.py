@@ -21,6 +21,7 @@ from application_sdk._context_errors import (  # noqa: F401 — AppContextError 
 )
 from application_sdk._install import worker_only_missing
 from application_sdk._logging import get_logger
+from application_sdk._runtime.offload import offload_owner
 
 if TYPE_CHECKING:
     from application_sdk.handler.contracts import HandlerCredential
@@ -172,10 +173,15 @@ def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
     (FastAPI requests, Temporal SDR activities) cannot overwrite each other's
     context.  Each asyncio Task gets its own copy of the ContextVar namespace,
     so token-based reset is both safe and strictly scoped to the current task.
+
+    Blocking calls offloaded inside the block are charged to ``ctx.app_name``
+    (FND-2973), so on a pod serving several apps each app's share of the
+    blocking pool is counted and capped separately.
     """
     token = _current_handler_context.set(ctx)
     try:
-        yield ctx
+        with offload_owner(ctx.app_name):
+            yield ctx
     finally:
         _current_handler_context.reset(token)
 

@@ -768,6 +768,20 @@ class WarmupInput(_SourceRequestInput):
     one that does not, and reads the overrun as ``WARMING``."""
 
 
+class ManifestInput(BaseModel):
+    """Input for the optional ``Handler.compute_manifest`` operation."""
+
+    entrypoint: str
+    """The entry point whose manifest is requested."""
+
+    manifest: dict[str, Any]
+    """Its generated manifest, tokens already resolved. Open on purpose: the
+    DAG is a passthrough contract with Automation Engine."""
+
+    fe_inputs: dict[str, Any] = Field(default_factory=dict)
+    """The decoded setup-form values; empty when the request sends none."""
+
+
 class PreflightOutput(BaseModel):
     """Output from the preflight_check handler operation."""
 

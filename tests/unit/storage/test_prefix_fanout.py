@@ -238,8 +238,13 @@ class TestDrainGivesUpWithoutProgress:
         finally:
             fsync.release.set()
 
-        assert warning.call_count == 1
-        assert "wedged" in warning.call_args.args[-1], "stuck call not named"
+        # The wedged call is also reported as stranded (FND-2973) when its
+        # caller is cancelled; only the drain's own give-up line is asserted here.
+        drain_reports = [
+            c for c in warning.call_args_list if "Stopped waiting" in c.args[0]
+        ]
+        assert len(drain_reports) == 1
+        assert "wedged" in drain_reports[0].args[-1], "stuck call not named"
 
     async def test_a_wedged_thread_does_not_swallow_the_cancellation(self) -> None:
         call = _BlockingCall()
@@ -263,6 +268,12 @@ class TestDrainGivesUpWithoutProgress:
         each finish lands 0.6 allowances after the last, so the drain's stall
         clock never reaches the allowance, while the whole drain spans 2.4 of
         them. Real-time spacing made this flaky on loaded runners.
+
+        The clock moves on only once the drain has *recorded* the previous
+        finish. Its progress callback runs on the finishing thread, after the
+        callback that wakes the drain, so neither the thread's own last line
+        nor the drain waking says the finish is on its stall clock yet; a
+        callback added after the drain's own does.
         """
         budget = 10.0
         now = [0.0]
@@ -270,13 +281,17 @@ class TestDrainGivesUpWithoutProgress:
         started = [threading.Event() for _ in range(count)]
         releases = [threading.Event() for _ in range(count)]
         finished: list[int] = []
+        recorded: list[None] = []
 
         def staggered(i: int) -> None:
             started[i].set()
             releases[i].wait(_SAFETY_RELEASE)
             finished.append(i)
 
-        with tracking_offloads() as pending:
+        with (
+            patch.object(offload_module.logger, "warning") as warning,
+            tracking_offloads() as pending,
+        ):
             tasks = [
                 asyncio.ensure_future(run_in_thread(staggered, i)) for i in range(count)
             ]
@@ -286,21 +301,31 @@ class TestDrainGivesUpWithoutProgress:
                 await _wait_started(event)
             for task in tasks:
                 task.cancel()
+            markers = list(pending)
+            assert len(markers) == count
             drain = asyncio.ensure_future(
                 drain_offloads(
                     pending, max_no_progress_seconds=budget, clock=lambda: now[0]
                 )
             )
+            # One turn of the loop runs the drain up to its first await, which
+            # comes after it has added its callbacks; a done callback runs in
+            # the order it was added, so ours now runs after its progress mark.
+            await asyncio.sleep(0)
+            for marker in markers:
+                marker.add_done_callback(lambda _done: recorded.append(None))
             for i in range(count):
                 now[0] += budget * 0.6
                 releases[i].set()
                 await asyncio.wait_for(
-                    _until(lambda: len(finished) > i), _START_TIMEOUT
+                    _until(lambda: len(recorded) > i), _START_TIMEOUT
                 )
-                await asyncio.sleep(0.01)  # let the drain observe the finish
                 assert not drain.done() or i == count - 1, f"gave up after {i + 1}"
             await asyncio.wait_for(drain, _SAFETY_RELEASE)
 
+        assert not [
+            c for c in warning.call_args_list if "Stopped waiting" in c.args[0]
+        ], "the drain gave up while its threads were finishing"
         assert now[0] > 2 * budget
         assert sorted(finished) == list(range(count))
         for task in tasks:

@@ -80,6 +80,14 @@ class DaprComponentsDirNotFoundError(InvalidInputError):
 
 
 @dataclass(kw_only=True)
+class DaprConfigFileNotFoundError(InvalidInputError):
+    code: ClassVar[str] = "INVALID_INPUT_DAPR_CONFIG_FILE"
+    message: str = "embedded_dapr: config_file does not exist or is not a file"
+    field: str | None = "config_file"
+    constraint: str | None = "must be an existing file"
+
+
+@dataclass(kw_only=True)
 class DaprReadinessTimeoutError(AppTimeoutError):
     code: ClassVar[str] = "TIMEOUT_DAPR_READINESS"
     message: str = "Embedded Dapr did not become ready within deadline"

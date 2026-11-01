@@ -2397,6 +2397,12 @@ def test_cmd_bootstrap_json_reports_a_removal_as_touched(
         assert f".github/workflows/{name}" in payload["touched"]
 
 
+def test_porter_cnab_workflow_is_retired_but_its_helper_is_not() -> None:
+    assert "porter-bundle-cnab.yaml" in RETIRED_WORKFLOWS
+    # A repo outside bootstrap still calls the helper from another workflow.
+    assert ".github/scripts/registry-login.sh" not in RETIRED_FILES
+
+
 # ---------------------------------------------------------------------------
 # Dependabot config: superseded by the Renovate preset, never managed
 # ---------------------------------------------------------------------------

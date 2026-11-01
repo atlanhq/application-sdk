@@ -176,7 +176,8 @@ budget.
 Hard mode covers every outcome the gate attributes to the **source** — a
 `NOT_READY` verdict, anything the handler raises (typed or not), a probe
 overrunning the budget, a running attempt Temporal had to kill, a provably
-absent credential. Failures of the gate's own **plumbing** (the gate's
+absent credential (the secret store answers not-found, or the object store
+still has no credential config after its re-read ladder). Failures of the gate's own **plumbing** (the gate's
 credential resolution failing, a collapsed not-found wrapping a transport error,
 no worker ever running the attempt) always fail open, in both postures. When
 Temporal kills a running attempt the workflow applies the mode from the failure

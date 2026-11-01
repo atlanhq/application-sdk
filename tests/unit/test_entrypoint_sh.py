@@ -123,10 +123,13 @@ def _run_entrypoint_and_sigterm(tmp_path: Path, app_exit_on_term: int) -> int:
     daprd.chmod(0o755)
     ready = tmp_path / "app-ready"
     uv = tmp_path / "uv"
+    # `sleep & wait`, not a foreground `sleep`: sh runs a trap only once the
+    # foreground command returns, but `wait` returns as soon as the signal
+    # lands, so the trap fires on delivery instead of up to a second later.
     uv.write_text(
         f"#!/bin/sh\ntrap 'exit {app_exit_on_term}' TERM\n"
         f"touch '{ready}'\n"
-        "while :; do sleep 1; done\n"
+        'while :; do sleep 1 & wait "$!"; done\n'
     )
     uv.chmod(0o755)
 

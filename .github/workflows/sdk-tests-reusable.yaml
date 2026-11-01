@@ -75,7 +75,7 @@ jobs:
     # matrix leg's critical path, and a timing comparison next to three xdist
     # neighbours is a flake by construction. Here they run once, in one
     # process, on a quiet box (FND-4238).
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -236,7 +236,7 @@ jobs:
       - uses: "./.github/actions/setup-deps"
 
       - name: Log in to GHCR (private MinIO mirror)
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

@@ -58,12 +58,15 @@ from obstore.store import ObjectStore
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common._listing import prune_internal_dirs
 from application_sdk.storage.errors import (
+    StorageAuthError,
     StorageConfigError,
     StorageError,
+    StorageGatewayAuthUnavailableError,
     StorageNotFoundError,
     StoragePermissionError,
 )
 from application_sdk.storage.ops import (
+    GATEWAY_INVALID_CLIENT_CODE,
     BoundStore,
     _list_items,
     _obstore_http_evidence,
@@ -407,22 +410,48 @@ class CloudStore:
         return downloaded
 
     def _raise_if_denied(self, exc: Exception, action: str, key: str) -> None:
-        """Raise ``StoragePermissionError`` from *exc* when it is a 401/403.
+        """Raise a typed USER error from *exc* when it is a 401/403.
 
         A 401/403 is a credential or bucket-policy problem (IAM, a VPC Service
         Controls perimeter) that no retry fixes. Every store this class talks
         to belongs to the customer, so it is a non-retryable USER error rather
         than the retryable platform outage the shared primitives report (they
         cannot tell a customer bucket from the deployment's own store).
+
+        The two statuses get different leaves because they have different
+        fixes: a 401 is the credential itself being rejected
+        (:class:`StorageAuthError`, category AUTH) — for Azure that includes a
+        failed token request against the identity provider — while a 403 is a
+        valid credential without access (:class:`StoragePermissionError`).
         """
-        if isinstance(exc, StoragePermissionError):
+        # Already typed. The gateway leaf is a 401 too, but it is the
+        # blobstorage proxy failing its own identity lookup — a retryable
+        # platform condition — and relabelling it here would tell the customer
+        # to fix a credential that is fine.
+        if isinstance(exc, StoragePermissionError | StorageGatewayAuthUnavailableError):
             return
         denied = _denied_evidence(exc)
         if denied is None:
             return
         http_status, provider_code = denied
+        # The same gateway verdict, still as raw driver text on the paths that
+        # call obstore directly rather than through the shared primitives.
+        if http_status == 401 and provider_code == GATEWAY_INVALID_CLIENT_CODE:
+            return
         target = _store_target(self._store, key)
         detail = f"{http_status} {provider_code}" if provider_code else str(http_status)
+        if http_status == 401:
+            raise StorageAuthError(
+                f"Authentication failed {action} {target or key} ({detail}): the "
+                "store rejected the credential. Check that the credential's "
+                "secret, key or token is current and, for an Azure client "
+                "secret, that it is the secret value rather than the secret ID.",
+                key=key,
+                cause=exc,
+                target=target,
+                http_status=http_status,
+                provider_code=provider_code,
+            ) from exc
         raise StoragePermissionError(
             f"Permission denied {action} {target or key} ({detail}). Check the "
             "credential's IAM access and any VPC Service Controls perimeter "

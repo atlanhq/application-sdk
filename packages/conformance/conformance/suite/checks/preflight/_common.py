@@ -82,12 +82,8 @@ class Registry:
 
 def build_registry(paths: list[Path], root: Path) -> Registry:
     """Parse *paths* once, building the shared :class:`Registry`."""
-    sources: list[Source] = []
+    texts: list[tuple[Path, str, str]] = []
     parse_failures: list[str] = []
-    by_name: dict[str, ClassRecord] = {}
-    aliases_by_rel: dict[str, dict[str, str]] = {}
-    alias_targets: dict[str, str] = {}
-
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
@@ -95,16 +91,35 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
             parse_failures.append(str(path.relative_to(root)))
             continue
         try:
-            tree = ast.parse(text, filename=str(path))
-        except SyntaxError:
-            parse_failures.append(str(path.relative_to(root)))
-            continue
-        if not isinstance(tree, ast.Module):
-            continue
-        try:
             rel = str(path.relative_to(root))
         except ValueError:
             rel = str(path)
+        texts.append((path, rel, text))
+    return registry_from_texts(texts, parse_failures=parse_failures)
+
+
+def registry_from_texts(
+    texts: list[tuple[Path, str, str]], *, parse_failures: list[str] | None = None
+) -> Registry:
+    """Build the :class:`Registry` from ``(path, rel, text)`` triples already read.
+
+    Lets a per-file scanner (the E-series reuses :func:`reachable_preflight_sites`
+    for F005's preflight scope) build a registry from the one text it was given.
+    """
+    sources: list[Source] = []
+    failures: list[str] = list(parse_failures or [])
+    by_name: dict[str, ClassRecord] = {}
+    aliases_by_rel: dict[str, dict[str, str]] = {}
+    alias_targets: dict[str, str] = {}
+
+    for path, rel, text in texts:
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError:
+            failures.append(rel)
+            continue
+        if not isinstance(tree, ast.Module):
+            continue
         aliases = collect_import_aliases(tree)
         sources.append(
             Source(
@@ -128,8 +143,21 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
         sources=tuple(sources),
         by_name=by_name,
         aliases_by_rel=aliases_by_rel,
-        parse_failures=tuple(parse_failures),
+        parse_failures=tuple(failures),
     )
+
+
+def preflight_scope_lines(reg: Registry) -> dict[str, frozenset[int]]:
+    """F005's scope, per file: the ``def`` lines of every function it inspects.
+
+    The same reach :func:`reachable_preflight_sites` gives F005 — every
+    ``preflight_check`` override and the helpers it resolves — keyed by the
+    source's relative path.
+    """
+    lines: dict[str, set[int]] = {}
+    for src, func in reachable_preflight_sites(reg):
+        lines.setdefault(src.rel, set()).add(func.lineno)
+    return {rel: frozenset(found) for rel, found in lines.items()}
 
 
 def _module_alias_targets(tree: ast.Module, aliases: dict[str, str]) -> dict[str, str]:

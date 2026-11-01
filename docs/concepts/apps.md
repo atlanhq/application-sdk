@@ -76,6 +76,8 @@ POST /workflows/v1/manifest          {"entrypoint": "<name>", "fe_inputs": {...}
 GET  /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>          # size-capped
 ```
 
+The `core.py` hook runs on the worker only: the consolidated API host serves the handler, not `core.py`, and `gen_app_api.py check` refuses an app that has one. An app served by the host computes the manifest in its handler instead, with [`Handler.compute_manifest`](handlers.md#manifestinput-and-compute_manifest), which both the worker and the host call (a `core.py` hook for the same entry point wins on the worker).
+
 The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop via the SDK's `run_in_thread()` (never the shared default executor — see conformance rule P031). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
 
 > **Use `POST` when you send `fe_inputs`.** On `GET`, `fe_inputs` rides in the query string and is bounded by the request line. The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large`, *before* the hook runs, so oversize surfaces as a clear error instead of an opaque truncation. That cap is not conservative padding: past **~64 KB of request line** the URL is silently mangled by the HTTP parser — the app receives a fragment and answers `200` on a corrupt value — which is strictly worse than a rejection. A near-"select-all" asset-export-advanced submission decodes to ~11 KB and hit exactly this (CSA-539). `POST` puts the payload in the body, where neither limit applies. `GET` remains supported and uncapped for requests that send no `fe_inputs` at all — static manifest fetches, the app playground, and AE/marketplace registration probes.
@@ -532,7 +534,7 @@ always the attributed failure. HTTP `/check` and SDR attribute the same failure.
 | Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `CANCELLED`; `RATE_LIMITED` left it in FND-3774), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
-| Credential provably absent | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
+| Credential provably absent (the secret store answers not-found, or the object store still has no credential config after its re-read ladder) | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
 | No worker ever ran the attempt (`SCHEDULE_TO_START`) | `gate_broken` | fail open | fail open |
@@ -906,6 +908,31 @@ OTLP.
 > (process-isolation fix [#2769](https://github.com/atlanhq/application-sdk/pull/2769)), so a native
 > fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
 > worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
+
+#### Opt-in creation rules
+
+By default the check runs exactly what pyatlan_v9's `.validate(for_creation=True)` checks. pyatlan
+11.5.0 derives SQL parents from the qualifiedName in its `creator()` helpers, so it stopped
+reporting SQL-family assets that lack their parents: a `Schema` without `database` /
+`database_name` / `database_qualified_name`, a `Table` without `atlan_schema`, and `Table`, `View`,
+`Column`, `Procedure` and the other SQL-family types without their `schema_*` / `database_*`
+names. A transform that writes NDJSON by hand can still emit those assets, and publish needs those
+fields. An app opts back in to the checks by naming a rule set:
+
+```python
+from application_sdk.validation import AssetCreationRules
+
+
+class MyApp(App):
+    asset_validation_rules = frozenset({AssetCreationRules.SQL_PARENTS})
+```
+
+`App.asset_validation_rules` applies to both `upload()` and `upload_refs()`. The check stays
+warn-only. Rule messages use pyatlan's `"<field> is required for creation"` wording, so they land in
+`asset_validation_summary` under the same `required_for_creation:<field>` keys. Integration tests
+declare the same set on `BaseIntegrationTest.asset_validation_rules`, with a per-`Scenario`
+override. `validate_asset`, `validate_transformed_dir` and `validate_assets_as_artifact` take it
+as `creation_rules=`. The default is an empty set, which keeps the SDK aligned with pyatlan.
 
 ### Declaring artifact schemas
 
@@ -1286,6 +1313,8 @@ class MyConnector(App):
 ```python
 policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 ```
+
+A non-retryable error raised in a task (an `AppError` whose `retryable` resolves to `False`) is non-retryable for the whole run. The task is not retried, and a workflow-level `RetryPolicy` does not re-run the workflow either: the generated workflow re-raises the failure as a top-level non-retryable `ApplicationError` that keeps the task's `type` and `details`. A retryable error that uses up the task's attempts still fails the workflow retryably, so a workflow-level retry applies.
 
 ---
 

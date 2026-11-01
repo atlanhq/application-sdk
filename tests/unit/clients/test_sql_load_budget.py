@@ -58,16 +58,19 @@ class _Hang:
     ``block`` pays the probe's toll first, so the probe sees whether the loop
     ran while the step was in progress. ``returned`` is set only when the park
     ends, so a ``load()`` that raised while it is unset gave up on its own
-    budget rather than waiting for the step.
+    budget rather than waiting for the step. ``recorded`` is set once the probe
+    has its outcome.
     """
 
     def __init__(self, probe: LoopProbe) -> None:
         self.probe = probe
         self.release = threading.Event()
         self.returned = threading.Event()
+        self.recorded = threading.Event()
 
     def block(self) -> None:
         self.probe.block()
+        self.recorded.set()
         self.release.wait(_HANG_SECONDS)
         self.returned.set()
 
@@ -80,11 +83,22 @@ def hang() -> Iterator[_Hang]:
     step.release.set()
 
 
-def _assert_gave_up_on_the_budget(step: _Hang) -> None:
+async def _assert_gave_up_on_the_budget(step: _Hang) -> None:
+    """Call with ``step.probe`` still bound.
+
+    On a loaded runner ``load()`` can give up before the worker thread reaches
+    the probe, or before the probe has recorded. Waiting here, with the probe
+    bound and the loop free, lets a late worker record instead of finding an
+    unbound probe or an empty ``outcomes``.
+    """
     assert not step.returned.is_set(), (
         "load() raised only after the hung step returned: it waited for the "
         "worker thread instead of giving up at its own budget"
     )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + step.probe.stall_seconds * 2
+    while not step.recorded.is_set() and loop.time() < deadline:
+        await asyncio.sleep(0.01)
     step.probe.assert_loop_stayed_free("load()")
 
 
@@ -276,9 +290,13 @@ class TestSyncLoadBudget:
             return "test://h"
 
         client.get_sqlalchemy_connection_string = _hung_sts  # type: ignore[method-assign]
-        with _budget(_BUDGET), pytest.raises(SqlClientConnectTimeoutError) as exc_info:
-            await hang.probe.run(lambda: client.load({}))
-        _assert_gave_up_on_the_budget(hang)
+        with hang.probe.bound():
+            with (
+                _budget(_BUDGET),
+                pytest.raises(SqlClientConnectTimeoutError) as exc_info,
+            ):
+                await client.load({})
+            await _assert_gave_up_on_the_budget(hang)
         assert "within" in exc_info.value.message
         assert client.engine is None
 
@@ -293,13 +311,14 @@ class TestSyncLoadBudget:
             return MagicMock()
 
         engine.connect.side_effect = _hung_connect
-        with (
-            _budget(_BUDGET),
-            patch("sqlalchemy.create_engine", return_value=engine),
-            pytest.raises(SqlClientConnectTimeoutError),
-        ):
-            await hang.probe.run(lambda: client.load({}))
-        _assert_gave_up_on_the_budget(hang)
+        with hang.probe.bound():
+            with (
+                _budget(_BUDGET),
+                patch("sqlalchemy.create_engine", return_value=engine),
+                pytest.raises(SqlClientConnectTimeoutError),
+            ):
+                await client.load({})
+            await _assert_gave_up_on_the_budget(hang)
         engine.dispose.assert_called_once()
         assert client.engine is None
 
@@ -328,9 +347,10 @@ class TestAsyncLoadBudget:
             return "test://h"
 
         client.get_sqlalchemy_connection_string = _hung_sts  # type: ignore[method-assign]
-        with _budget(_BUDGET), pytest.raises(SqlClientConnectTimeoutError):
-            await hang.probe.run(lambda: client.load({}))
-        _assert_gave_up_on_the_budget(hang)
+        with hang.probe.bound():
+            with _budget(_BUDGET), pytest.raises(SqlClientConnectTimeoutError):
+                await client.load({})
+            await _assert_gave_up_on_the_budget(hang)
 
     async def test_hung_ping_is_typed_timeout_and_disposes(self) -> None:
         client = AsyncBaseSQLClient()

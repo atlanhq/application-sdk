@@ -272,6 +272,7 @@ class DaprCredentialVault:
             BindingResponse,
         )
         from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+            CredentialConfigNotFoundError,
             CredentialVaultError,
         )
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage.ops imports execution-related modules
@@ -303,7 +304,8 @@ class DaprCredentialVault:
             "blobName": normalized_key,
         }
 
-        async def _fetch() -> BindingResponse:
+        async def _fetch() -> BindingResponse | None:
+            """Return ``None`` only for the object store's explicit not-found."""
             try:
                 return await self._upstream.invoke("get", data=data, metadata=metadata)
             except BindingError as exc:
@@ -311,7 +313,7 @@ class DaprCredentialVault:
                 # rather than the cold-start budget, which would delay the
                 # failure and relabel it as an unreachable sidecar.
                 if exc.cause is not None and _is_missing_object_error(exc.cause):
-                    return BindingResponse(data=None, metadata={})
+                    return None
                 if exc.cause is not None and is_dapr_transport_unavailable(exc.cause):
                     # str() of a dropped connection (e.g. ReadError) is empty,
                     # so name the cause by type as well.
@@ -325,6 +327,10 @@ class DaprCredentialVault:
                 raise
 
         attempts = 0
+        # An empty successful reply also arrives as data=None (DaprBinding
+        # maps b"" to None) but is not the store confirming absence, so it
+        # keeps the generic, fail-open vault error.
+        saw_empty_reply = False
         for delay in (*_MISSING_CONFIG_RETRY_DELAYS_SECONDS, None):
             # A transport error or any other 5xx raises out of this loop on
             # the cold-start path; only the not-found answer is re-read here.
@@ -334,12 +340,25 @@ class DaprCredentialVault:
                 component=DAPR_UPSTREAM_BINDING_COMPONENT,
             )
             attempts += 1
-            if response.data is not None:
-                return orjson.loads(response.data)
+            if response is not None:
+                if response.data is not None:
+                    return orjson.loads(response.data)
+                saw_empty_reply = True
             if delay is not None:
                 await asyncio.sleep(delay)
 
-        raise CredentialVaultError(
+        if saw_empty_reply:
+            raise CredentialVaultError(
+                "No credential config read for GUID %s from upstream store "
+                "(empty reply within %d attempts over %.0fs)"
+                % (
+                    credential_guid,
+                    attempts,
+                    sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS),
+                ),
+                credential_guid=credential_guid,
+            )
+        raise CredentialConfigNotFoundError(
             "No credential config found for GUID %s in upstream store "
             "(object store answered not-found on %d attempts over %.0fs)"
             % (credential_guid, attempts, sum(_MISSING_CONFIG_RETRY_DELAYS_SECONDS)),
@@ -446,19 +465,27 @@ class DaprCredentialVault:
 
         Probing, classification and redaction are shared with the agent-shape
         resolver via
-        :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`:
-        a definitively-absent key is skipped (:meth:`_get_secret` returns
-        ``{}``), any store failure stops resolution rather than leaving the
-        ref-key in place as the credential value.
+        :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`.
+        A definitively-absent key is skipped (:meth:`_get_secret` returns
+        ``{}``). An outage or a recognised throttle stops resolution.
+
+        Single-key mode only runs for agent-sourced configs (direct configs
+        always fetch one bundle by GUID), so the store probed here is the
+        customer's SDR store. Heracles turns an SDR's agent_json into such a
+        config for Test Authentication, preflight and metadata calls. A store
+        refusal therefore keeps the value, with a WARNING: this is the same
+        deprecated, time-boxed bridge as the agent_json path (FND-4407), since
+        the probe can't tell a plain value from a ref-key either.
 
         Each probe's *inner* keys merge into one dict in **candidate order**, so
         a key returned by two probes is last-writer-wins with serial probing's
         tiebreak.
 
         Raises:
-            SecretStoreError: If any probe's store lookup failed (the subtypes
+            SecretStoreError: If a probe hit an outage (the subtypes
                 :class:`SecretStoreUnavailableError` /
-                :class:`SecretStoreUnreachableError` for an outage).
+                :class:`SecretStoreUnreachableError`). Any store answer,
+                throttles included, keeps the value as SDK <= 3.49 did.
                 Hash-labelled.
         """
         logger.debug("Single-key mode: fetching secrets per field")
@@ -467,7 +494,9 @@ class DaprCredentialVault:
             return await self._get_secret(value, log_label=label)
 
         resolved = await probe_single_keys(
-            _single_key_candidates(credential_config), _fetch
+            _single_key_candidates(credential_config),
+            _fetch,
+            keep_value_on_store_answer=True,
         )
 
         collected: dict[str, Any] = {}

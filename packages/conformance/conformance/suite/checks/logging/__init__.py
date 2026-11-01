@@ -55,7 +55,11 @@ from conformance.suite.schema.findings import Finding
 
 from ._checker import build_checker
 from ._constants import SERIES
-from ._crossfile import _collect_basicconfig_calls, _detect_factory
+from ._crossfile import (
+    _collect_basicconfig_calls,
+    _detect_factory,
+    _file_level_report_line,
+)
 from ._helpers import is_adapter_file, is_dev_harness
 from ._performance import WarnThenRaiseVisitor
 from ._toml import check_ruff_config
@@ -130,6 +134,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     factory_by_file: dict[str, str] = {}  # rel_path -> factory_type
     adapter_by_file: dict[str, bool] = {}  # rel_path -> is adapter/definition file
     directives_by_file: dict[str, dict[int, _IgnoreDirective]] = {}
+    report_line_by_file: dict[str, int] = {}  # rel_path -> L002 report line
     basicconfig_calls: list[Finding] = []  # placeholder findings for L016
 
     for path in paths:
@@ -148,6 +153,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         rel_str = str(rel)
         directives = _parse_directives(text)
         directives_by_file[rel_str] = directives
+        report_line_by_file[rel_str] = _file_level_report_line(text, directives)
 
         # Per-file rules
         result = build_checker(text, rel_str, directives)
@@ -193,7 +199,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             continue
         label = _FACTORY_LABEL.get(factory, factory)
         fake_node = ast.Module(body=[], type_ignores=[])
-        fake_node.lineno = 1  # type: ignore[attr-defined]
+        # Line 1, or the first line after a shebang / coding header, so a
+        # directive there can suppress it (see _file_level_report_line).
+        fake_node.lineno = report_line_by_file.get(rel_str, 1)  # type: ignore[attr-defined]
         fake_node.col_offset = 0  # type: ignore[attr-defined]
         findings.append(
             make_finding(

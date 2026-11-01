@@ -381,6 +381,37 @@ class TestLifecycle:
         with pytest.raises(FakeSourceNotRunningError):
             _ = source.base_url
 
+    def test_the_accept_loop_polls_for_shutdown_well_inside_the_stdlib_default(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``stop()`` waits for ``serve_forever`` to notice ``shutdown()``.
+
+        It checks once per ``poll_interval``, which defaults to 0.5s: left at
+        that, every ``stop()`` paid up to half a second, ~38s across this file
+        alone (FND-4304). Read off the call rather than timed, so the test does
+        not depend on how fast the runner is.
+        """
+        import socketserver
+
+        stdlib_default = socketserver.BaseServer.serve_forever.__defaults__[0]
+        polled: list[float] = []
+        real_serve_forever = fake_source._FakeSourceServer.serve_forever
+
+        def recording_serve_forever(server, poll_interval: float = stdlib_default):
+            polled.append(poll_interval)
+            real_serve_forever(server, poll_interval=poll_interval)
+
+        monkeypatch.setattr(
+            fake_source._FakeSourceServer, "serve_forever", recording_serve_forever
+        )
+
+        with HttpFakeSource():
+            pass
+
+        assert stdlib_default == 0.5
+        assert polled == [fake_source._SHUTDOWN_POLL_SECONDS]
+        assert fake_source._SHUTDOWN_POLL_SECONDS <= stdlib_default / 10
+
 
 class TestRouting:
     def test_static_route(self, fake: HttpFakeSource) -> None:

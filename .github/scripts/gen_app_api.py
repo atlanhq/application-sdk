@@ -609,9 +609,19 @@ def _toml_str(value: str) -> str:
     return json.dumps(value)
 
 
+#: A PEP 508 ``name[extras] @ url`` requirement: what ``packaging``'s
+#: ``Requirement.url`` reads, without importing it (this script runs alone).
+_DIRECT_REFERENCE = re.compile(
+    r"^\s*[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?\s*(?:\[[^\]]*\])?\s*@"
+)
+
+
 def _pyproject(config: Config) -> str:
     deps = [_api_requirement(config), *config.dependencies]
-    direct = config.api_source is not None and "git" in config.api_source
+    # hatchling refuses a direct reference unless allowed, so allow it only when
+    # one is declared: a git-pinned api package, or a private package that a bare
+    # name would expose to dependency confusion. Every requirement ships as declared.
+    direct = any(_DIRECT_REFERENCE.match(d) for d in deps)
     return (
         "[project]\n"
         f'name = "{config.distribution}"\n'
@@ -656,8 +666,9 @@ def generated_files(root: Path) -> list[str]:
 def compute_manifest_hooks(root: Path) -> list[str]:
     """``app/<entrypoint>/core.py`` files defining ``compute_manifest``.
 
-    The host serves static manifests only: a hook runs app code at request time,
-    which the host's api-only install cannot be trusted to import.
+    The host never runs one: ``core.py`` is worker code outside the handler's
+    files, which the host's api-only install cannot be trusted to import. A
+    manifest computed per request belongs in the handler's ``compute_manifest``.
     """
     return sorted(
         p.relative_to(root).as_posix()
@@ -793,8 +804,9 @@ def check(root: Path, config: Config) -> list[str]:
             for n in logging_statements(ast.parse(text, filename=handler))
         )
     problems.extend(
-        f"{hook}: compute_manifest runs app code per request; the consolidated "
-        "host serves static manifests only, so this app cannot be hosted yet"
+        f"{hook}: compute_manifest runs app code per request outside the "
+        "handler, which the consolidated host never runs; make the manifest "
+        "static, or move the hook to the handler's compute_manifest"
         for hook in compute_manifest_hooks(root)
     )
     return problems

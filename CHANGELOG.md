@@ -1,5 +1,122 @@
 # Changelog
 
+## v3.53.1 (October 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.53.0...v3.53.1
+
+### Bug Fixes
+
+- report a 401 from a customer store as AUTH, not PERMISSION (FND-4409) (#4613) (by @vaibhavatlan in [0510fc8](https://github.com/atlanhq/application-sdk/commit/0510fc8))
+- block on a credential config the object store confirms missing (#4615) (by @mothership-ai[bot] in [81a2dec](https://github.com/atlanhq/application-sdk/commit/81a2dec))
+
+### Chores
+
+- update github-actions (#4609) (by @renovate[bot] in [f1b54c7](https://github.com/atlanhq/application-sdk/commit/f1b54c7))
+- update astral-sh/setup-uv action to v10.3.3 (#4622) (by @renovate[bot] in [e7a7bbc](https://github.com/atlanhq/application-sdk/commit/e7a7bbc))
+- allowlist CVE-2026-115905 (CRITICAL 7d SLA) (#4624) (by @atlan-app-fleet[bot] in [f00287d](https://github.com/atlanhq/application-sdk/commit/f00287d))
+- require temporalio>=1.35.0 to clear the bundled zip crate CVE (BLDX-1670) (#4625) (by @vaibhavatlan in [6f362c8](https://github.com/atlanhq/application-sdk/commit/6f362c8))
+- keep the LoopProbe bound until the load() budget worker records (FND-4438) (#4627) (by @vaibhavatlan in [3e39840](https://github.com/atlanhq/application-sdk/commit/3e39840))
+- allowlist CVE-2026-116587 (HIGH 30d SLA) (#4634) (by @atlan-app-fleet[bot] in [bea5cc1](https://github.com/atlanhq/application-sdk/commit/bea5cc1))
+- check serverResources against serverVpa, not the worker vpa (AUT-1232) (#4633) (by @OnkarVO7 in [e53f233](https://github.com/atlanhq/application-sdk/commit/e53f233))
+
+
+## v3.53.0 (October 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.52.0...v3.53.0
+
+### Features
+
+- declared-source agent_json (format 2), normalized at ingress so apps need no change; refused refs go to the user [FND-4407] (#4610) (by @vaibhavatlan in [a276a30](https://github.com/atlanhq/application-sdk/commit/a276a30))
+
+### Bug Fixes
+
+- treat a store-rejected secret name as a literal in single-key probing (#4596) (by @SwarnadeepChatterjee in [b4252d3](https://github.com/atlanhq/application-sdk/commit/b4252d3))
+- stage the cross-store copy under TEMPORARY_PATH, not /tmp (#4594) (by @connectivity-ai[bot] in [2bdc086](https://github.com/atlanhq/application-sdk/commit/2bdc086))
+- time-boxed legacy single-key bridge keeps values the store rejects, with a deprecation warning [FND-4407] (#4611) (by @vaibhavatlan in [58ed83e](https://github.com/atlanhq/application-sdk/commit/58ed83e))
+
+### Chores
+
+- lock file maintenance (#4583) (by @renovate[bot] in [99d2a9d](https://github.com/atlanhq/application-sdk/commit/99d2a9d))
+- sync daprd pin to 1.18.9 (#4587) (by @atlan-app-fleet[bot] in [cffbe16](https://github.com/atlanhq/application-sdk/commit/cffbe16))
+- update atlanhq/application-sdk action to v3.52.0 (#4589) (by @renovate[bot] in [5dcd4b4](https://github.com/atlanhq/application-sdk/commit/5dcd4b4))
+- update github-actions (#4591) (by @renovate[bot] in [2eaa597](https://github.com/atlanhq/application-sdk/commit/2eaa597))
+- update dependency ubuntu to v26 (#4537) (by @renovate[bot] in [adb566a](https://github.com/atlanhq/application-sdk/commit/adb566a))
+- lock file maintenance (#4590) (by @renovate[bot] in [c0b8968](https://github.com/atlanhq/application-sdk/commit/c0b8968))
+- update the pinned pkl toolchain to v0.32.2 (#4539) (by @renovate[bot] in [77412e1](https://github.com/atlanhq/application-sdk/commit/77412e1))
+- advance the drain test's clock only after the drain records each finish (FND-4359) (#4599) (by @cmgrote in [72aac03](https://github.com/atlanhq/application-sdk/commit/72aac03))
+- lock file maintenance (#4600) (by @renovate[bot] in [7e5a4b2](https://github.com/atlanhq/application-sdk/commit/7e5a4b2))
+
+
+## v3.52.0 (October 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.2...v3.52.0
+
+### Features
+
+- contain stranded run_in_thread calls per app (FND-2973) (#4217) (by @vaibhavatlan in [0aff20a](https://github.com/atlanhq/application-sdk/commit/0aff20a))
+- let apps opt in to SQL-parent creation checks pyatlan 11.5.0 dropped (FND-4325) (#4578) (by @cmgrote in [079d968](https://github.com/atlanhq/application-sdk/commit/079d968))
+- serve the host's config and file routes from GCS on GCP; 503, not an ejection, on Azure Blob (#4572) (by @SanilK2108 in [cc139b3](https://github.com/atlanhq/application-sdk/commit/cc139b3))
+- compute a manifest per request through Handler.compute_manifest, on the worker and the host (#4573) (by @SanilK2108 in [78c5a8c](https://github.com/atlanhq/application-sdk/commit/78c5a8c))
+
+### Bug Fixes
+
+- stop the workflow-level retry on a task's non-retryable failure (FND-4307) (#4546) (by @cmgrote in [cfe44e8](https://github.com/atlanhq/application-sdk/commit/cfe44e8))
+- stop the sizing sink's flush when a test resets it (FND-4334) (#4579) (by @cmgrote in [4651858](https://github.com/atlanhq/application-sdk/commit/4651858))
+- FND-4314 JsonFileReader notice keeps pandas values; run() ids from App context (#4550) (by @sachi-atlan in [95cb1b4](https://github.com/atlanhq/application-sdk/commit/95cb1b4))
+- single-key probing skips objectstore:// file references (#4582) (by @connectivity-ai[bot] in [09bb3b3](https://github.com/atlanhq/application-sdk/commit/09bb3b3))
+
+### Chores
+
+- remove 1 resolved allowlist entry (#4566) (by @atlan-app-fleet[bot] in [3a938c9](https://github.com/atlanhq/application-sdk/commit/3a938c9))
+- lock file maintenance (#4568) (by @renovate[bot] in [de7f275](https://github.com/atlanhq/application-sdk/commit/de7f275))
+- update atlanhq/application-sdk action to v3.51.2 (#4569) (by @renovate[bot] in [5380389](https://github.com/atlanhq/application-sdk/commit/5380389))
+- lock file maintenance (#4570) (by @renovate[bot] in [5b485d2](https://github.com/atlanhq/application-sdk/commit/5b485d2))
+- cut the unit leg's fixed costs — per-chunk gc.collect, fake-source shutdown poll, per-test mktemp — and report timing against a budget (FND-4304) (#4544) (by @cmgrote in [7fe9562](https://github.com/atlanhq/application-sdk/commit/7fe9562))
+- lock file maintenance (#4571) (by @renovate[bot] in [13986f0](https://github.com/atlanhq/application-sdk/commit/13986f0))
+- lock file maintenance (#4580) (by @renovate[bot] in [d4f2864](https://github.com/atlanhq/application-sdk/commit/d4f2864))
+
+### Other Changes
+
+- test(observability): stop test_record_metric_with_various_inputs racing the metrics flush thread (FND-4337) (#4581) (by @cmgrote in [83b6c80](https://github.com/atlanhq/application-sdk/commit/83b6c80))
+
+
+## v3.51.2 (October 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.1...v3.51.2
+
+### Bug Fixes
+
+- bound teardown after the worker drains (#4516) (by @sriram-atlan in [ce36273](https://github.com/atlanhq/application-sdk/commit/ce36273))
+- break OTLP self-log feedback loop and bound shutdown flush (#4520) (by @cmgrote in [9bf2a24](https://github.com/atlanhq/application-sdk/commit/9bf2a24))
+- run per-entrypoint auth and metadata hooks over SDR (#4518) (by @cmgrote in [07e32eb](https://github.com/atlanhq/application-sdk/commit/07e32eb))
+- stop unit tests leaking shared state across an xdist worker (FND-4236) (#4533) (by @cmgrote in [3e3a38a](https://github.com/atlanhq/application-sdk/commit/3e3a38a))
+- make the daprd download atomic and retried, seed CI caches from main (FND-4241) (#4540) (by @cmgrote in [80b1b78](https://github.com/atlanhq/application-sdk/commit/80b1b78))
+- stop each test idling 5s in the worker shutdown drain (FND-4305) (#4545) (by @cmgrote in [098461b](https://github.com/atlanhq/application-sdk/commit/098461b))
+
+### Performance
+
+- disable the RocksDB WAL in SpillableDict (FND-4087) (#4530) (by @cmgrote in [85b715a](https://github.com/atlanhq/application-sdk/commit/85b715a))
+
+### Chores
+
+- certifi>=2026.10.19 for the conformance lock and the api package (GHSA-6q48-6c7w-9gw2) (#4523) (by @vaibhavatlan in [826c15a](https://github.com/atlanhq/application-sdk/commit/826c15a))
+- lock file maintenance (#4511) (by @renovate[bot] in [602bf46](https://github.com/atlanhq/application-sdk/commit/602bf46))
+- stop passing tests from having to beat short timeouts (FND-4234) (#4531) (by @cmgrote in [7707a77](https://github.com/atlanhq/application-sdk/commit/7707a77))
+- replace sleep-as-synchronisation with events and stop the fake source sharing its port on Windows (FND-4235) (#4532) (by @cmgrote in [0343469](https://github.com/atlanhq/application-sdk/commit/0343469))
+- keep unit-test writes under tmp_path and pool children on one xdist worker (FND-4237) (#4536) (by @cmgrote in [f09cc90](https://github.com/atlanhq/application-sdk/commit/f09cc90))
+- replace wall-clock timing asserts in unit tests with LoopProbe, frozen clocks and bounded waits (FND-4233) (#4535) (by @cmgrote in [f0b8d1d](https://github.com/atlanhq/application-sdk/commit/f0b8d1d))
+- update github-actions (#4517) (by @renovate[bot] in [4aa533e](https://github.com/atlanhq/application-sdk/commit/4aa533e))
+- lock file maintenance (#4525) (by @renovate[bot] in [ac3e6fa](https://github.com/atlanhq/application-sdk/commit/ac3e6fa))
+- lock file maintenance (#4525) (by @renovate[bot] in [81151e9](https://github.com/atlanhq/application-sdk/commit/81151e9))
+- update github-actions (#4549) (by @renovate[bot] in [bb72c43](https://github.com/atlanhq/application-sdk/commit/bb72c43))
+- lock file maintenance (#4547) (by @renovate[bot] in [5d9ab0a](https://github.com/atlanhq/application-sdk/commit/5d9ab0a))
+- raise filelock to 4.2.1 in the dev/test lock (FND-4322) (#4561) (by @cmgrote in [bb833e7](https://github.com/atlanhq/application-sdk/commit/bb833e7))
+- raise pyatlan floor to 11.5.0 (#4560) (by @cmgrote in [6279dcc](https://github.com/atlanhq/application-sdk/commit/6279dcc))
+- move conformance lock to authlib 1.9.1 (#4564) (by @cmgrote in [a21af5f](https://github.com/atlanhq/application-sdk/commit/a21af5f))
+- lock file maintenance (#4557) (by @renovate[bot] in [7f8017d](https://github.com/atlanhq/application-sdk/commit/7f8017d))
+- lock file maintenance (#4565) (by @renovate[bot] in [fb2edbb](https://github.com/atlanhq/application-sdk/commit/fb2edbb))
+
+
 ## v3.51.1 (October 21, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.51.0...v3.51.1

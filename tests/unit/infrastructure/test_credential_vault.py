@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterator
-from contextlib import contextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,7 +18,16 @@ from application_sdk.infrastructure._dapr.credential_vault import (
 from application_sdk.infrastructure._secret_utils import (
     process_secret_data as _process_secret_data,
 )
-from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.infrastructure.credential_vault import (
+    CredentialConfigNotFoundError,
+    CredentialVaultError,
+)
+from tests.unit.infrastructure._credential_vault_fakes import (
+    binding_500 as _binding_500,
+)
+from tests.unit.infrastructure._credential_vault_fakes import (
+    vault_sleep as _vault_sleep,
+)
 from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
@@ -289,13 +296,13 @@ class TestDaprCredentialVaultGetCredentials:
         # _try_fetch, not the original SecretStoreUnavailableError("secret_key_ref").
         assert "secret_key_ref" not in str(exc_info.value)
 
-    async def test_single_key_store_error_raises_without_leaking_ref_key(
+    async def test_single_key_refusal_keeps_value_without_leaking_ref_key(
         self,
     ) -> None:
         """A definitive (non-cold-start) rejection during single-key probing
-        stops resolution (FND-4077) rather than leaving the ref-key in place as
-        the password — and neither the WARNING log nor the raised error leaks
-        the raw ref-key."""
+        of an agent-sourced config keeps the value (FND-4407 bridge: the store
+        is the customer's SDR store, and the probe can't tell a plain value
+        from a ref-key), and the WARNING log never leaks the raw ref-key."""
         ref_key = "SNOWFLAKE_PROD_PASSWORD"
         expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
         config = {"credentialSource": "agent", "password": ref_key}
@@ -314,15 +321,11 @@ class TestDaprCredentialVaultGetCredentials:
             patch(
                 "application_sdk.infrastructure._single_key_probe.logger"
             ) as mock_logger,
-            pytest.raises(CredentialVaultError) as exc_info,
         ):
             vault = self._make_vault(mock_client)
-            await vault.get_credentials("my-guid")
+            credentials = await vault.get_credentials("my-guid")
 
-        # The first failing candidate in config order is raised (here the
-        # ``credentialSource`` value, which this path also probes).
-        assert ref_key not in str(exc_info.value)
-        assert "sha256:" in str(exc_info.value)
+        assert credentials["password"] == ref_key  # kept as entered
 
         logged = " ".join(
             str(arg) for call in mock_logger.warning.call_args_list for arg in call.args
@@ -938,27 +941,40 @@ class TestSingleKeyProbeConcurrency:
         assert "sha256:" in str(err)
         assert err.cause is None
 
-    async def test_store_error_on_one_field_stops_resolution(self) -> None:
-        """A store error on one field is fatal even when another field resolved
-        (FND-4077): skipping it would send that field's ref-key as its value.
-        A key the store definitively lacks is still skipped (``_get_secret``
-        returns ``{}`` for it, covered above)."""
-        from application_sdk.infrastructure.secrets import SecretStoreError
+    async def test_throttle_on_one_field_keeps_the_value(self) -> None:
+        """FND-4407 bridge, SDK <= 3.49 behaviour: a throttle is a store
+        answer, so the field is kept and the resolved field still merges."""
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
 
         async def _get_secret(value: str, *, log_label: str | None = None):
             if value == "real-key":
                 return {"password": "resolved"}
-            raise SecretStoreError(
+            raise SecretStoreTransientError(
                 "ThrottlingException", secret_name=value, retryable=True
             )
 
         config = {"a": "real-key", "b": "throttled-key"}
 
-        with pytest.raises(SecretStoreError) as exc_info:
-            await self._vault(_get_secret)._fetch_single_key_secrets(config)
+        result = await self._vault(_get_secret)._fetch_single_key_secrets(config)
 
-        assert exc_info.value.effective_retryable is True
-        assert "throttled-key" not in str(exc_info.value)
+        assert result == {"password": "resolved"}
+
+    async def test_refusal_on_one_field_keeps_the_value(self) -> None:
+        """FND-4407 bridge on the SDR vault path. Single-key mode only runs
+        for agent-sourced configs, whose store is the customer's SDR store,
+        so a refused plain value is kept, exactly as on the agent_json path."""
+        from application_sdk.infrastructure.secrets import SecretStoreError
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            if value == "real-key":
+                return {"password": "resolved"}
+            raise SecretStoreError("AccessDenied", secret_name=value, retryable=True)
+
+        config = {"a": "real-key", "b": "plain-value"}
+
+        secrets = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert secrets == {"password": "resolved"}
 
 
 def test_outage_types_stay_importable_from_this_module() -> None:
@@ -975,28 +991,6 @@ def test_outage_types_stay_importable_from_this_module() -> None:
     assert credential_vault.DaprSidecarUnreachableError is DaprSidecarUnreachableError
     assert credential_vault.SecretStoreUnavailableError is SecretStoreUnavailableError
     assert credential_vault.SecretStoreUnreachableError is SecretStoreUnreachableError
-
-
-@contextmanager
-def _vault_sleep() -> Iterator[AsyncMock]:
-    """No-op the vault's own ``asyncio.sleep``, and only the vault's."""
-    with (
-        private_stdlib(
-            "application_sdk.infrastructure._dapr.credential_vault", "asyncio"
-        ) as local_asyncio,
-        patch.object(local_asyncio, "sleep", new_callable=AsyncMock) as sleep,
-    ):
-        yield sleep
-
-
-def _binding_500(dapr_message: str) -> httpx.HTTPStatusError:
-    """A Dapr binding GET answered with HTTP 500 and Dapr's JSON error body."""
-    req = httpx.Request("POST", "http://localhost:3500/v1.0/bindings/upstream")
-    body = {"errorCode": "ERR_INVOKE_OUTPUT_BINDING", "message": dapr_message}
-    resp = httpx.Response(500, request=req, content=json.dumps(body).encode())
-    return httpx.HTTPStatusError(
-        "Server error '500 Internal Server Error'", request=req, response=resp
-    )
 
 
 class TestDaprCredentialVaultMissingConfigBlob:
@@ -1090,6 +1084,36 @@ class TestDaprCredentialVaultMissingConfigBlob:
         message = str(exc_info.value)
         assert "No credential config found for GUID example-credential" in message
         assert "not-found on 4 attempts over 17s" in message
+        assert isinstance(exc_info.value, CredentialConfigNotFoundError)
+        # Code-keyed consumers must see the same code as before the subtype.
+        assert exc_info.value.code == CredentialVaultError.code
+
+    async def test_empty_config_reply_is_not_reported_as_confirmed_absence(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A successful but empty reply is not the store saying "not found"."""
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=[
+                _binding_500("error invoking output binding: object not found"),
+                BindingResult(data=b"", metadata={}),
+                _binding_500("error invoking output binding: object not found"),
+                _binding_500("error invoking output binding: object not found"),
+            ]
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep(),
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert not isinstance(exc_info.value, CredentialConfigNotFoundError)
+        assert "empty reply within 4 attempts" in str(exc_info.value)
 
     async def test_binding_500_without_not_found_is_still_retried(
         self, deterministic_dapr_cold_start_deadline

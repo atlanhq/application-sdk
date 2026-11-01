@@ -9,8 +9,9 @@ completions. What has to hold:
   force`) cannot answer for this one;
 * the verdict is `success` only when all of them succeeded, and a failure names
   each failed workflow;
-* a status that is no longer `pending` is never overwritten, so a late
-  duplicate event cannot flip a recorded verdict;
+* a recorded pass is never overwritten, so a late duplicate event cannot
+  flip it; a recorded failure gives way to `success` only once a re-run of
+  what failed has passed, read from a request the bot posted (FND-4331);
 * an unknown request time settles nothing (lens F-3dd6c5, F-387afb);
 * once final, the newest Release Gate run is re-run unless its latest attempt
   started after the verdict — idempotent, so every later callback retries a
@@ -170,9 +171,17 @@ class FakeApi:
         runs: dict[str, list[list[dict[str, Any]]]] | None = None,
         written_at: str = _iso(40),
         rerun_fails: bool = False,
+        history: list[dict[str, Any]] | None = None,
+        arrives_before_write: list[dict[str, Any] | None] | None = None,
     ) -> None:
         self.status = status
         self.status_created_at = status_created_at
+        self.status_url = COMMAND_URL
+        # Older `gate-check` rows under the current one, newest first.
+        self.history = history or []
+        # Rows another workflow posts just before each of this driver's status
+        # writes lands, in write order (a racing `/gate-check force`).
+        self.arrives_before_write = list(arrives_before_write or [])
         self.written_at = written_at
         self.rerun_fails = rerun_fails
         # workflow → successive listings; the last one sticks.
@@ -188,28 +197,30 @@ class FakeApi:
             )
             self.writes.append((path, fields))
             if "/statuses/" in path:
+                row = (
+                    self.arrives_before_write.pop(0)
+                    if self.arrives_before_write
+                    else None
+                )
+                if row is not None:
+                    self._push(row["state"], row["description"])
+                    self.status_created_at = row["created_at"]
+                    self.status_url = row["target_url"]
                 # Read back like GitHub: the newest row wins.
-                self.status = (fields["state"], fields["description"])
+                self._push(fields["state"], fields["description"])
                 self.status_created_at = self.written_at
+                self.status_url = fields["target_url"]
             if path.endswith("/rerun") and self.rerun_fails:
                 return subprocess.CompletedProcess(args, 1, "", "409 already running")
             return subprocess.CompletedProcess(args, 0, "{}", "")
         path = next(a for a in args[1:] if a.startswith("repos/"))
         self.paths.append(path)
-        rows: list[dict[str, Any]] = []
-        if self.status is not None:
-            rows = [
-                {
-                    "context": "gate-check",
-                    "state": self.status[0],
-                    "description": self.status[1],
-                    "created_at": self.status_created_at,
-                }
-            ]
+        current = [self._row()] if self.status is not None else []
         if path.endswith("/status"):
-            body: Any = {"statuses": rows}
+            body: Any = {"statuses": current}
         elif "/statuses?" in path:
-            body = rows
+            rows = current + self.history
+            body = [rows] if "--paginate" in args else rows
         elif "/actions/workflows/" in path:
             workflow = path.split("/workflows/")[1].split("/")[0]
             queue = self.runs.get(workflow, [[]])
@@ -225,6 +236,40 @@ class FakeApi:
         else:
             raise AssertionError(f"unexpected gh call: {args}")
         return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
+
+    def _push(self, state: str, description: str) -> None:
+        if self.status is not None:
+            self.history.insert(0, self._row())
+        self.status = (state, description)
+
+    def _row(self) -> dict[str, Any]:
+        assert self.status is not None
+        return _status_row(
+            *self.status, created=self.status_created_at, url=self.status_url
+        )
+
+
+BOT = "github-actions[bot]"
+#: The command run that posted a `/gate-check` request: one per request.
+COMMAND_URL = "https://example.invalid/command/1"
+
+
+def _status_row(
+    state: str,
+    description: str,
+    *,
+    created: str,
+    creator: str = BOT,
+    url: str = COMMAND_URL,
+) -> dict[str, Any]:
+    return {
+        "context": "gate-check",
+        "state": state,
+        "description": description,
+        "target_url": url,
+        "created_at": created,
+        "creator": {"login": creator},
+    }
 
 
 def _gate(
@@ -259,7 +304,8 @@ class TestSettle:
         self, status: tuple[str, str]
     ) -> None:
         """A late duplicate completion must not flip a recorded verdict; it
-        only re-checks the Release Gate (here already up to date)."""
+        only re-checks the Release Gate (here already up to date). The failure
+        has no re-run to read: see TestRerunAfterFailure for one that does."""
         api = FakeApi(
             status=status,
             status_created_at=_iso(40),
@@ -317,6 +363,198 @@ class TestSettle:
         )
         assert gcv.settle(GitHub(REPO, api), SHA).final is False
         assert any("event=workflow_dispatch" in p for p in api.paths)
+
+
+REQUEST = _status_row("pending", "running: tests.yaml checks.yml", created=_iso(30))
+#: A later `/gate-check force`, made by another command run.
+FORCE = _status_row(
+    "pending",
+    "running: tests.yaml",
+    created=_iso(45),
+    url="https://example.invalid/command/2",
+)
+#: A second force after that one, made by a third command run.
+FORCE_AGAIN = _status_row(
+    "pending",
+    "running: checks.yml",
+    created=_iso(47),
+    url="https://example.invalid/command/3",
+)
+
+
+class TestFindRequest:
+    def test_ranks_requests_by_their_first_row_not_the_newest_row(self) -> None:
+        rows = [
+            _status_row("pending", "running: tests.yaml", created=_iso(50)),
+            FORCE_AGAIN,
+            REQUEST,
+        ]
+        request, requested_at = gcv.find_request(rows)
+        assert request == FORCE_AGAIN
+        assert requested_at == datetime(2026, 10, 13, 12, 47, tzinfo=timezone.utc)
+
+    def test_an_undated_request_settles_nothing(self) -> None:
+        undated = dict(REQUEST, created_at=None)
+        assert gcv.find_request([undated]) == (undated, None)
+
+    def test_rows_that_are_not_requests_are_skipped(self) -> None:
+        rows = [
+            _status_row("failure", "failed: x", created=_iso(40)),
+            _status_row("pending", "running: x", created=_iso(41), creator="x"),
+        ]
+        assert gcv.find_request(rows) == (None, None)
+
+
+class TestRerunAfterFailure:
+    """FND-4331: "Re-run failed jobs" on a dispatched run that failed the gate.
+
+    The re-run is a new attempt of the same run, and its completion fires the
+    same callback. When it passes, the recorded `failure` must give way to
+    `success` and Release Gate must be re-run to read it; otherwise the only
+    way out is a full `/gate-check force`.
+    """
+
+    def _api(
+        self,
+        tests_run: dict[str, Any],
+        *,
+        state: str = "failure",
+        request: dict[str, Any] = REQUEST,
+    ) -> FakeApi:
+        return FakeApi(
+            status=(state, "failed: tests.yaml (failure)"),
+            status_created_at=_iso(40),
+            written_at=_iso(50),
+            history=[request],
+            runs={
+                "tests.yaml": [[tests_run]],
+                "checks.yml": [[_run(2)]],
+                # Read the `failure` when it was written.
+                gcv.RELEASE_GATE_WORKFLOW: [[_gate(8, started=41)]],
+            },
+        )
+
+    @pytest.mark.parametrize("state", ["failure", "error"])
+    def test_a_passing_rerun_turns_the_verdict_green(self, state: str) -> None:
+        api = self._api(_run(1), state=state)
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert (verdict.final, verdict.state) == (True, "success")
+        status_path, fields = api.writes[0]
+        assert status_path == f"repos/{REPO}/statuses/{SHA}"
+        assert (fields["context"], fields["state"]) == ("gate-check", "success")
+        assert fields["description"] == "passed: tests.yaml checks.yml"
+        assert [p for p, _ in api.writes[1:]] == [f"repos/{REPO}/actions/runs/8/rerun"]
+
+    def test_the_new_verdict_is_shown(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        shown: list[str] = []
+        monkeypatch.setattr(
+            gcv, "show_verdict", lambda g, s, b, verdict: shown.append(verdict.state)
+        )
+        gcv.settle(GitHub(REPO, self._api(_run(1))), SHA, branch="bump-version-main")
+        assert shown == ["success"]
+
+    @pytest.mark.parametrize(
+        "tests_run",
+        [
+            _run(1, status="in_progress", conclusion=None),
+            _run(1, conclusion="failure"),
+        ],
+        ids=["rerun-still-running", "rerun-failed-again"],
+    )
+    def test_the_failure_stands_until_the_rerun_passes(
+        self, tests_run: dict[str, Any]
+    ) -> None:
+        api = self._api(tests_run)
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert (verdict.final, verdict.state) == (True, "failure")
+        assert api.writes == []
+
+    def test_a_request_not_posted_by_the_bot_is_ignored(self) -> None:
+        """FND-3947: only github-actions[bot]'s rows are trusted. A `pending`
+        anyone with write access posted must not get a bot-signed pass."""
+        forged = _status_row(
+            "pending", "running: tests.yaml checks.yml", created=_iso(30), creator="x"
+        )
+        api = self._api(_run(1), request=forged)
+        assert gcv.settle(GitHub(REPO, api), SHA).state == "failure"
+        assert api.writes == []
+
+    def test_runs_older_than_the_request_still_do_not_count(self) -> None:
+        api = self._api(_run(1, created=10))
+        assert gcv.settle(GitHub(REPO, api), SHA).state == "failure"
+        assert api.writes == []
+
+    def test_a_force_request_racing_the_write_is_put_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """lens F-7d5bea: a `/gate-check force` lands between the read and the
+        write. The pass must not mask it, or the forced runs' callbacks find a
+        recorded pass and never settle them."""
+        shown: list[str] = []
+        monkeypatch.setattr(
+            gcv, "show_verdict", lambda g, s, b, verdict: shown.append(verdict.state)
+        )
+        api = self._api(_run(1))
+        api.arrives_before_write = [FORCE]
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert verdict.final is False
+        assert [f["state"] for _, f in api.writes[:2]] == ["success", "pending"]
+        fields = api.writes[1][1]
+        assert (fields["description"], fields["target_url"]) == (
+            FORCE["description"],
+            FORCE["target_url"],
+        )
+        assert api.status == ("pending", FORCE["description"])
+        assert shown == []
+
+    def test_a_second_force_racing_the_put_back_stays_the_request(self) -> None:
+        """lens F-f1a9c4: a second `/gate-check force` lands between the
+        re-read and the put-back of the first. The put-back is then the
+        newest row, but the second force is the newest request, and only its
+        runs may settle the commit."""
+        api = self._api(_run(1))
+        api.arrives_before_write = [FORCE, FORCE_AGAIN]
+        gcv.settle(GitHub(REPO, api), SHA)
+        rows = GitHub(REPO, api).status_rows(SHA)
+        assert rows[0]["target_url"] == FORCE["target_url"]  # the put-back
+        request, requested_at = gcv.find_request(rows)
+        assert request is not None
+        assert request["target_url"] == FORCE_AGAIN["target_url"]
+        assert requested_at == datetime(2026, 10, 13, 12, 47, tzinfo=timezone.utc)
+        # The next callback waits on the second force's own runs (checks.yml
+        # has none since it was made), never on the first force's passing one.
+        api.writes.clear()
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert verdict.final is False
+        assert verdict.reason == "checks.yml has not started yet"
+        assert api.writes == []
+
+    def test_the_put_back_request_keeps_its_own_time(self) -> None:
+        """The forced runs were created before the re-post. Dated by the
+        re-post, they would never count and the request would never settle."""
+        api = FakeApi(
+            status=("pending", FORCE["description"]),
+            status_created_at=_iso(50),
+            history=[
+                _status_row(
+                    "success", "passed: tests.yaml checks.yml", created=_iso(49)
+                ),
+                FORCE,
+            ],
+            runs={
+                "tests.yaml": [[_run(3, created=47)]],
+                gcv.RELEASE_GATE_WORKFLOW: [[_gate(8, started=51)]],
+            },
+        )
+        api.status_url = FORCE["target_url"]
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert (verdict.final, verdict.state) == (True, "success")
+
+    def test_a_recorded_pass_is_never_rewritten(self) -> None:
+        """A later re-run that fails does not reach back into a passed gate."""
+        api = self._api(_run(1, conclusion="failure"), state="success")
+        assert gcv.settle(GitHub(REPO, api), SHA).state == "success"
+        assert api.writes == []
 
 
 class TestSettleShowsTheVerdict:

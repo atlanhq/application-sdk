@@ -5,7 +5,6 @@ in the application, including file outputs and object store interactions.
 """
 
 import errno
-import gc
 import inspect
 import os
 import shutil
@@ -674,7 +673,6 @@ class Writer(ABC):
                 await self._flush_buffer(chunk, self.chunk_part)
 
                 del chunk
-                gc.collect()
 
             if self.current_buffer_size_bytes > 0:
                 # Finally upload the final file to the object store.

@@ -35,6 +35,7 @@ from pathlib import Path
 from application_sdk.dev._dapr_errors import (
     DaprComponentsConfigError,
     DaprComponentsDirNotFoundError,
+    DaprConfigFileNotFoundError,
     DaprdBinaryMissingError,
     DaprdDownloadIncompleteError,
     DaprdExitedError,
@@ -455,9 +456,17 @@ async def embedded_dapr(
     eventstore_root: str = DEFAULT_EVENTSTORE_ROOT,
     secrets_file: str | None = None,
     components_dir: str | None = None,
+    config_file: str | None = None,
     log_level: str = "warn",
 ) -> AsyncIterator[EmbeddedDapr]:
     """Boot an embedded ``daprd`` for local app development.
+
+    *config_file* is an optional Dapr ``Configuration`` YAML passed to
+    ``daprd --config``. Use it for runtime behaviour that lives in the
+    configuration, not a component: for example ``secrets.scopes`` with
+    ``defaultAccess: deny``, which makes the secret store refuse any name
+    outside ``allowedSecrets`` (403 ``ERR_PERMISSION_DENIED``), the way a
+    scoped production secret-store identity does.
 
     By default (no *components_dir*) these components are auto-generated into a
     temp dir:
@@ -507,6 +516,10 @@ async def embedded_dapr(
         not components_dir.strip() or not Path(components_dir).is_dir()
     ):
         raise DaprComponentsDirNotFoundError(value_summary=repr(components_dir))
+    if config_file is not None and (
+        not config_file.strip() or not Path(config_file).is_file()
+    ):
+        raise DaprConfigFileNotFoundError(value_summary=repr(config_file))
 
     binary = _ensure_daprd_binary()
     http_port, grpc_port = _pick_free_ports(2)
@@ -557,6 +570,7 @@ async def embedded_dapr(
             log_level,
             # Disable the metrics + placement endpoints we don't need for local dev.
             "--enable-metrics=false",
+            *(("--config", config_file) if config_file is not None else ()),
             stdout=log_fd,
             stderr=asyncio.subprocess.STDOUT,
         )

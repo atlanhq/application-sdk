@@ -7,9 +7,12 @@ in a declarative, data-driven manner.
 import os
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from application_sdk.testing.integration._errors import HttpClientInputError
+
+if TYPE_CHECKING:
+    from application_sdk.validation.asset_rules import AssetCreationRules
 
 
 class APIType(Enum):
@@ -153,6 +156,9 @@ class Scenario:
             ``asset_validation_strict``. ``None`` (default) inherits the class
             setting (warn-first: failures are logged, not raised). Set ``True`` to
             fail the scenario on any invalid or orphaned asset.
+        asset_validation_rules: Override the test class's
+            ``asset_validation_rules``. ``None`` (default) inherits the class
+            setting; an empty set turns the extra checks off for this scenario.
     """
 
     name: str
@@ -183,6 +189,7 @@ class Scenario:
     preflight_timeout: int = 60
     validate_assets: bool | None = None
     asset_validation_strict: bool | None = None
+    asset_validation_rules: "frozenset[AssetCreationRules] | None" = None
 
     def __post_init__(self):
         """Validate the scenario after initialization."""

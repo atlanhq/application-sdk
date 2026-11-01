@@ -37,6 +37,7 @@ from application_sdk.dev._dapr import (
 from application_sdk.dev._dapr_errors import (
     DaprComponentsConfigError,
     DaprComponentsDirNotFoundError,
+    DaprConfigFileNotFoundError,
     DaprdDownloadIncompleteError,
     DaprdExitedError,
     UnsupportedArchitectureError,
@@ -331,6 +332,50 @@ class TestEmbeddedDaprLifecycle:
         missing = tmp_path / "does-not-exist"
         with pytest.raises(DaprComponentsDirNotFoundError):
             async with embedded_dapr(components_dir=str(missing)):
+                pass
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            assert k not in os.environ
+
+    @pytest.mark.asyncio
+    async def test_config_file_is_passed_to_daprd(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _stub_subprocess_and_binary,
+    ) -> None:
+        """A Dapr Configuration (e.g. secret scoping) reaches ``daprd --config``;
+        without one, no ``--config`` flag is passed."""
+        monkeypatch.chdir(tmp_path)
+        config = tmp_path / "config.yaml"
+        config.write_text("kind: Configuration\n")
+        spawned: list[tuple[object, ...]] = []
+
+        async def _record(*args, **_kwargs):
+            spawned.append(args)
+            return _stub_subprocess_and_binary
+
+        with private_stdlib("application_sdk.dev._dapr", "asyncio") as local_asyncio:
+            monkeypatch.setattr(local_asyncio, "create_subprocess_exec", _record)
+            async with embedded_dapr(config_file=str(config)):
+                pass
+            async with embedded_dapr():
+                pass
+
+        with_config, without_config = spawned
+        flag = with_config.index("--config")
+        assert with_config[flag + 1] == str(config)
+        assert "--config" not in without_config
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad", ["", "   ", "missing.yaml"])
+    async def test_missing_config_file_fails_fast(
+        self, bad: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
+            monkeypatch.delenv(k, raising=False)
+        with pytest.raises(DaprConfigFileNotFoundError):
+            async with embedded_dapr(config_file=bad):
                 pass
         for k in ("DAPR_HTTP_PORT", "DAPR_GRPC_PORT", "DAPR_COMPONENTS_PATH"):
             assert k not in os.environ

@@ -12,8 +12,9 @@ For each module we:
    * ``@entrypoint(name=<non-literal>)`` → recorded as *unresolved* (cannot be
      statically verified)
 
-3. Separately collect ``App`` subclass ``ClassDef`` nodes so contract-only
-   findings can be anchored to a meaningful location in the code.
+3. Separately collect ``App``-family subclass ``ClassDef`` nodes (any base in
+   ``SDK_APP_BASE_NAMES``) so contract-only findings can be anchored to a
+   meaningful location in the code.
 
 Import-provenance policy
 ------------------------
@@ -30,7 +31,11 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._ast_common import (
+    SDK_APP_BASE_NAMES,
+    _IgnoreDirective,
+    _parse_directives,
+)
 
 _SDK_PREFIX = "application_sdk"
 
@@ -55,7 +60,7 @@ def _sdk_entrypoint_aliases(tree: ast.Module) -> frozenset[str]:
 
 
 def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
-    """Return local names bound to the SDK ``App`` class in this module."""
+    """Return local names bound to an SDK ``App``-family base in this module."""
     bound: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom) or node.level > 0:
@@ -63,7 +68,7 @@ def _sdk_app_aliases(tree: ast.Module) -> frozenset[str]:
         module = node.module or ""
         if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
             for alias in node.names:
-                if alias.name == "App":
+                if alias.name in SDK_APP_BASE_NAMES:
                     bound.add(alias.asname or alias.name)
     return frozenset(bound)
 
@@ -228,7 +233,7 @@ class EntrypointLocation:
 
 @dataclass
 class AppClassLocation:
-    """An ``App`` subclass found in the codebase."""
+    """An ``App``-family subclass found in the codebase."""
 
     filename: str
     node: ast.ClassDef

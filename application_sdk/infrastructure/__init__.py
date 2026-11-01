@@ -52,10 +52,12 @@ from application_sdk.infrastructure.pubsub import (
     Subscription,
 )
 from application_sdk.infrastructure.secrets import (
+    AgentSecretReadError,
     EnvironmentSecretStore,
     SecretNotFoundError,
     SecretStore,
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
     get_deployment_secret,
@@ -63,6 +65,7 @@ from application_sdk.infrastructure.secrets import (
 from application_sdk.infrastructure.state import StateStore, StateStoreError
 
 __all__ = [
+    "AgentSecretReadError",
     "AsyncDaprClient",
     "Binding",
     "BindingError",
@@ -89,6 +92,7 @@ __all__ = [
     "SecretNotFoundError",
     "SecretStore",
     "SecretStoreError",
+    "SecretStoreTransientError",
     "SecretStoreUnavailableError",
     "SecretStoreUnreachableError",
     "StateStore",

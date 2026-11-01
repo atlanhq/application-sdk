@@ -112,13 +112,13 @@ mid-run with a serialization error nothing in their configuration explains.
   and read the result rather than inferring it. Removing a recorded field does fire B005
   at BLOCK tier; retiring one is the sanctioned route, but read it precisely. B005 skips
   a sunset field only when it is ABSENT from source (live is None and status ==
-  'sunset'), so retirement is: mark deprecated=True with
-  json_schema_extra={'x-lifecycle': 'sunset'}, regenerate, THEN remove the field. A
-  sunset field still declared with a changed type is still a retype and is judged as
-  one. Narrowing in place is free only where _retype_is_compatible allows it: an
-  inherited field, a widening, or replacing Any with a concrete type in the SAME OUTER
-  SHAPE (which payload safety requires anyway, so it is not optional). Wrapping Any in
-  MaxItems does not make it acceptable or clear P001: without the opt-out, P001's
+  'sunset'), so retirement moves the ledger entry one status per merge (active ->
+  deprecated -> sunset) and only then removes the field; prescriptions guide step 6 has
+  the steps. A sunset field still declared with a changed type is still a retype and is
+  judged as one. Narrowing in place is free only where _retype_is_compatible allows it:
+  an inherited field, a widening, or replacing Any with a concrete type in the SAME
+  OUTER SHAPE (which payload safety requires anyway, so it is not optional). Wrapping
+  Any in MaxItems does not make it acceptable or clear P001: without the opt-out, P001's
   inverse finding still reports the Any-typed field and class creation raises
   PayloadSafetyError; with the opt-out, the class-level finding still fires. Any is
   refused unconditionally. MaxItems bounds a collection only when its element/value type
@@ -183,8 +183,9 @@ needs its own bound.
 results) moves by reference: write it to the object store and pass a `FileReference`.
 This is the fix that holds at 2MB.
 
-6. *Retire a field nothing populates*: mark it `deprecated=True` with `x-lifecycle:
-sunset`, regenerate the ledger, then remove it from source.
+6. *Retire a field nothing populates*: one ledger status per merge (`active` ->
+`deprecated` -> `sunset`), then remove it from source; the prescriptions guide, step 6,
+has the steps.
 
 **Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias with
 no bound (`TreeSelection` bounds every level), or a nested `BaseModel(extra='allow')`
@@ -203,9 +204,11 @@ file, and never let a post-generate hook re-insert the opt-out.
 
 **Narrowing changes what the app accepts.**  Before narrowing, list the shapes the field
 really carries (its normaliser, its producers, the next task's contract) and confirm
-each still validates.  Only `@entrypoint` fields are in the contract ledger, so task
-contracts can be narrowed freely; for an entrypoint field run `gen-contract-ledger` then
-`ledger-guard` and read the result rather than inferring it.
+each still validates.  Only entrypoint contracts (an `@entrypoint` method, or `async def
+run()` on a subclass of `App` or an SDK App class such as `SqlApp`) are in the contract
+ledger, so a contract used only by `@task` methods can be narrowed freely; for an
+entrypoint field run `gen-contract-ledger` then `ledger-guard` and read the result
+rather than inferring it.
 
 **Keeping the opt-out** is the owner's decision, reached only after the steps above were
 tried and refused, with each refusal named in `# conformance: ignore[P001] <reason>`.
@@ -727,7 +730,7 @@ conformance: ignore[P014] <reason>` at the method definition.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.6.0
 
-> Input/Output contract field uses a dict of primitives or a container of Any — replace with a typed nested model
+> Input/Output contract field uses a dict of primitives or a container of Any — replace with typed fields (one per fixed key) or a container of a typed model (open keys)
 
 **Rationale:** Bounded containers (Annotated[dict[str, str], MaxItems(50)]) pass payload-safety
 validation (P001) but are still stringly-typed: keys and values carry no schema, typos
@@ -735,13 +738,15 @@ surface only at runtime, and the field is invisible to contract diffing and sche
 tooling.  The SDK's make-contract guidance explicitly prefers typed properties over
 arbitrary string keys ('avoid stringly-typed contracts where the user can typo a key and
 only discover it at runtime').  WARN (not BLOCK) because the bounded form is technically
-sanctioned; this is a modeling nudge toward a typed nested model.
+sanctioned; this is a modeling nudge toward typed fields.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/contracts.py — the collection filters are containers of a typed
-  model, `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
-  and `CollectResidualsInput.residual_files` is `Annotated[dict[str, FileReference],
+- **Compliant example:** atlan-metabase-app app/contracts.py — a fixed key set is one typed field per key
+  (`TransformTaskInput.connection_qualified_name: str = ""`, `connection_name: str =
+  ""`); open keys with a structured value are containers of a typed model,
+  `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`, and
+  `CollectResidualsInput.residual_files` is `Annotated[dict[str, FileReference],
   MaxItems(16)]`. The value type is what this rule grades: a bounded dict of str would
   still fire, because MaxItems keeps the payload small but gives the keys and values no
   schema.
@@ -755,8 +760,10 @@ unmodeled boundary.  Even though the bounded form satisfies the payload-safety g
 runtime-only failures, and the field is invisible to contract diffing and the SDK's
 `is_backwards_compatible` checker.
 
-The SDK contract guidance (`make-contract` skill, §6) prefers typed properties / a
-nested `pydantic.BaseModel` subclass over arbitrary string keys.
+The SDK contract guidance (`make-contract` skill, §6) prefers typed properties over
+arbitrary string keys.  The target depends on the key set the app writes: a fixed key
+set becomes one typed field per key on the contract; open keys with a structured value
+become a bounded container of a `pydantic.BaseModel` subclass.
 
 **Exempt:** `list[FooModel]`, `dict[str, FooModel]` — containers of a typed class are
 the canonical bounded pattern and are fine. Lists and sets of a scalar primitive (`str`,
@@ -770,9 +777,10 @@ sanctioned — this is a modeling nudge, not a gate failure.  Suppress with `#
 conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 
 On a field already recorded in the contract ledger, retyping it to a model in place is a
-B005 break (the ledger keys a field's type by its name). Add the typed field under a new
-name and retire the old one, or keep the bounded container and suppress this warning
-with that reason.
+B005 break (the ledger keys a field's type by its name). Add the typed fields under new
+names with defaults, move every writer and reader onto them, then retire the old one
+(prescriptions guide, P001 step 6), or keep the bounded container and suppress this
+warning with that reason.
 
 ---
 

@@ -207,6 +207,15 @@ result = requests.get(url)
 result = await self.run_in_thread(requests.get, url)
 ```
 
+Give the blocking call its own driver-level timeout (connect, socket, statement). An
+`asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` frees only the caller.
+The thread keeps its pool slot until the driver returns, and is reported as
+*stranded* (a WARNING plus the `offload.stranded_threads` gauge, per app).
+
+When `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` is set, an app with that many calls in flight
+gets a retryable `ResourceExhaustedError` instead of queueing. See ADR-0010 →
+*Addendum: containing stranded threads per app*.
+
 ## Writing Files
 
 Never write an artifact directly to its final name. Use `application_sdk.common.atomic`:
@@ -493,9 +502,20 @@ async def transform_users(self, inp: TransformInput) -> TransformOutput:
 ```
 
 For JSON inputs, swap `pd.read_parquet` for an `orjson.loads` loop over the
-file lines. No `ParquetFileReader` / `JsonFileReader` construction required —
-they exist only to bridge the legacy inline-upload contract and will be
-deleted in v4.0.
+file lines. `JsonFileReader` coerced values through pandas: an int column
+with a missing key came back as float (`3` → `3.0`), the missing key as
+`NaN`. The orjson loop returns the values in the file, so fix the callers
+that relied on the coercion rather than rebuilding a DataFrame:
+
+- `row[key]` on an optional key raises `KeyError` — use `row.get(key)`.
+- `pd.isna` / `math.isnan` checks for absence — use `is None` or
+  `key not in row`.
+- A value formatted into a published key or qualified name changes
+  (`"3.0"` → `"3"`) — record it as an owner decision, don't paper over it.
+
+No
+`ParquetFileReader` / `JsonFileReader` construction required — they exist
+only to bridge the legacy inline-upload contract and will be deleted in v4.0.
 
 ### Transitional opt-in on the legacy `ParquetFileWriter`
 

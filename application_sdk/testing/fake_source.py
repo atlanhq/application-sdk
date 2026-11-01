@@ -103,6 +103,9 @@ _WILDCARD_HOSTS = frozenset({"0.0.0.0", ""})  # noqa: S104 — compared against,
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 _JOIN_GRACE_SECONDS = 5.0
+# How often the accept loop checks for shutdown(). serve_forever's default of
+# 0.5s is what stop() waited out on every call; nothing else depends on it.
+_SHUTDOWN_POLL_SECONDS = 0.05
 _MAX_BODY_BYTES = 64 * 1024 * 1024
 _MAX_CHUNK_LINE_BYTES = 8192
 _RESERVED_RESPONSE_HEADERS = frozenset(
@@ -612,6 +615,7 @@ class HttpFakeSource:
                 )
             thread = threading.Thread(
                 target=server.serve_forever,
+                kwargs={"poll_interval": _SHUTDOWN_POLL_SECONDS},
                 name=f"{self.name}-server",
                 daemon=True,
             )
