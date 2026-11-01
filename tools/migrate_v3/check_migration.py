@@ -94,11 +94,15 @@ _RE_EXECUTE_ACTIVITY = re.compile(r"\bworkflow\.execute_activity_method\s*\(")
 # Negative lookbehind for "async" and "get_async_" to avoid false positives.
 _RE_SYNC_GET_CLIENT = re.compile(r"(?<!\bget_async_)(?<!\basync\s)\bget_client\s*\(")
 
-# App subclass existence — class inheriting from a v3 base.
+# App subclass existence — class inheriting from a v3 base, in any position
+# of the base list (mixins usually come first: ``class X(Mixin, SqlApp)``).
+# ``[^)]*?`` stays inside the parentheses and the ``(?<!\w)`` guard keeps
+# it to whole names (``MyApp`` does not match ``App``; ``templates.SqlApp``
+# does match).
 # re.DOTALL ensures \s* matches newlines in multiline class signatures.
 _RE_APP_SUBCLASS = re.compile(
-    r"class\s+\w+\s*\(\s*(?:"
-    r"App|SqlMetadataExtractor|IncrementalSqlMetadataExtractor|"
+    r"class\s+\w+\s*\([^)]*?(?<!\w)(?:"
+    r"App|SqlApp|SqlMetadataExtractor|IncrementalSqlMetadataExtractor|"
     r"SqlQueryExtractor|BaseMetadataExtractor"
     r")\s*[,)]",
     re.DOTALL,
@@ -502,8 +506,8 @@ def check_directory(
     if app_subclass_required and not _RE_APP_SUBCLASS.search(prod_text):
         advisories.append(
             "WARN [app-subclass-missing]: No App subclass found. "
-            "Create a class that inherits from App / SqlMetadataExtractor / "
-            "IncrementalSqlMetadataExtractor / SqlQueryExtractor."
+            "Create a class that inherits from App (or SqlApp for a SQL "
+            "metadata source)."
         )
 
     # ── WARN: handler not using new base ─────────────────────────────────
