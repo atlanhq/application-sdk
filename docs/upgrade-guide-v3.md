@@ -166,11 +166,12 @@ class MyQueryWorkflow(SQLQueryExtractionWorkflow):
 ### v3
 
 ```python
-from application_sdk.app import App, task
-from application_sdk.templates.contracts.sql_query import (
+from application_sdk.templates import SqlQueryExtractor
+from application_sdk.templates.contracts import (
     QueryBatchInput, QueryBatchOutput,
     QueryFetchInput, QueryFetchOutput,
 )
+from application_sdk.app import task
 
 class MyQueryExtractor(SqlQueryExtractor):
     @task(timeout_seconds=600)
