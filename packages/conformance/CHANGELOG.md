@@ -2,6 +2,22 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.53.1] - 2026-11-01
+
+### Bug fixes
+
+- FND-4386 migrate-storage decided defaults and key vs hand-off rule (#4604) ([b70ae24](https://github.com/atlanhq/application-sdk/commit/b70ae24))
+- L006 false positive on compliant code (1 repo) (#4645) ([049d279](https://github.com/atlanhq/application-sdk/commit/049d279))
+- O001 false positive on compliant code (1 repo) (#4648) ([c936442](https://github.com/atlanhq/application-sdk/commit/c936442))
+- D004 false positive on compliant code (1 repo) (#4650) ([490c0c3](https://github.com/atlanhq/application-sdk/commit/490c0c3))
+- FND-4385 P028 guidance keeps creator gaps open (#4603) ([a2e2ae9](https://github.com/atlanhq/application-sdk/commit/a2e2ae9))
+- FND-4313 v3 upgrade guide sends SQL metadata to SqlApp, query logs to App (#4552) ([d78c39e](https://github.com/atlanhq/application-sdk/commit/d78c39e))
+- T005 false positive on compliant code (1 repo) (#4652) ([b04fe85](https://github.com/atlanhq/application-sdk/commit/b04fe85))
+
+### Other changes
+
+- chore(deps): update non-critical python dependencies (#4519) ([28cc215](https://github.com/atlanhq/application-sdk/commit/28cc215))
+
 ## [0.53.0] - 2026-10-28
 
 ### Features
