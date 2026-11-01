@@ -1046,6 +1046,7 @@ jobs:
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
+      app_sync_body:    ${{ steps.manifest.outputs.app_sync_body }}
       app_configs:      ${{ steps.app_configs.outputs.app_configs }}
       # `steps.candidate` runs only in candidate mode and renames the build to
       # `candidate-<tree>`; otherwise these are the tag step's values.
@@ -1937,3 +1938,15 @@ jobs:
           echo "Published \`${APP_NAME}\` version \`${IMAGE_TAG}\` to \`${CHANNEL_USED}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY
+
+      # The publish route creates a version and has no `tags` field, so app-level
+      # tags (marketplace search keywords) are synced with the app update that
+      # `atlan app register` uses. Runs only when atlan.yaml sets `tags`;
+      # warn-only — see .sdk-entrypoint/.github/scripts/sync_marketplace_tags.py.
+      - name: Sync marketplace tags
+        if: ${{ needs.prepare.outputs.app_sync_body != '' }}
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
+          APP_SYNC_BODY: ${{ needs.prepare.outputs.app_sync_body }}
+        run: python3 .sdk-entrypoint/.github/scripts/sync_marketplace_tags.py
