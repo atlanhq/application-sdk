@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.36.0] - 2026-11-01
+
+### Features
+
+- add tags to NativeAppBundle and sync atlan.yaml tags to the marketplace on publish (#4632) ([42717c4](https://github.com/atlanhq/application-sdk/commit/42717c4))
+
 ## [0.35.0] - 2026-10-19
 
 ### Features
