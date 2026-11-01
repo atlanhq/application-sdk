@@ -424,8 +424,8 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'sql'", specifier = ">=1.1.3,<1.6.0" },
     { name = "duckdb-engine", marker = "extra == 'incremental'", specifier = ">=0.17.0,<0.18.0" },
     { name = "duckdb-engine", marker = "extra == 'sql'", specifier = ">=0.17.0,<0.18.0" },
-    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.43.0,<40.44.0" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.143.0,<0.144.0" },
+    { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=40.44.0,<40.45.0" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.162.0,<0.163.0" },
     { name = "fastmcp", marker = "extra == 'mcp'", specifier = ">=3.2.0,<4.0.0" },
     { name = "google-auth", specifier = ">=2.0.0,<3.0.0" },
     { name = "httpx", specifier = ">=0.27.0,<0.29.0" },
@@ -444,7 +444,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'incremental'", specifier = ">=2.2.3,<3.0.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<3.0.0" },
     { name = "pandas", marker = "extra == 'sql'", specifier = ">=2.2.3,<3.0.0" },
-    { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.34.1,<0.35.0" },
+    { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.35.0,<0.36.0" },
     { name = "prometheus-client", specifier = ">=0.20.0,<1.0" },
     { name = "protobuf", specifier = ">=6.33.5,<8" },
     { name = "pyarrow", marker = "extra == 'incremental'", specifier = ">=23.0.1,<24.0.0" },
@@ -521,7 +521,7 @@ requires-dist = [
     { name = "authlib", marker = "extra == 'pyatlan'", specifier = ">=1.9.1,<2" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.38.6,<2.0.0" },
     { name = "certifi", specifier = ">=2026.10.19" },
-    { name = "fastapi", specifier = ">=0.143.0,<0.144.0" },
+    { name = "fastapi", specifier = ">=0.162.0,<0.163.0" },
     { name = "httpx", specifier = ">=0.27.0,<0.29.0" },
     { name = "httpx", marker = "extra == 'aws'", specifier = ">=0.27.0,<0.29.0" },
     { name = "httpx", marker = "extra == 'sql'", specifier = ">=0.27.0,<0.29.0" },
@@ -560,7 +560,7 @@ requires-dist = [
 provides-extras = ["test"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = "==0.17.1" }]
+dev = [{ name = "ruff", specifier = "==0.17.3" }]
 
 [[package]]
 name = "attrs"
@@ -1465,19 +1465,19 @@ wheels = [
 
 [[package]]
 name = "faker"
-version = "40.43.0"
+version = "40.44.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/33/6c/b8793efc2f00a912ef17cf0b61b717cddf34607499efcb8a32238c119368/faker-40.43.0.tar.gz", hash = "sha256:02fae4327c03a4a6315e1b428a3878f435bfc276c93435ea349b95c0c9372361", size = 2032713, upload-time = "2026-10-09T20:06:29.652Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/87/22/965c7b822f4c80f6e003c696d5fa01b48eea6cc7852d61aec8779519b346/faker-40.44.0.tar.gz", hash = "sha256:97245a3756dcaf35418b89bea9f03ae6881557db0032bf048744c2aaee2a9108", size = 2034259, upload-time = "2026-10-28T17:06:41.048Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/81/ed/0d6d0d6467ae3d009fb82fb411867c7fcfeadbdd25602cab0d7a7963f400/faker-40.43.0-py3-none-any.whl", hash = "sha256:9dd7c0ddfaf30c842b05502d3cf641c135e0120a3a19047008ba8525b72953ed", size = 2069082, upload-time = "2026-10-09T20:06:27.166Z" },
+    { url = "https://files.pythonhosted.org/packages/58/9e/3da962809aefa00ddf457d1b11bba41d7766373a0ad9e537fa0804604361/faker-40.44.0-py3-none-any.whl", hash = "sha256:db808a3ec33fe9ce5caf40b9fb61f85f46e429a56966f765209272adec83e4c6", size = 2069747, upload-time = "2026-10-28T17:06:39.109Z" },
 ]
 
 [[package]]
 name = "fastapi"
-version = "0.143.5"
+version = "0.162.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -1487,9 +1487,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8f/6a/ac6ec87026038fb7583018e0905f6c9d55bc8ee07d30d44c743f18b19435/fastapi-0.143.5.tar.gz", hash = "sha256:0b5c8e52d243cd2f015376b41e78db5bee585578782481abd145e1ab5a62a3ba", size = 470247, upload-time = "2026-10-18T09:12:55.556Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/eb/2cf8c80abf09b2800aef0a83b41066fbfda8ee5495b7a08b9d1af40f7046/fastapi-0.162.0.tar.gz", hash = "sha256:6a22c1e2e6e32e0633ee7e170f00009a29b8228b16feb219ee42f32fd8d88a8f", size = 527867, upload-time = "2026-10-23T18:47:33.264Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/eb/4e/5f7d1268900eb14a6697a42d94c8f7e3b8450d27301761f231672f928419/fastapi-0.143.5-py3-none-any.whl", hash = "sha256:09cc38ed8c6a95f407783ef4d98ceeb350e192fe8fbb8ed711070bcd5208fdfa", size = 144894, upload-time = "2026-10-18T09:12:54.125Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/4f/3f2c25c9b43970b5e9a08beb5e04776247edea684ddc0930f4f02f0bb6cb/fastapi-0.162.0-py3-none-any.whl", hash = "sha256:3785963de305dd09912426cb81f2d230fce98ab3521cdfe97265c8d14983128c", size = 148912, upload-time = "2026-10-23T18:47:31.734Z" },
 ]
 
 [package.optional-dependencies]
@@ -4071,7 +4071,7 @@ wheels = [
 
 [[package]]
 name = "pandera"
-version = "0.34.1"
+version = "0.35.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
@@ -4080,9 +4080,9 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "typing-inspect" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/56/6c86add6272b295ea77f629757c6d79a12ec30ac51e01a0428d6ff11224c/pandera-0.34.1.tar.gz", hash = "sha256:8907a976403757c5e05a73022d4c447c74844d01c6053667b9a2ca63f26c2fa6", size = 1066371, upload-time = "2026-10-06T15:16:29.118Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/44/a996e575da4f1adec5a4ff16eb43d69d0125901315ca9ac9613ac3b61009/pandera-0.35.0.tar.gz", hash = "sha256:d2d11bbf9b4dd19c227caf31ac57ac28a679bbe18577f9496dcf809143232389", size = 1132618, upload-time = "2026-10-25T02:33:03.012Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/53/e2/f86fdba3312c977beb39e7c3b29d1cdb43c508ed8278ff40aa329aa10611/pandera-0.34.1-py3-none-any.whl", hash = "sha256:fbcbd0aafeb8d69d7db0ab7990e89cbea31c2c5b8a5e9bde8b3a33f8678975a4", size = 535038, upload-time = "2026-10-06T15:16:27.372Z" },
+    { url = "https://files.pythonhosted.org/packages/29/17/239d1e64d290c26f126582445649bc7c925a7a80f2472b8bd04d6ec22f8d/pandera-0.35.0-py3-none-any.whl", hash = "sha256:ce5cab5e882480d07575361899a4140585b80c489410cf97b7ef6e8aa90de3b6", size = 557083, upload-time = "2026-10-25T02:33:01.376Z" },
 ]
 
 [package.optional-dependencies]
