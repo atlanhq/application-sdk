@@ -388,7 +388,9 @@ def test_tags_emit_app_sync_body(tmp_path, monkeypatch):
     }
 
 
-@pytest.mark.parametrize("bad_tags", ["lineage", ["lineage", ""], ["lineage", 3]])
+@pytest.mark.parametrize(
+    "bad_tags", ["lineage", ["lineage", ""], ["lineage", 3], None, False, 0, ""]
+)
 def test_tags_must_be_list_of_non_empty_strings(tmp_path, monkeypatch, bad_tags):
     monkeypatch.chdir(tmp_path)
     _write(
@@ -419,3 +421,21 @@ def test_tags_require_update_fields(tmp_path, monkeypatch, missing):
     _write(tmp_path, payload)
     with pytest.raises(AtlanYamlError, match=f'non-empty "{missing}"'):
         parse_atlan_yaml.parse()
+
+
+def test_explicit_empty_tags_sync_to_clear(tmp_path, monkeypatch):
+    # `tags: []` is a deliberate "remove every tag": it must reach the
+    # marketplace, unlike an absent key, which skips the sync entirely.
+    monkeypatch.chdir(tmp_path)
+    _write(
+        tmp_path,
+        {
+            "name": "x",
+            "app_id": "1",
+            "display_name": "X",
+            "type": "connector",
+            "tags": [],
+        },
+    )
+    out = parse_atlan_yaml.parse()
+    assert json.loads(out["app_sync_body"])["tags"] == []

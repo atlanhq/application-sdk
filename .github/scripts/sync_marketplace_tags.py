@@ -17,6 +17,7 @@ Environment:
 
 from __future__ import annotations
 
+import http.client
 import os
 import sys
 import urllib.error
@@ -26,23 +27,54 @@ APPS_PATH = "/api/service/marketplace/apps"
 TIMEOUT_S = 60
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect so the bearer token never leaves ``BASE_URL``.
+
+    urllib follows 30x by default and re-sends ``Authorization`` to the new
+    location, which may be another origin or plain HTTP. Returning ``None``
+    surfaces the 30x as an ``HTTPError``, which ``sync`` reports as a warning,
+    matching the publish ``curl`` call, which does not follow redirects.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def post(url: str, body: str, token: str) -> tuple[int, str]:
-    """POST *body* and return ``(status, response text)``; ``0`` on transport errors."""
-    req = urllib.request.Request(
-        url,
-        data=body.encode(),
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {token}",
-        },
-    )
+    """POST *body* and return ``(status, response text)``; ``0`` on transport errors.
+
+    Never raises: a malformed response (``http.client.HTTPException``, e.g.
+    ``BadStatusLine``) or an unusable URL (``ValueError``) is a transport error
+    too, so the post-publish step stays warn-only.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 — https tenant URL from the caller's base_url input
+        req = urllib.request.Request(
+            url,
+            data=body.encode(),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        with _OPENER.open(req, timeout=TIMEOUT_S) as resp:  # noqa: S310 — https tenant URL from the caller's base_url input
             return resp.status, resp.read().decode(errors="replace")
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.read().decode(errors="replace")
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        try:
+            text = exc.read().decode(errors="replace")
+        except (http.client.HTTPException, OSError) as read_exc:
+            text = str(read_exc)
+        return exc.code, text
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        TimeoutError,
+        OSError,
+        ValueError,
+    ) as exc:
         return 0, str(exc)
 
 

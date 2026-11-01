@@ -19,7 +19,7 @@ Outputs (single-line, append-safe):
     sdk_version        atlan-application-sdk version pinned in uv.lock (or empty)
     entrypoints  JSON-encoded list (single line) or empty string
     app_sync_body      JSON body for ``POST /marketplace/apps`` (single line) when
-                       ``tags`` is set, else empty string
+                       ``tags`` is present (``[]`` clears), else empty string
     deploy_config      YAML-dumped ``deploy:`` block (multiline; heredoc'd by caller)
 
 Validation errors are emitted as ``::error::`` annotations and exit non-zero.
@@ -144,12 +144,14 @@ def _app_sync_body(d: dict[str, Any]) -> str:
     The publish route creates a version and has no ``tags`` field, so app-level
     tags reach the marketplace only through this app update. Local marketplace
     requires ``name``, ``display_name`` and ``app_type`` on every call, so they
-    ride along unchanged from atlan.yaml. Apps without ``tags`` get no body and
-    publish exactly as before.
+    ride along unchanged from atlan.yaml. Only an absent ``tags`` key skips the
+    sync, so those apps publish exactly as before. An explicit ``tags: []`` is
+    sent, so removing every tag clears the marketplace keywords. Any other
+    value, falsy or not (``null``, ``false``, a string), is a malformed manifest.
     """
-    tags = d.get("tags")
-    if not tags:
+    if "tags" not in d:
         return ""
+    tags = d["tags"]
     if not isinstance(tags, list) or not all(
         isinstance(t, str) and t.strip() for t in tags
     ):
