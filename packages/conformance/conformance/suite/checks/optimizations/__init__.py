@@ -68,7 +68,6 @@ from ._stdlib_json import (
     OrjsonOverStdlibJsonChecker,
     _collect_json_bindings,
     _collect_json_fallback_calls,
-    _collect_orjson_bindings,
 )
 
 SERIES = "O"
@@ -91,14 +90,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
         return []
 
     module_names, func_names = _collect_json_bindings(tree)
-    orjson_module_names, orjson_func_names = _collect_orjson_bindings(tree)
-    fallback_calls = _collect_json_fallback_calls(
-        tree,
-        module_names,
-        func_names,
-        orjson_module_names,
-        orjson_func_names,
-    )
+    fallback_calls = _collect_json_fallback_calls(tree, module_names, func_names)
     directives = _parse_directives(text)
     checker = OrjsonOverStdlibJsonChecker(
         filename=file,

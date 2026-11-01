@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.optimizations import (
     _collect_json_bindings,
     main,
@@ -85,6 +86,70 @@ def test_o001_fires_for_non_fallback_json_serialization() -> None:
         "    return json.dumps(data)\n"
     )
     assert _ids(src) == ["O001", "O001", "O001", "O001"]
+
+
+@pytest.mark.parametrize(
+    ("imports", "attempt"),
+    [
+        ("import orjson as oj", "oj.dumps(data)"),
+        ("from orjson import dumps", "dumps(data)"),
+        ("from orjson import dumps as fast_dumps", "fast_dumps(data)"),
+    ],
+)
+def test_o001_silent_on_typeerror_fallback_through_aliased_orjson(
+    imports: str, attempt: str
+) -> None:
+    src = (
+        f"import json\n{imports}\n\n"
+        "def write_record(data):\n"
+        "    try:\n"
+        f"        return {attempt}\n"
+        "    except TypeError:\n"
+        "        return json.dumps(data)\n"
+    )
+    assert _ids(src) == []
+
+
+def test_o001_fires_when_orjson_attempt_is_conditional() -> None:
+    # The else-branch raises TypeError without ever attempting orjson, so the
+    # handler is not a fallback for an orjson failure.
+    src = (
+        "import json\n"
+        "import orjson\n\n"
+        "def branch(data, enabled):\n"
+        "    try:\n"
+        "        if enabled:\n"
+        "            orjson.dumps(data)\n"
+        "        else:\n"
+        "            raise TypeError()\n"
+        "    except TypeError:\n"
+        "        return json.dumps(data)\n\n"
+        "def short_circuit(data, enabled):\n"
+        "    try:\n"
+        "        return enabled and orjson.dumps(data)\n"
+        "    except TypeError:\n"
+        "        return json.dumps(data)\n\n"
+        "def raises_first(data):\n"
+        "    try:\n"
+        "        raise TypeError()\n"
+        "        orjson.dumps(data)\n"
+        "    except TypeError:\n"
+        "        return json.dumps(data)\n"
+    )
+    assert _ids(src) == ["O001", "O001", "O001"]
+
+
+def test_o001_fires_when_orjson_name_is_shadowed() -> None:
+    src = (
+        "import json\n"
+        "import orjson\n\n"
+        "def write_record(data, orjson):\n"
+        "    try:\n"
+        "        return orjson.dumps(data)\n"
+        "    except TypeError:\n"
+        "        return json.dumps(data)\n"
+    )
+    assert _ids(src) == ["O001"]
 
 
 def test_o001_prescription_names_the_accepted_typeerror_fallback() -> None:
