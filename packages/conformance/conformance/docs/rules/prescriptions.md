@@ -150,42 +150,42 @@ in order.  Each is a real fix only once the field is bounded, not merely accepte
 check.
 
 1. *Nothing to fix.*  When the finding says every declared field is already payload-safe
-(str, int, a nested model, `FilterMap`, a `MaxItems`-bounded collection), remove the
-keyword, or the `_allow_unbounded_fields` attribute.  This is the most common case.
-`Input` drops undeclared keys with or without the opt-out, so extra arguments a caller
-sends never justify it.
+  (str, int, a nested model, `FilterMap`, a `MaxItems`-bounded collection), remove the
+  keyword, or the `_allow_unbounded_fields` attribute.  This is the most common case.
+  `Input` drops undeclared keys with or without the opt-out, so extra arguments a caller
+  sends never justify it.
 
 2. *Drop an override of an SDK base field.*  Re-declaring `connection` as `dict[str,
-Any]` over `ConnectionRef`, or filters as `dict[str, Any]` over `FilterMap | str`, is
-how most `Any` arrives.  Deleting the override inherits the safe type and keeps the wire
-shape.  `FilterMap` keeps two levels, so a tree widget the app reads deeper loses those
-levels: set `treeSelection = true` on the widget instead (step 3).
+  Any]` over `ConnectionRef`, or filters as `dict[str, Any]` over `FilterMap | str`, is
+  how most `Any` arrives.  Deleting the override inherits the safe type and keeps the
+  wire shape.  `FilterMap` keeps two levels, so a tree widget the app reads deeper loses
+  those levels: set `treeSelection = true` on the widget instead (step 3).
 
 3. *Use the SDK's types in the same outer shape.*  `ConnectionRef`; `CredentialRef` or
-`credential_guid` (credentials cross tasks by reference, never inline);
-`AgentCredentialSpec` for `agent_json`; a `BaseMetadataConfig` subclass for wizard
-metadata; `FilterMap` for flat filter maps; `TreeSelection`
-(`application_sdk.contracts.types`) for a tree-widget selection (`APITree` and similar)
-read below its second level, which a generated contract gets from `treeSelection = true`
-on the widget; for an extraction app's include/exclude filters it extends
-`TreeSelectionExtractionInput`, whose filters are `TreeSelection | str`; a small
-`BaseModel` for a dict whose keys are known.  Absorb legacy wire shapes with a
-`mode='before'` validator.
+  `credential_guid` (credentials cross tasks by reference, never inline);
+  `AgentCredentialSpec` for `agent_json`; a `BaseMetadataConfig` subclass for wizard
+  metadata; `FilterMap` for flat filter maps; `TreeSelection`
+  (`application_sdk.contracts.types`) for a tree-widget selection (`APITree` and
+  similar) read below its second level, which a generated contract gets from
+  `treeSelection = true` on the widget; for an extraction app's include/exclude filters
+  it extends `TreeSelectionExtractionInput`, whose filters are `TreeSelection | str`; a
+  small `BaseModel` for a dict whose keys are known.  Absorb legacy wire shapes with a
+  `mode='before'` validator.
 
 4. *Bound a collection of safe values* with `Annotated[..., MaxItems(n)]`, `n` taken
-from the field's real cardinality.  That covers every variable-size collection, not only
-`dict` and `list`: `set`, `frozenset`, `tuple[T, ...]`, `Sequence`, `Mapping` and the
-like are refused without it, bare or parameterised, so retyping a list as a set is not a
-fix.  A fixed-arity `tuple[A, B]` is bounded by its shape.  Every nested collection
-needs its own bound.
+  from the field's real cardinality.  That covers every variable-size collection, not
+  only `dict` and `list`: `set`, `frozenset`, `tuple[T, ...]`, `Sequence`, `Mapping` and
+  the like are refused without it, bare or parameterised, so retyping a list as a set is
+  not a fix.  A fixed-arity `tuple[A, B]` is bounded by its shape.  Every nested
+  collection needs its own bound.
 
 5. *Data that grows with the source system* (file lists, event batches, per-object
-results) moves by reference: write it to the object store and pass a `FileReference`.
-This is the fix that holds at 2MB.
+  results) moves by reference: write it to the object store and pass a `FileReference`.
+  This is the fix that holds at 2MB.
 
 6. *Retire a field nothing populates*: one ledger status per merge (`active` ->
-`deprecated` -> `sunset`), then remove it from source; the prescriptions guide, step 6,
-has the steps.
+  `deprecated` -> `sunset`), then remove it from source; the prescriptions guide, step
+  6, has the steps.
 
 **Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias with
 no bound (`TreeSelection` bounds every level), or a nested `BaseModel(extra='allow')`
@@ -659,8 +659,8 @@ tenant, taking every workflow the customer runs on it down with the one bad meth
 A method decorated with `@entrypoint` (or a concrete `run()` override on an `App`
 subclass, which is the implicit single-entrypoint form) must declare:
 
-* its non-`self` parameter as a subclass of `Input`   (`application_sdk.contracts`); *
-its return type as a subclass of `Output`   (`application_sdk.contracts`).
+* its non-`self` parameter as a subclass of `Input` (`application_sdk.contracts`);
+* its return type as a subclass of `Output` (`application_sdk.contracts`).
 
 Violations include: missing annotation, a primitive / container type (`dict`, `list`,
 `str`, `Any`, etc. — even subscripted/bounded forms like `dict[str, str]`), or a class
@@ -706,8 +706,8 @@ the customer discovers before anyone else does.
 
 A method decorated with `@task` must declare:
 
-* its non-`self` parameter as a subclass of `Input`   (`application_sdk.contracts`); *
-its return type as a subclass of `Output`   (`application_sdk.contracts`).
+* its non-`self` parameter as a subclass of `Input` (`application_sdk.contracts`);
+* its return type as a subclass of `Output` (`application_sdk.contracts`).
 
 Violations include: missing annotation, a primitive / container type (`dict`, `list`,
 `str`, `Any`, etc. — even subscripted/bounded forms like `dict[str, str]`), or a class
@@ -816,12 +816,12 @@ route around it.
 An app's entry-point names are declared in two independent places:
 
 1. **Contract (toolkit-owned):** `contract/app.pkl` → `pkl eval` →
-`app/generated/<name>/manifest.json`.  The `<name>` is what callers pass as
-`?entrypoint=<name>` and the Automation Engine `workflow_type`.
+  `app/generated/<name>/manifest.json`.  The `<name>` is what callers pass as
+  `?entrypoint=<name>` and the Automation Engine `workflow_type`.
 
 2. **Code (developer-owned):** `@entrypoint`-decorated `App` methods. The registered
-wire name is the explicit `name=` argument or the method name in kebab-case
-(`extract_metadata` → `extract-metadata`).
+  wire name is the explicit `name=` argument or the method name in kebab-case
+  (`extract_metadata` → `extract-metadata`).
 
 `poe generate` only runs `pkl eval`; it never imports app code, so the two can drift
 silently.  Drift causes the HTTP create path to fail — `/manifest?entrypoint=crawler`
@@ -831,33 +831,34 @@ workaround (BLDX-1425).
 **This rule checks (per repo):**
 
 * **Multi-entry-point apps** (`app/generated/` has named subdirs each containing
-`manifest.json`): the set of `@entrypoint` wire names must exactly equal the set of
-subdir names.
+  `manifest.json`): the set of `@entrypoint` wire names must exactly equal the set of
+  subdir names.
 
 * **Single-entry-point apps** (root `app/generated/manifest.json`, no subdirs): every
-code `@entrypoint` must be declared as a DAG route — a `workflow_type` of the form
-`"<app>:<wire-name>"` in the manifest DAG (the BLDX-1342 route/card split: one
-marketplace card plus additional DAG-invoked routes, without per-entry-point bundle
-subdirs). A code `@entrypoint` the DAG never routes to is flagged. When the manifest
-declares no such routes (legacy), the check falls back to permitting at most one
-`@entrypoint`.
+  code `@entrypoint` must be declared as a DAG route — a `workflow_type` of the form
+  `"<app>:<wire-name>"` in the manifest DAG (the BLDX-1342 route/card split: one
+  marketplace card plus additional DAG-invoked routes, without per-entry-point bundle
+  subdirs). A code `@entrypoint` the DAG never routes to is flagged. When the manifest
+  declares no such routes (legacy), the check falls back to permitting at most one
+  `@entrypoint`.
 
 * **Legacy workflow type aliases (CNCT-199, CONNECT-1081):** an app may declare
-inbound-only Temporal types that external callers still dispatch. The source read here
-is the generated manifest's `legacy_workflow_types` block, not the `App` class attribute
-— K015 is what holds those two in agreement. A bare (colon-free) DAG node whose
-`workflow_type` equals a declared alias routes the alias's target entry point, provided
-the node's own identity does not contradict the declaration: a node whose `app_name`
-names an app this repo does not define dispatches on that app's worker, so it routes
-nothing here even when its type is declared locally. A node carrying no `app_name`
-routes on the declaration alone (task queues play no part). A bare node **not** declared
-as an alias is a platform/other-app node (such as `PublishWorkflow`) and routes nothing.
+  inbound-only Temporal types that external callers still dispatch. The source read here
+  is the generated manifest's `legacy_workflow_types` block, not the `App` class
+  attribute — K015 is what holds those two in agreement. A bare (colon-free) DAG node
+  whose `workflow_type` equals a declared alias routes the alias's target entry point,
+  provided the node's own identity does not contradict the declaration: a node whose
+  `app_name` names an app this repo does not define dispatches on that app's worker, so
+  it routes nothing here even when its type is declared locally. A node carrying no
+  `app_name` routes on the declaration alone (task queues play no part). A bare node
+  **not** declared as an alias is a platform/other-app node (such as `PublishWorkflow`)
+  and routes nothing.
 
 * **Non-literal `name=`:** a `@entrypoint(name=variable)` cannot be statically resolved
-and is flagged as unverifiable.
+  and is flagged as unverifiable.
 
 * **No `app/generated/`:** the repo is not a native-app-contract repo; this rule is a
-no-op.
+  no-op.
 
 **Remediation**
 
@@ -865,30 +866,30 @@ The contract `app/generated/` tree is the authoritative source; align code to it
 default fix:
 
 1. For each `@entrypoint` name in *code* that backs a tile with a different name, rename
-the entry point to the tile name: `@entrypoint(name="<tile>")`. The tile name and the
-entry-point name are one identity — a tile cannot start a differently named entry point.
-Renaming changes the entry point's canonical Temporal workflow type, so keep the old
-type dispatching with an inbound-only alias, declared twice: `legacy_workflow_types =
-{"<app>:<old-name>": "<tile>"}` on the `App` class, and the same pair in
-`legacyWorkflowTypes` on every entrypoint contract in `contract/app.pkl` (K015 holds the
-two in agreement). An alias may stay for as long as callers still dispatch the old type.
-The alias covers Temporal workflow-type dispatch only, not the `/start` selector:
-`?entrypoint=` resolves entry-point names, so a caller selecting
-`?entrypoint=<old-name>` must switch to the tile name.
+  the entry point to the tile name: `@entrypoint(name="<tile>")`. The tile name and the
+  entry-point name are one identity — a tile cannot start a differently named entry
+  point. Renaming changes the entry point's canonical Temporal workflow type, so keep
+  the old type dispatching with an inbound-only alias, declared twice:
+  `legacy_workflow_types = {"<app>:<old-name>": "<tile>"}` on the `App` class, and the
+  same pair in `legacyWorkflowTypes` on every entrypoint contract in `contract/app.pkl`
+  (K015 holds the two in agreement). An alias may stay for as long as callers still
+  dispatch the old type. The alias covers Temporal workflow-type dispatch only, not the
+  `/start` selector: `?entrypoint=` resolves entry-point names, so a caller selecting
+  `?entrypoint=<old-name>` must switch to the tile name.
 
 2. For each contract name not matched in code, add an
-`@entrypoint(name="<missing-name>")` on the corresponding App method, or rename the
-entry point that already backs that tile as in step 1.
+  `@entrypoint(name="<missing-name>")` on the corresponding App method, or rename the
+  entry point that already backs that tile as in step 1.
 
 3. If the *code* name is the intended one and the contract is wrong, update the
-`entrypoints { new Entrypoint { name = "..." } }` block in `contract/app.pkl` and re-run
-`pkl eval` so the `app/generated/<name>/` dir and `workflow_type` follow — never
-hand-edit `app/generated/` (C002 catches stale generated artifacts). On a released app,
-prefer step 1: a tile's name is its Marketplace card and configmap identity, and no
-alias covers renaming it.
+  `entrypoints { new Entrypoint { name = "..." } }` block in `contract/app.pkl` and
+  re-run `pkl eval` so the `app/generated/<name>/` dir and `workflow_type` follow —
+  never hand-edit `app/generated/` (C002 catches stale generated artifacts). On a
+  released app, prefer step 1: a tile's name is its Marketplace card and configmap
+  identity, and no alias covers renaming it.
 
 4. For a single-entry-point app that now has multiple `@entrypoint`s, either add named
-`Entrypoint` blocks in `contract/app.pkl` or remove the extra `@entrypoint`.
+  `Entrypoint` blocks in `contract/app.pkl` or remove the extra `@entrypoint`.
 
 Land as `BLOCK`: a justified inline `# conformance: ignore[P016] <reason>` on the
 decorator line (or the comment-only line directly above it) records the exception and
@@ -1352,16 +1353,16 @@ reports progress, the same silent-zero-asset class P030 polices at the upload se
 Three independent sources declare an app's name:
 
 1. **Code (authoritative):** the `App` subclass (or an SDK template subclass).  The SDK
-derives the name as `cls.name or _pascal_to_kebab(cls.__name__)`: an explicit `name =
-"..."` wins; otherwise the PascalCase class name is kebab-cased
-(`MSSQLMetadataExtractor` → `mssql-metadata-extractor`).
+  derives the name as `cls.name or _pascal_to_kebab(cls.__name__)`: an explicit `name =
+  "..."` wins; otherwise the PascalCase class name is kebab-cased
+  (`MSSQLMetadataExtractor` → `mssql-metadata-extractor`).
 
 2. **Contract:** `atlan.yaml` top-level `name:` (generated from `contract/app.pkl`).
-This value becomes `ATLAN_APPLICATION_NAME` at deploy and drives the task-queue prefix,
-`workflow_type`, and log-identity tags.
+  This value becomes `ATLAN_APPLICATION_NAME` at deploy and drives the task-queue
+  prefix, `workflow_type`, and log-identity tags.
 
 3. **Env:** `ATLAN_APPLICATION_NAME=...` in `.env.example`, read at runtime into
-`constants.APPLICATION_NAME` (defaults silently to `"default"` when unset).
+  `constants.APPLICATION_NAME` (defaults silently to `"default"` when unset).
 
 `poe generate` runs `pkl eval` but never imports app code, so the three can drift
 silently.  Drift causes artifact-path mismatches: `App.upload()` writes to
@@ -1371,20 +1372,20 @@ finding 0 files (BLDX-1491).
 **This rule checks (per repo):**
 
 * **Code vs contract:** the code-derived app name must equal the `atlan.yaml` top-level
-`name:` value.
+  `name:` value.
 
 * **Code vs env:** the code-derived app name must equal `ATLAN_APPLICATION_NAME` in
-`.env.example`.
+  `.env.example`.
 
 * **Non-literal `name =`:** a class-level `name = variable` that cannot be statically
-resolved is flagged as unverifiable.
+  resolved is flagged as unverifiable.
 
 **No-op when:**
 
 * No App-family leaf class is found in the Python source (SDK repos, utility libraries).
-* No `atlan.yaml` and no `.env.example` are present (non-native-app repos). * Multiple
-App-family leaf classes with different names are found (bundle repos — handled by P016
-instead).
+* No `atlan.yaml` and no `.env.example` are present (non-native-app repos).
+* Multiple App-family leaf classes with different names are found (bundle repos —
+  handled by P016 instead).
 
 **Remediation**
 
@@ -1392,10 +1393,10 @@ The code-derived name is the source of truth (mirrors
 `AppRegistry.resolve_running_app_name` from PR #2380).  To fix drift:
 
 1. Add an explicit `name = \"<intended-name>\"` class variable to the App subclass so
-the code name is unambiguous.
+  the code name is unambiguous.
 
 2. Update `contract/app.pkl` `name` to match and re-run `pkl eval` (never hand-edit
-`atlan.yaml` — C002 catches stale generated artifacts).
+  `atlan.yaml` — C002 catches stale generated artifacts).
 
 3. Update `ATLAN_APPLICATION_NAME` in `.env.example` to match the code name.
 
@@ -1518,22 +1519,24 @@ so it is not flagged.
 
 Fix, by site:
 
-- A `pyatlan_v9` creator produces the same string: use it.  To build   the asset, call
-`X.creator(...)`.  To get only the string, read   `X.creator(...).qualified_name` in a
-memoized helper; when the caller   has only the id, pass it as `name` too and never emit
-that asset. - The creator raises on a blank or `None` input the app accepts: use it
-all the same and let it raise.  Do not add an app-side guard and do not   keep the
-f-string.  A blank made by app code (`.get(k) or ""`) is an   app bug; a blank the
-source really sends is a gap in pyatlan. - `Process` / `ColumnProcess` / `BIProcess`:
-call   `generate_qualified_name(..., process_id=<everything after the   connection
-qualifiedName>)`, which returns   `{connection_qualified_name}/{process_id}`.  A blank
-`process_id`   raises; never pass `None`: it falls back to an MD5 hash, a different
-identity.  A blank `name` or connection qualifiedName raises too.   `inputs` and
-`outputs` must be non-empty: when only ids are known,   pass placeholders. - No creator
-for the type, a creator that produces a different string,   or a creator that needs an
-input the app does not have: keep the   f-string in one helper per name shape and leave
-it unsuppressed. - Not a qualifiedName at all: `# conformance: ignore[P028] <reason>`
-(see the terminal state).
+- A `pyatlan_v9` creator produces the same string: use it.  To build the asset, call
+  `X.creator(...)`.  To get only the string, read `X.creator(...).qualified_name` in a
+  memoized helper; when the caller has only the id, pass it as `name` too and never emit
+  that asset.
+- The creator raises on a blank or `None` input the app accepts: use it all the same and
+  let it raise.  Do not add an app-side guard and do not keep the f-string.  The site is
+  closed by the creator, not a gap: list each such input in the PR description.
+- `Process` / `ColumnProcess` / `BIProcess`: call `generate_qualified_name(...,
+  process_id=<everything after the connection qualifiedName>)`, which returns
+  `{connection_qualified_name}/{process_id}`.  A blank `process_id` raises; never pass
+  `None`: it falls back to an MD5 hash, a different identity.  A blank `name` or
+  connection qualifiedName raises too. `inputs` and `outputs` must be non-empty: when
+  only ids are known, pass placeholders.
+- No creator for the type, a creator that produces a different string, a creator that
+  needs an input the app does not have, or a creator that rejects a non-blank input the
+  app accepts: keep the f-string in one helper per name shape and leave it unsuppressed.
+- Not a qualifiedName at all: `# conformance: ignore[P028] <reason>` (see the terminal
+  state).
 
 Not a fix: `"/".join(...)`, `+`, `.format()` or `%` keep the hand-built grammar and only
 hide it from this check.
@@ -1584,16 +1587,16 @@ In SDR (agent) mode the platform (Heracles/AE) derives the agent task queue
 (`atlan-<agent-name>`) and fills the credential-routing spec from these top-level fields
 at dispatch. Two failure modes:
 
-* **Misplaced / partial** — the fields are nested only under   `args.metadata` (or
-`extraction_method` is omitted). The platform   can't derive the queue, so the
-extraction strands on the cloud queue   `atlan-<app>-<deployment>` — which the
-customer's firewalled source   can't reach — and never progresses (atlan-tableau-app,
-atlan-snowflake-app). * **Missing entirely** — no manifest declares agent routing at
-all; the   agent receives no credentials and writes zero assets while the   workflow
-reports success (atlan-mssql-app#177). The hand-written SDR   test supplied the value
-directly, bypassing the manifest, so it   passed; adopting
-`BaseSDRIntegrationTest.manifest_path` (T003)   closes the test gap, this rule closes
-the static gap.
+* **Misplaced / partial** — the fields are nested only under `args.metadata` (or
+  `extraction_method` is omitted). The platform can't derive the queue, so the
+  extraction strands on the cloud queue `atlan-<app>-<deployment>` — which the
+  customer's firewalled source can't reach — and never progresses (atlan-tableau-app,
+  atlan-snowflake-app).
+* **Missing entirely** — no manifest declares agent routing at all; the agent receives
+  no credentials and writes zero assets while the workflow reports success
+  (atlan-mssql-app#177). The hand-written SDR test supplied the value directly,
+  bypassing the manifest, so it passed; adopting `BaseSDRIntegrationTest.manifest_path`
+  (T003) closes the test gap, this rule closes the static gap.
 
 **Remediation (default — an outdated toolkit pin).**  Bump `app-contract-toolkit` to the
 current `@<version>` in `contract/PklProject`, re-resolve
@@ -1613,16 +1616,16 @@ Do not hand-edit the generated manifest either way — C002 tracks drift.
 
 Toolkit-version notes (from fleet remediation):
 
-* Manifests generated by **older contract-toolkit versions** may not   emit the
-`{{agent-json}}` slot at all — the missing-entirely mode   above.  The fix is to
-**regenerate with the current toolkit**, not to   hand-patch the slot in. *
-`flatManifestArgs: true` is required in the contract so   `agent_json` +
-`extraction_method` land at the extract-args TOP   LEVEL; with `flatManifestArgs: false`
-the toolkit buries them under   `args.metadata`, which is exactly the misplaced mode
-above   (agent-queue routing breaks when the fields are only in metadata). * The
-platform (AE) fetches the manifest from the **deployed app   service**, not from the
-repo — a manifest fix only takes effect once   the deployed image ships it.  A merged PR
-alone does not clear the   runtime failure.
+* Manifests generated by **older contract-toolkit versions** may not emit the
+  `{{agent-json}}` slot at all — the missing-entirely mode above.  The fix is to
+  **regenerate with the current toolkit**, not to hand-patch the slot in.
+* `flatManifestArgs: true` is required in the contract so `agent_json` +
+  `extraction_method` land at the extract-args TOP LEVEL; with `flatManifestArgs: false`
+  the toolkit buries them under `args.metadata`, which is exactly the misplaced mode
+  above (agent-queue routing breaks when the fields are only in metadata).
+* The platform (AE) fetches the manifest from the **deployed app service**, not from the
+  repo — a manifest fix only takes effect once the deployed image ships it.  A merged PR
+  alone does not clear the runtime failure.
 
 ---
 
@@ -1684,25 +1687,26 @@ either — see P042 for why a working bridge still has to change.
 **What does NOT satisfy this rule** (patterns fleet remediation found behind real
 silent-zero-asset publishes):
 
-* **Delegating to SDK `SqlApp.run()`** — `run()` persists   extraction output to the
-*deployment* store only; the publish stage   reads the *tenant bucket*.  Extraction
-'succeeds' and 0 assets   publish (observed for an OLAP connector in fleet testing). *
-**A no-op `upload_to_atlan` stub** — a method defined with no   storage-transfer call in
-its body (e.g. a body that only logs or   returns, with a comment claiming another stage
-owns the transfer).   The checker flags these definitions specifically (observed for a
-document-store connector in fleet testing).  A transfer is matched   on whole
-`_`-separated tokens of the callee name, never a bare   substring, so `compute_summary`
-/ `output_stats` /   `get_inputs` do not read as transfers while `upload_file` /
-`storage_upload_file` / `migrate_from_objectstore_to_atlan` do;   a bare verb (`sync`,
-`push`, `put`, `copy`) additionally   requires a store-naming receiver.  Delegation is
-resolved one level   into the same class, and an abstract declaration   (`raise
-NotImplementedError` / `pass` / `...`) is not a stub. * **A deprecated SDK upload shim**
-that re-roots artifacts under the   code-derived app name and drops the `transformed/`
-segment — the   transfer runs but publish finds nothing at the expected prefix
-(observed for a managed-Postgres connector in fleet testing; see   also P038 for the
-mis-rooting class). * **Inline writers that target the deployment store only** — output
-is   written, but never to the tenant bucket (observed for a key-value   store connector
-in fleet testing).
+* **Delegating to SDK `SqlApp.run()`** — `run()` persists extraction output to the
+  *deployment* store only; the publish stage reads the *tenant bucket*.  Extraction
+  'succeeds' and 0 assets publish (observed for an OLAP connector in fleet testing).
+* **A no-op `upload_to_atlan` stub** — a method defined with no storage-transfer call in
+  its body (e.g. a body that only logs or returns, with a comment claiming another stage
+  owns the transfer). The checker flags these definitions specifically (observed for a
+  document-store connector in fleet testing).  A transfer is matched on whole
+  `_`-separated tokens of the callee name, never a bare substring, so `compute_summary`
+  / `output_stats` / `get_inputs` do not read as transfers while `upload_file` /
+  `storage_upload_file` / `migrate_from_objectstore_to_atlan` do; a bare verb (`sync`,
+  `push`, `put`, `copy`) additionally requires a store-naming receiver.  Delegation is
+  resolved one level into the same class, and an abstract declaration (`raise
+  NotImplementedError` / `pass` / `...`) is not a stub.
+* **A deprecated SDK upload shim** that re-roots artifacts under the code-derived app
+  name and drops the `transformed/` segment — the transfer runs but publish finds
+  nothing at the expected prefix (observed for a managed-Postgres connector in fleet
+  testing; see also P038 for the mis-rooting class).
+* **Inline writers that target the deployment store only** — output is written, but
+  never to the tenant bucket (observed for a key-value store connector in fleet
+  testing).
 
 **Transfers that still fire P030.**  Two shapes move bytes but are not `self.upload` /
 `self.upload_refs` and are not the named `upload_to_atlan` bridge P042 reports.  An app
@@ -1903,12 +1907,13 @@ This rule fires when an app performs *custom* credential resolution — a bare
 call — but NEVER routes through an agent-aware resolver entry point anywhere in its
 source:
 
-* `CredentialRef.resolve(input)` — reads `input.agent_json` and   picks the agent vs.
-direct-GUID route. * `CredentialRef.from_workflow_args(workflow_args)` — the same,
-reading `agent_json` off the args payload. * `route_credentials(input)`
-(`application_sdk.credentials`,   SDK >= 3.40.0) — routes through
-`CredentialRef.resolve` and also   owns the pre-built-ref and inline channels; on an SDK
-that has it,   P053 prescribes it over a hand-rolled `CredentialRef.resolve`.
+* `CredentialRef.resolve(input)` — reads `input.agent_json` and picks the agent vs.
+  direct-GUID route.
+* `CredentialRef.from_workflow_args(workflow_args)` — the same, reading `agent_json` off
+  the args payload.
+* `route_credentials(input)` (`application_sdk.credentials`, SDK >= 3.40.0) — routes
+  through `CredentialRef.resolve` and also owns the pre-built-ref and inline channels;
+  on an SDK that has it, P053 prescribes it over a hand-rolled `CredentialRef.resolve`.
 
 An app that resolves strictly by `credential_guid` (a custom local vault read that only
 ever builds `CredentialRef(name=guid, credential_guid=guid)`) ignores `agent_json`, so
@@ -2041,10 +2046,11 @@ to *receive* the forwarded `agent_json`.
 This rule fires when the generated extract-input contract (`AppInputContract` in a
 generated `_input.py`):
 
-* subclasses the bare `Input` base (NOT the SDK `*ExtractionInput`   family, which
-declares `agent_json`), AND * declares no `agent_json` field of its own, AND * rejects
-extra fields (no `allow_unbounded_fields=True` class keyword,   no `extra="allow"` in
-the model config).
+* subclasses the bare `Input` base (NOT the SDK `*ExtractionInput` family, which
+  declares `agent_json`), AND
+* declares no `agent_json` field of its own, AND
+* rejects extra fields (no `allow_unbounded_fields=True` class keyword, no
+  `extra="allow"` in the model config).
 
 In that shape Pydantic silently drops the forwarded `agent_json` at model construction.
 The extract input's `credential_ref` is then `None` and extraction fails with
@@ -2201,20 +2207,21 @@ transfer works — which is exactly why it needs a different message.  Treating 
 P030 false positive moved these repos from WARN to silent, and silence is wrong for
 three reasons:
 
-* **It is the SDK's own deprecated symbol.**  `upload_to_atlan` is   `@deprecated` in
-`application_sdk.templates.base_metadata_extractor`   with `removal_version: 4.0.0`.
-Going quiet on a locally   reimplemented version of a name scheduled for deletion is the
-opposite of what the deprecation lifecycle is for. * **The suite would contradict
-itself.**  B001 matches   `.upload_to_atlan(...)` call sites receiver-agnostically from
-the   generated manifest.  Where the bridge is invoked explicitly rather   than only
-dispatched as a DAG task, the repo already gets a B001   finding — alongside P-series
-silence. * **A bridge cannot be equivalent, and the gap is silent-data-loss   shaped.**
-`App.upload()` carries ADR-0014 dual-write routing,   transformed-asset validation in a
-child process, the canonical   `artifacts/apps/{app}/workflows/{workflow_id}/{run_id}`
-prefix, and   `@task` retry/replay semantics; the transfer underneath adds the
-cross-pod deployment-store fallback (a KEDA-scaled SDR worker where   `local_path` does
-not exist on this pod), partial-local reconcile,   and SHA-256 sidecar dedup for
-idempotent replay.
+* **It is the SDK's own deprecated symbol.**  `upload_to_atlan` is `@deprecated` in
+  `application_sdk.templates.base_metadata_extractor` with `removal_version: 4.0.0`.
+  Going quiet on a locally reimplemented version of a name scheduled for deletion is the
+  opposite of what the deprecation lifecycle is for.
+* **The suite would contradict itself.**  B001 matches `.upload_to_atlan(...)` call
+  sites receiver-agnostically from the generated manifest.  Where the bridge is invoked
+  explicitly rather than only dispatched as a DAG task, the repo already gets a B001
+  finding — alongside P-series silence.
+* **A bridge cannot be equivalent, and the gap is silent-data-loss shaped.**
+  `App.upload()` carries ADR-0014 dual-write routing, transformed-asset validation in a
+  child process, the canonical `artifacts/apps/{app}/workflows/{workflow_id}/{run_id}`
+  prefix, and `@task` retry/replay semantics; the transfer underneath adds the cross-pod
+  deployment-store fallback (a KEDA-scaled SDR worker where `local_path` does not exist
+  on this pod), partial-local reconcile, and SHA-256 sidecar dedup for idempotent
+  replay.
 
 **A green full-DAG e2e is not a clearance.**  It shows bytes moved on that run.  It does
 not show the bridge preserves the key layout under replay, survives a pod that never
@@ -2331,12 +2338,12 @@ describes — it is the sanctioned seam used one level too low. The storage cont
 this module's docstring names the two supported paths:
 
 * **task-to-task** data → a `FileReference` field on the contract. The activity
-interceptor persists it after the producing task and materialises it before the
-consuming one, with a per-file SHA-256 sidecar so a partial or corrupt transfer is
-detected rather than reused.
+  interceptor persists it after the producing task and materialises it before the
+  consuming one, with a per-file SHA-256 sidecar so a partial or corrupt transfer is
+  detected rather than reused.
 
 * **phase/app hand-off** → `App.upload()` / `App.download()`, which add dual-write
-routing, the canonical artifact prefix, and `@task` retry/replay.
+  routing, the canonical artifact prefix, and `@task` retry/replay.
 
 **Fix by hoisting, not by substituting in place.** `App.upload()` is itself a framework
 task, so calling it where the prefix call used to sit — inside a `@task` — trades this
@@ -2433,13 +2440,13 @@ explicit encoding is only as portable as the characters that happen to be in it.
 Fix it one of two ways, and the right one depends on what the text is for:
 
 * The value is parsed as JSON — `orjson.loads(path.read_text())` or
-`json.loads(path.read_text())`.  Both parsers accept `bytes`   natively, so use
-`path.read_bytes()`: the decode step is a wasted   round trip *and* is the entire source
-of the locale dependency.   Adding `encoding="utf-8"` here papers over a conversion that
-should not be happening. * Everything else — pass `encoding="utf-8"` explicitly, or read
-through the suite's own `safe_read_text(path)`
-(`conformance.suite.checks._ast_common`), which defaults to UTF-8   and returns `None`
-rather than raising on undecodable bytes.
+  `json.loads(path.read_text())`.  Both parsers accept `bytes` natively, so use
+  `path.read_bytes()`: the decode step is a wasted round trip *and* is the entire source
+  of the locale dependency. Adding `encoding="utf-8"` here papers over a conversion that
+  should not be happening.
+* Everything else — pass `encoding="utf-8"` explicitly, or read through the suite's own
+  `safe_read_text(path)` (`conformance.suite.checks._ast_common`), which defaults to
+  UTF-8 and returns `None` rather than raising on undecodable bytes.
 
 Only fully implicit calls are flagged.  `read_text(encoding=...)`, `read_text("utf-8")`
 (the encoding is `read_text`'s first positional parameter), `write_text(data,
@@ -2452,14 +2459,14 @@ For `open`-like calls, only **text mode** is graded — binary reads and writes 
 nothing — and the families do not agree on how to spell it:
 
 * the builtin `open` / `io.open` / `aiofiles.open` and `<path>.open(...)` are text
-unless the mode says `"b"`.
+  unless the mode says `"b"`.
 
 * `gzip` / `bz2` / `lzma` are binary by default **and** binary for any mode without a
-`"t"`, so `gzip.open(p, "w")` is not graded while `gzip.open(p, "wt")` is.
+  `"t"`, so `gzip.open(p, "w")` is not graded while `gzip.open(p, "wt")` is.
 
 * the `tempfile` factories are binary by default (`w+b`) but read an explicit mode the
-builtin's way — text whenever `"b"` is absent — so `NamedTemporaryFile(mode="w")` is
-graded.
+  builtin's way — text whenever `"b"` is absent — so `NamedTemporaryFile(mode="w")` is
+  graded.
 
 Receivers whose `open` never yields a decoded stream are skipped outright (`os` returns
 a file descriptor, `tarfile` / `zipfile` return archive members, `codecs.open` is binary
@@ -2499,12 +2506,12 @@ connection's persistent state lives.
 
 Use the SDK seam instead:
 
-* `get_persistent_s3_prefix(connection_qualified_name, app_name)` —   the
-connection-scoped prefix
-(`persistent-artifacts/apps/{app}/connection/{connection_id}`); *
-`fetch_marker_from_storage` / `persist_marker_to_storage`
-(`application_sdk.common.incremental.marker`) — the incremental   marker read/write
-built on that prefix.
+* `get_persistent_s3_prefix(connection_qualified_name, app_name)` — the
+  connection-scoped prefix
+  (`persistent-artifacts/apps/{app}/connection/{connection_id}`);
+* `fetch_marker_from_storage` / `persist_marker_to_storage`
+  (`application_sdk.common.incremental.marker`) — the incremental marker read/write
+  built on that prefix.
 
 Deriving the prefix locally is not merely duplication: the two copies agree on the
 inputs the app author thought of and diverge on the ones they did not.  In CONNECT-1136
@@ -2686,8 +2693,9 @@ For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, `uv.lock` must
 `atlan-application-sdk` to `3.30.0` or newer — the floor at which the SDR interactive
 setup surfaces become available on the worker:
 
-* **test authentication** (`sdr:test_auth`), * **preflight checks**
-(`sdr:preflight_check`), and * **metadata browsing** (`sdr:fetch_metadata`).
+* **test authentication** (`sdr:test_auth`),
+* **preflight checks** (`sdr:preflight_check`), and
+* **metadata browsing** (`sdr:fetch_metadata`).
 
 Both sides of the platform gate on this floor. heracles rejects an interactive dispatch
 to a worker running an older application-sdk (`BelowFloorError` → a 4xx with an upgrade
@@ -2721,19 +2729,20 @@ platform reads the version off the running worker.
 *offer* each surface; they are switched on in the app's own contract (`contract/app.pkl`
 → `pkl eval` to regenerate):
 
-* **Preflight checks** — declare a `preflight-check` widget   (`Config.SageV2` with its
-`checks {}`) in the entrypoint's form and   list `"preflight-check"` in that
-entrypoint's `required` UIRule.   It is per entrypoint: one that omits the widget runs
-no preflight (a   miner may leave it out deliberately). * **Test authentication** — set
-`allowTestAuthentication = true` on the   credential / agent widget in the entrypoint
-form. The toolkit emits it   as `ui.showTestAuthentication` in the generated manifest,
-and the   setup UI shows the Test Authentication button only when that flag is set   AND
-the agent clears this floor. Emitting it needs an   `app-contract-toolkit` version that
-supports   `allowTestAuthentication`. * **Include / exclude metadata filters** — once
-the agent clears the floor   these render the interactive metadata picker; below it (or
-when the   version can't be read) the picker falls back to a plain text box. This
-follows the same floor gate automatically — no per-connector change   beyond declaring
-the filter widget.
+* **Preflight checks** — declare a `preflight-check` widget (`Config.SageV2` with its
+  `checks {}`) in the entrypoint's form and list `"preflight-check"` in that
+  entrypoint's `required` UIRule. It is per entrypoint: one that omits the widget runs
+  no preflight (a miner may leave it out deliberately).
+* **Test authentication** — set `allowTestAuthentication = true` on the credential /
+  agent widget in the entrypoint form. The toolkit emits it as
+  `ui.showTestAuthentication` in the generated manifest, and the setup UI shows the Test
+  Authentication button only when that flag is set AND the agent clears this floor.
+  Emitting it needs an `app-contract-toolkit` version that supports
+  `allowTestAuthentication`.
+* **Include / exclude metadata filters** — once the agent clears the floor these render
+  the interactive metadata picker; below it (or when the version can't be read) the
+  picker falls back to a plain text box. This follows the same floor gate automatically
+  — no per-connector change beyond declaring the filter widget.
 
 ---
 
@@ -2764,11 +2773,11 @@ copied, the bypass spreads.
 App code under `app/` (`app/generated/` excluded) turns a pyatlan asset into wire output
 itself instead of through `application_sdk.common.asset_serialization.entity_bytes`:
 
-* `<x>.to_nested_bytes()` or `<x>.to_nested_dict()`; * `to_atlas_format(...)` resolved
-to `pyatlan_v9`, or the SDK's   internal
-`application_sdk.common.entity_envelope.to_atlas_format_dict`   (also importable from
-`application_sdk.common.asset_serialization`)   (a bare imported name, aliased or not,
-or an attribute call through a   module bound to it).
+* `<x>.to_nested_bytes()` or `<x>.to_nested_dict()`;
+* `to_atlas_format(...)` resolved to `pyatlan_v9`, or the SDK's internal
+  `application_sdk.common.entity_envelope.to_atlas_format_dict` (also importable from
+  `application_sdk.common.asset_serialization`) (a bare imported name, aliased or not,
+  or an attribute call through a module bound to it).
 
 Names resolve by lexical scope, as Python binds them (comprehensions get their own
 scope; class bodies are skipped): a parameter or local helper that shadows an imported
@@ -2829,15 +2838,16 @@ credential seam.
 Two shapes fire, and the finding says which:
 
 * **routing** — a function calls `CredentialRef.resolve(...)` or
-`CredentialRef.resolve_or_none(...)`, constructs   `CredentialRef(...)` whose
-`credential_guid=` is the input's own   GUID channel (`<x>.credential_guid`,
-`<x>['credential_guid']`,   `<x>.get('credential_guid')`, or a local name bound from
-one), or   flattens inline `[{key, value}]` pairs itself (a loop or   comprehension over
-a `cred`-named iterable reading `item['key']`   and `item['value']` /
-`item.get('value')`).  One finding per   function, at its first such site, naming every
-shape it has; * **local credential types** — a module-level alias named
-`CredentialValue`, `CredentialMap`, `InlineCredentials` or   `Bounded*Credential*` whose
-value is a type union or a (possibly   `Annotated`) `dict`.
+  `CredentialRef.resolve_or_none(...)`, constructs `CredentialRef(...)` whose
+  `credential_guid=` is the input's own GUID channel (`<x>.credential_guid`,
+  `<x>['credential_guid']`, `<x>.get('credential_guid')`, or a local name bound from
+  one), or flattens inline `[{key, value}]` pairs itself (a loop or comprehension over a
+  `cred`-named iterable reading `item['key']` and `item['value']` /
+  `item.get('value')`).  One finding per function, at its first such site, naming every
+  shape it has;
+* **local credential types** — a module-level alias named `CredentialValue`,
+  `CredentialMap`, `InlineCredentials` or `Bounded*Credential*` whose value is a type
+  union or a (possibly `Annotated`) `dict`.
 
 Use the seam instead:
 
@@ -2965,11 +2975,12 @@ In a module importing `pyatlan_v9.model.assets`, the mapper sets the list end of
 instead of the single end on each child (`FabricActivity.fabric_process`,
 `Column.table`):
 
-* `X(..., a=...)` or `X.creator(..., a=...)`; * `x.a = ...`, `x.a += ...` or
-`x.a.append(...)` /   `.extend(...)` / `.insert(...)`, where `x` is bound in the same
-scope to `X(...)` / `X.creator(...)` or annotated `X`; * the same assignment or append
-on a receiver of unknown type, when   the value names the child type
-(`[RelatedColumn(...)]`,   `Column.ref_by_qualified_name(...)`) and that pairs with `a`.
+* `X(..., a=...)` or `X.creator(..., a=...)`;
+* `x.a = ...`, `x.a += ...` or `x.a.append(...)` / `.extend(...)` / `.insert(...)`,
+  where `x` is bound in the same scope to `X(...)` / `X.creator(...)` or annotated `X`;
+* the same assignment or append on a receiver of unknown type, when the value names the
+  child type (`[RelatedColumn(...)]`, `Column.ref_by_qualified_name(...)`) and that
+  pairs with `a`.
 
 The list ends come from a table generated off the pinned pyatlan_v9 models
 (`gen-relationship-directions`): an end whose single-valued inverse is on the child
@@ -3148,9 +3159,11 @@ raw dict — a dict display with literal `"typeName"` and `"attributes"` keys, o
 Atlas encodes struct values and nested refs in the same shape, so the rule fires only
 where the dict is emitted:
 
-* `<x>.append(D)`, `<x>.insert(i, D)`, or an element of   `<x>.extend([...])` (a list /
-tuple display or comprehension); * `entity_bytes(D)`; * `yield D`; * `return D` from a
-`map_<entity>` mapper.
+* `<x>.append(D)`, `<x>.insert(i, D)`, or an element of `<x>.extend([...])` (a list /
+  tuple display or comprehension);
+* `entity_bytes(D)`;
+* `yield D`;
+* `return D` from a `map_<entity>` mapper.
 
 `D` is the dict itself or a simple name bound to one in the same scope.  A dict stored
 under a subscript, nested in another dict, passed to `model_validate` or returned from a
@@ -3195,12 +3208,13 @@ A field on an `Input`/`Output` contract typed `str` or a list/set of `str` (bare
 bounded with `MaxItems`, or optional) whose value app code under the scanned tree (tests
 excluded) writes as JSON or reads back as JSON:
 
-* written: `Contract(FIELD=json.dumps(...))` (also   `orjson.dumps(...)` with or without
-`.decode()`, and   `.model_dump_json()`), a list or set comprehension of those,
-`x.FIELD = json.dumps(...)`, or a `field_validator` naming   `FIELD` that returns
-`json.dumps(...)`; * read: `json.loads(x.FIELD)` (also `x.FIELD or default` and
-`getattr(x, 'FIELD')`), `json.loads(s) for s in x.FIELD`,   `map(json.loads, x.FIELD)`,
-`Model.model_validate_json(x.FIELD)`   or `TypeAdapter(...).validate_json(x.FIELD)`.
+* written: `Contract(FIELD=json.dumps(...))` (also `orjson.dumps(...)` with or without
+  `.decode()`, and `.model_dump_json()`), a list or set comprehension of those, `x.FIELD
+  = json.dumps(...)`, or a `field_validator` naming `FIELD` that returns
+  `json.dumps(...)`;
+* read: `json.loads(x.FIELD)` (also `x.FIELD or default` and `getattr(x, 'FIELD')`),
+  `json.loads(s) for s in x.FIELD`, `map(json.loads, x.FIELD)`,
+  `Model.model_validate_json(x.FIELD)` or `TypeAdapter(...).validate_json(x.FIELD)`.
 
 `x` counts only when it is typed as a contract class: a parameter annotated with one, a
 local bound to `Contract(...)` / `Contract.model_validate(...)`, or `self` in a method
