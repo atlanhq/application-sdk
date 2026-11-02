@@ -2,6 +2,7 @@ import asyncio
 import base64
 import logging
 import threading
+from collections import deque
 from datetime import datetime
 from typing import Any
 
@@ -122,9 +123,17 @@ class SegmentClient:
             default_user_id: Default user ID for events (defaults to SEGMENT_DEFAULT_USER_ID)
             batch_size: Maximum number of events per batch (defaults to SEGMENT_BATCH_SIZE)
             batch_timeout_seconds: Max seconds to wait before sending batch (defaults to SEGMENT_BATCH_TIMEOUT_SECONDS)
-            max_queue_size: Maximum number of queued events; further events are
-                dropped and counted in ``dropped_count`` (defaults to 10 000)
+            max_queue_size: Maximum number of events waiting to be handed to the
+                worker loop, and separately of events queued there; further
+                events are dropped and counted in ``dropped_count`` (defaults
+                to 10 000). Must not be negative: ``asyncio.Queue`` treats a
+                non-positive size as unbounded.
+
+        Raises:
+            ValueError: If ``max_queue_size`` is negative.
         """
+        if max_queue_size < 0:
+            raise ValueError(f"max_queue_size must be >= 0, got {max_queue_size}")
         self._write_key = write_key or SEGMENT_WRITE_KEY
         self._api_url = api_url or SEGMENT_API_URL
         self._default_user_id = default_user_id or SEGMENT_DEFAULT_USER_ID
@@ -145,11 +154,19 @@ class SegmentClient:
         # Set by ``close()``. A closed client drops events instead of starting a
         # worker thread nothing will ever join.
         self._closed = False
-        # Events dropped because the queue was full. Written only on the worker
-        # loop's thread.
+        # Hand-off from ``send_metric`` (any thread) to the worker loop. Capped
+        # at ``_max_queue_size`` at admission, so a worker loop that falls
+        # behind cannot accumulate one scheduled callback per event: at most
+        # one ``_drain_ingress`` callback is pending (``_drain_scheduled``).
+        self._ingress: deque[MetricRecord] = deque()
+        self._drain_scheduled = False
+        # Guards ``_ingress``, ``_drain_scheduled``, ``_dropped_count`` and
+        # ``_overflowing``.
+        self._ingress_lock = threading.Lock()
+        # Events dropped because the hand-off or the queue was full.
         self._dropped_count = 0
-        # True while the queue is full and drops are being counted; the drop
-        # warning fires once per episode. Worker-loop thread only.
+        # True while events are being dropped; the drop warning fires once per
+        # episode and re-arms when an event reaches the queue again.
         self._overflowing = False
 
         # Enable client if write key is present
@@ -172,7 +189,7 @@ class SegmentClient:
 
     @property
     def dropped_count(self) -> int:
-        """Events dropped because the queue was at ``max_queue_size``."""
+        """Events dropped because the hand-off or the queue was at ``max_queue_size``."""
         return self._dropped_count
 
     def _start_worker_thread(self) -> None:
@@ -323,39 +340,78 @@ class SegmentClient:
         if not self._loop or not self._queue:
             return
 
+        with self._ingress_lock:
+            if len(self._ingress) >= self._max_queue_size:
+                warn = self._count_drops_locked(1)
+                schedule = False
+            else:
+                warn = False
+                self._ingress.append(metric_record)
+                schedule = not self._drain_scheduled
+                self._drain_scheduled = True
+        if warn:
+            self._warn_dropping()
+        if not schedule:
+            return
+
         try:
-            # Enqueue on the worker thread's event loop. ``put_nowait`` rather
-            # than ``await put``: with a bounded queue, ``put`` would park one
-            # coroutine per event until space frees, an unbounded backlog of
-            # its own.
-            self._loop.call_soon_threadsafe(self._enqueue, metric_record)
+            # One drain callback per batch of hand-offs, not one per event, and
+            # ``put_nowait`` there rather than ``await put``: either alternative
+            # would hold events outside the caps for as long as the loop lags.
+            self._loop.call_soon_threadsafe(self._drain_ingress)
         except Exception:
+            with self._ingress_lock:
+                self._drain_scheduled = False
             logging.warning("Failed to queue metric for Segment", exc_info=True)
 
-    def _enqueue(self, metric_record: MetricRecord) -> None:
-        """Queue *metric_record*, or drop and count it if the queue is full.
+    def _count_drops_locked(self, n: int) -> bool:
+        """Count *n* dropped events; True if this starts an overflow episode.
 
-        Runs on the worker loop. Warns on the first drop of each overflow
-        episode (the queue was accepting events before it), not on every drop.
+        Caller holds ``_ingress_lock``.
         """
+        self._dropped_count += n
+        if self._overflowing:
+            return False
+        self._overflowing = True
+        return True
+
+    def _warn_dropping(self) -> None:
+        logging.warning(
+            "Segment queue full (%d events); dropping new events "
+            "(dropped so far: %d)",
+            self._max_queue_size,
+            self._dropped_count,
+        )
+
+    def _drain_ingress(self) -> None:
+        """Move handed-off events into the queue, dropping any that do not fit.
+
+        Runs on the worker loop. Checked with ``full()`` rather than catching
+        ``QueueFull``: only this loop touches the queue, so the check cannot go
+        stale before ``put_nowait``, and a full queue is an expected state.
+        """
+        with self._ingress_lock:
+            records = list(self._ingress)
+            self._ingress.clear()
+            self._drain_scheduled = False
         if self._queue is None:
             return
-        # Checked rather than caught: only this loop touches the queue, so
-        # ``full()`` cannot go stale before ``put_nowait``, and a full queue is
-        # an expected state, not an error with a useful stack.
-        if not self._queue.full():
-            self._queue.put_nowait(metric_record)
-            self._overflowing = False
-        else:
-            self._dropped_count += 1
-            if not self._overflowing:
-                self._overflowing = True
-                logging.warning(
-                    "Segment queue full (%d events); dropping new events "
-                    "(dropped so far: %d)",
-                    self._max_queue_size,
-                    self._dropped_count,
-                )
+        dropped = 0
+        accepted = False
+        for record in records:
+            if self._queue.full():
+                dropped += 1
+            else:
+                self._queue.put_nowait(record)
+                accepted = True
+        warn = False
+        with self._ingress_lock:
+            if accepted:
+                self._overflowing = False
+            if dropped:
+                warn = self._count_drops_locked(dropped)
+        if warn:
+            self._warn_dropping()
 
     async def _process_queue(self) -> None:
         """Background worker that processes metrics from the queue.

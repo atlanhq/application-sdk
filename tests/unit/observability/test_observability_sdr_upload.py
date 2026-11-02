@@ -446,6 +446,51 @@ class TestAddRecordFlushTasks:
         )
         assert not obs_instance._flush_tasks
 
+    async def test_flush_all_waits_for_flushes_started_while_it_waits(
+        self, obs_instance
+    ):
+        """A batch flush that ``add_record`` starts while ``flush_all`` is
+        waiting on earlier ones is awaited too. Its batch has already left the
+        buffer, so ``flush_all``'s own drain cannot pick it up; a one-time
+        snapshot of in-flight tasks returned with it still uploading."""
+        import orjson
+
+        obs_instance._batch_size = 2
+        sink: list[dict[str, Any]] = []
+        first_upload = asyncio.Event()
+        uploads = 0
+
+        async def _upload(key, local_path, store=None, **_kw):
+            nonlocal uploads
+            uploads += 1
+            if uploads == 1:
+                await first_upload.wait()
+            else:
+                # Later uploads outlast the first, so a flush_all that stopped
+                # after the first returns before they finish.
+                await asyncio.sleep(0.05)
+            with gzip.open(local_path, "rb") as fh:
+                sink.extend(orjson.loads(line) for line in fh if line.strip())
+
+        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        p1, p2, p3, p4 = _patched_sink(obs_instance, _upload)
+        with p1, p2, p3, p4:
+            for i in range(2):
+                obs_instance.add_record(_make_record(base_ts + i, f"msg-{i}"))
+            await asyncio.sleep(0)  # first flush reaches its stalled upload
+            drain = asyncio.get_running_loop().create_task(
+                AtlanObservability.flush_all()
+            )
+            await asyncio.sleep(0)  # flush_all is now waiting on the first
+            for i in range(2, 4):
+                obs_instance.add_record(_make_record(base_ts + i, f"msg-{i}"))
+            first_upload.set()
+            await drain
+            delivered = sorted(r["message"] for r in sink)
+
+        assert delivered == [f"msg-{i}" for i in range(4)]
+        assert not obs_instance._flush_tasks
+
     async def test_stalled_store_bounds_inflight_flushes(self, obs_instance):
         """With uploads stalled, ``add_record`` keeps at most
         ``_MAX_INFLIGHT_FLUSHES`` flush tasks; further records wait in the

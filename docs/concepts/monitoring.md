@@ -781,7 +781,7 @@ A full batch is written by a background flush task. At most four run per signal 
 
 An unhandled asyncio exception schedules a flush too, but only one at a time and at most one every 5 seconds, so an exception storm against an unreachable OTLP collector does not pile up flushes or `otlp-log-flush` threads. Only one `otlp-log-flush` thread is alive at a time; a flush that finds an earlier one still exporting waits for it within its own timeout instead of starting another.
 
-Segment metrics are queued up to 10,000 events; past that, new events are dropped and counted (`SegmentClient.dropped_count`), with one warning per overflow episode. A flush sends the backlog in `ATLAN_SEGMENT_BATCH_SIZE` chunks. After `close()`, further metrics are dropped.
+Segment metrics are bounded twice: at most 10,000 events (`max_queue_size`) wait to be handed to the client's worker loop, and at most 10,000 sit in its queue. Past either cap, new events are dropped and counted (`SegmentClient.dropped_count`), with one warning per overflow episode. A negative `max_queue_size` raises `ValueError`. A flush sends the backlog in `ATLAN_SEGMENT_BATCH_SIZE` chunks. After `close()`, further metrics are dropped.
 
 ---
 

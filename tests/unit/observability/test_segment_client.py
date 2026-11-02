@@ -391,10 +391,10 @@ class TestSendMetricEnabled:
         mrun.assert_not_called()
 
     def test_happy_path_schedules_via_loop(self):
-        """When everything is initialized, send_metric hands the record to the
-        worker loop's ``_enqueue`` via ``call_soon_threadsafe`` — never a parked
-        ``await queue.put`` coroutine, which a bounded queue would turn into an
-        unbounded backlog of its own."""
+        """When everything is initialized, send_metric puts the record in the
+        bounded hand-off and schedules the worker loop's ``_drain_ingress`` via
+        ``call_soon_threadsafe`` — never a parked ``await queue.put`` coroutine,
+        which a bounded queue would turn into an unbounded backlog of its own."""
         client = _enabled_client_no_thread()
         fake_thread = mock.MagicMock()
         fake_thread.is_alive.return_value = True
@@ -412,9 +412,8 @@ class TestSendMetricEnabled:
         ):
             client.send_metric(record)
         mrun.assert_not_called()
-        client._loop.call_soon_threadsafe.assert_called_once_with(
-            client._enqueue, record
-        )
+        client._loop.call_soon_threadsafe.assert_called_once_with(client._drain_ingress)
+        assert list(client._ingress) == [record]
 
     def test_scheduling_failure_swallowed(self):
         """Any exception while scheduling must be swallowed, not propagated."""
@@ -805,46 +804,94 @@ class TestFlush:
 # ---------------------------------------------------------------------------
 
 
+def _ready_client(max_queue_size: int) -> SegmentClient:
+    """An enabled client that looks initialized, with a mock worker loop whose
+    ``call_soon_threadsafe`` records callbacks but never runs them — a worker
+    loop that has fallen behind."""
+    with mock.patch.object(SegmentClient, "_start_worker_thread", return_value=None):
+        client = SegmentClient(write_key="fake-key", max_queue_size=max_queue_size)
+    alive = mock.MagicMock()
+    alive.is_alive.return_value = True
+    client._worker_thread = alive
+    client._initialized_event.set()
+    client._loop = mock.MagicMock()
+    client._queue = asyncio.Queue(maxsize=max_queue_size)
+    return client
+
+
 class TestBoundedQueue:
-    async def test_enqueue_drops_and_counts_when_full(self):
-        """At ``max_queue_size`` new events are dropped and counted rather than
-        growing the queue (or parking one coroutine each) for the length of a
-        Segment outage."""
-        with mock.patch.object(
-            SegmentClient, "_start_worker_thread", return_value=None
-        ):
-            client = SegmentClient(write_key="fake-key", max_queue_size=3)
-        client._queue = asyncio.Queue(maxsize=client._max_queue_size)
-
+    def test_lagging_loop_holds_one_callback_and_a_capped_handoff(self):
+        """While the worker loop runs nothing, events beyond ``max_queue_size``
+        are dropped at admission and only one drain callback is scheduled — no
+        per-event callback holding its record outside the cap."""
+        client = _ready_client(max_queue_size=3)
         with mock.patch.object(sc_module.logging, "warning") as warn:
-            for i in range(10):
-                client._enqueue(_make_record(value=float(i)))
+            for i in range(50):
+                client.send_metric(
+                    _make_record(value=float(i), labels={"send_to_segment": "true"})
+                )
 
-        assert client._queue.qsize() == 3
-        assert client.dropped_count == 7
+        assert client._loop.call_soon_threadsafe.call_count == 1
+        assert len(client._ingress) == 3
+        assert client.dropped_count == 47
         # One warning for the overflow episode, not one per dropped event.
         assert warn.call_count == 1
 
-    async def test_drop_warning_rearms_after_queue_drains(self):
-        with mock.patch.object(
-            SegmentClient, "_start_worker_thread", return_value=None
-        ):
-            client = SegmentClient(write_key="fake-key", max_queue_size=1)
-        client._queue = asyncio.Queue(maxsize=1)
+    async def test_drain_fills_queue_and_counts_overflow(self):
+        """The drain moves the hand-off into the queue up to its cap, counts
+        what does not fit, and re-arms scheduling for the next event."""
+        client = _ready_client(max_queue_size=2)
+        client._queue.put_nowait(_make_record())  # one slot already taken
+        for _ in range(2):
+            client.send_metric(_make_record(labels={"send_to_segment": "true"}))
+
+        with mock.patch.object(sc_module.logging, "warning"):
+            client._drain_ingress()
+
+        assert client._queue.qsize() == 2
+        assert client.dropped_count == 1
+        assert not client._ingress
+        client.send_metric(_make_record(labels={"send_to_segment": "true"}))
+        assert client._loop.call_soon_threadsafe.call_count == 2
+
+    async def test_drop_warning_rearms_after_an_event_is_queued(self):
+        client = _ready_client(max_queue_size=1)
+
+        def send() -> None:
+            client.send_metric(_make_record(labels={"send_to_segment": "true"}))
 
         with mock.patch.object(sc_module.logging, "warning") as warn:
-            client._enqueue(_make_record())
-            client._enqueue(_make_record())  # drop → warn
+            send()
+            send()  # hand-off full → drop, warn
+            client._drain_ingress()  # queued → episode over
             client._queue.get_nowait()
-            client._enqueue(_make_record())  # accepted → episode over
-            client._enqueue(_make_record())  # drop → warn again
+            send()
+            send()  # hand-off full → drop, warn again
 
         assert client.dropped_count == 2
         assert warn.call_count == 2
 
-    def test_default_max_queue_size_is_bounded(self):
-        client = _enabled_client_no_thread()
-        assert client._max_queue_size == sc_module._DEFAULT_MAX_QUEUE_SIZE > 0
+    def test_negative_max_queue_size_rejected(self):
+        """``asyncio.Queue`` treats a non-positive size as unbounded, so a
+        negative value would silently remove the cap."""
+        with pytest.raises(ValueError, match="max_queue_size"):
+            SegmentClient(write_key="fake-key", max_queue_size=-1)
+
+    @pytest.mark.parametrize(
+        ("configured", "expected"),
+        [(7, 7), (0, sc_module._DEFAULT_MAX_QUEUE_SIZE)],
+    )
+    def test_worker_init_builds_a_bounded_queue(self, configured, expected):
+        """The queue the real worker thread builds carries the cap — not one a
+        test substituted. Starts and closes a real worker; no request is sent."""
+        client = SegmentClient(write_key="fake-key", max_queue_size=configured)
+        try:
+            assert client._initialized_event.is_set()
+            assert client._queue is not None
+            assert client._queue.maxsize == expected > 0
+        finally:
+            client.close()
+        assert not client._worker_thread.is_alive()
 
 
 class TestFlushQueueChunking:
@@ -872,16 +919,33 @@ class TestFlushQueueChunking:
 
 class TestWorkerStartAndClose:
     def test_concurrent_start_starts_one_thread(self):
-        """Concurrent callers that all see a dead worker start exactly one."""
+        """Concurrent callers that all see a dead worker start exactly one.
+
+        Deterministic contention: the first caller holds the start (blocked on
+        ``gate``) until every caller has reached ``_start_lock``, so the other
+        seven are all waiting on the lock when it is released.
+        """
         import threading  # noqa: PLC0415 — only this test needs real threads
 
         client = _enabled_client_no_thread()
+        callers_n = 8
         started: list[int] = []
         gate = threading.Event()
+        arrived = threading.Semaphore(0)
+        real_lock = client._start_lock
+
+        class _ArrivalLock:
+            def __enter__(self):
+                arrived.release()
+                return real_lock.__enter__()
+
+            def __exit__(self, *exc):
+                return real_lock.__exit__(*exc)
+
+        client._start_lock = _ArrivalLock()  # type: ignore[assignment]
 
         def _fake_start_locked() -> None:
-            # Hold the start long enough for every caller to reach it.
-            gate.wait(2.0)
+            gate.wait(10.0)
             started.append(1)
             alive = mock.MagicMock()
             alive.is_alive.return_value = True
@@ -891,13 +955,16 @@ class TestWorkerStartAndClose:
             client, "_start_worker_thread_locked", side_effect=_fake_start_locked
         ):
             callers = [
-                threading.Thread(target=client._start_worker_thread) for _ in range(8)
+                threading.Thread(target=client._start_worker_thread)
+                for _ in range(callers_n)
             ]
             for t in callers:
                 t.start()
+            for _ in range(callers_n):
+                assert arrived.acquire(timeout=10.0), "a caller never reached the lock"
             gate.set()
             for t in callers:
-                t.join(5.0)
+                t.join(10.0)
 
         assert started == [1]
 

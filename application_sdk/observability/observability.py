@@ -224,19 +224,28 @@ class AtlanObservability(Generic[T], ABC):
             try:
                 await instance._await_flush_tasks()
                 await instance._flush_buffer(force=True)
+                # Records logged while the drain above ran may have started
+                # new batch flushes; wait for those too.
+                await instance._await_flush_tasks()
             except Exception:
                 logging.error("Error flushing instance", exc_info=True)
 
     async def _await_flush_tasks(self) -> None:
         """Wait for in-flight ``add_record`` flushes owned by the running loop.
 
+        Re-checks after each wait until none are left: while it waits, an
+        ``add_record`` can take a freed slot and start another flush, whose
+        batch is no longer in the buffer for the caller's drain to find.
+
         Tasks bound to another loop cannot be awaited from here; that loop's
         own shutdown path flushes them.
         """
         loop = asyncio.get_running_loop()
-        with self._buffer_lock:
-            pending = [t for t in self._flush_tasks if t.get_loop() is loop]
-        if pending:
+        while True:
+            with self._buffer_lock:
+                pending = [t for t in self._flush_tasks if t.get_loop() is loop]
+            if not pending:
+                return
             # ``_flush_records`` handles its own errors; gather only so one
             # unexpected failure cannot hide the others.
             results = await asyncio.gather(*pending, return_exceptions=True)
