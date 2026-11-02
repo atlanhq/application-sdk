@@ -153,6 +153,33 @@ def test_certify_and_leak_scan_keep_their_publish_or_main_condition(
     assert evaluate(body, contexts) is runs
 
 
+@pytest.mark.parametrize("job_id", ("certify-plan", "certify-unit"))
+@pytest.mark.parametrize(("shards", "runs"), [(1, False), (0, True), (4, True)])
+def test_shard_jobs_run_only_when_the_app_opts_in(
+    job_id: str, shards: int, runs: bool
+) -> None:
+    # Sharding is opt-in: at the default (1) certify runs the tests itself and
+    # an app pays for no extra jobs.
+    body = _gate_body(_jobs()[job_id]["if"])
+    contexts = {
+        "github": {"ref": MAIN},
+        "inputs": {"publish": True, "unit_test_shards": shards},
+        "needs": {"build-decision": {"outputs": {"enable_sdr": ""}}},
+    }
+    assert evaluate(body, contexts) is runs
+
+
+def test_certify_itself_does_not_depend_on_the_shard_input() -> None:
+    assert "unit_test_shards" not in _jobs()["certify"]["if"]
+
+
+def test_sharding_defaults_to_off() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    # PyYAML reads the bare `on:` key as boolean True.
+    inputs = workflow[True]["workflow_call"]["inputs"]
+    assert inputs["unit_test_shards"]["default"] == 1
+
+
 @pytest.mark.parametrize("job_id", CHAIN_JOBS)
 def test_build_chain_sits_behind_prepare(job_id: str) -> None:
     jobs = _jobs()

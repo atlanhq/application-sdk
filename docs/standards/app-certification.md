@@ -26,22 +26,27 @@ These are the layers that are **identical for every app**. App-specific layers
 app's own live stack (databases, Dapr, Temporal) and secrets, so they stay in
 the app's own CI (`tests.yaml`, the marketplace-releases e2e reusables, …).
 
-## Sharded unit tests
+## Sharded unit tests (opt-in)
 
-Unit tests run in parallel `certify-unit` legs, then `certify` folds the legs'
-results and combined coverage into the verdict:
+By default `certify` runs `tests/unit` itself in one job, and no extra jobs
+start. An app whose suite outgrows one runner can opt in with the
+`unit_test_shards` input. The tests then run in parallel `certify-unit` legs,
+and `certify` folds the legs' results and combined coverage into the verdict:
 
 ```
 certify-plan ─> certify-unit (1..N in parallel) ─> certify (v3 shape, contract drift, verdict)
 ```
 
-- **N is automatic.** `certify-plan` reads the app's committed pytest-split
+- **Default `1`:** no split, no extra jobs. Same as before sharding.
+- **`0` (auto):** `certify-plan` reads the app's committed pytest-split
   `.test_durations` and gives one leg per ~5 minutes of recorded
-  `tests/unit` time, capped at 10. An app with no durations file gets one leg.
-- **Pin it** with the `unit_test_shards` input (1–10). 0 means auto.
-- **Generate the file** with `uv run --with pytest-split pytest tests/unit --store-durations`
+  `tests/unit` time, capped at 10. With no durations file it gives one leg.
+- **`2`–`10`:** pin the leg count.
+- **Generate the durations file** with `uv run --with pytest-split pytest tests/unit --store-durations`
   and commit it. A stale file only unbalances the legs, never skips a test.
 - A leg with no result (crashed, timed out, upload lost) counts as failed.
+- Opting in costs about one extra billed minute per leg (checkout and
+  `uv sync`), in exchange for a much shorter wait before publish.
 
 ## Why centralized (no per-app wiring)
 

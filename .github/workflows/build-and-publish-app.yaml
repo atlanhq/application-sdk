@@ -113,10 +113,10 @@ on:
         type: boolean
         default: false
       unit_test_shards:
-        description: "How many parallel runners the certify gate splits `tests/unit` across (1-10). Default 0 = auto: sized from the app's committed pytest-split `.test_durations` file (one shard per ~5 minutes of recorded unit-test time, max 10); an app with no such file runs one shard, as before. Set it to pin the count. See docs/standards/app-certification.md."
+        description: "Opt-in: split the certify gate's `tests/unit` across parallel runners. Default 1 = no split: `certify` runs the tests itself in one job, as before, and no extra jobs start. 0 = auto: sized from the app's committed pytest-split `.test_durations` file (one runner per ~5 minutes of recorded unit-test time, max 10). 2-10 = pin the runner count. See docs/standards/app-certification.md."
         required: false
         type: number
-        default: 0
+        default: 1
       use_ghcr_base:
         description: "Resolve the SDK base image from GHCR directly during the image build, instead of through the registry gateway at registry.atlan.com that serves the same GHCR package. Default TRUE. The preflight pins the GHCR digest for `FROM registry.atlan.com/public/app-runtime-base:3`; a Dockerfile it cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from the Dockerfile's reference as written. Pass false to skip the preflight and build from the Dockerfile's reference as written (a `FROM ghcr.io/atlanhq/app-runtime-base` still pulls from GHCR). See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the registry layout."
         required: false
@@ -486,15 +486,18 @@ jobs:
   # build-decision) has nothing to certify, so it skips here too; the release
   # that ships the image certifies it.
   #
-  # Unit tests run in `certify-unit`, split across `certify-plan`'s shard count;
-  # this job folds their results into the verdict. Publish waits on this job
+  # Sharding is opt-in (`unit_test_shards`, default 1). By default `certify`
+  # runs the unit tests itself and `certify-plan` / `certify-unit` skip, so an
+  # app that does not opt in pays for no extra jobs. An app that opts in runs
+  # its tests in `certify-unit`, split across `certify-plan`'s shard count, and
+  # `certify` folds their results into the verdict. Publish waits on `certify`
   # while the image build does not, so on a single 2-vCPU runner a large suite
   # set the whole run's wall time — and neared the 30-minute cap.
   # `certify_unit_shards.py` holds the plan / per-shard / fan-in logic.
   certify-plan:
     name: Certify plan
     needs: build-decision
-    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' && inputs.unit_test_shards != 1 }}
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -535,7 +538,7 @@ jobs:
   certify-unit:
     name: Certify unit tests (${{ matrix.shard }}/${{ needs.certify-plan.outputs.total }})
     needs: [build-decision, certify-plan]
-    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' && inputs.unit_test_shards != 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -776,13 +779,26 @@ jobs:
           fi
 
       # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
-      # The tests ran in the `certify-unit` legs; fold their result files here.
-      # Glob, not exact names: a leg's retried upload lands as `-retry`. With
-      # `pattern:` an empty match is a success, so a missing leg surfaces in the
-      # verdict script (absent result = failed), not in this step.
+      # Default (`unit_test_shards` 1): run the tests here as one shard — the
+      # same pytest command as before sharding — and write the result file the
+      # verdict below reads. --all-groups (inside the script) so the app's test
+      # dependency group (pytest plugins like pytest-asyncio) is installed.
+      - name: "Unit tests (in this job)"
+        if: always() && inputs.unit_test_shards == 1
+        continue-on-error: true
+        working-directory: app
+        env:
+          COVERAGE_SOURCE: ${{ inputs.coverage_source }}
+          INSTALL_OUTCOME: ${{ steps.app_install.outcome }}
+        run: python3 ../sdk/.github/scripts/certify_unit_shards.py run --shard 1 --total 1 --coverage-source "${COVERAGE_SOURCE}" --install-outcome "${INSTALL_OUTCOME}" --results-dir ../certify-shards
+
+      # Opted in: the tests ran in the `certify-unit` legs; fold their result
+      # files here. Glob, not exact names: a leg's retried upload lands as
+      # `-retry`. With `pattern:` an empty match is a success, so a missing leg
+      # surfaces in the verdict script (absent result = failed), not here.
       - name: Download unit-test shard results
         id: download-shards
-        if: always()
+        if: always() && inputs.unit_test_shards != 1
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -791,11 +807,11 @@ jobs:
           path: certify-shards
 
       - name: Wait before the download retry
-        if: always() && steps.download-shards.outcome == 'failure'
+        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
         run: sleep 20
 
       - name: Download unit-test shard results (retry)
-        if: always() && steps.download-shards.outcome == 'failure'
+        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
@@ -807,10 +823,11 @@ jobs:
         id: unit
         if: always()
         env:
-          TOTAL: ${{ needs.certify-plan.outputs.total }}
+          TOTAL: ${{ inputs.unit_test_shards == 1 && '1' || needs.certify-plan.outputs.total }}
         run: python3 sdk/.github/scripts/certify_unit_shards.py verdict --results-dir certify-shards --total "${TOTAL}"
 
-      # Each leg measured its own slice; combine them before the threshold.
+      # Each shard measured its own slice (one shard when not opted in);
+      # combine them before the threshold.
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
         if: always() && steps.unit.outputs.outcome == 'success'
