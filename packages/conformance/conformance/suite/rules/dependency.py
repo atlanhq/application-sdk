@@ -19,6 +19,8 @@ SDK upgrades.  These rules enforce two invariants:
   extra (uv silently drops unknown extras).
 * ``D006`` — the app's ``requires-python`` lower bound is not below the SDK's
   minimum supported Python, so the app never claims support the SDK lacks.
+* ``D016`` — the app's ``requires-python`` admits the Python the runtime image
+  ships (3.13).
 * ``D007`` — the app builds with Hatchling.
 * ``D008`` — the app's pyright ``typeCheckingMode`` is not weaker than
   ``standard``.
@@ -1171,6 +1173,72 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d015"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="D016",
+        canonical_reference=(
+            'atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`: the SDK '
+            "floor and no upper cap, so the range admits the Python 3.13 that "
+            "app-runtime-base:3 ships. An app that needs an upper bound sets one above "
+            'the runtime\'s version, e.g. `">=3.11,<3.14"`.'
+        ),
+        fix_locus=FixLocus.PACKAGING,
+        scope=RuleScope.APP,
+        name="RequiresPythonExcludesRuntimePython",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="python-version",
+        autofixable=True,
+        since="0.54.0",
+        rationale=(
+            "Every app ships on app-runtime-base:3, whose interpreter is Python 3.13, "
+            "and the SDR e2e harness pins its host Python to the same version so the "
+            "suite tests what ships. An app whose requires-python excludes 3.13 "
+            "declares itself unsupported on the only Python it ever runs on, and uv "
+            "quietly resolves around the cap: CI builds the venv on an older "
+            "interpreter, so e2e exercises a Python production never uses. On "
+            "ubuntu-26.04 runners there is no system 3.12, so uv downloads one into an "
+            "uncached temp directory; the cached venv then links to an interpreter "
+            "that is gone on the next runner, uv rebuilds it without the test group, "
+            "and every warm e2e run fails with 'Failed to spawn: pytest' (FND-4505). "
+            "Nothing in the app's diff points at the cause."
+        ),
+        short_description=(
+            "App requires-python excludes Python 3.13, the version the runtime "
+            "image ships"
+        ),
+        full_description=(
+            "The app's ``[project].requires-python`` must admit the Python\n"
+            "that ``app-runtime-base:3`` ships (**3.13**).  The image's base\n"
+            "tag pins only the minor; its patch floats, so the range must\n"
+            "admit every ``3.13.x``.  It is evaluated as a PEP 440 specifier\n"
+            "set, so every spelling that shuts any of 3.13 out is caught --\n"
+            "``<3.13``, ``<=3.12``, ``==3.12.*``, ``~=3.12.0``, ``!=3.13.*``,\n"
+            "``==3.13.0``::\n"
+            "\n"
+            '    requires-python = ">=3.11,<3.13"   # flagged\n'
+            '    requires-python = ">=3.11,<3.14"   # passes\n'
+            '    requires-python = ">=3.11"         # passes\n'
+            "\n"
+            "An absent ``requires-python`` is not graded (D006 owns the\n"
+            "floor).  The runtime version is a drift-guarded constant in the\n"
+            "checker, kept equal to the golden base tag in the SDK's\n"
+            "``Dockerfile``, so the rule needs no resolved environment.\n"
+            "\n"
+            "Autofixable: raise only the upper-bound clause so 3.13 is\n"
+            "admitted, keep the lower bound, then re-run ``uv lock``.  An\n"
+            "exclusion clause (``!=``) or a micro-version pin/bound is\n"
+            "routed to human review instead.\n"
+            "Cite: FND-4505."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d016"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,

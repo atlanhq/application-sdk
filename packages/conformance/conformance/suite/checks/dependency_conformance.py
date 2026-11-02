@@ -16,6 +16,9 @@ Rules in this check module:
   name an extra the SDK actually publishes (uv silently drops unknown extras).
 * **D006 IncompatibleRequiresPython** — the app's ``[project].requires-python``
   lower bound must not be below the SDK's minimum supported Python.
+* **D016 RequiresPythonExcludesRuntimePython** — the app's
+  ``[project].requires-python`` must admit the Python ``app-runtime-base:3``
+  ships (3.13).
 * **D007 NonStandardBuildBackend** — ``[build-system].build-backend`` must be
   Hatchling.
 * **D008 WeakenedTypeChecking** — ``[tool.pyright].typeCheckingMode`` must not
@@ -108,6 +111,7 @@ RULE_D012 = "D012"
 RULE_D013 = "D013"
 RULE_D014 = "D014"
 RULE_D015 = "D015"
+RULE_D016 = "D016"
 
 SDK_PACKAGE = "atlan-application-sdk"
 # The conformance suite itself (D011).  Apps declare it in a dev group so
@@ -167,6 +171,12 @@ _REMOTE_COMPONENT_FETCH_RE = re.compile(
 # by ``test_d006_sdk_python_floor_matches_sdk_pyproject``, which re-reads the
 # SDK's real pyproject.toml and fails if this constant drifts.
 SDK_PYTHON_FLOOR: tuple[int, int] = (3, 11)
+
+# The Python ``app-runtime-base:3`` ships, as ``(major, minor)``. D016 requires
+# every app's requires-python to admit it. Hardcoded for the same reason as
+# SDK_PYTHON_FLOOR; ``test_d016_runtime_python_matches_sdk_dockerfile`` re-reads
+# the golden base tag in the SDK's Dockerfile and fails if this drifts.
+RUNTIME_IMAGE_PYTHON: tuple[int, int] = (3, 13)
 
 # A PEP 508 / requirement-string fragment. Captures the package *name*; the
 # rest of the line is treated as the version-specifier blob.
@@ -705,6 +715,38 @@ def _requires_python_lower_bound(
     return (major, minor), operator, lineno
 
 
+def _requires_python_excludes_runtime(data: Mapping[str, Any]) -> str | None:
+    """Return the app's ``requires-python`` spec when it shuts out the runtime
+    image's Python, else ``None``.
+
+    The runtime image's base tag pins only ``X.Y``; its patch floats as the
+    mutable tag is rebuilt. So the spec must admit *every* ``X.Y.N`` patch
+    (checked for N in 0..99), not just one: ``<3.13``, ``<=3.12``,
+    ``==3.12.*``, ``~=3.12.0``, ``!=3.13.*``, ``==3.13.0`` and ``!=3.13.4`` are
+    all caught while ``<3.14``, ``<4.0`` and ``==3.13.*`` pass. Absent or
+    unparseable specs return ``None``: D006 owns the absent case, and a spec
+    ``packaging`` cannot parse is not graded here.
+    """
+    project = data.get("project")
+    if not isinstance(project, dict):
+        return None
+    spec = project.get("requires-python")
+    if not isinstance(spec, str) or not spec.strip():
+        return None
+    try:
+        from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    except ImportError:  # pragma: no cover - packaging is a declared dependency
+        return None
+    try:
+        specifiers = SpecifierSet(spec)
+    except InvalidSpecifier:
+        return None
+    major, minor = RUNTIME_IMAGE_PYTHON
+    if all(specifiers.contains(f"{major}.{minor}.{patch}") for patch in range(100)):
+        return None
+    return spec.strip()
+
+
 def _line_of(text: str, key: str, *, section: str | None = None) -> int:
     """Return the 1-based line of the ``<key> =`` assignment, else 1.
 
@@ -914,6 +956,29 @@ def scan_text(
                     suppressions=suppressions,
                 )
             )
+
+    # ── D016 (pure-text) ────────────────────────────────────────────────────
+    excluded = _requires_python_excludes_runtime(data)
+    if excluded is not None:
+        rt_major, rt_minor = RUNTIME_IMAGE_PYTHON
+        findings.append(
+            _make_finding(
+                rule_id=RULE_D016,
+                file=file,
+                line=_line_of(text, "requires-python", section="project"),
+                column=1,
+                message=(
+                    f"requires-python '{excluded}' does not admit every Python "
+                    f"{rt_major}.{rt_minor}.x; app-runtime-base:3 ships "
+                    f"{rt_major}.{rt_minor} (patch floats with the image) and the "
+                    f"e2e harness runs it. Widen the range so the whole "
+                    f"{rt_major}.{rt_minor} line is admitted (e.g. "
+                    f"'<{rt_major}.{rt_minor + 1}', or drop the cap) and re-run "
+                    f"`uv lock`."
+                ),
+                suppressions=suppressions,
+            )
+        )
 
     # ── D007 (pure-text) ────────────────────────────────────────────────────
     backend = _build_backend(text, data=data)
