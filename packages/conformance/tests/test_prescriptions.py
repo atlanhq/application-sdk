@@ -857,6 +857,111 @@ def test_p001_an_opt_out_guarding_no_unsafe_field_says_removing_it_is_the_fix() 
     assert "remove the opt-out" in message
 
 
+_NOOP_OPTOUT = (
+    "from application_sdk.contracts.base import Input, Output\n"
+    "class TaskInput(Input, allow_unbounded_fields=True):\n"
+    "    run_id: str = ''\n"
+    "    total: int = 0\n"
+)
+
+
+def _optout_swap(tmp_path: Path, files: dict[str, str]) -> dict | None:
+    p001 = [
+        f
+        for f in _scan_files(tmp_path, files)
+        if f.rule_id == "P001" and f.file == "m.py"
+    ]
+    assert len(p001) == 1
+    return (p001[0].properties or {}).get("atlan/safeSwap")
+
+
+def test_p001_marks_an_opt_out_guarding_nothing_as_a_safe_swap(tmp_path: Path) -> None:
+    swap = _optout_swap(tmp_path, {"m.py": _NOOP_OPTOUT})
+    assert swap is not None
+    assert swap == {
+        "id": "remove-noop-optout",
+        "find": ", allow_unbounded_fields=True",
+        "replace": "",
+        "requires": {"package": "atlan-application-sdk", "min": "3.0.0"},
+    }
+    fixed = _NOOP_OPTOUT.replace(swap["find"], swap["replace"])
+    assert [f for f in _scan_one(tmp_path, fixed) if f.rule_id == "P001"] == []
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        "from m import TaskInput\nclass Child(TaskInput):\n    blob: Any = None\n",
+        "import m\nclass Child(m.TaskInput):\n    blob: Any = None\n",
+        "from m import TaskInput\nLegacy = TaskInput\n",
+        "from m import TaskInput\nM = create_model('M', __base__=TaskInput)\n",
+        "def broken(:\n",
+    ],
+    ids=["subclass", "dotted-subclass", "alias", "create-model", "unparsable-file"],
+)
+def test_p001_no_safe_swap_when_another_class_can_inherit_the_opt_out(
+    tmp_path: Path, other: str
+) -> None:
+    assert (
+        _optout_swap(tmp_path, {"m.py": _NOOP_OPTOUT, "tests/other.py": other}) is None
+    )
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        _NOOP_OPTOUT.replace("Input, allow", "PublishInputMixin, Input, allow"),
+        _NOOP_OPTOUT.replace("from application_sdk.contracts.base", "from app.base"),
+        _NOOP_OPTOUT.replace(
+            "import Input, Output\n",
+            "import Output\nfrom application_sdk.contracts.base import Output as Input\n",
+        ),
+        _NOOP_OPTOUT.replace(
+            "class TaskInput", "Input = make_input()\nclass TaskInput"
+        ),
+        _NOOP_OPTOUT.replace("    total: int = 0\n", "    rows: list[str] = []\n"),
+        _NOOP_OPTOUT.replace("    total: int = 0\n", "    spec: ExternalSpec = None\n"),
+        _NOOP_OPTOUT.replace("(Input, allow", "(\n    Input, allow"),
+        _NOOP_OPTOUT.replace("=True)", "=True, frozen=True)"),
+        _NOOP_OPTOUT.replace(
+            "=True):", "=True):  # was (Output, allow_unbounded_fields=True)"
+        ),
+        _NOOP_OPTOUT + "    _allow_unbounded_fields = True\n",
+    ],
+    ids=[
+        "other-base",
+        "app-local-input",
+        "renamed-import",
+        "input-rebound",
+        "unsafe-field",
+        "unknown-field",
+        "keyword-on-another-line",
+        "other-keyword",
+        "text-twice-on-the-line",
+        "attribute-opt-out-too",
+    ],
+)
+def test_p001_no_safe_swap_unless_the_opt_out_is_provably_a_no_op(
+    tmp_path: Path, src: str
+) -> None:
+    assert _optout_swap(tmp_path, {"m.py": src}) is None
+
+
+def test_p001_no_safe_swap_on_the_class_attribute_opt_out(tmp_path: Path) -> None:
+    src = (
+        "from application_sdk.contracts.base import Input\n"
+        "class TaskInput(Input):\n"
+        "    _allow_unbounded_fields = True\n"
+        "    run_id: str = ''\n"
+    )
+    assert _optout_swap(tmp_path, {"m.py": src}) is None
+
+
+def test_p001_no_safe_swap_without_the_repo(tmp_path: Path) -> None:
+    findings = [f for f in scan_text(_NOOP_OPTOUT, "m.py") if f.rule_id == "P001"]
+    assert len(findings) == 1 and not findings[0].properties
+
+
 def test_p001_treats_tree_selection_as_payload_safe() -> None:
     src = (
         "class C(Input, allow_unbounded_fields=True):\n"

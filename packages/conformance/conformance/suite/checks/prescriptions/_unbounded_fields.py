@@ -36,8 +36,11 @@ so a class in that state is dead code that no detector used to notice, and
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common._discovery import EXCLUDE_DIRS, discover
+from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
 from conformance.suite.schema.findings import Finding
 
 #: Bases that put a class under payload-safety enforcement. Matched by NAME, and
@@ -45,6 +48,9 @@ from conformance.suite.schema.findings import Finding
 #: conservative miss is much cheaper than telling an app its contract is broken
 #: when it is not.
 _CONTRACT_BASES = frozenset({"Input", "Output"})
+
+#: The keyword text a ``remove-noop-optout`` safe swap deletes from the class line.
+_OPTOUT_FIND = ", allow_unbounded_fields=True"
 
 
 def _simple_name(node: ast.expr | None) -> str | None:
@@ -563,16 +569,76 @@ def _is_contract_subclass(node: ast.ClassDef) -> bool:
     return False
 
 
+def reused_class_names(root: Path) -> frozenset[str]:
+    """Names any class in the repo could inherit through, tests included.
+
+    A class base (``class B(A)`` gives ``A``), a name bound to another name
+    (``Alias = A``) and a ``__base__=`` keyword (``create_model(..., __base__=A)``).
+    A class named here may pass its opt-out to a class this file cannot see, so
+    its opt-out is not a safe swap.  The whole repo is read, so a scan of a few
+    files gives the same answer as a full one; a file that does not parse makes
+    every opt-out unsafe.
+    """
+    names: set[str] = set()
+    for path in discover(root, exclude_dirs=EXCLUDE_DIRS - {"tests", "test"}):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        except SyntaxError:
+            return frozenset({"*"})
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                names.update(n for b in node.bases if (n := _simple_name(b)))
+            elif isinstance(node, ast.Assign) and _simple_name(node.value):
+                names.add(_simple_name(node.value))  # type: ignore[arg-type]
+            elif isinstance(node, ast.keyword) and node.arg == "__base__":
+                names.update(
+                    n
+                    for v in (
+                        node.value.elts
+                        if isinstance(node.value, ast.Tuple)
+                        else [node.value]
+                    )
+                    if (n := _simple_name(v))
+                )
+    return frozenset(names)
+
+
+def _imported_contract_bases(node: ast.Module) -> frozenset[str]:
+    """``Input`` / ``Output`` bound by a from-import; untrusted ones are removed by the caller."""
+    return frozenset(
+        a.name
+        for stmt in node.body
+        if isinstance(stmt, ast.ImportFrom)
+        for a in stmt.names
+        if a.name in _CONTRACT_BASES
+    )
+
+
 class UnboundedContractFieldsChecker(ast.NodeVisitor):
-    """Walk a module AST and emit P001 findings."""
+    """Walk a module AST and emit P001 findings.
+
+    With *lines* (the module source) and *reused* (from :func:`reused_class_names`),
+    a keyword opt-out that guards nothing is marked as the ``remove-noop-optout``
+    safe swap when the class's only bases are the SDK's ``Input`` / ``Output`` and
+    no class can inherit it.  The opt-out is read only when the class is defined
+    (``validate_payload_safety``), so once every field is safe deleting it changes
+    nothing the app does.
+    """
 
     def __init__(
         self,
         filename: str,
         directives: dict[int, _IgnoreDirective],
+        lines: list[str] | None = None,
+        reused: frozenset[str] | None = None,
     ) -> None:
         self._filename = filename
         self._directives = directives
+        self._lines = lines
+        self._reused = reused
+        self._sdk_bases: frozenset[str] = frozenset()
         self._findings: list[Finding] = []
         self._types = _Types({}, set())
         #: Classes that set a truthy _allow_unbounded_fields themselves.
@@ -617,6 +683,9 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         ) | _untrusted_import_bindings(node)
         self._types = _Types(aliases, {c.name for c in all_classes}, local_names)
         self._keyword_optout = {c for c in all_classes if _keyword_optout(c)}
+        self._sdk_bases = (
+            _imported_contract_bases(node) - local_names - {c.name for c in all_classes}
+        )
 
         # One pass in source order: a base is defined before the class that names it, so each
         # base is already resolved, and a later redefinition of a name does not reach back.
@@ -660,15 +729,17 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         opted_out = False
         if node in self._keyword_optout:
+            fields = self._types.fields(node)
             self._findings.append(
                 make_finding(
                     filename=self._filename,
                     rule_id="P001",
                     node=node,
                     message=_optout_message(
-                        node.name, "allow_unbounded_fields", self._types.fields(node)
+                        node.name, "allow_unbounded_fields", fields
                     ),
                     directives=self._directives,
+                    properties=self._noop_optout_swap(node, fields),
                 )
             )
             opted_out = True
@@ -718,6 +789,33 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         if not opted_out:
             self._check_missing_optout(node)
         self.generic_visit(node)
+
+    def _noop_optout_swap(
+        self, node: ast.ClassDef, fields: dict[str, list[tuple[str, str]]]
+    ) -> dict[str, object] | None:
+        if self._lines is None or self._reused is None or any(fields.values()):
+            return None
+        if (
+            node.name in self._reused
+            or "*" in self._reused
+            or node in self._attr_optout
+        ):
+            return None
+        if not node.bases or any(
+            not isinstance(b, ast.Name) or b.id not in self._sdk_bases
+            for b in node.bases
+        ):
+            return None
+        if any(kw.arg != "allow_unbounded_fields" for kw in node.keywords):
+            return None
+        if self._lines[node.lineno - 1].count(_OPTOUT_FIND) != 1:
+            return None
+        return SafeSwap(
+            id="remove-noop-optout",
+            find=_OPTOUT_FIND,
+            replace="",
+            requires=SafeSwapRequires(package="atlan-application-sdk", min="3.0.0"),
+        ).to_properties()
 
     def _check_missing_optout(self, node: ast.ClassDef) -> None:
         """A contract with an ``Any`` field and no opt-out cannot be imported."""

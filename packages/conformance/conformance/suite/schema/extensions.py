@@ -208,9 +208,10 @@ class SafeSwap(BaseModel):
     """A finding whose fix is one fixed text change that keeps behaviour.
 
     Set by a checker in ``result.properties["atlan/safeSwap"]`` only when the
-    replacement is the same object, or a public method that delegates to the
-    flagged one with the same signature, so the change cannot alter what the
-    app does.  The rule stays a migration rule; this marks one finding.
+    replacement is the same object, a public method that delegates to the
+    flagged one with the same signature, or the removal of a payload-safety
+    opt-out that guards no field and that no class inherits, so the change
+    cannot alter what the app does.  The rule stays a migration rule; this marks one finding.
 
     Apply it as: on the finding's line, ``find`` occurs exactly once; replace
     it with ``replace``.  When ``find`` is not on that line exactly once, or
@@ -218,7 +219,8 @@ class SafeSwap(BaseModel):
     """
 
     id: str
-    """Recipe id: ``public-reexport`` (import path) or ``public-rename`` (method name)."""
+    """Recipe id: ``public-reexport`` (import path), ``public-rename`` (method name) or
+    ``remove-noop-optout`` (``replace`` is empty: delete ``find``)."""
 
     find: str
     replace: str

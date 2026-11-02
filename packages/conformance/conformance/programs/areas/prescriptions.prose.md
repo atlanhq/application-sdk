@@ -659,8 +659,10 @@ around `finding.line` before drafting any proposal.
 
 **Typed-boundary / contract-modeling rules (P013–P015, P059)** — migration rules
 (`autofixable = false`), scope=app; `classification` is always `"judgment"`.
-The lane applies nothing: return `not_remediable = true` with a
-`migration_brief`.  Backed by `suite.checks.prescriptions`.
+For P013, P014 and P059 the lane applies nothing: return
+`not_remediable = true` with a `migration_brief`.  P015 is fixed in the same
+edit as P001 on the same field: see **Contract fields (P001 + P015)** below.
+Backed by `suite.checks.prescriptions`.
 
 - **P013 UntypedEntrypointBoundary** (BLOCK) — an `@entrypoint` method, or an
   `async def run()` on an `App` subclass (the implicit entrypoint), has an
@@ -707,10 +709,11 @@ The lane applies nothing: return `not_remediable = true` with a
   `OpenAPIConnectorOutput.api_spec_count: int = 0` and
   `api_path_count: int = 0` (the SDK `ExtractionOutput` does the same with
   `tables_extracted`, `columns_extracted`, …).  **Open keys with a structured
-  value**: a bounded dict of a model, from `atlan-metabase-app`
-  `app/contracts.py`:
-  `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
-  where `CollectionSelection` is a `BaseModel`; keep the `MaxItems` bound:
+  value**: a bounded dict of a model with declared fields, from
+  `atlan-metabase-app` `app/contracts.py`:
+  `residual_files: Annotated[dict[str, FileReference], MaxItems(16)]`
+  (a model with no fields and `extra="allow"` bounds nothing: see P001 "Not
+  fixes"; a tree-widget selection is `TreeSelection`); keep the `MaxItems` bound:
   payload safety still requires it on the container.  The brief names the
   fields and lists every reader and writer of the old field.  On a ledgered
   contract (P001 above, "Classify the class first"), add the typed fields
@@ -736,6 +739,65 @@ The lane applies nothing: return `not_remediable = true` with a
   contract ledger, add the typed field under a new name and retire the old one.
   Propose `# conformance: ignore[P059] <reason>` only when a system outside the
   app needs the value as JSON text.
+
+**Contract fields (P001 + P015)** — how the migration lane fixes both rules.
+P015 on a field and P001 on its class are one edit: type each field the P001
+finding lists, then remove the opt-out last, once the class's fields are all
+payload-safe.  A P001 finding marked `atlan/safeSwap` with id
+`remove-noop-optout` is that last step with nothing else to check: delete
+`find` from the class line.
+
+1. **Read each field's writers and readers first** (P001 "Narrowing a value
+   type is a DATA change"): the producers, the generated `manifest.json` args,
+   and every read.  Then pick the after-shape by what the field carries:
+
+   | Field carries | After-shape |
+   |---|---|
+   | a re-declaration of an SDK base field (`connection`, `include_filter`, `exclude_filter`) | delete the override; the base type stays |
+   | filters on a contract the app declares | `FilterMap \| str` when readers go two levels deep at most; `TreeSelection \| str` when they read deeper; on a generated contract, `treeSelection = true` on both filter widgets |
+   | a connection | `ConnectionRef` (from `atlan-metabase-app` `app/contracts.py`: `connection: ConnectionRef = Field(default_factory=ConnectionRef)`) |
+   | credentials | `credential_guid` or `CredentialRef`, resolved inside the task; `agent_json` is `AgentCredentialSpec`.  The P053 fix on the same code moves with it |
+   | wizard form state (`metadata`) | a `BaseMetadataConfig` subclass declaring the keys the app reads |
+   | a whole-payload dict passed between tasks (workflow args, `config`, `extra`) | one typed field per key the task reads, with the current default; a key nothing reads is not carried |
+   | a dict whose writers use a literal key set | one typed field per key (per-type counts: `<type>_extracted: int = 0`, like the SDK `ExtractionOutput`) |
+   | a list of records | a `BaseModel` record with the keys the readers use, in `Annotated[list[Record], MaxItems(N)]` where `N` is the producer's own cap (a fetch limit or batch size constant in the app, cited by name); with no cap in the code, a `FileReference` (P001 step 5) |
+   | a list of `FileReference` | `Annotated[list[FileReference], MaxItems(N)]` (from `atlan-openapi-app` `app/contracts.py`: `spec_files: Annotated[list[FileReference], MaxItems(1000)]`), or one `FileReference` to the directory that holds them |
+   | open keys with plain values | an owner decision (see the blocks below) |
+   | nothing: no producer sends it and nothing constructs it | retire it (P001 step 6) |
+
+2. **Where the class lives decides how it changes.**  A task contract changes
+   in place.  A ledgered contract (P001 "Classify the class first") keeps the
+   old field: add the typed fields under new names with defaults, move every
+   writer and reader onto them, and mark the old field `deprecated=True` in
+   the same change (retirement step 1).  A generated contract changes at its
+   `contract/*.pkl` source only.
+3. **Remove the opt-out last**, only when the class's own P001 finding would
+   list no field, and import the module afterwards.  A class that inherits
+   the opt-out (its P001 message says so) is fixed with the class that sets it.
+
+Defaults below keep what the app does today.  A row with `block` is an owner
+decision: such a site waits for the person the `brief` asks.
+
+```decided-defaults
+{"rule": "P001", "fix_shape": "remove-noop-optout", "decision": "Delete the allow_unbounded_fields=True keyword (or the _allow_unbounded_fields attribute) from a class whose P001 finding says every field it declares is already payload-safe; import the module afterwards. A base or mixin outside the file that still has an unsafe field is fixed first.", "why": "The opt-out is read only when the class is defined (validate_payload_safety); with every field safe the class is the same, and Input drops undeclared keys with or without it.", "interface": false}
+{"rule": "P001", "fix_shape": "delete-dead-class", "decision": "Delete a contract class that nothing constructs, annotates or subclasses (tests included), with tests that only cover it.", "why": "Code no path runs changes no behaviour; keeping it keeps an opt-out nobody needs.", "interface": false}
+{"rule": "P001", "fix_shape": "drop-sdk-override", "decision": "Delete the app's re-declaration of a field its SDK base already types (connection: ConnectionRef; include_filter / exclude_filter: FilterMap | str, or TreeSelection | str on a TreeSelectionExtractionInput). Readers keep working when they read at most the depth the base type keeps; otherwise use filter-tree-selection.", "why": "The base type accepts the same wire payload the override did and is compatible with the contract ledger by construction."}
+{"rule": "P015", "fix_shape": "drop-sdk-override", "decision": "Delete the app's re-declaration of a field its SDK base already types (connection: ConnectionRef; include_filter / exclude_filter: FilterMap | str, or TreeSelection | str on a TreeSelectionExtractionInput). Readers keep working when they read at most the depth the base type keeps; otherwise use filter-tree-selection.", "why": "The base type accepts the same wire payload the override did and is compatible with the contract ledger by construction."}
+{"rule": "P001", "fix_shape": "filter-tree-selection", "decision": "Filters that readers walk below the second level: on a generated contract set treeSelection = true on both filter widgets in contract/app.pkl and regenerate (the class then extends TreeSelectionExtractionInput) and delete the app override; on a contract the app declares, type them TreeSelection | str. Filters read at most two levels deep take FilterMap | str.", "why": "TreeSelection keeps every level of the tree the widget sends and bounds each level; FilterMap keeps two levels."}
+{"rule": "P015", "fix_shape": "filter-tree-selection", "decision": "Filters that readers walk below the second level: on a generated contract set treeSelection = true on both filter widgets in contract/app.pkl and regenerate (the class then extends TreeSelectionExtractionInput) and delete the app override; on a contract the app declares, type them TreeSelection | str. Filters read at most two levels deep take FilterMap | str.", "why": "TreeSelection keeps every level of the tree the widget sends and bounds each level; FilterMap keeps two levels."}
+{"rule": "P015", "fix_shape": "fixed-keys-to-fields", "decision": "A dict whose writers use a literal key set, on a task contract: one typed field per key with the value's current type and an empty default, set by every writer and read by every reader; delete the helper that built the dict. Keys nothing reads are not carried.", "why": "The same values cross the task boundary under declared names; no key the app reads is lost."}
+{"rule": "P015", "fix_shape": "counts-to-fields", "decision": "Per-type counts with a fixed key set: one int field per key, default 0, named <type>_extracted or the name the readers already use. On a ledgered Output also keep the old dict, filled as today and marked deprecated=True (retirement step 1); on a task Output replace it.", "why": "Readers get the same numbers; the ledgered field retires one status per merge as B005 requires."}
+{"rule": "P001", "fix_shape": "retire-dead-field", "decision": "A field no producer sends (absent from manifest.json args) and nothing constructs: on a task contract delete it; on a ledgered contract mark it Field(..., deprecated=True) and regenerate the ledger (retirement step 1), all such fields of the contract in the same change.", "why": "Nothing fills the field today, so retiring it changes no value any reader sees."}
+{"rule": "P015", "fix_shape": "retire-dead-field", "decision": "A field no producer sends (absent from manifest.json args) and nothing constructs: on a task contract delete it; on a ledgered contract mark it Field(..., deprecated=True) and regenerate the ledger (retirement step 1), all such fields of the contract in the same change.", "why": "Nothing fills the field today, so retiring it changes no value any reader sees."}
+{"rule": "P001", "fix_shape": "credentials-by-reference", "decision": "A task input that carries resolved credentials inline takes credential_guid or a CredentialRef instead, and the task resolves it itself (self.context.resolve_credential_raw_or_inline or the app's existing resolver). The inline field is retired (retire-dead-field) once no caller sets it.", "why": "The task gets the same credential values; secrets stop crossing Temporal history."}
+{"rule": "P015", "fix_shape": "credentials-by-reference", "decision": "A task input that carries resolved credentials inline takes credential_guid or a CredentialRef instead, and the task resolves it itself (self.context.resolve_credential_raw_or_inline or the app's existing resolver). The inline field is retired (retire-dead-field) once no caller sets it.", "why": "The task gets the same credential values; secrets stop crossing Temporal history."}
+{"rule": "P001", "fix_shape": "^filter-tree-selection$", "block": "TreeSelection and TreeSelectionExtractionInput need atlan-application-sdk 3.48.0 or later, and the app locks an older one.", "brief": "Raise this app's atlan-application-sdk lock to 3.48.0 or later; the filter fix follows.", "requires": {"package": "atlan-application-sdk", "min": "3.48.0"}}
+{"rule": "P015", "fix_shape": "^filter-tree-selection$", "block": "TreeSelection and TreeSelectionExtractionInput need atlan-application-sdk 3.48.0 or later, and the app locks an older one.", "brief": "Raise this app's atlan-application-sdk lock to 3.48.0 or later; the filter fix follows.", "requires": {"package": "atlan-application-sdk", "min": "3.48.0"}}
+{"rule": "P015", "fix_shape": "^open-keys-ignore$", "block": "The keys are open (they come from the source) and the values are plain, so no typed field fits; the end state is an ignore with the owner's reason.", "brief": "Is this key set really open? If yes, which reason should '# conformance: ignore[P015] <reason>' carry; if no, which keys does it have?"}
+{"rule": "P001", "fix_shape": "^keep-opt-out$", "block": "Every wire-preserving fix was tried and refused (P001 step 8); keeping the opt-out is the owner's last resort.", "brief": "Keep allow_unbounded_fields with '# conformance: ignore[P001] <reason>' naming what was tried, or accept the payload change?"}
+{"rule": "P001", "fix_shape": "^narrow-drops-shape$", "block": "The narrowed type rejects a payload shape a producer sends today; that changes what the app accepts.", "brief": "Drop support for this payload shape (name it), or keep a wider type that accepts it?"}
+{"rule": "P015", "fix_shape": "^narrow-drops-shape$", "block": "The narrowed type rejects a payload shape a producer sends today; that changes what the app accepts.", "brief": "Drop support for this payload shape (name it), or keep a wider type that accepts it?"}
+```
 
 **Typed-boundary read rule (P026)** — suggest-only, scope=app, WARN-tier;
 `classification` is always `"judgment"`.  Backed by
