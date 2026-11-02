@@ -105,6 +105,7 @@ async def _close_credential(credential: object) -> None:
             "Azure credential close did not finish within %.0fs; abandoning the "
             "wait, so its HTTP transport may stay open until the thread ends",
             _CREDENTIAL_CLOSE_TIMEOUT_SECONDS,
+            exc_info=True,
         )
     except Exception:
         logger.warning("Error closing Azure credential", exc_info=True)
