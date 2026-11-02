@@ -5,8 +5,8 @@ allowing the workflow to orchestrate locking without hitting Temporal's
 deadlock timeout.
 """
 
-import random
 import uuid
+import zlib
 from typing import Any
 
 from temporalio import activity
@@ -43,25 +43,38 @@ def _acquire_token(owner_id: str) -> str:
     return f"{owner_id}:{activity_id}"
 
 
-async def _find_held_slot(
+async def _scan_slots(
     redis_client: RedisClientAsync, lock_name: str, max_locks: int, token: str
-) -> int | None:
-    """Return the slot this acquire already holds, if a previous attempt set it.
+) -> tuple[int | None, int | None]:
+    """Return ``(held, candidate)`` for this acquire from one ``MGET``.
 
-    A ``SET NX`` can land in Redis while its reply is lost (timeout, dropped
-    connection); without this check the retry picks a fresh random slot and
-    the first stays held, unreleased, until its TTL.
+    ``held`` is the slot already holding *token*: a ``SET NX`` can land in
+    Redis while its reply is lost (timeout, dropped connection), and the retry
+    must reuse that slot rather than take a second one that stays held,
+    unreleased, until its TTL.
+
+    ``candidate`` is the first free slot walking from a start point fixed by
+    *token* (``crc32``, stable across processes, unlike ``hash``). Every
+    attempt of one acquire therefore picks the same slot while the free set is
+    unchanged, so a retry racing its own still-in-flight earlier ``SET`` sends
+    ``SET NX`` to the same key and only one of the two can land. ``None`` when
+    every slot is taken.
     """
+    first = zlib.crc32(token.encode()) % max_locks
     client = redis_client.redis_client
     if client is None:
-        return None
+        # Not connected: let ``_acquire_lock`` raise its typed connection error.
+        return None, first
     values = await client.mget([f"{lock_name}:{slot}" for slot in range(max_locks)])
-    for slot, value in enumerate(values):
-        if isinstance(value, bytes):
-            value = value.decode()
+    decoded = [v.decode() if isinstance(v, bytes) else v for v in values]
+    for slot, value in enumerate(decoded):
         if value == token:
-            return slot
-    return None
+            return slot, None
+    for offset in range(max_locks):
+        slot = (first + offset) % max_locks
+        if decoded[slot] is None:
+            return None, slot
+    return None, None
 
 
 @activity.defn
@@ -80,8 +93,9 @@ async def acquire_distributed_lock(
         owner_id (str): Unique identifier for the lock owner.
 
     Idempotent across Temporal retries: the slot's value is a per-acquire
-    token (see ``_acquire_token``), and a retry that finds a slot already
-    holding its token returns that slot instead of taking another.
+    token (see ``_acquire_token``), a retry that finds a slot already holding
+    its token returns that slot instead of taking another, and the slot to
+    try is chosen from the token, not at random (see ``_scan_slots``).
 
     Returns:
         dict[str, Any]: Lock information with the following keys:
@@ -100,12 +114,11 @@ async def acquire_distributed_lock(
             value_summary=str(max_locks),
         )
     token = _acquire_token(owner_id)
-    slot = random.randint(0, max_locks - 1)
-    resource_id = f"{lock_name}:{slot}"
+    resource_id = lock_name
 
     try:
         async with RedisClientAsync() as redis_client:
-            held = await _find_held_slot(redis_client, lock_name, max_locks, token)
+            held, slot = await _scan_slots(redis_client, lock_name, max_locks, token)
             if held is not None:
                 resource_id = f"{lock_name}:{held}"
                 logger.info(
@@ -119,6 +132,11 @@ async def acquire_distributed_lock(
                     "resource_id": resource_id,
                     "owner_id": token,
                 }
+
+            if slot is None:
+                # Every slot is taken; Temporal's retry policy tries again.
+                raise LockAcquisitionError()
+            resource_id = f"{lock_name}:{slot}"
 
             # Acquire lock - connection will stay open until context exits
             acquired = await redis_client._acquire_lock(resource_id, token, ttl_seconds)

@@ -518,14 +518,6 @@ def _patch_redis(fake: _FakeRedis):
     )
 
 
-def _patch_slots(*slots: int):
-    """Pin the random slot picks, so a retry would take a *different* slot."""
-    return patch(
-        "application_sdk.execution._temporal.lock_activities.random.randint",
-        side_effect=list(slots),
-    )
-
-
 def _patch_activity_id(activity_id: str):
     info = MagicMock()
     info.activity_id = activity_id
@@ -544,7 +536,7 @@ class TestAcquireDistributedLockIdempotent:
         )
 
         fake = _FakeRedis(lose_first_set_reply=True)
-        with _patch_redis(fake), _patch_activity_id("7"), _patch_slots(0, 1):
+        with _patch_redis(fake), _patch_activity_id("7"):
             with pytest.raises(RedisLockError):
                 await acquire_distributed_lock("res", 50, 60, "app:run-1")
             first_slot_keys = set(fake.data)
@@ -563,7 +555,7 @@ class TestAcquireDistributedLockIdempotent:
         )
 
         fake = _FakeRedis()
-        with _patch_redis(fake), _patch_slots(0, 1):
+        with _patch_redis(fake):
             with _patch_activity_id("1"):
                 first = await acquire_distributed_lock("res", 50, 60, "app:run-1")
             with _patch_activity_id("2"):
@@ -591,10 +583,45 @@ class TestAcquireDistributedLockIdempotent:
         )
 
         fake = _FakeRedis()
-        with _patch_redis(fake), _patch_slots(0, 1):
+        with _patch_redis(fake):
             first = await acquire_distributed_lock("res", 50, 60, "app:run-1")
             second = await acquire_distributed_lock("res", 50, 60, "app:run-1")
 
         assert first["resource_id"] != second["resource_id"]
         assert first["owner_id"] != second["owner_id"]
         assert len(fake.data) == 2
+
+    async def test_every_attempt_of_one_acquire_targets_the_same_slot(self):
+        """A retry racing its own in-flight SET must send SET NX to the same key.
+
+        Simulated by erasing attempt 1's write (it has not landed yet when the
+        retry scans): the retry still picks attempt 1's slot, so whichever SET
+        lands second fails NX instead of occupying a second slot.
+        """
+        from application_sdk.execution._temporal.lock_activities import (
+            acquire_distributed_lock,
+        )
+
+        fake = _FakeRedis()
+        with _patch_redis(fake), _patch_activity_id("7"):
+            first = await acquire_distributed_lock("res", 50, 60, "app:run-1")
+            fake.data.clear()  # attempt 1's SET "not landed yet"
+            retry = await acquire_distributed_lock("res", 50, 60, "app:run-1")
+
+        assert retry["resource_id"] == first["resource_id"]
+
+    async def test_all_slots_taken_raises_without_writing(self):
+        from application_sdk.execution._temporal._lock_errors import (
+            LockAcquisitionError,
+        )
+        from application_sdk.execution._temporal.lock_activities import (
+            acquire_distributed_lock,
+        )
+
+        fake = _FakeRedis()
+        fake.data = {"res:0": b"other:1", "res:1": b"other:2"}
+        with _patch_redis(fake), _patch_activity_id("7"):
+            with pytest.raises(LockAcquisitionError):
+                await acquire_distributed_lock("res", 2, 60, "app:run-1")
+
+        assert fake.data == {"res:0": b"other:1", "res:1": b"other:2"}
