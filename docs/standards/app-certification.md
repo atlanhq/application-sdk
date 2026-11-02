@@ -26,6 +26,32 @@ These are the layers that are **identical for every app**. App-specific layers
 app's own live stack (databases, Dapr, Temporal) and secrets, so they stay in
 the app's own CI (`tests.yaml`, the marketplace-releases e2e reusables, …).
 
+## Sharded unit tests (opt-in)
+
+By default `certify` runs `tests/unit` itself in one job, exactly as before,
+and no extra jobs start. An app that sets nothing stays on this path.
+
+An app whose suite outgrows one runner can opt in by setting the
+`unit_test_shards` input to a leg count from 2 to 10. The tests then run in
+parallel `certify-unit` legs, and `certify` folds the legs' results and
+combined coverage into the verdict:
+
+```
+certify-unit (N legs in parallel) ─> certify (v3 shape, contract drift, verdict)
+```
+
+- **Default `1`:** no split, no extra jobs.
+- **`2`–`10`:** that many legs. Any other value fails the run.
+- **Balance:** pytest-split balances the legs from the app's committed
+  `.test_durations` when it has one, and splits evenly by test count when it
+  does not. Generate the file with
+  `uv run --with pytest-split pytest tests/unit --store-durations` and commit
+  it. A stale file only unbalances the legs, never skips a test.
+- A leg with no result (crashed, timed out, upload lost) counts as failed.
+- Opting in costs about one billed setup minute per leg (checkout and
+  `uv sync`), in exchange for a much shorter wait before publish. There is no
+  separate planning job: the leg list is looked up from the input directly.
+
 ## Why centralized (no per-app wiring)
 
 The earlier model required each app to opt in by passing
