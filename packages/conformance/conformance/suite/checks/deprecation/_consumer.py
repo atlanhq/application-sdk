@@ -42,6 +42,8 @@ false positives at WARN.
 from __future__ import annotations
 
 import ast
+import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
@@ -72,6 +74,11 @@ def _module_matches(import_mod: str, entry_module: str) -> bool:
     return entry_module == import_mod or entry_module.startswith(import_mod + ".")
 
 
+#: Class that owns every :data:`PUBLIC_RENAMES` method.  A call is only marked
+#: when its receiver is proven to be this class or an instance of an app class
+#: whose only base chain ends in it.
+RENAME_OWNER = "SqlApp"
+
 #: Deprecated SqlApp method -> (public method it delegates to, first SDK version with it).
 PUBLIC_RENAMES: dict[str, tuple[str, str]] = {
     "_resolve_credential_ref": ("resolve_credential_ref", "3.33.2"),
@@ -92,8 +99,23 @@ _SKIP_DIRS = frozenset(
 )
 
 
-def _skipped(dirs: tuple[str, ...]) -> bool:
-    return any(part in _SKIP_DIRS or part.startswith(".") for part in dirs)
+def _skip_dir(name: str) -> bool:
+    return name in _SKIP_DIRS or name.startswith(".")
+
+
+def _repo_python_files(root: Path) -> Iterator[tuple[Path, tuple[str, ...]]]:
+    """Yield ``(path, parts relative to root)`` for every repo ``.py`` file.
+
+    Skipped directories are pruned during the walk, so an in-tree virtualenv
+    or ``site-packages`` is never enumerated.
+    """
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if not _skip_dir(d)]
+        base = Path(dirpath)
+        prefix = base.relative_to(root).parts
+        for filename in filenames:
+            if filename.endswith(".py"):
+                yield base / filename, (*prefix, filename)
 
 
 def _is_test_file(parts: tuple[str, ...]) -> bool:
@@ -107,23 +129,49 @@ def _is_test_file(parts: tuple[str, ...]) -> bool:
     )
 
 
+def _bound_names(tree: ast.Module, watched: set[str]) -> set[str]:
+    """Names in *watched* that *tree* binds, defines, or names as a string.
+
+    Covers ``def``/``class`` of the name, assignment to it as a name or an
+    attribute (``_resolve_credential_ref = custom`` in a class body,
+    ``SqlApp._resolve_credential_ref = f``), an import bound to it, and a
+    string constant equal to it (``setattr(..., "<name>", ...)``).  Any of
+    these can change which body a call of the name runs.
+    """
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            name: str | None = node.name
+        elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            name = node.id
+        elif isinstance(node, ast.Attribute) and not isinstance(node.ctx, ast.Load):
+            name = node.attr
+        elif isinstance(node, ast.alias):
+            name = node.asname or node.name.rpartition(".")[2]
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            name = node.value
+        else:
+            continue
+        if name in watched:
+            bound.add(name)
+    return bound
+
+
 def unsafe_renames(root: Path) -> frozenset[str]:
     """Deprecated names in :data:`PUBLIC_RENAMES` whose call is not a safe swap in *root*.
 
-    Unsafe when any Python file in the repo, tests included, defines a function
-    with the old or the new name (an override changes which body runs), or a
-    test file mentions the old name (a patch of it stops reaching
-    the call). The whole repo is read, so a scan of a few files gives the same
+    Unsafe when any Python file in the repo, tests included, binds the old or
+    the new name (a ``def``, a class-level alias, an attribute assignment, an
+    import, or a string naming it — any of which can change which body runs),
+    or a test file mentions the old name (a patch of it stops reaching the
+    call). The whole repo is read, so a scan of a few files gives the same
     answer as a full one.
     """
     watched = {
         name for pair in PUBLIC_RENAMES.items() for name in (pair[0], pair[1][0])
     }
     unsafe: set[str] = set()
-    for path in root.rglob("*.py"):
-        rel = path.relative_to(root).parts
-        if _skipped(rel[:-1]):
-            continue
+    for path, rel in _repo_python_files(root):
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -138,16 +186,12 @@ def unsafe_renames(root: Path) -> frozenset[str]:
         except SyntaxError:
             unsafe |= present & PUBLIC_RENAMES.keys()
             continue
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name in present
-            ):
-                unsafe |= {
-                    old
-                    for old, (new, _) in PUBLIC_RENAMES.items()
-                    if node.name in (old, new)
-                }
+        bound = _bound_names(tree, present)
+        unsafe |= {
+            old
+            for old, (new, _) in PUBLIC_RENAMES.items()
+            if old in bound or new in bound
+        }
     return frozenset(unsafe)
 
 
@@ -163,17 +207,130 @@ def _rename_swap(name: str, unsafe: frozenset[str]) -> SafeSwap | None:
     )
 
 
+def _single_exact_match(call: ast.Call, find: str, lines: list[str]) -> bool:
+    """Whether *find* occurs once on the call's line, at this call's ``.name(``.
+
+    The swap is applied as a text replace on the finding's line, so it is only
+    sound when that line holds exactly one occurrence and it is this call's.
+    """
+    func = call.func
+    if not isinstance(func, ast.Attribute) or func.end_lineno != call.lineno:
+        return False
+    if not 0 < call.lineno <= len(lines):
+        return False
+    line = lines[call.lineno - 1].encode("utf-8")
+    needle = find.encode("utf-8")
+    end = func.end_col_offset
+    if end is None or line.count(needle) != 1:
+        return False
+    # ``find`` is ``.<attr>(``: it must start one byte before the attribute
+    # name and end on the byte right after the attribute expression.
+    return line.find(needle) == end - len(needle) + 1
+
+
+def _owner_receiver_calls(
+    tree: ast.Module, is_owner_ref: Callable[[ast.expr], bool]
+) -> frozenset[int]:
+    """``id()`` of each method call whose receiver is proven to be the owner.
+
+    Proven receivers, and nothing else:
+
+    * the owner class itself, or an *owner class* of this file
+      (``SqlApp._build_transform_input(...)``);
+    * the first parameter of a non-static method defined directly in an owner
+      class's body, when the method never rebinds it (``self._x(...)``).
+
+    An *owner class* is a class of this file with exactly one base and no
+    class keywords, where that base is the owner or another owner class.  A
+    second base could supply its own method of the name ahead of the owner's
+    in the MRO, and a base defined in another file cannot be seen here, so
+    both leave the call unproven.
+    """
+    classes: dict[str, list[ast.ClassDef]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            classes.setdefault(node.name, []).append(node)
+    owner_classes: dict[str, ast.ClassDef] = {}
+    changed = True
+    while changed:
+        changed = False
+        for name, defs in classes.items():
+            if name in owner_classes or len(defs) != 1:
+                continue
+            cls = defs[0]
+            if len(cls.bases) != 1 or cls.keywords:
+                continue
+            base = cls.bases[0]
+            if is_owner_ref(base) or (
+                isinstance(base, ast.Name) and base.id in owner_classes
+            ):
+                owner_classes[name] = cls
+                changed = True
+
+    def _is_class_ref(expr: ast.expr) -> bool:
+        return is_owner_ref(expr) or (
+            isinstance(expr, ast.Name) and expr.id in owner_classes
+        )
+
+    calls: set[int] = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and _is_class_ref(node.func.value)
+        ):
+            calls.add(id(node))
+    for cls in owner_classes.values():
+        for stmt in cls.body:
+            if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if any(
+                isinstance(d, ast.Name) and d.id == "staticmethod"
+                for d in stmt.decorator_list
+            ):
+                continue
+            params = [*stmt.args.posonlyargs, *stmt.args.args]
+            if not params:
+                continue
+            first = params[0]
+            receiver = first.arg
+            rebound = any(
+                (
+                    isinstance(n, ast.Name)
+                    and n.id == receiver
+                    and not isinstance(n.ctx, ast.Load)
+                )
+                or (isinstance(n, ast.arg) and n.arg == receiver and n is not first)
+                for n in ast.walk(stmt)
+            )
+            if rebound:
+                continue
+            for n in ast.walk(stmt):
+                if (
+                    isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Attribute)
+                    and isinstance(n.func.value, ast.Name)
+                    and n.func.value.id == receiver
+                ):
+                    calls.add(id(n))
+    return frozenset(calls)
+
+
 def scan_consumer(
     tree: ast.Module,
     file: str,
     manifest: Manifest,
     directives: dict[int, _IgnoreDirective],
     unsafe: frozenset[str] | None = None,
+    source: str | None = None,
 ) -> list[Finding]:
     """Return B001 findings for *tree* against the deprecated-symbol *manifest*.
 
     A call of a :data:`PUBLIC_RENAMES` method is marked as a safe swap only when
-    *unsafe* (from :func:`unsafe_renames`) is given and does not name it.
+    *unsafe* (from :func:`unsafe_renames`) is given and does not name it, the
+    receiver is proven to be the SDK's :data:`RENAME_OWNER` (see
+    :func:`_owner_receiver_calls`), and *source* is given and the call's line
+    holds exactly one occurrence of the swap's ``find`` text, at this call.
     """
     if not manifest.symbols:
         return []
@@ -208,6 +365,9 @@ def scan_consumer(
     # Local name bound to an enum class that has deprecated members, mapped to
     # that enum's name in the manifest.
     enum_bindings: dict[str, str] = {}
+    # Local names bound (via from-import) to the SDK's RENAME_OWNER class.
+    owner_bindings: set[str] = set()
+    owner_modules = {method[name].module for name in PUBLIC_RENAMES if name in method}
 
     def _match_class_func(name: str, import_mod: str) -> DeprecatedSymbol | None:
         for record in class_func.get(name, ()):
@@ -242,6 +402,10 @@ def scan_consumer(
             if not _is_sdk_module(mod):
                 continue
             for alias in node.names:
+                if alias.name == RENAME_OWNER and any(
+                    _module_matches(mod, m) for m in owner_modules
+                ):
+                    owner_bindings.add(alias.asname or alias.name)
                 if _enum_declares_members(alias.name, mod):
                     enum_bindings[alias.asname or alias.name] = alias.name
                 record = _match_class_func(alias.name, mod)
@@ -297,6 +461,27 @@ def scan_consumer(
             return None
         return enum_member.get(enum_name, {}).get(node.attr)
 
+    def _is_owner_ref(expr: ast.expr) -> bool:
+        if isinstance(expr, ast.Name):
+            return expr.id in owner_bindings
+        return (
+            isinstance(expr, ast.Attribute)
+            and expr.attr == RENAME_OWNER
+            and isinstance(expr.value, ast.Name)
+            and expr.value.id in sdk_module_aliases
+            and any(
+                _module_matches(sdk_module_aliases[expr.value.id], m)
+                for m in owner_modules
+            )
+        )
+
+    owner_calls = (
+        _owner_receiver_calls(tree, _is_owner_ref)
+        if unsafe is not None and source is not None
+        else frozenset()
+    )
+    lines = source.splitlines() if source is not None else []
+
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             for base in node.bases:
@@ -320,7 +505,13 @@ def scan_consumer(
             and node.func.attr in method
         ):
             record = method[node.func.attr]
-            swap = None if unsafe is None else _rename_swap(node.func.attr, unsafe)
+            swap = (
+                _rename_swap(node.func.attr, unsafe)
+                if unsafe is not None and id(node) in owner_calls
+                else None
+            )
+            if swap is not None and not _single_exact_match(node, swap.find, lines):
+                swap = None
             findings.append(
                 make_finding(
                     filename=file,

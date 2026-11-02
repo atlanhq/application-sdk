@@ -90,8 +90,14 @@ A finding whose fix is one fixed text change that keeps behaviour carries
 - `public-reexport` (B008): a module-level `from <private> import ...` whose
   names a public module re-exports as the same objects.
 - `public-rename` (B001): a call of a deprecated SDK method whose public
-  name takes the same arguments, in a repo where no file defines a function
-  of the old or the new name and no file under `tests/` names the old one.
+  name takes the same arguments. Marked only when all of these hold:
+  the receiver is proven to be the SDK's `SqlApp` (`SqlApp.<name>(...)`, or
+  `self`/`cls` in a method of a class in the same file whose single base
+  chain ends at the SDK's `SqlApp`); no file in the repo binds the old or
+  the new name (a `def`, a class-level alias, an attribute assignment, an
+  import, or a string naming it); no test file names the old one; and the
+  call's line holds exactly one `find`, at this call. A call on any other
+  receiver is left unmarked even when the name matches.
 
 Apply it on the finding's line only: `find` occurs there exactly once;
 replace it with `replace`. Apply it only when `uv.lock` pins `package` at or
@@ -156,8 +162,11 @@ fixed in this skill, except the **owner decisions**.
   - `SqlApp._resolve_credential_ref` → `SqlApp.resolve_credential_ref`, and
     `SqlApp._build_transform_input` → `SqlApp.build_transform_input` (same
     signature; the old names delegate; `atlan-mysql-app` `app/mysql.py:521`).
-    When the app defines a method of either name, it is an **owner
-    decision** (below), not a swap.
+    When the app defines or binds either name, it is an **owner
+    decision** (below), not a swap. An unmarked call on a receiver that is
+    not the app's `SqlApp` (another library's object of the same method
+    name) is not this migration: check what the receiver is before changing
+    it.
   - `DataframeType.daft` → `DataframeType.pandas`.
   - `fetch_marker_from_storage` → `fetch_marker`, `persist_marker_to_storage`
     → `persist_marker` (SDK ≥ 3.41.0): same arguments, but the results are
@@ -267,7 +276,8 @@ fixed in this skill, except the **owner decisions**.
     [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
     (in the `atlanhq/application-sdk` repo, not shipped with this package).
   - **SqlApp override** — the app defines `_resolve_credential_ref` or
-    `_build_transform_input` (or the public name) on an `SqlApp` subclass.
+    `_build_transform_input` (or the public name) on an `SqlApp` subclass,
+    including a class-level alias (`_resolve_credential_ref = custom`).
     The SDK's `run()` and preflight gate call only the public name, so an
     override on the old name is not reached today; renaming it to the
     public name makes the SDK start calling the app's body.

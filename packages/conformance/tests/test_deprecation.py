@@ -11,7 +11,9 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+from pathlib import Path
 
+import pytest
 from conformance.suite.checks._ast_common import _parse_directives
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
@@ -1863,8 +1865,19 @@ def _repo(tmp_path, files: dict[str, str]):
 
 
 def _b001_in(root, file: str) -> list:
-    tree, directives = _tree_and_directives((root / file).read_text())
-    return scan_consumer(tree, file, load_manifest(), directives, unsafe_renames(root))
+    source = (root / file).read_text()
+    tree, directives = _tree_and_directives(source)
+    return scan_consumer(
+        tree, file, load_manifest(), directives, unsafe_renames(root), source
+    )
+
+
+def _rename_marks(root, file: str = "app/connector.py") -> list:
+    return [
+        SafeSwap.from_properties(f.properties)
+        for f in _b001_in(root, file)
+        if f.message.startswith("Calls deprecated SDK method")
+    ]
 
 
 def test_b001_marks_a_rename_call_when_the_repo_defines_and_tests_neither_name(
@@ -1967,3 +1980,150 @@ def test_b001_rename_check_ignores_installed_packages_and_reads_root_test_files(
     }
     assert found["_resolve_credential_ref"] is not None
     assert found["_build_transform_input"] is None
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        "from application_sdk.templates import SqlApp\n"
+        "def custom(self, input):\n    return None\n"
+        "class Connector(SqlApp):\n    _resolve_credential_ref = custom\n",
+        "from application_sdk.templates import SqlApp\n"
+        "def custom(self, input):\n    return None\n"
+        "SqlApp._resolve_credential_ref = custom\n",
+        "from application_sdk.templates import SqlApp\n"
+        "setattr(SqlApp, 'resolve_credential_ref', lambda self, input: None)\n",
+        "from vendor.auth import resolve_credential_ref\n",
+    ],
+)
+def test_b001_leaves_a_rename_call_unmarked_when_any_binding_of_either_name_exists(
+    tmp_path, binding: str
+) -> None:
+    root = _repo(tmp_path, {"app/connector.py": _RENAME_CALLER, "app/base.py": binding})
+    found = {
+        f.message.split("'")[1]: SafeSwap.from_properties(f.properties)
+        for f in _b001_in(root, "app/connector.py")
+    }
+    assert found["_resolve_credential_ref"] is None
+    assert found["_build_transform_input"] is not None
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A third-party object whose method happens to share the name.
+        "from vendor.auth import client\n"
+        "def run(input):\n    return client._resolve_credential_ref(input)\n",
+        # A second base can supply the method ahead of SqlApp in the MRO.
+        "from application_sdk.templates import SqlApp\n"
+        "from vendor.auth import Mixin\n"
+        "class C(Mixin, SqlApp):\n"
+        "    def run(self, input):\n        return self._resolve_credential_ref(input)\n",
+        # The base is defined in another file: the chain cannot be seen here.
+        "from app.base import Base\n"
+        "class C(Base):\n"
+        "    def run(self, input):\n        return self._resolve_credential_ref(input)\n",
+        # The receiver is rebound inside the method.
+        "from application_sdk.templates import SqlApp\n"
+        "from vendor.auth import client\n"
+        "class C(SqlApp):\n"
+        "    def run(self, input):\n"
+        "        self = client\n        return self._resolve_credential_ref(input)\n",
+        # A staticmethod's first parameter is not the instance.
+        "from application_sdk.templates import SqlApp\n"
+        "class C(SqlApp):\n"
+        "    @staticmethod\n"
+        "    def run(other, input):\n        return other._resolve_credential_ref(input)\n",
+        # SqlApp from a module that is not the SDK's.
+        "from vendor.templates import SqlApp\n"
+        "class C(SqlApp):\n"
+        "    def run(self, input):\n        return self._resolve_credential_ref(input)\n",
+    ],
+)
+def test_b001_leaves_a_rename_call_unmarked_when_the_receiver_is_not_proven_sqlapp(
+    tmp_path, src: str
+) -> None:
+    root = _repo(tmp_path, {"app/connector.py": src})
+    marks = _rename_marks(root)
+    assert marks == [None]
+
+
+def test_b001_marks_a_rename_call_through_a_same_file_sqlapp_subclass_chain(
+    tmp_path,
+) -> None:
+    src = (
+        "import application_sdk.templates as t\n"
+        "class Base(t.SqlApp):\n    pass\n"
+        "class C(Base):\n"
+        "    def run(self, input):\n        return self._resolve_credential_ref(input)\n"
+        "    @classmethod\n"
+        "    def make(cls, input):\n        return cls._build_transform_input(input, None)\n"
+    )
+    root = _repo(tmp_path, {"app/connector.py": src})
+    marks = _rename_marks(root)
+    assert len(marks) == 2 and all(m is not None for m in marks)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "        return (self._resolve_credential_ref(a), self._resolve_credential_ref(b))\n",
+        "        return self._resolve_credential_ref (a)\n",
+        "        return self._resolve_credential_ref(a)  # was ._resolve_credential_ref(\n",
+    ],
+)
+def test_b001_leaves_a_rename_call_unmarked_without_one_exact_text_match(
+    tmp_path, line: str
+) -> None:
+    src = (
+        "from application_sdk.templates import SqlApp\n"
+        "class C(SqlApp):\n"
+        "    def run(self, a, b):\n" + line
+    )
+    root = _repo(tmp_path, {"app/connector.py": src})
+    marks = _rename_marks(root)
+    assert marks and all(m is None for m in marks)
+
+
+def test_b001_rename_marks_need_the_source_text(tmp_path) -> None:
+    root = _repo(tmp_path, {"app/connector.py": _RENAME_CALLER})
+    tree, directives = _tree_and_directives(_RENAME_CALLER)
+    findings = scan_consumer(
+        tree, "app/connector.py", load_manifest(), directives, unsafe_renames(root)
+    )
+    assert [SafeSwap.from_properties(f.properties) for f in findings] == [None, None]
+
+
+def test_b001_rename_check_prunes_skipped_directories_from_the_walk(
+    tmp_path, monkeypatch
+) -> None:
+    import os
+
+    from conformance.suite.checks.deprecation import _consumer
+
+    root = _repo(
+        tmp_path,
+        {
+            "app/connector.py": _RENAME_CALLER,
+            ".venv/lib/python3.11/site-packages/pkg/mod.py": "x = 1\n",
+            "pyenv/lib/site-packages/pkg/deep/mod.py": "x = 1\n",
+            "node_modules/a/b.py": "x = 1\n",
+        },
+    )
+    visited: list[str] = []
+    real_walk = os.walk
+
+    def spy(top, *args, **kwargs):
+        for entry in real_walk(top, *args, **kwargs):
+            visited.append(entry[0])
+            yield entry
+
+    monkeypatch.setattr(_consumer.os, "walk", spy)
+    unsafe_renames(root)
+    entered = {Path(d).relative_to(root).parts for d in visited}
+    assert not any(
+        part in {".venv", "site-packages", "node_modules"}
+        for parts in entered
+        for part in parts
+    )
+    assert ("app",) in entered

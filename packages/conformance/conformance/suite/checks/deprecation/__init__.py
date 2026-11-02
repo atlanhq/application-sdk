@@ -116,7 +116,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             rel = str(path)
         directives = _parse_directives(text)
         if run_consumer and manifest is not None:
-            findings.extend(scan_consumer(tree, rel, manifest, directives, unsafe))
+            findings.extend(
+                scan_consumer(tree, rel, manifest, directives, unsafe, text)
+            )
         if run_consumer:
             findings.extend(scan_daft_runtime(tree, rel, directives))
             findings.extend(scan_private_imports(tree, rel, directives, own_roots))
