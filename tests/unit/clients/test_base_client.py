@@ -1,3 +1,4 @@
+import ssl
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -322,34 +323,45 @@ class TestBaseClient:
         # Verify that timeout was passed to AsyncClient (with pool timeout)
         call_kwargs = mock_async_client.call_args.kwargs
         assert call_kwargs["transport"]._transport is base_client.http_retry_transport
-        assert call_kwargs["verify"] is True
         assert call_kwargs["timeout"].pool == 30.0
         assert call_kwargs["timeout"].connect == timeout
 
+    def test_default_transport_pool_uses_sdk_ssl_context(self):
+        """The shared pool verifies with the SDK context, custom CAs included.
+
+        httpx ignores ``AsyncClient(verify=...)`` when ``transport=`` is also
+        passed, so the context has to be on the transport itself.
+        """
+        sdk_context = ssl.create_default_context()
+        with patch(
+            "application_sdk.clients.base.get_ssl_context", return_value=sdk_context
+        ):
+            client = BaseClient()
+
+        transport = client.http_retry_transport
+        assert isinstance(transport, httpx.AsyncHTTPTransport)
+        assert transport._pool._ssl_context is sdk_context
+
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("method", ["get", "post"])
     @patch("application_sdk.clients.base.httpx.AsyncClient")
-    @patch("application_sdk.clients.base.get_ssl_context", return_value=True)
-    async def test_execute_http_post_request_always_verifies_ssl(
-        self, mock_get_ssl_context, mock_async_client, base_client
+    async def test_http_helpers_do_not_pass_ignored_verify(
+        self, mock_async_client, method, base_client
     ):
-        """SSL verification is always enforced; get_ssl_context() cannot be bypassed."""
+        """Per-call ``verify=`` is dropped: httpx ignores it next to ``transport=``."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-
         mock_client_instance = AsyncMock()
-        mock_client_instance.post.return_value = mock_response
+        getattr(mock_client_instance, method).return_value = mock_response
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
-        url = "https://api.example.com/test"
-
-        result = await base_client.execute_http_post_request(url=url)
+        helper = getattr(base_client, f"execute_http_{method}_request")
+        result = await helper(url="https://api.example.com/test", raise_on_error=True)
 
         assert result == mock_response
-        mock_get_ssl_context.assert_called_once()
         call_kwargs = mock_async_client.call_args.kwargs
         assert call_kwargs["transport"]._transport is base_client.http_retry_transport
-        assert call_kwargs["verify"] is True
-        assert call_kwargs["timeout"].pool == 30.0
+        assert "verify" not in call_kwargs
 
     @given(credentials=sql_credentials_strategy)
     @settings(

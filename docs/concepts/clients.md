@@ -128,7 +128,7 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 
 1.  **HTTP Configuration:**
     *   **`http_headers` (HeaderTypes):** HTTP headers for all requests made by this client. Supports dict, Headers object, or list of tuples. GET and POST requests through the `execute_http_get_request` and `execute_http_post_request` methods will use this header and allow for override through the `headers` parameter.
-    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. The default httpx transport retries connection setup (connect errors and connect timeouts) up to 3 times. That retry happens before any request bytes are sent, so it is safe for POST. It does not retry read errors or status codes. Override it for custom retry behavior, for example with `httpx-retries`.
+    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. The default httpx transport retries connection setup (connect errors and connect timeouts) up to 3 times. That retry happens before any request bytes are sent, so it is safe for POST. It does not retry read errors or status codes. It also verifies TLS with `get_ssl_context()`, so CAs in `SSL_CERT_DIR` are trusted. Override it for custom retry behavior, for example with `httpx-retries`. A replacement transport owns TLS verification (httpx ignores a per-client `verify=` when a transport is given), so build its inner transport with `httpx.AsyncHTTPTransport(verify=get_ssl_context())`.
 
 2.  **Loading (`load` method):**
     *   Called with credentials and other configuration parameters.
@@ -170,9 +170,14 @@ class MyApiClient(BaseClient):
         }
 
         # Optionally set up custom retry transport for advanced retry logic
+        # import httpx
         # from httpx_retries import Retry, RetryTransport
+        # from application_sdk.clients import get_ssl_context
         # retry = Retry(total=5, backoff_factor=10, status_forcelist=[429, 500, 502, 503, 504])
-        # self.http_retry_transport = RetryTransport(retry=retry)
+        # self.http_retry_transport = RetryTransport(
+        #     retry=retry,
+        #     transport=httpx.AsyncHTTPTransport(verify=get_ssl_context()),
+        # )
 
     async def fetch_data(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """Custom method to fetch data from the API."""
@@ -208,7 +213,10 @@ class MyApiClient(BaseClient):
         self.http_headers = {"Authorization": f"Bearer {kwargs.get('token')}"}
 
         # Install httpx-retries: pip install httpx-retries
+        import httpx
         from httpx_retries import Retry, RetryTransport
+
+        from application_sdk.clients import get_ssl_context
 
         # Configure retry for status codes and network errors
         retry = Retry(
@@ -216,7 +224,12 @@ class MyApiClient(BaseClient):
             backoff_factor=10,
             status_forcelist=[429, 500, 502, 503, 504]
         )
-        self.http_retry_transport = RetryTransport(retry=retry)
+        # The replacement transport owns TLS verification; pass the SDK
+        # context so CAs from SSL_CERT_DIR stay trusted.
+        self.http_retry_transport = RetryTransport(
+            retry=retry,
+            transport=httpx.AsyncHTTPTransport(verify=get_ssl_context()),
+        )
         # The RetryTransport can be overridden with a custom transport from libraries like `httpx-retries` through methods like `_retry_operation_async`. Check the library for more details.
 ```
 
@@ -261,6 +274,8 @@ ssl_ctx = get_ssl_context()   # returns True (default cert verification) if SSL_
 ```
 
 Pass the resulting `ssl.SSLContext` via `DB_CONFIG.connect_args={"ssl": ssl_ctx}` for mutual-TLS database connections.
+
+`BaseClient` applies this context to its default `http_retry_transport`, so `execute_http_get_request` and `execute_http_post_request` trust `SSL_CERT_DIR` CAs without extra setup. The context is read when the client is constructed.
 
 ## Prometheus Metrics
 
