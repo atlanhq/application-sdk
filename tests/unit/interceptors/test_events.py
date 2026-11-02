@@ -1259,3 +1259,214 @@ class TestDirectHttpFallback:
     )
     def test_non_delivery_classifier(self, text, expected):
         assert events_module._proves_non_delivery(BindingError(text)) is expected
+
+    # -- FND-4280: a failure that may have delivered is flagged non-retryable --
+
+    async def _publish_failing(
+        self, tmp_path, binding_text, *, enabled=True, post_side_effect=None
+    ):
+        """Publish once against a binding that fails with *binding_text*; return
+        (raised BindingError, httpx.AsyncClient mock)."""
+        _component(tmp_path)
+        infra = self._infra(
+            BindingError(binding_text, binding_name="eventstore", operation="create")
+        )
+        client = _http_client(post_side_effect=post_side_effect)
+        p = self._patches(infra, client, enabled=enabled)
+        with (
+            p[0],
+            p[1],
+            p[2],
+            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
+            p[4],
+        ):
+            with pytest.raises(BindingError) as exc:
+                await _publish_event_via_binding(self._event())
+        return exc.value, http_client
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "enabled", [True, False], ids=["fallback-on", "fallback-off"]
+    )
+    async def test_ambiguous_error_is_flagged_uncertain(self, tmp_path, enabled):
+        err, http_client = await self._publish_failing(
+            tmp_path, _AMBIGUOUS, enabled=enabled
+        )
+        http_client.assert_not_called()
+        assert err.retryable is False
+        assert events_module._is_delivery_uncertain(err)
+
+    @pytest.mark.asyncio
+    async def test_proven_non_delivery_without_fallback_stays_retryable(self, tmp_path):
+        err, _ = await self._publish_failing(tmp_path, _NON_DELIVERY, enabled=False)
+        assert not events_module._is_delivery_uncertain(err)
+        assert err.effective_retryable is True
+
+    @pytest.mark.asyncio
+    async def test_direct_connect_failure_stays_retryable(self, tmp_path):
+        import httpx
+
+        err, http_client = await self._publish_failing(
+            tmp_path,
+            _NON_DELIVERY,
+            post_side_effect=httpx.ConnectError("connection refused"),
+        )
+        http_client.assert_called_once()
+        assert not events_module._is_delivery_uncertain(err)
+
+    @pytest.mark.asyncio
+    async def test_direct_read_timeout_is_flagged_uncertain(self, tmp_path):
+        """The request body went out; Event Ingress may have accepted it."""
+        import httpx
+
+        err, http_client = await self._publish_failing(
+            tmp_path,
+            _NON_DELIVERY,
+            post_side_effect=httpx.ReadTimeout("no response"),
+        )
+        http_client.assert_called_once()
+        assert events_module._is_delivery_uncertain(err)
+
+    @pytest.mark.parametrize(
+        "status,proves",
+        [(400, True), (401, True), (429, True), (500, False), (502, False)],
+    )
+    def test_direct_status_classifier(self, status, proves):
+        import httpx
+
+        request = httpx.Request("POST", "https://t/")
+        error = httpx.HTTPStatusError(
+            "x", request=request, response=httpx.Response(status, request=request)
+        )
+        assert events_module._direct_error_proves_non_delivery(error) is proves
+
+
+class TestPublishEventDeliveryUncertain:
+    """FND-4280: the ``publish_event`` activity must not be retried after a
+    failure that may have delivered the event, or the workflow's
+    ``RetryPolicy(maximum_attempts=3)`` re-sends it up to three times."""
+
+    _EVENT_DATA = {
+        "event_type": EventTypes.APPLICATION_EVENT.value,
+        "event_name": ApplicationEventNames.WORKFLOW_START.value,
+        "data": {},
+    }
+
+    @pytest.mark.asyncio
+    async def test_uncertain_failure_is_non_retryable(self) -> None:
+        from application_sdk.execution.errors import ApplicationError
+
+        err = BindingError(_AMBIGUOUS, binding_name="eventstore", operation="create")
+        events_module._mark_delivery_uncertain(err)
+        with mock.patch.object(
+            events_module,
+            "_publish_event_via_binding",
+            mock.AsyncMock(side_effect=err),
+        ) as publish:
+            with pytest.raises(ApplicationError) as exc:
+                await publish_event(dict(self._EVENT_DATA))
+
+        publish.assert_awaited_once()
+        assert exc.value.non_retryable is True
+        assert exc.value.type == "EventDeliveryUncertainError"
+        assert exc.value.__cause__ is err
+        (details,) = exc.value.details
+        assert details.code == "DEPENDENCY_UNAVAILABLE_EVENT_DELIVERY_UNCERTAIN"
+        assert details.retryable is False
+        assert details.evidence["event_name"] == "workflow_start"
+
+    @pytest.mark.asyncio
+    async def test_proven_non_delivery_stays_retryable(self) -> None:
+        from application_sdk.execution._temporal._activity_errors import (
+            EventPublishError,
+        )
+
+        err = BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+        with mock.patch.object(
+            events_module,
+            "_publish_event_via_binding",
+            mock.AsyncMock(side_effect=err),
+        ):
+            with pytest.raises(EventPublishError) as exc:
+                await publish_event(dict(self._EVENT_DATA))
+        assert exc.value.effective_retryable is True
+
+
+class TestEventId:
+    """``metadata.event_id`` lets consumers dedupe: one id per logical event."""
+
+    @staticmethod
+    def _enrich(event_name: str, *, attempt: int = 1, activity_id: str = "7"):
+        act_info = mock.MagicMock(
+            activity_type="publish_event",
+            activity_id=activity_id,
+            attempt=attempt,
+            workflow_type="wf-type",
+            workflow_id="wf-1",
+            workflow_run_id="run-1",
+        )
+        with (
+            mock.patch.object(
+                events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+            ),
+            mock.patch.object(events_module.activity, "info", return_value=act_info),
+        ):
+            return _enrich_event_metadata(
+                Event(event_type="application_events", event_name=event_name, data={})
+            ).metadata.event_id
+
+    def test_workflow_event_id_is_stable_across_attempts(self) -> None:
+        start = ApplicationEventNames.WORKFLOW_START.value
+        assert self._enrich(start, attempt=1) == self._enrich(start, attempt=3)
+        assert self._enrich(start) != self._enrich(
+            ApplicationEventNames.WORKFLOW_END.value
+        )
+
+    def test_activity_event_id_differs_per_attempt(self) -> None:
+        start = ApplicationEventNames.ACTIVITY_START.value
+        assert self._enrich(start, attempt=1) != self._enrich(start, attempt=2)
+        assert self._enrich(start, activity_id="1") != self._enrich(
+            start, activity_id="2"
+        )
+        assert self._enrich(start) == self._enrich(start)
+
+    def test_outside_a_workflow_each_event_gets_a_fresh_id(self) -> None:
+        with (
+            mock.patch.object(
+                events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+            ),
+            mock.patch.object(
+                events_module.activity, "info", side_effect=RuntimeError("no ctx")
+            ),
+        ):
+            ids = {
+                _enrich_event_metadata(
+                    Event(
+                        event_type="application_events",
+                        event_name="worker_start",
+                        data={},
+                    )
+                ).metadata.event_id
+                for _ in range(2)
+            }
+        assert len(ids) == 2
+        assert all(ids)
+
+    def test_preset_event_id_is_kept(self) -> None:
+        from application_sdk.contracts.events import EventMetadata
+
+        event = Event(
+            event_type="application_events",
+            event_name="worker_start",
+            data={},
+            metadata=EventMetadata(event_id="given"),
+        )
+        with (
+            mock.patch.object(
+                events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+            ),
+            mock.patch.object(
+                events_module.activity, "info", side_effect=RuntimeError("no ctx")
+            ),
+        ):
+            assert _enrich_event_metadata(event).metadata.event_id == "given"

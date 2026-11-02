@@ -64,6 +64,13 @@ class EventMetadata(BaseModel):
         activity_id: ID of the activity.
         attempt: Attempt number for the activity.
         topic_name: Name of the topic for the event.
+        event_id: Identity of the event for consumer-side dedupe, set when the
+            event is published. Deterministic inside a workflow: a hash of
+            ``workflow_id``, ``workflow_run_id`` and ``event_name`` (plus
+            ``activity_id`` and ``attempt`` for ``activity_start`` /
+            ``activity_end``, which each attempt emits afresh), so a retried
+            ``publish_event`` activity sends the same id. A random UUID outside
+            a workflow (``worker_start``, ``token_refresh``).
     """
 
     application_name: str = Field(init=True, default=APPLICATION_NAME)
@@ -83,6 +90,7 @@ class EventMetadata(BaseModel):
     attempt: int | None = Field(init=True, default=None)
 
     topic_name: str | None = Field(init=False, default=None)
+    event_id: str | None = Field(init=True, default=None)
 
 
 class EventFilter(BaseModel):

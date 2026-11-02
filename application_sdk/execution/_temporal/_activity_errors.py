@@ -55,6 +55,25 @@ class EventPublishError(DependencyUnavailableError):
 
 
 @dataclass(kw_only=True)
+class EventDeliveryUncertainError(EventPublishError):
+    """An event publish failed in a way that may still have delivered it.
+
+    An upstream HTTP status from the Dapr binding, or a direct-HTTPS fallback
+    that failed after sending, means Event Ingress may already hold the event.
+    Not retryable: events carry no server-side dedupe, so a retry could
+    deliver ``workflow_start`` / ``workflow_end`` more than once.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_EVENT_DELIVERY_UNCERTAIN"
+    default_retryable: ClassVar[bool] = False
+    message: str = (
+        "Event publish failed after it may have been delivered; not retried "
+        "to avoid a duplicate"
+    )
+    event_name: str | None = None
+
+
+@dataclass(kw_only=True)
 class TemporalAuthTokenAcquireError(DependencyUnavailableError):
     """Failed to acquire the initial Temporal OAuth auth token."""
 
