@@ -109,7 +109,9 @@ calls `conformance-reusable.yaml` on its bump PRs and leaves the input off too (
 *The SDK repo* cannot use caller skips: SDK Gate and Connector Tests Gate are inline required
 jobs, and a skipped inline job files `skipped`, which reads as a pass. So both gates run and
 **fail fast** on an un-opted bump PR, and every job they compose skips. Only the Admin role
-may comment `/gate-check` here (app repos accept Write, Maintain or Admin). It posts a
+may comment `/gate-check` here (app repos accept Write, Maintain or Admin, plus a plain
+`/gate-check` on a `bump-version*` PR from the fleet App itself, matched on the comment's
+`performed_via_github_app.id`, for the release train — FND-4037). It posts a
 `gate-check` status on the head and re-runs SDK Gate, PR Checks and CodeQL there; each reads
 the status live (`bump_pr_opt_in.py check --sha`), since a re-run replays the original event
 payload.
