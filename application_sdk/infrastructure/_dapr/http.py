@@ -62,8 +62,8 @@ _DEFAULT_TIMEOUT = 30.0
 #
 # Shared by every call on the transport (state, bindings, pub/sub, secrets), so
 # this is wider than the credential fix it shipped with — see
-# https://github.com/atlanhq/application-sdk/issues/2995. Secret GETs replay a
-# narrower status set (_SECRET_RETRY_STATUSES) over the same ladder.
+# https://github.com/atlanhq/application-sdk/issues/2995. get_secret skips the
+# replay for a "not found" 500 (see _SECRET_RETRY_STATUSES).
 _DEFAULT_RETRY_TOTAL = 3
 #: Base of the ladder above. A constructor parameter rather than a literal so a
 #: test can collapse the ladder to zero and still drive all
@@ -74,12 +74,25 @@ _DEFAULT_BACKOFF_FACTOR = 1.0
 
 #: Statuses the transport replays for state, binding and pub/sub calls.
 _RETRY_STATUSES = (500, 502, 503, 504)
-#: Statuses the transport replays for secret GETs (FND-4279). Not 500: Dapr
-#: answers an absent key with 500 ``ERR_SECRET_GET``, so replaying 500 paid the
-#: whole ladder (4 requests, 2-12s) for a definitive not-found. A 500 that
-#: does mean "not ready yet" is retried a layer up by
-#: :func:`retry_past_dapr_cold_start`, which reads Dapr's ``errorCode``.
+#: Statuses ``get_secret`` replays unconditionally (FND-4279). A 500 is
+#: replayed only when its body is not "not found": Dapr answers an absent key
+#: with 500 ``ERR_SECRET_GET``, so replaying every 500 paid the whole ladder
+#: (4 requests, 2-12s) for a definitive answer. Every other 500 (a throttle,
+#: an unrecognised backend wording) is still replayed: no layer above retries
+#: those in-process, and the legacy single-key bridge (FND-4407) keeps a
+#: throttled ref-key as the literal value, so losing the replay would send it
+#: to the source as the credential.
 _SECRET_RETRY_STATUSES = (502, 503, 504)
+
+
+class _ReplayableSecretAnswer(Exception):
+    """Raised by ``get_secret``'s response validator so the transport replays a
+    500 that is not "not found" on the usual ladder.
+
+    Never escapes: httpx-retries returns the last attempt's response without
+    validating it, so the caller sees that response's status as usual.
+    """
+
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -465,7 +478,10 @@ class BindingResult(BaseModel):
 
 
 def _build_retry(
-    retries: int, backoff_factor: float, statuses: tuple[int, ...]
+    retries: int,
+    backoff_factor: float,
+    statuses: tuple[int, ...],
+    extra_exceptions: tuple[type[Exception], ...] = (),
 ) -> Retry:
     """The transport retry policy, replaying *statuses* and transport errors."""
     return Retry(
@@ -488,6 +504,7 @@ def _build_retry(
             httpx.TimeoutException,
             httpx.NetworkError,
             httpx.RemoteProtocolError,
+            *extra_exceptions,
         ],
     )
 
@@ -511,10 +528,13 @@ class AsyncDaprClient:
             transport=httpx.AsyncHTTPTransport(limits=_HTTP_POOL_LIMITS),
             retry=_build_retry(retries, backoff_factor, _RETRY_STATUSES),
         )
-        # Passed per request on secret GETs; RetryTransport prefers
-        # request.extensions["retry"] over its own.
+        # Passed per request by get_secret (with its response validator);
+        # RetryTransport prefers request.extensions["retry"] over its own.
         self._secret_retry = _build_retry(
-            retries, backoff_factor, _SECRET_RETRY_STATUSES
+            retries,
+            backoff_factor,
+            _SECRET_RETRY_STATUSES,
+            extra_exceptions=(_ReplayableSecretAnswer,),
         )
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -563,17 +583,31 @@ class AsyncDaprClient:
     # ------------------------------------------------------------------
 
     async def get_secret(self, store_name: str, key: str) -> dict[str, str]:
+        async def replay_unless_absent(response: httpx.Response) -> None:
+            if response.status_code != 500:
+                return
+            from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — circular: client.py imports this module
+                is_secret_absent_response,
+            )
+
+            await response.aread()
+            if not is_secret_absent_response(key, response):
+                raise _ReplayableSecretAnswer
+
         resp = await self._client.get(
             SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe="")),
-            extensions={"retry": self._secret_retry},
+            extensions={
+                "retry": self._secret_retry.copy_with(
+                    validate_response=replay_unless_absent
+                )
+            },
         )
         resp.raise_for_status()
         return resp.json()
 
     async def get_bulk_secret(self, store_name: str) -> dict[str, dict[str, str]]:
         resp = await self._client.get(
-            SECRET_STORE_BULK_PATH.format(store_name=store_name),
-            extensions={"retry": self._secret_retry},
+            SECRET_STORE_BULK_PATH.format(store_name=store_name)
         )
         resp.raise_for_status()
         return resp.json()

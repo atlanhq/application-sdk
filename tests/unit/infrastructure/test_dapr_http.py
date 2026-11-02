@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -432,22 +433,35 @@ class TestRetryConfiguration:
 
 class TestSecretRequestRetryStatuses:
     """FND-4279: Dapr answers an absent secret with 500 ERR_SECRET_GET, so
-    secret GETs must not replay 500; other calls keep the full status set."""
-
-    _ABSENT_BODY = {
-        "errorCode": "ERR_SECRET_GET",
-        "message": "failed getting secret with key example-key from secret "
-        "store secretstore: secret example-key not found",
-    }
+    get_secret must not replay that answer. Every other 500 (a throttle, an
+    unrecognised wording) keeps the replay: no layer above retries it
+    in-process, and the legacy single-key bridge (FND-4407) would keep a
+    throttled ref-key as the literal value."""
 
     @staticmethod
-    def _client_answering(status: int, body: dict | None = None):
+    def _secret_get_body(key: str, backend_error: str) -> dict[str, str]:
+        return {
+            "errorCode": "ERR_SECRET_GET",
+            "message": f"failed getting secret with key {key} from secret "
+            f"store secretstore: {backend_error}",
+        }
+
+    @staticmethod
+    def _client_answering(*responses: tuple[int, Any]):
+        """A client whose sidecar returns *responses* in turn, repeating the last.
+
+        Each response is ``(status, body)``; a ``bytes`` body is sent raw, any
+        other body as JSON.
+        """
         attempts = {"n": 0}
 
         class Answer(httpx.AsyncBaseTransport):
             async def handle_async_request(self, request):
+                status, body = responses[min(attempts["n"], len(responses) - 1)]
                 attempts["n"] += 1
-                return httpx.Response(status, json=body or {}, request=request)
+                if isinstance(body, bytes):
+                    return httpx.Response(status, content=body, request=request)
+                return httpx.Response(status, json=body, request=request)
 
         # backoff_factor=0 collapses the ladder; per-request retry policies
         # come from the client, so swap only the inner transport.
@@ -455,45 +469,111 @@ class TestSecretRequestRetryStatuses:
         client._client._transport._async_transport = Answer()
         return client, attempts
 
-    async def test_absent_secret_is_not_found_after_one_request(self) -> None:
+    @pytest.mark.parametrize(
+        ("key", "backend_error"),
+        [
+            pytest.param("example-key", "secret example-key not found", id="absent"),
+            pytest.param(
+                "arn:aws:iam::123456789012:role/example",
+                'invalid resource name "arn:aws:iam::123456789012:role/example": '
+                "[may not contain '/']",
+                id="k8s-invalid-name",
+            ),
+        ],
+    )
+    async def test_not_found_answer_is_not_replayed(
+        self, key: str, backend_error: str
+    ) -> None:
         from application_sdk.infrastructure._dapr.client import (
             classify_secret_fetch_error,
         )
 
-        client, attempts = self._client_answering(500, self._ABSENT_BODY)
+        client, attempts = self._client_answering(
+            (500, self._secret_get_body(key, backend_error))
+        )
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            await client.get_secret("secretstore", "example-key")
+            await client.get_secret("secretstore", key)
         await client.close()
 
         assert attempts["n"] == 1
         assert isinstance(
-            classify_secret_fetch_error("example-key", exc_info.value),
-            SecretNotFoundError,
+            classify_secret_fetch_error(key, exc_info.value), SecretNotFoundError
         )
 
-    async def test_bulk_secret_does_not_replay_500(self) -> None:
-        client, attempts = self._client_answering(500, self._ABSENT_BODY)
-        with pytest.raises(httpx.HTTPStatusError):
-            await client.get_bulk_secret("secretstore")
-        await client.close()
-        assert attempts["n"] == 1
+    async def test_throttled_answer_is_still_replayed(self) -> None:
+        from application_sdk.infrastructure._dapr.client import (
+            classify_secret_fetch_error,
+        )
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
 
-    @pytest.mark.parametrize("status", [502, 503, 504])
-    async def test_secret_gateway_errors_still_replayed(self, status: int) -> None:
+        body = self._secret_get_body(
+            "example-key", "couldn't get secret: ThrottlingException: Rate exceeded"
+        )
+        client, attempts = self._client_answering((500, body))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.get_secret("secretstore", "example-key")
+        await client.close()
+
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+        # The last attempt's response reaches the classifier intact.
+        assert isinstance(
+            classify_secret_fetch_error("example-key", exc_info.value),
+            SecretStoreTransientError,
+        )
+
+    async def test_throttle_that_clears_returns_the_secret(self) -> None:
+        body = self._secret_get_body(
+            "example-key", "couldn't get secret: ThrottlingException: Rate exceeded"
+        )
+        client, attempts = self._client_answering(
+            (500, body), (200, {"example-key": "resolved"})
+        )
+        result = await client.get_secret("secretstore", "example-key")
+        await client.close()
+
+        assert result == {"example-key": "resolved"}
+        assert attempts["n"] == 2
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(b"<html>upstream error</html>", id="non-json"),
+            pytest.param({"errorCode": "ERR_SOMETHING_ELSE"}, id="other-code"),
+        ],
+    )
+    async def test_unrecognised_500_is_still_replayed(self, body: Any) -> None:
         from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
 
-        client, attempts = self._client_answering(status)
+        client, attempts = self._client_answering((500, body))
         with pytest.raises(httpx.HTTPStatusError):
             await client.get_secret("secretstore", "example-key")
         await client.close()
         assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
 
-    async def test_state_get_still_replays_500(self) -> None:
+    @pytest.mark.parametrize("status", [502, 503, 504])
+    async def test_secret_gateway_errors_still_replayed(self, status: int) -> None:
         from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
 
-        client, attempts = self._client_answering(500)
+        client, attempts = self._client_answering((status, {}))
         with pytest.raises(httpx.HTTPStatusError):
-            await client.get_state("statestore", "example-key")
+            await client.get_secret("secretstore", "example-key")
+        await client.close()
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            pytest.param(lambda c: c.get_state("statestore", "k"), id="state"),
+            pytest.param(lambda c: c.get_bulk_secret("secretstore"), id="bulk-secret"),
+        ],
+    )
+    async def test_other_gets_still_replay_500(self, call) -> None:
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        client, attempts = self._client_answering((500, {}))
+        with pytest.raises(httpx.HTTPStatusError):
+            await call(client)
         await client.close()
         assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
 

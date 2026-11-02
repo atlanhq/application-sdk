@@ -307,6 +307,27 @@ def _is_secret_absent_message(name: str, message: object) -> bool:
     return _SECRET_ABSENT_MESSAGE_RE.search(_backend_error(name, message)) is not None
 
 
+def is_secret_absent_response(name: str, response: httpx.Response) -> bool:
+    """Whether a Dapr secrets-API response says the key *name* doesn't exist.
+
+    True only for a 5xx ``ERR_SECRET_GET`` whose message has a not-found shape,
+    the same test :func:`classify_secret_fetch_error` uses for
+    :class:`SecretNotFoundError`. *response*'s body must already be read.
+    """
+    if response.status_code < 500:
+        return False
+    try:
+        body = orjson.loads(response.content)
+    # conformance: ignore[E009] a non-JSON body is not a not-found answer; the caller replays it
+    except orjson.JSONDecodeError:
+        return False
+    return (
+        isinstance(body, dict)
+        and body.get("errorCode") == _ERR_SECRET_GET
+        and _is_secret_absent_message(name, body.get("message"))
+    )
+
+
 def _is_secret_transient_message(name: str, message: object) -> bool:
     """Whether an ``ERR_SECRET_GET`` message is a temporary backend failure."""
     return (
