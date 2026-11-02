@@ -1271,15 +1271,21 @@ class TestDownloadOnTheSharedEngine:
         self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from application_sdk.storage.errors import StorageError
+        from application_sdk.testing.fixtures import _redirect_temporary_path
 
         scratch = tmp_path / "tmp"
         scratch.mkdir()
         monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        # Path-less downloads land under TEMPORARY_PATH (FND-4282), so that is
+        # where a leaked temp file would be.
+        sdk_tmp = tmp_path / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
 
         with pytest.raises(StorageError):
             await download("missing/key.json", store=store)
 
         assert list(scratch.iterdir()) == []
+        assert [p for p in sdk_tmp.rglob("*") if p.is_file()] == []
 
     async def test_a_cancelled_download_leaves_no_temp_file(
         self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -1287,11 +1293,14 @@ class TestDownloadOnTheSharedEngine:
         import asyncio
 
         from application_sdk.storage.ops import _put
+        from application_sdk.testing.fixtures import _redirect_temporary_path
 
         await _put("cx/key.json", b"{}", store)
         scratch = tmp_path / "tmp"
         scratch.mkdir()
         monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        sdk_tmp = tmp_path / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
 
         with (
             patch(
@@ -1303,6 +1312,39 @@ class TestDownloadOnTheSharedEngine:
             await download("cx/key.json", store=store)
 
         assert list(scratch.iterdir()) == []
+        assert [p for p in sdk_tmp.rglob("*") if p.is_file()] == []
+
+    async def test_path_less_downloads_land_in_the_run_scratch_dir(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-4282: no local_path → under the run's dir, which cleanup_files sweeps."""
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal.activity_utils import run_temp_dir
+        from application_sdk.storage.ops import _put
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        _redirect_temporary_path(monkeypatch, str(tmp_path / "sdk-tmp"))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
+        )
+        await _put("pl/one.json", b"{}", store)
+        await _put("pd/a.txt", b"a", store)
+
+        file_dl = await download("pl/one.json", store=store)
+        dir_dl = await download("pd/", store=store)
+
+        run_dir = Path(run_temp_dir()).resolve()
+        assert run_dir.is_relative_to((tmp_path / "sdk-tmp").resolve())
+        assert file_dl.ref.local_path is not None
+        assert dir_dl.ref.local_path is not None
+        assert Path(file_dl.ref.local_path).resolve().parent == run_dir
+        assert Path(dir_dl.ref.local_path).resolve().parent == run_dir
+        assert (Path(dir_dl.ref.local_path) / "a.txt").read_bytes() == b"a"
 
 
 class TestUploadOnTheSharedEngine:

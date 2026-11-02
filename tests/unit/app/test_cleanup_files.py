@@ -122,6 +122,59 @@ class TestCleanupFiles:
         assert result.path_results[missing] is True
 
     @pytest.mark.asyncio
+    async def test_default_sweep_removes_path_less_materialised_refs(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-4282: refs with only a ``storage_path`` go with the run.
+
+        Both shapes materialise under the run's scratch directory, and the
+        default sweep — no ``extra_paths``, no ``CLEANUP_BASE_PATHS`` — removes
+        them without either being tracked.
+        """
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.reference import materialize_file_reference
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        sdk_tmp = tmp_path / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
+        )
+        store = create_memory_store()
+        await _put("k/one.bin", b"one", store, normalize=False)
+        await _put("d/a.txt", b"a", store, normalize=False)
+        file_ref = await materialize_file_reference(
+            store, FileReference(is_durable=True, storage_path="k/one.bin")
+        )
+        dir_ref = await materialize_file_reference(
+            store, FileReference(is_durable=True, storage_path="d/")
+        )
+        assert file_ref.local_path is not None and dir_ref.local_path is not None
+        for local in (file_ref.local_path, dir_ref.local_path):
+            assert os.path.realpath(local).startswith(os.path.realpath(sdk_tmp))
+            assert os.path.exists(local)
+
+        app = _CleanupApp()
+        with (
+            mock.patch(
+                "application_sdk.app.base.TaskStateAccessor.get", return_value=None
+            ),
+            mock.patch("application_sdk.constants.CLEANUP_BASE_PATHS", []),
+        ):
+            result = await app.cleanup_files(CleanupInput())
+
+        assert not os.path.exists(file_ref.local_path)
+        assert not os.path.exists(dir_ref.local_path)
+        assert all(result.path_results.values())
+
+    @pytest.mark.asyncio
     async def test_extra_paths_override_defaults(self, tmp_path: Any) -> None:
         extra_dir = tmp_path / "extra"
         extra_dir.mkdir()

@@ -893,8 +893,11 @@ async def materialize_file_reference(
     Args:
         store: Source obstore store.
         ref: A durable ``FileReference`` with ``storage_path`` set.
-        local_dir: Optional directory for temp files/dirs (uses the system
-            temp dir if ``None``).
+        local_dir: Optional directory for temp files/dirs. If ``None``, a
+            ref with no ``local_path`` lands under the run's scratch directory
+            (``{TEMPORARY_PATH}/{build_output_path()}``), which
+            ``cleanup_files`` removes; outside an activity, under
+            ``{TEMPORARY_PATH}/file-refs``.
 
     Returns:
         A ``FileReference`` with ``local_path`` pointing to the verified
@@ -1066,6 +1069,40 @@ async def materialize_file_reference(
         return out
 
 
+#: Under ``TEMPORARY_PATH``, where a path-less ref materialises when there is no
+#: run to scope it to (a script, a test, a handler outside any activity).
+_UNSCOPED_MATERIALIZE_DIRNAME = "file-refs"
+
+
+def _default_materialize_dir() -> str:
+    """The directory a ref with no ``local_path`` and no ``local_dir`` lands in.
+
+    Inside an activity it is the run's scratch directory
+    (``run_temp_dir()``), which ``cleanup_files`` removes by default, so a
+    hand-off that carries only a ``storage_path`` does not outlive its run on
+    the pod's disk (FND-4282). Outside one there is no run to clean up after,
+    so it is ``{TEMPORARY_PATH}/file-refs`` — still under the SDK's temp root,
+    never the system temp directory. Created if missing.
+    """
+    from application_sdk import (  # noqa: PLC0415 — read at call time so a TEMPORARY_PATH redirect is honoured
+        constants,
+    )
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415 — circular: execution imports storage
+        WorkflowIdError,
+        WorkflowRunIdError,
+    )
+    from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: execution imports storage
+        run_temp_dir,
+    )
+
+    try:
+        root = run_temp_dir()
+    except (WorkflowIdError, WorkflowRunIdError):
+        root = os.path.join(constants.TEMPORARY_PATH, _UNSCOPED_MATERIALIZE_DIRNAME)
+    Path(root).mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _resolve_local_directory(ref: FileReference, local_dir: str | None) -> str:
     """Pick and create the local directory a directory ref materialises into."""
     if ref.local_path is not None:
@@ -1073,7 +1110,7 @@ def _resolve_local_directory(ref: FileReference, local_dir: str | None) -> str:
     elif local_dir is not None:
         local_directory = local_dir
     else:
-        local_directory = tempfile.mkdtemp()
+        local_directory = tempfile.mkdtemp(dir=_default_materialize_dir())
     Path(local_directory).mkdir(parents=True, exist_ok=True)
     return local_directory
 
@@ -1348,7 +1385,9 @@ async def _materialize_single_file(
             Path(local_dir).mkdir(parents=True, exist_ok=True)
             fd, out_path = tempfile.mkstemp(suffix=suffix, dir=local_dir)
         else:
-            fd, out_path = tempfile.mkstemp(suffix=suffix)
+            fd, out_path = tempfile.mkstemp(
+                suffix=suffix, dir=_default_materialize_dir()
+            )
         os.close(
             fd
         )  # close immediately; this only reserves the destination name — the download stages in .sdk-partial/ and publishes over it

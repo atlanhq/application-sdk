@@ -737,7 +737,13 @@ class TestMaterializeFileReference:
         assert result.local_path.endswith(".bin")
 
     async def test_single_file_no_local_path_no_local_dir(self, store) -> None:
-        """Without local_path or local_dir, uses system tmp."""
+        """Without local_path or local_dir, and no run: under TEMPORARY_PATH.
+
+        FND-4282: this used to be the system temp directory, which no cleanup
+        root covers.
+        """
+        from application_sdk import constants
+
         await _put("k/x.txt", b"sys-temp", store, normalize=False)
         await _put(
             "k/x.txt.sha256",
@@ -749,9 +755,46 @@ class TestMaterializeFileReference:
         result = await materialize_file_reference(store, ref)
         assert result.local_path is not None
         assert Path(result.local_path).read_bytes() == b"sys-temp"
-        # Cleanup
-        Path(result.local_path).unlink(missing_ok=True)
-        Path(result.local_path + ".sha256").unlink(missing_ok=True)
+        unscoped = (Path(constants.TEMPORARY_PATH) / "file-refs").resolve()
+        assert Path(result.local_path).resolve().parent == unscoped
+
+    async def test_path_less_refs_land_in_the_run_scratch_dir(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-4282: inside a run, both shapes land where cleanup_files sweeps."""
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal.activity_utils import run_temp_dir
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        _redirect_temporary_path(monkeypatch, str(tmp_path / "sdk-tmp"))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
+        )
+        await _put("k/one.bin", b"one", store, normalize=False)
+        await _put("d/a.txt", b"a", store, normalize=False)
+        await _put("d/b.txt", b"b", store, normalize=False)
+
+        file_out = await materialize_file_reference(
+            store, FileReference(is_durable=True, storage_path="k/one.bin")
+        )
+        dir_out = await materialize_file_reference(
+            store,
+            FileReference(is_durable=True, storage_path="d/", file_count=2),
+        )
+
+        run_dir = Path(run_temp_dir()).resolve()
+        assert run_dir.is_relative_to((tmp_path / "sdk-tmp").resolve())
+        assert run_dir.parts[-2:] == ("wf-1", "run-1")
+        assert file_out.local_path is not None and dir_out.local_path is not None
+        assert Path(file_out.local_path).resolve().parent == run_dir
+        assert Path(dir_out.local_path).resolve().parent == run_dir
+        assert Path(file_out.local_path).read_bytes() == b"one"
+        assert (Path(dir_out.local_path) / "a.txt").read_bytes() == b"a"
 
     async def test_single_file_not_found_raises(self, store, tmp_path) -> None:
         """Storage path absent → StorageNotFoundError.

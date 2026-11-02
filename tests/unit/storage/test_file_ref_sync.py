@@ -208,6 +208,52 @@ class TestPersistAndMaterialize:
             os.unlink(path)
 
 
+class TestPathLessMaterialiseLocation:
+    """FND-4282: the interceptor never passes ``local_dir``.
+
+    A ref carrying only a ``storage_path`` must land under the run's scratch
+    directory — the one ``cleanup_files`` removes — not the system temp dir.
+    """
+
+    async def test_file_and_directory_refs_land_in_the_run_scratch_dir(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal.activity_utils import run_temp_dir
+        from application_sdk.storage.ops import _put
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        _redirect_temporary_path(monkeypatch, str(tmp_path / "sdk-tmp"))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
+        )
+        store = create_memory_store()
+        await _put("hand/off.bin", b"file", store, normalize=False)
+        await _put("hand/dir/a.txt", b"a", store, normalize=False)
+
+        file_in = await materialize_file_refs(
+            store,
+            _TaskInput(ref=FileReference(is_durable=True, storage_path="hand/off.bin")),
+        )
+        dir_in = await materialize_file_refs(
+            store,
+            _TaskInput(ref=FileReference(is_durable=True, storage_path="hand/dir/")),
+        )
+
+        run_dir = Path(run_temp_dir()).resolve()
+        assert run_dir.is_relative_to((tmp_path / "sdk-tmp").resolve())
+        for ref in (file_in.ref, dir_in.ref):
+            assert ref.local_path is not None
+            assert Path(ref.local_path).resolve().parent == run_dir
+        assert Path(file_in.ref.local_path).read_bytes() == b"file"
+        assert (Path(dir_in.ref.local_path) / "a.txt").read_bytes() == b"a"
+
+
 class TestDirectoryPersistMaterialize:
     async def test_persist_directory_sets_file_count(self, tmp_path) -> None:
         store = create_memory_store()

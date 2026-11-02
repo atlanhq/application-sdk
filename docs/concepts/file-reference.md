@@ -291,7 +291,13 @@ Input. For each durable ref that needs downloading (file absent, marker missing,
 size different from `size_bytes`, or file hash different from the marker), the
 SDK:
 
-1. Downloads the file from the store to a temp path under `TEMPORARY_PATH`.
+1. Downloads the file from the store. A ref with no `local_path` (the usual
+   hand-off shape: only a `storage_path`) gets a fresh temp name under the
+   run's scratch directory, `{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}/`,
+   which `cleanup_files()` removes when the run completes. Directory refs get a
+   fresh subdirectory there. Outside an activity there is no run to scope to,
+   so the destination is `{TEMPORARY_PATH}/file-refs/`. Either way it is never
+   the system temp directory.
 2. Verifies the downloaded content SHA-256 against the stored sidecar.
 3. Writes a fresh local sidecar.
 4. Sets `local_path` on the ref so your task sees a ready-to-use local file.

@@ -32,12 +32,14 @@
     from ``input.workflow_id``.
 """
 
+import os
 import warnings
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from temporalio import activity
 
+from application_sdk import constants
 from application_sdk.app.registry import AppRegistry
 from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.observability.logger_adaptor import get_logger
@@ -171,6 +173,22 @@ def build_output_path() -> str:
         workflow_id=get_workflow_id(),
         run_id=get_workflow_run_id(),
     )
+
+
+def run_temp_dir() -> str:
+    """SDK-internal: the local scratch directory of the current run.
+
+    ``{TEMPORARY_PATH}/{build_output_path()}``, e.g.
+    ``./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456``. It is the
+    directory ``cleanup_files`` removes by default, so anything the SDK writes
+    under it on the run's behalf goes with the run. ``TEMPORARY_PATH`` is read
+    at call time so a redirect of the constant is honoured.
+
+    Raises:
+        WorkflowIdError: Outside an activity context.
+        WorkflowRunIdError: Outside a workflow-backed activity.
+    """
+    return os.path.join(constants.TEMPORARY_PATH, build_output_path())
 
 
 def get_object_store_prefix(path: str) -> str:
