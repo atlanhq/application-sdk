@@ -736,7 +736,10 @@ async def run_in_thread(
       ``contextvars.copy_context()``. Mutations inside the thread stay
       isolated from the caller (copy semantics).
     - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
-      Temporal's activity pool, to avoid deadlocking the worker.
+      Temporal's activity pool, to avoid deadlocking the worker. Calls already
+      on an ``sdk-blocking-*`` thread run inline in a copied context: a nested
+      event loop must not submit work behind the pool thread waiting for it.
+      Nested calls reuse that thread's offload slot.
     - Each call is charged to an app: the handler invocation's app when one is
       bound (see :func:`offload_owner`), else the process's
       ``ATLAN_APPLICATION_NAME``. When ``ATLAN_OFFLOAD_MAX_THREADS_PER_APP`` is set,
@@ -815,6 +818,13 @@ async def run_in_thread(
     scopes = _OFFLOAD_SCOPES.get()
     if scopes:
         call = _tracked_offload(call, scopes, label)
+    # A blocking-pool caller may drive a nested event loop (e.g. a storage
+    # download that offloads fsync). Submitting again can deadlock a saturated
+    # pool: every thread waits for work queued behind itself. Reuse the current
+    # thread and its slot, retaining context isolation, tracking and the hold.
+    if threading.current_thread().name.startswith("sdk-blocking-"):
+        with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
+            return call()
     cancel_handle = _bound_handle(func)
     # The app's own pool on the consolidated host (``blocking_executor``), else
     # the process-wide one.
