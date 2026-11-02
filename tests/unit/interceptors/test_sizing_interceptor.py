@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -49,6 +51,11 @@ class MockActivityInfo:
     workflow_run_id: str = "run-id"
     workflow_type: str = "MergeWorkflow"
     attempt: int = 1
+    started_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    scheduled_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    start_to_close_timeout: timedelta | None = None
+    schedule_to_close_timeout: timedelta | None = None
+    heartbeat_timeout: timedelta | None = None
 
 
 @dataclass
@@ -507,6 +514,146 @@ class TestTelemetryNeverChangesTheOutcome:
 
         report_input_bytes(100)  # would land in a leaked collector
         assert sizing_inputs_module._current_inputs.get() is None
+
+
+_NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestWalkBudget:
+    """The walk runs inside the attempt, so it may never outlast the attempt."""
+
+    def test_no_timeouts_gets_the_fixed_cap(self):
+        info = MockActivityInfo(started_time=_NOW, scheduled_time=_NOW)
+        budget = sizing_interceptor_module._walk_budget_seconds(info, _NOW)
+        assert budget == sizing_interceptor_module.DESCRIBE_INPUTS_TIMEOUT_SECONDS
+
+    def test_start_to_close_bounds_the_walk(self):
+        """5s start_to_close, handler returned at 1s: 3s left after the margin,
+        not the fixed 10s that would run past the deadline."""
+        info = MockActivityInfo(
+            started_time=_NOW - timedelta(seconds=1),
+            start_to_close_timeout=timedelta(seconds=5),
+        )
+        budget = sizing_interceptor_module._walk_budget_seconds(info, _NOW)
+        assert budget == pytest.approx(3.0)
+
+    def test_the_tighter_of_the_two_deadlines_wins(self):
+        info = MockActivityInfo(
+            started_time=_NOW,
+            start_to_close_timeout=timedelta(seconds=60),
+            scheduled_time=_NOW - timedelta(seconds=58),
+            schedule_to_close_timeout=timedelta(seconds=60),
+        )
+        budget = sizing_interceptor_module._walk_budget_seconds(info, _NOW)
+        assert budget == pytest.approx(1.0)
+
+    def test_heartbeat_timeout_bounds_the_walk(self):
+        info = MockActivityInfo(heartbeat_timeout=timedelta(seconds=6))
+        budget = sizing_interceptor_module._walk_budget_seconds(info, _NOW)
+        assert budget == pytest.approx(3.0)
+
+    def test_a_naive_server_time_is_read_as_utc(self):
+        info = MockActivityInfo(
+            started_time=(_NOW - timedelta(seconds=1)).replace(tzinfo=None),
+            start_to_close_timeout=timedelta(seconds=5),
+        )
+        budget = sizing_interceptor_module._walk_budget_seconds(info, _NOW)
+        assert budget == pytest.approx(3.0)
+
+
+class TestWalkIsolation:
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value="ok")
+        return n
+
+    @staticmethod
+    def _interceptor(mock_next):
+        return _SizingActivityInboundInterceptor(mock_next, 1.0, frozenset({"merge"}))
+
+    @staticmethod
+    def _input():
+        return MockExecuteActivityInput(args=[object(), object()])
+
+    async def test_no_time_left_skips_the_walk(self, mock_next):
+        info = MockActivityInfo(
+            started_time=datetime.now(timezone.utc) - timedelta(seconds=5),
+            start_to_close_timeout=timedelta(seconds=5),
+        )
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(trace)),
+            patch(_DESCRIBE_TARGET) as mock_describe,
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = info
+            result = await self._interceptor(mock_next).execute_activity(self._input())
+
+        assert result == "ok"
+        mock_describe.assert_not_called()
+        obs = mock_record.call_args[0][0]
+        assert obs.input_bytes is None
+        assert obs.peak_memory_bytes == 1024
+
+    async def test_the_walk_runs_on_its_own_pool(self, mock_next):
+        """A stuck walk must pin a sizing thread, not a shared offload slot."""
+        threads: list[str] = []
+
+        def _record_thread(_input_data):
+            threads.append(threading.current_thread().name)
+            return None
+
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(ContainerTrace(peak_memory_bytes=1))),
+            patch(_DESCRIBE_TARGET, _record_thread),
+            patch(_RECORD_TARGET),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            await self._interceptor(mock_next).execute_activity(self._input())
+
+        assert len(threads) == 1
+        assert threads[0].startswith("sdk-sizing-walk-")
+
+    async def test_a_stuck_walk_skips_later_walks(self, mock_next, monkeypatch):
+        """Nothing queues behind a walk that never returns: the next activity
+        records input size unknown at once instead of waiting out its budget."""
+        monkeypatch.setattr(
+            sizing_interceptor_module, "DESCRIBE_INPUTS_TIMEOUT_SECONDS", 0.05
+        )
+        release = threading.Event()
+        calls: list[int] = []
+
+        def _stuck(_input_data):
+            calls.append(1)
+            release.wait(timeout=10)
+            return None
+
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        try:
+            with (
+                patch(_ACTIVITY_TARGET) as mock_act,
+                patch(_TRACKER_TARGET, _tracker(trace)),
+                patch(_DESCRIBE_TARGET, _stuck),
+                patch(_RECORD_TARGET) as mock_record,
+            ):
+                mock_act.info.return_value = MockActivityInfo()
+                interceptor = self._interceptor(mock_next)
+                assert await interceptor.execute_activity(self._input()) == "ok"
+                assert await interceptor.execute_activity(self._input()) == "ok"
+
+            assert len(calls) == 1
+            assert mock_record.call_count == 2
+            assert all(c[0][0].input_bytes is None for c in mock_record.call_args_list)
+        finally:
+            release.set()
+            # Let the stuck thread finish so later tests see an idle pool.
+            await asyncio.get_running_loop().run_in_executor(
+                sizing_interceptor_module._SIZING_WALK_EXECUTOR, lambda: None
+            )
+        assert not sizing_interceptor_module._WALKS.busy()
 
 
 class TestAgainstTheRealTracker:

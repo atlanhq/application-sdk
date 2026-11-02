@@ -5,8 +5,11 @@ exactly the teams whose data is needed. Ships off; allow-list only.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import os
+import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from temporalio import activity
@@ -16,7 +19,7 @@ from temporalio.worker import (
     Interceptor,
 )
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import blocking_executor, run_in_thread
 from application_sdk.observability.cgroup import ContainerTrace, track_container_usage
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.sizing import SizingObservation, record_observation
@@ -38,10 +41,83 @@ def _pod_name() -> str | None:
     return os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME") or None
 
 
-#: Budget for sizing the input after the activity returns. The walk is capped at
-#: 10k files, but a slow volume can still take long enough to push the attempt
-#: toward ``start_to_close``; past this, input size is recorded as unknown.
+#: Most time the input walk after the activity returns may take. The walk is
+#: capped at 10k files, but a slow volume can still be slow; past this, input
+#: size is recorded as unknown. Never more than the attempt has left: see
+#: ``_walk_budget_seconds``.
 DESCRIBE_INPUTS_TIMEOUT_SECONDS = 10.0
+
+#: Left unspent before the attempt's deadline, for completing the activity and
+#: for clock skew between the worker and the Temporal server that set it.
+_DEADLINE_MARGIN_SECONDS = 1.0
+
+# The walk's own pool, not the shared ``run_in_thread`` one. A timed-out walk
+# cannot be stopped, and one stat on an unresponsive mount can block for good:
+# here that pins one sizing thread, never a slot unrelated offloads need. One
+# worker, because ``_WALKS`` skips a walk while another is still running, so
+# nothing queues behind a stuck one.
+_SIZING_WALK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="sdk-sizing-walk-"
+)
+
+
+class _WalkTracker:
+    """Whether a walk is still running on its thread, even after its caller
+    stopped waiting for it. Counted by the thread itself, so an abandoned walk
+    stays visible until it really returns.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._running = 0
+
+    def busy(self) -> bool:
+        with self._lock:
+            return self._running > 0
+
+    def describe(self, input_data: Any) -> InputSize | None:
+        with self._lock:
+            self._running += 1
+        try:
+            return describe_inputs(input_data)
+        finally:
+            with self._lock:
+                self._running -= 1
+
+
+_WALKS = _WalkTracker()
+
+
+def _utc(moment: datetime) -> datetime:
+    """Temporal's times are UTC; treat a naive one as UTC rather than fail on it."""
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _walk_budget_seconds(info: Any, now: datetime) -> float:
+    """Seconds the input walk may take, bounded by the attempt's own deadlines.
+
+    The walk runs inside the attempt: running past ``start_to_close`` or
+    ``schedule_to_close`` lets Temporal time the attempt out and retry work that
+    already completed. The activity's auto-heartbeat has stopped by now, so the
+    walk also stays within half the heartbeat timeout (the last beat may have
+    been up to one interval ago). ``<= 0`` means there is no time to walk.
+    """
+    budget = DESCRIBE_INPUTS_TIMEOUT_SECONDS
+    now = _utc(now)
+    if info.start_to_close_timeout is not None:
+        deadline = _utc(info.started_time) + info.start_to_close_timeout
+        budget = min(
+            budget, (deadline - now).total_seconds() - _DEADLINE_MARGIN_SECONDS
+        )
+    if info.schedule_to_close_timeout is not None:
+        deadline = _utc(info.scheduled_time) + info.schedule_to_close_timeout
+        budget = min(
+            budget, (deadline - now).total_seconds() - _DEADLINE_MARGIN_SECONDS
+        )
+    if info.heartbeat_timeout is not None:
+        budget = min(budget, info.heartbeat_timeout.total_seconds() / 2)
+    return budget
+
 
 #: Selects every activity. For a discovery pass on a test tenant, not production.
 WILDCARD = "*"
@@ -191,28 +267,43 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
     async def _describe_inputs_bounded(
         self, input: ExecuteActivityInput, info: Any
     ) -> InputSize | None:
-        """Input size, or ``None`` (unknown) if the walk outlasts its budget.
+        """Input size, or ``None`` (unknown) if there is no time or thread for it.
 
         args[1] is the Input (args[0] is TaskContext). In a thread: with no
         reported reads it walks every materialised FileReference, up to 10k files
         (FND-4084). The context is copied, so the collector begin_collection()
-        set is still the one it reads. Bounded because the attempt's
-        ``start_to_close`` is still running while it walks.
+        set is still the one it reads.
         """
         input_data = input.args[1] if len(input.args) > 1 else None
-        try:
-            return await asyncio.wait_for(
-                run_in_thread(describe_inputs, input_data),
-                timeout=DESCRIBE_INPUTS_TIMEOUT_SECONDS,
+        budget = _walk_budget_seconds(info, datetime.now(timezone.utc))
+        if budget <= 0:
+            logger.warning(
+                "No time left before activity %s's deadline to size its input; "
+                "recording the observation with input size unknown",
+                info.activity_type,
             )
+            return None
+        if _WALKS.busy():
+            logger.warning(
+                "A previous input walk is still running (an unresponsive "
+                "filesystem?); recording activity %s's observation with input "
+                "size unknown",
+                info.activity_type,
+            )
+            return None
+        try:
+            with blocking_executor(_SIZING_WALK_EXECUTOR):
+                return await asyncio.wait_for(
+                    run_in_thread(_WALKS.describe, input_data), timeout=budget
+                )
         except TimeoutError:
-            # The thread cannot be interrupted; it finishes in the background,
-            # bounded by the walk's file cap, and its result is discarded.
+            # The thread cannot be interrupted; it finishes on its own pool, and
+            # later walks are skipped until it does.
             logger.warning(
                 "Input sizing for activity %s exceeded %.1fs; "
                 "recording the observation with input size unknown",
                 info.activity_type,
-                DESCRIBE_INPUTS_TIMEOUT_SECONDS,
+                budget,
                 exc_info=True,
             )
             return None
