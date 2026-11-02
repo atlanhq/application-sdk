@@ -32,7 +32,6 @@ Example:
 """
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from azure.core.credentials import TokenCredential
@@ -93,7 +92,7 @@ class AzureClient(ClientInterface):
         credential (DefaultAzureCredential): Azure credential instance
         auth_provider (AzureAuthProvider): Authentication provider instance
         _services (Dict[str, Any]): Cache of service clients
-        _executor (ThreadPoolExecutor): Thread pool for async operations
+        _closed (bool): Whether close() has run; a closed client cannot be reloaded
         _connection_health (bool): Connection health status
     """
 
@@ -109,7 +108,9 @@ class AzureClient(ClientInterface):
         Args:
             credentials (Optional[Dict[str, Any]]): Azure Service Principal credentials.
                 Must include tenant_id, client_id, and client_secret.
-            max_workers (int): Maximum number of worker threads for async operations.
+            max_workers (int): Ignored. The client never used its own thread
+                pool (blocking SDK calls go through ``run_in_thread``); kept so
+                existing callers that pass it keep working.
             **kwargs: Additional keyword arguments passed to service clients.
         """
         self.credentials = credentials or {}
@@ -117,9 +118,11 @@ class AzureClient(ClientInterface):
         self.credential: TokenCredential | None = None
         self.auth_provider = AzureAuthProvider()
         self._services: dict[str, Any] = {}
-        self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
-            max_workers=max_workers
-        )
+        self._closed = False
+        # Strong reference to a close() the sync ``__exit__`` scheduled on a
+        # running loop; the loop holds tasks weakly, so an unreferenced one
+        # can be garbage-collected before it runs.
+        self._close_task: asyncio.Task[None] | None = None
         self._connection_health = False
         self._kwargs = kwargs
 
@@ -139,7 +142,7 @@ class AzureClient(ClientInterface):
         if credentials:
             self.credentials = credentials
 
-        if self._executor is None:
+        if self._closed:
             raise AzureClientAuthError(
                 message="Azure client has been closed; instantiate a new AzureClient",
             )
@@ -224,13 +227,19 @@ class AzureClient(ClientInterface):
             # Clear service cache
             self._services.clear()
 
-            # Shutdown executor
-            # In a thread: wait=True joins the pool's workers, which holds the
-            # loop for as long as any submitted call runs (FND-4084). Detached
-            # first, so a concurrent close() does not shut it down twice.
-            executor, self._executor = self._executor, None
-            if executor is not None:
-                await run_in_thread(executor.shutdown, wait=True)
+            self._closed = True
+
+            # Close the credential: it owns an HTTP transport (connection
+            # pool) that otherwise lives until garbage collection. Detached
+            # first, so a concurrent close() does not close it twice. In a
+            # thread: the sync credential's close() tears down its transport.
+            credential, self.credential = self.credential, None
+            close_credential = getattr(credential, "close", None)
+            if callable(close_credential):
+                try:
+                    await run_in_thread(close_credential)
+                except Exception:
+                    logger.warning("Error closing Azure credential", exc_info=True)
 
             # Reset connection health
             self._connection_health = False
@@ -332,23 +341,24 @@ class AzureClient(ClientInterface):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        # Note: This is a synchronous context manager.
-        # For proper async cleanup, use the async context manager instead.
-        # This method is kept for backward compatibility but doesn't guarantee cleanup.
-        logger.warning(
-            "Using synchronous context manager. For proper async cleanup, "
-            "use 'async with AzureClient() as client:' instead."
-        )
-        # Schedule cleanup but don't wait for it
+        """Context manager exit.
+
+        Prefer ``async with AzureClient() as client:``. Outside an event loop
+        this runs ``close()`` to completion. Inside a running loop a sync exit
+        cannot wait for an async close, so it schedules ``close()`` as a task
+        (held on ``self``, so it is not garbage-collected before it runs) and
+        returns before cleanup finishes.
+        """
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.close())
         except RuntimeError:
-            # No event loop running, can't schedule async cleanup
-            logger.warning(
-                "No event loop running, async cleanup not possible", exc_info=True
-            )
+            asyncio.run(self.close())
+            return
+        logger.warning(
+            "AzureClient used as a sync context manager inside a running event "
+            "loop; close() is scheduled, not awaited. Use 'async with' instead."
+        )
+        self._close_task = loop.create_task(self.close())
 
     async def __aenter__(self):
         """Async context manager entry."""

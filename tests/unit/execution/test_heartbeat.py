@@ -80,6 +80,11 @@ def fake_temporalio(monkeypatch):
     return fake_activity
 
 
+async def _build_controller() -> TemporalHeartbeatController:
+    """Construct on a running loop, as the activity wrapper does."""
+    return TemporalHeartbeatController()
+
+
 class TestTemporalHeartbeatController:
     def test_heartbeat_calls_activity_heartbeat(self, fake_temporalio) -> None:
         """Exercises the function-local import of ``temporalio.activity``."""
@@ -139,6 +144,35 @@ class TestTemporalHeartbeatController:
         ctl = TemporalHeartbeatController()
         ctl.heartbeat("inline")
         fake_temporalio.heartbeat.assert_called_once_with("inline")
+
+    def test_heartbeat_from_a_thread_after_the_loop_closed_is_dropped(
+        self, fake_temporalio
+    ) -> None:
+        """At shutdown the loop can close under a ``run_in_thread`` worker.
+
+        The beat cannot be delivered; it must be dropped, not raised into
+        the user's thread as ``RuntimeError: Event loop is closed``.
+        """
+        loop = asyncio.new_event_loop()
+        ctl = loop.run_until_complete(_build_controller())
+        loop.close()
+
+        errors: list[BaseException] = []
+
+        def _in_thread() -> None:
+            try:
+                ctl.heartbeat("late", 1)
+                ctl.heartbeat_keepalive()
+            except BaseException as exc:  # noqa: BLE001 — the assertion is "nothing escapes"
+                errors.append(exc)
+
+        worker = threading.Thread(target=_in_thread)
+        worker.start()
+        worker.join(timeout=5)
+
+        assert errors == []
+        fake_temporalio.heartbeat.assert_not_called()
+        assert ctl.last_sent_details() == ("late", 1)
 
 
 # ---------------------------------------------------------------------------

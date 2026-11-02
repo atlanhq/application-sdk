@@ -52,7 +52,8 @@ Proxy / TLS (obstore reads none of these itself, so we plumb them explicitly):
 Retry config (passed via ``S3Store(retry_config=…)``):
 
 * ``ATLAN_OBSTORE_RETRY_MAX_RETRIES`` — overrides obstore's default of 10.
-* ``ATLAN_OBSTORE_RETRY_TIMEOUT`` — overrides obstore's default of 3 min.
+* ``ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS`` — overrides obstore's default of 3 min
+  (integer seconds).
 
 We deliberately do **not** add a Python-level retry loop on top — the Rust
 layer already retries with backoff and we'd just multiply the failure time

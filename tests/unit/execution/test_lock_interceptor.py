@@ -465,3 +465,121 @@ class TestLockHeldUntilActivityCompletes:
         assert call_order.index("activity_completed") < call_order.index(
             "lock_released"
         ), "Activity must complete before lock is released"
+
+
+# ---------------------------------------------------------------------------
+# acquire_distributed_lock — idempotent across retries (FND-4285)
+# ---------------------------------------------------------------------------
+
+
+class _FakeRedis:
+    """In-memory stand-in for the async redis client: SET NX + MGET."""
+
+    def __init__(self, *, lose_first_set_reply: bool = False) -> None:
+        self.data: dict[str, bytes] = {}
+        self._lose_reply = lose_first_set_reply
+
+    async def set(self, key, value, nx=False, ex=None):
+        if nx and key in self.data:
+            return None
+        self.data[key] = value.encode()
+        if self._lose_reply:
+            # The write landed; the reply did not.
+            self._lose_reply = False
+            raise TimeoutError("reply lost")
+        return True
+
+    async def mget(self, keys):
+        return [self.data.get(k) for k in keys]
+
+
+class _FakeRedisClientAsync:
+    """Context manager matching ``RedisClientAsync`` around a shared fake."""
+
+    def __init__(self, fake: _FakeRedis) -> None:
+        self.redis_client = fake
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    async def _acquire_lock(self, resource_id, owner_id, ttl_seconds):
+        return bool(
+            await self.redis_client.set(resource_id, owner_id, nx=True, ex=ttl_seconds)
+        )
+
+
+def _patch_redis(fake: _FakeRedis):
+    return patch(
+        "application_sdk.execution._temporal.lock_activities.RedisClientAsync",
+        lambda: _FakeRedisClientAsync(fake),
+    )
+
+
+def _patch_slots(*slots: int):
+    """Pin the random slot picks, so a retry would take a *different* slot."""
+    return patch(
+        "application_sdk.execution._temporal.lock_activities.random.randint",
+        side_effect=list(slots),
+    )
+
+
+def _patch_activity_id(activity_id: str):
+    info = MagicMock()
+    info.activity_id = activity_id
+    return patch(
+        "application_sdk.execution._temporal.lock_activities.activity.info",
+        return_value=info,
+    )
+
+
+class TestAcquireDistributedLockIdempotent:
+    async def test_retry_after_lost_set_reply_reuses_the_slot(self):
+        """A SET that landed but whose reply was lost must not leak a slot."""
+        from application_sdk.execution._temporal._lock_errors import RedisLockError
+        from application_sdk.execution._temporal.lock_activities import (
+            acquire_distributed_lock,
+        )
+
+        fake = _FakeRedis(lose_first_set_reply=True)
+        with _patch_redis(fake), _patch_activity_id("7"), _patch_slots(0, 1):
+            with pytest.raises(RedisLockError):
+                await acquire_distributed_lock("res", 50, 60, "app:run-1")
+            first_slot_keys = set(fake.data)
+
+            result = await acquire_distributed_lock("res", 50, 60, "app:run-1")
+
+        assert set(fake.data) == first_slot_keys, "retry took a second slot"
+        assert result["resource_id"] in first_slot_keys
+        assert result["owner_id"] == "app:run-1:7"
+        assert fake.data[result["resource_id"]] == b"app:run-1:7"
+
+    async def test_concurrent_acquires_in_one_run_take_distinct_slots(self):
+        """Same run, different acquire activities: one slot each, no reuse."""
+        from application_sdk.execution._temporal.lock_activities import (
+            acquire_distributed_lock,
+        )
+
+        fake = _FakeRedis()
+        with _patch_redis(fake), _patch_slots(0, 1):
+            with _patch_activity_id("1"):
+                first = await acquire_distributed_lock("res", 50, 60, "app:run-1")
+            with _patch_activity_id("2"):
+                second = await acquire_distributed_lock("res", 50, 60, "app:run-1")
+
+        assert first["resource_id"] != second["resource_id"]
+        assert len(fake.data) == 2
+
+    async def test_returned_owner_id_is_the_stored_value(self):
+        """Release verifies ownership against ``owner_id``; it must match Redis."""
+        from application_sdk.execution._temporal.lock_activities import (
+            acquire_distributed_lock,
+        )
+
+        fake = _FakeRedis()
+        with _patch_redis(fake), _patch_activity_id("3"):
+            result = await acquire_distributed_lock("res", 5, 60, "app:run-9")
+
+        assert fake.data[result["resource_id"]] == result["owner_id"].encode()

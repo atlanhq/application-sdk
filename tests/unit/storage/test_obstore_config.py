@@ -230,6 +230,31 @@ class TestClientOptionsRootCertificate:
 
 
 class TestRetryConfig:
+    def test_documented_retry_env_vars_are_the_ones_read(self) -> None:
+        """The module docstring names exactly the retry env vars the code reads.
+
+        It once documented ``ATLAN_OBSTORE_RETRY_TIMEOUT`` while the code read
+        ``ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS``, so an operator following the
+        doc set a variable nothing reads.
+        """
+        import inspect
+        import re
+
+        documented = set(
+            re.findall(r"``(ATLAN_OBSTORE_RETRY_\w+)``", _obstore_config.__doc__ or "")
+        )
+        read = set(
+            re.findall(
+                r'os\.getenv\("(ATLAN_OBSTORE_RETRY_\w+)"\)',
+                inspect.getsource(obstore_retry_config),
+            )
+        )
+        assert read == {
+            "ATLAN_OBSTORE_RETRY_MAX_RETRIES",
+            "ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS",
+        }
+        assert documented == read
+
     def test_returns_none_when_no_env_set(self, monkeypatch) -> None:
         monkeypatch.delenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES", raising=False)
         monkeypatch.delenv("ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS", raising=False)

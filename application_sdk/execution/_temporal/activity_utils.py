@@ -32,14 +32,13 @@
     from ``input.workflow_id``.
 """
 
-import os
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from temporalio import activity
 
 from application_sdk.app.registry import AppRegistry
-from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -148,10 +147,10 @@ def build_output_path() -> str:
 def get_object_store_prefix(path: str) -> str:
     """Convert a local-path or object-store-path into an object-store prefix.
 
-    Handles two input shapes:
-
-    1. Paths under ``TEMPORARY_PATH`` — converted to relative object-store keys.
-    2. User-provided paths — returned as-is (already relative object-store keys).
+    A delegate to :func:`application_sdk.storage.ops.normalize_key`, the SDK's
+    single local-path → store-key normaliser. Kept as a public name so existing
+    callers keep working; the two used to diverge (the staging root mapped to
+    ``'.'`` here, and backslashes survived on POSIX).
 
     .. note::
         This is a path-shape utility, not a "where am I in the workflow"
@@ -175,48 +174,8 @@ def get_object_store_prefix(path: str) -> str:
         >>> get_object_store_prefix("datasets/sales/2024/")
         "datasets/sales/2024"
     """
-    # Normalize paths for comparison
-    abs_path = os.path.abspath(path)
-    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — activity frame only; keep obstore out of the workflow-sandbox import set
+        normalize_key,
+    )
 
-    def _to_relative_object_store_key(p: str) -> str:
-        """Strip drive letter / leading anchor + normalize separators.
-
-        Object-store keys are forward-slash, **relative** strings (no
-        drive letter, no leading slash). On Windows, an absolute local
-        path like ``C:\\Users\\...\\file`` would otherwise become a
-        bogus key the obstore LocalFileSystem backend can't append to
-        its store root (it'd try to walk
-        ``<store_root>\\C:\\Users\\...`` which Windows rejects as
-        invalid syntax). ``os.path.splitdrive`` peels the drive on
-        Windows (no-op on POSIX), then we strip the leading
-        separator and convert remaining backslashes.
-        """
-        _drive, rest = os.path.splitdrive(p)
-        return rest.replace(os.path.sep, "/").strip("/")
-
-    # Check if path is under TEMPORARY_PATH
-    try:
-        # Use os.path.commonpath to properly check if path is under temp directory
-        # This prevents false positives like '/tmp/local123' matching '/tmp/local'
-        common_path = os.path.commonpath([abs_path, abs_temp_path])
-        if common_path == abs_temp_path:
-            # Path is under temp directory, convert to relative object store path
-            relative_path = os.path.relpath(abs_path, abs_temp_path)
-            # Normalize path separators to forward slashes for object store
-            return relative_path.replace(os.path.sep, "/")
-        else:
-            # Path is outside TEMPORARY_PATH (user-provided base, unit
-            # tests using ``tmp_path``, etc.). Strip drive letter and
-            # leading separator so the result is still a relative
-            # object-store key, not an absolute filesystem path.
-            return _to_relative_object_store_key(path)
-    except ValueError:
-        # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
-        # In this case, treat as user-provided path, normalize the same way.
-        logger.warning(
-            "os.path.commonpath/relpath raised ValueError for path %r; falling back to direct normalization",
-            path,
-            exc_info=True,
-        )
-        return _to_relative_object_store_key(path)
+    return normalize_key(path)

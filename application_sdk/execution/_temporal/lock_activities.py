@@ -22,6 +22,46 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+def _acquire_token(owner_id: str) -> str:
+    """Return the lock value identifying *this* acquire across its retries.
+
+    ``owner_id`` names the workflow run, which may hold several slots of one
+    lock at once (parallel locked activities), so it cannot tell this acquire's
+    slot apart from a sibling's. The acquire activity's ``activity_id`` is
+    stable across Temporal retries of one scheduled activity and distinct
+    between scheduled activities, so ``owner_id:activity_id`` is.
+
+    Outside an activity (a direct call) there is no retry to dedupe against,
+    and ``owner_id`` is returned unchanged.
+    """
+    try:
+        activity_id = activity.info().activity_id
+    except RuntimeError:
+        return owner_id
+    return f"{owner_id}:{activity_id}"
+
+
+async def _find_held_slot(
+    redis_client: RedisClientAsync, lock_name: str, max_locks: int, token: str
+) -> int | None:
+    """Return the slot this acquire already holds, if a previous attempt set it.
+
+    A ``SET NX`` can land in Redis while its reply is lost (timeout, dropped
+    connection); without this check the retry picks a fresh random slot and
+    the first stays held, unreleased, until its TTL.
+    """
+    client = redis_client.redis_client
+    if client is None:
+        return None
+    values = await client.mget([f"{lock_name}:{slot}" for slot in range(max_locks)])
+    for slot, value in enumerate(values):
+        if isinstance(value, bytes):
+            value = value.decode()
+        if value == token:
+            return slot
+    return None
+
+
 @activity.defn
 async def acquire_distributed_lock(
     lock_name: str,
@@ -37,11 +77,16 @@ async def acquire_distributed_lock(
         ttl_seconds (int): Time-to-live for the lock in seconds.
         owner_id (str): Unique identifier for the lock owner.
 
+    Idempotent across Temporal retries: the slot's value is a per-acquire
+    token (see ``_acquire_token``), and a retry that finds a slot already
+    holding its token returns that slot instead of taking another.
+
     Returns:
         dict[str, Any]: Lock information with the following keys:
             - slot_id (int): Allocated lock slot.
             - resource_id (str): Fully qualified lock resource ID.
-            - owner_id (str): Owner identifier.
+            - owner_id (str): The value stored in the slot — the per-acquire
+              token. Pass it to ``release_distributed_lock``.
 
     Raises:
         AppError: If lock acquisition fails due to Redis errors or invalid parameters.
@@ -52,22 +97,36 @@ async def acquire_distributed_lock(
             message=f"max_locks must be greater than 0, got {max_locks}",
             value_summary=str(max_locks),
         )
+    token = _acquire_token(owner_id)
     slot = random.randint(0, max_locks - 1)
     resource_id = f"{lock_name}:{slot}"
 
     try:
         async with RedisClientAsync() as redis_client:
+            held = await _find_held_slot(redis_client, lock_name, max_locks, token)
+            if held is not None:
+                resource_id = f"{lock_name}:{held}"
+                logger.info(
+                    "Lock already held by this acquire: slot=%s resource_id=%s",
+                    held,
+                    resource_id,
+                )
+                return {
+                    "status": True,
+                    "slot_id": held,
+                    "resource_id": resource_id,
+                    "owner_id": token,
+                }
+
             # Acquire lock - connection will stay open until context exits
-            acquired = await redis_client._acquire_lock(
-                resource_id, owner_id, ttl_seconds
-            )
+            acquired = await redis_client._acquire_lock(resource_id, token, ttl_seconds)
             if acquired:
                 logger.info("Lock acquired: slot=%s resource_id=%s", slot, resource_id)
                 return {
                     "status": True,
                     "slot_id": slot,
                     "resource_id": resource_id,
-                    "owner_id": owner_id,
+                    "owner_id": token,
                 }
 
             raise LockAcquisitionError()

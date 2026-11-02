@@ -325,9 +325,15 @@ class TemporalHeartbeatController:
             return
         # Off the loop: run the send on it, in this thread's context — the copy
         # `run_in_thread` made, which carries Temporal's activity context.
-        self._loop.call_soon_threadsafe(
-            activity.heartbeat, *details, context=contextvars.copy_context()
-        )
+        try:
+            self._loop.call_soon_threadsafe(
+                activity.heartbeat, *details, context=contextvars.copy_context()
+            )
+        except RuntimeError:
+            # The loop closed under a still-running worker thread (worker
+            # shutdown). Nothing can deliver the beat any more, and raising
+            # here would fail the user's thread for a progress signal.
+            logger.debug("Heartbeat dropped: activity event loop is closed")
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
         """Get details from the last heartbeat before activity was retried."""

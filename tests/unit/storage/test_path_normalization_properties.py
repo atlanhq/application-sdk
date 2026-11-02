@@ -134,3 +134,53 @@ def test_safe_join_under_never_escapes_root(
     except StorageError:
         return  # rejected — the guard did its job
     assert joined.is_relative_to(root)
+
+
+# ---------------------------------------------------------------------------
+# One normaliser: get_object_store_prefix is normalize_key
+# ---------------------------------------------------------------------------
+
+
+@given(key=_clean_key, spelling=_key_spellings)
+@settings(max_examples=100)
+def test_get_object_store_prefix_agrees_with_normalize_key(key: str, spelling) -> None:
+    """The execution-side helper and the storage normaliser never diverge."""
+    from application_sdk.execution import get_object_store_prefix
+
+    with mock.patch.object(constants, "TEMPORARY_PATH", _STAGING_ROOT):
+        path = spelling(key)
+        assert get_object_store_prefix(path) == normalize_key(path)
+
+
+def test_get_object_store_prefix_maps_staging_root_to_store_root() -> None:
+    """The staging root is the store root (``''``), not ``'.'``."""
+    from application_sdk.execution import get_object_store_prefix
+
+    with mock.patch.object(constants, "TEMPORARY_PATH", _STAGING_ROOT):
+        assert get_object_store_prefix(_STAGING_ROOT) == ""
+        assert get_object_store_prefix(f"{_STAGING_ROOT}/") == ""
+
+
+def test_get_object_store_prefix_converts_backslashes() -> None:
+    """A backslash path yields the forward-slash key on every platform."""
+    from application_sdk.execution import get_object_store_prefix
+
+    assert get_object_store_prefix("artifacts\\apps\\x\\f.json") == (
+        "artifacts/apps/x/f.json"
+    )
+
+
+def test_normalize_key_strips_drive_letter() -> None:
+    """A Windows drive is never part of a store key.
+
+    ``os.path.splitdrive`` is patched to its Windows behaviour so the
+    branch runs on POSIX CI too.
+    """
+    import ntpath
+
+    with mock.patch(
+        "application_sdk.storage.ops.os.path.splitdrive", ntpath.splitdrive
+    ):
+        assert normalize_key("C:\\Users\\runner\\raw\\records.json") == (
+            "Users/runner/raw/records.json"
+        )
