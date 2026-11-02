@@ -184,11 +184,31 @@ def run_temp_dir() -> str:
     under it on the run's behalf goes with the run. ``TEMPORARY_PATH`` is read
     at call time so a redirect of the constant is honoured.
 
+    The workflow ID is caller-chosen (``/workflows/v1/start`` accepts it
+    verbatim), so the result is checked to resolve strictly *inside*
+    ``TEMPORARY_PATH``: not outside it via ``..`` segments, and not the root
+    itself, whose removal would take every other run's scratch with it.
+
     Raises:
         WorkflowIdError: Outside an activity context.
         WorkflowRunIdError: Outside a workflow-backed activity.
+        RunTempDirEscapeError: If the directory would not be strictly inside
+            ``TEMPORARY_PATH``.
     """
-    return os.path.join(constants.TEMPORARY_PATH, build_output_path())
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+        RunTempDirEscapeError,
+    )
+
+    path = os.path.join(constants.TEMPORARY_PATH, build_output_path())
+    root = os.path.realpath(constants.TEMPORARY_PATH)
+    resolved = os.path.realpath(path)
+    try:
+        contained = resolved != root and os.path.commonpath([root, resolved]) == root
+    except ValueError:  # different drives on Windows: not contained
+        contained = False
+    if not contained:
+        raise RunTempDirEscapeError()
+    return path
 
 
 def get_object_store_prefix(path: str) -> str:

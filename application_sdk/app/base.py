@@ -2277,6 +2277,9 @@ class App(ABC):
             CLEANUP_BASE_PATHS,
             TRACKED_FILE_REFS_KEY,
         )
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            RunTempDirEscapeError,
+        )
         from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
             run_temp_dir,
         )
@@ -2321,7 +2324,16 @@ class App(ABC):
             # The same directory a path-less FileReference materialises into
             # (storage/reference.py ``_default_materialize_dir``), so those
             # downloads go with the run instead of piling up on the pod.
-            dir_paths = [run_temp_dir()]
+            try:
+                dir_paths = [run_temp_dir()]
+            except RunTempDirEscapeError:
+                # A workflow ID with ``..`` segments: deleting what it points
+                # at would reach outside TEMPORARY_PATH, so sweep nothing.
+                _task_logger.warning(
+                    "Skipping the run scratch directory sweep: it resolves "
+                    "outside TEMPORARY_PATH"
+                )
+                dir_paths = []
 
         for base_path in dir_paths:
             try:

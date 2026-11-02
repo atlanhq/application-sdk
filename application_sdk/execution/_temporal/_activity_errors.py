@@ -31,6 +31,21 @@ class WorkflowRunIdError(InternalError):
 
 
 @dataclass(kw_only=True)
+class RunTempDirEscapeError(InvalidInputError):
+    """The run's scratch directory does not resolve strictly inside ``TEMPORARY_PATH``.
+
+    The directory is built from the workflow ID, which a caller of
+    ``/workflows/v1/start`` may choose; a value carrying ``..`` segments would
+    otherwise point downloads, and ``cleanup_files``' delete, outside the SDK's
+    temp root.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_RUN_TEMP_DIR"
+    message: str = "The run's scratch directory resolves outside TEMPORARY_PATH"
+    field: str | None = "workflow_id"
+
+
+@dataclass(kw_only=True)
 class EventPublishError(DependencyUnavailableError):
     """Event could not be published via the pub/sub binding."""
 

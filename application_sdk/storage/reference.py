@@ -910,6 +910,9 @@ async def materialize_file_reference(
             declares, or its manifest is not in the store.
         StorageIntegrityError: If downloaded data does not match the stored
             sidecar or the manifest digest, or the manifest is malformed.
+        RunTempDirEscapeError: If a ref with no ``local_path`` and no
+            *local_dir* would land outside ``TEMPORARY_PATH`` because the
+            workflow ID carries ``..`` segments. Nothing is written.
 
     Concurrency: a stable destination — ``ref.local_path``, or the resolved
     directory — is serialised under a per-path lock (CONNECT-1126), so
@@ -1083,6 +1086,10 @@ def _default_materialize_dir() -> str:
     the pod's disk (FND-4282). Outside one there is no run to clean up after,
     so it is ``{TEMPORARY_PATH}/file-refs`` — still under the SDK's temp root,
     never the system temp directory. Created if missing.
+
+    ``RunTempDirEscapeError`` from ``run_temp_dir()`` (a workflow ID that would
+    climb out of ``TEMPORARY_PATH``) is deliberately not caught: falling back
+    would hide it, and writing there is what the check exists to stop.
     """
     from application_sdk import (  # noqa: PLC0415 — read at call time so a TEMPORARY_PATH redirect is honoured
         constants,

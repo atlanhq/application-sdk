@@ -736,14 +736,18 @@ class TestMaterializeFileReference:
         assert Path(result.local_path).read_bytes() == b"hello"
         assert result.local_path.endswith(".bin")
 
-    async def test_single_file_no_local_path_no_local_dir(self, store) -> None:
+    async def test_single_file_no_local_path_no_local_dir(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Without local_path or local_dir, and no run: under TEMPORARY_PATH.
 
         FND-4282: this used to be the system temp directory, which no cleanup
         root covers.
         """
-        from application_sdk import constants
+        from application_sdk.testing.fixtures import _redirect_temporary_path
 
+        sdk_tmp = tmp_path / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
         await _put("k/x.txt", b"sys-temp", store, normalize=False)
         await _put(
             "k/x.txt.sha256",
@@ -755,8 +759,47 @@ class TestMaterializeFileReference:
         result = await materialize_file_reference(store, ref)
         assert result.local_path is not None
         assert Path(result.local_path).read_bytes() == b"sys-temp"
-        unscoped = (Path(constants.TEMPORARY_PATH) / "file-refs").resolve()
+        unscoped = (sdk_tmp / "file-refs").resolve()
         assert Path(result.local_path).resolve().parent == unscoped
+        Path(result.local_path).unlink()
+        Path(result.local_path + ".sha256").unlink(missing_ok=True)
+
+    async def test_a_climbing_workflow_id_writes_nothing_outside_temporary_path(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller-chosen workflow ID with ``..`` must not move the download root."""
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal._activity_errors import (
+            RunTempDirEscapeError,
+        )
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        sdk_tmp = tmp_path / "a" / "b" / "c" / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(
+                workflow_id="../../../../../../../../outside",
+                workflow_run_id="run-1",
+            ),
+        )
+        await _put("k/one.bin", b"one", store, normalize=False)
+        await _put("d/a.txt", b"a", store, normalize=False)
+
+        with pytest.raises(RunTempDirEscapeError):
+            await materialize_file_reference(
+                store, FileReference(is_durable=True, storage_path="k/one.bin")
+            )
+        with pytest.raises(RunTempDirEscapeError):
+            await materialize_file_reference(
+                store, FileReference(is_durable=True, storage_path="d/")
+            )
+        assert not (tmp_path / "a" / "outside").exists()
+        assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
 
     async def test_path_less_refs_land_in_the_run_scratch_dir(
         self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
