@@ -267,6 +267,29 @@ class TestGetEventTokenService:
         assert fake_service_cls.call_count == 1
 
 
+def _oauth_error(error_cls: type[Exception], status: int | None) -> Exception:
+    """An OAuthTokenError shaped like OAuthTokenService._exchange raises it.
+
+    ``status`` is the token endpoint's HTTP status; ``None`` stands for a
+    transport failure (connection refused, timeout).
+    """
+    import httpx
+
+    request = httpx.Request("POST", "https://example.com/token")
+    if status is None:
+        cause: Exception = httpx.ConnectTimeout("timed out", request=request)
+    else:
+        cause = httpx.HTTPStatusError(
+            "token endpoint error",
+            request=request,
+            response=httpx.Response(status, request=request),
+        )
+    try:
+        raise error_cls("Token exchange failed") from cause
+    except error_cls as exc:
+        return exc
+
+
 class TestEventTokenServiceCaching:
     """FND-4279: one credential lookup per retry window, shared by callers."""
 
@@ -347,7 +370,7 @@ class TestEventTokenServiceCaching:
 
         stale = mock.MagicMock(name="stale-service")
         stale.get_headers = mock.AsyncMock(
-            side_effect=OAuthTokenError("invalid_client")
+            side_effect=_oauth_error(OAuthTokenError, 401)
         )
         rotated = mock.MagicMock(name="rotated-service")
         rotated.get_headers = mock.AsyncMock(
@@ -371,6 +394,57 @@ class TestEventTokenServiceCaching:
             }
         assert secrets.await_count == 4
         assert service_cls.call_count == 2
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            pytest.param(None, id="timeout"),
+            pytest.param(503, id="503"),
+            pytest.param(429, id="429"),
+        ],
+    )
+    async def test_transient_exchange_failure_keeps_the_service(
+        self, status: int | None
+    ) -> None:
+        """F-c287a7: an endpoint outage is not a credential rejection, so the
+        cached service stays and the next publish retries the exchange."""
+        from application_sdk.credentials.oauth import OAuthTokenError
+
+        service = mock.MagicMock(name="service")
+        service.get_headers = mock.AsyncMock(
+            side_effect=[
+                _oauth_error(OAuthTokenError, status),
+                {"authorization": "Bearer recovered"},
+            ]
+        )
+        secrets = mock.AsyncMock(side_effect=["id", "secret"])
+        service_cls = mock.MagicMock(return_value=service)
+        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
+        with p1, p2, p3, p4:
+            assert await _get_event_auth_headers() == {}
+            assert await _get_event_auth_headers() == {
+                "authorization": "Bearer recovered"
+            }
+        assert secrets.await_count == 2
+        assert service_cls.call_count == 1
+
+    @pytest.mark.parametrize(
+        ("status", "rejected"),
+        [(400, True), (401, True), (403, True), (408, False), (500, False)],
+    )
+    def test_credential_rejection_is_a_non_transient_4xx(
+        self, status: int, rejected: bool
+    ) -> None:
+        from application_sdk.credentials.oauth import OAuthTokenError
+
+        exc = _oauth_error(OAuthTokenError, status)
+        assert events_module._is_credential_rejection(exc) is rejected
+
+    def test_exchange_without_access_token_is_a_rejection(self) -> None:
+        from application_sdk.credentials.oauth import OAuthTokenError
+
+        exc = OAuthTokenError("OAuth exchange returned no access_token")
+        assert events_module._is_credential_rejection(exc) is True
 
 
 class TestEnrichEventMetadata:

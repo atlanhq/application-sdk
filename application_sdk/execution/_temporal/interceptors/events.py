@@ -159,11 +159,32 @@ async def _build_event_token_service() -> "OAuthTokenService | None":
     return OAuthTokenService(cred)
 
 
+def _is_credential_rejection(exc: BaseException) -> bool:
+    """Whether a failed token exchange means the client credentials were refused.
+
+    True for a 4xx from the token endpoint (``invalid_client`` and friends,
+    except 408/429), or a 2xx with no ``access_token``. False for a 5xx, a
+    408/429 or a transport failure: the endpoint is struggling, and the same
+    credentials may work on the next publish.
+    """
+    import httpx  # noqa: PLC0415 — cold path: only after a failed token exchange
+
+    cause = exc.__cause__
+    if cause is None:
+        return True
+    if isinstance(cause, httpx.HTTPStatusError):
+        status = cause.response.status_code
+        return 400 <= status < 500 and status not in (408, 429)
+    return False
+
+
 async def _get_event_auth_headers() -> dict[str, str]:
     """Auth headers for an event publish; empty when auth is off or failing.
 
-    A rejected token exchange (:class:`OAuthTokenError`) drops the cached
-    service so rotated credentials are re-read.
+    A token exchange that refuses the credentials drops the cached service, so
+    rotated credentials are re-read after
+    :data:`_EVENT_TOKEN_SERVICE_RETRY_SECONDS`. A transient exchange failure
+    keeps the service, and the next publish retries the exchange.
     """
     from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
         OAuthTokenError,
@@ -174,14 +195,22 @@ async def _get_event_auth_headers() -> dict[str, str]:
         if token_service is None:
             return {}
         return await token_service.get_headers()
-    except OAuthTokenError:
-        _invalidate_event_token_service()
-        logger.warning(
-            "Token exchange for event binding auth failed, proceeding without "
-            "authentication; client credentials are re-read in %.0fs",
-            _EVENT_TOKEN_SERVICE_RETRY_SECONDS,
-            exc_info=True,
-        )
+    except OAuthTokenError as exc:
+        if _is_credential_rejection(exc):
+            _invalidate_event_token_service()
+            logger.warning(
+                "Token endpoint refused the event binding client credentials, "
+                "proceeding without authentication; client credentials are "
+                "re-read in %.0fs",
+                _EVENT_TOKEN_SERVICE_RETRY_SECONDS,
+                exc_info=True,
+            )
+        else:
+            logger.warning(
+                "Token exchange for event binding auth failed transiently, "
+                "proceeding without authentication; the next publish retries",
+                exc_info=True,
+            )
     except Exception:
         logger.warning(
             "Failed to get auth headers for event binding, proceeding without authentication",
