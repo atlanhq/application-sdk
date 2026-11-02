@@ -167,12 +167,16 @@ class TestTemporalHeartbeatController:
                 errors.append(exc)
 
         worker = threading.Thread(target=_in_thread)
-        worker.start()
-        worker.join(timeout=5)
+        with patch("application_sdk.execution.heartbeat.logger") as log:
+            worker.start()
+            worker.join(timeout=5)
 
         assert errors == []
         fake_temporalio.heartbeat.assert_not_called()
         assert ctl.last_sent_details() == ("late", 1)
+        # Reported once, with the traceback, however many beats are dropped.
+        log.warning.assert_called_once()
+        assert log.warning.call_args.kwargs.get("exc_info") is True
 
 
 # ---------------------------------------------------------------------------

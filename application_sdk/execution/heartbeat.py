@@ -296,6 +296,9 @@ class TemporalHeartbeatController:
             self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
             self._loop = None
+        # Whether a dropped off-loop beat has been reported; later drops on
+        # this controller stay quiet so a per-chunk beater cannot flood logs.
+        self._drop_reported = False
 
     def heartbeat(self, *details: Any) -> None:
         """Send a heartbeat to Temporal with optional progress details.
@@ -330,10 +333,19 @@ class TemporalHeartbeatController:
                 activity.heartbeat, *details, context=contextvars.copy_context()
             )
         except RuntimeError:
-            # The loop closed under a still-running worker thread (worker
-            # shutdown). Nothing can deliver the beat any more, and raising
-            # here would fail the user's thread for a progress signal.
-            logger.debug("Heartbeat dropped: activity event loop is closed")
+            # Expected cause: the loop closed under a still-running worker
+            # thread (worker shutdown). Nothing can deliver the beat any more,
+            # and raising here would fail the user's thread for a progress
+            # signal. exc_info keeps any other RuntimeError visible.
+            if not self._drop_reported:
+                self._drop_reported = True
+                logger.warning(
+                    "Heartbeat from a worker thread could not be handed to the "
+                    "activity event loop; dropping it and any later off-loop "
+                    "heartbeats from this attempt (Temporal sees no further "
+                    "progress from it)",
+                    exc_info=True,
+                )
 
     def get_last_heartbeat_details(self) -> tuple[Any, ...]:
         """Get details from the last heartbeat before activity was retried."""
