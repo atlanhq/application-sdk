@@ -18,6 +18,7 @@ import contextlib
 import os
 import threading
 from collections.abc import AsyncIterator, Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -280,6 +281,10 @@ class TestSizingInterceptorInputWalk:
             task_queue: str = "q"
             workflow_type: str = "W"
             attempt: int = 1
+            # The walk budget reads the attempt's deadlines; None = unbounded.
+            start_to_close_timeout: timedelta | None = None
+            schedule_to_close_timeout: timedelta | None = None
+            heartbeat_timeout: timedelta | None = None
 
         @dataclass
         class _ExecInput:
