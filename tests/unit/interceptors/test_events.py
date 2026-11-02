@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Any
 from unittest import mock
@@ -230,8 +231,9 @@ class TestGetEventTokenService:
         with (
             mock.patch("application_sdk.constants.AUTH_ENABLED", True, create=True),
             mock.patch("application_sdk.constants.AUTH_URL", "", create=True),
+            mock.patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
             mock.patch(
-                "application_sdk.infrastructure.secrets.get_deployment_secret",
+                "application_sdk.infrastructure.secrets._fetch_deployment_secret",
                 new=mock.AsyncMock(return_value=""),
             ),
         ):
@@ -251,8 +253,9 @@ class TestGetEventTokenService:
                 "https://example.com/token",
                 create=True,
             ),
+            mock.patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
             mock.patch(
-                "application_sdk.infrastructure.secrets.get_deployment_secret",
+                "application_sdk.infrastructure.secrets._fetch_deployment_secret",
                 new=mock.AsyncMock(side_effect=["client-id", "secret"]),
             ),
             mock.patch(
@@ -294,33 +297,40 @@ class TestEventTokenServiceCaching:
     """FND-4279: one credential lookup per retry window, shared by callers."""
 
     @staticmethod
+    @contextlib.contextmanager
     def _auth_patches(secret_mock: mock.AsyncMock, service_cls: mock.MagicMock):
-        return (
+        """Auth on, a deployed (non-local) process, *secret_mock* as the store."""
+        with (
             mock.patch("application_sdk.constants.AUTH_ENABLED", True, create=True),
             mock.patch(
                 "application_sdk.constants.AUTH_URL",
                 "https://example.com/token",
                 create=True,
             ),
+            mock.patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
             mock.patch(
-                "application_sdk.infrastructure.secrets.get_deployment_secret",
+                "application_sdk.infrastructure.secrets._fetch_deployment_secret",
                 new=secret_mock,
             ),
             mock.patch(
                 "application_sdk.credentials.oauth.OAuthTokenService", service_cls
             ),
-        )
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_missing_credentials_are_fetched_once_per_window(self) -> None:
-        secrets = mock.AsyncMock(return_value=None)
+        from application_sdk.infrastructure.secrets import SecretNotFoundError
+
+        secrets = mock.AsyncMock(side_effect=SecretNotFoundError("missing"))
         service_cls = mock.MagicMock()
-        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
-        with p1, p2, p3, p4:
+        with self._auth_patches(secrets, service_cls):
             for _ in range(5):
                 assert await _get_event_token_service() is None
             # One lookup = the client-id and client-secret reads.
             assert secrets.await_count == 2
+            window = events_module._event_token_service_retry_at - time.monotonic()
+            assert 55.0 < window <= events_module._EVENT_TOKEN_SERVICE_RETRY_SECONDS
 
             _expire_retry_window()
             assert await _get_event_token_service() is None
@@ -338,8 +348,7 @@ class TestEventTokenServiceCaching:
         secrets = mock.AsyncMock(side_effect=slow_secret)
         fake_service = mock.MagicMock(name="OAuthTokenService")
         service_cls = mock.MagicMock(return_value=fake_service)
-        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
-        with p1, p2, p3, p4:
+        with self._auth_patches(secrets, service_cls):
             callers = [
                 asyncio.create_task(_get_event_token_service()) for _ in range(10)
             ]
@@ -352,12 +361,22 @@ class TestEventTokenServiceCaching:
         assert service_cls.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_lookup_failure_is_cached_for_the_window(self) -> None:
-        secrets = mock.AsyncMock(side_effect=RuntimeError("store down"))
-        p1, p2, p3, p4 = self._auth_patches(secrets, mock.MagicMock())
-        with p1, p2, p3, p4:
-            with pytest.raises(RuntimeError):
+    async def test_store_failure_is_cached_for_the_short_window(self) -> None:
+        """A store that did not answer (not ready at boot, throttled) is
+        retried after the short outage window, not the 60 s miss window."""
+        from application_sdk.infrastructure.secrets import SecretStoreUnavailableError
+
+        secrets = mock.AsyncMock(side_effect=SecretStoreUnavailableError("k"))
+        with self._auth_patches(secrets, mock.MagicMock()):
+            with pytest.raises(SecretStoreUnavailableError):
                 await _get_event_token_service()
+            window = events_module._event_token_service_retry_at - time.monotonic()
+            assert (
+                0.0
+                < window
+                <= events_module._EVENT_TOKEN_SERVICE_OUTAGE_RETRY_SECONDS
+                < events_module._EVENT_TOKEN_SERVICE_RETRY_SECONDS
+            )
             assert await _get_event_token_service() is None
             assert await _get_event_auth_headers() == {}
         assert secrets.await_count == 1
@@ -380,8 +399,7 @@ class TestEventTokenServiceCaching:
             side_effect=["old-id", "old-secret", "new-id", "new-secret"]
         )
         service_cls = mock.MagicMock(side_effect=[stale, rotated])
-        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
-        with p1, p2, p3, p4:
+        with self._auth_patches(secrets, service_cls):
             assert await _get_event_auth_headers() == {}
             # Inside the window: no exchange, no secret read.
             assert await _get_event_auth_headers() == {}
@@ -394,6 +412,29 @@ class TestEventTokenServiceCaching:
             }
         assert secrets.await_count == 4
         assert service_cls.call_count == 2
+
+    def test_lookups_on_separate_event_loops_each_get_a_lock(self) -> None:
+        """A lock that has made a caller wait is bound to its loop; a second
+        loop that also has to wait must not get that lock."""
+        from application_sdk.infrastructure.secrets import SecretNotFoundError
+
+        async def contended_lookup() -> None:
+            events_module._event_token_service_retry_at = 0.0
+
+            async def slow_missing(key: str) -> None:
+                await asyncio.sleep(0.01)
+                raise SecretNotFoundError(key)
+
+            secrets = mock.AsyncMock(side_effect=slow_missing)
+            with self._auth_patches(secrets, mock.MagicMock()):
+                results = await asyncio.gather(
+                    _get_event_token_service(), _get_event_token_service()
+                )
+            assert results == [None, None]
+            assert secrets.await_count == 2  # one shared lookup
+
+        asyncio.run(contended_lookup())
+        asyncio.run(contended_lookup())
 
     @pytest.mark.parametrize(
         "status",
@@ -419,8 +460,7 @@ class TestEventTokenServiceCaching:
         )
         secrets = mock.AsyncMock(side_effect=["id", "secret"])
         service_cls = mock.MagicMock(return_value=service)
-        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
-        with p1, p2, p3, p4:
+        with self._auth_patches(secrets, service_cls):
             assert await _get_event_auth_headers() == {}
             assert await _get_event_auth_headers() == {
                 "authorization": "Bearer recovered"

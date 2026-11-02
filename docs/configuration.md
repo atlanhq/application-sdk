@@ -168,7 +168,7 @@ Set these when `ATLAN_AUTH_ENABLED=true` to authenticate the worker and handler 
 | `ATLAN_AUTH_CLIENT_ID_KEY` | `ATLAN_AUTH_CLIENT_ID` | Key name for the client ID within the deployment secret. |
 | `ATLAN_AUTH_CLIENT_SECRET_KEY` | `ATLAN_AUTH_CLIENT_SECRET` | Key name for the client secret within the deployment secret. |
 
-When `ATLAN_AUTH_ENABLED` is on, lifecycle events read the client credentials for their bearer token once and reuse them. If the credentials are missing, the lookup fails, or the token endpoint refuses them (a 4xx other than 408/429, or no `access_token`), events go out without auth and the lookup is not repeated for 60 s. A refusal discards the cached credentials, so a rotated credential is picked up within 60 s, without a restart. A transient exchange failure (5xx, 408/429, timeout) keeps the credentials, and the next event retries the exchange.
+When `ATLAN_AUTH_ENABLED` is on, lifecycle events read the client credentials for their bearer token once and reuse them. If the credentials are missing or the token endpoint refuses them (a 4xx other than 408/429, or no `access_token`), events go out without auth and the lookup is not repeated for 60 s. If the secret store does not answer (not ready yet, throttled), the lookup is repeated after 5 s. A refusal discards the cached credentials, so a rotated credential is picked up within 60 s, without a restart. A transient exchange failure (5xx, 408/429, timeout) keeps the credentials, and the next event retries the exchange.
 
 ---
 
