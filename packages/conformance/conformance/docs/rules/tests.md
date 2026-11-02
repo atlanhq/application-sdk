@@ -211,10 +211,11 @@ See `docs/agents/canonical-apps.md` for the layout the canonical apps use, and
 remediation found it in two shapes; either leaves a permanently failing check once the
 suite is gone):
 
-* an `sdr:` job inside `.github/workflows/tests.yaml` that runs the   deleted suite —
-delete the job AND drop `sdr` from the   `tests-passed` job's `needs:` list and its
-verify step; * a standalone `sdr-integration*.yaml` workflow plus its
-`.github/sdr-e2e/` config directory — delete both.
+* an `sdr:` job inside `.github/workflows/tests.yaml` that runs the deleted suite —
+  delete the job AND drop `sdr` from the `tests-passed` job's `needs:` list and its
+  verify step;
+* a standalone `sdr-integration*.yaml` workflow plus its `.github/sdr-e2e/` config
+  directory — delete both.
 
 The agent-mode full-DAG e2e workflow replaces the old SDR CI.
 
@@ -225,12 +226,12 @@ migration).
 **Fixing it well**
 
 * Delete the whole SDR test folder (`tests/sdr/`, with its `__init__.py`, conftest and
-helpers) once its scenarios have a home; never leave a docstring-only or empty stub
-where the harness was.
+  helpers) once its scenarios have a home; never leave a docstring-only or empty stub
+  where the harness was.
 
 * Before deleting, move each scenario where the rationale puts it: auth, preflight and
-credential resolution to the handler unit tests; the full DAG to the generated E2E base
-(`tests/e2e/`), which the reference apps extend.
+  credential resolution to the handler unit tests; the full DAG to the generated E2E
+  base (`tests/e2e/`), which the reference apps extend.
 
 * Update anything under `tests/` or the docs that points at the deleted path.
 
@@ -729,10 +730,10 @@ T008-adjacent confusion).
 **Fixing it well**
 
 * A test that subclasses the deprecated SDR harness (`BaseSDRIntegrationTest`) is not
-moved: T003 retires it, and moving it only carries the T003 finding to the new path.
+  moved: T003 retires it, and moving it only carries the T003 finding to the new path.
 
 * Otherwise move the file into the tier the reference apps use (`tests/unit`,
-`tests/integration`, `tests/e2e`, `tests/ui`) and update anything that imports it.
+  `tests/integration`, `tests/e2e`, `tests/ui`) and update anything that imports it.
 
 Not auto-applied: a repo-declared tier such as `tests/parity` needs a decision, and
 moving files must keep their `conftest.py` and fixtures. The remediation lane routes
@@ -1032,10 +1033,11 @@ unit job. But `addopts` applies to every pytest run, so a `-m 'not <marker>'`
 deselection is still applied to the integration job and removes any `tests/integration/`
 test carrying that marker from the only job meant to run it:
 
-* **All deselected** — the integration job collects nothing and fails   with `pytest`
-exit code 5 (`no tests ran`). * **Some deselected** — those tests run in no tier at all
-(the unit job   never collects `tests/integration/`; the integration job deselects
-them), so they silently stop contributing any signal.
+* **All deselected** — the integration job collects nothing and fails with `pytest` exit
+  code 5 (`no tests ran`).
+* **Some deselected** — those tests run in no tier at all (the unit job never collects
+  `tests/integration/`; the integration job deselects them), so they silently stop
+  contributing any signal.
 
 This is the inverse of **T001**, which wants integration tests to *carry* the
 `integration` marker. Both hold at once: keep the marker, but do **not**
@@ -1275,7 +1277,7 @@ when none of those hold:
 * the caller sets `enable-e2e: false` (skips the e2e job entirely), or
 
 * the caller leaves `app-image-name` empty, which disables the GHCR image build — the
-e2e job has no connector image to start the worker container from.
+  e2e job has no connector image to start the worker container from.
 
 **Fix:** add or repair the caller in `.github/workflows/tests.yaml`:
 
@@ -1392,14 +1394,14 @@ it touched, which is what this rule exists to stop recurring.
 A module under `tests/` declares scaffolding the contract toolkit generates. Three
 shapes are flagged:
 
-1. An e2e harness subclass (transitively a `BaseE2ETest` /    `SQLAppE2ETest`) that
-assigns any of `connector_short_name`,    `argo_package_name`, `argo_template_name`,
-`app_service_url`,    `connection_type`, `connection_category` — the exact attribute
-set `app/generated/_e2e_base.py` emits. 2. A `CredentialBody` subclass — generated as
-`<Name>CredentialBody` / `<Name>AgentCredentialBody` in
-`app/generated/_e2e_credential.py`. 3. A `MustacheSubstitutions` /
-`SQLMustacheSubstitutions` subclass —    generated as `<Name>MustacheSubstitutions` in
-`app/generated/_e2e_substitutions.py`.
+1. An e2e harness subclass (transitively a `BaseE2ETest` / `SQLAppE2ETest`) that assigns
+  any of `connector_short_name`, `argo_package_name`, `argo_template_name`,
+  `app_service_url`, `connection_type`, `connection_category` — the exact attribute set
+  `app/generated/_e2e_base.py` emits.
+2. A `CredentialBody` subclass — generated as `<Name>CredentialBody` /
+  `<Name>AgentCredentialBody` in `app/generated/_e2e_credential.py`.
+3. A `MustacheSubstitutions` / `SQLMustacheSubstitutions` subclass — generated as
+  `<Name>MustacheSubstitutions` in `app/generated/_e2e_substitutions.py`.
 
 **Fix:** import the generated modules and keep only what the contract cannot know — the
 source under test, the asset floors, and the run mode.
@@ -1534,20 +1536,22 @@ collectable test class under `tests/e2e/`.
 **Scope: bundle mode only.** Two shapes are both called multi-entrypoint, and only one
 has a gap:
 
-* `app/generated/<ep>/manifest.json` subdirs — each entrypoint is   submitted to
-Automation Engine independently, with its own DAG and   task queue. **This rule's
-scope.** * One marketplace card whose secondary entrypoints are invoked as DAG   nodes
-via `workflow_type: "<app>:<wire>"` (the BLDX-1342 route/card   split). The parent's own
-full-DAG run executes them, so they are   covered transitively and are never flagged —
-see `atlan-metabase-app`,   whose `extract-lineage` runs as a DAG node.
+* `app/generated/<ep>/manifest.json` subdirs — each entrypoint is submitted to
+  Automation Engine independently, with its own DAG and task queue. **This rule's
+  scope.**
+* One marketplace card whose secondary entrypoints are invoked as DAG nodes via
+  `workflow_type: "<app>:<wire>"` (the BLDX-1342 route/card split). The parent's own
+  full-DAG run executes them, so they are covered transitively and are never flagged —
+  see `atlan-metabase-app`, whose `extract-lineage` runs as a DAG node.
 
 Single-entrypoint apps never see this rule.
 
 **An entrypoint counts as covered** when some collectable class under `tests/e2e/`
 resolves to it by any of the three forms the harness itself accepts:
 
-1. inheriting the generated base for it (`<Ep>GeneratedE2EBase`), 2. a class-level
-`entrypoint = "<ep>"`, 3. a class-level `manifest_path` containing `/generated/<ep>/`.
+1. inheriting the generated base for it (`<Ep>GeneratedE2EBase`),
+2. a class-level `entrypoint = "<ep>"`,
+3. a class-level `manifest_path` containing `/generated/<ep>/`.
 
 Resolution is syntactic and deliberately generous — the miss direction is a false
 negative, never a false positive.
@@ -1640,13 +1644,14 @@ case-insensitively against the base of every SDK-harness e2e test class — a co
 `SystemAppE2ETest`, directly, through a repo-local base, or through a generated
 `*GeneratedE2EBase`:
 
-* `system` — the class **must** inherit `SystemAppE2ETest`. * `utility` — either base is
-allowed. Some system apps keep   `utility` because they have a marketplace tile and can
-be run   directly, but only ever inside a tenant; for them inheriting
-`SystemAppE2ETest` *is* the declaration, and the runtime pool gate   holds the suite
-there. A utility that never adopts it cannot be told   apart from any other utility, so
-it is not flagged. * `connector` — the class **must not** inherit `SystemAppE2ETest`. *
-any other type, or no `atlan.yaml` — not graded.
+* `system` — the class **must** inherit `SystemAppE2ETest`.
+* `utility` — either base is allowed. Some system apps keep `utility` because they have
+  a marketplace tile and can be run directly, but only ever inside a tenant; for them
+  inheriting `SystemAppE2ETest` *is* the declaration, and the runtime pool gate holds
+  the suite there. A utility that never adopts it cannot be told apart from any other
+  utility, so it is not flagged.
+* `connector` — the class **must not** inherit `SystemAppE2ETest`.
+* any other type, or no `atlan.yaml` — not graded.
 
 A base counts as the SDK class only when it is imported from
 `application_sdk.testing.e2e`; a same-named class from anywhere else is resolved against
@@ -1654,8 +1659,8 @@ the repo's own classes.
 
 **Remediation (system):** in this order —
 
-1. Make `SystemAppE2ETest` the first base. For a toolkit-generated    base, regenerating
-(`pkl eval -m . contract/app.pkl`) from a    contract typed `system` emits it already:
+1. Make `SystemAppE2ETest` the first base. For a toolkit-generated base, regenerating
+  (`pkl eval -m . contract/app.pkl`) from a contract typed `system` emits it already:
 
 ```python
 from application_sdk.testing.e2e import SystemAppE2ETest
@@ -1665,7 +1670,7 @@ class MyAppGeneratedE2EBase(SystemAppE2ETest):
 ```
 
 2. Get the repo added to the selected repositories of the
-`E2E_SYSTEM_TENANT_MATRIX_JSON` secret, so CI places its legs on    the system-app pool.
+  `E2E_SYSTEM_TENANT_MATRIX_JSON` secret, so CI places its legs on the system-app pool.
 
 **Remediation (connector):** base the suite on the generated `<Name>GeneratedE2EBase`
 (or `BaseE2ETest` / `SQLAppE2ETest`). If the app really is a system app, fix `type` in

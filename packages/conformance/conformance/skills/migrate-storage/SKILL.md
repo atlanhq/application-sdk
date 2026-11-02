@@ -13,8 +13,10 @@ description: >
   upload_to_atlan and private storage helpers such as _download_files. The
   done-bar is delivery parity: the object-store keys the app publishes for
   downstream apps are the same before and after, and the transformed entities
-  are the same multiset. Key layout, tiers, empty-output semantics, file
-  formats and entrypoint-contract changes stop for an owner decision.
+  are the same multiset. Decided defaults cover scratch directories, tiers,
+  internal key layout, delivery and entrypoint-field retirement; a change to
+  a key read outside the run, the delivered file set, file formats,
+  cross-run state or an entrypoint key name stops for an owner decision.
 runs_before: [migrate-orchestration, migrate-deprecated-symbols]
 routes_to: [migrate-deprecated-symbols]
 also_clears: [ParquetFileReader, ParquetFileWriter, JsonFileReader, JsonFileWriter, upload_to_atlan, _download_files, _resolve_store]
@@ -28,7 +30,7 @@ optional_triggers:
   - "upload_prefix replacement"
   - "RollingFileWriter migration"
 owner: connector-platform-team
-last_updated: "2026-10-19"
+last_updated: "2026-10-26"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -177,9 +179,28 @@ return ExtractionOutput(transformed_data_prefix=delivered.prefix)
 With `label=` on each `DeclaredFile` instead of `source_prefix`, each file
 lands at `<prefix>/<label>` (`atlan-metabase-app`).
 
-Reading another app's cache or an external bucket: `CloudStore(self.context.upstream_storage or self.context.storage, provider="tenant")`
-(`atlan-openapi-app` `app/connector.py`), or `CloudStore.from_credentials(...)`
-for a customer bucket.
+Reading data another app or another workflow node wrote (a prefix handed in
+on the entrypoint Input, the connection cache): download it in the
+`@entrypoint` and hand the ref to the task (`atlan-metabase-app`
+`app/connector.py`, `extract_lineage`, with this skill's two empty-prefix
+rules added: one trailing `/`, and `None` when nothing was downloaded):
+
+```python
+qi_records = None
+if input.view_lineage_input_prefix:
+    dl = await self.download(
+        DownloadInput(storage_path=input.view_lineage_input_prefix.rstrip("/") + "/")
+    )
+    qi_records = dl.ref if dl.ref.file_count else None
+build = await self.build_lineage_records(BuildLineageInput(qi_records=qi_records, ...))
+```
+
+`App.download` reads `self.context.upstream_storage or self.context.storage`.
+A helper that needs a store handle for the same data uses that same
+expression; it never builds a store binding. A customer bucket:
+`CloudStore.from_credentials(...)` (`atlan-openapi-app` `app/connector.py`);
+the app's own tenant store: `CloudStore(self.context.storage, provider="tenant")`
+(same file).
 
 ## Step 0 — Preconditions
 
@@ -244,7 +265,22 @@ each use to the inventory.
   read/write or `_download_files` that moves data from one task to another
   within the run. Becomes a FileReference field on the producer's Output and
   the consumer's Input. A shared `output_path` on an `@entrypoint` contract
-  is a public-contract change: see **owner decisions**.
+  is a public-contract change: see **owner decisions**. A value formatted as
+  an object-store key or prefix is still a hand-off when a task in this run
+  reads it: one task uploads under it and a later task downloads it, or the
+  tasks use it as a directory. Classify by who reads the value, not by how
+  it is spelled or what a comment calls it. When the key comes from another
+  workflow node (an `@entrypoint` Input field), the `@entrypoint` downloads
+  it and the task gets the ref (see **inbound**).
+- **scratch** — an `output_path` / `output_dir` on a `@task` Input that only
+  says where the task writes; the data moves on as FileReferences or not at
+  all. Drop the field; the task makes its own directory.
+- **dead** — a path field nothing reads. Search `app/`, `tests/`, the
+  generated manifests (`app/generated/**/manifest.json`, which read Output
+  fields by JSONPath) and `contract/app.pkl` for the field name, and check
+  that no SDK base class or mixin the contract extends reads it by name.
+  On a `@task` contract, delete it (or the whole unused class); on an
+  `@entrypoint` contract, owner decision 5.
 - **writer / reader** — `ParquetFileWriter` / `JsonFileWriter` →
   `RollingFileWriter` (or a local write plus `FileReference.from_local` for
   the directory); `ParquetFileReader` / `JsonFileReader` → a FileReference
@@ -278,9 +314,25 @@ each use to the inventory.
   `upstream_storage or storage`: Atlan's bucket in SDR, and in-cluster the
   one store that both names point at, which is where publish reads.
 - **inbound** — reading another app's output by prefix (for example the
-  query-intelligence app's results). Becomes `self.download(DownloadInput(...))`
-  in `run()` (it reads `upstream_storage or storage`) or
-  `CloudStore(self.context.upstream_storage or self.context.storage, ...)`.
+  query-intelligence app's results), the connection cache, or a
+  `FileReference(storage_path=..., is_durable=True)` built by hand to name
+  data already in the store. Becomes `self.download(DownloadInput(...))` in
+  `run()` / the `@entrypoint`, with `dl.ref` handed to the tasks that read it
+  (`None` when `dl.ref.file_count` is 0). Pass a prefix with one trailing
+  `/`: without it an empty prefix reads as a missing single object and
+  raises, where `download_prefix` returned nothing. A helper that needs the store
+  handle itself uses `self.context.upstream_storage or self.context.storage`.
+  An input that is optional today (the run goes on without it) stays
+  optional: see the decided defaults.
+- **wrapper** — an app helper that wraps `upload_prefix` /
+  `download_prefix`. Classify each
+  caller (hand-off, outbound, inbound), migrate the callers, then delete the
+  helper. A helper with many callers across tasks is one design change;
+  plan it as such or stop with that reason.
+- **cross-run state** — a prefix synced so the next run can read it
+  (current-state snapshots, incremental markers, resume checkpoints). No
+  contract boundary carries it, so neither a FileReference nor `upload_refs`
+  applies as is. Owner decision 7.
 - **move** — a transfer call inside a `@task`: `self.upload` /
   `self.download` / `self.upload_refs` (P008) and the `application_sdk.storage`
   helpers `upload_file` / `upload_file_from_bytes`, which P008 does not see.
@@ -290,14 +342,38 @@ each use to the inventory.
   adds keys downstream apps can see, so it is an owner decision.
 - **store** — a hand-built store (P009). Inside the app:
   `self.context.storage` / `upstream_storage` or `App.download`. An external
-  customer bucket: `CloudStore.from_credentials`. A `boto3` import used only
-  for authentication (STS, IAM) is not storage: ignore it with that reason.
+  customer bucket: `CloudStore.from_credentials`; keep the old failure on an
+  empty prefix (list first when the old code failed on it). A `boto3` import
+  used only for authentication (STS, IAM, an RDS token) is not storage:
+  ignore it with that reason. A `boto3` client for an AWS service that is the
+  metadata source (for example a data-catalogue or query-service API) has
+  no documented SDK seam
+  (`application_sdk.common.aws_utils` builds plain clients but is not in the
+  SDK capability manifest and takes no client `Config`): stop and record it.
 - **field** — a hand-set `storage_path` / `is_durable` / `file_count` (P010).
-  `FileReference.from_local(path, tier=...)` computes them. A `storage_path`
-  that pins a key another app reads is an **outbound** site, not a field fix.
-- **key** — a `str` field that holds an object-store key or prefix, not a
-  local path (P012 false positive by name). Rename to `*_prefix` / `*_key`, or
-  ignore with that reason; never convert a store key to a FileReference.
+  `FileReference.from_local(path, tier=...)` computes them. Check this shape
+  first: the call sets `local_path` and, besides `tier`, only `file_count`
+  (and maybe `is_durable=False` / `storage_path=None`), with no
+  `auto_materialize`, `manifest_path` or `store`. It is decided default
+  `from-local`: replace the call with
+  `FileReference.from_local(<the same local_path>, tier=<the same tier>)` and
+  change nothing else. Persisting the ref counts the files again, so the
+  hand-set count never reaches a consumer. Any other keyword set is not this
+  shape; read on. A ref that pins
+  `storage_path` to a key mirrored from its local path, often after the task
+  uploaded the file itself, becomes `from_local` and the task's own upload
+  goes; the interceptor persists it under `file_refs/`. A reader that loads
+  that key by name reads the ref instead. A pinned key that something
+  outside this run reads (publish, another app, the DAG) is an **outbound**
+  site: deliver it with `upload_refs` at the same key.
+- **key** — a `str` field on an `@entrypoint` Output that holds an
+  object-store key or prefix read outside this run (by the generated
+  manifest's JSONPath for the next workflow node, or by another app), or an
+  `@entrypoint` Input field that receives such a key from outside the run
+  (P012 false positive by name or description). An Input key keeps its
+  name; its read becomes an **inbound** download. Never convert it to a FileReference. Renaming it
+  changes the DAG wire contract: owner decision 8. A key only tasks of this
+  run read is a **hand-off**, not a key.
 
 Private storage helpers routed here by `migrate-deprecated-symbols` (B008):
 `_download_files` (a **hand-off** or **inbound** site),
@@ -335,6 +411,8 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    keeps the default tier, `TRANSIENT`, because a `RETAINED` one only keeps a
    second copy of the same bytes. Keep a ref `RETAINED` when its own key is
    read after the run, or when the file must be reviewable after the run.
+   A ref handed only from one task to another stays `RETAINED`, as the
+   legacy writer output it replaces survived the run.
 3. **Empty output.** `upload_refs` returns `prefix=""` for an empty
    declaration and raises on a declared file with no objects; some apps hand
    publish a prefix naming an empty tree today. An empty or missing prefix
@@ -365,6 +443,29 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
 6. **Retries.** Legacy writers with `replace_prefix=True` wiped a prior
    attempt's prefix; per-task scratch directories do not. Confirm no consumer
    depends on that overwrite.
+7. **Cross-run state.** A prefix the next run reads back (a cross-run
+   **state** site). The reference apps keep no state of their own: they
+   hand a `current_state_prefix` to the publish node, which owns the state
+   (`atlan-mysql-app` `app/mysql.py`). An app that diffs or carries state
+   forward itself has a design difference, not a storage fix: leave the
+   site open and record it. P044's own text allows
+   `# conformance: ignore[P044] state synced across runs` for a state
+   directory synced wholesale; do not add it without the owner's answer.
+8. **Entrypoint key.** A **key** field that the generated manifest or
+   another app reads keeps its name with a reasoned
+   `# conformance: ignore[P012] object-store key, not a local path, read by <reader>`
+   (decided default `entry-key-ignore`). P012 matches the field name or
+   its description, and
+   the value already survives the move to another node; a `*_prefix` /
+   `*_key` rename (the reference apps' names) changes only the name and
+   costs the decision 5 lifecycle plus a manifest switch. Rename only when
+   the owner asks for it.
+
+Decisions 1, 2, 5, 6 and 8 have answers that apply to every app; they are in
+**Decided defaults** below. A site that needs a different answer (a key
+outside the run would move, the delivered file set would change, a
+declaration can be empty: decision 3) still
+stops here.
 
 **Stop 1** (see Agent protocol).
 
@@ -401,6 +502,37 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    the developer accepted it at Stop 1.
 
 **Stop 2** (see Agent protocol).
+
+## Decided defaults
+
+Owner answers for storage sites, read by remediation tooling. Each row names
+a fix shape for a Step 1 class as its `fix_shape`. A default keeps what the app does today
+(a run that goes on without an input keeps going on; a file delivered today
+is delivered at the same key).
+
+```decided-defaults
+{"rule": "P012", "fix_shape": "task-scratch", "decision": "Drop the path field from the @task contract and stop passing it; the task writes into its own tempfile.mkdtemp() directory and returns what it wrote as FileReferences. A retry gets a new directory; the consumer only sees the ref the successful attempt returned.", "why": "Owner decision 6: nothing reads the shared path, so its overwrite on retry is not needed. Reference shape: atlan-metabase-app app/paths.py task_scratch_dir."}
+{"rule": "P012", "fix_shape": "task-hand-off", "decision": "The producer writes into its own scratch directory and returns FileReference.from_local(<file or dir>, tier=StorageTier.RETAINED) on a typed Output field, or None when it wrote nothing; when upload_refs also re-delivers that ref, keep the from_local default TRANSIENT instead. The consumer declares FileReference | None on its Input and reads .local_path. On a @task contract delete the path or key field and the transfer calls that moved the data; on an @entrypoint contract retire the old field with entrypoint-field-retire. A key handed in from another workflow node is downloaded in the @entrypoint (inbound-download).", "why": "Owner decision 2: hand-off output was legacy writer output that survived the run, so RETAINED keeps that. Reference shape: atlan-openapi-app app/contracts.py, atlan-metabase-app app/connector.py."}
+{"rule": "P044", "fix_shape": "task-hand-off", "decision": "Same as P012 task-hand-off, tier rule included: the producing task returns FileReference.from_local(<dir>, tier=StorageTier.RETAINED) (TRANSIENT when upload_refs re-delivers it; None when empty), the consuming task declares it on its Input; a reader of a prefix several tasks wrote declares a bounded collection of refs, Annotated[dict[str, FileReference], MaxItems(n)]. Delete the upload_prefix / download_prefix calls and any wrapper left with no caller.", "why": "The interceptor persists and materialises the ref with per-file checksums, which the prefix copy did not have. Reference shape: atlan-metabase-app app/contracts.py."}
+{"rule": "P012", "fix_shape": "dead-field", "decision": "Delete the field (or the class when nothing uses it) and every place that sets it, once the Step 1 search (app, tests, generated manifests, contract/app.pkl, SDK base classes) finds no reader. On an @entrypoint contract use entrypoint-field-retire instead.", "why": "A field nothing reads carries no behaviour; @task contracts are free to change."}
+{"rule": "P012", "fix_shape": "entrypoint-field-retire", "decision": "In this change stop reading the field and mark it deprecated (Field(..., deprecated=True), or the Pkl widget then regenerate) and regenerate the ledger. A later change marks it sunset; a third deletes it. The finding stays open until the delete; say which step this is in the PR description. Never for a field the generated manifest or another app reads: that field is a key and keeps its value.", "why": "Owner decision 5. An old payload that still sends the key is accepted: Input drops an unknown key with a warning."}
+{"rule": "P010", "fix_shape": "from-local", "decision": "FileReference.from_local(<local_path>, tier=<the tier the call passed>) in place of FileReference(local_path=..., file_count=..., tier=...); keep the None guards around it and change nothing else. Only for a call that sets local_path and, besides tier, only file_count (and maybe is_durable=False / storage_path=None): no auto_materialize, manifest_path or store.", "why": "The interceptor counts the files again when it persists a local ref, so the hand-set file_count never reaches a consumer."}
+{"rule": "P010", "fix_shape": "unpin-key", "decision": "FileReference.from_local(<local path>, tier=<the tier it had>) and delete the task's own upload of that file; a reader that loaded the pinned key by name gets the ref on its Input instead. A pinned key that something outside the run reads stays: deliver that file from run() with outbound-upload-refs at the same key.", "why": "Owner decision 1: refs read only inside the run may live under file_refs/ keys; keys read outside the run do not move."}
+{"rule": "P010", "fix_shape": "inbound-download", "decision": "self.download(DownloadInput(storage_path=<the prefix with one trailing slash: prefix.rstrip('/') + '/'>)) in run() / the @entrypoint, and pass dl.ref (None when dl.ref.file_count is 0) to each task that reads it; a single object keeps its exact key. Without the trailing slash an empty prefix is read as a missing single object and raises. If the run goes on without this data today, keep that: catch TemporalActivityError around the download and continue with None only when isinstance(error.cause, TemporalApplicationError) (import it from application_sdk.execution; its ApplicationError is the subclass for raising and never matches a failure read back) and error.cause.type is in a fixed set of leaf class names. error.cause.type is the class name of the exception the download raised, never a parent, so build the set from the old except clause by replacing each caught class with its own name plus the names of all its subclasses (for a storage error, the subclasses defined in application_sdk.storage.errors; for OSError, the built-in OSError subclasses); StorageNotFoundError must be in it. Write the set as a literal in the app. Re-raise anything else. If the run fails without it today, let the error raise.", "why": "App.download reads upstream_storage or storage and retries with the SDK transfer policy; the task gets a ref that survives a move to another pod. The download in the @entrypoint and the ref handed to the task are the atlan-metabase-app app/connector.py extract_lineage shape; the None-on-empty rule and the fail-soft catch are this skill's rules for keeping today's behaviour (the reference download has neither). The error type crosses the activity boundary as its class name string."}
+{"rule": "P044", "fix_shape": "inbound-download", "decision": "Same as P010 inbound-download: hoist the download_prefix of another app's or another node's output to self.download(...) in run() / the @entrypoint and hand dl.ref to the task; keep today's fail-soft or fail-hard behaviour as described there.", "why": "A download inside a @task trades P044 for P008. Reference shape: atlan-metabase-app app/connector.py extract_lineage."}
+{"rule": "P009", "fix_shape": "inbound-download", "decision": "Same as P010 inbound-download when the hand-built store only reads a prefix for a task: remove the store and the task that used it, download in run() / the @entrypoint, hand dl.ref on.", "why": "App.download already routes to upstream_storage or storage."}
+{"rule": "P009", "fix_shape": "store-fallback", "decision": "For a hand-built store that only reads, and that was bound to the upstream store: self.context.upstream_storage or self.context.storage. For one bound to the deployment store: self.context.storage. Drop test settings that only fed the hand-built store. A store the app writes through is a move site: owner decision.", "why": "The same store App.download uses for upstream data, and the app's own store for its own data, so keys and bucket do not change in either deployment mode."}
+{"rule": "P009", "fix_shape": "outbound-upload-refs", "decision": "Replace the hand-written copy between the deployment and upstream stores with one self.upload_refs(UploadRefsInput(...)) call in run() after the transforms, over every transformed ref the tasks returned: either files=[DeclaredFile(ref=ref)] with source_prefix=prefix=<the prefix delivered today> when the ref keys already end in today's relative names, or files=[DeclaredFile(ref=ref, label=<today's relative name>)] with prefix=<the prefix delivered today>. Hand delivered.prefix downstream. Declare exactly the files today's code delivers; if any declaration can be empty, stop: owner decision 3. Run it in every deployment, not only when ENABLE_ATLAN_UPLOAD is set; the only new keys are the .sha256 sidecars upload_refs writes next to each file, as in the reference apps. The task refs keep the from_local default TRANSIENT; leave UploadRefsInput.tier at its default RETAINED.", "why": "Owner decisions 1-3: destination keys equal today's keys; upload_refs writes to upstream_storage or storage, which in-cluster is the same store, and verifies the delivery against the declaration. Reference shape: atlan-mysql-app app/mysql.py run() (source_prefix), atlan-metabase-app app/connector.py (label)."}
+{"rule": "P044", "fix_shape": "outbound-upload-refs", "decision": "Same as P009 outbound-upload-refs for an upload_prefix of transformed output that publish or another app reads: return the refs from the task, deliver them with one upload_refs call in run() at today's prefix and relative names, hand delivered.prefix downstream, and stop on a declaration that can be empty (owner decision 3).", "why": "An upload inside a @task trades P044 for P008. Reference shape: atlan-mysql-app app/mysql.py run()."}
+{"rule": "P009", "fix_shape": "customer-bucket", "decision": "CloudStore.from_credentials(<the same bucket, region and auth the client used>); call store.list(prefix) first when the old code failed on an empty prefix; then store.download(prefix=..., output_dir=<the same local layout>). Needs SDK 3.49.1 or later; with a lower lock, plan the site as SDK.", "why": "CloudStore is the SDK API for a customer bucket; it skips S3 folder-marker keys, and from 3.49.1 it resolves a blank region as boto3 did. Reference shape: atlan-openapi-app app/connector.py."}
+{"rule": "P009", "fix_shape": "auth-only-ignore", "decision": "# conformance: ignore[P009] boto3 for authentication only, not object storage (<the one in use: STS, IAM or RDS token>), on the import line, after checking that every boto3 client in the file is STS, IAM or an RDS token; any other service client is the Step 1 store-class stop.", "why": "Step 1 store class: authentication is not storage.", "suppress": true, "reason": "authentication only, not object storage"}
+{"rule": "P012", "fix_shape": "entry-key-ignore", "decision": "# conformance: ignore[P012] object-store key, not a local path, read by <the manifest node or app that reads it>, on the field line, for a str field on an @entrypoint Output whose value is an object-store key or prefix read outside this run, or an @entrypoint Input field that receives one (its read becomes inbound-download). Only when no code in the app uses the value as a local path (os.path.join with a local root, open, makedirs). A field used both ways: move the in-run use to a FileReference hand-off between tasks, keep the field and its value for the manifest, then add this ignore. Never retire a field the manifest or another app reads.", "why": "Owner decision 8: P012 matches the field name or its description; the value already survives the move to another node, and a rename changes only the name.", "suppress": true, "reason": "object-store key, not a local path"}
+{"rule": "P012", "fix_shape": "not-path-ignore", "decision": "# conformance: ignore[P012] <what the value is>, not a path, on the field line, for a str field whose value is not a path at all (a format flag, a list of names, a display name).", "why": "P012 is a name heuristic; its rule text names a reasoned ignore for a field that is not a transferable path.", "suppress": true, "reason": "not a path"}
+{"rule": "P044", "fix_shape": "^cross-run-state$", "block": "The site syncs a prefix so that the next run can read it back (a current-state snapshot, an incremental marker). The reference apps keep no state of their own: they hand a current-state prefix to the publish node, which owns the state. Owner decision 7.", "brief": "Should this app keep its own cross-run state with # conformance: ignore[P044] state synced across runs, or hand the state to publish as the reference apps do (a design change outside this skill)?"}
+{"rule": "P009", "fix_shape": "^boto3-source-api$", "block": "boto3 builds a client for an AWS service that is the app's metadata source, not object storage. The SDK has no documented seam for such a client: application_sdk.common.aws_utils is not in the SDK capability manifest and takes no client Config.", "brief": "Should application_sdk.common.aws_utils become the public seam for source clients (with client Config), or should P009 stop firing on AWS clients that are not storage?"}
+{"rule": "P009", "fix_shape": "^dev-script$", "block": "The boto3 import is in a developer script under scripts/ (fixture seeding, replay capture), not in app runtime code.", "brief": "Should conformance scan scripts/ for P009, or should these developer tools take a reasoned ignore?"}
+{"rule": "P009", "fix_shape": "^customer-bucket$", "requires": {"package": "atlan-application-sdk", "min": "3.49.1"}, "block": "CloudStore.from_credentials resolves a blank region as boto3 did only from atlan-application-sdk 3.49.1, and the app's lock resolves an older SDK.", "brief": "Raise the app's atlan-application-sdk lock to 3.49.1 or later through its normal dependency update, then re-run this site."}
+```
 
 ## Agent protocol
 

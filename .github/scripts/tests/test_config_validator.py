@@ -361,6 +361,99 @@ resources:
         rules = {v.rule for v in exc.value.violations}
         assert "requests_exceeds_vpa_max_memory" in rules
 
+    _SPLIT_SERVER = """
+splitDeploymentEnabled: true
+temporalWorkerDeployment: {enabled: true}
+vpa:
+  enabled: true
+  maxAllowed: {cpu: 50m}
+resources:
+  requests: {cpu: 50m, memory: 500Mi}
+  limits:   {cpu: 2,   memory: 1Gi}
+workerResources:
+  requests: {cpu: 50m, memory: 500Mi}
+  limits:   {cpu: 2,   memory: 1Gi}
+serverResources:
+  requests: {cpu: 100m, memory: 512Mi}
+  limits:   {cpu: 300m, memory: 1Gi}
+"""
+
+    def test_server_request_ignores_worker_vpa_max(self):
+        # The app vpa targets the worker only; a server request above it is fine.
+        validate_config(self._SPLIT_SERVER, sdk_version="3.6.0")
+
+    def test_server_request_within_server_vpa_max_passes(self):
+        validate_config(
+            self._SPLIT_SERVER + "serverVpa:\n  maxAllowed: {cpu: 100m}\n",
+            sdk_version="3.6.0",
+        )
+
+    def test_server_request_above_server_vpa_max_fails(self):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                self._SPLIT_SERVER + "serverVpa:\n  maxAllowed: {cpu: 80m}\n",
+                sdk_version="3.6.0",
+            )
+        (v,) = exc.value.violations
+        assert v.rule == "requests_exceeds_vpa_max_cpu"
+        assert v.field == "serverResources.requests.cpu"
+        assert "serverVpa.maxAllowed.cpu (80m)" in v.expected
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            "serverVpa:\n  enabled: false\n  maxAllowed: {cpu: 80m}\n",
+            'serverVpa:\n  updateMode: "Off"\n  maxAllowed: {cpu: 80m}\n',
+            "routeToCommonAPIServer: true\nserverVpa:\n  maxAllowed: {cpu: 80m}\n",
+        ],
+    )
+    def test_server_vpa_not_clamping_skips_rule(self, extra):
+        validate_config(self._SPLIT_SERVER + extra, sdk_version="3.6.0")
+
+    @pytest.mark.parametrize(
+        ("extra", "field"),
+        [
+            ('serverVpa: "100m"\n', "serverVpa"),
+            ("serverVpa: [cpu]\n", "serverVpa"),
+            ("serverVpa:\n  maxAllowed: 100\n", "serverVpa.maxAllowed"),
+            ('serverVpa:\n  maxAllowed: "100m"\n', "serverVpa.maxAllowed"),
+        ],
+    )
+    def test_server_vpa_not_a_mapping_reports_invalid_type(self, extra, field):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(self._SPLIT_SERVER + extra, sdk_version="3.6.0")
+        (v,) = exc.value.violations
+        assert v.rule == "invalid_type"
+        assert v.field == field
+
+    @pytest.mark.parametrize(
+        ("max_allowed", "field"),
+        [
+            ("{cpu: abc}", "serverVpa.maxAllowed.cpu"),
+            ("{memory: 1Zz}", "serverVpa.maxAllowed.memory"),
+        ],
+    )
+    def test_server_vpa_invalid_quantity_reported(self, max_allowed, field):
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(
+                self._SPLIT_SERVER + f"serverVpa:\n  maxAllowed: {max_allowed}\n",
+                sdk_version="3.6.0",
+            )
+        assert [(v.rule, v.field) for v in exc.value.violations] == [
+            ("invalid_quantity", field)
+        ]
+
+    def test_worker_request_still_checked_against_vpa_max(self):
+        cfg = self._SPLIT_SERVER.replace(
+            "workerResources:\n  requests: {cpu: 50m",
+            "workerResources:\n  requests: {cpu: 100m",
+        )
+        with pytest.raises(ConfigValidationError) as exc:
+            validate_config(cfg, sdk_version="3.6.0")
+        assert [v.field for v in exc.value.violations] == [
+            "workerResources.requests.cpu"
+        ]
+
     def test_request_within_declared_max_passes(self):
         validate_config("""
 vpa:

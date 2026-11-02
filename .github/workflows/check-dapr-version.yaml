@@ -18,9 +18,15 @@ name: Sync Dapr Version from Base Image
 # or Harbor credentials needed. This is the same image the Hourly Security Scan
 # (``daily-security-scan.yml``) reads.
 #
-# Trigger: a new SDK version is released and the runtime image is rebuilt
-# (``release: published`` — the same event ``harbor-release.yaml`` rebuilds the
-# image on), plus manual dispatch. On each run it:
+# Trigger: ``harbor-release.yaml`` finishes rebuilding the runtime image for a
+# published SDK release (``workflow_run`` on its completion), plus manual
+# dispatch. This must NOT listen to ``release: published`` itself: that is the
+# same event the image rebuild starts on, so both ran side by side and the sync
+# pulled ``:3`` ~10s in, minutes before the rebuild pushed the new image. Every
+# run therefore compared the pin against the PREVIOUS release's daprd, and a
+# daprd bump in the image went unnoticed until the release after it. Only a
+# successful, release-triggered rebuild counts — a manual rebuild publishes
+# under a branch tag prefix, not ``:3``. On each run it:
 #   1. Pulls the runtime base image and reads daprd's reported version (raw-logged).
 #   2. Compares it to the pinned ``__dapr_version``.
 #   3. Opens a PR bumping the pin when they differ.
@@ -30,8 +36,10 @@ name: Sync Dapr Version from Base Image
 # ``workflow_dispatch`` to reconcile the pin on demand in the meantime.
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    # Must match ``name:`` in harbor-release.yaml.
+    workflows: ["Publish Harbor Image (Release)"]
+    types: [completed]
   workflow_dispatch: {}
 
 permissions:
@@ -51,6 +59,11 @@ env:
 jobs:
   sync:
     name: Sync daprd pin from runtime base image
+    # Run only after the image rebuild for a release actually pushed a new ``:3``.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'release')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -163,10 +176,8 @@ jobs:
           baked="${{ steps.compare.outputs.baked }}"
           pinned="${{ steps.compare.outputs.pinned }}"
           image="${{ env.TARGET_IMAGE }}"
-          # PR always targets main. On a ``release: published`` event the trigger
-          # ref is the tag (e.g. refs/tags/v3.18.0), not a branch — so we cannot
-          # use github.ref_name as the base. The release tag is cut from main, so
-          # the checked-out HEAD already matches main's tip at release time.
+          # PR always targets main. Both ``workflow_run`` and a dispatch from main
+          # check out main's tip, so the pin read above is main's current one.
           base="main"
           branch="chore/sync-daprd-${baked}"
 

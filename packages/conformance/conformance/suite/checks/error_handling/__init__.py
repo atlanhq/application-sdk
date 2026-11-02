@@ -33,8 +33,11 @@ Rule implementations are split by category:
 from __future__ import annotations
 
 import ast
+import io
+import re
 import sys
-from pathlib import Path
+import tokenize
+from pathlib import Path, PurePosixPath
 
 from conformance.suite.checks._ast_common import (
     EXCLUDE_DIRS,
@@ -47,16 +50,19 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.schema.findings import Finding
 
 from .._deprecated_module import module_is_deprecated
+from ..logging._helpers import is_script_file
 from ._checker import Checker
 from ._collect import _collect_imports, _collect_legacy_aliases
 from ._constants import (
     _ATLAN_LEGACY_MODULE,
     ACTIVITY_DECORATORS,
     BUILTIN_RAISES,
+    E012_TOOLING_ROOTS,
     INTEROP_DECORATORS,
     INTEROP_METHODS,
     LEAF_CLASSES,
     LEGACY_ATLAN_ERRORS,
+    PROTOCOL_DUNDER_BUILTINS,
     SERIES,
 )
 from ._dependency_category import dependency_unavailable_classes
@@ -67,11 +73,13 @@ from .exception_chaining import exception_helpers
 __all__ = [
     "ACTIVITY_DECORATORS",
     "BUILTIN_RAISES",
+    "E012_TOOLING_ROOTS",
     "EXCLUDE_DIRS",
     "INTEROP_DECORATORS",
     "INTEROP_METHODS",
     "LEAF_CLASSES",
     "LEGACY_ATLAN_ERRORS",
+    "PROTOCOL_DUNDER_BUILTINS",
     "SERIES",
     "_IgnoreDirective",
     "discover",
@@ -79,6 +87,7 @@ __all__ = [
     "is_builtin_raise",
     "main",
     "parse_ignore_directive",
+    "scan_all",
     "scan_path",
     "scan_text",
 ]
@@ -89,8 +98,52 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
+def _is_build_tooling(file: str) -> bool:
+    """True when repo-relative *file* sits under a tooling root (``tools/``, ``contract/``).
+
+    Only the first path component counts, so an app package such as
+    ``app/tools/`` stays in scope.
+    """
+    parts = PurePosixPath(file.replace("\\", "/")).parts
+    return len(parts) > 1 and parts[0] in E012_TOOLING_ROOTS
+
+
+_NON_EXPLANATORY_COMMENT = re.compile(
+    r"#\s*(conformance\s*:|noqa\b|type\s*:\s*ignore|pragma\b|pyright\s*:|fmt\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _comment_lines_of(text: str) -> frozenset[int]:
+    """Lines carrying an explanatory comment — tool directives do not count."""
+    lines: set[int] = set()
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(text).readline):
+            if token.type == tokenize.COMMENT and not _NON_EXPLANATORY_COMMENT.match(
+                token.string
+            ):
+                if token.string.lstrip("#").strip():
+                    lines.add(token.start[0])
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return frozenset()
+    return frozenset(lines)
+
+
+def _preflight_lines_of(text: str, file: str, path: Path | None) -> frozenset[int]:
+    """F005's preflight scope within this one file (no cross-file reach)."""
+    from ..preflight._common import preflight_scope_lines, registry_from_texts
+
+    registry = registry_from_texts([(path or Path(file), file, text)])
+    return preflight_scope_lines(registry).get(file, frozenset())
+
+
 def scan_text(
-    text: str, file: str, *, path: Path | None = None, root: Path | None = None
+    text: str,
+    file: str,
+    *,
+    path: Path | None = None,
+    root: Path | None = None,
+    preflight_lines: frozenset[int] | None = None,
 ) -> list[Finding]:
     """Scan Python source *text* and return all E-series findings.
 
@@ -98,11 +151,18 @@ def scan_text(
     when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
     and :mod:`._dependency_category`), and let E007 see a deprecation marker
     on an enclosing package (see :mod:`.._deprecated_module`).
+
+    *preflight_lines* is F005's preflight scope for this file — the ``def``
+    lines of the functions F005 inspects — which E004 reuses so the two rules
+    agree on where WARNING is barred.  :func:`_scan_all` computes it across
+    the whole repo; without it, the scope is computed from this file alone.
     """
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
         return []
+    if preflight_lines is None:
+        preflight_lines = _preflight_lines_of(text, file, path)
 
     imports = _collect_imports(tree)
     atlan_ioerror = imports.get("IOError") == _ATLAN_LEGACY_MODULE
@@ -124,12 +184,18 @@ def scan_text(
         raised_error_helpers=raised_error_helpers,
         dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
         deprecated_module=module_is_deprecated(tree, path=path, root=root),
+        e012_in_scope=not _is_build_tooling(file),
+        script_file=is_script_file(text, tree),
+        preflight_lines=preflight_lines,
+        comment_lines=_comment_lines_of(text),
     )
     checker.visit(tree)
     return checker._findings
 
 
-def scan_path(path: Path, root: Path) -> list[Finding]:
+def scan_path(
+    path: Path, root: Path, *, preflight_lines: frozenset[int] | None = None
+) -> list[Finding]:
     """Scan a single Python file, producing repo-root-relative URIs."""
     try:
         text = path.read_text(encoding="utf-8")
@@ -139,13 +205,37 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         rel = path.relative_to(root)
     except ValueError:
         rel = path
-    return scan_text(text, str(rel), path=path, root=root)
+    return scan_text(
+        text, str(rel), path=path, root=root, preflight_lines=preflight_lines
+    )
 
 
 def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # scan_path, not scan_text: E004 and E021 follow the repo's own imports,
-    # which needs each file's path and the repo root.
-    return [finding for path in paths for finding in scan_path(path, root)]
+    # which needs each file's path and the repo root. F005's preflight scope
+    # follows helpers across files, so it is computed once over every path.
+    from ..preflight._common import build_registry, preflight_scope_lines
+
+    scope = preflight_scope_lines(build_registry(paths, root))
+
+    def _rel(path: Path) -> str:
+        try:
+            return str(path.relative_to(root))
+        except ValueError:
+            return str(path)
+
+    return [
+        finding
+        for path in paths
+        for finding in scan_path(
+            path, root, preflight_lines=scope.get(_rel(path), frozenset())
+        )
+    ]
+
+
+#: Whole-repo entry point for the suite runner: same findings as scanning each
+#: path, plus F005's preflight scope followed across files for E004.
+scan_all = _scan_all
 
 
 main = make_cli_main(

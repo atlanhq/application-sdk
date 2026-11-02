@@ -162,24 +162,28 @@ RULES: tuple[RuleDefinition, ...] = (
         since="0.5.0",
         rationale=(
             "D002 only covers [project.dependencies] and the optional-dependencies arrays; "
-            "an SDK-managed package re-pinned in a PEP 735 [dependency-groups] table escapes "
-            "it. A dev/test group that re-pins a package the SDK already manages drifts from "
-            "the SDK's validated dev environment and must be touched on every SDK bump."
+            "a redundant SDK-managed tooling pin in a PEP 735 [dependency-groups] table "
+            "escapes it. Such a dev/test group entry drifts from the SDK's validated "
+            "environment and must be touched on every SDK bump. A package directly imported "
+            "by app-owned test source is instead a direct test dependency, not a redundant "
+            "SDK tooling pin."
         ),
         short_description=(
-            "SDK-managed dependency redeclared in a [dependency-groups] table"
+            "Redundant SDK-managed dependency in a [dependency-groups] table"
         ),
         full_description=(
             "Packages pinned by ``atlan-application-sdk`` must not be "
             "redeclared in the app's PEP 735 ``[dependency-groups.*]`` tables "
-            "(dev/test groups).  This is the coverage gap left by D002, which "
-            "scans only ``[project.dependencies]`` and "
-            "``[project.optional-dependencies.*]``.  Pull SDK-managed dev/test "
-            "tooling in via ``atlan-application-sdk[tests]`` rather than "
-            "re-pinning it.  The managed set is read via "
+            "(dev/test groups) merely to pull in SDK-managed tooling. This is "
+            "the coverage gap left by D002, which scans only "
+            "``[project.dependencies]`` and "
+            "``[project.optional-dependencies.*]``. A package directly imported "
+            "by app-owned test source is a direct test dependency rather than a "
+            "redundant tooling pin, so it may remain in the group. Pull other "
+            "SDK-managed test tooling in via ``atlan-application-sdk[tests]`` "
+            "rather than re-pinning it. The managed set is read via "
             "``importlib.metadata.requires('atlan-application-sdk')``; if the "
-            "SDK is not importable, this rule is skipped silently. "
-            "Cite: BLDX-1410."
+            "SDK is not importable, this rule is skipped silently. Cite: BLDX-1410."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"

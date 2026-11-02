@@ -326,6 +326,34 @@ def test_t005_silent_on_hypothesis_property_with_no_raise_marker() -> None:
     assert findings == []
 
 
+def test_t005_silent_on_no_raise_marker_after_explanatory_comment() -> None:
+    findings = scan_text(
+        "def test_missing_cache_dir():\n"
+        "    # Even with the option enabled, a missing cache dir must not raise.\n"
+        "    process_missing_dir()\n",
+        "tests/unit/test_cache.py",
+    )
+    assert findings == []
+
+
+def test_t005_fires_on_unrelated_comment() -> None:
+    findings = scan_text(
+        "def test_missing_cache_dir():\n"
+        "    # The cache directory is intentionally absent.\n"
+        "    process_missing_dir()\n",
+        "tests/unit/test_cache.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_fires_when_no_raise_phrase_is_only_in_string() -> None:
+    findings = scan_text(
+        'def test_note_text():\n    record_note("# must not raise")\n',
+        "tests/unit/test_notes.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
 def test_t005_still_fires_without_no_raise_marker() -> None:
     """A bare call with no marker and no assertion is still flagged — the
     marker must be explicit, not inferred from the call shape alone."""

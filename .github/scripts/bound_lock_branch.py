@@ -235,8 +235,11 @@ def regenerate_relationship_directions(root: Path) -> int:
     ).returncode
 
 
-def apply_outputs(source: Path, root: Path) -> None:
-    """Copy OUTPUT_PATHS from an artifact directory into the checkout.
+def apply_outputs(
+    source: Path, root: Path, paths: tuple[str, ...] = OUTPUT_PATHS
+) -> None:
+    """Copy ``paths`` (default OUTPUT_PATHS) from an artifact directory into the
+    checkout. renovate_pyatlan_sync.py reuses this with its own output list.
 
     Only the declared paths are read, so nothing else in the artifact can reach
     a branch that auto-merges. Every one must be present: `bound` uploads all of
@@ -247,7 +250,7 @@ def apply_outputs(source: Path, root: Path) -> None:
     outside the artifact under allowlisted names. Everything is checked before
     anything is copied.
     """
-    for path in OUTPUT_PATHS:
+    for path in paths:
         src = source
         for part in Path(path).parts:
             src = src / part
@@ -255,11 +258,13 @@ def apply_outputs(source: Path, root: Path) -> None:
                 raise ValueError(f"refusing symlinked artifact entry: {path}")
         if not src.is_file():
             raise FileNotFoundError(f"missing artifact output: {path}")
-    for path in OUTPUT_PATHS:
+    for path in paths:
         shutil.copyfile(source / path, root / path)
 
 
-def stage_and_commit(root: Path, paths: list[str]) -> bool:
+def stage_and_commit(
+    root: Path, paths: list[str], message: str = COMMIT_MESSAGE
+) -> bool:
     """Stage the bound outputs and commit iff something changed.
 
     Returns True when a commit was made. Stages explicit paths only, so nothing
@@ -290,7 +295,7 @@ def stage_and_commit(root: Path, paths: list[str]) -> bool:
         print("Locks were already within the window — nothing to commit.")
         return False
 
-    subprocess.run(["git", "commit", "-m", COMMIT_MESSAGE], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-m", message], cwd=root, check=True)
     return True
 
 

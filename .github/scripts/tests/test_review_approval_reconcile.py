@@ -1081,7 +1081,8 @@ def test_every_gh_call_this_script_makes_is_bounded():
         for argv, kwargs in recorder.seen
         if is_pr_list(argv) or is_graphql(argv) or is_rate_limit(argv)
     ]
-    assert len(own) == 3
+    # PR listing, the lens and dependency-gate GraphQL prefilters, rate limit.
+    assert len(own) == 4
     assert all(kw.get("timeout") == reconcile.GH_TIMEOUT_SECONDS for kw in own)
 
 
@@ -1312,3 +1313,224 @@ def test_no_delay_when_nothing_was_posted():
     run_lens_sweep(lens_gh(), api)
 
     assert api.slept == []
+
+
+# --- the dependency gate source (FND-4439) ------------------------------
+
+
+GATE_OLD = "2026-08-17T11:00:00Z"  # an hour before NOW: past GATE_MIN_AGE
+GATE_FRESH = "2026-08-17T11:55:00Z"  # five minutes before NOW
+
+
+def gate_node(
+    number=PR,
+    head=HEAD,
+    ref="vuln-agent/fix-deps",
+    rollup="SUCCESS",
+    draft=False,
+    committed=GATE_OLD,
+):
+    return {
+        "number": number,
+        "isDraft": draft,
+        "headRefName": ref,
+        "headRefOid": head,
+        "commits": {
+            "nodes": [
+                {
+                    "commit": {
+                        "oid": head,
+                        "committedDate": committed,
+                        "statusCheckRollup": {"state": rollup},
+                    }
+                }
+            ]
+        },
+    }
+
+
+def is_gate_query(argv) -> bool:
+    return argv[1:3] == ["api", "graphql"] and any(
+        "statusCheckRollup" in arg for arg in argv
+    )
+
+
+def is_reviews(argv) -> bool:
+    return (
+        argv[1] == "api"
+        and any(str(arg).endswith(f"/pulls/{PR}/reviews") for arg in argv)
+        and "POST" not in argv
+    )
+
+
+def gate_review(state="APPROVED", commit=HEAD, login="atlan-ci"):
+    return {
+        "user": {"login": login},
+        "state": state,
+        "commit_id": commit,
+        "body": f"{reconcile.dep_gate.APPROVAL_SIGNATURE} all required CI checks passed.",
+    }
+
+
+def gate_gh(nodes=None, reviews=None, **kwargs) -> FakeGH:
+    gh = base_gh(**kwargs)
+    gh.on(
+        is_gate_query,
+        ok(
+            "\n".join(
+                json.dumps(n) for n in (nodes if nodes is not None else [gate_node()])
+            )
+        ),
+    )
+    gh.on(is_reviews, ok(json.dumps([reviews or []])))
+    return gh
+
+
+class StubGate:
+    """Stands in for the gate's process_pr, recording how it was driven."""
+
+    def __init__(self, result=True, raises=None):
+        self.result, self.raises, self.calls = result, raises, []
+
+    def __call__(self, repo, pr, eval_sha, extra_pattern, runner, *, freeze_mode):
+        self.calls.append((repo, pr, eval_sha, extra_pattern, freeze_mode, runner))
+        if self.raises:
+            raise self.raises
+        return self.result
+
+
+def run_gate_sweep(gh, stub, **kwargs):
+    gate = reconcile.GateSource(
+        REPO,
+        gh,
+        approver_token=PAT,
+        extra_pattern="extra/.+",
+        process_pr=stub,
+    )
+    return run_sweep(gh, gate=gate, **kwargs)
+
+
+def test_gate_candidates_need_a_vuln_agent_branch_a_green_rollup_and_no_draft():
+    gh = gate_gh(
+        nodes=[
+            # Renovate PRs are left to the gate's own runs.
+            gate_node(number=1, ref="renovate/lock-file-maintenance"),
+            gate_node(number=2, ref="vuln-agent/fix-deps"),
+            gate_node(number=3, ref="feat/something"),
+            gate_node(number=4, rollup="FAILURE"),
+            gate_node(number=5, rollup="PENDING"),
+            gate_node(number=6, draft=True),
+        ]
+    )
+    heads = reconcile.gate_candidate_heads(REPO, gh)
+    assert sorted(n for n, _ in heads) == [2]
+
+
+def test_a_lost_gate_approval_is_re_driven_through_the_gate_itself():
+    gh, stub = gate_gh(), StubGate(result=True)
+    outcomes = run_gate_sweep(gh, stub)
+    assert [(o.number, o.action, o.source) for o in outcomes] == [
+        (PR, reconcile.RECONCILED, reconcile.GATE)
+    ]
+    repo, pr, sha, pattern, _, _ = stub.calls[0]
+    assert (repo, pr, sha, pattern) == (REPO, str(PR), HEAD, "extra/.+")
+
+
+def test_a_declining_gate_is_a_skip_not_a_failure():
+    gh, stub = gate_gh(), StubGate(result=False)
+    [outcome] = run_gate_sweep(gh, stub)
+    assert outcome.action == reconcile.SKIPPED and outcome.source == reconcile.GATE
+
+
+def test_an_approved_head_is_a_quiet_no_op():
+    gh, stub = gate_gh(reviews=[gate_review("APPROVED")]), StubGate()
+    assert run_gate_sweep(gh, stub) == []
+    assert stub.calls == []
+
+
+def test_a_withdrawn_gate_approval_is_never_re_driven():
+    gh, stub = gate_gh(reviews=[gate_review("DISMISSED")]), StubGate()
+    [outcome] = run_gate_sweep(gh, stub)
+    assert outcome.action == reconcile.SKIPPED
+    assert stub.calls == []
+
+
+def test_an_approval_on_an_older_head_does_not_count():
+    gh, stub = gate_gh(reviews=[gate_review("APPROVED", commit=OTHER)]), StubGate()
+    [outcome] = run_gate_sweep(gh, stub)
+    assert outcome.action == reconcile.RECONCILED
+
+
+def test_a_fresh_head_is_left_to_the_gate_s_own_run():
+    gh, stub = gate_gh(nodes=[gate_node(committed=GATE_FRESH)]), StubGate()
+    assert run_gate_sweep(gh, stub) == []
+
+
+def test_a_spent_quota_defers_the_gate_without_running_it():
+    gh, stub = gate_gh(quota_remaining=0), StubGate()
+    [outcome] = run_gate_sweep(gh, stub)
+    assert outcome.action == reconcile.DEFERRED
+    assert stub.calls == []
+
+
+def test_a_gate_error_is_a_failure():
+    gh = gate_gh()
+    stub = StubGate(raises=reconcile.dep_gate.resync.GhError("listing files failed"))
+    [outcome] = run_gate_sweep(gh, stub)
+    assert outcome.action == reconcile.FAILED
+
+
+def test_dry_run_never_runs_the_gate():
+    gh, stub = gate_gh(), StubGate()
+    [outcome] = run_gate_sweep(gh, stub, dry_run=True)
+    assert outcome.reason == reconcile.DRY_RUN_REASON
+    assert stub.calls == []
+
+
+def test_only_the_approval_post_runs_on_the_atlan_ci_token():
+    seen = []
+
+    def runner(cmd, **kwargs):
+        seen.append(((kwargs.get("env") or {}).get("GH_TOKEN"), cmd[1:4]))
+        return ok()
+
+    routed = reconcile.approver_runner(runner, PAT)
+    routed(["gh", "api", f"repos/{REPO}/pulls/{PR}/files"])
+    routed(["gh", "api", "-X", "POST", f"repos/{REPO}/pulls/{PR}/reviews", "-f", "x"])
+    assert seen[0][0] is None  # inherits the App token from the environment
+    assert seen[1][0] == PAT
+
+
+def test_the_extra_pattern_is_read_from_the_gate_caller(tmp_path):
+    caller = tmp_path / "renovate-auto-approve.yml"
+    caller.write_text(
+        "jobs:\n  auto-approve:\n    with:\n"
+        "      extra_dep_file_pattern: 'packages/x/.+\\.ya?ml'\n"
+    )
+    assert reconcile.caller_extra_pattern(caller) == r"packages/x/.+\.ya?ml"
+    assert reconcile.caller_extra_pattern(tmp_path / "missing.yml") == ""
+
+
+def test_the_real_caller_pattern_is_readable():
+    caller = SCRIPTS.parent / "workflows" / "renovate-auto-approve.yml"
+    assert reconcile.caller_extra_pattern(caller)
+
+
+def test_every_gate_call_is_bounded_and_a_stalled_approve_is_not_a_success():
+    """F-cbc6ca: the gate's own calls carry no timeout; the reconciler adds one."""
+    seen = []
+
+    def stalls_on_post(cmd, **kwargs):
+        seen.append(kwargs.get("timeout"))
+        if "POST" in cmd:
+            raise subprocess.TimeoutExpired(cmd="gh", timeout=kwargs["timeout"])
+        return ok()
+
+    routed = reconcile.approver_runner(stalls_on_post, PAT)
+    routed(["gh", "api", f"repos/{REPO}/pulls/{PR}/files"], capture_output=True)
+    with pytest.raises(subprocess.CalledProcessError):
+        routed(
+            ["gh", "api", "-X", "POST", f"repos/{REPO}/pulls/{PR}/reviews"],
+            check=True,
+        )
+    assert seen == [reconcile.GH_TIMEOUT_SECONDS] * 2

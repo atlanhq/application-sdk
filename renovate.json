@@ -114,6 +114,35 @@
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
+    },
+    {
+      "description": "pyatlan floor lane (FND-4439): on every pyatlan release, raise the `pyatlan>=X` floor the SDK PUBLISHES (root pyproject.toml and packages/api's `pyatlan` extra) instead of only moving this repo's lock, so the next SDK release carries the new pyatlan to every app. Under the preset's default rangeStrategy an in-range release produces no PR at all and reaches only this repo's uv.lock through lockFileMaintenance, which apps never see. groupName splits pyatlan out of the preset's 'non-critical python dependencies' group so both manifests move in one PR on its own branch (renovate/pyatlan; a major lands on renovate/major-pyatlan via separateMajorMinor). packages/conformance does not declare pyatlan, so Renovate cannot touch its lock: .github/workflows/renovate-pyatlan-sync.yaml moves that lock to the root's pyatlan and regenerates relationship_directions.json on the minor/patch branch. No matchUpdateTypes: the rule applies to every update type, and the next rule takes majors back out of auto-merge (under rangeStrategy bump Renovate keeps updateType minor/patch and only adds `bump` as a second matchable type, so either shape would match; this one does not depend on that). semanticCommitType is restated so the commit type does not hinge on rule order against config:recommended's fix-for-deps preset. No minimumReleaseAge: pyatlan is Atlan-published and exempt from the cooldown (FND-378), and upstream exempts `bump` regardless. Mend cannot run postUpgradeTasks, which is why the regeneration is a workflow and not a task here.",
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "pyatlan"
+      ],
+      "groupName": "pyatlan",
+      "rangeStrategy": "bump",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "pyatlan majors are reviewed, never auto-merged: a major raises the SDK's `<N+1` cap, which is the control point for a pyatlan major reaching every connector (see the preset's FND-378 note), and the conformance lock cannot follow it until an SDK release does. Separate from the rule above so that rule can stay update-type-agnostic; the preset's major rule still gives it the lowest prPriority.",
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "pyatlan"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "platformAutomerge": false
     }
   ],
   "ignorePaths": [

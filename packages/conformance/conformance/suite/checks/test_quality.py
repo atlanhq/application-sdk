@@ -87,8 +87,10 @@ Known coverage limits (intentional — see module docstring of
 from __future__ import annotations
 
 import ast
+import io
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
@@ -118,8 +120,8 @@ _SCENARIO_HELPER_ATTRS: frozenset[str] = frozenset(
 
 # Explicit "the assertion is: this does not raise" marker — see the module
 # docstring's "Assertion vocabulary" section for why this is comment-gated
-# rather than inferred from a bare call.
-_NO_RAISE_MARKER_RE = re.compile(r"#\s*(?:should|must)\s+not\s+raise\b", re.IGNORECASE)
+# rather than inferred from a bare call. Match the phrase anywhere in a comment.
+_NO_RAISE_MARKER_RE = re.compile(r"\b(?:should|must)\s+not\s+raise\b", re.IGNORECASE)
 
 __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
@@ -352,14 +354,18 @@ def _withitem_is_assertion_cm(item: ast.withitem) -> bool:
 def _has_no_raise_marker(
     lines: list[str], node: ast.FunctionDef | ast.AsyncFunctionDef
 ) -> bool:
-    """True when a ``# should/must not raise`` comment appears in *node*'s body.
+    """True when a no-raise marker comment appears in *node*'s body.
 
     Scanned over the node's full line span (``lineno``..``end_lineno``) since
     the marker may trail the call it documents or sit on the line above it.
+    Tokenizing that span ensures marker-like text inside string literals is not
+    mistaken for a Python comment.
     """
     end = node.end_lineno or node.lineno
+    source = "\n".join(lines[node.lineno - 1 : end])
     return any(
-        _NO_RAISE_MARKER_RE.search(line) for line in lines[node.lineno - 1 : end]
+        token.type == tokenize.COMMENT and _NO_RAISE_MARKER_RE.search(token.string)
+        for token in tokenize.generate_tokens(io.StringIO(source).readline)
     )
 
 

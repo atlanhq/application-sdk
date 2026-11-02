@@ -21,6 +21,8 @@ real expressions, in both directions:
 
 from __future__ import annotations
 
+import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -43,7 +45,7 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build-and-publish-app.yaml"
 #: carries the gate's meaning, is what gets evaluated.
 FAILURE_PREFIX = "!failure() && "
 
-GATED_JOBS = ("certify", "leak-scan", "prepare")
+GATED_JOBS = ("certify-unit", "certify", "leak-scan", "prepare")
 #: Jobs that only run behind `prepare`, directly or through `merge`.
 CHAIN_JOBS = ("build", "merge", "security-scan", "app-deployment-dispatcher", "publish")
 
@@ -129,7 +131,7 @@ def test_gated_jobs_skip_only_on_false(job_id: str, answer: str) -> None:
     assert evaluate(body, contexts) is (answer != "false")
 
 
-@pytest.mark.parametrize("job_id", ("certify", "leak-scan"))
+@pytest.mark.parametrize("job_id", ("certify-unit", "certify", "leak-scan"))
 @pytest.mark.parametrize(
     ("ref", "publish", "runs"),
     [
@@ -149,6 +151,66 @@ def test_certify_and_leak_scan_keep_their_publish_or_main_condition(
         "needs": {"build-decision": {"outputs": {"enable_sdr": ""}}},
     }
     assert evaluate(body, contexts) is runs
+
+
+@pytest.mark.parametrize(("shards", "runs"), [(1, False), (2, True), (10, True)])
+def test_shard_legs_run_only_when_the_app_opts_in(shards: int, runs: bool) -> None:
+    # Sharding is opt-in: at the default (1) certify runs the tests itself and
+    # an app pays for no extra jobs.
+    body = _gate_body(_jobs()["certify-unit"]["if"])
+    contexts = {
+        "github": {"ref": MAIN},
+        "inputs": {"publish": True, "unit_test_shards": shards},
+        "needs": {"build-decision": {"outputs": {"enable_sdr": ""}}},
+    }
+    assert evaluate(body, contexts) is runs
+
+
+def _shard_matrix() -> tuple[dict[str, list[int]], str]:
+    """Split certify-unit's matrix expression into its lookup table and index."""
+    expression = _jobs()["certify-unit"]["strategy"]["matrix"]["shard"]
+    match = re.fullmatch(
+        r"\$\{\{ fromJSON\('(?P<table>[^']*)'\)\[(?P<index>.*)\] \}\}", expression
+    )
+    assert match, expression
+    return json.loads(match["table"]), match["index"]
+
+
+def test_shard_matrix_has_one_leg_per_shard() -> None:
+    # The leg list is looked up from a table, not built by a planning job
+    # (one fewer billed job). Every count 1-10 maps to legs 1..N.
+    table, index = _shard_matrix()
+    assert index == "format('{0}', inputs.unit_test_shards)"
+    assert table == {str(n): list(range(1, n + 1)) for n in range(1, 11)}
+
+
+def test_shard_matrix_has_no_entry_outside_the_range() -> None:
+    # No entry -> no leg runs; certify's verdict then rejects the count
+    # (covered in test_certify_unit_shards.py), so publish is blocked.
+    table, _ = _shard_matrix()
+    assert not {"0", "-1", "11"} & table.keys()
+
+
+def test_shard_legs_cannot_hand_app_code_a_write_token() -> None:
+    # The legs run app code (pytest): the job token is read-only, and no
+    # checkout persists it into .git/config where that code could read it.
+    job = _jobs()["certify-unit"]
+    assert job["permissions"] == {"contents": "read"}
+    checkouts = [s for s in job["steps"] if "actions/checkout@" in s.get("uses", "")]
+    assert checkouts
+    for step in checkouts:
+        assert step["with"].get("persist-credentials") is False, step["name"]
+
+
+def test_certify_itself_does_not_depend_on_the_shard_input() -> None:
+    assert "unit_test_shards" not in _jobs()["certify"]["if"]
+
+
+def test_sharding_defaults_to_off() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    # PyYAML reads the bare `on:` key as boolean True.
+    inputs = workflow[True]["workflow_call"]["inputs"]
+    assert inputs["unit_test_shards"]["default"] == 1
 
 
 @pytest.mark.parametrize("job_id", CHAIN_JOBS)

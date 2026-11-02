@@ -45,6 +45,15 @@ iconUrl: String?
 /// Marketplace visibility.
 visibility: String = "public"
 
+/// Marketplace search tags. Same contract as `App.pkl`'s `tags`.
+///
+/// Default: `[]`, which emits no `tags` key, so existing bundles render
+/// byte-identical `atlan.yaml`. When set, emitted as a top-level `tags` list
+/// after `visibility`. The Build & Publish workflow syncs it to the marketplace,
+/// which serves it as the app's keywords on every entrypoint card; marketplace
+/// search matches on it. Tags are app-level: entrypoints have no per-card tags.
+tags: Listing<String> = new Listing {}
+
 /// Argo package names used for legacy/stitching lookup.
 argoPackageNames: Listing<String> = new Listing {}
 
@@ -200,6 +209,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   when (executionMode != null) { ["execution_mode"] = executionMode }
   when (iconUrl != null) { ["icon_url"] = iconUrl }
   ["visibility"] = visibility
+  when (!tags.isEmpty) { ["tags"] = tags }
   when (!argoPackageNames.isEmpty) { ["argo_package_names"] = argoPackageNames }
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime

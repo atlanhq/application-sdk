@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk-api"
-version = "3.53.0"
+version = "3.53.2"
 description = "Experimental: the handler surface of the Atlan Application SDK, for the consolidated API host"
 license = "Apache-2.0"
 authors = [
@@ -17,7 +17,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-    "fastapi>=0.143.0,<0.144.0",
+    "fastapi>=0.162.0,<0.163.0",
     "pydantic>=2.10.6,<3.0.0",
     "orjson>=3.11.6,<4.0.0",
     # Form parsing for the file-upload route. Arrives on the worker through
@@ -40,19 +40,19 @@ dependencies = [
 sql = [
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
     "httpx>=0.27.0,<0.29.0",
-    "python-dotenv>=1.1.0,<2.0.0",
+    "python-dotenv>=1.2.2,<2.0.0",  # CVE-2026-28684
 ]
 pandas = ["pandas>=2.2.3,<3.0.0"]
 aws = [
     "boto3>=1.38.6,<2.0.0",
     "httpx>=0.27.0,<0.29.0",
-    "python-dotenv>=1.1.0,<2.0.0",
+    "python-dotenv>=1.2.2,<2.0.0",  # CVE-2026-28684
 ]
 # Never needed to serve a handler: the input-contract models import pyatlan_v9
 # only inside ConnectionRef's Atlas conversion helpers, which the host never
 # calls. Declared so those function-level imports are an extra's, as on the worker.
 pyatlan = [
-    "pyatlan>=11.5.0,<12",
+    "pyatlan>=11.6.0,<12",
     # pyatlan 11.5.0 already requires authlib~=1.9.1 on Python >=3.10. Published
     # here too so a resolver that ignores requires-python cannot pick pyatlan's
     # py3.9 authlib branch for this wheel.

@@ -259,7 +259,8 @@ fixed in this skill, except the **owner decisions**.
     attributes change unless proven equal per asset type.
   - **SQL extractor** — `SqlMetadataExtractor`,
     `IncrementalSqlMetadataExtractor`, or `BaseMetadataExtractor` on a source
-    read with SQL → `templates.SqlApp` (`atlan-mysql-app` `app/mysql.py:181`).
+    read with SQL → `templates.SqlApp` (`atlan-mysql-app` `app/mysql.py:181`;
+    `IncrementalSqlMetadataExtractor` → `SqlApp` with a custom `run()`).
     `SqlApp` runs `extract_*` / `transform_*` tasks and writes raw JSONL where
     the old base ran `fetch_*` tasks and wrote parquet, so task names, raw
     layout and the transform change together. Hand it to the developer with

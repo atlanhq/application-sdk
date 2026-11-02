@@ -14,6 +14,13 @@ inputs:
     required: false
     description: The Python version to use for the action.
     default: "3.11"
+  lookup-only:
+    required: false
+    description: |
+      "true" to check for the venv cache entry without downloading it. On a
+      hit nothing is installed; on a miss the venv is built and saved as usual.
+      For jobs that only seed the cache (warm-caches.yaml).
+    default: "false"
 
 runs:
   using: "composite"
@@ -38,12 +45,12 @@ runs:
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.tool_cache }}/uv
-        key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.13.5
+        key: uv-bin-${{ runner.os }}-${{ runner.arch }}-0.13.6
 
     - name: Install uv
-      uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+      uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       with:
-        version: "0.13.5"
+        version: "0.13.6"
         enable-cache: true
         cache-dependency-glob: "uv.lock"
         github-token: ${{ github.token }}
@@ -63,11 +70,24 @@ runs:
         # (e.g. toolkit_baseline.json), suite/schema/*.json, bootstrap/templates/*
         # — also bust the cache. The sibling tests/, pyproject.toml, and README
         # are outside conformance/ and correctly excluded (not in the wheel).
-        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('uv.lock', 'packages/conformance/conformance/**') }}
+        #
+        # `pyc` marks entries that carry bytecode (see Install dependencies). It
+        # was added so entries saved before that were never restored again.
+        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-pyc-${{ hashFiles('uv.lock', 'packages/conformance/conformance/**') }}
+        lookup-only: ${{ inputs.lookup-only }}
 
     - name: Install dependencies
       if: steps.cache-venv.outputs.cache-hit != 'true'
       shell: bash
+      # Compile bytecode into the venv so the saved entry carries it. Without
+      # it, every leg's xdist workers compile the same ~6,500 modules at once
+      # during collection: -n 4 --collect-only took 24.7s on a plain venv vs
+      # 17.3s on a compiled one, at 33% more cache (177 -> 236 MB compressed).
+      # Compiling here only runs on a miss, where it costs about what it saves
+      # for that leg (FND-4309). Every miss compiles, not just warm-caches.yaml,
+      # because whichever job saves a key on main first owns that entry.
+      env:
+        UV_COMPILE_BYTECODE: "1"
       run: |
         PYTHON_MINOR=$(echo "${{ inputs.python-version }}" | cut -d. -f2)
         if [ "${PYTHON_MINOR}" -ge 14 ] 2>/dev/null; then

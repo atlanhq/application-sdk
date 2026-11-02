@@ -145,6 +145,18 @@ def _needs(job: dict[str, Any]) -> list[str]:
     return [needs] if isinstance(needs, str) else list(needs)
 
 
+def _ancestors(jobs: dict[str, Any], job_id: str) -> set[str]:
+    """Every job ``job_id`` depends on, directly or through another need."""
+    seen: set[str] = set()
+    stack = _needs(jobs[job_id])
+    while stack:
+        need = stack.pop()
+        if need not in seen:
+            seen.add(need)
+            stack.extend(_needs(jobs[need]))
+    return seen
+
+
 def _inputs(workflow: dict[str, Any]) -> dict[str, Any]:
     """The reusable's input defaults, with the scaffolded caller's overrides
     (packages/conformance/.../templates/tests.yaml)."""
@@ -159,8 +171,9 @@ def _simulate(
     event: str, proof_result: str, proven: str, outputs: dict[str, dict[str, str]]
 ) -> dict[str, str]:
     """Each job's result for one run. A job runs when its ``if:`` holds and,
-    unless the ``if:`` calls a status function, every need succeeded (GitHub's
-    implicit ``success()``). A job that runs succeeds, except ``queue-proof``,
+    unless the ``if:`` calls a status function, every job it depends on
+    succeeded: GitHub's implicit ``success()`` covers the whole ``needs`` chain,
+    not only direct needs. A job that runs succeeds, except ``queue-proof``,
     whose result the scenario picks."""
     workflow = _workflow()
     jobs: dict[str, Any] = workflow["jobs"]
@@ -179,7 +192,9 @@ def _simulate(
                 continue
             condition = str(job.get("if", "true"))
             implicit = not _STATUS_FN_RE.search(condition)
-            if implicit and any(results[n] != "success" for n in needs):
+            if implicit and any(
+                results[n] != "success" for n in _ancestors(jobs, job_id)
+            ):
                 runs = False
             else:
                 contexts = {
@@ -253,6 +268,13 @@ def test_queue_proof_runs_only_on_a_queue_entry(event: str) -> None:
     # Its skip must not take the unit tier or the gate down with it.
     assert results["unit"] == "success"
     assert results["tests-passed"] == "success"
+
+
+@pytest.mark.parametrize("event", ["pull_request", "push", "workflow_dispatch"])
+def test_an_opted_in_app_runs_its_api_member(event: str) -> None:
+    # queue-proof's skip sits upstream of api-member through detect-api-member.
+    outputs = {**_OUTPUTS, "detect-api-member": {"present": "true"}}
+    assert _simulate(event, "success", "true", outputs)["api-member"] == "success"
 
 
 def test_the_gate_keeps_its_static_required_name() -> None:

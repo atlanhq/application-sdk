@@ -61,13 +61,13 @@ Flags app consumption of any symbol recorded in the deprecated-symbol manifest t
 ships with this conformance package (BLDX-1418).  Four surfaces are matched,
 name-anchored within an `application_sdk` import context:
 
-* importing a deprecated class/function (`from application_sdk.x import Foo`); *
-subclassing a deprecated base (`class MyExtractor(BaseMetadataExtractor)`); * calling a
-deprecated method by attribute (`obj.upload_to_atlan(...)`); * reading a deprecated enum
-member (`DataframeType.daft`), which the   SDK marks with a `__deprecated_members__`
-mapping in the enum's   class body — the convention that exists because `@deprecated`
-cannot attach to a member.  Matching is module-aware through the enum   class, so an
-app's own same-named enum is never flagged.
+* importing a deprecated class/function (`from application_sdk.x import Foo`);
+* subclassing a deprecated base (`class MyExtractor(BaseMetadataExtractor)`);
+* calling a deprecated method by attribute (`obj.upload_to_atlan(...)`);
+* reading a deprecated enum member (`DataframeType.daft`), which the SDK marks with a
+  `__deprecated_members__` mapping in the enum's class body — the convention that exists
+  because `@deprecated` cannot attach to a member.  Matching is module-aware through the
+  enum class, so an app's own same-named enum is never flagged.
 
 The finding carries the SDK's migration guidance from the deprecation notice so the fix
 is concrete.  Complements E013 `LegacyAtlanErrorRaise` (which owns the `raise
@@ -98,7 +98,8 @@ Flags a `@deprecated(...)` or `DeprecationWarning` notice in SDK source whose me
 does not name *both*:
 
 * a **migration target** — what to use instead (`use X` / `Use X instead` / `Migrate to
-Y`); and * a **removal version** — when it goes away (`will be removed in v4.0`).
+  Y`); and
+* a **removal version** — when it goes away (`will be removed in v4.0`).
 
 Both are required so every deprecation is self-describing and B001 can propagate
 concrete guidance to consumers.  Only symbol-level markers are checked (decorator, or a
@@ -219,29 +220,30 @@ version fails or silently mis-parses — a break they hit with zero changes on t
 
 Fires when a ledger entry for an entrypoint contract field is either:
 
-* **absent from the live contract** — the field was removed (a rename is   caught here:
-the old name is gone); or * **present with a different canonical type** — the field's
-annotation   changed (e.g. `str` → `int`, or `Optional[str]` → `str`); or * **marked
-`sunset` in source while the ledger records anything else**   — `gen-contract-ledger`
-records `sunset` only over `deprecated`   and keeps `active` otherwise, so a ledger
-`active` means the   deprecation step was skipped (mark the field `deprecated` first),
-and a ledger `deprecated` means it was not regenerated, or was   hand-edited, since the
-source moved.  A hand-edited ledger that   writes `sunset` directly is what
-`ledger-guard` reports against   the base ref; or * **required in source while the
-ledger records it not required** —   required means Pydantic v2's: no default,
-`Optional` or not.  A field   had its default removed, or was added to a contract the
-ledger already   records without one: `gen-contract-ledger` never records `required`
-moving from `false` to `true`, and records a field new to a   recorded contract `false`.
-Before regeneration such a new field is   reported here alongside B006, since
-regenerating does not clear it.   Callers that predate the field — a saved workflow
-config, another   app's DAG node — do not send it, so their first run on the new version
-fails validation.  Add the field with a default and migrate callers;   a contract new to
-the ledger may declare required fields freely.  An   entry with `required` unknown (a
-ledger written before the key   existed) is not checked, and its first regeneration
-records the   source's requiredness as the baseline.  A field inherited from an SDK
-contract the app's repo does not contain is not checked either: the   SDK's own B005 run
-guards it.  `ledger-guard` refuses the same two   moves in a hand-edited ledger against
-the base ref.
+* **absent from the live contract** — the field was removed (a rename is caught here:
+  the old name is gone); or
+* **present with a different canonical type** — the field's annotation changed (e.g.
+  `str` → `int`, or `Optional[str]` → `str`); or
+* **marked `sunset` in source while the ledger records anything else** —
+  `gen-contract-ledger` records `sunset` only over `deprecated` and keeps `active`
+  otherwise, so a ledger `active` means the deprecation step was skipped (mark the field
+  `deprecated` first), and a ledger `deprecated` means it was not regenerated, or was
+  hand-edited, since the source moved.  A hand-edited ledger that writes `sunset`
+  directly is what `ledger-guard` reports against the base ref; or
+* **required in source while the ledger records it not required** — required means
+  Pydantic v2's: no default, `Optional` or not.  A field had its default removed, or was
+  added to a contract the ledger already records without one: `gen-contract-ledger`
+  never records `required` moving from `false` to `true`, and records a field new to a
+  recorded contract `false`.  Before regeneration such a new field is reported here
+  alongside B006, since regenerating does not clear it. Callers that predate the field —
+  a saved workflow config, another app's DAG node — do not send it, so their first run
+  on the new version fails validation.  Add the field with a default and migrate
+  callers; a contract new to the ledger may declare required fields freely.  An entry
+  with `required` unknown (a ledger written before the key existed) is not checked, and
+  its first regeneration records the source's requiredness as the baseline.  A field
+  inherited from an SDK contract the app's repo does not contain is not checked either:
+  the SDK's own B005 run guards it.  `ledger-guard` refuses the same two moves in a
+  hand-edited ledger against the base ref.
 
 Type comparison uses canonical normalized strings: `Optional[X]` and `X | None` are
 equivalent, as are `List[X]` and `list[X]`, so purely syntactic rewrites do not trigger
@@ -397,13 +399,14 @@ Flags daft-only DataFrame API usage in apps that consume the SDK (files importin
 `application_sdk`), where SDK >= 3.22 readers return **pandas** frames and the `[daft]`
 extra installs nothing:
 
-* `frame.count_rows()` — daft-only; pandas uses `len(frame)`; * `frame.to_pylist()` —
-daft-only on reader frames; pandas uses   `frame.to_dict("records")`.  Receivers that
-are demonstrably   pyarrow Tables (bound from `pa.Table.from_*` / `pa.table` /
-`.to_arrow_table()`) are exempt — `pyarrow.Table.to_pylist()`   is a real API; *
-`frame.names` — daft-only; pandas uses `frame.columns`.  Only   simple-variable
-receivers are matched (`df.schema.names` /   `df.index.names` are legitimate
-pyarrow/pandas chains and are   not flagged).
+* `frame.count_rows()` — daft-only; pandas uses `len(frame)`;
+* `frame.to_pylist()` — daft-only on reader frames; pandas uses
+  `frame.to_dict("records")`.  Receivers that are demonstrably pyarrow Tables (bound
+  from `pa.Table.from_*` / `pa.table` / `.to_arrow_table()`) are exempt —
+  `pyarrow.Table.to_pylist()` is a real API;
+* `frame.names` — daft-only; pandas uses `frame.columns`.  Only simple-variable
+  receivers are matched (`df.schema.names` / `df.index.names` are legitimate
+  pyarrow/pandas chains and are not flagged).
 
 `DataframeType.daft` is **not** matched here.  It is the SDK's own symbol and was only
 hand-coded into this rule because nothing marked it; it now carries a
@@ -464,14 +467,15 @@ prevent; revisit once the count nears zero.
 Flags any import or attribute use that reaches a private module or name the app does not
 own.  Six shapes are matched:
 
-* `from application_sdk.execution._temporal.preflight_gate import X`   — a private
-component anywhere in the module path; * `import
-application_sdk.execution._temporal.worker`; * `from application_sdk.execution._temporal
-import preflight_gate`   — private component in the package being imported from; * `from
-application_sdk.app.base import _helper` — public module,   private name; * `from
-pandas._libs import x` — any third party, not just the SDK; * `import application_sdk as
-sdk` … `sdk.execution._temporal.x`   — module-qualified use, where the import line
-itself is clean.
+* `from application_sdk.execution._temporal.preflight_gate import X` — a private
+  component anywhere in the module path;
+* `import application_sdk.execution._temporal.worker`;
+* `from application_sdk.execution._temporal import preflight_gate` — private component
+  in the package being imported from;
+* `from application_sdk.app.base import _helper` — public module, private name;
+* `from pandas._libs import x` — any third party, not just the SDK;
+* `import application_sdk as sdk` … `sdk.execution._temporal.x` — module-qualified use,
+  where the import line itself is clean.
 
 **The app's own privates are never flagged.**  A relative import (`from ._helpers import
 x`) is own code by construction, and an absolute import rooted at one of the repo's own

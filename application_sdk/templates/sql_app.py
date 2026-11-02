@@ -1,6 +1,7 @@
 """SqlApp — consolidated SQL metadata extraction template.
 
-Replaces ``SqlMetadataExtractor``, ``SqlQueryExtractor``, and
+Replaces ``SqlMetadataExtractor``, ``SqlQueryExtractor``,
+``IncrementalSqlMetadataExtractor`` (with a custom ``run()``), and
 ``BaseMetadataExtractor`` (for SQL sources; a non-SQL connector subclasses
 ``application_sdk.app.App``) with a single App class that provides:
 
