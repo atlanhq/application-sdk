@@ -197,7 +197,12 @@ fix.  The re-detection gate is authoritative for this area — see
   lower bound: `">=3.11,<3.13"` → `">=3.11,<3.14"`; `">=3.11,<=3.12"` →
   `">=3.11,<3.14"`.  Never lower the floor and never pin `==3.13.*`.  For an
   exact-pin spelling (`==3.12.*`, `~=3.12.0`) the intent is not mechanical:
-  propose `">=3.11,<3.14"` and route to residue for human confirmation.
+  propose `">=3.11,<3.14"` and route to residue for human confirmation.  The
+  runtime's patch floats with the image, so the range must admit every 3.13.x:
+  for an explicit exclusion that shuts out any of 3.13 (`!=3.13.*`,
+  `!=3.13.4`) or a micro-version pin or bound (`==3.13.0`, `<3.13.5`,
+  `>=3.13.2`), do not raise an unrelated upper bound — route to residue for
+  human confirmation, proposing removal of that clause.
   State in the edit description that `uv lock` must be re-run (the lock's
   `requires-python` and cp313 wheels must follow) and that the app's tests
   should be run on Python 3.13; a dependency that has no 3.13 build surfaces

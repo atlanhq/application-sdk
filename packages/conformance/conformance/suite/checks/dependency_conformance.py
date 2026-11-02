@@ -719,11 +719,13 @@ def _requires_python_excludes_runtime(data: Mapping[str, Any]) -> str | None:
     """Return the app's ``requires-python`` spec when it shuts out the runtime
     image's Python, else ``None``.
 
-    Evaluated as a PEP 440 specifier set against the runtime ``X.Y.0`` and
-    ``X.Y.99`` (lowest and a high patch), so ``<3.13``, ``<=3.12``,
-    ``==3.12.*`` and ``~=3.12.0`` are all caught while ``<3.14``, ``<4.0`` and
-    ``==3.13.*`` pass. Absent or unparseable specs return ``None``: D006 owns
-    the absent case, and a spec ``packaging`` cannot parse is not graded here.
+    The runtime image's base tag pins only ``X.Y``; its patch floats as the
+    mutable tag is rebuilt. So the spec must admit *every* ``X.Y.N`` patch
+    (checked for N in 0..99), not just one: ``<3.13``, ``<=3.12``,
+    ``==3.12.*``, ``~=3.12.0``, ``!=3.13.*``, ``==3.13.0`` and ``!=3.13.4`` are
+    all caught while ``<3.14``, ``<4.0`` and ``==3.13.*`` pass. Absent or
+    unparseable specs return ``None``: D006 owns the absent case, and a spec
+    ``packaging`` cannot parse is not graded here.
     """
     project = data.get("project")
     if not isinstance(project, dict):
@@ -740,8 +742,7 @@ def _requires_python_excludes_runtime(data: Mapping[str, Any]) -> str | None:
     except InvalidSpecifier:
         return None
     major, minor = RUNTIME_IMAGE_PYTHON
-    candidates = (f"{major}.{minor}.0", f"{major}.{minor}.99")
-    if any(specifiers.contains(v, prereleases=True) for v in candidates):
+    if all(specifiers.contains(f"{major}.{minor}.{patch}") for patch in range(100)):
         return None
     return spec.strip()
 
@@ -967,10 +968,11 @@ def scan_text(
                 line=_line_of(text, "requires-python", section="project"),
                 column=1,
                 message=(
-                    f"requires-python '{excluded}' excludes Python "
-                    f"{rt_major}.{rt_minor}, the version app-runtime-base:3 "
-                    f"ships and the e2e harness runs. Raise the upper bound so "
-                    f"{rt_major}.{rt_minor} is admitted (e.g. "
+                    f"requires-python '{excluded}' does not admit every Python "
+                    f"{rt_major}.{rt_minor}.x; app-runtime-base:3 ships "
+                    f"{rt_major}.{rt_minor} (patch floats with the image) and the "
+                    f"e2e harness runs it. Widen the range so the whole "
+                    f"{rt_major}.{rt_minor} line is admitted (e.g. "
                     f"'<{rt_major}.{rt_minor + 1}', or drop the cap) and re-run "
                     f"`uv lock`."
                 ),

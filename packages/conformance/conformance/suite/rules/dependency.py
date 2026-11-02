@@ -1214,10 +1214,12 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         full_description=(
             "The app's ``[project].requires-python`` must admit the Python\n"
-            "that ``app-runtime-base:3`` ships (**3.13**).  The range is\n"
-            "evaluated as a PEP 440 specifier set, so every spelling that\n"
-            "shuts 3.13 out is caught -- ``<3.13``, ``<=3.12``, ``==3.12.*``,\n"
-            "``~=3.12.0``::\n"
+            "that ``app-runtime-base:3`` ships (**3.13**).  The image's base\n"
+            "tag pins only the minor; its patch floats, so the range must\n"
+            "admit every ``3.13.x``.  It is evaluated as a PEP 440 specifier\n"
+            "set, so every spelling that shuts any of 3.13 out is caught --\n"
+            "``<3.13``, ``<=3.12``, ``==3.12.*``, ``~=3.12.0``, ``!=3.13.*``,\n"
+            "``==3.13.0``::\n"
             "\n"
             '    requires-python = ">=3.11,<3.13"   # flagged\n'
             '    requires-python = ">=3.11,<3.14"   # passes\n'
@@ -1229,7 +1231,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``Dockerfile``, so the rule needs no resolved environment.\n"
             "\n"
             "Autofixable: raise only the upper-bound clause so 3.13 is\n"
-            "admitted, keep the lower bound, then re-run ``uv lock``.\n"
+            "admitted, keep the lower bound, then re-run ``uv lock``.  An\n"
+            "exclusion clause (``!=``) or a micro-version pin/bound is\n"
+            "routed to human review instead.\n"
             "Cite: FND-4505."
         ),
         help_uri=(

@@ -521,7 +521,21 @@ def test_d006_sdk_python_floor_matches_sdk_pyproject() -> None:
 
 
 @pytest.mark.parametrize(
-    "spec", [">=3.11,<3.13", ">=3.11,<=3.12", "==3.12.*", "~=3.12.0", "<3.13"]
+    "spec",
+    [
+        ">=3.11,<3.13",
+        ">=3.11,<=3.12",
+        "==3.12.*",
+        "~=3.12.0",
+        "<3.13",
+        # exclusion clauses: no upper bound to raise
+        ">=3.11,!=3.13.*",
+        ">=3.11,!=3.13.4",
+        # micro-version pins/bounds: the image's 3.13 patch floats
+        "==3.13.0",
+        ">=3.11,<3.13.5",
+        ">=3.13.2",
+    ],
 )
 def test_d016_fires_when_runtime_python_excluded(spec: str) -> None:
     findings = scan_text(
