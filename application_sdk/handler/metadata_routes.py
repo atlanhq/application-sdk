@@ -37,6 +37,7 @@ from uuid import uuid4
 import orjson
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
+from pydantic import ValidationError
 
 from application_sdk._logging import get_logger
 from application_sdk.common._generated_tree import (
@@ -50,6 +51,20 @@ from application_sdk.common.build_identity import (
     build_identity,
 )
 from application_sdk.common.task_queue import resolve_manifest_tokens
+from application_sdk.credentials.ref import (
+    GUID_ROUTED_EXTRACTION_METHODS,
+    CredentialRef,
+)
+from application_sdk.credentials.requirements import (
+    agent_schema,
+    canonical_credential,
+    credential_form,
+    credential_from_pairs,
+    credential_slots,
+    load_form,
+    missing_required_fields,
+)
+from application_sdk.credentials.spec import DECLARED_SOURCE_KEYS
 from application_sdk.errors.base import redact_secrets
 from application_sdk.handler.base import Handler
 from application_sdk.handler.context import (
@@ -310,6 +325,92 @@ def _redacted(exc: HTTPException) -> HTTPException:
         detail=redact_secrets(detail),
         headers=exc.headers,
     )
+
+
+#: The workflow-form credential slot routed by ``ExtractionInput``'s top-level
+#: ``extraction_method`` / ``credential_guid`` / ``agent_json`` fields.
+_PRIMARY_CREDENTIAL_SLOT = "credential-guid"
+
+
+def missing_fields_error(paths: list[tuple[str, ...]]) -> ValidationError:
+    """A pydantic ``missing`` error per path: the 422 handler's own shape."""
+    return ValidationError.from_exception_data(
+        "WorkflowCredentials",
+        [{"type": "missing", "loc": path, "input": {}} for path in paths],
+    )
+
+
+def credential_gaps(
+    generated_dir: Path,
+    entrypoint: str | None,
+    inline_credentials: Any,
+    input_data: Any,
+) -> list[tuple[str, ...]]:
+    """Required credential fields a ``/validate`` body leaves out (FND-502).
+
+    Requirements come from the app's generated forms, never from a guess:
+    the entry point's workflow form names its credential slots and their
+    credential type; the credential form ``<type>.json`` and the workflow
+    form's agent schema mark fields ``required`` per auth type. Three
+    shapes are checked, each only when the form that governs it is shipped:
+
+    * **inline** ``credentials`` (v2 or v3), e.g. at credential creation,
+      against the credential form → ``credentials.<path>``;
+    * an **agent** workflow (``extraction_method="agent"``): a populated
+      ``agent_json`` must map every required field of its auth type to a
+      secret key → ``agent_json.<auth-type>.<path>``. Declared-source
+      (format 2) specs are left to their own validation;
+    * a **GUID-routed** workflow: a required credential slot must carry a
+      reference (``credential_guid``, or any populated ``CredentialRef``
+      field) → ``credential_guid``. The vaulted credential itself is not
+      readable here; its fields are checked when it is created, by sending
+      it inline.
+
+    Returns:
+        Missing field locations; empty when nothing required is missing.
+    """
+    if entrypoint is None:
+        return []
+    form_path, _ = entrypoint_form(generated_dir, entrypoint)
+    workflow_form = load_form(form_path)
+    slots = credential_slots(workflow_form) if workflow_form is not None else []
+    gaps: list[tuple[str, ...]] = []
+
+    if isinstance(inline_credentials, list) and inline_credentials:
+        types = {slot.credential_type for slot in slots}
+        form = credential_form(generated_dir, types.pop()) if len(types) == 1 else None
+        if form is not None:
+            credential = credential_from_pairs(inline_credentials)
+            gaps.extend(
+                ("credentials", *gap.split("."))
+                for gap in missing_required_fields(form, credential)
+            )
+
+    primary = next((s for s in slots if s.field == _PRIMARY_CREDENTIAL_SLOT), None)
+    if primary is None or not primary.required or workflow_form is None:
+        return gaps
+    method = (getattr(input_data, "extraction_method", "") or "direct").strip().lower()
+    if method == "agent":
+        spec = getattr(input_data, "agent_json", None)
+        if spec is None or not spec.is_populated():
+            gaps.append(("agent_json",))
+            return gaps
+        raw = spec.to_raw_dict()
+        schema = agent_schema(workflow_form, primary.credential_type)
+        if schema is None or any(key in raw for key in DECLARED_SOURCE_KEYS):
+            return gaps
+        credential = canonical_credential(raw)
+        auth_type = credential.get("authType") or ""
+        for gap in missing_required_fields(schema, credential):
+            gaps.append(("agent_json", f"{auth_type}.{gap}" if auth_type else gap))
+    elif method in GUID_ROUTED_EXTRACTION_METHODS:
+        referenced = bool(getattr(input_data, "credential_guid", "")) or any(
+            isinstance(getattr(input_data, name, None), CredentialRef)
+            for name in type(input_data).model_fields
+        )
+        if not referenced:
+            gaps.append(("credential_guid",))
+    return gaps
 
 
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
@@ -789,15 +890,26 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
 
         Answers 200 when the body fits, and 422 naming each offending field
         (never echoing a value) when it does not. Inline credentials are
-        normalised and stripped first, as ``/start`` does: they are never
-        part of a workflow's configuration.
+        never part of the configuration the contract judges; instead they,
+        and the workflow's own credential reference, are checked for the
+        fields the app's generated forms mark required (FND-502). See
+        :func:`credential_gaps`.
         """
         contract = _resolve_input_contract(entrypoint)
         body = source.normalize_body(await read_json_object(request))
-        for key in ("credentials", "workflow_id", "workflow_type"):
+        inline_credentials = body.pop("credentials", None)
+        for key in ("workflow_id", "workflow_type"):
             body.pop(key, None)
+        resolved = entrypoint or _default_entrypoint(
+            source.log(), "No default entry point for app %s"
+        )
         try:
-            validate_request(contract, body)
+            input_data = validate_request(contract, body)
+            missing = credential_gaps(
+                source.generated_dir(), resolved, inline_credentials, input_data
+            )
+            if missing:
+                raise RequestContractError(missing_fields_error(missing))
         except RequestContractError:
             raise
         except Exception as exc:
@@ -812,9 +924,6 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
             raise HTTPException(
                 status_code=500, detail="Failed to validate workflow configuration"
             ) from None
-        resolved = entrypoint or _default_entrypoint(
-            source.log(), "No default entry point for app %s"
-        )
         return JSONResponse(
             content={
                 "success": True,

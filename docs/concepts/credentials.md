@@ -157,6 +157,33 @@ Inline credentials always come out in one shape: a flat dict with dotted keys, l
 
 ---
 
+## Required Fields at Submission
+
+`application_sdk.credentials.requirements` reads which credential fields an app
+requires from its generated forms, and `POST /workflows/v1/validate` uses it to
+reject a workflow or credential that leaves one out, before anything runs (see
+[Validating a workflow configuration](server.md#validating-a-workflow-configuration)).
+The requirement comes from the contract itself: `required = true` on a
+`FieldSpec` in `credentials.pkl` is generated into the credential form
+`<credential-type>.json` and the workflow form's agent schema. An app doesn't
+declare anything extra.
+
+```python
+from application_sdk.credentials.requirements import (
+    credential_form,
+    credential_from_pairs,
+    missing_required_fields,
+)
+
+form = credential_form(generated_dir, "atlan-connectors-bigquery")
+missing_required_fields(form, credential_from_pairs(pairs))
+# ["extra.atlan_oauth_id"]  -- field paths only, never values
+```
+
+`canonical_credential` nests a flat credential (`extra.*`, `<authType>.*`,
+`<authType>.extra.*`) the way `transform_agent_credentials` does at runtime. A
+parity test pins the two together.
+
 ## Custom Credential Types
 
 Register custom credential types via `register_credential_type`:
