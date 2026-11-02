@@ -814,7 +814,11 @@ from application_sdk.observability.sizing_inputs import report_input_bytes
 report_input_bytes(len(payload))
 ```
 
-Every reader returns `None` rather than a guessed `0` — a missing reading has to stay distinguishable from a real zero, or sizing picks the smallest tier. Nothing is emitted at all unless a cgroup reading was obtained, so on a host without one (local macOS/Windows, or a pod with no memory controller) no rows are produced.
+Every reader returns `None` rather than a guessed `0` — a missing reading has to stay distinguishable from a real zero, or sizing picks the smallest tier. Sizing the input happens after the activity returns, still inside its attempt, so it is bounded. It gets at most 10 seconds and never more than the attempt has left before its `start_to_close` or `schedule_to_close` deadline (less a 1-second margin), or half its heartbeat timeout. Past that, the row is recorded with input size unknown. The walk runs on its own single thread, so a walk stuck on an unresponsive filesystem cannot take threads from other offloaded work. While a walk is still running, later rows skip it and record input size unknown.
+
+**Telemetry never changes an activity's outcome.** The row is recorded after the activity has finished, and an error there, or a cancel arriving then (for example a worker shutdown past its graceful timeout), drops the row with a WARNING. The activity's result or original error is what Temporal sees, so a completed activity is never retried because of its own measurement.
+
+Nothing is emitted at all unless a cgroup reading was obtained, so on a host without one (local macOS/Windows, or a pod with no memory controller) no rows are produced.
 
 ### Batching and shutdown
 
