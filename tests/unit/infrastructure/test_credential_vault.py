@@ -528,6 +528,53 @@ class TestDaprCredentialVaultColdStartRetry:
         assert result["host"] == "db.example.com"
         assert "password" not in result
 
+    async def test_absent_ref_key_logs_label_only_at_debug(self) -> None:
+        """FND-4279: an absent single-key probe is an expected answer, logged
+        at DEBUG with the hashed label only — no WARNING, no exc_info (the
+        exception's str() and chained httpx URL both carry the raw key)."""
+        ref_key = "SNOWFLAKE_PROD_PASSWORD"
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+        config = {"credentialSource": "agent", "password": ref_key}
+        req = httpx.Request("GET", f"http://localhost/v1.0/secrets/store/{ref_key}")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_SECRET_GET",
+                "message": f"failed getting secret with key {ref_key} from "
+                f"secret store secretstore: secret {ref_key} not found",
+            },
+        )
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                f"Server error for url {req.url}", request=req, response=resp
+            )
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(
+                "application_sdk.infrastructure._dapr.credential_vault.logger"
+            ) as mock_logger,
+        ):
+            vault = self._make_vault(mock_client)
+            await vault.get_credentials("my-guid")
+
+        mock_logger.warning.assert_not_called()
+        absent_calls = [
+            call
+            for call in mock_logger.debug.call_args_list
+            if "definitively absent" in call.args[0]
+        ]
+        assert len(absent_calls) == 1
+        assert absent_calls[0].args[1] == f"sha256:{expected_hash}"
+        assert "exc_info" not in absent_calls[0].kwargs
+        every_call = mock_logger.method_calls
+        assert ref_key not in " ".join(str(c) for c in every_call)
+
 
 # ---------------------------------------------------------------------------
 # DaprCredentialVault._fetch_credential_config cold-start retry / classification
