@@ -4,6 +4,7 @@ exactly the teams whose data is needed. Ships off; allow-list only.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from typing import Any
@@ -16,11 +17,12 @@ from temporalio.worker import (
 )
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.observability.cgroup import track_container_usage
+from application_sdk.observability.cgroup import ContainerTrace, track_container_usage
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.sizing import SizingObservation, record_observation
 from application_sdk.observability.sizing_census import CENSUS
 from application_sdk.observability.sizing_inputs import (
+    InputSize,
     begin_collection,
     describe_inputs,
     end_collection,
@@ -35,6 +37,11 @@ def _pod_name() -> str | None:
     """
     return os.environ.get("K8S_POD_NAME") or os.environ.get("HOSTNAME") or None
 
+
+#: Budget for sizing the input after the activity returns. The walk is capped at
+#: 10k files, but a slow volume can still take long enough to push the attempt
+#: toward ``start_to_close``; past this, input size is recorded as unknown.
+DESCRIBE_INPUTS_TIMEOUT_SECONDS = 10.0
 
 #: Selects every activity. For a discovery pass on a test tenant, not production.
 WILDCARD = "*"
@@ -88,7 +95,6 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
         # Created here so reads accumulate into it; without one, reporting is a
         # no-op, which keeps report_input_bytes() free to call from a hot path.
         begin_collection()
-        concurrency_max = concurrency_now
         # Bound first so the outer ``finally`` cannot NameError if the tracker
         # never yields.
         trace = None
@@ -106,41 +112,110 @@ class _SizingActivityInboundInterceptor(ActivityInboundInterceptor):
             outcome = "ERROR"
             raise
         finally:
+            # try/finally: whatever happens to the telemetry, the collection ends,
+            # so a finished activity cannot leak into the next one.
+            try:
+                if trace is not None:
+                    await self._record_safely(
+                        input, info, token, trace, outcome, start_ns, started_at
+                    )
+            finally:
+                end_collection()
+
+    async def _record_safely(
+        self,
+        input: ExecuteActivityInput,
+        info: Any,
+        token: int,
+        trace: ContainerTrace,
+        outcome: str,
+        start_ns: int,
+        started_at: float,
+    ) -> None:
+        """Record one observation. Never raises, including on cancel.
+
+        Runs in ``_measured``'s ``finally``, after the activity has finished:
+        anything that escaped here would replace its result (or its real error),
+        and Temporal would retry work whose side effects already ran. Telemetry
+        is dropped instead.
+        """
+        try:
             # peak(), not leave(): the slot is still held, and leaving early
             # would undercount concurrency for everything else running.
             concurrency_max = CENSUS.peak(token)
             # After the ``async with`` exits: the tracker fills the peak and CPU
             # deltas in its own ``finally``, so reading inside would record nothing.
-            # try/finally: the walk below is an await, and a cancel delivered
-            # there must still end the collection.
-            try:
-                if trace is not None:
-                    duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
-                    # Read after the activity, once readers have reported. args[1] is
-                    # the Input (args[0] is TaskContext). In a thread: with no
-                    # reported reads it walks every materialised FileReference, up
-                    # to 10k files (FND-4084). The context is copied, so the
-                    # collector begin_collection() set is still the one it reads.
-                    input_size = await run_in_thread(
-                        describe_inputs, input.args[1] if len(input.args) > 1 else None
-                    )
-                    record_observation(
-                        SizingObservation.from_trace(
-                            trace,
-                            activity_type=info.activity_type or "",
-                            task_queue=info.task_queue or "",
-                            workflow_type=info.workflow_type or "",
-                            attempt=info.attempt,
-                            outcome=outcome,
-                            duration_seconds=duration_s,
-                            input_size=input_size,
-                            started_at=started_at,
-                            pod=_pod_name(),
-                            concurrency_max=concurrency_max,
-                        )
-                    )
-            finally:
-                end_collection()
+            duration_s = (time.monotonic_ns() - start_ns) / 1_000_000_000
+            input_size = await self._describe_inputs_bounded(input, info)
+            record_observation(
+                SizingObservation.from_trace(
+                    trace,
+                    activity_type=info.activity_type or "",
+                    task_queue=info.task_queue or "",
+                    workflow_type=info.workflow_type or "",
+                    attempt=info.attempt,
+                    outcome=outcome,
+                    duration_seconds=duration_s,
+                    input_size=input_size,
+                    started_at=started_at,
+                    pod=_pod_name(),
+                    concurrency_max=concurrency_max,
+                )
+            )
+        # conformance: ignore[E004] telemetry after the activity finished; raising
+        # would turn a completed activity into a retry.
+        except asyncio.CancelledError:
+            # A cancel that lands here (worker shutdown past its graceful
+            # timeout) arrived after the activity finished. Absorb it so the
+            # finished outcome is what Temporal sees; uncancel() so structured
+            # concurrency (asyncio.timeout, TaskGroup) does not see a pending one.
+            task = asyncio.current_task()
+            if task is not None:
+                task.uncancel()
+            logger.warning(
+                "Sizing telemetry cancelled after activity %s finished; "
+                "observation dropped, activity outcome kept",
+                info.activity_type,
+                exc_info=True,
+            )
+        # conformance: ignore[E004] telemetry after the activity finished; raising
+        # would turn a completed activity into a retry.
+        except Exception:
+            logger.warning(
+                "Sizing telemetry failed for activity %s; "
+                "observation dropped, activity outcome kept",
+                info.activity_type,
+                exc_info=True,
+            )
+
+    async def _describe_inputs_bounded(
+        self, input: ExecuteActivityInput, info: Any
+    ) -> InputSize | None:
+        """Input size, or ``None`` (unknown) if the walk outlasts its budget.
+
+        args[1] is the Input (args[0] is TaskContext). In a thread: with no
+        reported reads it walks every materialised FileReference, up to 10k files
+        (FND-4084). The context is copied, so the collector begin_collection()
+        set is still the one it reads. Bounded because the attempt's
+        ``start_to_close`` is still running while it walks.
+        """
+        input_data = input.args[1] if len(input.args) > 1 else None
+        try:
+            return await asyncio.wait_for(
+                run_in_thread(describe_inputs, input_data),
+                timeout=DESCRIBE_INPUTS_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            # The thread cannot be interrupted; it finishes in the background,
+            # bounded by the walk's file cap, and its result is discarded.
+            logger.warning(
+                "Input sizing for activity %s exceeded %.1fs; "
+                "recording the observation with input size unknown",
+                info.activity_type,
+                DESCRIBE_INPUTS_TIMEOUT_SECONDS,
+                exc_info=True,
+            )
+            return None
 
 
 class SizingTelemetryInterceptor(Interceptor):

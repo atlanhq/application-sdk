@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from application_sdk.execution._temporal.interceptors import (
+    sizing as sizing_interceptor_module,
+)
 from application_sdk.execution._temporal.interceptors.sizing import (
     WILDCARD,
     SizingTelemetryInterceptor,
@@ -14,8 +18,10 @@ from application_sdk.execution._temporal.interceptors.sizing import (
 )
 from application_sdk.execution.settings import load_interceptor_settings
 from application_sdk.observability import sizing as sizing_module
+from application_sdk.observability import sizing_inputs as sizing_inputs_module
 from application_sdk.observability.cgroup import ContainerTrace
 from application_sdk.observability.sizing import SizingObservation
+from application_sdk.observability.sizing_inputs import report_input_bytes
 
 _ACTIVITY_TARGET = "application_sdk.execution._temporal.interceptors.sizing.activity"
 _TRACKER_TARGET = (
@@ -25,6 +31,13 @@ _RECORD_TARGET = (
     "application_sdk.execution._temporal.interceptors.sizing.record_observation"
 )
 _HISTOGRAM_TARGET = "application_sdk.observability.sizing.create_histogram"
+_DESCRIBE_TARGET = (
+    "application_sdk.execution._temporal.interceptors.sizing.describe_inputs"
+)
+_RUN_IN_THREAD_TARGET = (
+    "application_sdk.execution._temporal.interceptors.sizing.run_in_thread"
+)
+_LOGGER_TARGET = "application_sdk.execution._temporal.interceptors.sizing.logger"
 
 
 @dataclass
@@ -363,6 +376,137 @@ class TestSizingInterceptor:
             await interceptor.execute_activity(MockExecuteActivityInput())
 
         assert captured["interval"] == 0.25
+
+
+class TestTelemetryNeverChangesTheOutcome:
+    """The row is recorded after the activity finished; nothing there may replace
+    its result, or Temporal retries work whose side effects already ran."""
+
+    @pytest.fixture
+    def mock_next(self):
+        n = AsyncMock()
+        n.execute_activity = AsyncMock(return_value="ok")
+        return n
+
+    @staticmethod
+    def _interceptor(mock_next):
+        return _SizingActivityInboundInterceptor(mock_next, 1.0, frozenset({"merge"}))
+
+    @staticmethod
+    def _input():
+        return MockExecuteActivityInput(args=[object(), object()])
+
+    async def test_a_raising_describe_inputs_still_returns_the_result(self, mock_next):
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(trace)),
+            patch(_DESCRIBE_TARGET, side_effect=RuntimeError("walk broke")),
+            patch(_RECORD_TARGET) as mock_record,
+            patch(_LOGGER_TARGET) as mock_logger,
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            result = await self._interceptor(mock_next).execute_activity(self._input())
+
+        assert result == "ok"
+        mock_record.assert_not_called()
+        mock_logger.warning.assert_called_once()
+
+    async def test_a_raising_record_still_returns_the_result(self, mock_next):
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(trace)),
+            patch(_RECORD_TARGET, side_effect=RuntimeError("sink broke")),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            result = await self._interceptor(mock_next).execute_activity(self._input())
+
+        assert result == "ok"
+
+    async def test_a_raising_describe_inputs_keeps_the_original_error(self, mock_next):
+        mock_next.execute_activity = AsyncMock(side_effect=ValueError("boom"))
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(trace)),
+            patch(_DESCRIBE_TARGET, side_effect=RuntimeError("walk broke")),
+            patch(_RECORD_TARGET),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            with pytest.raises(ValueError, match="boom"):
+                await self._interceptor(mock_next).execute_activity(self._input())
+
+    async def test_a_cancel_during_telemetry_still_returns_the_result(self, mock_next):
+        """A worker shutdown past its graceful timeout cancels the task; if that
+        lands after the activity returned, the result must still be reported."""
+
+        async def _cancelled_mid_walk(func, *args, **kwargs):
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()
+            await asyncio.sleep(0)  # the cancel is delivered here
+            raise AssertionError("unreachable: the cancel is delivered above")
+
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(trace)),
+            patch(_RUN_IN_THREAD_TARGET, _cancelled_mid_walk),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            result = await self._interceptor(mock_next).execute_activity(self._input())
+            task = asyncio.current_task()
+            assert task is not None
+            # Absorbed, not left pending for an enclosing timeout/TaskGroup.
+            assert task.cancelling() == 0
+
+        assert result == "ok"
+        mock_record.assert_not_called()
+
+    async def test_a_slow_walk_is_bounded_and_records_input_unknown(
+        self, mock_next, monkeypatch
+    ):
+        monkeypatch.setattr(
+            sizing_interceptor_module, "DESCRIBE_INPUTS_TIMEOUT_SECONDS", 0.01
+        )
+        never = asyncio.Event()
+
+        async def _hangs(func, *args, **kwargs):
+            await never.wait()
+
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(trace)),
+            patch(_RUN_IN_THREAD_TARGET, _hangs),
+            patch(_RECORD_TARGET) as mock_record,
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            result = await asyncio.wait_for(
+                self._interceptor(mock_next).execute_activity(self._input()),
+                timeout=5,
+            )
+
+        assert result == "ok"
+        obs = mock_record.call_args[0][0]
+        assert obs.input_bytes is None
+        assert obs.peak_memory_bytes == 1024
+
+    async def test_the_collection_ends_even_when_telemetry_fails(self, mock_next):
+        trace = ContainerTrace(peak_memory_bytes=1024, peak_source="poll")
+        with (
+            patch(_ACTIVITY_TARGET) as mock_act,
+            patch(_TRACKER_TARGET, _tracker(trace)),
+            patch(_DESCRIBE_TARGET, side_effect=RuntimeError("walk broke")),
+            patch(_RECORD_TARGET),
+        ):
+            mock_act.info.return_value = MockActivityInfo()
+            await self._interceptor(mock_next).execute_activity(self._input())
+
+        report_input_bytes(100)  # would land in a leaked collector
+        assert sizing_inputs_module._current_inputs.get() is None
 
 
 class TestAgainstTheRealTracker:
