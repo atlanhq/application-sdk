@@ -16,25 +16,28 @@ An app repo that has not resynced onto the gated shims keeps the old Features
 and Bug Fixes notes, so the reasoning above still holds for it.
 
 So: push only when the open branch would release something different from what
-this run built. The branch is left alone when, against what is already on
-``origin/<branch>``, all of these hold:
+this run built, and never from a run older than the branch. First the bases are
+compared — the commit this run built on against the one the branch was built on
+(the bump commit's parent) (FND-4488):
 
-  * the version in each version file is the same;
-  * the CHANGELOG section for that version is the same, ignoring the date in
-    its heading (the date moves every day and is not release content);
-  * the branch already contains the commit this run built on (FND-4488).
+  * the branch does not contain this run's base — main moved under it: push;
+  * the branch is built on a strictly newer base — this run is an older merge's
+    run that arrived late, so whatever it computed is a subset of what the
+    branch already releases: skip, whatever its version or notes say;
+  * the same base: push only if, against ``origin/<branch>``, the version in
+    some version file or the CHANGELOG section for that version (ignoring the
+    date in its heading, which moves every day) differs.
 
-The last condition keeps the branch's tree identical to what its merge ships.
+The first rule keeps the branch's tree identical to what its merge ships.
 ``/gate-check`` tests the bump PR's *head*, not its merge ref, so a branch left
 on an older base is gated on a tree that is not the one released: two Renovate
 merges seconds apart (lock maintenance, then an application-sdk bump) queued two
 runs, the first built on the older commit and pushed, and the second — built on
 the commit carrying the new SDK — matched version and notes and skipped, so the
-release gate tested the old SDK while the merge would ship the new one. A run
-whose base the branch already contains (the same base, or an older merge's run
-arriving after a newer one) still skips, so a burst never moves the branch
-backwards. A branch containing the base also merges onto it cleanly by
-construction, which is what the older merge-tree check here used to establish.
+release gate tested the old SDK while the merge would ship the new one. The
+second rule is what keeps a burst from moving the branch backwards. A branch
+containing the base also merges onto it cleanly by construction, which is what
+an older merge-tree check here used to establish.
 
 Fails open: any check that cannot be made — the branch does not exist, a file is
 missing on it, git errors — resolves to ``push=true``, which is the behaviour
@@ -116,6 +119,12 @@ def changelog_section(text: str, version: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def rev_parse(ref: str) -> str | None:
+    """The full SHA ``ref`` names, or None when git cannot resolve it."""
+    result = run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
 def contains(ref: str, commit: str) -> bool:
     """True when ``commit`` is ``ref`` or one of its ancestors.
 
@@ -148,6 +157,21 @@ def decide(
     if fetch.returncode != 0:
         return True, f"{remote} could not be fetched (first bump, or deleted)"
 
+    built_on = rev_parse(onto)
+    branch_base = rev_parse(f"{remote}^")
+    if built_on is None or branch_base is None:
+        return True, f"the bases of {onto} and {remote} could not be resolved"
+    if not contains(remote, built_on):
+        return True, (
+            f"{remote} is built on an older base than this run's "
+            f"{built_on[:12]} — rebuilding so the gated head is what the merge ships"
+        )
+    if branch_base != built_on:
+        return False, (
+            f"{remote} is built on {branch_base[:12]}, newer than this run's "
+            f"{built_on[:12]} — a late run for an older merge, not re-pushing"
+        )
+
     for path in version_files:
         published = _git_show(remote, path)
         if published is None:
@@ -171,15 +195,9 @@ def decide(
     if built is None or published is None or built != published:
         return True, f"release notes for v{new_version} changed"
 
-    if not contains(remote, onto):
-        return True, (
-            f"{remote} is built on an older base than this run's {onto} — "
-            "rebuilding so the gated head is what the merge ships"
-        )
-
     return False, (
         f"{remote} already carries v{new_version} with the same release notes "
-        f"on a base containing {onto} — not re-pushing"
+        f"on this run's base {built_on[:12]} — not re-pushing"
     )
 
 

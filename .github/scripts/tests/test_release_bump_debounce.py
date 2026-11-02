@@ -180,7 +180,7 @@ def test_skips_when_the_branch_is_built_on_this_runs_base(repo: Path) -> None:
     push, reason = _decide("1.0.1")
 
     assert push is False, reason
-    assert "base containing" in reason
+    assert "on this run's base" in reason
 
 
 def test_skips_an_older_merges_run_that_arrives_after_a_newer_one(
@@ -201,9 +201,9 @@ def test_skips_an_older_merges_run_that_arrives_after_a_newer_one(
     assert push is False, reason
 
 
-def test_pushes_when_a_feat_merge_turns_the_patch_into_a_minor(repo: Path) -> None:
+def test_pushes_when_the_same_base_computes_a_different_version(repo: Path) -> None:
+    """Same base, new verdict — e.g. a re-run after the bump rules changed."""
     _publish_bump(repo, "1.0.1", "October 06, 2026", [])
-    _merge_to_main(repo, "feat: thing", {"app.py": "x = 3\n"})
     _build_locally("1.1.0", "October 06, 2026", [])
 
     push, reason = _decide("1.1.0")
@@ -212,15 +212,25 @@ def test_pushes_when_a_feat_merge_turns_the_patch_into_a_minor(repo: Path) -> No
     assert "version changed" in reason and "1.0.1" in reason
 
 
-def test_pushes_when_a_fix_merge_adds_a_release_note(repo: Path) -> None:
+def test_pushes_when_the_same_base_renders_different_notes(repo: Path) -> None:
     _publish_bump(repo, "1.0.1", "October 06, 2026", ["first fix"])
-    _merge_to_main(repo, "fix: second", {"app.py": "x = 4\n"})
     _build_locally("1.0.1", "October 06, 2026", ["first fix", "second"])
 
     push, reason = _decide("1.0.1")
 
     assert push is True
     assert "release notes" in reason
+
+
+def test_pushes_when_a_feat_merge_moves_main(repo: Path) -> None:
+    _publish_bump(repo, "1.0.1", "October 06, 2026", [])
+    _merge_to_main(repo, "feat: thing", {"app.py": "x = 3\n"})
+    _build_locally("1.1.0", "October 06, 2026", [])
+
+    push, reason = _decide("1.1.0")
+
+    assert push is True
+    assert "older base" in reason
 
 
 def test_pushes_when_the_open_branch_would_conflict_with_main(repo: Path) -> None:
@@ -279,6 +289,23 @@ def test_main_fails_open_and_writes_outputs(
     lines = out.read_text().splitlines()
     assert "push=true" in lines
     assert any(line.startswith("reason=debounce check failed") for line in lines)
+
+
+def test_a_late_older_run_with_a_different_release_never_rolls_back(
+    repo: Path,
+) -> None:
+    """A run for an older merge must not overwrite a newer bump, even when its
+    version and notes differ — they differ because it saw fewer commits."""
+    older = _git(repo, "rev-parse", "HEAD")
+    _merge_to_main(repo, "feat: thing", {"app.py": "x = 3\n"})
+    _publish_bump(repo, "1.1.0", "October 06, 2026", ["thing"])
+    _git(repo, "checkout", "-q", older)
+    _build_locally("1.0.1", "October 06, 2026", [])
+
+    push, reason = _decide("1.0.1")
+
+    assert push is False, reason
+    assert "late run for an older merge" in reason
 
 
 @pytest.mark.parametrize(
