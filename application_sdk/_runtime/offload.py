@@ -33,6 +33,7 @@ from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Generic, ParamSpec, TypeVar
 
 from application_sdk._logging import get_logger
+from application_sdk._runtime.cgroup import available_cpus
 from application_sdk._runtime.progress import (
     DEFAULT_MAX_NO_PROGRESS_SECONDS,
     ProgressTracker,
@@ -1088,47 +1089,177 @@ def _report_detached_failure(future: "concurrent.futures.Future[Any]") -> None:
 #   single thread but every lock, in whatever state the other threads left
 #   them — a deadlock/corruption factory. spawn starts a clean interpreter.
 #
-# Lazy and cached by width: callers passing the same max_workers share one
-# ProcessPoolExecutor of that width, created on first use; distinct widths get
-# distinct pools, so discarding one width's pool on a crash never disturbs
-# another's. Processes that never need isolation never pay for a child.
+# Lazy, keyed by width, and reaped when idle: callers passing the same
+# max_workers share one ProcessPoolExecutor of that width, created on first use;
+# distinct widths get distinct pools, so discarding one width's pool on a crash
+# never disturbs another's. Processes that never need isolation never pay for a
+# child.
+#
+# Why reaped (FND-4278)? Each spawn child re-imports the parent's main module
+# and the decode stack — ~175 MiB apiece before it decodes a byte — and a pool
+# never shut down keeps every child it ever started for the worker's lifetime:
+# ~700 MiB of idle children sitting under the pod's memory limit after a single
+# burst of uploads. So once a pool has had nothing in flight for
+# FAULT_ISOLATION_IDLE_SECONDS it is shut down and its children exit; the next
+# call spawns afresh. That spawn cost lands on best-effort work with a
+# minutes-long timeout, which is the right side of the trade.
+#
+# Why not ``max_tasks_per_child=1``? CPython replaces a retired child eagerly,
+# as soon as the old one exits, not when the next task arrives — so the pool
+# still holds max_workers idle children between bursts. It only trades a warm
+# child for a cold one; it does not give the memory back.
 #
 # Concurrency: the default pool runs several children so concurrent best-effort
 # callers decode in PARALLEL, not serialised behind one child. Isolation here is
-# purely fault containment — NOT a serialisation crutch to dodge the msgspec
-# 0.20.0 concurrent-decode segfault: that bug is same-process (a shared
-# in-process decoder across threads); separate child processes don't share that
-# state, and once msgspec 0.21.1 lands even same-process concurrent decode is
-# safe. The default width is capped low because each spawn child re-imports the
-# decode stack (pyatlan/msgspec), which costs memory under a pod limit. A caller
-# that wants to bound — or serialise (max_workers=1) — its own work passes an
-# explicit width. (A crash in any one child breaks the whole ProcessPoolExecutor
-# — inherent to the executor — so concurrent callers on that width then see
-# BrokenProcessPool; for best-effort work that is a benign skip.)
-_DEFAULT_PROCESS_POOL_MAX_WORKERS = min(4, (os.cpu_count() or 1))
-_PROCESS_EXECUTORS: dict[int, concurrent.futures.ProcessPoolExecutor] = {}
-_PROCESS_EXECUTORS_LOCK = threading.Lock()
+# purely fault containment. It was introduced while msgspec 0.20.0 could
+# segfault on concurrent decode (CNCT-85); that bug was same-process and the
+# lock now pins 0.21.1, which fixes it. Isolation stays the default anyway:
+# ADR-0017's reason is that a native fault in *any* C extension on the decode
+# path must not take the worker down, and that holds whatever the msgspec
+# version. Now that the children exist only while there is work, keeping them
+# costs spawn latency, not resident memory.
+#
+# Width: ``min(4, CPUs available to the container)`` — the CFS quota, not
+# ``os.cpu_count()``, which reports the node's cores. A caller that wants to
+# bound — or serialise (max_workers=1) — its own work passes an explicit width.
+# (A crash in any one child breaks the whole ProcessPoolExecutor — inherent to
+# the executor — so concurrent callers on that width then see BrokenProcessPool;
+# for best-effort work that is a benign skip.)
+_MAX_DEFAULT_PROCESS_POOL_WIDTH = 4
+
+#: Env var: seconds a fault-isolation pool with nothing in flight keeps its
+#: children before shutting down. ``0`` shuts it down as soon as it goes idle.
+FAULT_ISOLATION_IDLE_SECONDS_ENV = "ATLAN_FAULT_ISOLATION_IDLE_SECONDS"
+_DEFAULT_FAULT_ISOLATION_IDLE_SECONDS = 30.0
+_REPORTED_BAD_IDLE_SECONDS: set[str] = set()
 
 
-def _get_process_executor(max_workers: int) -> concurrent.futures.ProcessPoolExecutor:
-    with _PROCESS_EXECUTORS_LOCK:
-        executor = _PROCESS_EXECUTORS.get(max_workers)
-        if executor is None:
-            executor = concurrent.futures.ProcessPoolExecutor(
-                max_workers=max_workers,
-                mp_context=multiprocessing.get_context("spawn"),
-            )
-            _PROCESS_EXECUTORS[max_workers] = executor
-        return executor
+@functools.cache
+def _default_process_pool_max_workers() -> int:
+    """``min(4, CPUs the container may use)``, read once per process."""
+    return min(_MAX_DEFAULT_PROCESS_POOL_WIDTH, available_cpus())
 
 
-def _discard_process_executor(max_workers: int) -> None:
-    """Drop the width-``max_workers`` pool (and kill its children) so the next
-    call at that width starts fresh."""
-    with _PROCESS_EXECUTORS_LOCK:
-        executor = _PROCESS_EXECUTORS.pop(max_workers, None)
-    if executor is None:
-        return
+def _idle_seconds() -> float:
+    """The configured idle period, read on every release so it can be retuned.
+
+    An unparseable or negative value is logged once and replaced by the
+    default rather than raised: raising here would fail isolated work over a
+    configuration typo.
+    """
+    raw = os.environ.get(FAULT_ISOLATION_IDLE_SECONDS_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if value >= 0 and value != float("inf"):
+        return value
+    if raw not in _REPORTED_BAD_IDLE_SECONDS:
+        _REPORTED_BAD_IDLE_SECONDS.add(raw)
+        logger.warning(
+            "Ignoring %s=%r: expected a non-negative number of seconds; using %ss",
+            FAULT_ISOLATION_IDLE_SECONDS_ENV,
+            raw,
+            _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS,
+        )
+    return _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS
+
+
+class _IsolationPool:
+    """One width's executor and its in-flight count. Guarded by the pools lock.
+
+    ``in_flight`` counts submitted calls until their *child* finishes, not until
+    their caller stops waiting: a caller that is cancelled leaves its child
+    running, and reaping the pool under it would kill work still in progress.
+    ``idle_generation`` invalidates an idle timer the moment new work arrives,
+    so a timer that fires late can never reap a pool that has been busy since.
+    ``reaped`` is set once an idle shutdown has joined every child, so a reader
+    can observe the children's exit without calling ``waitpid`` itself (a second
+    ``waitpid`` racing the executor's own join can misreport a reaped child as
+    still running).
+    """
+
+    __slots__ = ("executor", "in_flight", "idle_generation", "idle_timer", "reaped")
+
+    def __init__(self, max_workers: int) -> None:
+        self.executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=max_workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+        self.in_flight = 0
+        self.idle_generation = 0
+        self.idle_timer: threading.Timer | None = None
+        self.reaped = threading.Event()
+
+    def stop_idle_timer(self) -> None:
+        self.idle_generation += 1
+        if self.idle_timer is not None:
+            self.idle_timer.cancel()
+            self.idle_timer = None
+
+
+_PROCESS_POOLS: dict[int, _IsolationPool] = {}
+_PROCESS_POOLS_LOCK = threading.Lock()
+
+
+def _acquire_process_pool(max_workers: int) -> _IsolationPool:
+    """The width-``max_workers`` pool, with one more call counted in flight."""
+    with _PROCESS_POOLS_LOCK:
+        pool = _PROCESS_POOLS.get(max_workers)
+        if pool is None:
+            pool = _IsolationPool(max_workers)
+            _PROCESS_POOLS[max_workers] = pool
+        pool.in_flight += 1
+        pool.stop_idle_timer()
+        return pool
+
+
+def _release_process_pool(max_workers: int, pool: _IsolationPool) -> None:
+    """Count one call out; start the idle timer when the pool has none left."""
+    with _PROCESS_POOLS_LOCK:
+        pool.in_flight -= 1
+        if pool.in_flight or _PROCESS_POOLS.get(max_workers) is not pool:
+            return
+        pool.stop_idle_timer()
+        timer = threading.Timer(
+            _idle_seconds(),
+            _reap_idle_pool,
+            args=(max_workers, pool, pool.idle_generation),
+        )
+        timer.daemon = True
+        timer.name = f"sdk-isolation-idle-{max_workers}"
+        pool.idle_timer = timer
+        timer.start()
+
+
+def _reap_idle_pool(max_workers: int, pool: _IsolationPool, generation: int) -> None:
+    """Shut the pool down if it is still the live, idle pool this timer was for."""
+    with _PROCESS_POOLS_LOCK:
+        if (
+            pool.in_flight
+            or pool.idle_generation != generation
+            or _PROCESS_POOLS.get(max_workers) is not pool
+        ):
+            return
+        del _PROCESS_POOLS[max_workers]
+        pool.idle_timer = None
+    # Outside the lock: a caller arriving now builds a fresh pool rather than
+    # waiting for this one's children to exit. Nothing is queued or running, so
+    # the children take the sentinel and exit, and joining them leaves no zombie.
+    pool.executor.shutdown(wait=True)
+    pool.reaped.set()
+
+
+def _discard_process_pool(max_workers: int, pool: _IsolationPool) -> None:
+    """Drop ``pool`` (and kill its children) so the next call at this width
+    starts fresh."""
+    with _PROCESS_POOLS_LOCK:
+        if _PROCESS_POOLS.get(max_workers) is pool:
+            del _PROCESS_POOLS[max_workers]
+        pool.stop_idle_timer()
+    executor = pool.executor
     # Kill the children BEFORE shutdown(): a dead child is the pool's
     # well-trodden unwind path — the manager thread sees it, marks the pool
     # broken, resolves every still-queued work item with BrokenProcessPool,
@@ -1174,8 +1305,11 @@ async def run_fault_isolated(
       ``func`` must be a module-level function (pickled by reference).
     - ContextVars do **not** propagate — the child is a fresh interpreter.
       Have the child return data and log from the parent.
-    - The child imports ``func``'s module on first use (one-time cost,
-      amortized by the pooled worker).
+    - The child imports ``func``'s module on first use. Children are pooled
+      while calls keep arriving and exit once the pool has been idle for
+      ``ATLAN_FAULT_ISOLATION_IDLE_SECONDS`` (default 30), so a call after a
+      quiet spell pays a fresh spawn and import; idle children never hold
+      memory for the worker's lifetime.
 
     Like :func:`run_in_thread`, the call is automatically wrapped in a progress
     hold (ADR-0018) so an isolated call — which emits nothing at all until the
@@ -1189,8 +1323,9 @@ async def run_fault_isolated(
         timeout: Seconds to wait before killing the child and raising
             ``TimeoutError``. ``None`` waits forever.
         max_workers: Width of the (width-keyed) process pool this call runs on.
-            ``None`` (default) uses ``min(4, cpu_count)`` so concurrent callers
-            decode in parallel. Pass ``1`` to opt into sequential execution —
+            ``None`` (default) uses ``min(4, CPUs available to the container)``
+            — the cgroup CPU limit, not the node's core count — so concurrent
+            callers decode in parallel. Pass ``1`` to opt into sequential execution —
             all ``max_workers=1`` callers share a single child and queue behind
             one another; pass another integer to bound concurrency at a
             different width. Must be >= 1.
@@ -1204,7 +1339,9 @@ async def run_fault_isolated(
             discarded.
         InvalidInputValueError: ``max_workers`` is < 1 (also a ``ValueError``).
     """
-    workers = _DEFAULT_PROCESS_POOL_MAX_WORKERS if max_workers is None else max_workers
+    workers = (
+        _default_process_pool_max_workers() if max_workers is None else max_workers
+    )
     if workers < 1:
         raise InvalidInputValueError(
             message=f"max_workers must be >= 1, got {workers}",
@@ -1234,9 +1371,21 @@ async def run_fault_isolated(
     # the child, so the call returns at its deadline whether or not a hold is
     # watching.
     with _auto_hold(_ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout):
-        future = loop.run_in_executor(
-            _get_process_executor(workers), functools.partial(func, *args, **kwargs)
+        pool = _acquire_process_pool(workers)
+        try:
+            child_future = pool.executor.submit(
+                functools.partial(func, *args, **kwargs)
+            )
+        except BaseException:
+            # Never submitted (pool broken or shut down): nothing will release
+            # the in-flight count, so release it here.
+            _release_process_pool(workers, pool)
+            raise
+        # Released when the *child* is done, not when this caller stops waiting.
+        child_future.add_done_callback(
+            lambda _done: _release_process_pool(workers, pool)
         )
+        future = asyncio.wrap_future(child_future, loop=loop)
         if timeout is not None:
             # Not asyncio.wait_for: on timeout it cancels the future and then
             # waits for the cancellation to land — but a running executor call
@@ -1245,7 +1394,7 @@ async def run_fault_isolated(
             # ourselves.
             done, _ = await asyncio.wait({future}, timeout=timeout)
             if not done:
-                _discard_process_executor(workers)
+                _discard_process_pool(workers, pool)
                 # The kill resolves the abandoned future with BrokenProcessPool;
                 # consume it so asyncio never logs "exception was never
                 # retrieved".
@@ -1256,7 +1405,7 @@ async def run_fault_isolated(
         try:
             return await future
         except BrokenProcessPool:
-            _discard_process_executor(workers)
+            _discard_process_pool(workers, pool)
             raise
         except asyncio.CancelledError:
             task = asyncio.current_task()
@@ -1303,8 +1452,8 @@ async def run_best_effort(
             caller's module (OTel source) rather than this one.
         timeout: Seconds before the child is killed and the run is skipped.
         max_workers: Pool width, forwarded to :func:`run_fault_isolated`. ``None``
-            uses the default ``min(4, cpu_count)``; pass ``1`` to serialise this
-            work.
+            uses the default ``min(4, CPUs available to the container)``; pass
+            ``1`` to serialise this work.
 
     Returns:
         ``func``'s result, or ``None`` if the run crashed, timed out, or errored.
