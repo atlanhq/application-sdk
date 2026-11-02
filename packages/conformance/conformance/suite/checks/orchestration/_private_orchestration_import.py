@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks.deprecation._private_imports import _reexport_swap
 from conformance.suite.schema.findings import Finding
 
 from ._temporal_common import private_sdk_import_name, private_sdk_target
@@ -22,10 +23,14 @@ def check_p005(
 ) -> list[Finding]:
     """Emit a P005 finding for every import that reaches SDK-private internals."""
     findings: list[Finding] = []
+    top_level = {id(n) for n in getattr(tree, "body", [])}
     for node in ast.walk(tree):
         target: str | None = None
+        swap = None
         if isinstance(node, ast.ImportFrom):
             target = private_sdk_target(node)
+            if target is not None and id(node) in top_level:
+                swap = _reexport_swap(node, target)
         elif isinstance(node, ast.Import):
             target = next(
                 (a.name for a in node.names if private_sdk_import_name(a.name)),
@@ -46,6 +51,7 @@ def check_p005(
                     "team; suppress with '# conformance: ignore[P005] <reason>'."
                 ),
                 directives=directives,
+                properties=swap.to_properties() if swap else None,
             )
         )
     return findings

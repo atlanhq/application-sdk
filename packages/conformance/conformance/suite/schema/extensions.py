@@ -218,7 +218,8 @@ class SafeSwap(BaseModel):
     """
 
     id: str
-    """Recipe id: ``public-reexport`` (import path) or ``public-rename`` (method name)."""
+    """Recipe id: ``public-reexport`` (import path), ``public-rename`` (method name) or
+    ``public-alias`` (a public alias of the same class, bound to the old name)."""
 
     find: str
     replace: str

@@ -72,10 +72,30 @@ def temporal_import_hint(node: ast.stmt) -> str:
         "workflow",
         "activity",
     }
+    if module == "temporalio.exceptions" or names & {"WorkflowFailureError"}:
+        return (
+            "Import the same class from 'application_sdk.execution' under its "
+            "Temporal* alias (TemporalApplicationError, TemporalTimeoutError, "
+            "TemporalWorkflowFailureError, ...)."
+        )
+    if module.startswith("temporalio.testing") or names & {"WorkflowEnvironment"}:
+        return (
+            "In tests, run the app on the integration fixture kit "
+            "('application_sdk.testing.integration.fixtures'), which owns the "
+            "Temporal server, worker and client."
+        )
     if module.startswith("temporalio.client") or "Client" in names:
-        return "Use 'from application_sdk.execution import create_temporal_client'."
+        return (
+            "Annotate with 'TemporalClient' from 'application_sdk.execution'; in "
+            "tests the integration fixture kit owns the client, and a "
+            "create_temporal_client call fires P017 outside tests/integration/."
+        )
     if module.startswith("temporalio.worker") or names & {"Worker"}:
-        return "Use 'from application_sdk.execution import AppWorker, create_worker'."
+        return (
+            "Boot through 'application_sdk.main.run_dev_combined'; in tests the "
+            "integration fixture kit owns the worker, and a create_worker call "
+            "fires P017 outside tests/integration/."
+        )
     if names & primitives or module in {"temporalio.workflow", "temporalio.activity"}:
         return (
             "Use the re-exports from 'application_sdk.app' "

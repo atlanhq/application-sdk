@@ -9,9 +9,17 @@ wires Temporal directly is caught.
 
 from __future__ import annotations
 
+import importlib
+import importlib.metadata
 from pathlib import Path
 
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
+from conformance.suite.checks.orchestration._direct_temporal_import import (
+    PUBLIC_ALIAS_MODULE,
+    PUBLIC_ALIASES,
+)
+from conformance.suite.schema.extensions import SafeSwap
+from packaging.version import Version
 
 
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:
@@ -103,6 +111,145 @@ def test_p005_suppressed_inline() -> None:
     )
     fs = _rule(src, "P005")
     assert len(fs) == 1 and fs[0].suppressed
+
+
+# ── Safe-swap markers (atlan/safeSwap) ──────────────────────────────────────
+
+
+def _swap(finding) -> SafeSwap | None:
+    return SafeSwap.from_properties(finding.properties)
+
+
+def _apply(src: str, finding) -> str:
+    swap = _swap(finding)
+    assert swap is not None
+    lines = src.splitlines(keepends=True)
+    assert lines[finding.line - 1].count(swap.find) == 1
+    lines[finding.line - 1] = lines[finding.line - 1].replace(swap.find, swap.replace)
+    return "".join(lines)
+
+
+def test_p005_marks_a_module_level_public_reexport_import_as_a_safe_swap() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    build_output_path,\n"
+        "    get_object_store_prefix as prefix,\n"
+        ")\n"
+    )
+    (finding,) = _rule(src, "P005", "tests/unit/test_x.py")
+    swap = _swap(finding)
+    assert swap is not None and swap.id == "public-reexport"
+    assert (swap.requires.package, swap.requires.min) == (
+        "atlan-application-sdk",
+        "3.0.0",
+    )
+    fixed = _apply(src, finding)
+    assert fixed.startswith("from application_sdk.execution import (\n")
+    assert _rule(fixed, "P005") == []
+
+
+def test_p005_leaves_a_function_local_reexport_import_unmarked() -> None:
+    src = (
+        "def f():\n"
+        "    from application_sdk.execution._temporal.activity_utils import (\n"
+        "        get_object_store_prefix,\n"
+        "    )\n"
+        "    return get_object_store_prefix\n"
+    )
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_p005_leaves_a_name_without_a_public_home_unmarked() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    get_object_store_prefix,\n"
+        "    get_workflow_id,\n"
+        ")\n"
+    )
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_p005_leaves_a_dotted_module_import_unmarked() -> None:
+    src = "import application_sdk.execution._temporal.activity_utils as au\n"
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_p005_leaves_other_private_modules_unmarked() -> None:
+    src = "from application_sdk.execution._temporal.worker import create_worker\n"
+    (finding,) = _rule(src, "P005", "tests/integration/test_x.py")
+    assert _swap(finding) is None
+
+
+def test_p004_marks_a_failure_class_import_keeping_the_bound_name() -> None:
+    src = "from temporalio.exceptions import ApplicationError\n"
+    (finding,) = _rule(src, "P004")
+    swap = _swap(finding)
+    assert swap is not None and swap.id == "public-alias"
+    assert swap.requires.min == "3.50.0"
+    fixed = _apply(src, finding)
+    assert fixed == (
+        "from application_sdk.execution import TemporalApplicationError as ApplicationError\n"
+    )
+    assert _rule(fixed, "P004") == []
+
+
+def test_p004_marks_an_aliased_failure_class_import_keeping_its_alias() -> None:
+    src = "from temporalio.exceptions import TimeoutError as TT  # noqa: A004\n"
+    (finding,) = _rule(src, "P004", "tests/unit/test_x.py")
+    swap = _swap(finding)
+    assert swap is not None and swap.requires.min == "3.21.0"
+    assert _apply(src, finding).startswith(
+        "from application_sdk.execution import TemporalTimeoutError as TT"
+    )
+
+
+def test_p004_marks_the_client_failure_class() -> None:
+    (finding,) = _rule("from temporalio.client import WorkflowFailureError\n", "P004")
+    assert _apply("from temporalio.client import WorkflowFailureError\n", finding) == (
+        "from application_sdk.execution import TemporalWorkflowFailureError as WorkflowFailureError\n"
+    )
+
+
+def test_p004_leaves_other_temporal_imports_unmarked() -> None:
+    for src in (
+        "from temporalio.client import Client\n",
+        "from temporalio.exceptions import TimeoutType\n",
+        "from temporalio.exceptions import ApplicationError, TimeoutError\n",
+        "from temporalio.exceptions import (\n    ApplicationError,\n)\n",
+        "import temporalio.exceptions\n",
+        "def f():\n    from temporalio.exceptions import ApplicationError\n    return ApplicationError\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert _swap(finding) is None, src
+
+
+def test_p004_public_aliases_are_the_same_objects_from_their_floor() -> None:
+    installed = Version(importlib.metadata.version("atlan-application-sdk"))
+    seam = importlib.import_module(PUBLIC_ALIAS_MODULE)
+    for (module, name), (public, since) in PUBLIC_ALIASES.items():
+        if installed < Version(since):
+            assert not hasattr(seam, public), (public, since, installed)
+            continue
+        assert getattr(seam, public) is getattr(importlib.import_module(module), name)
+
+
+def test_p004_hints_never_suggest_a_call_that_fires_p017() -> None:
+    for src in (
+        "from temporalio.client import Client\n",
+        "from temporalio.worker import Worker\n",
+        "from temporalio.testing import WorkflowEnvironment\n",
+    ):
+        (finding,) = _rule(src, "P004", "tests/unit/test_x.py")
+        assert "import create_" not in finding.message
+        assert "fixture kit" in finding.message
+
+
+def test_p004_hint_names_the_failure_alias() -> None:
+    (finding,) = _rule("from temporalio.exceptions import ApplicationError\n", "P004")
+    assert "TemporalApplicationError" in finding.message
 
 
 # ── P006 TemporalImportOutsideAdapter (sdk) ─────────────────────────────────
