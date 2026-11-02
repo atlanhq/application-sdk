@@ -81,7 +81,18 @@ The private `activity_utils.get_object_store_prefix` / `build_output_path`
 imports and other non-orchestration privates (`constants._HTTP_POOL_LIMITS`,
 `constants._HTTP_POOL_TIMEOUT_SECONDS`, `outputs._current_outputs`,
 `handler.service._app_error_to_http_status`) belong to
-`migrate-deprecated-symbols`. List them; do not migrate them here.
+`migrate-deprecated-symbols`. List them; do not migrate them here. Outside
+`tests/` each of these lines is also a B008 finding, and the receiving
+skill's fix clears both.
+
+**Safe swaps:** the detector marks two shapes with the SARIF property
+`atlan/safeSwap` (`{id, find, replace, requires}`): a module-level P005
+`from` import of only `get_object_store_prefix` / `build_output_path`
+(`public-reexport`), and a module-level, one-line P004 import of one
+temporalio failure class (`public-alias`, which keeps the bound name:
+`from application_sdk.execution import TemporalApplicationError as ApplicationError`).
+Apply one only when `find` occurs once on the line and `uv.lock` pins the
+SDK at or above `requires.min`.
 
 ## After-shape APIs
 
@@ -90,13 +101,17 @@ imports and other non-orchestration privates (`constants._HTTP_POOL_LIMITS`,
 | workflow id in `run()` / `@entrypoint` | `self.context.workflow_id` | App | 3.20.1 |
 | run id in `run()` | `self.run_id` | App | 3.0.0 |
 | workflow id in a `@task` | `input.workflow_id` | typed Input | 3.0.0 |
+| run id in a `@task` | `self.run_id` (the task context carries the dispatching workflow's run id) | App | 3.0.0 |
+| heartbeat in a `@task` | `self.heartbeat(*details)`, or the task's `auto_heartbeat_seconds` when the call only kept the task alive | App | 3.0.0 |
+| logger in `run()` | `self.logger` | App | 3.0.0 |
+| registered entry points and workflow types | `AppRegistry.get_instance().get(<App>.name).entry_points`, and `canonical_workflow_type(<App>.name, ep)` per entry | `application_sdk.app` | 3.0.0; `canonical_workflow_type` 3.29.0 |
 | start time, current time | `self.context.started_at`, `now()` | App / `application_sdk.app` | 3.0.0 / 3.13.0 |
 | workflow primitives | `now`, `sleep`, `uuid4`, `wait_condition`, `signal`, `query`, `update` | `application_sdk.app` | 3.13.0 |
 | decorators | `task(name=, timeout_seconds=, heartbeat_timeout_seconds=, retry_policy=, retry_max_attempts=, pool=)` on a method taking exactly one `Input` subclass and returning an `Output` subclass (anything else raises `TaskContractError` when the class is defined), `entrypoint(name=, default=)` | `application_sdk.app` | 3.0.0; `pool` 3.21.0 |
 | retry policy | `RetryPolicy(max_attempts=3, initial_interval=1s, max_interval=5m, backoff_coefficient=2.0, non_retryable_errors=())`; the `@task` keyword defaults differ: `retry_max_attempts=3`, `retry_initial_interval_seconds=1`, `retry_max_interval_seconds=30` | `application_sdk.app` | 3.0.0 |
 | sandbox passthrough | `passthrough_modules: ClassVar[set[str]]` on the App class | App | — |
 | workflow-type rename alias | `legacy_workflow_types` on the App class | App | 3.29.0 |
-| client type, failure types | `TemporalClient`; `TemporalWorkflowFailureError`, `TemporalActivityError`, `TemporalApplicationError` (not `ApplicationError` from the same module: that is a narrower subclass for raising, and an `isinstance` check on a failure read back from Temporal is False for it; it is the `.cause` of a `TemporalActivityError` when a task raised, and the direct `.cause` of the workflow failure when `run()` raised), `TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, `TemporalTimeoutError` | `application_sdk.execution` | 3.20.0 / 3.21.0; `TemporalApplicationError`: first release after 3.49.2 |
+| client type, failure types | `TemporalClient`; `TemporalWorkflowFailureError`, `TemporalActivityError`, `TemporalApplicationError` (not `ApplicationError` from the same module: that is a narrower subclass for raising, and an `isinstance` check on a failure read back from Temporal is False for it; it is the `.cause` of a `TemporalActivityError` when a task raised, and the direct `.cause` of the workflow failure when `run()` raised), `TemporalCancelledError`, `TemporalChildWorkflowError`, `TemporalTerminatedError`, `TemporalTimeoutError` | `application_sdk.execution` | `TemporalClient` 3.20.0; the failure types 3.21.0; `TemporalApplicationError` 3.50.0 |
 | converters, backend | `create_data_converter_for_app`, `TemporalExecutorBackend` | `application_sdk.execution` | 3.20.0 |
 | dev boot | `run_dev_combined(app_class, *, credential_stores=, example_input=, task_queue=, ...)` | `application_sdk.main` | 3.0.0 |
 | integration tests | `from application_sdk.testing.integration.fixtures import *` (the kit owns worker and client) | `application_sdk.testing.integration.fixtures` | — |
@@ -106,9 +121,20 @@ imports and other non-orchestration privates (`constants._HTTP_POOL_LIMITS`,
 `input_type_supports_gate`, `_resolve_gate_enforcement`, `_is_gate_broken`;
 per-run dynamic task-queue routing (`execute_activity(..., task_queue=...)`
 — `@task(pool=)` is static); `temporalio.exceptions.FailureError`,
-`temporalio.client.WorkflowExecutionStatus`,
-`temporalio.testing.WorkflowEnvironment`; `workflow.patched`; a public setter
-for the App context in unit tests.
+`temporalio.exceptions.TimeoutType`,
+`temporalio.client.WorkflowExecutionStatus`, schedules
+(`temporalio.client.Schedule*`), search attributes (`SearchAttributeKey`,
+`upsert_search_attributes`), child workflows (`execute_child_workflow`),
+`temporalio.api` payload and event types, `temporalio.testing.WorkflowEnvironment`
+and worker options or workflow history in a test (the integration fixture kit
+runs one in-process worker and exposes neither); `workflow.patched`,
+`workflow.in_workflow`, `activity.in_activity`, and the attempt facts of
+`activity.info()` (`attempt`, `task_queue`, `activity_type`,
+`start_to_close_timeout`); a public setter for the App context in unit tests;
+and SDK test-helper privates (`testing._mustache`, `testing.e2e.payload._*`,
+`testing.integration.fixtures._*` / `runner._*`, `dev._embedded._CACHE_DIR`,
+`outputs._current_outputs`, `credentials.agent._LITERAL_KEYS`, private
+contract and template helpers).
 
 Before you call a site "no public equivalent", look for a public surface that
 answers the same question the code asks, and swap to it. Example: a test that
@@ -239,7 +265,20 @@ One row per **use**, not per finding, `tests/` included: one import of
   Before you recommend removal, name the reason: the kit test that runs the
   same workflow end to end, the fact that the file imports no app module, or
   the fact that it asserts only on its own mocks.
-  Remove a file only after the developer confirms.
+  Remove a file only after the developer confirms; a file whose docstring says
+  it is kept on purpose stays an owner decision.
+- **harness** — a test that boots its own `WorkflowEnvironment` and worker to
+  run the app's real workflow with worker options (for example
+  `max_concurrent_activities`) or reads the workflow history. The kit does not
+  expose either, so moving it changes what the test proves: owner decision 9.
+- **hand-built workflow** — app code with `@workflow.defn` / `@activity.defn`,
+  `execute_activity` / `execute_activity_method`, `execute_child_workflow`,
+  `continue_as_new`, or a private `TaskContext` built to dispatch tasks. Moving
+  it onto `App` and `@task` changes the workflow type and activity names
+  (owner decision 1); a child workflow has no public seam.
+- **operator script** — Temporal code under `scripts/` that an engineer runs
+  by hand (perf reports, history dumps, local workers). The public client and
+  worker factories fire P017 outside `tests/integration/`: owner decision 10.
 - **no public equivalent** — see the list above.
 - **routed** — a private SDK name that is not orchestration (see Routing).
 
@@ -273,6 +312,37 @@ One row per **use**, not per finding, `tests/` included: one import of
 8. **Local files across workers.** A delete of files another step wrote has
    no public fix today (the SDK cleans one worker only). Agree it with the
    SDK owner; do not move it into a task.
+9. **Test harness with its own worker.** Move it onto the kit (and drop what
+   the kit does not expose), or keep it with a justified ignore that names
+   the tracked SDK issue for a kit option.
+10. **Operator scripts.** Delete the script, move it out of the app repo, or
+    keep it with a justified ignore.
+
+### Decided defaults
+
+Answers that hold for every app. A site whose shape is listed here needs no
+owner answer; a `block` row sends the site to a person with its question.
+
+```decided-defaults
+{"rule": "P005", "fix_shape": "workflow-identity", "decision": "get_workflow_id() becomes input.workflow_id when the task's typed Input is in scope, else self.context.workflow_id; when the app sets workflow_id on that Input itself, use self.context.workflow_id. get_workflow_run_id() becomes self.run_id or self.context.run_id. Keep every key, path and log field built from the value.", "why": "App.run_id is the workflow run id and the task context carries the same workflow and run ids the private helpers read, so the values do not change."}
+{"rule": "P005", "fix_shape": "registry-introspection", "decision": "A test that reads entry points through _scan_entrypoints reads AppRegistry.get_instance().get(<App>.name).entry_points instead; drop the implicit run() entry (key run) where the old code listed only @entrypoint methods.", "why": "The registry holds the same entry points the private scan returned."}
+{"rule": "P004", "fix_shape": "public-alias", "decision": "Import the same class from application_sdk.execution under its Temporal* alias and bind the name the module used before (from application_sdk.execution import TemporalApplicationError as ApplicationError); a multi-name or function-local import gets the same change per name. Needs TemporalApplicationError at SDK 3.50.0, the other failure aliases at 3.21.0.", "why": "Each alias is the temporalio class itself, so every except, isinstance and raise behaves the same."}
+{"rule": "P004", "fix_shape": "run-context", "decision": "In run() or an @entrypoint, workflow.info().workflow_id becomes self.context.workflow_id and workflow.info().run_id becomes self.run_id. A helper outside run() that read workflow.info() takes workflow_id and run_id as parameters and run() passes them; a unit test that patched temporalio.workflow.info calls the helper with the ids instead. Keep every path, key and log field built from the ids.", "why": "The App context is built from workflow.info() before run() starts, so the ids are the same values."}
+{"rule": "P004", "fix_shape": "task-context", "decision": "In a @task, activity.info().workflow_id becomes input.workflow_id (self.context.workflow_id when the app sets workflow_id on that Input itself) and activity.info().workflow_run_id becomes self.run_id; activity.heartbeat(...) becomes self.heartbeat(...) with the same details. A helper outside the task method that heartbeats takes a callable the task passes (self.heartbeat). Keep every key, path and log field built from the ids.", "why": "The task context carries the dispatching workflow's ids, and App.heartbeat sends the same heartbeat through the task's controller."}
+{"rule": "P004", "fix_shape": "registry-introspection", "decision": "A test that reads workflow names through temporalio.workflow._Definition reads them from AppRegistry.get_instance().get(<App>.name).entry_points with canonical_workflow_type(<App>.name, ep) per entry (SDK 3.29.0).", "why": "The SDK registers each workflow class under canonical_workflow_type, so the names are the same."}
+{"rule": "P004", "fix_shape": "client-annotation", "decision": "A temporalio Client used only in a type annotation becomes TemporalClient from application_sdk.execution.", "why": "TemporalClient is the temporalio Client class itself."}
+{"rule": "P004", "fix_shape": "retry-policy", "decision": "A temporalio RetryPolicy becomes the SDK RetryPolicy from application_sdk.app with every value copied explicitly (maximum_attempts → max_attempts, non_retryable_error_types → non_retryable_errors); a temporalio maximum_attempts of 0 (unlimited) has no SDK default and stays an owner decision.", "why": "Copying every value keeps the retry behaviour; the SDK defaults differ from temporalio's."}
+{"rule": "P004", "match": "temporalio\\.testing|WorkflowEnvironment", "block": "temporalio.testing.WorkflowEnvironment has no public equivalent; the integration fixture kit runs one in-process worker and exposes no worker options or workflow history.", "brief": "Move this test onto the integration fixture kit (dropping what the kit does not expose), or keep it with '# conformance: ignore[P004] no public equivalent — tracked in <id>'? Which atlanhq/application-sdk issue?"}
+{"rule": "P004", "match": "SearchAttributeKey|upsert_search_attributes|TimeoutType|\\bFailureError\\b|WorkflowExecutionStatus|\\bSchedule\\w*\\b|temporalio\\.api\\b", "block": "Search attributes, FailureError, TimeoutType, WorkflowExecutionStatus, schedules and temporalio.api types have no public equivalent.", "brief": "Which atlanhq/application-sdk issue asks for a public API for this? The ignore then reads '# conformance: ignore[P004] no public equivalent — tracked in <id>'."}
+{"rule": "P005", "match": "_resolve_gate_enforcement|_temporal\\.activities\\b", "block": "The private gate-enforcement resolver and the private TaskContext have no public equivalent.", "brief": "Which atlanhq/application-sdk issue tracks a public API? The ignore then reads '# conformance: ignore[P005] no public equivalent — tracked in <id>'."}
+{"rule": "P004", "fix_shape": "^no-public-equivalent$", "block": "The temporalio name has no public equivalent (see the list in this skill). The end state is an ignore that names a tracking issue.", "brief": "Which atlanhq/application-sdk issue asks for a public API? The ignore then reads '# conformance: ignore[P004] no public equivalent — tracked in <id>'."}
+{"rule": "P005", "fix_shape": "^no-public-equivalent$", "block": "The private SDK name has no public equivalent (see the list in this skill). The end state is an ignore that names a tracking issue.", "brief": "Which atlanhq/application-sdk issue asks for a public API? The ignore then reads '# conformance: ignore[P005] no public equivalent — tracked in <id>'."}
+{"rule": "P004", "fix_shape": "^hand-built-workflow$", "block": "A hand-built workflow or activity dispatch: moving it onto App and @task changes the workflow type and activity names, and a child workflow has no public seam.", "brief": "Rewrite this workflow as an App (new workflow type: list legacy_workflow_types and agree a drain window), or keep it with an ignore that names a tracked SDK issue?"}
+{"rule": "P004", "fix_shape": "^own-worker-harness$", "block": "The test boots its own worker to set worker options or read workflow history, which the integration fixture kit does not expose.", "brief": "Move it onto the kit and drop what the kit does not expose, or keep it with an ignore that names a tracked SDK issue for a kit option?"}
+{"rule": "P005", "fix_shape": "^own-worker-harness$", "block": "The test boots its own worker to set worker options or read workflow history, which the integration fixture kit does not expose.", "brief": "Move it onto the kit and drop what the kit does not expose, or keep it with an ignore that names a tracked SDK issue for a kit option?"}
+{"rule": "P004", "fix_shape": "^v2-residue$", "block": "A test of a workflow written in the test file. Removing it is the owner's call; some owners keep such a file on purpose.", "brief": "Remove this test (name the kit test that covers the same workflow), or keep it with a justified ignore?"}
+{"rule": "P004", "fix_shape": "^operator-script$", "block": "Temporal code in an operator script under scripts/; the public factories fire P017 there.", "brief": "Delete this script, move it out of the app repo, or keep it with '# conformance: ignore[P004] <reason>'?"}
+```
 
 **Stop 1** (see Agent protocol).
 
