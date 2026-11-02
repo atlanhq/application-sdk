@@ -75,6 +75,13 @@ _BLOCKING_EXECUTOR_OVERRIDE: contextvars.ContextVar[
     concurrent.futures.Executor | None
 ] = contextvars.ContextVar("_BLOCKING_EXECUTOR_OVERRIDE", default=None)
 
+# True inside the copied context an offloaded call runs in, on any offload pool
+# (shared ``sdk-blocking-*`` or a per-app ``api-*``). ``asyncio.run`` in that
+# thread copies it into its main task, so nested ``run_in_thread`` sees it.
+_IN_OFFLOAD: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "_IN_OFFLOAD", default=False
+)
+
 
 @contextlib.contextmanager
 def blocking_executor(executor: concurrent.futures.Executor) -> Iterator[None]:
@@ -736,10 +743,15 @@ async def run_in_thread(
       ``contextvars.copy_context()``. Mutations inside the thread stay
       isolated from the caller (copy semantics).
     - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
-      Temporal's activity pool, to avoid deadlocking the worker. Calls already
-      on an ``sdk-blocking-*`` thread run inline in a copied context: a nested
-      event loop must not submit work behind the pool thread waiting for it.
-      Nested calls reuse that thread's offload slot.
+      Temporal's activity pool, to avoid deadlocking the worker. Calls made
+      from inside an offloaded call, on any offload pool, run inline in a
+      copied context: a nested event loop must not submit work behind the pool
+      thread waiting for it. The inline call blocks the nested event loop for
+      its whole duration, so ``asyncio.wait_for`` cannot time it out,
+      cancelling it has no effect, a ``CancelHandle`` is not fired, and other
+      tasks on that loop wait for it. Nested calls are charged to the outer
+      call's slot, are not counted against ``ATLAN_OFFLOAD_MAX_THREADS_PER_APP``
+      on their own, and do not go through ``_claim_slot``.
     - Each call is charged to an app: the handler invocation's app when one is
       bound (see :func:`offload_owner`), else the process's
       ``ATLAN_APPLICATION_NAME``. When ``ATLAN_OFFLOAD_MAX_THREADS_PER_APP`` is set,
@@ -796,6 +808,7 @@ async def run_in_thread(
         - ``self.context.storage`` / ``self.context.state`` — already async.
     """
     ctx = contextvars.copy_context()
+    ctx.run(_IN_OFFLOAD.set, True)
     loop = asyncio.get_running_loop()
     # Auto-hold, unbounded (ADR-0018 → *Feeding the tracker*, mechanism 2).
     # `run_in_thread` is a mandatory seam, so this is the one place the SDK can
@@ -818,11 +831,12 @@ async def run_in_thread(
     scopes = _OFFLOAD_SCOPES.get()
     if scopes:
         call = _tracked_offload(call, scopes, label)
-    # A blocking-pool caller may drive a nested event loop (e.g. a storage
+    # An offloaded caller (any offload pool: the shared ``sdk-blocking-*`` one or
+    # a per-app ``api-*`` one) may drive a nested event loop (e.g. a storage
     # download that offloads fsync). Submitting again can deadlock a saturated
     # pool: every thread waits for work queued behind itself. Reuse the current
     # thread and its slot, retaining context isolation, tracking and the hold.
-    if threading.current_thread().name.startswith("sdk-blocking-"):
+    if _IN_OFFLOAD.get():
         with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
             return call()
     cancel_handle = _bound_handle(func)

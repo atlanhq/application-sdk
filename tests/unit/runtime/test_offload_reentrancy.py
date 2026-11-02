@@ -23,6 +23,8 @@ async def test_nested_fsync_completes_with_saturated_pool(
 
     def shard(index: int) -> tuple[int, int]:
         if index < workers:
+            # Every pool thread must hold a shard at once, so the pool is
+            # saturated before any nested call happens.
             barrier.wait(timeout=30)
         caller_thread = threading.get_ident()
 
@@ -88,5 +90,30 @@ async def test_nested_call_preserves_context_kwargs_and_exception(
     try:
         assert await offload.run_in_thread(outer) == ("worker-result", "worker")
         assert value.get() == "outer"
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
+
+
+async def test_nested_call_inline_on_per_app_pool() -> None:
+    """A per-app ``api-*`` pool thread runs nested calls inline too."""
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="api-test-")
+
+    def outer() -> tuple[int, int]:
+        outer_thread = threading.get_ident()
+
+        async def nested() -> int:
+            def inner() -> int:
+                return threading.get_ident()
+
+            # If the fix regresses, the nested loop awaits a future queued behind
+            # this thread; wait_for then raises TimeoutError instead of hanging CI.
+            return await asyncio.wait_for(offload.run_in_thread(inner), 30)
+
+        return outer_thread, asyncio.run(nested())
+
+    try:
+        with offload.blocking_executor(pool):
+            outer_thread, inner_thread = await offload.run_in_thread(outer)
+        assert outer_thread == inner_thread
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
