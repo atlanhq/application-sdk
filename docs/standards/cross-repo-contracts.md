@@ -355,6 +355,22 @@ with a later `AUTH` row now names the `AUTH` row. Since FND-3774 a hard gate als
 `RATE_LIMITED`, so that
 marker now appears on ordinary runs, not only with storage verification opted in.
 
+## Submission-time validation: `/workflows/v1/validate` and `/start`'s 422
+
+| | |
+|---|---|
+| **Produced by** | `_parse_start_request()` in `application_sdk/handler/service.py`, shared by `POST /workflows/v1/validate` and `POST /workflows/v1/start`; the 422 body is built by the `RequestContractError` handler in `application_sdk/handler/routes.py` |
+| **Served at** | `POST /workflows/v1/validate?entrypoint=<name>` (200 or 422, never dispatches), and the same 422 from `POST /workflows/v1/start` |
+| **Key** | 422: `success: false`, `message`, `detail[]` of `{field, message, type}`. `field` is the dotted pydantic location; the rejected value is never included |
+| **Read by** | Workflow creation callers (Heracles), which call `/validate` with the body they will later send to `/start`, and surface `detail[]` to the user |
+| **Pinned by** | `TestValidateWorkflowConfig` and `test_start_contract_misfit_answers_422_naming_the_field` in `tests/unit/handler/test_service.py` |
+
+`/validate` and `/start` share one parser, so a body `/validate` accepts is one
+`/start` accepts. Don't give either route its own normalisation. A caller must
+treat 422 as final: the same body never succeeds on retry. Before FND-501,
+`/start` answered these as 500 "Failed to start workflow", so a caller that
+retried 5xx retried them uselessly.
+
 ## The preflight-results write route
 
 The one entry here that runs the other way: the SDK is the **caller**, not the

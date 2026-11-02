@@ -71,6 +71,7 @@ All routes registered by `create_app_handler_service()`:
 | `/workflows/v1/check` | POST | Run preflight connectivity checks |
 | `/workflows/v1/metadata` | POST | Browse source metadata (schemas, tables) |
 | `/workflows/v1/start` | POST | Start a workflow run (use `?entrypoint=<name>` for multi-entry-point apps) |
+| `/workflows/v1/validate` | POST | Dry-run `/start`: validate a workflow configuration against the entry point's input contract without starting anything (see [Validating a workflow configuration](#validating-a-workflow-configuration)) |
 | `/workflows/v1/stop/{workflow_id}/{run_id}` | POST | Terminate a running workflow |
 | `/workflows/v1/result/{workflow_id}` | GET | Fetch the final result of a completed workflow |
 | `/workflows/v1/status/{workflow_id}/{run_id}` | GET | Poll workflow execution status |
@@ -89,6 +90,34 @@ All routes registered by `create_app_handler_service()`:
 | `/ready`, `/server/ready` | GET | Readiness probe |
 | `/metrics` | GET | Prometheus metrics (always exposed; merges SDK custom metrics + HTTP server instrumentation + `prometheus_client` defaults, plus Temporal Rust-core families proxied from `127.0.0.1:9464` when enabled and reachable) |
 | `/` | GET | API root / service info |
+
+## Validating a workflow configuration
+
+`POST /workflows/v1/validate` takes the same body and `?entrypoint=` as
+`/workflows/v1/start` and runs the same resolution, credential stripping and
+input-contract validation, then stops. It needs no Temporal connection. Call it
+when a workflow is created, so a configuration the runtime cannot execute is
+rejected at submission instead of failing at engine time.
+
+It goes further than the JSON Schema served by `/workflows/v1/input-contract`,
+because it also runs the contract's `field_validator`s. For the SQL templates
+those reject:
+
+- SQL-unsafe filter values;
+- include/exclude/temp-table patterns that no regex dialect compiles: an
+  unbalanced group or bracket, a reversed character range, or a trailing
+  backslash. Dialect-specific syntax (`\p{L}`, POSIX classes) is left for the
+  source to judge.
+
+| Outcome | Status | Body |
+|---|---|---|
+| `/start` would accept the body | 200 | `{"success": true, "data": {"entrypoint", "workflow_type"}}` |
+| The body does not fit the contract, or is not a JSON object | 422 | `{"success": false, "message": "Invalid request: <fields>", "detail": [{"field", "message", "type"}]}` |
+| Unknown `?entrypoint=` | 400 | |
+
+`/workflows/v1/start` answers the same 422 for the same body, before it touches
+Temporal. The rejected value is never echoed back, because it can be a
+credential.
 
 ## MCP Server Integration
 

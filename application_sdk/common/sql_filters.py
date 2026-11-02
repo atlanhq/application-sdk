@@ -9,6 +9,7 @@ import glob
 import json
 import os
 import re
+import warnings
 from typing import Any, TypeAlias
 
 import orjson
@@ -226,6 +227,95 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
             if isinstance(key, str):
                 _check_str("key", key)
             _check_value("value", values)
+    return v
+
+
+# ---------------------------------------------------------------------------
+# Structural regex check at submission time (FND-501).
+#
+# Filter patterns are evaluated by the *source's* regex engine (POSIX, Java,
+# RE2, ICU, ...), not by Python's ``re``, so a Python compile failure alone is
+# not a verdict: ``\p{L}`` or ``(?<name>...)`` are valid in some dialects and
+# rejected by ``re``. Only the failures below are refused — each one is a
+# pattern no regex dialect accepts, so the workflow would otherwise be
+# accepted and then fail at engine time. Allowlisted by ``re.error.msg``
+# prefix; anything else Python rejects passes through to the source.
+# ---------------------------------------------------------------------------
+
+_DIALECT_INDEPENDENT_REGEX_ERRORS: tuple[str, ...] = (
+    "missing ), unterminated subpattern",
+    "unbalanced parenthesis",
+    "unterminated character set",
+    "bad character range",
+    "bad escape (end of pattern)",
+)
+
+
+def _check_regex_structure(label: str, pattern: str) -> None:
+    try:
+        with warnings.catch_warnings():
+            # POSIX classes such as ``[[:alpha:]]`` raise a FutureWarning in
+            # ``re``; they are valid in the source dialects that use them.
+            warnings.simplefilter("ignore")
+            re.compile(pattern)
+    except re.error as e:
+        if e.msg.startswith(_DIALECT_INDEPENDENT_REGEX_ERRORS):
+            # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
+            raise ValueError(
+                f"Invalid regex in filter {label} {pattern!r}: {e.msg}"
+                f" at position {e.pos}"
+            ) from None
+
+
+def validate_filter_regex_syntax(v: Any) -> Any:
+    """Reject filter patterns that no regex dialect can compile.
+
+    Walks the same shapes as :func:`validate_filter_no_sql_injection` — a raw
+    regex string, a JSON-encoded filter-map string, or a ``FilterMap`` /
+    APITree dict (keys and string values) — and raises ``ValueError`` on an
+    unbalanced group or bracket, a reversed character range, or a trailing
+    backslash, so the workflow is rejected at submission instead of failing
+    at engine time. Dialect-specific syntax Python's ``re`` does not know is
+    left for the source to judge (see ``_DIALECT_INDEPENDENT_REGEX_ERRORS``).
+
+    Args:
+        v: A filter value — raw regex string, JSON-encoded filter map string,
+            or filter dict.
+
+    Returns:
+        ``v`` unchanged when every pattern is structurally valid.
+
+    Raises:
+        ValueError: Naming the offending pattern and the structural error.
+    """
+
+    def _walk(label: str, value: Any, depth: int = 0) -> None:
+        if depth > _MAX_FILTER_NESTING_DEPTH:
+            return  # depth is policed by validate_filter_no_sql_injection
+        if isinstance(value, str):
+            _check_regex_structure(label, value)
+        elif isinstance(value, list):
+            for item in value:
+                _walk("value", item, depth + 1)
+        elif isinstance(value, dict):
+            for key, nested in value.items():
+                if isinstance(key, str):
+                    _check_regex_structure("key", key)
+                _walk("value", nested, depth + 1)
+
+    if isinstance(v, str):
+        stripped = v.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = orjson.loads(stripped)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                _walk("value", parsed)
+                return v
+        _walk("value", v)
+    elif isinstance(v, dict):
+        _walk("value", v)
     return v
 
 

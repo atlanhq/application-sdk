@@ -8361,46 +8361,159 @@ class TestAgentJsonIngressOnTheHandlerPath:
         assert response.status_code == 500
         assert response.json()["detail"] == "Internal server error"
 
-    def test_start_internal_validation_failure_stays_a_500(self) -> None:
-        """``/start`` validates its body *inside* its error boundary.
+    def test_start_contract_misfit_answers_422_naming_the_field(self) -> None:
+        """A ``/start`` body that does not fit the input contract is a 422 (FND-501).
 
-        The app-level 422 handler exists for the form endpoints (auth /
-        preflight / metadata), which validate *outside* any boundary. A
-        ValidationError escaping ``/start``'s boundary is an internal bug, so
-        ``/start`` re-raises it past the 422 handler — it must surface as the
-        sanitized 500 the boundary answers, never as "the request did not fit
-        the contract".
+        The body is the caller's workflow configuration: a misfit never
+        succeeds on retry, so it is rejected naming the field — and before
+        Temporal is touched, so the rejection does not depend on Temporal
+        being reachable.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock
 
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
-        class _StartValidationApp(App):
+        class _StartMisfitApp(App):
             @entrypoint
             async def run(self, input: _RoutingInput) -> _RoutingOutput:
                 return _RoutingOutput()
 
         svc = create_app_handler_service(
             _TestHandler(),
-            app_name="start-validation",
-            app_class=_StartValidationApp,
+            app_name="start-misfit",
+            app_class=_StartMisfitApp,
             temporal_host="temporal:7233",
         )
-        patcher = patch(
-            "application_sdk.handler.service._get_temporal_client",
-            new=AsyncMock(return_value=MagicMock()),
-        )
-        patcher.start()
-        try:
-            # Input.correlation_id is a `str`; pydantic v2 rejects an int, so
-            # model_validate raises inside the /start try block.
+        get_client = AsyncMock(return_value=MagicMock())
+        with patch(
+            "application_sdk.handler.service._get_temporal_client", new=get_client
+        ):
+            # Input.correlation_id is a `str`; pydantic v2 rejects an int.
             response = TestClient(svc, raise_server_exceptions=False).post(
                 "/workflows/v1/start", json={"correlation_id": 123}
             )
-            assert response.status_code == 500
-        finally:
-            patcher.stop()
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["success"] is False
+        assert [d["field"] for d in body["detail"]] == ["correlation_id"]
+        assert "123" not in response.text  # the rejected value is never echoed
+        get_client.assert_not_awaited()
+
+    def test_start_internal_validation_failure_stays_a_500(self) -> None:
+        """A ValidationError raised past body validation is still a sanitized 500.
+
+        Only the body's contract check answers 422; a ValidationError from
+        the SDK's own stamping is an internal bug, never "the request did
+        not fit the contract".
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _StartInternalApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="start-internal",
+            app_class=_StartInternalApp,
+            temporal_host="temporal:7233",
+        )
+
+        def _stamp_fails(*_args: object, **_kwargs: object) -> str:
+            _RoutingInput.model_validate({"correlation_id": 123})
+            raise AssertionError("unreachable")
+
+        with (
+            patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "application_sdk.handler.service.resolve_dispatch_workflow_id",
+                new=_stamp_fails,
+            ),
+        ):
+            response = TestClient(svc, raise_server_exceptions=False).post(
+                "/workflows/v1/start", json={}
+            )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Failed to start workflow"
+
+
+class TestValidateWorkflowConfig:
+    """``POST /workflows/v1/validate`` — a dry-run ``/start`` (FND-501)."""
+
+    @staticmethod
+    def _client(*, temporal_host: str = "") -> TestClient:
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _ValidateRouteApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        return TestClient(
+            create_app_handler_service(
+                _TestHandler(),
+                app_name="validate-route",
+                app_class=_ValidateRouteApp,
+                temporal_host=temporal_host,
+            ),
+            raise_server_exceptions=False,
+        )
+
+    def test_valid_config_answers_200_without_temporal(self) -> None:
+        response = self._client().post(
+            "/workflows/v1/validate",
+            json={"name": "ok", "credentials": [{"key": "password", "value": "s"}]},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"]["entrypoint"] == "run"
+
+    def test_invalid_config_answers_the_same_422_as_start(self) -> None:
+        response = self._client().post(
+            "/workflows/v1/validate", json={"correlation_id": 123}
+        )
+
+        assert response.status_code == 422
+        assert [d["field"] for d in response.json()["detail"]] == ["correlation_id"]
+
+    def test_validate_never_dispatches(self) -> None:
+        from unittest.mock import AsyncMock
+
+        get_client = AsyncMock()
+        with patch(
+            "application_sdk.handler.service._get_temporal_client", new=get_client
+        ):
+            response = self._client(temporal_host="temporal:7233").post(
+                "/workflows/v1/validate", json={"name": "ok"}
+            )
+
+        assert response.status_code == 200
+        get_client.assert_not_awaited()
+
+    def test_unknown_entrypoint_is_rejected(self) -> None:
+        response = self._client().post(
+            "/workflows/v1/validate?entrypoint=no-such-entrypoint", json={}
+        )
+
+        assert response.status_code == 400
+
+    def test_non_object_body_answers_422(self) -> None:
+        response = self._client().post("/workflows/v1/validate", json=[1, 2])
+
+        assert response.status_code == 422
 
 
 class TestManifestPostTransport:

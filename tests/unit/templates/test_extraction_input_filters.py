@@ -630,3 +630,36 @@ class TestTreeSelectionExtractionInput:
 
         with pytest.raises(SqlTreeFilterInputUnsupportedError):
             await SqlMetadataExtractor.run(None, TreeSelectionExtractionInput())  # type: ignore[arg-type]
+
+
+class TestFilterRegexSyntaxAtSubmission:
+    """FND-501: a pattern no regex dialect compiles fails validation, not the engine."""
+
+    @pytest.mark.parametrize(
+        "model", [ExtractionInput, ExtractionTaskInput, TreeSelectionExtractionInput]
+    )
+    @pytest.mark.parametrize("field", ["include_filter", "exclude_filter"])
+    def test_broken_filter_regex_is_rejected(self, model, field):
+        # APITree selections nest dicts; flat filter maps list schemas.
+        schemas: dict | list = {} if model is TreeSelectionExtractionInput else []
+        with pytest.raises(ValidationError) as exc:
+            model.model_validate({field: {"^db(": schemas}})
+        errors = exc.value.errors()
+        assert errors[0]["loc"] == (field,)
+        assert "Invalid regex" in errors[0]["msg"]
+
+    @pytest.mark.parametrize("model", [ExtractionInput, ExtractionTaskInput])
+    def test_broken_temp_table_regex_is_rejected(self, model):
+        with pytest.raises(ValidationError) as exc:
+            model.model_validate({"temp_table_regex": "^tmp_[a-"})
+        assert exc.value.errors()[0]["loc"] == ("temp_table_regex",)
+
+    def test_broken_raw_regex_string_is_rejected(self):
+        with pytest.raises(ValidationError, match="Invalid regex"):
+            ExtractionInput.model_validate({"exclude_filter": "^temp_(.*$"})
+
+    def test_dialect_specific_regex_is_accepted(self):
+        result = ExtractionInput.model_validate(
+            {"include_filter": {"^db$": ["^\\p{L}+$"]}}
+        )
+        assert result.include_filter == {"^db$": ["^\\p{L}+$"]}
