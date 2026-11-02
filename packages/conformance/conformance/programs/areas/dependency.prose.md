@@ -18,7 +18,7 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode —
-D002/D003/D004/D006/D007/D008/D012/D013/D014/D015 are WARN-tier, so they are
+D002/D003/D004/D006/D007/D008/D012/D013/D014/D015/D016 are WARN-tier, so they are
 processed in strict mode; D001, D005, D009, D010 and D011 are BLOCK-tier and
 processed in both modes.
 
@@ -189,6 +189,19 @@ fix.  The re-detection gate is authoritative for this area — see
   with the SDK floor named in the finding message (`>=3.11`), preserving any
   upper bound: `requires-python = ">=3.10,<4.0"` → `">=3.11,<4.0"`;
   `requires-python = ">=3.10"` → `">=3.11"`.
+
+- **D016 RequiresPythonExcludesRuntimePython** — the app's
+  `[project].requires-python` shuts out Python 3.13, the version
+  `app-runtime-base:3` ships.  Replace only the upper-bound clause so the
+  runtime version named in the finding message is admitted, preserving the
+  lower bound: `">=3.11,<3.13"` → `">=3.11,<3.14"`; `">=3.11,<=3.12"` →
+  `">=3.11,<3.14"`.  Never lower the floor and never pin `==3.13.*`.  For an
+  exact-pin spelling (`==3.12.*`, `~=3.12.0`) the intent is not mechanical:
+  propose `">=3.11,<3.14"` and route to residue for human confirmation.
+  State in the edit description that `uv lock` must be re-run (the lock's
+  `requires-python` and cp313 wheels must follow) and that the app's tests
+  should be run on Python 3.13; a dependency that has no 3.13 build surfaces
+  only there, and is the one legitimate reason to suppress instead.
 
 - **D007 NonStandardBuildBackend** — set `build-backend` to `"hatchling.build"`
   in `[build-system]` and ensure `requires = ["hatchling"]`.  Build-affecting:
@@ -477,7 +490,7 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008 / D010** — standard inline
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D016** — standard inline
   suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:

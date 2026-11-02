@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**15 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**16 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -30,6 +30,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
 | [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | yes | 0.31.0 |
 | [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
+| [D016](#d016) | `RequiresPythonExcludesRuntimePython` | `warn` | `app` | `python-version` | yes | 0.54.0 |
 
 ---
 
@@ -180,12 +181,13 @@ The SDK's own pyproject is exempt.
 
 **Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
 
-> SDK-managed dependency redeclared in a [dependency-groups] table
+> Redundant SDK-managed dependency in a [dependency-groups] table
 
-**Rationale:** D002 only covers [project.dependencies] and the optional-dependencies arrays; an
-SDK-managed package re-pinned in a PEP 735 [dependency-groups] table escapes it. A
-dev/test group that re-pins a package the SDK already manages drifts from the SDK's
-validated dev environment and must be touched on every SDK bump.
+**Rationale:** D002 only covers [project.dependencies] and the optional-dependencies arrays; a
+redundant SDK-managed tooling pin in a PEP 735 [dependency-groups] table escapes it.
+Such a dev/test group entry drifts from the SDK's validated environment and must be
+touched on every SDK bump. A package directly imported by app-owned test source is
+instead a direct test dependency, not a redundant SDK tooling pin.
 
 ### What correct looks like
 
@@ -197,10 +199,12 @@ validated dev environment and must be touched on every SDK bump.
 - **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Packages pinned by `atlan-application-sdk` must not be redeclared in the app's PEP 735
-`[dependency-groups.*]` tables (dev/test groups).  This is the coverage gap left by
-D002, which scans only `[project.dependencies]` and `[project.optional-dependencies.*]`.
-Pull SDK-managed dev/test tooling in via `atlan-application-sdk[tests]` rather than
-re-pinning it.  The managed set is read via
+`[dependency-groups.*]` tables (dev/test groups) merely to pull in SDK-managed tooling.
+This is the coverage gap left by D002, which scans only `[project.dependencies]` and
+`[project.optional-dependencies.*]`. A package directly imported by app-owned test
+source is a direct test dependency rather than a redundant tooling pin, so it may remain
+in the group. Pull other SDK-managed test tooling in via `atlan-application-sdk[tests]`
+rather than re-pinning it. The managed set is read via
 `importlib.metadata.requires('atlan-application-sdk')`; if the SDK is not importable,
 this rule is skipped silently. Cite: BLDX-1410.
 
@@ -809,5 +813,47 @@ type-checked*, which is not a safe automatic rewrite.
 
 Scope is `both`: application-sdk's own `pyproject.toml` carries this exact shape.  Cite:
 FND-2229.
+
+---
+
+## D016 — `RequiresPythonExcludesRuntimePython` {#d016}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.54.0
+
+> App requires-python excludes Python 3.13, the version the runtime image ships
+
+**Rationale:** Every app ships on app-runtime-base:3, whose interpreter is Python 3.13, and the SDR e2e
+harness pins its host Python to the same version so the suite tests what ships. An app
+whose requires-python excludes 3.13 declares itself unsupported on the only Python it
+ever runs on, and uv quietly resolves around the cap: CI builds the venv on an older
+interpreter, so e2e exercises a Python production never uses. On ubuntu-26.04 runners
+there is no system 3.12, so uv downloads one into an uncached temp directory; the cached
+venv then links to an interpreter that is gone on the next runner, uv rebuilds it
+without the test group, and every warm e2e run fails with 'Failed to spawn: pytest'
+(FND-4505). Nothing in the app's diff points at the cause.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`: the SDK floor and no
+  upper cap, so the range admits the Python 3.13 that app-runtime-base:3 ships. An app
+  that needs an upper bound sets one above the runtime's version, e.g. `">=3.11,<3.14"`.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
+
+The app's `[project].requires-python` must admit the Python that `app-runtime-base:3`
+ships (**3.13**).  The range is evaluated as a PEP 440 specifier set, so every spelling
+that shuts 3.13 out is caught -- `<3.13`, `<=3.12`, `==3.12.*`, `~=3.12.0`:
+
+```python
+requires-python = ">=3.11,<3.13"   # flagged
+requires-python = ">=3.11,<3.14"   # passes
+requires-python = ">=3.11"         # passes
+```
+
+An absent `requires-python` is not graded (D006 owns the floor).  The runtime version is
+a drift-guarded constant in the checker, kept equal to the golden base tag in the SDK's
+`Dockerfile`, so the rule needs no resolved environment.
+
+Autofixable: raise only the upper-bound clause so 3.13 is admitted, keep the lower
+bound, then re-run `uv lock`. Cite: FND-4505.
 
 ---

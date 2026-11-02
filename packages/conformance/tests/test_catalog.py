@@ -509,6 +509,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "D008",
         "D009",
         "D011",
+        "D016",
         "E020",
         "K001",
         "K002",

@@ -14,6 +14,7 @@ from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_supp
 from conformance.suite.checks.dependency_conformance import (
     _LOCK_URL_RE,
     _REMOTE_COMPONENT_FETCH_RE,
+    RUNTIME_IMAGE_PYTHON,
     SDK_PYTHON_FLOOR,
     _collect_dialect_drivers,
     _collect_dialect_names,
@@ -514,6 +515,87 @@ def test_d006_sdk_python_floor_matches_sdk_pyproject() -> None:
     bound = _requires_python_lower_bound(text)
     assert bound is not None
     assert bound[0] == SDK_PYTHON_FLOOR
+
+
+# ── D016: requires-python must admit the runtime image's Python ──────────────
+
+
+@pytest.mark.parametrize(
+    "spec", [">=3.11,<3.13", ">=3.11,<=3.12", "==3.12.*", "~=3.12.0", "<3.13"]
+)
+def test_d016_fires_when_runtime_python_excluded(spec: str) -> None:
+    findings = scan_text(
+        _py_pyproject(spec), "pyproject.toml", sdk_managed_packages=set()
+    )
+    assert [f.rule_id for f in findings] == ["D016"]
+    f = findings[0]
+    assert f"'{spec}'" in f.message
+    assert "3.13" in f.message
+    assert f.line == 3  # anchored on the requires-python line
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [">=3.11", ">=3.11,<3.14", ">=3.11,<4.0", "==3.13.*", ">=3.11.10,<4.0", "~=3.11"],
+)
+def test_d016_passes_when_runtime_python_admitted(spec: str) -> None:
+    findings = scan_text(
+        _py_pyproject(spec), "pyproject.toml", sdk_managed_packages=set()
+    )
+    assert [f.rule_id for f in findings if f.rule_id == "D016"] == []
+
+
+def test_d016_absent_requires_python_no_finding() -> None:
+    text = _write_pyproject(deps='    "atlan-application-sdk>=3.17.2,<4.0.0",\n')
+    assert scan_text(text, "pyproject.toml", sdk_managed_packages=set()) == []
+
+
+def test_d016_unparseable_spec_not_graded() -> None:
+    findings = scan_text(
+        _py_pyproject("not a spec"), "pyproject.toml", sdk_managed_packages=set()
+    )
+    assert "D016" not in {f.rule_id for f in findings}
+
+
+def test_d016_suppressed_inline_directive() -> None:
+    text = (
+        "[project]\n"
+        'name = "demo-app"\n'
+        'requires-python = ">=3.11,<3.13"  # conformance: ignore[D016] native ext\n'
+        'version = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        "]\n"
+    )
+    findings = scan_text(text, "pyproject.toml", sdk_managed_packages=set())
+    assert [f.rule_id for f in findings] == ["D016"]
+    assert findings[0].suppressed is True
+    assert "native ext" in (findings[0].suppression_justification or "")
+
+
+def test_d016_sdk_pyproject_is_exempt() -> None:
+    text = (
+        "[project]\n"
+        'name = "atlan-application-sdk"\n'
+        'requires-python = ">=3.11,<3.13"\n'
+        'version = "0.1.0"\n'
+    )
+    assert scan_text(text, "pyproject.toml", sdk_managed_packages=set()) == []
+
+
+def test_d016_runtime_python_matches_sdk_dockerfile() -> None:
+    """Drift guard: RUNTIME_IMAGE_PYTHON must track the SDK's golden base tag."""
+    dockerfile = Path(__file__).parents[3] / "Dockerfile"
+    if not dockerfile.is_file():
+        pytest.skip("SDK Dockerfile not locatable from the test tree")
+    tags = set(
+        re.findall(r"app-framework-golden:(\d+)\.(\d+)\b", dockerfile.read_text())
+    )
+    if not tags:
+        pytest.skip("repo-root Dockerfile carries no golden base tag")
+    assert len(tags) == 1, f"conflicting golden base tags: {tags}"
+    (major, minor) = next(iter(tags))
+    assert (int(major), int(minor)) == RUNTIME_IMAGE_PYTHON
 
 
 # ── D004: redeclaration in [dependency-groups] ───────────────────────────────
