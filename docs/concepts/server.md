@@ -140,7 +140,11 @@ error naming the field. No credential value is returned or logged.
 | Invalid `?entrypoint=` name / several entry points and none named | 400 | |
 | Unknown `?entrypoint=` | 404 | |
 
-The rejected value is never echoed back, because it can be a credential.
+The 422 never includes pydantic's `input`, because the rejected value can be a
+credential. The SDK's own validators (SQL filters, regex structure, incremental
+markers, required credential fields) name the field and the problem, never the
+value. A custom validator in an app's contract is returned as written, so it
+must not put the value in its message either.
 `/workflows/v1/start` (worker only) answers the same 422 shape when its body
 does not fit the entry point's input type, before it touches Temporal.
 

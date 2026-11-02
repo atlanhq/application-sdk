@@ -172,8 +172,11 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
         for seq in sequences:
             if seq in value:
                 # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
+                # Names the denied sequence, never the value: this message
+                # reaches a caller's 422 body (FND-501), and a filter value
+                # can carry what the caller would not want reflected.
                 raise ValueError(
-                    f"SQL-unsafe sequence {seq!r} not allowed in filter {label}: {value!r}"
+                    f"SQL-unsafe sequence {seq!r} not allowed in filter {label}"
                 )
 
     def _check_value(label: str, value: Any, depth: int = 0) -> None:
@@ -213,7 +216,7 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
                     # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
                     raise ValueError(
                         f"Malformed JSON in filter value at line {e.lineno} "
-                        f"column {e.colno}: {v!r}"
+                        f"column {e.colno}"
                     ) from e
                 parsed = None
             if isinstance(parsed, dict):

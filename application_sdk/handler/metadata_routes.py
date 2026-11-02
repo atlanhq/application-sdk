@@ -896,8 +896,19 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
         :func:`credential_gaps`.
         """
         contract = _resolve_input_contract(entrypoint)
-        body = source.normalize_body(await read_json_object(request))
+        raw_body = await read_json_object(request)
+        body = source.normalize_body(raw_body)
         inline_credentials = body.pop("credentials", None)
+        if "credentials" not in raw_body and isinstance(inline_credentials, list):
+            # A flat v2 credential: the normaliser lifted these top-level keys
+            # into ``credentials`` but leaves them in the body. Take them out
+            # of the configuration too, so no credential value reaches the
+            # contract's verdict. The pair keys are the normaliser's own
+            # choice, so connector-extended credential keys go as well.
+            for pair in inline_credentials:
+                key = pair.get("key") if isinstance(pair, dict) else None
+                if isinstance(key, str):
+                    body.pop(key.split(".", 1)[0], None)
         for key in ("workflow_id", "workflow_type"):
             body.pop(key, None)
         resolved = entrypoint or _default_entrypoint(

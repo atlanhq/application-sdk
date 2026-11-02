@@ -29,6 +29,9 @@ _INPUT_MODULE = textwrap.dedent(
     class AppInputContract(ExtractionInput):
         oauth_client_id: str
         enable_tags: bool = False
+        # Shares a name with a flat v2 credential key: proves credentials
+        # never reach the contract's verdict.
+        password: int = 0
         source_credential: CredentialRef | None = None
     """
 )
@@ -116,3 +119,40 @@ def test_host_rejects_a_non_object_body(host: TestClient) -> None:
     response = host.post("/workflows/v1/validate", json=["not", "an", "object"])
 
     assert response.status_code == 422
+
+
+def test_flat_v2_credentials_never_reach_the_contract(host: TestClient) -> None:
+    """lens F-6b1e2a: top-level credential keys are stripped, not judged."""
+    response = host.post(
+        "/workflows/v1/validate",
+        json={
+            "oauth_client_id": "client-123",
+            "host": "db.example.invalid",
+            "username": "u",
+            "password": "hunter2-not-an-int",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert "hunter2" not in response.text
+
+
+@pytest.mark.parametrize(
+    "include_filter",
+    [
+        {"^db$": ["SECRET_SCHEMA'"]},  # SQL-unsafe sequence
+        '{"^db$": ["SECRET_SCHEMA"]',  # malformed JSON envelope
+    ],
+)
+def test_sql_filter_rejection_does_not_echo_the_value(
+    host: TestClient, include_filter: object
+) -> None:
+    """lens F-095e1b: the validator names the problem, never the value."""
+    response = host.post(
+        "/workflows/v1/validate",
+        json={"oauth_client_id": "client-123", "include_filter": include_filter},
+    )
+
+    assert response.status_code == 422
+    assert [d["field"] for d in response.json()["detail"]] == ["include_filter"]
+    assert "SECRET_SCHEMA" not in response.text
