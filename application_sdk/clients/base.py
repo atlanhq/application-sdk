@@ -68,8 +68,10 @@ class BaseClient(ClientInterface):
         credentials (Dict[str, Any]): Client credentials for authentication.
         http_headers (HeaderTypes): HTTP headers for all http requests made by this client. Supports dict, Headers object, or list of tuples.
         http_retry_transport (httpx.AsyncBaseTransport): HTTP transport for requests. Defaults to an
-            httpx transport that retries connection setup up to 3 times. Can be overridden in load()
-            for custom retry behavior.
+            httpx transport that retries connection setup up to 3 times and verifies TLS with
+            ``get_ssl_context()``. Can be overridden in load() for custom retry behavior; a
+            replacement transport owns TLS verification, so build it with
+            ``verify=get_ssl_context()`` to keep trusting CAs from ``SSL_CERT_DIR``.
 
     Extending the Client:
         To customize retry behavior, subclasses can override the http_retry_transport
@@ -89,7 +91,10 @@ class BaseClient(ClientInterface):
             ...         # For advanced retry logic with status code handling, use httpx-retries:
             ...         # from httpx_retries import Retry, RetryTransport
             ...         # retry = Retry(total=5, backoff_factor=20)
-            ...         # self.http_retry_transport = RetryTransport(retry=retry) #replace transport with custom transport if needed
+            ...         # self.http_retry_transport = RetryTransport(
+            ...         #     retry=retry,
+            ...         #     transport=httpx.AsyncHTTPTransport(verify=get_ssl_context()),
+            ...         # )  # replace transport with custom transport if needed
 
         Advanced Retry Configuration:
             For applications requiring advanced retry logic (e.g., status code-based retries,
@@ -109,7 +114,11 @@ class BaseClient(ClientInterface):
             ...             backoff_factor=10,
             ...             status_forcelist=[429, 500, 502, 503, 504]
             ...         )
-            ...         self.http_retry_transport = RetryTransport(retry=retry)
+            ...         # The replacement transport owns TLS verification.
+            ...         self.http_retry_transport = RetryTransport(
+            ...             retry=retry,
+            ...             transport=httpx.AsyncHTTPTransport(verify=get_ssl_context()),
+            ...         )
 
         Header Management:
             The client supports a two-level header system using httpx Headers for merging headers:
@@ -145,7 +154,11 @@ class BaseClient(ClientInterface):
         # BLDX-1153). httpcore retries only connection setup (ConnectError,
         # ConnectTimeout), before any request bytes are sent, so the retries
         # are safe for POST.
+        # TLS verification lives on the transport: httpx ignores
+        # ``AsyncClient(verify=...)`` whenever ``transport=`` is also passed,
+        # so the SDK context (default CAs plus SSL_CERT_DIR) must be set here.
         self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
+            verify=get_ssl_context(),
             limits=_HTTP_POOL_LIMITS,
             retries=_HTTP_CONNECT_RETRIES,
         )
@@ -333,12 +346,10 @@ class BaseClient(ClientInterface):
             ... )
         """
         _warn_if_raise_on_error_unset("execute_http_get_request", raise_on_error)
-        ssl_context = get_ssl_context()
         transport = await self._borrow_transport()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
             transport=transport,
-            verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
@@ -470,12 +481,10 @@ class BaseClient(ClientInterface):
             ... )
         """
         _warn_if_raise_on_error_unset("execute_http_post_request", raise_on_error)
-        ssl_context = get_ssl_context()
         transport = await self._borrow_transport()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
             transport=transport,
-            verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
             if headers:
