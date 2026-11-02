@@ -791,12 +791,13 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 #:
 #: Defaulted ON (CNCT-85). The scan runs the pyatlan/msgspec decode in an isolated
 #: child process (``run_best_effort`` over ``run_fault_isolated``), so a native
-#: fault — e.g. the msgspec 0.20.0 concurrent-decode segfault on py3.13 — is
-#: contained to the child and surfaces as a swallowed best-effort skip, never
-#: killing the worker. This branch (PR #2769) is intended to merge only once the
-#: msgspec 0.21.1 bump is in place, at which point concurrent decode is itself
-#: safe and on-by-default validation is the right posture. Set to "false" to
-#: disable per-deployment.
+#: fault in any C extension on that path is contained to the child and surfaces
+#: as a swallowed best-effort skip, never killing the worker. The fault that
+#: motivated it (msgspec 0.20.0's concurrent-decode segfault) is fixed in the
+#: locked msgspec 0.21.1; isolation stays because it contains the whole class,
+#: not that one bug (ADR-0017). Its children exit once the pool is idle for
+#: ``ATLAN_FAULT_ISOLATION_IDLE_SECONDS`` (FND-4278), so the scan holds memory
+#: only while it runs. Set to "false" to disable per-deployment.
 VALIDATE_ASSETS_ON_UPLOAD: bool = (
     os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
 )

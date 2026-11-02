@@ -30,6 +30,7 @@ import pytest
 #: about its dependencies is exactly what this test exists to catch, and a
 #: discovery loop would silently accept it.
 _RUNTIME_MODULES = [
+    "application_sdk._runtime.cgroup",
     "application_sdk._runtime.offload",
     "application_sdk._runtime.progress",
 ]
