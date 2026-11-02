@@ -113,7 +113,7 @@ on:
         type: boolean
         default: false
       unit_test_shards:
-        description: "Opt-in: split the certify gate's `tests/unit` across this many parallel runners (2-10). Default 1 = no split: `certify` runs the tests itself in one job, exactly as before, and no extra jobs start. Any other value outside 1-10 fails the run. When set, pytest-split balances the runners from the app's committed `.test_durations` if it has one, else splits evenly by count. See docs/standards/app-certification.md."
+        description: "Opt-in: split the certify gate's `tests/unit` across this many parallel runners (2-10). Default 1 = no split: `certify` runs the tests itself in one job, exactly as before, and no extra jobs start. Any value outside 1-10 fails the run. When set, pytest-split balances the runners from the app's committed `.test_durations` if it has one, else splits evenly by count. See docs/standards/app-certification.md."
         required: false
         type: number
         default: 1
@@ -487,40 +487,14 @@ jobs:
   # that ships the image certifies it.
   #
   # Sharding is opt-in (`unit_test_shards`, default 1). By default `certify`
-  # runs the unit tests itself and `certify-plan` / `certify-unit` skip, so an
-  # app that does not opt in pays for no extra jobs. An app that opts in (2-10)
-  # runs its tests in `certify-unit`, one leg per shard, and
-  # `certify` folds their results into the verdict. Publish waits on `certify`
-  # while the image build does not, so on a single 2-vCPU runner a large suite
-  # set the whole run's wall time — and neared the 30-minute cap.
-  # `certify_unit_shards.py` holds the plan / per-shard / fan-in logic.
-  certify-plan:
-    name: Certify plan
-    needs: build-decision
-    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' && inputs.unit_test_shards != 1 }}
-    runs-on: ubuntu-slim
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      total: ${{ steps.plan.outputs.total }}
-      shards: ${{ steps.plan.outputs.shards }}
-    steps:
-      - name: Checkout SDK helper scripts
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: main
-          path: .sdk-entrypoint
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-
-      - name: Plan unit-test shards
-        id: plan
-        env:
-          SHARDS: ${{ inputs.unit_test_shards }}
-        run: python3 .sdk-entrypoint/.github/scripts/certify_unit_shards.py plan --shards "${SHARDS}"
-
+  # runs the unit tests itself and `certify-unit` skips, so an app that does
+  # not opt in pays for no extra jobs. An app that opts in (2-10) runs its
+  # tests in `certify-unit`, one leg per shard, and `certify` folds their
+  # results into the verdict. Publish waits on `certify` while the image build
+  # does not, so on a single 2-vCPU runner a large suite set the whole run's
+  # wall time — and neared the 30-minute cap.
+  # `certify_unit_shards.py` holds the per-shard / fan-in logic.
+  #
   # One leg per shard. A failing test does NOT fail the leg (continue-on-error
   # on the run step): `certify` must still run to render every layer in one
   # verdict, and `!failure()` on it would skip it if a leg went red. The leg's
@@ -528,15 +502,19 @@ jobs:
   # that crashes or times out leaves no result, which `certify` reads as failed
   # — or, if the whole job fails, `!failure()` skips certify and publish.
   certify-unit:
-    name: Certify unit tests (${{ matrix.shard }}/${{ needs.certify-plan.outputs.total }})
-    needs: [build-decision, certify-plan]
+    name: Certify unit tests (${{ matrix.shard }}/${{ inputs.unit_test_shards }})
+    needs: build-decision
     if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' && inputs.unit_test_shards != 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.certify-plan.outputs.shards) }}
+        # Expressions cannot build a range, so the shard list is looked up
+        # rather than computed by a planning job (one fewer billed job).
+        # A count outside 1-10 has no entry: the empty matrix fails this job,
+        # and `!failure()` then skips certify and publish.
+        shard: ${{ fromJSON('{"1":[1],"2":[1,2],"3":[1,2,3],"4":[1,2,3,4],"5":[1,2,3,4,5],"6":[1,2,3,4,5,6],"7":[1,2,3,4,5,6,7],"8":[1,2,3,4,5,6,7,8],"9":[1,2,3,4,5,6,7,8,9],"10":[1,2,3,4,5,6,7,8,9,10]}')[format('{0}', inputs.unit_test_shards)] }}
     steps:
       - name: Checkout app
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -592,7 +570,7 @@ jobs:
         working-directory: app
         env:
           SHARD: ${{ matrix.shard }}
-          TOTAL: ${{ needs.certify-plan.outputs.total }}
+          TOTAL: ${{ inputs.unit_test_shards }}
           COVERAGE_SOURCE: ${{ inputs.coverage_source }}
           INSTALL_OUTCOME: ${{ steps.app_install.outcome }}
         run: python3 ../sdk/.github/scripts/certify_unit_shards.py run --shard "${SHARD}" --total "${TOTAL}" --coverage-source "${COVERAGE_SOURCE}" --install-outcome "${INSTALL_OUTCOME}" --results-dir ../certify-shard
@@ -629,7 +607,7 @@ jobs:
 
   certify:
     name: Certify app
-    needs: [build-decision, certify-plan, certify-unit]
+    needs: [build-decision, certify-unit]
     if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -815,7 +793,7 @@ jobs:
         id: unit
         if: always()
         env:
-          TOTAL: ${{ inputs.unit_test_shards == 1 && '1' || needs.certify-plan.outputs.total }}
+          TOTAL: ${{ inputs.unit_test_shards }}
         run: python3 sdk/.github/scripts/certify_unit_shards.py verdict --results-dir certify-shards --total "${TOTAL}"
 
       # Each shard measured its own slice (one shard when not opted in);

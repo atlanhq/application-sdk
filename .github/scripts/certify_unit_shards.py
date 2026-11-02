@@ -4,14 +4,12 @@
 ``build-and-publish-app.yaml`` certifies every app by running its
 ``tests/unit`` before publish. On one 2-vCPU runner a large suite outgrows the
 job's 30-minute cap, and publish waits on certify long after the image is
-built. This script holds the three decisions the sharded layout needs, so each
+built. This script holds the two decisions the sharded layout needs, so each
 branch has a test (``tests/test_certify_unit_shards.py``; see
-``docs/standards/ci.md``):
+``docs/standards/ci.md``). Sharding is opt-in: at the default of one shard
+``certify`` calls ``run`` itself; an app that sets ``unit_test_shards`` (2-10)
+gets one ``certify-unit`` leg per shard.
 
-``plan``
-    Validate the shard count the app opted into (``unit_test_shards``) and
-    emit the matrix list. Sharding is opt-in: at the default of one shard the
-    workflow skips the plan and the legs, and ``certify`` runs ``run`` itself.
 ``run``
     One shard: pytest with coverage, plus pytest-split's ``--splits/--group``
     when there is more than one shard. Writes a result file and the shard's
@@ -21,11 +19,10 @@ branch has a test (``tests/test_certify_unit_shards.py``; see
     the certification verdict enforces. A missing result counts as a failure —
     publish must never pass on evidence that was not produced.
 
-Stdlib only: ``plan`` runs on ``ubuntu-slim`` with the system ``python3``.
+Stdlib only: runs with the runner's system ``python3``.
 
 Usage::
 
-    python3 certify_unit_shards.py plan --shards 4
     python3 certify_unit_shards.py run --shard 2 --total 4 --coverage-source app \\
         --install-outcome success --results-dir ../certify-shard
     python3 certify_unit_shards.py verdict --results-dir certify-shards --total 4
@@ -42,11 +39,6 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-#: Ceiling on legs. Past this the slowest single test, not the shard count,
-#: is the floor, while every extra leg still bills its setup minute
-#: (checkout + ``uv sync``, ~1 billed minute).
-MAX_SHARDS = 10
-
 #: pytest exits 5 when it collects nothing. One shard of several can
 #: legitimately be empty (more shards than tests), so there it is a pass. With
 #: a single shard it means the whole suite collected nothing, which failed the
@@ -56,15 +48,6 @@ PYTEST_NO_TESTS_COLLECTED = 5
 UNIT_TESTS_DIR = "tests/unit"
 
 Runner = Callable[[Sequence[str]], int]
-
-
-def plan_shards(shards: int) -> int:
-    """Return the opted-in shard count, rejecting anything outside 1..MAX_SHARDS."""
-    if shards < 1 or shards > MAX_SHARDS:
-        raise ValueError(
-            f"unit_test_shards must be 1 (default, no split) or 2..{MAX_SHARDS}, got {shards}"
-        )
-    return shards
 
 
 def pytest_command(shard: int, total: int, coverage_source: str) -> list[str]:
@@ -174,9 +157,6 @@ def main(argv: Sequence[str] | None = None, runner: Runner = _subprocess_runner)
     parser = argparse.ArgumentParser(description="Shard the certify gate's unit tests.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    plan = sub.add_parser("plan")
-    plan.add_argument("--shards", type=int, required=True)
-
     run = sub.add_parser("run")
     run.add_argument("--shard", type=int, required=True)
     run.add_argument("--total", type=int, required=True)
@@ -189,16 +169,6 @@ def main(argv: Sequence[str] | None = None, runner: Runner = _subprocess_runner)
     verdict.add_argument("--total", type=int, required=True)
 
     args = parser.parse_args(argv)
-
-    if args.command == "plan":
-        try:
-            total = plan_shards(args.shards)
-        except ValueError as exc:
-            print(f"::error::{exc}")
-            return 1
-        _write_output("total", str(total))
-        _write_output("shards", json.dumps(list(range(1, total + 1))))
-        return 0
 
     if args.command == "run":
         outcome = run_shard(

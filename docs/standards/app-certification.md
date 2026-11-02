@@ -37,7 +37,7 @@ parallel `certify-unit` legs, and `certify` folds the legs' results and
 combined coverage into the verdict:
 
 ```
-certify-plan ─> certify-unit (N legs in parallel) ─> certify (v3 shape, contract drift, verdict)
+certify-unit (N legs in parallel) ─> certify (v3 shape, contract drift, verdict)
 ```
 
 - **Default `1`:** no split, no extra jobs.
@@ -48,9 +48,9 @@ certify-plan ─> certify-unit (N legs in parallel) ─> certify (v3 shape, cont
   `uv run --with pytest-split pytest tests/unit --store-durations` and commit
   it. A stale file only unbalances the legs, never skips a test.
 - A leg with no result (crashed, timed out, upload lost) counts as failed.
-- Opting in costs a small planning job plus about one billed setup minute per
-  leg (checkout and `uv sync`), in exchange for a much shorter wait before
-  publish.
+- Opting in costs about one billed setup minute per leg (checkout and
+  `uv sync`), in exchange for a much shorter wait before publish. There is no
+  separate planning job: the leg list is looked up from the input directly.
 
 ## Why centralized (no per-app wiring)
 

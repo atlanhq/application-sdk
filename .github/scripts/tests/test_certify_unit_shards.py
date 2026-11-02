@@ -15,39 +15,10 @@ assert _spec and _spec.loader
 certify_unit_shards = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(certify_unit_shards)
 
-plan_shards = certify_unit_shards.plan_shards
 pytest_command = certify_unit_shards.pytest_command
 run_shard = certify_unit_shards.run_shard
 decide_verdict = certify_unit_shards.decide_verdict
 main = certify_unit_shards.main
-MAX_SHARDS = certify_unit_shards.MAX_SHARDS
-
-
-@pytest.mark.parametrize("shards", [1, 2, MAX_SHARDS])
-def test_plan_accepts_an_opted_in_count(shards: int) -> None:
-    assert plan_shards(shards) == shards
-
-
-@pytest.mark.parametrize("shards", [-1, 0, MAX_SHARDS + 1])
-def test_plan_rejects_a_count_outside_the_range(shards: int) -> None:
-    # No auto mode: 0 is not a "size it for me" value, it is an error.
-    with pytest.raises(ValueError):
-        plan_shards(shards)
-
-
-def test_plan_writes_the_matrix_list(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    output = tmp_path / "out"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    assert main(["plan", "--shards", "3"]) == 0
-    lines = output.read_text(encoding="utf-8").splitlines()
-    assert lines == ["total=3", "shards=[1, 2, 3]"]
-    assert json.loads(lines[1].split("=", 1)[1]) == [1, 2, 3]
-
-
-def test_plan_fails_on_invalid_count() -> None:
-    assert main(["plan", "--shards", "99"]) == 1
 
 
 # ── run ─────────────────────────────────────────────────────────────────────
