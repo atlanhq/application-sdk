@@ -76,8 +76,23 @@ runs:
         key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-pyc-${{ hashFiles('uv.lock', 'packages/conformance/conformance/**') }}
         lookup-only: ${{ inputs.lookup-only }}
 
+    # The key carries setup-python's version, but uv builds the venv on the
+    # interpreter that satisfies the project's requires-python. When an app
+    # excludes the requested version (e2e asks for 3.13, an app caps <3.13)
+    # uv picks another one; on ubuntu-26.04 it downloads it into the uncached
+    # UV_PYTHON_INSTALL_DIR, so the saved venv links to a path that is gone on
+    # the next runner. A hit would then skip the install, and the first
+    # `uv run` rebuilds the venv with default groups only (no pytest). Drop
+    # such a venv and install as on a miss. Skipped on lookup-only, where
+    # nothing is restored.
+    - name: Validate restored virtual environment
+      id: validate-venv
+      if: steps.cache-venv.outputs.cache-hit == 'true' && inputs.lookup-only != 'true'
+      shell: bash
+      run: python3 -I "${{ github.action_path }}/../../scripts/validate_restored_venv.py" .venv
+
     - name: Install dependencies
-      if: steps.cache-venv.outputs.cache-hit != 'true'
+      if: steps.cache-venv.outputs.cache-hit != 'true' || steps.validate-venv.outputs.usable == 'false'
       shell: bash
       # Compile bytecode into the venv so the saved entry carries it. Without
       # it, every leg's xdist workers compile the same ~6,500 modules at once
