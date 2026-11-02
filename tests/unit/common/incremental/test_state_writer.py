@@ -326,10 +326,10 @@ class TestDownloadTransformedData:
         ``get_current_table_scope`` return None and ``write_current_state``
         raise "No tables found in transformed output".
         """
-        from application_sdk.execution._temporal import activity_utils
+        from application_sdk import constants
 
         staging = tmp_path / "staging"
-        monkeypatch.setattr(activity_utils, "TEMPORARY_PATH", str(staging))
+        monkeypatch.setattr(constants, "TEMPORARY_PATH", str(staging))
         output_path = staging / "artifacts/apps/oracle/workflows/wf-1/run-1"
 
         prefix = "artifacts/apps/oracle/workflows/wf-1/run-1/transformed"

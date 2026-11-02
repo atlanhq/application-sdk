@@ -9,7 +9,6 @@ lock the contract documented in PR #1602 and prevent re-introduction of the bugs
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -106,19 +105,13 @@ class TestAzureClientErrorContract:
         from application_sdk.clients.azure.client import AzureClient
 
         client = AzureClient()
-
-        # Simulate: client was closed (executor shut down + nulled).
-        # Close should be idempotent and set _executor = None.
-        if isinstance(client._executor, ThreadPoolExecutor):
-            client._executor.shutdown(wait=False)
-        client._executor = None
+        await client.close()
 
         with pytest.raises(AzureClientAuthError) as exc_info:
             await client.load({"auth_type": "service_principal"})
 
-        # Pre-fix this would silently submit work to a dead executor and
-        # surface a confusing error far from the cause. After the fix the
-        # client raises AzureClientAuthError with an actionable message.
+        # A closed client must refuse to reload with an actionable message
+        # rather than fail somewhere far from the cause.
         assert "instantiate a new" in str(exc_info.value).lower()
 
 

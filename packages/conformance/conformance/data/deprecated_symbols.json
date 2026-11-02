@@ -264,6 +264,15 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.activity_utils",
+      "removal_version": "4.0.0",
+      "symbol": "TEMPORARY_PATH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "APPLICATION_VERSION is deprecated; use application_sdk.constants.APPLICATION_VERSION \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.interceptors.log",

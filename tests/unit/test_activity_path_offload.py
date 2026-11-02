@@ -221,30 +221,27 @@ class TestMaterializeEmptyPrefix:
 
 
 class TestAzureClientClose:
-    async def test_executor_shutdown_does_not_block_the_loop(self) -> None:
+    async def test_credential_close_does_not_block_the_loop(self) -> None:
         probe = LoopProbe()
         from application_sdk.clients.azure.client import AzureClient
 
         client = AzureClient()
-        real_executor = client._executor
-        assert real_executor is not None
-        real_executor.shutdown(wait=True)
-        executor = mock.MagicMock()
-        shutdowns: list[int] = []
+        credential = mock.MagicMock()
+        closes: list[int] = []
 
-        def slow_shutdown(wait: bool = True) -> None:
-            shutdowns.append(threading.get_ident())
+        def slow_close() -> None:
+            closes.append(threading.get_ident())
             probe.block()
 
-        executor.shutdown.side_effect = slow_shutdown
-        client._executor = executor
+        credential.close.side_effect = slow_close
+        client.credential = credential
 
         with probe.bound():
             await client.close()
 
-        executor.shutdown.assert_called_once_with(wait=True)
-        assert client._executor is None
-        assert threading.get_ident() not in shutdowns, "shut down on the loop thread"
+        credential.close.assert_called_once_with()
+        assert client.credential is None
+        assert threading.get_ident() not in closes, "closed on the loop thread"
         probe.assert_loop_stayed_free("AzureClient.close")
 
 

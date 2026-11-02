@@ -147,7 +147,14 @@ def normalize_key(key: str) -> str:
       unchanged (normalisation is a no-op for clean keys).
 
     Backslashes are converted to forward slashes and leading/trailing slashes
-    are stripped so the result is always a clean relative key.
+    are stripped so the result is always a clean relative key.  A drive
+    letter on a path outside the staging area (``C:\\Users\\...`` on Windows)
+    is dropped too: object-store keys are never anchored to a drive, and the
+    LocalStore backend cannot append one to its root.  ``splitdrive`` is a
+    no-op on POSIX.
+
+    This is the SDK's only local-path → store-key normaliser;
+    ``application_sdk.execution.get_object_store_prefix`` delegates here.
 
     Args:
         key: Raw key, local path, or staging path to normalise.
@@ -168,10 +175,10 @@ def normalize_key(key: str) -> str:
             # Path is inside the staging area — strip the staging prefix.
             normalized = os.path.relpath(abs_path, abs_temp_path).replace(os.sep, "/")
         else:
-            normalized = key.strip("/")
+            normalized = os.path.splitdrive(key)[1]
     except ValueError:  # conformance: ignore[E009] os.path.commonpath raises on mixed Windows drives; simple-strip fallback
         # os.path.commonpath raises on mixed Windows drives; fall back to simple strip.
-        normalized = key.strip("/")
+        normalized = os.path.splitdrive(key)[1]
 
     normalized = normalized.replace("\\", "/").replace(os.sep, "/").strip("/")
     # os.path.relpath resolves the staging root itself to "."; treat as store root.

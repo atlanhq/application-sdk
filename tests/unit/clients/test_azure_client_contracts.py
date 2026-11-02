@@ -127,8 +127,7 @@ class TestInit:
         assert c.auth_provider is not None
         assert c._services == {}
         assert c._connection_health is False
-        # default executor with 10 workers
-        assert c._executor is not None
+        assert c._closed is False
 
     def test_kwargs_stored(self):
         c = AzureClient(credentials={"foo": "bar"}, max_workers=4, extra="x")
@@ -444,11 +443,12 @@ class TestContextManagers:
         client = AzureClient()
         assert client.__enter__() is client
 
-    def test_sync_exit_with_no_running_loop_does_not_raise(self):
-        """``__exit__`` outside an event loop must log + continue."""
+    def test_sync_exit_with_no_running_loop_runs_close(self):
+        """``__exit__`` outside an event loop runs ``close`` to completion."""
         client = AzureClient()
-        # there's no running loop here — covers the RuntimeError branch
-        client.__exit__(None, None, None)
+        with patch.object(client, "close", new=AsyncMock()) as mock_close:
+            client.__exit__(None, None, None)
+        mock_close.assert_awaited_once()
 
     def test_sync_exit_with_running_loop_schedules_close(self):
         """``__exit__`` schedules ``close`` as a task when a loop is running."""
@@ -457,6 +457,8 @@ class TestContextManagers:
             client = AzureClient()
             with patch.object(client, "close", new=AsyncMock()) as mock_close:
                 client.__exit__(None, None, None)
+                # The task is held on the client, not left unreferenced.
+                assert client._close_task is not None
                 # Yield once so the scheduled task runs
                 await asyncio.sleep(0)
                 mock_close.assert_awaited_once()
