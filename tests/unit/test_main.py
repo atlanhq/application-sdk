@@ -1290,6 +1290,13 @@ class TestFlushObservability:
 class TestLoopExceptionHandler:
     """Tests for _loop_exception_handler()."""
 
+    @pytest.fixture(autouse=True)
+    def _reset_handler_flush_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import application_sdk.main as main_mod
+
+        monkeypatch.setattr(main_mod, "_loop_handler_flush_task", None)
+        monkeypatch.setattr(main_mod, "_loop_handler_flush_last", None)
+
     def test_logs_with_exc_info_when_exception_present(self) -> None:
         """Context with 'exception' is logged with exc_info."""
         loop = MagicMock()
@@ -1313,6 +1320,43 @@ class TestLoopExceptionHandler:
         assert mock_log.error.called
         loop.create_task.assert_called_once()
         loop.default_exception_handler.assert_called_once_with(ctx)
+
+    def test_exception_storm_schedules_one_flush(self) -> None:
+        """While a handler flush is running, further exceptions schedule no
+        more: each flush takes a ``to_thread`` slot and, against a dead
+        collector, an OTLP flush that only returns at its timeout."""
+        loop = MagicMock()
+        running = MagicMock()
+        running.done.return_value = False
+        loop.create_task.return_value = running
+        with patch("application_sdk.main.logger"):
+            for _ in range(100):
+                _loop_exception_handler(loop, {"message": "storm"})
+        assert loop.create_task.call_count == 1
+        assert loop.default_exception_handler.call_count == 100
+
+    def test_finished_flush_respects_min_interval(self) -> None:
+        """A finished flush does not let the next exception flush at once; a
+        new one starts only after the minimum interval."""
+        import application_sdk.main as main_mod
+
+        loop = MagicMock()
+        finished = MagicMock()
+        finished.done.return_value = True
+        loop.create_task.return_value = finished
+        with patch("application_sdk.main.logger"):
+            _loop_exception_handler(loop, {"message": "a"})
+            _loop_exception_handler(loop, {"message": "b"})
+            assert loop.create_task.call_count == 1
+            # Age the last flush past the interval instead of patching the
+            # process-wide clock.
+            main_mod._loop_handler_flush_last = (
+                main_mod.time.monotonic()
+                - main_mod._LOOP_HANDLER_FLUSH_MIN_INTERVAL_SECONDS
+                - 1
+            )
+            _loop_exception_handler(loop, {"message": "c"})
+        assert loop.create_task.call_count == 2
 
 
 # --------------------------------------------------------------------------- #

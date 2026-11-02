@@ -1738,6 +1738,12 @@ _logger_instances: dict[str, AtlanLoggerAdapter] = {}
 # exit, but callers (tests, explicit shutdown paths) may also invoke it.
 _otlp_shutdown_done = threading.Event()
 
+# The live ``otlp-log-flush`` thread, if any. ``flush_otlp_logs`` abandons its
+# thread at the timeout bound; against an unreachable collector that thread
+# keeps exporting, so starting a fresh one per call would let threads pile up.
+_otlp_flusher: threading.Thread | None = None
+_otlp_flusher_lock = threading.Lock()
+
 
 def flush_otlp_logs(timeout_millis: int = 5000) -> None:
     """Force-flush any buffered OTLP log records (CNCT-107).
@@ -1751,6 +1757,12 @@ def flush_otlp_logs(timeout_millis: int = 5000) -> None:
     empty, which against a dead collector costs one exporter timeout per
     batch. The flush runs on a daemon thread and is abandoned at the bound;
     ``shutdown()`` later stops that thread's export loop.
+
+    At most one flush thread is alive at a time. If an earlier, abandoned flush
+    is still running, this call waits for it within the same bound and starts a
+    new one only if it finished; otherwise the running flush is already
+    draining the queue, and this call returns at the bound without adding a
+    thread.
     """
     providers = [
         adapter.logger_provider
@@ -1768,9 +1780,30 @@ def flush_otlp_logs(timeout_millis: int = 5000) -> None:
             except Exception:  # noqa: S110 — teardown-only; losing the tail beats crashing shutdown
                 pass
 
-    flusher = threading.Thread(target=_flush, name="otlp-log-flush", daemon=True)
-    flusher.start()
-    flusher.join(timeout_millis / 1000)
+    def _current_or_new() -> tuple[threading.Thread, bool]:
+        """The live flush thread and ``False``, or a newly started one and
+        ``True`` if none is alive."""
+        global _otlp_flusher
+        with _otlp_flusher_lock:
+            current = _otlp_flusher
+            if current is not None and current.is_alive():
+                return current, False
+            current = threading.Thread(
+                target=_flush, name="otlp-log-flush", daemon=True
+            )
+            _otlp_flusher = current
+            current.start()
+            return current, True
+
+    deadline = time.monotonic() + timeout_millis / 1000
+    flusher, started = _current_or_new()
+    flusher.join(max(0.0, deadline - time.monotonic()))
+    if started or flusher.is_alive():
+        return
+    # An earlier call's flush finished within the bound: run this call's own
+    # flush for the records emitted since that one started.
+    flusher, _ = _current_or_new()
+    flusher.join(max(0.0, deadline - time.monotonic()))
 
 
 def shutdown_otlp_logs() -> None:

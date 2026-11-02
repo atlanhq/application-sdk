@@ -70,6 +70,13 @@ OBSERVABILITY_S3_PREFIX_MAP = {
 
 T = TypeVar("T")
 
+# Upper bound on batch flushes ``add_record`` may have in flight per instance.
+# Each one holds a full batch in memory and an object-store upload; during a
+# store outage uploads stall, and without a cap every ``batch_size`` records
+# would start another. At the cap, records stay in the buffer and the next
+# flush (a freed slot, the periodic flush, or ``flush_all``) takes them.
+_MAX_INFLIGHT_FLUSHES = 4
+
 
 @dataclass
 class _PartitionWriter:
@@ -189,6 +196,13 @@ class AtlanObservability(Generic[T], ABC):
         self.data_dir = data_dir
         self.file_name = file_name
         self._writer_seq = 0
+        # Batch flushes started by ``add_record``. Kept so they are not
+        # garbage-collected mid-write, so ``flush_all`` can await them before the
+        # loop ends (``asyncio.run`` cancels stragglers, and ``_flush_records``'s
+        # ``finally`` then deletes the half-written partition), and so their
+        # number can be capped. Guarded by ``_buffer_lock``: ``add_record`` runs
+        # on any thread that has a running loop.
+        self._flush_tasks: set[asyncio.Task[None]] = set()
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -200,14 +214,51 @@ class AtlanObservability(Generic[T], ABC):
     async def flush_all(cls) -> None:
         """Flush all instances of AtlanObservability.
 
-        This method attempts to flush all registered instances,
-        logging any errors that occur during flushing.
+        For each registered instance, first waits for the batch flushes
+        ``add_record`` started on this event loop, then flushes what is left in
+        the buffer. Waiting first matters at shutdown: a flush still in flight
+        when ``asyncio.run`` returns is cancelled, and its partial file deleted.
+        Errors are logged per instance and never raised.
         """
-        for instance in cls._instances:
+        for instance in list(cls._instances):
             try:
+                await instance._await_flush_tasks()
                 await instance._flush_buffer(force=True)
+                # Records logged while the drain above ran may have started
+                # new batch flushes; wait for those too.
+                await instance._await_flush_tasks()
             except Exception:
                 logging.error("Error flushing instance", exc_info=True)
+
+    async def _await_flush_tasks(self) -> None:
+        """Wait for in-flight ``add_record`` flushes owned by the running loop.
+
+        Re-checks after each wait until none are left: while it waits, an
+        ``add_record`` can take a freed slot and start another flush, whose
+        batch is no longer in the buffer for the caller's drain to find.
+
+        Tasks bound to another loop cannot be awaited from here; that loop's
+        own shutdown path flushes them.
+        """
+        loop = asyncio.get_running_loop()
+        while True:
+            with self._buffer_lock:
+                pending = [t for t in self._flush_tasks if t.get_loop() is loop]
+            if not pending:
+                return
+            # ``_flush_records`` handles its own errors; gather only so one
+            # unexpected failure cannot hide the others.
+            results = await asyncio.gather(*pending, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logging.warning(
+                        "Observability batch flush failed",
+                        exc_info=(type(result), result, result.__traceback__),
+                    )
+
+    def _discard_flush_task(self, task: "asyncio.Task[None]") -> None:
+        with self._buffer_lock:
+            self._flush_tasks.discard(task)
 
     @classmethod
     def _reset_for_testing(cls) -> None:
@@ -373,21 +424,23 @@ class AtlanObservability(Generic[T], ABC):
         This coroutine:
         - Performs initial flush
         - Runs periodic flushes at configured intervals
-        - Handles task cancellation gracefully
+        - Survives a failed flush: the error is logged and the next interval
+          flushes again (one bad flush used to end periodic flushing for good)
         - Ensures final flush on cancellation
         """
         try:
-            # Initial flush
-            await self._flush_buffer(force=True)
-
+            first = True
             while True:
-                await asyncio.sleep(self._flush_interval)
-                await self._flush_buffer(force=True)
+                if not first:
+                    await asyncio.sleep(self._flush_interval)
+                first = False
+                try:
+                    await self._flush_buffer(force=True)
+                except Exception:
+                    logging.warning("Error in periodic flush", exc_info=True)
         except asyncio.CancelledError:
             # Handle task cancellation gracefully
             await self._flush_buffer(force=True)
-        except Exception:
-            logging.error("Error in periodic flush", exc_info=True)
 
     async def _flush_buffer(self, force=False):
         """Flush the buffer to storage.
@@ -700,26 +753,33 @@ class AtlanObservability(Generic[T], ABC):
             #   where ``_flush_records`` cannot write;
             # - on a thread with no running event loop (sync activities run in
             #   the worker's thread pool), ``asyncio.create_task`` raises, and
-            #   the batch already swapped out of the buffer would be lost.
+            #   the batch already swapped out of the buffer would be lost;
+            # - when ``_MAX_INFLIGHT_FLUSHES`` are already running (a stalled
+            #   object store), so tasks and their batches do not pile up.
             in_workflow = in_temporal_workflow()
             can_flush_here = not in_workflow and _has_running_loop()
             with self._buffer_lock:
                 self._buffer.append(processed_record)
                 now = time()
-                if can_flush_here and (
-                    len(self._buffer) >= self._batch_size
-                    or (now - self._last_flush_time) >= self._flush_interval
+                if (
+                    can_flush_here
+                    and len(self._flush_tasks) < _MAX_INFLIGHT_FLUSHES
+                    and (
+                        len(self._buffer) >= self._batch_size
+                        or (now - self._last_flush_time) >= self._flush_interval
+                    )
                 ):
                     self._last_flush_time = now
                     # Swap rather than copy: O(1) instead of O(n).
                     buffer_copy = self._buffer
                     self._buffer = []
-                else:
-                    buffer_copy = None
-
-            # Flush if needed
-            if buffer_copy is not None:
-                asyncio.create_task(self._flush_records(buffer_copy))
+                    # Created under the lock so the cap check and the add are
+                    # one step across threads. ``create_task`` only schedules
+                    # the coroutine, and the done-callback runs later via the
+                    # loop, so neither re-enters this lock here.
+                    task = asyncio.create_task(self._flush_records(buffer_copy))
+                    self._flush_tasks.add(task)
+                    task.add_done_callback(self._discard_flush_task)
 
             # Export the record
             self.export_record(record)

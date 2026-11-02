@@ -3341,6 +3341,49 @@ def _loguru_message(logger_name: str) -> mock.MagicMock:
 class TestOtlpShutdownFlush:
     """CNCT-107: flush/shutdown the OTLP provider on process exit."""
 
+    @pytest.fixture(autouse=True)
+    def _fresh_otlp_flusher(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A test that abandons a blocked flush thread must not make the next
+        # test's flush wait on it.
+        from application_sdk.observability import logger_adaptor as la
+
+        monkeypatch.setattr(la, "_otlp_flusher", None)
+
+    def test_repeated_flushes_keep_one_thread_against_a_stuck_exporter(self):
+        """Against an unreachable collector each flush is abandoned at its
+        bound while its thread keeps exporting. Repeated flushes (one per
+        unhandled loop exception) must not start a thread each."""
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.flush_storm_test")
+        release = threading.Event()
+        provider = mock.MagicMock()
+        provider.force_flush.side_effect = lambda **_: release.wait()
+        adapter.logger_provider = provider
+        # Count only threads this test starts; an earlier test's abandoned
+        # flush may still be winding down.
+        before = set(threading.enumerate())
+        try:
+            for _ in range(10):
+                la.flush_otlp_logs(timeout_millis=20)
+            flushers = [
+                t
+                for t in threading.enumerate()
+                if t.name == "otlp-log-flush" and t not in before
+            ]
+            assert len(flushers) == 1
+            assert provider.force_flush.call_count == 1
+
+            # Once the stuck flush finishes, the next call flushes again
+            # rather than treating the finished thread as covering it.
+            release.set()
+            flushers[0].join(5)
+            la.flush_otlp_logs(timeout_millis=2000)
+            assert provider.force_flush.call_count == 2
+        finally:
+            release.set()
+            adapter.logger_provider = None
+
     def test_flush_otlp_logs_calls_force_flush_on_providers(self):
         from application_sdk.observability import logger_adaptor as la
 
