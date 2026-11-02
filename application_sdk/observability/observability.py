@@ -239,7 +239,13 @@ class AtlanObservability(Generic[T], ABC):
         if pending:
             # ``_flush_records`` handles its own errors; gather only so one
             # unexpected failure cannot hide the others.
-            await asyncio.gather(*pending, return_exceptions=True)
+            results = await asyncio.gather(*pending, return_exceptions=True)
+            for result in results:
+                if isinstance(result, Exception):
+                    logging.warning(
+                        "Observability batch flush failed",
+                        exc_info=(type(result), result, result.__traceback__),
+                    )
 
     def _discard_flush_task(self, task: "asyncio.Task[None]") -> None:
         with self._buffer_lock:

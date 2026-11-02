@@ -340,10 +340,13 @@ class SegmentClient:
         """
         if self._queue is None:
             return
-        try:
+        # Checked rather than caught: only this loop touches the queue, so
+        # ``full()`` cannot go stale before ``put_nowait``, and a full queue is
+        # an expected state, not an error with a useful stack.
+        if not self._queue.full():
             self._queue.put_nowait(metric_record)
             self._overflowing = False
-        except asyncio.QueueFull:
+        else:
             self._dropped_count += 1
             if not self._overflowing:
                 self._overflowing = True
