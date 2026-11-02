@@ -507,6 +507,11 @@ jobs:
     if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' && inputs.unit_test_shards != 1 }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The legs run app code (pytest), so the job token is read-only and no
+    # checkout leaves it in .git/config for that code to find. Artifact upload
+    # uses the runner's own token, not this one.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -522,6 +527,7 @@ jobs:
           ref: ${{ inputs.ref || github.ref }}
           path: app
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Mint fleet App token
         # Same as certify's: authenticates the app's private atlanhq deps.
@@ -541,6 +547,7 @@ jobs:
           path: sdk
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3

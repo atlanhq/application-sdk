@@ -190,6 +190,17 @@ def test_shard_matrix_has_no_entry_outside_the_range() -> None:
     assert not {"0", "-1", "11"} & table.keys()
 
 
+def test_shard_legs_cannot_hand_app_code_a_write_token() -> None:
+    # The legs run app code (pytest): the job token is read-only, and no
+    # checkout persists it into .git/config where that code could read it.
+    job = _jobs()["certify-unit"]
+    assert job["permissions"] == {"contents": "read"}
+    checkouts = [s for s in job["steps"] if "actions/checkout@" in s.get("uses", "")]
+    assert checkouts
+    for step in checkouts:
+        assert step["with"].get("persist-credentials") is False, step["name"]
+
+
 def test_certify_itself_does_not_depend_on_the_shard_input() -> None:
     assert "unit_test_shards" not in _jobs()["certify"]["if"]
 

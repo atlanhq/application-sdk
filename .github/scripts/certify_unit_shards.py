@@ -40,9 +40,10 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 #: pytest exits 5 when it collects nothing. One shard of several can
-#: legitimately be empty (more shards than tests), so there it is a pass. With
-#: a single shard it means the whole suite collected nothing, which failed the
-#: gate before sharding and still does.
+#: legitimately be empty (more shards than tests), so it is recorded as
+#: ``no_tests`` and passes — unless EVERY shard is empty, which means the whole
+#: suite collected nothing. That failed the gate before sharding and still does,
+#: as does a single shard that collects nothing.
 PYTEST_NO_TESTS_COLLECTED = 5
 
 UNIT_TESTS_DIR = "tests/unit"
@@ -84,8 +85,9 @@ def run_shard(
 ) -> str:
     """Run one shard and record its outcome; return the outcome.
 
-    Outcomes: ``success``, ``failure``, ``skipped`` (no ``tests/unit``), or
-    ``install_failed`` (app deps did not install, so nothing could run).
+    Outcomes: ``success``, ``failure``, ``no_tests`` (an empty shard of
+    several), ``skipped`` (no ``tests/unit``), or ``install_failed`` (app deps
+    did not install, so nothing could run).
     """
     if install_outcome != "success":
         outcome = "install_failed"
@@ -94,8 +96,12 @@ def run_shard(
         outcome = "skipped"
     else:
         code = runner(pytest_command(shard, total, coverage_source))
-        passing = (0, PYTEST_NO_TESTS_COLLECTED) if total > 1 else (0,)
-        outcome = "success" if code in passing else "failure"
+        if code == 0:
+            outcome = "success"
+        elif code == PYTEST_NO_TESTS_COLLECTED and total > 1:
+            outcome = "no_tests"
+        else:
+            outcome = "failure"
         coverage_file = app_dir / ".coverage"
         if coverage_file.is_file():
             results_dir.mkdir(parents=True, exist_ok=True)
@@ -137,6 +143,10 @@ def decide_verdict(results_dir: Path, total: int) -> tuple[str, list[str]]:
         return "skipped", ["App dependencies did not install in a unit-test shard."]
     if all(outcome == "skipped" for outcome in outcomes.values()):
         return "skipped", []
+    if all(outcome == "no_tests" for outcome in outcomes.values()):
+        return "failure", [
+            f"No unit tests were collected in any of the {total} shards."
+        ]
     return "success", []
 
 

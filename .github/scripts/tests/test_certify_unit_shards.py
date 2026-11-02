@@ -87,7 +87,7 @@ def _result(results: Path, shard: int) -> str:
     [
         (0, 4, "success"),
         # One shard of several can legitimately be empty.
-        (5, 4, "success"),
+        (5, 4, "no_tests"),
         (1, 4, "failure"),
         (2, 4, "failure"),
         (0, 1, "success"),
@@ -113,7 +113,7 @@ def test_run_maps_pytest_exit_codes(
 def test_run_without_coverage_data_still_records_outcome(tmp_path: Path) -> None:
     app, results = _app(tmp_path), tmp_path / "results"
     fake = _FakePytest(app, 5, writes_coverage=False)
-    assert run_shard(1, 2, "app", "success", results, app, fake) == "success"
+    assert run_shard(1, 2, "app", "success", results, app, fake) == "no_tests"
     assert not (results / "coverage.shard-1").exists()
 
 
@@ -163,6 +163,10 @@ def _write_results(results: Path, outcomes: dict[int, str]) -> None:
         ({1: "success", 2: "install_failed", 3: "success"}, "skipped"),
         # A real failure outranks an install problem elsewhere.
         ({1: "failure", 2: "install_failed", 3: "success"}, "failure"),
+        # Some empty shards are fine: more shards than tests.
+        ({1: "success", 2: "no_tests", 3: "no_tests"}, "success"),
+        # Every shard empty: the whole suite collected nothing.
+        ({1: "no_tests", 2: "no_tests", 3: "no_tests"}, "failure"),
     ],
 )
 def test_verdict_folds_shard_outcomes(
