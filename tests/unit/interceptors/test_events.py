@@ -203,8 +203,17 @@ def _reset_event_token_service():
 
 
 def _expire_retry_window() -> None:
-    """Move the cached negative result's deadline into the past."""
-    events_module._event_token_service_retry_at = time.monotonic() - 1.0
+    """End the cached negative result's window (0.0 = nothing cached)."""
+    events_module._event_token_service_retry_at = 0.0
+
+
+@contextlib.contextmanager
+def _frozen_events_clock(now: float):
+    """Freeze ``time.monotonic()`` as the events module sees it, and only there."""
+    clock = mock.MagicMock(wraps=time)
+    clock.monotonic.return_value = now
+    with mock.patch.object(events_module, "time", clock):
+        yield
 
 
 class TestGetEventTokenService:
@@ -325,12 +334,14 @@ class TestEventTokenServiceCaching:
         secrets = mock.AsyncMock(side_effect=SecretNotFoundError("missing"))
         service_cls = mock.MagicMock()
         with self._auth_patches(secrets, service_cls):
-            for _ in range(5):
-                assert await _get_event_token_service() is None
+            with _frozen_events_clock(1000.0):
+                for _ in range(5):
+                    assert await _get_event_token_service() is None
             # One lookup = the client-id and client-secret reads.
             assert secrets.await_count == 2
-            window = events_module._event_token_service_retry_at - time.monotonic()
-            assert 55.0 < window <= events_module._EVENT_TOKEN_SERVICE_RETRY_SECONDS
+            assert events_module._event_token_service_retry_at == (
+                1000.0 + events_module._EVENT_TOKEN_SERVICE_RETRY_SECONDS
+            )
 
             _expire_retry_window()
             assert await _get_event_token_service() is None
@@ -368,17 +379,18 @@ class TestEventTokenServiceCaching:
 
         secrets = mock.AsyncMock(side_effect=SecretStoreUnavailableError("k"))
         with self._auth_patches(secrets, mock.MagicMock()):
-            with pytest.raises(SecretStoreUnavailableError):
-                await _get_event_token_service()
-            window = events_module._event_token_service_retry_at - time.monotonic()
+            with _frozen_events_clock(1000.0):
+                with pytest.raises(SecretStoreUnavailableError):
+                    await _get_event_token_service()
+                assert await _get_event_token_service() is None
+                assert await _get_event_auth_headers() == {}
+            assert events_module._event_token_service_retry_at == (
+                1000.0 + events_module._EVENT_TOKEN_SERVICE_OUTAGE_RETRY_SECONDS
+            )
             assert (
-                0.0
-                < window
-                <= events_module._EVENT_TOKEN_SERVICE_OUTAGE_RETRY_SECONDS
+                events_module._EVENT_TOKEN_SERVICE_OUTAGE_RETRY_SECONDS
                 < events_module._EVENT_TOKEN_SERVICE_RETRY_SECONDS
             )
-            assert await _get_event_token_service() is None
-            assert await _get_event_auth_headers() == {}
         assert secrets.await_count == 1
 
     @pytest.mark.asyncio
