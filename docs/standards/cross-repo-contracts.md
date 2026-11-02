@@ -355,6 +355,23 @@ with a later `AUTH` row now names the `AUTH` row. Since FND-3774 a hard gate als
 `RATE_LIMITED`, so that
 marker now appears on ordinary runs, not only with storage verification opted in.
 
+## Submission-time validation: `/workflows/v1/validate` and `/start`'s 422
+
+| | |
+|---|---|
+| **Produced by** | `validate_workflow_config` in `register_metadata_routes()` (`application_sdk/handler/metadata_routes.py`, in the api distribution), which resolves the contract through the same `_resolve_input_contract` as `/input-contract`; `/start`'s 422 comes from `_parse_start_request()` in `application_sdk/handler/service.py`. Both 422 bodies are built by the `RequestContractError` handler in `application_sdk/handler/routes.py` |
+| **Served at** | `POST /workflows/v1/validate?entrypoint=<name>` on the consolidated API host and on the worker (200 or 422, never dispatches), and the same 422 shape from the worker's `POST /workflows/v1/start` |
+| **Key** | 422: `success: false`, `message`, `detail[]` of `{field, message, type}`. `field` is the dotted pydantic location (a missing required field has `type: "missing"`); pydantic's `input` is never included, and the SDK's own validators never embed the value in `message` (an app's custom validator is passed through as written). Missing credential fields (FND-502) use three prefixes: `credentials.<path>` (inline credential), `agent_json.<auth-type>.<path>` (agent mapping) and `credential_guid` (no reference) |
+| **Read by** | Workflow creation callers (Heracles), which call `/validate` on the API host with the body they will later send to `/start`, and surface `detail[]` to the user |
+| **Pinned by** | `tests/unit/handler/test_validate_route_host.py` and `tests/unit/handler/test_validate_route_credentials.py` (host), `TestValidateWorkflowConfig` and `test_start_contract_misfit_answers_422_naming_the_field` in `tests/unit/handler/test_service.py` (worker) |
+
+`/validate` judges the body against the **published** contract, the model
+`/input-contract` serves. The schema a caller reads and the verdict it gets
+come from one resolution, so they cannot drift. Don't give `/validate` its own
+contract lookup. A caller must treat 422 as final: the same body never succeeds
+on retry. Before FND-501, `/start` answered these as 500 "Failed to start
+workflow", so a caller that retried 5xx retried them uselessly.
+
 ## The preflight-results write route
 
 The one entry here that runs the other way: the SDK is the **caller**, not the

@@ -38,7 +38,7 @@ import warnings
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 from uuid import uuid4
 
 import orjson
@@ -147,6 +147,9 @@ from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-export
 from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
 from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
     RequestContractError as _RequestContractError,
+)
+from application_sdk.handler.request_contract import (  # noqa: E402
+    read_json_object as _read_json_object,
 )
 from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
     validate_request as _validate_request,
@@ -1040,6 +1043,98 @@ async def _provision_local_vault(guid: str, body: dict[str, Any]) -> JSONRespons
     )
 
 
+class _StartRequest(NamedTuple):
+    """A ``/start`` body resolved to its entry point and validated input."""
+
+    ep: Any
+    workflow_name: str
+    input_data: Any
+    explicit_workflow_id: str | None
+
+
+async def _parse_start_request(
+    request: Request, app_name: str, workflow_config: WorkflowClientConfig
+) -> _StartRequest:
+    """Resolve and validate a ``/start`` body against its entry point's input type.
+
+    Submission-time validation is ``/workflows/v1/validate`` (in
+    :mod:`application_sdk.handler.metadata_routes`, served by the API host as
+    well); this is ``/start``'s own last line, answering the same 422 shape.
+
+    Raises ``HTTPException`` for a missing app class or an unknown entry point,
+    and :class:`~application_sdk.handler.request_contract.RequestContractError`
+    (answered as a 422 naming the field) when the body is not a JSON object or
+    does not fit the entry point's input contract.
+
+    *workflow_config* is the one captured when this service's routes were
+    registered, never the module global: a second service built in the same
+    process rebinds the global, and must not change which app this one
+    resolves against.
+    """
+    app_cls = workflow_config.app_class
+    if app_cls is None:
+        raise HTTPException(status_code=503, detail="App class not provided.")
+
+    body = await _read_json_object(request)
+    explicit_workflow_id: str | None = body.pop("workflow_id", None)
+    # ?entrypoint= query param is the canonical selector; fall back to the
+    # legacy body field 'workflow_type' for backward compatibility.
+    entrypoint_param: str | None = request.query_params.get("entrypoint")
+    legacy_workflow_type: str | None = body.pop("workflow_type", None)
+    selected_entrypoint: str | None = entrypoint_param or legacy_workflow_type
+
+    if legacy_workflow_type is not None and entrypoint_param is None:
+        warnings.warn(
+            f"App {app_name}: 'workflow_type' body field is deprecated. "
+            "Use ?entrypoint=<name> query param instead. "
+            "Will be removed in v4.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logger.warning(
+            "App %s: 'workflow_type' body field is deprecated; "
+            "use ?entrypoint=<name> query param instead.",
+            app_name,
+        )
+
+    # Migration note (BLDX-1354): On a multi-entry-point app that has no
+    # explicit @entrypoint(default=True), omitting ?entrypoint= dispatches the
+    # alphabetically-first entry point by name instead of returning 400.
+    _, ep = _resolve_app_entrypoint(
+        workflow_config.app_name,
+        selected_entrypoint,
+        allow_workflow_type=(
+            entrypoint_param is None and legacy_workflow_type is not None
+        ),
+    )
+
+    input_type = ep.input_type
+    if input_type is None:
+        raise HTTPException(
+            status_code=500,
+            detail=f"App class {app_cls.__name__} entry point has no input type.",
+        )
+
+    body = _normalize_credentials(body)
+    if "credentials" in body:
+        # Always strip raw credentials — never pass through to Temporal
+        # history. Credentials are resolved at runtime via DaprCredentialVault
+        # using credential_guid.
+        del body["credentials"]
+        logger.debug("Stripped inline credentials from /start request body")
+
+    # The body is the caller's workflow configuration: a misfit is the
+    # caller's to fix and never succeeds on retry, so it answers 422 naming
+    # the field (FND-501) rather than a 5xx.
+    input_data = _validate_request(input_type, body)
+    return _StartRequest(
+        ep=ep,
+        workflow_name=canonical_workflow_type(workflow_config.app_name, ep),
+        input_data=input_data,
+        explicit_workflow_id=explicit_workflow_id,
+    )
+
+
 def _register_workflow_routes(
     app: FastAPI,
     *,
@@ -1051,79 +1146,30 @@ def _register_workflow_routes(
 ) -> None:
     """Register workflow lifecycle, manifest, input-contract, config, file,
     event, and dev-only routes on *app*."""
+    # Captured now: create_app_handler_service rebinds the module global per
+    # service, so reading it per request would resolve against whichever
+    # service was built last.
+    workflow_config = _workflow_config
 
     @app.post("/workflows/v1/start")
     async def start_workflow(request: Request) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503,
                 detail="Workflow execution not configured. Set ATLAN_TEMPORAL_HOST.",
             )
 
-        app_cls = _workflow_config.app_class
-        if app_cls is None:
-            raise HTTPException(status_code=503, detail="App class not provided.")
-
-        body: dict[str, Any] = await request.json()
-        explicit_workflow_id: str | None = body.pop("workflow_id", None)
-        # ?entrypoint= query param is the canonical selector; fall back to the
-        # legacy body field 'workflow_type' for backward compatibility.
-        entrypoint_param: str | None = request.query_params.get("entrypoint")
-        legacy_workflow_type: str | None = body.pop("workflow_type", None)
-        selected_entrypoint: str | None = entrypoint_param or legacy_workflow_type
-        workflow_id = explicit_workflow_id or "(unknown)"
-
-        if legacy_workflow_type is not None and entrypoint_param is None:
-            warnings.warn(
-                f"App {app_name}: 'workflow_type' body field is deprecated. "
-                "Use ?entrypoint=<name> query param instead. "
-                "Will be removed in v4.0.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            logger.warning(
-                "App %s: 'workflow_type' body field is deprecated; "
-                "use ?entrypoint=<name> query param instead.",
-                app_name,
-            )
-
+        workflow_id = "(unknown)"
         try:
+            # Validated before the Temporal client is touched, so a malformed
+            # configuration is rejected even when Temporal is unreachable.
+            parsed = await _parse_start_request(request, app_name, workflow_config)
+            input_data = parsed.input_data
+            explicit_workflow_id = parsed.explicit_workflow_id
+            workflow_name = parsed.workflow_name
+            workflow_id = explicit_workflow_id or workflow_id
+
             client = await _get_temporal_client()
-
-            # Migration note (BLDX-1354): On a multi-entry-point app that has
-            # no explicit @entrypoint(default=True), omitting ?entrypoint= now
-            # dispatches the alphabetically-first entry point by name instead of
-            # returning 400.  Any existing caller of /start on such an app that
-            # relies on the 400 response must add an explicit ?entrypoint= param
-            # or mark a default with @entrypoint(default=True).  Heracles and
-            # private callers should be updated before this SDK version is rolled
-            # out to apps with multiple entry points.
-            _, ep = _resolve_app_entrypoint(
-                _workflow_config.app_name,
-                selected_entrypoint,
-                allow_workflow_type=(
-                    entrypoint_param is None and legacy_workflow_type is not None
-                ),
-            )
-
-            input_type = ep.input_type
-            workflow_name = canonical_workflow_type(_workflow_config.app_name, ep)
-
-            if input_type is None:
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"App class {app_cls.__name__} entry point has no input type.",
-                )
-
-            body = _normalize_credentials(body)
-            if "credentials" in body:
-                # Always strip raw credentials — never pass through to
-                # Temporal history. Credentials are resolved at runtime
-                # via DaprCredentialVault using credential_guid.
-                del body["credentials"]
-                logger.debug("Stripped inline credentials from /start request body")
-
-            input_data = input_type.model_validate(body)
 
             # Populate framework-managed fields on input_data before Temporal dispatch.
             # These fields are declared on Input (contracts/base.py) but the /start
@@ -1157,18 +1203,18 @@ def _register_workflow_routes(
                 "Starting workflow: app=%s workflow_id=%s queue=%s",
                 app_name,
                 workflow_id,
-                _workflow_config.task_queue,
+                workflow_config.task_queue,
             )
 
             handle = await client.start_workflow(
                 workflow_name,
                 args=[input_data],
                 id=workflow_id,
-                task_queue=_workflow_config.task_queue,
+                task_queue=workflow_config.task_queue,
                 memo=corr_ctx.to_temporal_memo(),
                 execution_timeout=(
-                    timedelta(hours=_workflow_config.workflow_max_timeout_hours)
-                    if _workflow_config.workflow_max_timeout_hours
+                    timedelta(hours=workflow_config.workflow_max_timeout_hours)
+                    if workflow_config.workflow_max_timeout_hours
                     else None
                 ),
             )
@@ -1190,18 +1236,18 @@ def _register_workflow_routes(
                 }
             )
 
-        except HTTPException:
+        except (HTTPException, _RequestContractError):
+            # A body that does not fit the entry point's input contract
+            # escapes as _RequestContractError, which the app-level handler
+            # answers as a 422 naming the field.
             raise
         except ValidationError as e:
-            # /start validates the app's own input contract, which the caller
-            # does not own — so this is an internal failure, not a malformed
-            # request, and it answers a sanitized 500 with the real cause in
-            # the log. It cannot reach the 422 handler (that one is registered
-            # on _RequestContractError, which only _validate_request raises);
-            # catching here is what turns Starlette's plain-text 500 into the
-            # boundary's own logged, sanitized one.
+            # Any other ValidationError is raised past body validation — by
+            # the SDK's own stamping or a model it builds — so it is an
+            # internal failure, not a malformed request: a sanitized 500 with
+            # the real cause in the log.
             logger.error(
-                "Workflow input validation failed for app %s: %s",
+                "Internal validation failure starting workflow for app %s: %s",
                 app_name,
                 e,
                 exc_info=True,
@@ -1709,7 +1755,7 @@ def _register_workflow_routes(
 
     def _registry_default_entrypoint() -> str:
         _, ep = _resolve_app_entrypoint(
-            _workflow_config.app_name, None, unknown_ep_status=404
+            workflow_config.app_name, None, unknown_ep_status=404
         )
         return ep.name
 
@@ -1725,7 +1771,7 @@ def _register_workflow_routes(
         )
 
         try:
-            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
+            app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
         except AppNotFoundError:
             return []
         return [
@@ -1737,7 +1783,7 @@ def _register_workflow_routes(
     def _registry_input_contract(entrypoint: str | None) -> Any:
         try:
             _, ep = _resolve_app_entrypoint(
-                _workflow_config.app_name, entrypoint, unknown_ep_status=404
+                workflow_config.app_name, entrypoint, unknown_ep_status=404
             )
         except HTTPException as exc:
             # Registry miss — the entry point may be a *marketplace* (bundle)
@@ -1763,7 +1809,7 @@ def _register_workflow_routes(
     # the other handler operations.
     handler_manifest = handler_compute_manifest(
         handler,
-        lambda: _workflow_config.app_name or app_name,
+        lambda: workflow_config.app_name or app_name,
         secret_store=_secret_store,
     )
 
@@ -1773,9 +1819,9 @@ def _register_workflow_routes(
         app,
         MetadataSource(
             generated_dir=lambda: CONTRACT_GENERATED_DIR,
-            app_name=lambda: _workflow_config.app_name,
+            app_name=lambda: workflow_config.app_name,
             fallback_app_name=app_name,
-            task_queue=lambda: _workflow_config.task_queue,
+            task_queue=lambda: workflow_config.task_queue,
             deployment_name=lambda: DEPLOYMENT_NAME,
             default_entrypoint=_registry_default_entrypoint,
             explicit_entrypoints=_registry_explicit_entrypoints,
@@ -1786,6 +1832,7 @@ def _register_workflow_routes(
             programmatic_manifest=manifest,
             log=lambda: logger,
             max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
+            normalize_body=_worker_normalize,
         ),
     )
 

@@ -60,9 +60,9 @@ def _validate_marker_timestamp(value: str | None) -> str | None:
     if not _ISO_TIMESTAMP_PATTERN.match(value):
         # conformance: ignore[E012] Pydantic field_validator requires ValueError to surface as ValidationError; replacing with AppError would break Pydantic validation contract
         raise ValueError(
-            f"marker_timestamp must be empty or an ISO-8601 / RFC-3339 timestamp "
-            f"(got {value!r}). Reject reason: prevents SQL injection via "
-            "templates that substitute the marker into a quoted literal."
+            "marker_timestamp must be empty or an ISO-8601 / RFC-3339 timestamp. "
+            "Reject reason: prevents SQL injection via templates that "
+            "substitute the marker into a quoted literal."
         )
     return value
 

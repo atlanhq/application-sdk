@@ -1,0 +1,123 @@
+{
+  "config": {
+    "properties": {
+      "extraction-method": {
+        "type": "conditional",
+        "required": false,
+        "ui": {
+          "widget": "radio"
+        },
+        "default": "direct",
+        "conditions": [
+          {
+            "property": "labFlag",
+            "value": "SECURE_AGENT_EXTRACTION",
+            "enum": [
+              "direct",
+              "agent"
+            ]
+          }
+        ],
+        "enum": [
+          "direct"
+        ]
+      },
+      "credential-guid": {
+        "type": "string",
+        "required": true,
+        "ui": {
+          "widget": "credential",
+          "credentialType": "atlan-connectors-bigquery"
+        }
+      },
+      "agent-json": {
+        "type": "object",
+        "required": false,
+        "ui": {
+          "widget": "agent",
+          "agentConfigs": [
+            [
+              "atlan-connectors-bigquery",
+              {
+                "properties": {
+                  "basic": {
+                    "properties": {
+                      "username": {
+                        "type": "string",
+                        "required": true,
+                        "default": ""
+                      },
+                      "password": {
+                        "type": "string",
+                        "default": "",
+                        "required": true,
+                        "ui": {
+                          "widget": ""
+                        }
+                      }
+                    }
+                  },
+                  "gcp-wif": {
+                    "properties": {
+                      "extra": {
+                        "properties": {
+                          "project_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "service_account_email": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "wif_pool_provider_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "atlan_oauth_id": {
+                            "type": "string",
+                            "required": true
+                          },
+                          "atlan_oauth_secret": {
+                            "type": "string",
+                            "required": true,
+                            "ui": {
+                              "widget": ""
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "atlan-connectors-agent"
+            ]
+          ]
+        }
+      },
+      "include-filter": {
+        "type": "conditional",
+        "required": false,
+        "ui": {
+          "widget": "sqltree"
+        },
+        "conditions": [
+          {
+            "property": "extraction-method",
+            "value": "agent",
+            "required": false,
+            "default": "",
+            "ui": {
+              "widget": ""
+            }
+          }
+        ],
+        "additionalProperties": {
+          "type": "array"
+        }
+      }
+    }
+  }
+}
