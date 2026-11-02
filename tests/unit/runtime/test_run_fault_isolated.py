@@ -182,10 +182,20 @@ def _sleep_for(seconds: float) -> float:
 
 
 async def _wait_until_reaped(width: int) -> None:
+    """Wait until the width's idle pool has shut down and joined its children.
+
+    Waits on ``reaped`` rather than joining the children here: the reaper's
+    ``shutdown(wait=True)`` already reaps them, and a second ``waitpid`` racing it
+    gets ``ECHILD``, which ``multiprocessing`` reads as "still running".
+    """
+    pool = offload._PROCESS_POOLS.get(width)
     deadline = time.monotonic() + _REAP_DEADLINE_SECONDS
-    while width in offload._PROCESS_POOLS:
+    while pool is not None and not pool.reaped.is_set():
         assert time.monotonic() < deadline, f"width-{width} pool was never reaped"
         await asyncio.sleep(0.05)
+    assert (
+        width not in offload._PROCESS_POOLS or offload._PROCESS_POOLS[width] is not pool
+    )
 
 
 @pytest.mark.asyncio
@@ -202,9 +212,8 @@ async def test_an_idle_pool_shuts_down_and_its_children_exit(monkeypatch):
 
     await _wait_until_reaped(width)
 
-    for child in children:
-        child.join(timeout=_REAP_DEADLINE_SECONDS)
-        assert not child.is_alive()
+    # Every child has exited: the reaper's join recorded each exit code.
+    assert all(child.exitcode is not None for child in children)
     # The next call at that width gets a fresh pool and still works.
     assert await run_fault_isolated(_echo, "again", max_workers=width) == "echo:again"
 

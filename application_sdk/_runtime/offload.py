@@ -1175,9 +1175,13 @@ class _IsolationPool:
     running, and reaping the pool under it would kill work still in progress.
     ``idle_generation`` invalidates an idle timer the moment new work arrives,
     so a timer that fires late can never reap a pool that has been busy since.
+    ``reaped`` is set once an idle shutdown has joined every child, so a reader
+    can observe the children's exit without calling ``waitpid`` itself (a second
+    ``waitpid`` racing the executor's own join can misreport a reaped child as
+    still running).
     """
 
-    __slots__ = ("executor", "in_flight", "idle_generation", "idle_timer")
+    __slots__ = ("executor", "in_flight", "idle_generation", "idle_timer", "reaped")
 
     def __init__(self, max_workers: int) -> None:
         self.executor = concurrent.futures.ProcessPoolExecutor(
@@ -1187,6 +1191,7 @@ class _IsolationPool:
         self.in_flight = 0
         self.idle_generation = 0
         self.idle_timer: threading.Timer | None = None
+        self.reaped = threading.Event()
 
     def stop_idle_timer(self) -> None:
         self.idle_generation += 1
@@ -1244,6 +1249,7 @@ def _reap_idle_pool(max_workers: int, pool: _IsolationPool, generation: int) -> 
     # waiting for this one's children to exit. Nothing is queued or running, so
     # the children take the sentinel and exit, and joining them leaves no zombie.
     pool.executor.shutdown(wait=True)
+    pool.reaped.set()
 
 
 def _discard_process_pool(max_workers: int, pool: _IsolationPool) -> None:
