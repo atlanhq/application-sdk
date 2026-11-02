@@ -300,17 +300,41 @@ SDK:
 will be a stale path from another machine. The sidecar check catches this: the
 local sidecar is absent (different pod, different disk), so the SDK re-downloads.
 
-**Cache hit:** if the same worker hands the ref on, or retries, and the local
-file is intact, the SDK skips the download entirely. A file whose size, mtime and
-inode still match its marker is trusted without being read, so even a multi-GB
-hand-off costs only a `stat`. If the stat has moved, or the marker was written by
+**Cache hit:** if the producer's own copy is still at the ref's `local_path` on
+this worker (a same-worker hand-off) and it is intact, the SDK skips the
+download entirely. This holds for single files; a directory ref is always
+downloaded into the task's folder. Downloaded copies are never reused: each
+task gets its own (see below). A file whose size, mtime and inode still match
+its marker is trusted without being read, so even a multi-GB hand-off costs
+only a `stat`. If the stat has moved, or the marker was written by
 an older SDK that recorded only the digest, the file is re-hashed in a worker
 thread (never on the event loop): a match re-stamps the marker, a mismatch
 re-downloads. A replacement that restores the original size *and* mtime on the
 same inode (`cp -p` over the file in place) is not caught.
 
+The check compares the file's stat and size with its marker, not with the
+ref's own digest. If the producer overwrites the file with new content of the
+same size and persists it again, a consumer of the first ref reads the new
+content. Write each output to a fresh path.
+
 The local marker is SDK bookkeeping. Do not parse it in app code or tests: its
 format is not a contract.
+
+**Deleted when the task ends:** the SDK downloads a task's inputs into one
+folder for that task, at `<TEMPORARY_PATH>/.sdk-task-inputs/<id>/<n>/<storage_path>`
+(one numbered subfolder per object),
+and deletes the folder once the task's outputs are persisted, whether it
+succeeded or failed. The task sees `local_path` pointing into that folder. A
+retry, or another task on the same worker, downloads its own copy. A local copy
+that is already current at the ref's `local_path` (the producer's own copy on
+the same worker) is used where it is and never deleted; a ref with
+`auto_materialize=False` and a `Lazy` field the task fetches itself are left
+alone. Do not hand a materialised input's `local_path` on as a plain string:
+pass the `FileReference` itself, and pass `ref=` to `UploadInput` when you
+upload it, since a key derived from the local path no longer matches the
+store key. Each task holds an exclusive lock on its folder for as long as it runs; a
+worker that is killed mid-task loses it, and the next worker to start on that
+node deletes every folder whose lock is free.
 
 #### Directory FileReferences
 
