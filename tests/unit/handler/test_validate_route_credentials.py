@@ -215,3 +215,25 @@ class TestWorkflowCredentialReference:
 
         assert response.status_code == 422
         assert _fields(response) == ["agent_json"]
+
+
+@pytest.mark.parametrize("name", ["../crawler", "crawler/../..", "/etc", "missing"])
+def test_credential_gaps_only_builds_paths_from_listed_entrypoints(
+    name: str,
+) -> None:
+    """A name the generated tree does not list never becomes a path."""
+    from application_sdk.handler.metadata_routes import credential_gaps
+
+    assert (
+        credential_gaps(_FIXTURE, name, [{"key": "authType", "value": "x"}], None) == []
+    )
+
+
+def test_credential_gaps_resolves_a_listed_entrypoint() -> None:
+    from application_sdk.handler.metadata_routes import credential_gaps
+    from application_sdk.templates.contracts import ExtractionInput
+
+    pairs = [{"key": "authType", "value": "gcp-wif"}]
+    workflow = ExtractionInput.model_validate({"credential_guid": "guid-1"})
+    gaps = credential_gaps(_FIXTURE, "crawler", pairs, workflow)
+    assert ("credentials", "extra", "atlan_oauth_id") in gaps

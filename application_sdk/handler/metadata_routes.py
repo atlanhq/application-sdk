@@ -371,7 +371,17 @@ def credential_gaps(
     """
     if entrypoint is None:
         return []
-    form_path, _ = entrypoint_form(generated_dir, entrypoint)
+    # Build the form path only from a name the generated tree itself lists
+    # (or "" for the app-level form), never from the request's string: the
+    # route checked the name already, but that guard lives elsewhere and a
+    # path must not depend on it staying in front of this call.
+    known = next(
+        (name for name in ("", *tree_entrypoints(generated_dir)) if name == entrypoint),
+        None,
+    )
+    if known is None:
+        return []
+    form_path, _ = entrypoint_form(generated_dir, known)
     workflow_form = load_form(form_path)
     slots = credential_slots(workflow_form) if workflow_form is not None else []
     gaps: list[tuple[str, ...]] = []
