@@ -8,6 +8,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
+from temporalio.testing import WorkflowEnvironment
+
+from application_sdk.dev import _embedded
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -43,10 +46,48 @@ def test_warm_enters_and_leaves_both_runtimes(monkeypatch: pytest.MonkeyPatch) -
     fake.embedded_runtime = _tracking("temporal")  # type: ignore[attr-defined]
     fake.embedded_dapr = _tracking("dapr")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "application_sdk.dev", fake)
+    monkeypatch.setattr(warm, "time_skipping_server", _tracking("test-server"))
 
     _run_to_completion(warm.warm())
 
-    assert events == ["enter temporal", "enter dapr", "exit dapr", "exit temporal"]
+    assert events == [
+        "enter temporal",
+        "enter dapr",
+        "enter test-server",
+        "exit test-server",
+        "exit dapr",
+        "exit temporal",
+    ]
+
+
+def test_time_skipping_server_downloads_into_the_cached_dir(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The test server must land in the dir the cache action saves, not the
+    system temp dir a fresh runner starts empty."""
+    calls: list[dict[str, object]] = []
+
+    class _Env:
+        async def __aenter__(self) -> _Env:
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            return None
+
+    async def _start(**kwargs: object) -> _Env:
+        calls.append(kwargs)
+        return _Env()
+
+    monkeypatch.setattr(WorkflowEnvironment, "start_time_skipping", _start)
+    monkeypatch.setattr(_embedded, "_download_dir", lambda: "/cached/temporal")
+
+    async def _boot() -> None:
+        async with warm.time_skipping_server():
+            pass
+
+    _run_to_completion(_boot())
+
+    assert calls == [{"download_dest_dir": "/cached/temporal"}]
 
 
 @pytest.mark.parametrize(

@@ -42,6 +42,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.dev._embedded import _download_dir
 from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
@@ -143,7 +144,7 @@ async def _run_extract_workflow(base_path: str) -> str:
     local output directory the activity wrote the asset parquet to."""
     qid = uuid.uuid4().hex[:8]
     async with (
-        await WorkflowEnvironment.start_local() as env,
+        await WorkflowEnvironment.start_local(download_dest_dir=_download_dir()) as env,
         Worker(
             env.client,
             task_queue=f"sdr-extract-{qid}",

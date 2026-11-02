@@ -47,6 +47,7 @@ from application_sdk.app.base import App
 from application_sdk.app.context import AppContext
 from application_sdk.contracts.base import Input, Output
 from application_sdk.credentials.spec import AgentCredentialSpec
+from application_sdk.dev._embedded import _download_dir
 from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
     AuthError,
@@ -169,7 +170,10 @@ async def temporal_client() -> AsyncIterator[Client]:
     ``executor`` fixtures run against it unchanged.
     """
     async with await WorkflowEnvironment.start_time_skipping(
-        data_converter=pydantic_data_converter
+        data_converter=pydantic_data_converter,
+        # The CI-cached dir, not the system temp dir: a fresh runner would
+        # otherwise download the test server and can be refused with a 429.
+        download_dest_dir=_download_dir(),
     ) as env:
         yield env.client
 

@@ -18,6 +18,18 @@ logger = get_logger(__name__)
 _CACHE_DIR = Path.home() / ".cache" / "atlan-sdk" / "temporal"
 
 
+def _download_dir() -> str:
+    """Return the Temporal binary cache dir, creating it if absent.
+
+    Shared by :func:`embedded_runtime`, the integration tests that boot their
+    own Temporal servers (dev or time-skipping) and the CI cache seeder, so
+    every Temporal binary lands in the one directory the CI cache saves.
+    temporalio fails rather than create a missing download dir.
+    """
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return str(_CACHE_DIR)
+
+
 @dataclass(frozen=True)
 class EmbeddedRuntime:
     """Connection details for the in-process workflow runtime."""
@@ -48,11 +60,10 @@ async def embedded_runtime(
     """
     from temporalio.testing import WorkflowEnvironment  # noqa: PLC0415
 
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     logger.info("Starting embedded workflow runtime")
     env = await WorkflowEnvironment.start_local(
         namespace=namespace,
-        download_dest_dir=str(_CACHE_DIR),
+        download_dest_dir=_download_dir(),
         ui=temporal_ui,
         ui_port=temporal_ui_port if temporal_ui else None,
         dev_server_log_level=log_level,
