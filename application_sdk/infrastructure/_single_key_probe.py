@@ -61,7 +61,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 #: Bounded fan-out for the probe sweep (BLDX-1594). A probe holds its slot for
-#: its whole retry ladder, so the sweep costs ``ceil(candidates / this)``
+#: its whole retry ladder when the store is failing (a miss is one request
+#: since FND-4279), so the sweep costs up to ``ceil(candidates / this)``
 #: ladders — set above realistic payload field counts so the common case is one
 #: wave. Bounded because the candidate set is open-ended (``extra.*``) and a
 #: wide burst invites vault throttling.
@@ -133,8 +134,9 @@ async def probe_single_keys(
 
     Probes run **concurrently**, bounded by
     :data:`MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until BLDX-1594:
-    a probe that misses pays a full Dapr retry ladder, so serial probing cost
-    *ladder × number of literal-valued fields*.
+    a probe that missed paid a full Dapr retry ladder, so serial probing cost
+    *ladder × number of literal-valued fields*. A miss is now one request
+    (FND-4279), but a failing store still pays the ladder per probe.
 
     Returns ``(value, secret)`` pairs in **candidate order**, not completion
     order, so a caller that merges them gets the same last-writer-wins result

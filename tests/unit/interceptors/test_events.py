@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import Any
 from unittest import mock
 
@@ -22,6 +24,7 @@ from application_sdk.execution._temporal.interceptors.events import (
     EventInterceptor,
     EventWorkflowInboundInterceptor,
     _enrich_event_metadata,
+    _get_event_auth_headers,
     _get_event_token_service,
     _publish_event_via_binding,
     _send_lifecycle_event_to_segment,
@@ -188,12 +191,19 @@ class TestPublishEventActivity:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(autouse=False)
+@pytest.fixture(autouse=True)
 def _reset_event_token_service():
-    """Null the module-global cache between tests."""
+    """Null the module-global cache (and its negative entry) between tests."""
     events_module._event_token_service = None
+    events_module._event_token_service_retry_at = 0.0
     yield
     events_module._event_token_service = None
+    events_module._event_token_service_retry_at = 0.0
+
+
+def _expire_retry_window() -> None:
+    """Move the cached negative result's deadline into the past."""
+    events_module._event_token_service_retry_at = time.monotonic() - 1.0
 
 
 class TestGetEventTokenService:
@@ -255,6 +265,112 @@ class TestGetEventTokenService:
         assert second is fake_service
         # Constructed exactly once — singleton cache works.
         assert fake_service_cls.call_count == 1
+
+
+class TestEventTokenServiceCaching:
+    """FND-4279: one credential lookup per retry window, shared by callers."""
+
+    @staticmethod
+    def _auth_patches(secret_mock: mock.AsyncMock, service_cls: mock.MagicMock):
+        return (
+            mock.patch("application_sdk.constants.AUTH_ENABLED", True, create=True),
+            mock.patch(
+                "application_sdk.constants.AUTH_URL",
+                "https://example.com/token",
+                create=True,
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.secrets.get_deployment_secret",
+                new=secret_mock,
+            ),
+            mock.patch(
+                "application_sdk.credentials.oauth.OAuthTokenService", service_cls
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_credentials_are_fetched_once_per_window(self) -> None:
+        secrets = mock.AsyncMock(return_value=None)
+        service_cls = mock.MagicMock()
+        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
+        with p1, p2, p3, p4:
+            for _ in range(5):
+                assert await _get_event_token_service() is None
+            # One lookup = the client-id and client-secret reads.
+            assert secrets.await_count == 2
+
+            _expire_retry_window()
+            assert await _get_event_token_service() is None
+            assert secrets.await_count == 4
+        service_cls.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_concurrent_callers_share_one_lookup(self) -> None:
+        release = asyncio.Event()
+
+        async def slow_secret(key: str, **_: Any) -> str:
+            await release.wait()
+            return f"value-for-{key}"
+
+        secrets = mock.AsyncMock(side_effect=slow_secret)
+        fake_service = mock.MagicMock(name="OAuthTokenService")
+        service_cls = mock.MagicMock(return_value=fake_service)
+        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
+        with p1, p2, p3, p4:
+            callers = [
+                asyncio.create_task(_get_event_token_service()) for _ in range(10)
+            ]
+            await asyncio.sleep(0)
+            release.set()
+            results = await asyncio.gather(*callers)
+
+        assert all(r is fake_service for r in results)
+        assert secrets.await_count == 2
+        assert service_cls.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_lookup_failure_is_cached_for_the_window(self) -> None:
+        secrets = mock.AsyncMock(side_effect=RuntimeError("store down"))
+        p1, p2, p3, p4 = self._auth_patches(secrets, mock.MagicMock())
+        with p1, p2, p3, p4:
+            with pytest.raises(RuntimeError):
+                await _get_event_token_service()
+            assert await _get_event_token_service() is None
+            assert await _get_event_auth_headers() == {}
+        assert secrets.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_rejected_exchange_rereads_credentials_after_the_window(
+        self,
+    ) -> None:
+        from application_sdk.credentials.oauth import OAuthTokenError
+
+        stale = mock.MagicMock(name="stale-service")
+        stale.get_headers = mock.AsyncMock(
+            side_effect=OAuthTokenError("invalid_client")
+        )
+        rotated = mock.MagicMock(name="rotated-service")
+        rotated.get_headers = mock.AsyncMock(
+            return_value={"authorization": "Bearer rotated"}
+        )
+        secrets = mock.AsyncMock(
+            side_effect=["old-id", "old-secret", "new-id", "new-secret"]
+        )
+        service_cls = mock.MagicMock(side_effect=[stale, rotated])
+        p1, p2, p3, p4 = self._auth_patches(secrets, service_cls)
+        with p1, p2, p3, p4:
+            assert await _get_event_auth_headers() == {}
+            # Inside the window: no exchange, no secret read.
+            assert await _get_event_auth_headers() == {}
+            assert stale.get_headers.await_count == 1
+            assert secrets.await_count == 2
+
+            _expire_retry_window()
+            assert await _get_event_auth_headers() == {
+                "authorization": "Bearer rotated"
+            }
+        assert secrets.await_count == 4
+        assert service_cls.call_count == 2
 
 
 class TestEnrichEventMetadata:

@@ -168,6 +168,8 @@ Set these when `ATLAN_AUTH_ENABLED=true` to authenticate the worker and handler 
 | `ATLAN_AUTH_CLIENT_ID_KEY` | `ATLAN_AUTH_CLIENT_ID` | Key name for the client ID within the deployment secret. |
 | `ATLAN_AUTH_CLIENT_SECRET_KEY` | `ATLAN_AUTH_CLIENT_SECRET` | Key name for the client secret within the deployment secret. |
 
+When `ATLAN_AUTH_ENABLED` is on, lifecycle events read the client credentials for their bearer token once and reuse them. If the credentials are missing, the lookup fails, or the token exchange is rejected, events go out without auth and the lookup is not repeated for 60 s. A rejected exchange discards the cached credentials, so a rotated credential is picked up within 60 s, without a restart.
+
 ---
 
 ## Dapr Component Names
@@ -191,6 +193,8 @@ Dapr component names are read at module-import time (not at runtime) because the
 |----------|---------|-------------|
 | `ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT` | `60` | Max seconds to poll `/v1.0/healthz` at startup for daprd to start accepting connections. Startup proceeds as soon as daprd answers the probe at all (per-component readiness is covered by each call site's cold-start retry budget); only connection errors poll to this deadline. Increase for pathologically slow cold starts (image pull + daprd boot). |
 | `ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS` | `120.0` | Seconds a Dapr-backed call (secret fetch, credential-vault config fetch, ...) may retry a cold-sidecar race before giving up. Shared by every call site that opts into `retry_past_dapr_cold_start`. Env-overridable for pathologically slow runners. |
+
+Within each attempt of that budget, the Dapr HTTP client replays a failed GET up to 3 times (2-12 s of backoff) on a connection error or HTTP 500/502/503/504. Secret GETs replay only 502/503/504: Dapr answers a missing secret with HTTP 500 `ERR_SECRET_GET`, so a missing secret now fails after one request. A 500 that means "not ready yet" is retried by the cold-start budget above, which reads Dapr's `errorCode`.
 
 ---
 

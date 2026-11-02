@@ -423,10 +423,13 @@ class DaprCredentialVault:
                 component=DAPR_SECRET_STORE_COMPONENT,
             )
         except SecretNotFoundError:
-            logger.warning(
+            # DEBUG, label only, no exc_info (FND-4279): an absent key is an
+            # expected answer in single-key mode (each literal field is
+            # probed), and the exception's str() and chained httpx URL both
+            # carry the raw key that log_label exists to keep out of logs.
+            logger.debug(
                 "Secret %s definitively absent from store; returning empty credential",
                 log_label or secret_key,
-                exc_info=True,
             )
             return {}
         return process_secret_data(result)

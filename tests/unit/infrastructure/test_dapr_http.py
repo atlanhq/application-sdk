@@ -430,6 +430,74 @@ class TestRetryConfiguration:
         )
 
 
+class TestSecretRequestRetryStatuses:
+    """FND-4279: Dapr answers an absent secret with 500 ERR_SECRET_GET, so
+    secret GETs must not replay 500; other calls keep the full status set."""
+
+    _ABSENT_BODY = {
+        "errorCode": "ERR_SECRET_GET",
+        "message": "failed getting secret with key example-key from secret "
+        "store secretstore: secret example-key not found",
+    }
+
+    @staticmethod
+    def _client_answering(status: int, body: dict | None = None):
+        attempts = {"n": 0}
+
+        class Answer(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request):
+                attempts["n"] += 1
+                return httpx.Response(status, json=body or {}, request=request)
+
+        # backoff_factor=0 collapses the ladder; per-request retry policies
+        # come from the client, so swap only the inner transport.
+        client = AsyncDaprClient(base_url="http://localhost:3500", backoff_factor=0)
+        client._client._transport._async_transport = Answer()
+        return client, attempts
+
+    async def test_absent_secret_is_not_found_after_one_request(self) -> None:
+        from application_sdk.infrastructure._dapr.client import (
+            classify_secret_fetch_error,
+        )
+
+        client, attempts = self._client_answering(500, self._ABSENT_BODY)
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.get_secret("secretstore", "example-key")
+        await client.close()
+
+        assert attempts["n"] == 1
+        assert isinstance(
+            classify_secret_fetch_error("example-key", exc_info.value),
+            SecretNotFoundError,
+        )
+
+    async def test_bulk_secret_does_not_replay_500(self) -> None:
+        client, attempts = self._client_answering(500, self._ABSENT_BODY)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_bulk_secret("secretstore")
+        await client.close()
+        assert attempts["n"] == 1
+
+    @pytest.mark.parametrize("status", [502, 503, 504])
+    async def test_secret_gateway_errors_still_replayed(self, status: int) -> None:
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        client, attempts = self._client_answering(status)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_secret("secretstore", "example-key")
+        await client.close()
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+
+    async def test_state_get_still_replays_500(self) -> None:
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        client, attempts = self._client_answering(500)
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_state("statestore", "example-key")
+        await client.close()
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+
+
 class TestSidecarWaitTimeout:
     """The startup readiness gate must wait long enough for a cold-starting
     sidecar (the old 10s let CI proceed before daprd was up)."""
