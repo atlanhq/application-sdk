@@ -154,7 +154,7 @@ def test_certify_and_leak_scan_keep_their_publish_or_main_condition(
 
 
 @pytest.mark.parametrize("job_id", ("certify-plan", "certify-unit"))
-@pytest.mark.parametrize(("shards", "runs"), [(1, False), (0, True), (4, True)])
+@pytest.mark.parametrize(("shards", "runs"), [(1, False), (2, True), (10, True)])
 def test_shard_jobs_run_only_when_the_app_opts_in(
     job_id: str, shards: int, runs: bool
 ) -> None:

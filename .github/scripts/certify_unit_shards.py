@@ -9,10 +9,9 @@ branch has a test (``tests/test_certify_unit_shards.py``; see
 ``docs/standards/ci.md``):
 
 ``plan``
-    How many shards. An explicit ``--override`` wins; otherwise the app's
-    pytest-split ``.test_durations`` file sizes it (one shard per
-    ``TARGET_SECONDS_PER_SHARD`` of recorded ``tests/unit`` time). An app with
-    no durations file gets one shard — the same single job as before.
+    Validate the shard count the app opted into (``unit_test_shards``) and
+    emit the matrix list. Sharding is opt-in: at the default of one shard the
+    workflow skips the plan and the legs, and ``certify`` runs ``run`` itself.
 ``run``
     One shard: pytest with coverage, plus pytest-split's ``--splits/--group``
     when there is more than one shard. Writes a result file and the shard's
@@ -26,7 +25,7 @@ Stdlib only: ``plan`` runs on ``ubuntu-slim`` with the system ``python3``.
 
 Usage::
 
-    python3 certify_unit_shards.py plan --durations app/.test_durations --override 0
+    python3 certify_unit_shards.py plan --shards 4
     python3 certify_unit_shards.py run --shard 2 --total 4 --coverage-source app \\
         --install-outcome success --results-dir ../certify-shard
     python3 certify_unit_shards.py verdict --results-dir certify-shards --total 4
@@ -36,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import shutil
 import subprocess
@@ -44,14 +42,9 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-#: Recorded serial seconds of ``tests/unit`` one shard should carry. A
-#: standard runner runs ~5 minutes of serial test time well inside the job cap
-#: even without xdist, and leaves the per-shard setup (checkout + ``uv sync``,
-#: ~1 billed minute) a small share of each leg.
-TARGET_SECONDS_PER_SHARD = 300.0
-
 #: Ceiling on legs. Past this the slowest single test, not the shard count,
-#: is the floor, while every extra leg still bills its setup minute.
+#: is the floor, while every extra leg still bills its setup minute
+#: (checkout + ``uv sync``, ~1 billed minute).
 MAX_SHARDS = 10
 
 #: pytest exits 5 when it collects nothing. One shard of several can
@@ -65,35 +58,13 @@ UNIT_TESTS_DIR = "tests/unit"
 Runner = Callable[[Sequence[str]], int]
 
 
-def plan_shards(durations_path: Path, override: int) -> int:
-    """Return the shard count: ``override`` when set, else sized from durations."""
-    if override < 0 or override > MAX_SHARDS:
+def plan_shards(shards: int) -> int:
+    """Return the opted-in shard count, rejecting anything outside 1..MAX_SHARDS."""
+    if shards < 1 or shards > MAX_SHARDS:
         raise ValueError(
-            f"unit_test_shards must be 0 (auto) or 1..{MAX_SHARDS}, got {override}"
+            f"unit_test_shards must be 1 (default, no split) or 2..{MAX_SHARDS}, got {shards}"
         )
-    if override:
-        return override
-    try:
-        durations = json.loads(durations_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return 1
-    except (OSError, ValueError) as exc:
-        print(
-            f"::warning::Unreadable {durations_path} ({exc}); running unit tests as one shard."
-        )
-        return 1
-    if not isinstance(durations, dict):
-        print(
-            f"::warning::{durations_path} is not a pytest-split durations map; one shard."
-        )
-        return 1
-    seconds = sum(
-        float(value)
-        for node_id, value in durations.items()
-        if str(node_id).startswith(f"{UNIT_TESTS_DIR}/")
-        and isinstance(value, (int, float))
-    )
-    return max(1, min(MAX_SHARDS, math.ceil(seconds / TARGET_SECONDS_PER_SHARD)))
+    return shards
 
 
 def pytest_command(shard: int, total: int, coverage_source: str) -> list[str]:
@@ -204,8 +175,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner = _subprocess_runner)
     sub = parser.add_subparsers(dest="command", required=True)
 
     plan = sub.add_parser("plan")
-    plan.add_argument("--durations", type=Path, required=True)
-    plan.add_argument("--override", type=int, default=0)
+    plan.add_argument("--shards", type=int, required=True)
 
     run = sub.add_parser("run")
     run.add_argument("--shard", type=int, required=True)
@@ -222,7 +192,7 @@ def main(argv: Sequence[str] | None = None, runner: Runner = _subprocess_runner)
 
     if args.command == "plan":
         try:
-            total = plan_shards(args.durations, args.override)
+            total = plan_shards(args.shards)
         except ValueError as exc:
             print(f"::error::{exc}")
             return 1

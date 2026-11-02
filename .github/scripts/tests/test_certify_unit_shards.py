@@ -20,72 +20,19 @@ pytest_command = certify_unit_shards.pytest_command
 run_shard = certify_unit_shards.run_shard
 decide_verdict = certify_unit_shards.decide_verdict
 main = certify_unit_shards.main
-TARGET = certify_unit_shards.TARGET_SECONDS_PER_SHARD
 MAX_SHARDS = certify_unit_shards.MAX_SHARDS
 
 
-def _durations(tmp_path: Path, mapping: object) -> Path:
-    path = tmp_path / ".test_durations"
-    path.write_text(json.dumps(mapping), encoding="utf-8")
-    return path
+@pytest.mark.parametrize("shards", [1, 2, MAX_SHARDS])
+def test_plan_accepts_an_opted_in_count(shards: int) -> None:
+    assert plan_shards(shards) == shards
 
 
-# ── plan ────────────────────────────────────────────────────────────────────
-
-
-def test_no_durations_file_keeps_one_shard(tmp_path: Path) -> None:
-    assert plan_shards(tmp_path / ".test_durations", 0) == 1
-
-
-@pytest.mark.parametrize(
-    ("unit_seconds", "expected"),
-    [
-        (1.0, 1),
-        (TARGET, 1),
-        (TARGET + 1, 2),
-        (TARGET * 7 - 1, 7),
-        (TARGET * 50, MAX_SHARDS),
-    ],
-)
-def test_durations_size_the_shard_count(
-    tmp_path: Path, unit_seconds: float, expected: int
-) -> None:
-    path = _durations(tmp_path, {"tests/unit/test_a.py::test_x": unit_seconds})
-    assert plan_shards(path, 0) == expected
-
-
-def test_only_unit_tier_durations_count(tmp_path: Path) -> None:
-    # Certify runs tests/unit only; an integration suite in the same file must
-    # not buy shards that would sit empty.
-    path = _durations(
-        tmp_path,
-        {
-            "tests/unit/test_a.py::test_x": 10.0,
-            "tests/integration/test_b.py::test_y": TARGET * 9,
-        },
-    )
-    assert plan_shards(path, 0) == 1
-
-
-@pytest.mark.parametrize("content", ["not json", "[1, 2, 3]"])
-def test_unusable_durations_file_falls_back_to_one_shard(
-    tmp_path: Path, content: str, capsys: pytest.CaptureFixture[str]
-) -> None:
-    path = tmp_path / ".test_durations"
-    path.write_text(content, encoding="utf-8")
-    assert plan_shards(path, 0) == 1
-    assert "::warning::" in capsys.readouterr().out
-
-
-def test_override_wins_over_durations(tmp_path: Path) -> None:
-    path = _durations(tmp_path, {"tests/unit/test_a.py::test_x": TARGET * 9})
-    assert plan_shards(path, 3) == 3
-
-
-@pytest.mark.parametrize("override", [-1, MAX_SHARDS + 1])
-def test_override_out_of_range_is_rejected(tmp_path: Path, override: int) -> None:
+@pytest.mark.parametrize("shards", [-1, 0, MAX_SHARDS + 1])
+def test_plan_rejects_a_count_outside_the_range(shards: int) -> None:
+    # No auto mode: 0 is not a "size it for me" value, it is an error.
     with pytest.raises(ValueError):
-        plan_shards(tmp_path / ".test_durations", override)
+        plan_shards(shards)
 
 
 def test_plan_writes_the_matrix_list(
@@ -93,15 +40,14 @@ def test_plan_writes_the_matrix_list(
 ) -> None:
     output = tmp_path / "out"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    path = _durations(tmp_path, {"tests/unit/test_a.py::test_x": TARGET * 3})
-    assert main(["plan", "--durations", str(path), "--override", "0"]) == 0
+    assert main(["plan", "--shards", "3"]) == 0
     lines = output.read_text(encoding="utf-8").splitlines()
     assert lines == ["total=3", "shards=[1, 2, 3]"]
     assert json.loads(lines[1].split("=", 1)[1]) == [1, 2, 3]
 
 
-def test_plan_fails_on_invalid_override(tmp_path: Path) -> None:
-    assert main(["plan", "--durations", str(tmp_path / "x"), "--override", "99"]) == 1
+def test_plan_fails_on_invalid_count() -> None:
+    assert main(["plan", "--shards", "99"]) == 1
 
 
 # ── run ─────────────────────────────────────────────────────────────────────

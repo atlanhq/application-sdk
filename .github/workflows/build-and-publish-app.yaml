@@ -113,7 +113,7 @@ on:
         type: boolean
         default: false
       unit_test_shards:
-        description: "Opt-in: split the certify gate's `tests/unit` across parallel runners. Default 1 = no split: `certify` runs the tests itself in one job, as before, and no extra jobs start. 0 = auto: sized from the app's committed pytest-split `.test_durations` file (one runner per ~5 minutes of recorded unit-test time, max 10). 2-10 = pin the runner count. See docs/standards/app-certification.md."
+        description: "Opt-in: split the certify gate's `tests/unit` across this many parallel runners (2-10). Default 1 = no split: `certify` runs the tests itself in one job, exactly as before, and no extra jobs start. Any other value outside 1-10 fails the run. When set, pytest-split balances the runners from the app's committed `.test_durations` if it has one, else splits evenly by count. See docs/standards/app-certification.md."
         required: false
         type: number
         default: 1
@@ -488,8 +488,8 @@ jobs:
   #
   # Sharding is opt-in (`unit_test_shards`, default 1). By default `certify`
   # runs the unit tests itself and `certify-plan` / `certify-unit` skip, so an
-  # app that does not opt in pays for no extra jobs. An app that opts in runs
-  # its tests in `certify-unit`, split across `certify-plan`'s shard count, and
+  # app that does not opt in pays for no extra jobs. An app that opts in (2-10)
+  # runs its tests in `certify-unit`, one leg per shard, and
   # `certify` folds their results into the verdict. Publish waits on `certify`
   # while the image build does not, so on a single 2-vCPU runner a large suite
   # set the whole run's wall time — and neared the 30-minute cap.
@@ -506,14 +506,6 @@ jobs:
       total: ${{ steps.plan.outputs.total }}
       shards: ${{ steps.plan.outputs.shards }}
     steps:
-      - name: Checkout pytest-split durations
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref || github.ref }}
-          path: app
-          sparse-checkout: /.test_durations
-          sparse-checkout-cone-mode: false
-
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -526,8 +518,8 @@ jobs:
       - name: Plan unit-test shards
         id: plan
         env:
-          OVERRIDE: ${{ inputs.unit_test_shards }}
-        run: python3 .sdk-entrypoint/.github/scripts/certify_unit_shards.py plan --durations app/.test_durations --override "${OVERRIDE}"
+          SHARDS: ${{ inputs.unit_test_shards }}
+        run: python3 .sdk-entrypoint/.github/scripts/certify_unit_shards.py plan --shards "${SHARDS}"
 
   # One leg per shard. A failing test does NOT fail the leg (continue-on-error
   # on the run step): `certify` must still run to render every layer in one
