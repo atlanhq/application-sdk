@@ -76,8 +76,8 @@ _BLOCKING_EXECUTOR_OVERRIDE: contextvars.ContextVar[
 ] = contextvars.ContextVar("_BLOCKING_EXECUTOR_OVERRIDE", default=None)
 
 # True inside the copied context an offloaded call runs in, on any offload pool
-# (shared ``sdk-blocking-*`` or a per-app ``api-*``). ``asyncio.run`` in that
-# thread copies it into its main task, so nested ``run_in_thread`` sees it.
+# (shared ``sdk-blocking-*`` or a per-app ``api-*``). Set by ``run_in_thread`` and
+# ``submit_in_thread``; ``asyncio.run`` copies it, so nested ``run_in_thread`` sees it.
 _IN_OFFLOAD: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "_IN_OFFLOAD", default=False
 )
@@ -1063,6 +1063,7 @@ def submit_in_thread(
         never ran. Ignoring the return value is the normal case.
     """
     ctx = contextvars.copy_context()
+    ctx.run(_IN_OFFLOAD.set, True)
     executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     try:
         future = executor.submit(ctx.run, functools.partial(func, *args, **kwargs))
