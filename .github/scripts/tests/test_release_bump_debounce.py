@@ -1,7 +1,7 @@
 """Tests for .github/scripts/release_bump_debounce.py (FND-3322).
 
 Driven against real git repositories — a bare ``origin`` plus a clone — because
-the decision is made from what ``git fetch``/``git show``/``git merge-tree``
+the decision is made from what ``git fetch``/``git show``/``git merge-base``
 report, and a stubbed git would only prove the stub.
 """
 
@@ -125,13 +125,17 @@ def test_pushes_when_the_bump_branch_does_not_exist(repo: Path) -> None:
     assert "could not be fetched" in reason
 
 
-def test_skips_a_renovate_chore_merge_that_changes_neither_version_nor_notes(
+def test_pushes_when_main_moved_under_an_unchanged_version_and_notes(
     repo: Path,
 ) -> None:
+    """FND-4488: a chore(deps) merge must reach the gated head.
+
+    Before FND-4488 this skipped: same version, same notes, still merges
+    cleanly. But ``/gate-check`` tests the bump PR's head, so the release gate
+    ran on the old dependency while the merge shipped the new one.
+    """
     _merge_to_main(repo, "fix: a fix", {"app.py": "x = 2\n"})
     _publish_bump(repo, "1.0.1", "October 05, 2026", ["a fix"])
-    # A chore(deps) merge moves uv.lock on main; the next day's run rebuilds the
-    # same version and the same notes (chores are not rendered).
     _merge_to_main(
         repo, "chore(deps): bump dep", {"uv.lock": LOCK.format(v="1.0.0", dep="2.0")}
     )
@@ -139,12 +143,62 @@ def test_skips_a_renovate_chore_merge_that_changes_neither_version_nor_notes(
 
     push, reason = _decide("1.0.1")
 
+    assert push is True
+    assert "older base" in reason
+
+
+def test_reproduces_the_two_merges_seconds_apart_race(repo: Path) -> None:
+    """Lock maintenance and an SDK bump merge back to back; their runs queue.
+
+    The first run builds on the commit without the SDK bump and pushes. The
+    second, built on the commit with it, computes the same version and notes —
+    and must push, or the open release PR keeps the old SDK.
+    """
+    _merge_to_main(repo, "fix: a fix", {"app.py": "x = 2\n"})
+    _merge_to_main(
+        repo, "chore(deps): lock maintenance", {"app.py": "x = 2  # relocked\n"}
+    )
+    _publish_bump(repo, "1.0.1", "November 01, 2026", ["a fix"])  # run 1
+    _merge_to_main(
+        repo, "chore(deps): update sdk", {"uv.lock": LOCK.format(v="1.0.0", dep="3.0")}
+    )
+    _build_locally("1.0.1", "November 01, 2026", ["a fix"])  # run 2
+
+    push, reason = _decide("1.0.1")
+
+    assert push is True, reason
+    branch_lock = _git(repo, "show", f"origin/{BRANCH}:uv.lock")
+    assert 'version = "3.0"' not in branch_lock  # what run 2 must replace
+
+
+def test_skips_when_the_branch_is_built_on_this_runs_base(repo: Path) -> None:
+    _merge_to_main(repo, "fix: a fix", {"app.py": "x = 2\n"})
+    _publish_bump(repo, "1.0.1", "October 05, 2026", ["a fix"])
+    # A re-run of the same merge's bump, a day later: same base, same release.
+    _build_locally("1.0.1", "October 06, 2026", ["a fix"])
+
+    push, reason = _decide("1.0.1")
+
     assert push is False, reason
-    # And the stale branch really does combine with the new main: the bump's
-    # version edit and Renovate's dependency edit merge without conflict.
-    merged = _git(repo, "merge-tree", "--write-tree", "HEAD", f"origin/{BRANCH}")
-    lock = _git(repo, "show", f"{merged.splitlines()[0]}:uv.lock")
-    assert 'version = "1.0.1"' in lock and 'version = "2.0"' in lock
+    assert "base containing" in reason
+
+
+def test_skips_an_older_merges_run_that_arrives_after_a_newer_one(
+    repo: Path,
+) -> None:
+    """A run on an older base must not move the branch backwards."""
+    _merge_to_main(repo, "fix: a fix", {"app.py": "x = 2\n"})
+    older = _git(repo, "rev-parse", "HEAD")
+    _merge_to_main(
+        repo, "chore(deps): bump dep", {"uv.lock": LOCK.format(v="1.0.0", dep="2.0")}
+    )
+    _publish_bump(repo, "1.0.1", "October 06, 2026", ["a fix"])
+    _git(repo, "checkout", "-q", older)
+    _build_locally("1.0.1", "October 06, 2026", ["a fix"])
+
+    push, reason = _decide("1.0.1")
+
+    assert push is False, reason
 
 
 def test_pushes_when_a_feat_merge_turns_the_patch_into_a_minor(repo: Path) -> None:
@@ -169,7 +223,7 @@ def test_pushes_when_a_fix_merge_adds_a_release_note(repo: Path) -> None:
     assert "release notes" in reason
 
 
-def test_pushes_when_the_open_branch_no_longer_merges_cleanly(repo: Path) -> None:
+def test_pushes_when_the_open_branch_would_conflict_with_main(repo: Path) -> None:
     _publish_bump(repo, "1.0.1", "October 06, 2026", [])
     # A human edit to the same CHANGELOG lines the bump prepends conflicts.
     _merge_to_main(
@@ -184,7 +238,7 @@ def test_pushes_when_the_open_branch_no_longer_merges_cleanly(repo: Path) -> Non
     push, reason = _decide("1.0.1")
 
     assert push is True
-    assert "no longer merges cleanly" in reason
+    assert "older base" in reason
 
 
 def test_every_version_file_must_match(repo: Path) -> None:

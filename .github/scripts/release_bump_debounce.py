@@ -22,14 +22,19 @@ this run built. The branch is left alone when, against what is already on
   * the version in each version file is the same;
   * the CHANGELOG section for that version is the same, ignoring the date in
     its heading (the date moves every day and is not release content);
-  * the branch still merges cleanly onto the commit this run built on — a
-    branch that went CONFLICTING must be rebuilt, or the release wedges.
+  * the branch already contains the commit this run built on (FND-4488).
 
-Not pushing leaves the branch on an older base, which is safe: it only edits
-the version line(s), ``uv.lock``'s own-package version and the top of
-``CHANGELOG.md``, and the merge (and the e2e run on the ``e2e`` label, which
-tests the PR's merge ref) combines that with the current target. The
-mergeability check is what catches the case where it would not.
+The last condition keeps the branch's tree identical to what its merge ships.
+``/gate-check`` tests the bump PR's *head*, not its merge ref, so a branch left
+on an older base is gated on a tree that is not the one released: two Renovate
+merges seconds apart (lock maintenance, then an application-sdk bump) queued two
+runs, the first built on the older commit and pushed, and the second — built on
+the commit carrying the new SDK — matched version and notes and skipped, so the
+release gate tested the old SDK while the merge would ship the new one. A run
+whose base the branch already contains (the same base, or an older merge's run
+arriving after a newer one) still skips, so a burst never moves the branch
+backwards. A branch containing the base also merges onto it cleanly by
+construction, which is what the older merge-tree check here used to establish.
 
 Fails open: any check that cannot be made — the branch does not exist, a file is
 missing on it, git errors — resolves to ``push=true``, which is the behaviour
@@ -111,14 +116,13 @@ def changelog_section(text: str, version: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
-def merges_cleanly(onto: str, ref: str) -> bool:
-    """True when ``ref`` merges onto ``onto`` without conflicts.
+def contains(ref: str, commit: str) -> bool:
+    """True when ``commit`` is ``ref`` or one of its ancestors.
 
-    ``git merge-tree --write-tree`` (git >= 2.38) exits 0 on a clean merge and
-    1 on conflicts without touching the worktree or index. Any other outcome,
-    including an old git that does not know the flag, counts as "not clean".
+    ``git merge-base --is-ancestor`` exits 0 for yes and 1 for no; any other
+    outcome (an unknown commit, a git error) counts as "no", which pushes.
     """
-    return run(["git", "merge-tree", "--write-tree", onto, ref]).returncode == 0
+    return run(["git", "merge-base", "--is-ancestor", commit, ref]).returncode == 0
 
 
 def decide(
@@ -167,12 +171,15 @@ def decide(
     if built is None or published is None or built != published:
         return True, f"release notes for v{new_version} changed"
 
-    if not merges_cleanly(onto, remote):
-        return True, f"{remote} no longer merges cleanly onto {onto}"
+    if not contains(remote, onto):
+        return True, (
+            f"{remote} is built on an older base than this run's {onto} — "
+            "rebuilding so the gated head is what the merge ships"
+        )
 
     return False, (
         f"{remote} already carries v{new_version} with the same release notes "
-        "and still merges cleanly — not re-pushing"
+        f"on a base containing {onto} — not re-pushing"
     )
 
 
