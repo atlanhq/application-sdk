@@ -13,15 +13,21 @@ and Temporal doubles hand back real objects: what is being checked is how the
 poll reads a refused connection versus a 503, and a stub that returned whatever
 the code asked for could not tell those apart.
 
-Budgets here are deliberately tiny (sub-second) and real. Patching a global clock
-in an async test hands the same mock to the event loop's own timer, which
-produces flaky ``StopIteration`` failures that read as a bug in the code under
-test.
+Every wait here runs under
+:func:`~application_sdk.testing.harness._poll.fake_clock`, which swaps only the
+poll helper's own clock and sleeps — never :func:`time.monotonic` itself, which
+the asyncio event loop reads for its own timers (patching that process-wide
+produces spurious ``StopIteration`` flakes). It is not an optimisation. A real
+sub-second budget made every multi-attempt "settles" test a race between the
+scripted probe count and the runner: three probes and two 20ms gaps had to fit
+inside 120ms of wall time, and on a loaded 3-core macOS leg under xdist they did
+not, so the wait expired one probe short of the scripted 200. Under the fake
+clock the number of attempts a budget admits is arithmetic, not a measurement.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -38,6 +44,7 @@ from application_sdk.testing.harness import (
     Stalled,
     Verdict,
 )
+from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.preconditions import (
     GateReport,
     HealthReading,
@@ -57,9 +64,21 @@ from application_sdk.testing.harness.temporal import (
     WorkflowStatus,
 )
 
-# A budget small enough that a failing wait finishes inside a unit test, with a
-# real monotonic clock.
+# Six attempts on the fake clock: the sixth lands at 0.10s with 0.02s left,
+# which is ``is_last``. Small numbers are kept only so the arithmetic reads at a
+# glance; nothing here sleeps for real.
 FAST = Budget(timeout=timedelta(seconds=0.12), poll_interval=timedelta(seconds=0.02))
+
+
+@pytest.fixture(autouse=True)
+def _stepped_clock() -> Iterator[None]:
+    """Run every wait in this module on the poll helper's fake clock.
+
+    Autouse rather than per-test so a new "settles after N probes" test cannot
+    be added on the real clock by omission and reintroduce the race.
+    """
+    with fake_clock():
+        yield
 
 
 def _outcome(variant: type, label: str = "check") -> object:
