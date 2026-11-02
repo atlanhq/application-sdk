@@ -4,8 +4,9 @@
 ``build-and-publish-app.yaml`` certifies every app by running its
 ``tests/unit`` before publish. On one 2-vCPU runner a large suite outgrows the
 job's 30-minute cap, and publish waits on certify long after the image is
-built. This script holds the three decisions the sharded layout needs, out of
-the workflow's ``run:`` blocks (see ``docs/standards/ci.md``):
+built. This script holds the three decisions the sharded layout needs, so each
+branch has a test (``tests/test_certify_unit_shards.py``; see
+``docs/standards/ci.md``):
 
 ``plan``
     How many shards. An explicit ``--override`` wins; otherwise the app's
@@ -53,8 +54,10 @@ TARGET_SECONDS_PER_SHARD = 300.0
 #: is the floor, while every extra leg still bills its setup minute.
 MAX_SHARDS = 10
 
-#: pytest exits 5 when it collects nothing. A shard can legitimately be empty
-#: (more shards than tests), so that is a pass, not a failure.
+#: pytest exits 5 when it collects nothing. One shard of several can
+#: legitimately be empty (more shards than tests), so there it is a pass. With
+#: a single shard it means the whole suite collected nothing, which failed the
+#: gate before sharding and still does.
 PYTEST_NO_TESTS_COLLECTED = 5
 
 UNIT_TESTS_DIR = "tests/unit"
@@ -137,7 +140,8 @@ def run_shard(
         outcome = "skipped"
     else:
         code = runner(pytest_command(shard, total, coverage_source))
-        outcome = "success" if code in (0, PYTEST_NO_TESTS_COLLECTED) else "failure"
+        passing = (0, PYTEST_NO_TESTS_COLLECTED) if total > 1 else (0,)
+        outcome = "success" if code in passing else "failure"
         coverage_file = app_dir / ".coverage"
         if coverage_file.is_file():
             results_dir.mkdir(parents=True, exist_ok=True)
