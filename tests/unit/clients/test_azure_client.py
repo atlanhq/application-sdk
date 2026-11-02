@@ -1,5 +1,6 @@
 """Unit tests for Azure client."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -294,3 +295,63 @@ class TestAzureClientTeardown:
             client.credential = credential
 
         credential.close.assert_called_once_with()
+
+    async def test_close_does_not_hang_on_a_stuck_credential_close(self, monkeypatch):
+        """A credential close that never returns is abandoned at the bound."""
+        import threading
+
+        from application_sdk.clients.azure import client as client_mod
+
+        monkeypatch.setattr(client_mod, "_CREDENTIAL_CLOSE_TIMEOUT_SECONDS", 0.05)
+        release = threading.Event()
+        credential = MagicMock()
+        credential.close.side_effect = lambda: release.wait(5)
+        client = AzureClient()
+        client.credential = credential
+        client._connection_health = True
+
+        try:
+            await asyncio.wait_for(client.close(), timeout=2)
+        finally:
+            release.set()
+
+        assert client.credential is None
+        assert client._connection_health is False
+
+    async def test_close_during_credential_creation_closes_the_new_credential(self):
+        """A load() in flight when close() runs must not publish its credential."""
+        client = AzureClient()
+        credential = MagicMock()
+
+        async def _create(**_kwargs):
+            await client.close()  # close() lands while creation is awaited
+            return credential
+
+        client.auth_provider.create_credential = _create
+
+        from application_sdk.clients.azure.azure_errors import AzureClientAuthError
+
+        with pytest.raises(AzureClientAuthError):
+            await client.load({"tenant_id": "t", "client_id": "c"})
+
+        credential.close.assert_called_once_with()
+        assert client.credential is None
+        assert client._connection_health is False
+
+    async def test_close_during_connection_test_leaves_client_unhealthy(self):
+        client = AzureClient()
+        credential = MagicMock()
+        client.auth_provider.create_credential = AsyncMock(return_value=credential)
+
+        async def _test_then_close():
+            await client.close()
+
+        client._test_connection = _test_then_close
+
+        from application_sdk.clients.azure.azure_errors import AzureClientAuthError
+
+        with pytest.raises(AzureClientAuthError):
+            await client.load({"tenant_id": "t", "client_id": "c"})
+
+        credential.close.assert_called_once_with()
+        assert client._connection_health is False

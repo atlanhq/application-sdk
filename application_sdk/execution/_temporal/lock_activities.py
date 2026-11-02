@@ -6,6 +6,7 @@ deadlock timeout.
 """
 
 import random
+import uuid
 from typing import Any
 
 from temporalio import activity
@@ -32,12 +33,13 @@ def _acquire_token(owner_id: str) -> str:
     between scheduled activities, so ``owner_id:activity_id`` is.
 
     Outside an activity (a direct call) there is no retry to dedupe against,
-    and ``owner_id`` is returned unchanged.
+    so each call gets a fresh token: two direct acquires under one
+    ``owner_id`` must take two slots, not collapse into one.
     """
     try:
         activity_id = activity.info().activity_id
     except RuntimeError:
-        return owner_id
+        return f"{owner_id}:{uuid.uuid4()}"
     return f"{owner_id}:{activity_id}"
 
 

@@ -583,3 +583,18 @@ class TestAcquireDistributedLockIdempotent:
             result = await acquire_distributed_lock("res", 5, 60, "app:run-9")
 
         assert fake.data[result["resource_id"]] == result["owner_id"].encode()
+
+    async def test_direct_calls_with_one_owner_take_distinct_slots(self):
+        """Outside an activity there is no retry to dedupe: no slot sharing."""
+        from application_sdk.execution._temporal.lock_activities import (
+            acquire_distributed_lock,
+        )
+
+        fake = _FakeRedis()
+        with _patch_redis(fake), _patch_slots(0, 1):
+            first = await acquire_distributed_lock("res", 50, 60, "app:run-1")
+            second = await acquire_distributed_lock("res", 50, 60, "app:run-1")
+
+        assert first["resource_id"] != second["resource_id"]
+        assert first["owner_id"] != second["owner_id"]
+        assert len(fake.data) == 2
