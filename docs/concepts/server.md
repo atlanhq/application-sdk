@@ -104,10 +104,11 @@ because it also runs the contract's `field_validator`s. For the SQL templates
 those reject:
 
 - SQL-unsafe filter values;
-- include/exclude/temp-table patterns that no regex dialect compiles: an
-  unbalanced group or bracket, a reversed character range, or a trailing
-  backslash. Dialect-specific syntax (`\p{L}`, POSIX classes) is left for the
-  source to judge.
+- include/exclude/temp-table patterns that every engine the SQL templates
+  target rejects (POSIX ERE, PostgreSQL, ICU, RE2, Java): an unterminated `(`
+  or `[`, a reversed character range, or a trailing backslash. Syntax that only
+  some dialects accept (`\p{L}`, POSIX classes, a lone `)`) is left for the
+  source to judge. The error names the field and position, never the pattern.
 
 | Outcome | Status | Body |
 |---|---|---|

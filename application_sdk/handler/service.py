@@ -1052,7 +1052,9 @@ class _StartRequest(NamedTuple):
     explicit_workflow_id: str | None
 
 
-async def _parse_start_request(request: Request, app_name: str) -> _StartRequest:
+async def _parse_start_request(
+    request: Request, app_name: str, workflow_config: WorkflowClientConfig
+) -> _StartRequest:
     """Resolve and validate a ``/start`` body exactly as ``/start`` dispatches it.
 
     Shared by ``/start`` and ``/validate`` so the dry run cannot drift from the
@@ -1064,8 +1066,13 @@ async def _parse_start_request(request: Request, app_name: str) -> _StartRequest
     and :class:`~application_sdk.handler.request_contract.RequestContractError`
     (answered as a 422 naming the field) when the body is not a JSON object or
     does not fit the entry point's input contract.
+
+    *workflow_config* is the one captured when this service's routes were
+    registered, never the module global: a second service built in the same
+    process rebinds the global, and must not change which app this one
+    resolves against.
     """
-    app_cls = _workflow_config.app_class
+    app_cls = workflow_config.app_class
     if app_cls is None:
         raise HTTPException(status_code=503, detail="App class not provided.")
 
@@ -1095,7 +1102,7 @@ async def _parse_start_request(request: Request, app_name: str) -> _StartRequest
     # explicit @entrypoint(default=True), omitting ?entrypoint= dispatches the
     # alphabetically-first entry point by name instead of returning 400.
     _, ep = _resolve_app_entrypoint(
-        _workflow_config.app_name,
+        workflow_config.app_name,
         selected_entrypoint,
         allow_workflow_type=(
             entrypoint_param is None and legacy_workflow_type is not None
@@ -1123,7 +1130,7 @@ async def _parse_start_request(request: Request, app_name: str) -> _StartRequest
     input_data = _validate_request(input_type, body)
     return _StartRequest(
         ep=ep,
-        workflow_name=canonical_workflow_type(_workflow_config.app_name, ep),
+        workflow_name=canonical_workflow_type(workflow_config.app_name, ep),
         input_data=input_data,
         explicit_workflow_id=explicit_workflow_id,
     )
@@ -1140,10 +1147,14 @@ def _register_workflow_routes(
 ) -> None:
     """Register workflow lifecycle, manifest, input-contract, config, file,
     event, and dev-only routes on *app*."""
+    # Captured now: create_app_handler_service rebinds the module global per
+    # service, so reading it per request would resolve against whichever
+    # service was built last.
+    workflow_config = _workflow_config
 
     @app.post("/workflows/v1/start")
     async def start_workflow(request: Request) -> JSONResponse:
-        if not _workflow_config.is_configured():
+        if not workflow_config.is_configured():
             raise HTTPException(
                 status_code=503,
                 detail="Workflow execution not configured. Set ATLAN_TEMPORAL_HOST.",
@@ -1153,7 +1164,7 @@ def _register_workflow_routes(
         try:
             # Validated before the Temporal client is touched, so a malformed
             # configuration is rejected even when Temporal is unreachable.
-            parsed = await _parse_start_request(request, app_name)
+            parsed = await _parse_start_request(request, app_name, workflow_config)
             input_data = parsed.input_data
             explicit_workflow_id = parsed.explicit_workflow_id
             workflow_name = parsed.workflow_name
@@ -1193,18 +1204,18 @@ def _register_workflow_routes(
                 "Starting workflow: app=%s workflow_id=%s queue=%s",
                 app_name,
                 workflow_id,
-                _workflow_config.task_queue,
+                workflow_config.task_queue,
             )
 
             handle = await client.start_workflow(
                 workflow_name,
                 args=[input_data],
                 id=workflow_id,
-                task_queue=_workflow_config.task_queue,
+                task_queue=workflow_config.task_queue,
                 memo=corr_ctx.to_temporal_memo(),
                 execution_timeout=(
-                    timedelta(hours=_workflow_config.workflow_max_timeout_hours)
-                    if _workflow_config.workflow_max_timeout_hours
+                    timedelta(hours=workflow_config.workflow_max_timeout_hours)
+                    if workflow_config.workflow_max_timeout_hours
                     else None
                 ),
             )
@@ -1274,7 +1285,7 @@ def _register_workflow_routes(
         when it would not. Needs no Temporal connection.
         """
         try:
-            parsed = await _parse_start_request(request, app_name)
+            parsed = await _parse_start_request(request, app_name, workflow_config)
         except (HTTPException, _RequestContractError):
             raise
         except Exception as e:

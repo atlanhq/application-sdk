@@ -48,6 +48,10 @@ from application_sdk.handler.service import (
     _wrap_response,
     create_app_handler_service,
 )
+from application_sdk.templates.contracts.sql_metadata import (  # entry-point annotations resolve at module level
+    ExtractionInput,
+    ExtractionOutput,
+)
 
 # ---------------------------------------------------------------------------
 # Test Handler implementation
@@ -8514,6 +8518,70 @@ class TestValidateWorkflowConfig:
         response = self._client().post("/workflows/v1/validate", json=[1, 2])
 
         assert response.status_code == 422
+
+    def test_rejected_filter_pattern_is_not_echoed(self) -> None:
+        """A regex rejection names the field, never the pattern (no-echo)."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _ValidateFilterApp(App):
+            @entrypoint
+            async def run(self, input: ExtractionInput) -> ExtractionOutput:
+                return ExtractionOutput()
+
+        client = TestClient(
+            create_app_handler_service(
+                _TestHandler(),
+                app_name="validate-filter",
+                app_class=_ValidateFilterApp,
+            ),
+            raise_server_exceptions=False,
+        )
+        response = client.post(
+            "/workflows/v1/validate",
+            json={"include_filter": {"^db$": ["^SECRET_SCHEMA["]}},
+        )
+
+        assert response.status_code == 422
+        assert [d["field"] for d in response.json()["detail"]] == ["include_filter"]
+        assert "SECRET_SCHEMA" not in response.text
+
+    def test_each_service_resolves_against_its_own_app(self) -> None:
+        """A second service built in-process must not repoint the first.
+
+        ``create_app_handler_service`` rebinds the module-level workflow
+        config; the routes resolve against the config captured when their
+        own service was built.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _FirstServiceApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        class _SecondServiceApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        first = TestClient(
+            create_app_handler_service(
+                _TestHandler(), app_name="first-svc", app_class=_FirstServiceApp
+            ),
+            raise_server_exceptions=False,
+        )
+        before = first.post("/workflows/v1/validate", json={}).json()
+        create_app_handler_service(
+            _TestHandler(), app_name="second-svc", app_class=_SecondServiceApp
+        )
+
+        response = first.post("/workflows/v1/validate", json={})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"] == before["data"]
+        assert response.json()["data"]["entrypoint"] == "run"
 
 
 class TestManifestPostTransport:

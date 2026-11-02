@@ -12,18 +12,19 @@ from application_sdk.common.sql_filters import validate_filter_regex_syntax
 @pytest.mark.parametrize(
     ("pattern", "reason"),
     [
-        ("^db(", "unterminated subpattern"),
-        ("db)", "unbalanced parenthesis"),
-        ("[a-", "unterminated character set"),
-        ("[z-a]", "bad character range"),
-        ("abc\\", "bad escape (end of pattern)"),
+        ("^db(", "unterminated group"),
+        ("[a-", "unterminated character class"),
+        ("[z-a]", "reversed character range"),
+        ("abc\\", "trailing backslash"),
     ],
 )
 def test_structurally_broken_pattern_is_rejected(pattern: str, reason: str) -> None:
     with pytest.raises(ValueError, match="Invalid regex in filter value") as exc:
         validate_filter_regex_syntax(pattern)
     assert reason in str(exc.value)
-    assert repr(pattern) in str(exc.value)
+    # The message reaches the caller's 422 body: it never quotes the pattern.
+    assert pattern not in str(exc.value)
+    assert "z-a" not in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -37,6 +38,7 @@ def test_structurally_broken_pattern_is_rejected(pattern: str, reason: str) -> N
         "[[:alpha:]]+",  # POSIX class; re only warns
         "a++",
         "*abc",  # undefined in POSIX ERE, literal in some engines
+        "db)",  # a lone ")" is a literal in some ERE implementations
         '{"^qa$": ["^public$"]}',  # JSON-encoded filter map
         "{not json",  # malformed envelope is the injection check's call
     ],
@@ -46,22 +48,22 @@ def test_dialect_specific_or_valid_pattern_passes(pattern: str) -> None:
 
 
 def test_filter_map_key_is_checked() -> None:
-    with pytest.raises(ValueError, match="filter key '\\^db\\('"):
+    with pytest.raises(ValueError, match="filter key: unterminated group"):
         validate_filter_regex_syntax({"^db(": ["^public$"]})
 
 
 def test_filter_map_value_is_checked() -> None:
-    with pytest.raises(ValueError, match="filter value '\\[a-'"):
+    with pytest.raises(ValueError, match="filter value: unterminated character class"):
         validate_filter_regex_syntax({"^db$": ["^ok$", "[a-"]})
 
 
 def test_apitree_nested_key_is_checked() -> None:
-    with pytest.raises(ValueError, match="filter key '\\^s\\('"):
+    with pytest.raises(ValueError, match="filter key: unterminated group"):
         validate_filter_regex_syntax({"^db$": {"^s(": {}}})
 
 
 def test_json_encoded_filter_map_is_checked() -> None:
-    with pytest.raises(ValueError, match="filter key '\\^db\\('"):
+    with pytest.raises(ValueError, match="filter key: unterminated group"):
         validate_filter_regex_syntax('{"^db(": ["^public$"]}')
 
 

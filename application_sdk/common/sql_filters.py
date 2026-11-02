@@ -233,22 +233,30 @@ def validate_filter_no_sql_injection(v: Any) -> Any:
 # ---------------------------------------------------------------------------
 # Structural regex check at submission time (FND-501).
 #
-# Filter patterns are evaluated by the *source's* regex engine (POSIX, Java,
-# RE2, ICU, ...), not by Python's ``re``, so a Python compile failure alone is
-# not a verdict: ``\p{L}`` or ``(?<name>...)`` are valid in some dialects and
-# rejected by ``re``. Only the failures below are refused — each one is a
-# pattern no regex dialect accepts, so the workflow would otherwise be
-# accepted and then fail at engine time. Allowlisted by ``re.error.msg``
-# prefix; anything else Python rejects passes through to the source.
+# Filter patterns are evaluated by the *source's* regex engine, not by
+# Python's ``re``, so a Python compile failure alone is not a verdict:
+# ``\p{L}`` or ``(?<name>...)`` are valid in some dialects and rejected by
+# ``re``. Only the failures below are refused. Each is an error in every
+# engine the SQL templates render filters into -- POSIX ERE (Snowflake,
+# Redshift, Oracle), PostgreSQL ARE, ICU (MySQL 8), RE2 (BigQuery) and Java
+# -- so the workflow would otherwise be accepted and then fail at engine
+# time. A lone ``)`` is deliberately absent: POSIX leaves it undefined in an
+# ERE and some implementations read it as a literal. Allowlisted by
+# ``re.error.msg`` prefix; anything else Python rejects passes through to the
+# source.
+#
+# The message names the field position and a fixed description, never the
+# pattern itself or ``re``'s own text (``bad character range z-a`` quotes
+# it): this message reaches the caller in the 422 body, and the no-echo rule
+# there covers text embedded in a validator's message too.
 # ---------------------------------------------------------------------------
 
-_DIALECT_INDEPENDENT_REGEX_ERRORS: tuple[str, ...] = (
-    "missing ), unterminated subpattern",
-    "unbalanced parenthesis",
-    "unterminated character set",
-    "bad character range",
-    "bad escape (end of pattern)",
-)
+_DIALECT_INDEPENDENT_REGEX_ERRORS: dict[str, str] = {
+    "missing ), unterminated subpattern": "unterminated group '('",
+    "unterminated character set": "unterminated character class '['",
+    "bad character range": "reversed character range",
+    "bad escape (end of pattern)": "trailing backslash",
+}
 
 
 def _check_regex_structure(label: str, pattern: str) -> None:
@@ -259,12 +267,13 @@ def _check_regex_structure(label: str, pattern: str) -> None:
             warnings.simplefilter("ignore")
             re.compile(pattern)
     except re.error as e:
-        if e.msg.startswith(_DIALECT_INDEPENDENT_REGEX_ERRORS):
-            # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
-            raise ValueError(
-                f"Invalid regex in filter {label} {pattern!r}: {e.msg}"
-                f" at position {e.pos}"
-            ) from None
+        for prefix, description in _DIALECT_INDEPENDENT_REGEX_ERRORS.items():
+            if e.msg.startswith(prefix):
+                # conformance: ignore[E012] Pydantic @field_validator requires ValueError to collect validation errors; any other type bypasses Pydantic's error collection and propagates raw, breaking model instantiation for all callers
+                raise ValueError(
+                    f"Invalid regex in filter {label}: {description}"
+                    f" at position {e.pos}"
+                ) from None
 
 
 def validate_filter_regex_syntax(v: Any) -> Any:
@@ -273,8 +282,8 @@ def validate_filter_regex_syntax(v: Any) -> Any:
     Walks the same shapes as :func:`validate_filter_no_sql_injection` — a raw
     regex string, a JSON-encoded filter-map string, or a ``FilterMap`` /
     APITree dict (keys and string values) — and raises ``ValueError`` on an
-    unbalanced group or bracket, a reversed character range, or a trailing
-    backslash, so the workflow is rejected at submission instead of failing
+    unterminated group or character class, a reversed character range, or a
+    trailing backslash, so the workflow is rejected at submission instead of failing
     at engine time. Dialect-specific syntax Python's ``re`` does not know is
     left for the source to judge (see ``_DIALECT_INDEPENDENT_REGEX_ERRORS``).
 
