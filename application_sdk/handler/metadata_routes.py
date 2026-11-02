@@ -57,7 +57,12 @@ from application_sdk.handler.context import (
     SecretStore,
     bind_handler_context,
 )
-from application_sdk.handler.contracts import ManifestInput
+from application_sdk.handler.contracts import ManifestInput, normalize_credentials
+from application_sdk.handler.request_contract import (
+    RequestContractError,
+    read_json_object,
+    validate_request,
+)
 from application_sdk.handler.routes import (
     _ENTRYPOINT_NAME_RE,
     _http_error_boundary,
@@ -225,6 +230,9 @@ class MetadataSource:
         programmatic_manifest: An ``AppManifest`` built in Python, served when
             no entry point is named.
         log: The logger the routes report through.
+        normalize_body: Converts a v2 credential shape in a ``/validate`` body
+            to the v3 list before the credentials are stripped. The worker
+            passes its own, which honours connector-extended credential keys.
         max_fe_inputs_bytes: The GET ``fe_inputs`` cap.
         from_process_env: Whether this process's own ``ATLAN_APPLICATION_NAME``
             / ``ATLAN_DEPLOYMENT_NAME`` describe this app. ``False`` on the
@@ -245,6 +253,7 @@ class MetadataSource:
     )
     programmatic_manifest: Any = None
     log: Callable[[], Any] = lambda: logger
+    normalize_body: Callable[[dict[str, Any]], dict[str, Any]] = normalize_credentials
     max_fe_inputs_bytes: Callable[[], int] = lambda: MAX_FE_INPUTS_BYTES
     from_process_env: bool = True
 
@@ -304,7 +313,7 @@ def _redacted(exc: HTTPException) -> HTTPException:
 
 
 def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
-    """Register the configmap, manifest and input-contract routes on *app*."""
+    """Register the configmap, manifest, input-contract and validate routes on *app*."""
 
     def _default_entrypoint(log: Any, context: str) -> str | None:
         """The default entry point, or ``None`` (logged) when there is none."""
@@ -739,17 +748,79 @@ def register_metadata_routes(app: FastAPI, source: MetadataSource) -> None:
         ``?entrypoint=`` selects it; a single-entry-point app resolves
         automatically; a multi-entry-point app requires the param.
         """
-        if entrypoint is not None and not _ENTRYPOINT_NAME_RE.match(entrypoint):
-            raise HTTPException(status_code=400, detail="Invalid entrypoint name")
-        if source.input_contract is not None:
-            contract = source.input_contract(entrypoint)
-        else:
-            contract = tree_input_contract(
-                source.generated_dir(), source.app_package, entrypoint
-            )
+        contract = _resolve_input_contract(entrypoint)
         return Response(
             content=orjson.dumps(contract.model_json_schema()),
             media_type="application/json",
+        )
+
+    def _resolve_input_contract(entrypoint: str | None) -> Any:
+        """The entry point's input model: one resolution for both routes.
+
+        ``/validate`` judges a body against exactly the model ``/input-contract``
+        publishes, so the schema a caller reads and the verdict it gets
+        cannot drift apart.
+        """
+        if entrypoint is not None and not _ENTRYPOINT_NAME_RE.match(entrypoint):
+            raise HTTPException(status_code=400, detail="Invalid entrypoint name")
+        if source.input_contract is not None:
+            return source.input_contract(entrypoint)
+        return tree_input_contract(
+            source.generated_dir(), source.app_package, entrypoint
+        )
+
+    # ------------------------------------------------------------------
+    # Validate (FND-501)
+    # ------------------------------------------------------------------
+
+    @app.post("/workflows/v1/validate")
+    async def validate_workflow_config(
+        request: Request, entrypoint: str | None = None
+    ) -> JSONResponse:
+        """Validate a workflow configuration at submission; start nothing.
+
+        Judges the body a workflow will be started with against the entry
+        point's published input contract -- the model ``/input-contract``
+        serves, *including* its ``field_validator``\\ s, which that JSON Schema
+        cannot express -- so a caller creating a workflow rejects a
+        configuration the runtime cannot execute before it is persisted,
+        not at engine time. Served by the worker and the consolidated API
+        host alike, so it needs neither Temporal nor the app's worker.
+
+        Answers 200 when the body fits, and 422 naming each offending field
+        (never echoing a value) when it does not. Inline credentials are
+        normalised and stripped first, as ``/start`` does: they are never
+        part of a workflow's configuration.
+        """
+        contract = _resolve_input_contract(entrypoint)
+        body = source.normalize_body(await read_json_object(request))
+        for key in ("credentials", "workflow_id", "workflow_type"):
+            body.pop(key, None)
+        try:
+            validate_request(contract, body)
+        except RequestContractError:
+            raise
+        except Exception as exc:
+            # A validator that crashes instead of raising ValueError is the
+            # contract's bug, not the caller's: a sanitized 500.
+            source.log().error(
+                "Failed to validate workflow configuration for app %s: %s",
+                source.app_name(),
+                exc,
+                exc_info=True,
+            )
+            raise HTTPException(
+                status_code=500, detail="Failed to validate workflow configuration"
+            ) from None
+        resolved = entrypoint or _default_entrypoint(
+            source.log(), "No default entry point for app %s"
+        )
+        return JSONResponse(
+            content={
+                "success": True,
+                "message": "Workflow configuration is valid",
+                "data": {"entrypoint": resolved or None},
+            }
         )
 
 

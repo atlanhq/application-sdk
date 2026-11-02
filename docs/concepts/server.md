@@ -71,7 +71,7 @@ All routes registered by `create_app_handler_service()`:
 | `/workflows/v1/check` | POST | Run preflight connectivity checks |
 | `/workflows/v1/metadata` | POST | Browse source metadata (schemas, tables) |
 | `/workflows/v1/start` | POST | Start a workflow run (use `?entrypoint=<name>` for multi-entry-point apps) |
-| `/workflows/v1/validate` | POST | Dry-run `/start`: validate a workflow configuration against the entry point's input contract without starting anything (see [Validating a workflow configuration](#validating-a-workflow-configuration)) |
+| `/workflows/v1/validate` | POST | Validate a workflow configuration against the entry point's published input contract, without starting anything. Also served by the consolidated API host (see [Validating a workflow configuration](#validating-a-workflow-configuration)) |
 | `/workflows/v1/stop/{workflow_id}/{run_id}` | POST | Terminate a running workflow |
 | `/workflows/v1/result/{workflow_id}` | GET | Fetch the final result of a completed workflow |
 | `/workflows/v1/status/{workflow_id}/{run_id}` | GET | Poll workflow execution status |
@@ -93,15 +93,19 @@ All routes registered by `create_app_handler_service()`:
 
 ## Validating a workflow configuration
 
-`POST /workflows/v1/validate` takes the same body and `?entrypoint=` as
-`/workflows/v1/start` and runs the same resolution, credential stripping and
-input-contract validation, then stops. It needs no Temporal connection. Call it
+`POST /workflows/v1/validate?entrypoint=<name>` checks the body a workflow will
+be started with against the entry point's **published** input contract, then
+stops. That is the same model `GET /workflows/v1/input-contract` serves. Call it
 when a workflow is created, so a configuration the runtime cannot execute is
 rejected at submission instead of failing at engine time.
 
-It goes further than the JSON Schema served by `/workflows/v1/input-contract`,
-because it also runs the contract's `field_validator`s. For the SQL templates
-those reject:
+It lives with the metadata routes, so it ships in `atlan-application-sdk-api`.
+The consolidated API host serves it from the app's generated contract, and so
+does the worker, which resolves the same contract. It needs no Temporal
+connection and no running worker.
+
+It goes further than the JSON Schema, because it also runs the contract's
+`field_validator`s. For the SQL templates those reject:
 
 - SQL-unsafe filter values;
 - include/exclude/temp-table patterns that every engine the SQL templates
@@ -110,15 +114,20 @@ those reject:
   some dialects accept (`\p{L}`, POSIX classes, a lone `)`) is left for the
   source to judge. The error names the field and position, never the pattern.
 
+Inline `credentials` (v2 or v3 shape) and `workflow_id` / `workflow_type` are
+stripped before validation, as `/start` does. They are never part of a
+workflow's configuration.
+
 | Outcome | Status | Body |
 |---|---|---|
-| `/start` would accept the body | 200 | `{"success": true, "data": {"entrypoint", "workflow_type"}}` |
+| The body fits the contract | 200 | `{"success": true, "data": {"entrypoint"}}` |
 | The body does not fit the contract, or is not a JSON object | 422 | `{"success": false, "message": "Invalid request: <fields>", "detail": [{"field", "message", "type"}]}` |
-| Unknown `?entrypoint=` | 400 | |
+| Invalid `?entrypoint=` name / several entry points and none named | 400 | |
+| Unknown `?entrypoint=` | 404 | |
 
-`/workflows/v1/start` answers the same 422 for the same body, before it touches
-Temporal. The rejected value is never echoed back, because it can be a
-credential.
+The rejected value is never echoed back, because it can be a credential.
+`/workflows/v1/start` (worker only) answers the same 422 shape when its body
+does not fit the entry point's input type, before it touches Temporal.
 
 ## MCP Server Integration
 

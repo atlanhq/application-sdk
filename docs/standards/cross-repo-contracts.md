@@ -359,17 +359,18 @@ marker now appears on ordinary runs, not only with storage verification opted in
 
 | | |
 |---|---|
-| **Produced by** | `_parse_start_request()` in `application_sdk/handler/service.py`, shared by `POST /workflows/v1/validate` and `POST /workflows/v1/start`; the 422 body is built by the `RequestContractError` handler in `application_sdk/handler/routes.py` |
-| **Served at** | `POST /workflows/v1/validate?entrypoint=<name>` (200 or 422, never dispatches), and the same 422 from `POST /workflows/v1/start` |
-| **Key** | 422: `success: false`, `message`, `detail[]` of `{field, message, type}`. `field` is the dotted pydantic location; the rejected value is never included |
-| **Read by** | Workflow creation callers (Heracles), which call `/validate` with the body they will later send to `/start`, and surface `detail[]` to the user |
-| **Pinned by** | `TestValidateWorkflowConfig` and `test_start_contract_misfit_answers_422_naming_the_field` in `tests/unit/handler/test_service.py` |
+| **Produced by** | `validate_workflow_config` in `register_metadata_routes()` (`application_sdk/handler/metadata_routes.py`, in the api distribution), which resolves the contract through the same `_resolve_input_contract` as `/input-contract`; `/start`'s 422 comes from `_parse_start_request()` in `application_sdk/handler/service.py`. Both 422 bodies are built by the `RequestContractError` handler in `application_sdk/handler/routes.py` |
+| **Served at** | `POST /workflows/v1/validate?entrypoint=<name>` on the consolidated API host and on the worker (200 or 422, never dispatches), and the same 422 shape from the worker's `POST /workflows/v1/start` |
+| **Key** | 422: `success: false`, `message`, `detail[]` of `{field, message, type}`. `field` is the dotted pydantic location (a missing required field has `type: "missing"`); the rejected value is never included |
+| **Read by** | Workflow creation callers (Heracles), which call `/validate` on the API host with the body they will later send to `/start`, and surface `detail[]` to the user |
+| **Pinned by** | `tests/unit/handler/test_validate_route_host.py` (host), `TestValidateWorkflowConfig` and `test_start_contract_misfit_answers_422_naming_the_field` in `tests/unit/handler/test_service.py` (worker) |
 
-`/validate` and `/start` share one parser, so a body `/validate` accepts is one
-`/start` accepts. Don't give either route its own normalisation. A caller must
-treat 422 as final: the same body never succeeds on retry. Before FND-501,
-`/start` answered these as 500 "Failed to start workflow", so a caller that
-retried 5xx retried them uselessly.
+`/validate` judges the body against the **published** contract, the model
+`/input-contract` serves. The schema a caller reads and the verdict it gets
+come from one resolution, so they cannot drift. Don't give `/validate` its own
+contract lookup. A caller must treat 422 as final: the same body never succeeds
+on retry. Before FND-501, `/start` answered these as 500 "Failed to start
+workflow", so a caller that retried 5xx retried them uselessly.
 
 ## The preflight-results write route
 

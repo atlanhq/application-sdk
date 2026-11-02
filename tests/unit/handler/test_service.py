@@ -8512,7 +8512,8 @@ class TestValidateWorkflowConfig:
             "/workflows/v1/validate?entrypoint=no-such-entrypoint", json={}
         )
 
-        assert response.status_code == 400
+        # Same resolution, and so the same answer, as /input-contract.
+        assert response.status_code == 404
 
     def test_non_object_body_answers_422(self) -> None:
         response = self._client().post("/workflows/v1/validate", json=[1, 2])

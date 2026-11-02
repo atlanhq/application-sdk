@@ -1055,12 +1055,11 @@ class _StartRequest(NamedTuple):
 async def _parse_start_request(
     request: Request, app_name: str, workflow_config: WorkflowClientConfig
 ) -> _StartRequest:
-    """Resolve and validate a ``/start`` body exactly as ``/start`` dispatches it.
+    """Resolve and validate a ``/start`` body against its entry point's input type.
 
-    Shared by ``/start`` and ``/validate`` so the dry run cannot drift from the
-    real submission: same entry-point selection, same credential stripping,
-    same input contract (including its ``field_validator``\\ s, which the JSON
-    Schema served by ``/input-contract`` cannot express).
+    Submission-time validation is ``/workflows/v1/validate`` (in
+    :mod:`application_sdk.handler.metadata_routes`, served by the API host as
+    well); this is ``/start``'s own last line, answering the same 422 shape.
 
     Raises ``HTTPException`` for a missing app class or an unknown entry point,
     and :class:`~application_sdk.handler.request_contract.RequestContractError`
@@ -1272,42 +1271,6 @@ def _register_workflow_routes(
             raise HTTPException(
                 status_code=500, detail="Failed to start workflow"
             ) from None
-
-    @app.post("/workflows/v1/validate")
-    async def validate_workflow(request: Request) -> JSONResponse:
-        """Dry-run ``/start``: validate a workflow configuration, start nothing.
-
-        Takes the body and ``?entrypoint=`` that ``/start`` takes and runs the
-        same resolution and input-contract validation, so a caller creating a
-        workflow can reject a configuration the runtime cannot execute at
-        submission time instead of at engine time. Answers 200 when ``/start``
-        would accept the body, and the same 422 naming each offending field
-        when it would not. Needs no Temporal connection.
-        """
-        try:
-            parsed = await _parse_start_request(request, app_name, workflow_config)
-        except (HTTPException, _RequestContractError):
-            raise
-        except Exception as e:
-            logger.error(
-                "Failed to validate workflow configuration for app %s: %s",
-                app_name,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Failed to validate workflow configuration"
-            ) from None
-        return JSONResponse(
-            content={
-                "success": True,
-                "message": "Workflow configuration is valid",
-                "data": {
-                    "entrypoint": parsed.ep.name,
-                    "workflow_type": parsed.workflow_name,
-                },
-            }
-        )
 
     @app.post("/workflows/v1/stop/{workflow_id}/{run_id:path}")
     async def stop_workflow(workflow_id: str, run_id: str) -> JSONResponse:
@@ -1792,7 +1755,7 @@ def _register_workflow_routes(
 
     def _registry_default_entrypoint() -> str:
         _, ep = _resolve_app_entrypoint(
-            _workflow_config.app_name, None, unknown_ep_status=404
+            workflow_config.app_name, None, unknown_ep_status=404
         )
         return ep.name
 
@@ -1808,7 +1771,7 @@ def _register_workflow_routes(
         )
 
         try:
-            app_meta = AppRegistry.get_instance().get(_workflow_config.app_name)
+            app_meta = AppRegistry.get_instance().get(workflow_config.app_name)
         except AppNotFoundError:
             return []
         return [
@@ -1820,7 +1783,7 @@ def _register_workflow_routes(
     def _registry_input_contract(entrypoint: str | None) -> Any:
         try:
             _, ep = _resolve_app_entrypoint(
-                _workflow_config.app_name, entrypoint, unknown_ep_status=404
+                workflow_config.app_name, entrypoint, unknown_ep_status=404
             )
         except HTTPException as exc:
             # Registry miss — the entry point may be a *marketplace* (bundle)
@@ -1846,7 +1809,7 @@ def _register_workflow_routes(
     # the other handler operations.
     handler_manifest = handler_compute_manifest(
         handler,
-        lambda: _workflow_config.app_name or app_name,
+        lambda: workflow_config.app_name or app_name,
         secret_store=_secret_store,
     )
 
@@ -1856,9 +1819,9 @@ def _register_workflow_routes(
         app,
         MetadataSource(
             generated_dir=lambda: CONTRACT_GENERATED_DIR,
-            app_name=lambda: _workflow_config.app_name,
+            app_name=lambda: workflow_config.app_name,
             fallback_app_name=app_name,
-            task_queue=lambda: _workflow_config.task_queue,
+            task_queue=lambda: workflow_config.task_queue,
             deployment_name=lambda: DEPLOYMENT_NAME,
             default_entrypoint=_registry_default_entrypoint,
             explicit_entrypoints=_registry_explicit_entrypoints,
@@ -1869,6 +1832,7 @@ def _register_workflow_routes(
             programmatic_manifest=manifest,
             log=lambda: logger,
             max_fe_inputs_bytes=lambda: _MAX_FE_INPUTS_BYTES,
+            normalize_body=_worker_normalize,
         ),
     )
 
