@@ -298,12 +298,7 @@ def test_available_cpus_floors_the_quota(tmp_path, monkeypatch, cpu_max, expecte
     monkeypatch.setattr(
         runtime_cgroup, "CPU_MAX_V2", _write(tmp_path, "cpu.max", cpu_max)
     )
-    monkeypatch.setattr(
-        runtime_cgroup.os,
-        "sched_getaffinity",
-        lambda _pid: set(range(64)),
-        raising=False,
-    )
+    monkeypatch.setattr(runtime_cgroup, "_affinity_count", lambda: 64)
     assert runtime_cgroup.available_cpus() == expected
 
 
@@ -312,9 +307,7 @@ def test_available_cpus_without_a_quota_is_the_affinity_count(tmp_path, monkeypa
         runtime_cgroup, "CPU_MAX_V2", _write(tmp_path, "cpu.max", "max 100000")
     )
     monkeypatch.setattr(runtime_cgroup, "CPU_QUOTA_V1", str(tmp_path / "absent"))
-    monkeypatch.setattr(
-        runtime_cgroup.os, "sched_getaffinity", lambda _pid: {0, 1, 2}, raising=False
-    )
+    monkeypatch.setattr(runtime_cgroup, "_affinity_count", lambda: 3)
     assert runtime_cgroup.available_cpus() == 3
 
 
@@ -322,7 +315,5 @@ def test_available_cpus_never_exceeds_affinity(tmp_path, monkeypatch):
     monkeypatch.setattr(
         runtime_cgroup, "CPU_MAX_V2", _write(tmp_path, "cpu.max", "800000 100000")
     )
-    monkeypatch.setattr(
-        runtime_cgroup.os, "sched_getaffinity", lambda _pid: {0, 1}, raising=False
-    )
+    monkeypatch.setattr(runtime_cgroup, "_affinity_count", lambda: 2)
     assert runtime_cgroup.available_cpus() == 2

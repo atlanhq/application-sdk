@@ -73,6 +73,15 @@ def cpu_quota_cores(cpu_max_v2: str, quota_v1: str, period_v1: str) -> float | N
     return None
 
 
+def _affinity_count() -> int:
+    """CPUs in this process's affinity mask, or the node's count without one."""
+    try:
+        return len(os.sched_getaffinity(0)) or 1  # type: ignore[attr-defined]
+    except AttributeError:
+        # No affinity API (macOS, Windows): the node's count is all there is.
+        return os.cpu_count() or 1
+
+
 def available_cpus() -> int:
     """Whole CPUs this process may use: the tighter of affinity and the CFS quota.
 
@@ -80,11 +89,7 @@ def available_cpus() -> int:
     to the rounded-up figure would run more CPU-bound children than the quota
     can schedule at once, and the extra ones only add memory and throttling.
     """
-    try:
-        cpus = len(os.sched_getaffinity(0)) or 1  # type: ignore[attr-defined]
-    except AttributeError:
-        # No affinity API (macOS, Windows): the node's count is all there is.
-        cpus = os.cpu_count() or 1
+    cpus = _affinity_count()
     quota = cpu_quota_cores(CPU_MAX_V2, CPU_QUOTA_V1, CPU_PERIOD_V1)
     if quota is not None:
         cpus = min(cpus, max(1, math.floor(quota)))
