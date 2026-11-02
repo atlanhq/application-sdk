@@ -89,7 +89,9 @@ class BaseClient(ClientInterface):
             ...         }
             ...         # Optionally override retry transport with custom configuration
             ...         # For advanced retry logic with status code handling, use httpx-retries:
+            ...         # import httpx
             ...         # from httpx_retries import Retry, RetryTransport
+            ...         # from application_sdk.clients import get_ssl_context
             ...         # retry = Retry(total=5, backoff_factor=20)
             ...         # self.http_retry_transport = RetryTransport(
             ...         #     retry=retry,
@@ -106,7 +108,9 @@ class BaseClient(ClientInterface):
             ...         self.http_headers = {"Authorization": f"Bearer {kwargs.get('token')}"}
             ...
             ...         # Install httpx-retries: pip install httpx-retries
+            ...         import httpx
             ...         from httpx_retries import Retry, RetryTransport
+            ...         from application_sdk.clients import get_ssl_context
             ...
             ...         # Configure retry for status codes and network errors
             ...         retry = Retry(
@@ -221,9 +225,15 @@ class BaseClient(ClientInterface):
             ...     self.http_headers = {"Authorization": f"Bearer {kwargs.get('token')}"}
             ...
             ...     # For advanced retry logic, install httpx-retries: pip install httpx-retries
+            ...     import httpx
             ...     from httpx_retries import Retry, RetryTransport
+            ...     from application_sdk.clients import get_ssl_context
             ...     retry = Retry(total=5, backoff_factor=10, status_forcelist=[429, 500, 502, 503, 504])
-            ...     self.http_retry_transport = RetryTransport(retry=retry)
+            ...     # The replacement transport owns TLS verification.
+            ...     self.http_retry_transport = RetryTransport(
+            ...         retry=retry,
+            ...         transport=httpx.AsyncHTTPTransport(verify=get_ssl_context()),
+            ...     )
 
         Args:
             **kwargs: Additional keyword arguments, typically including credentials.

@@ -170,7 +170,9 @@ class MyApiClient(BaseClient):
         }
 
         # Optionally set up custom retry transport for advanced retry logic
+        # import httpx
         # from httpx_retries import Retry, RetryTransport
+        # from application_sdk.clients import get_ssl_context
         # retry = Retry(total=5, backoff_factor=10, status_forcelist=[429, 500, 502, 503, 504])
         # self.http_retry_transport = RetryTransport(
         #     retry=retry,
@@ -211,7 +213,10 @@ class MyApiClient(BaseClient):
         self.http_headers = {"Authorization": f"Bearer {kwargs.get('token')}"}
 
         # Install httpx-retries: pip install httpx-retries
+        import httpx
         from httpx_retries import Retry, RetryTransport
+
+        from application_sdk.clients import get_ssl_context
 
         # Configure retry for status codes and network errors
         retry = Retry(
