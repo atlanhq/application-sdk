@@ -371,17 +371,22 @@ def credential_gaps(
     """
     if entrypoint is None:
         return []
-    # Build the form path only from a name the generated tree itself lists
-    # (or "" for the app-level form), never from the request's string: the
-    # route checked the name already, but that guard lives elsewhere and a
-    # path must not depend on it staying in front of this call.
-    known = next(
-        (name for name in ("", *tree_entrypoints(generated_dir)) if name == entrypoint),
+    # Never build a path from the request's string: the route checked the
+    # name already, but that guard lives elsewhere. A nested entry point's
+    # directory comes from the tree's own listing; every other name -- the
+    # app-level "" or a registry entry point of a flat tree (F-af7cdf) --
+    # reads the flat forms at the root, where the name only picks a file by
+    # stem, as entrypoint_form's own fallback does.
+    nested = next(
+        (name for name in tree_entrypoints(generated_dir) if name == entrypoint),
         None,
     )
-    if known is None:
-        return []
-    form_path, _ = entrypoint_form(generated_dir, known)
+    if nested is not None:
+        form_path, _ = entrypoint_form(generated_dir, nested)
+    else:
+        form_path = choose_form_configmap(
+            eligible_form_configmaps(generated_dir), entrypoint
+        )
     workflow_form = load_form(form_path)
     slots = credential_slots(workflow_form) if workflow_form is not None else []
     gaps: list[tuple[str, ...]] = []

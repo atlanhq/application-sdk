@@ -237,3 +237,28 @@ def test_credential_gaps_resolves_a_listed_entrypoint() -> None:
     workflow = ExtractionInput.model_validate({"credential_guid": "guid-1"})
     gaps = credential_gaps(_FIXTURE, "crawler", pairs, workflow)
     assert ("credentials", "extra", "atlan_oauth_id") in gaps
+
+
+@pytest.fixture
+def flat_tree(tmp_path: Path) -> Path:
+    """The same forms in the flat (single-entry-point) layout."""
+    shutil.copy(_FIXTURE / "atlan-connectors-bigquery.json", tmp_path)
+    shutil.copy(_FIXTURE / "crawler" / "bigquery-crawler.json", tmp_path)
+    (tmp_path / "manifest.json").write_text("{}")
+    return tmp_path
+
+
+@pytest.mark.parametrize("entrypoint", ["crawler", ""])
+def test_flat_tree_entrypoint_still_gets_credential_checks(
+    flat_tree: Path, entrypoint: str
+) -> None:
+    """lens F-af7cdf: a registry entry point of a flat tree reads the root form."""
+    from application_sdk.handler.metadata_routes import credential_gaps
+    from application_sdk.templates.contracts import ExtractionInput
+
+    pairs = [{"key": "authType", "value": "gcp-wif"}]
+    workflow = ExtractionInput.model_validate({"extraction_method": "direct"})
+    gaps = credential_gaps(flat_tree, entrypoint, pairs, workflow)
+
+    assert ("credentials", "extra", "atlan_oauth_id") in gaps
+    assert ("credential_guid",) in gaps
