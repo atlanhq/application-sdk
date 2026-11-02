@@ -294,7 +294,12 @@ def _load_json(path: Path) -> Mapping[str, Any] | None:
     try:
         loaded = orjson.loads(path.read_bytes())
     except (OSError, orjson.JSONDecodeError):
-        logger.warning("Unreadable generated form %s; skipping its checks", path.name)
+        # A generated form, not a credential: its parse error is safe to keep.
+        logger.warning(
+            "Unreadable generated form %s; skipping its checks",
+            path.name,
+            exc_info=True,
+        )
         return None
     return loaded if isinstance(loaded, Mapping) else None
 
