@@ -19,6 +19,11 @@ from application_sdk.observability.models import MetricRecord
 from application_sdk.observability.utils import in_temporal_workflow
 from application_sdk.version import __version__
 
+# Default cap on queued events. Without one, a Segment outage grows the queue
+# for as long as metrics are emitted; at the cap new events are dropped and
+# counted (``SegmentClient.dropped_count``).
+_DEFAULT_MAX_QUEUE_SIZE = 10_000
+
 
 class SegmentTrackEvent(BaseModel):
     """Pydantic model for a single Segment track event.
@@ -104,6 +109,7 @@ class SegmentClient:
         default_user_id: str = "",
         batch_size: int = 0,
         batch_timeout_seconds: float = 0.0,
+        max_queue_size: int = 0,
     ):
         """Initialize Segment client.
 
@@ -116,6 +122,8 @@ class SegmentClient:
             default_user_id: Default user ID for events (defaults to SEGMENT_DEFAULT_USER_ID)
             batch_size: Maximum number of events per batch (defaults to SEGMENT_BATCH_SIZE)
             batch_timeout_seconds: Max seconds to wait before sending batch (defaults to SEGMENT_BATCH_TIMEOUT_SECONDS)
+            max_queue_size: Maximum number of queued events; further events are
+                dropped and counted in ``dropped_count`` (defaults to 10 000)
         """
         self._write_key = write_key or SEGMENT_WRITE_KEY
         self._api_url = api_url or SEGMENT_API_URL
@@ -124,12 +132,25 @@ class SegmentClient:
         self._batch_timeout_seconds = (
             batch_timeout_seconds or SEGMENT_BATCH_TIMEOUT_SECONDS
         )
-        self._queue: asyncio.Queue | None = None
+        self._max_queue_size = max_queue_size or _DEFAULT_MAX_QUEUE_SIZE
+        self._queue: asyncio.Queue[MetricRecord] | None = None
         self._client: httpx.AsyncClient | None = None
         self._worker_task: asyncio.Task | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._worker_thread: threading.Thread | None = None
         self._initialized_event = threading.Event()
+        # Serialises worker-thread start: concurrent ``send_metric`` calls that
+        # all see a dead thread would otherwise each start one.
+        self._start_lock = threading.Lock()
+        # Set by ``close()``. A closed client drops events instead of starting a
+        # worker thread nothing will ever join.
+        self._closed = False
+        # Events dropped because the queue was full. Written only on the worker
+        # loop's thread.
+        self._dropped_count = 0
+        # True while the queue is full and drops are being counted; the drop
+        # warning fires once per episode. Worker-loop thread only.
+        self._overflowing = False
 
         # Enable client if write key is present
         self.enabled = bool(self._write_key)
@@ -149,11 +170,25 @@ class SegmentClient:
             self._batch_timeout_seconds,
         )
 
-    def _start_worker_thread(self) -> None:
-        """Start a background thread with event loop for async operations."""
-        if self._worker_thread and self._worker_thread.is_alive():
-            return
+    @property
+    def dropped_count(self) -> int:
+        """Events dropped because the queue was at ``max_queue_size``."""
+        return self._dropped_count
 
+    def _start_worker_thread(self) -> None:
+        """Start a background thread with event loop for async operations.
+
+        No-op if the worker is alive or the client is closed. Serialised by
+        ``_start_lock`` so concurrent callers start at most one thread.
+        """
+        with self._start_lock:
+            if self._closed:
+                return
+            if self._worker_thread and self._worker_thread.is_alive():
+                return
+            self._start_worker_thread_locked()
+
+    def _start_worker_thread_locked(self) -> None:
         # Clear initialization event before starting new thread
         # This ensures we wait for the new thread to actually initialize
         self._initialized_event.clear()
@@ -171,7 +206,7 @@ class SegmentClient:
             self._loop = loop
 
             # Initialize queue and client in the event loop
-            self._queue = asyncio.Queue()
+            self._queue = asyncio.Queue(maxsize=self._max_queue_size)
             from application_sdk.constants import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
                 _HTTP_POOL_TIMEOUT_SECONDS,
             )
@@ -268,7 +303,7 @@ class SegmentClient:
         This method is non-blocking - it adds the metric to the queue and returns.
         Only metrics that pass the allow list check will be sent.
         """
-        if not self.enabled:
+        if not self.enabled or self._closed:
             return
 
         # Check if metric should be sent (allow list filtering)
@@ -278,6 +313,8 @@ class SegmentClient:
         # Ensure worker thread is running
         if not self._worker_thread or not self._worker_thread.is_alive():
             self._start_worker_thread()
+            if self._closed:
+                return
 
         # Wait for initialization to complete before sending metrics
         if not self._initialized_event.wait(timeout=1.0):
@@ -287,10 +324,35 @@ class SegmentClient:
             return
 
         try:
-            # Schedule coroutine in the worker thread's event loop
-            asyncio.run_coroutine_threadsafe(self._queue.put(metric_record), self._loop)
+            # Enqueue on the worker thread's event loop. ``put_nowait`` rather
+            # than ``await put``: with a bounded queue, ``put`` would park one
+            # coroutine per event until space frees, an unbounded backlog of
+            # its own.
+            self._loop.call_soon_threadsafe(self._enqueue, metric_record)
         except Exception:
             logging.warning("Failed to queue metric for Segment", exc_info=True)
+
+    def _enqueue(self, metric_record: MetricRecord) -> None:
+        """Queue *metric_record*, or drop and count it if the queue is full.
+
+        Runs on the worker loop. Warns on the first drop of each overflow
+        episode (the queue was accepting events before it), not on every drop.
+        """
+        if self._queue is None:
+            return
+        try:
+            self._queue.put_nowait(metric_record)
+            self._overflowing = False
+        except asyncio.QueueFull:
+            self._dropped_count += 1
+            if not self._overflowing:
+                self._overflowing = True
+                logging.warning(
+                    "Segment queue full (%d events); dropping new events "
+                    "(dropped so far: %d)",
+                    self._max_queue_size,
+                    self._dropped_count,
+                )
 
     async def _process_queue(self) -> None:
         """Background worker that processes metrics from the queue.
@@ -345,7 +407,10 @@ class SegmentClient:
                 logging.warning("Error processing Segment metric queue", exc_info=True)
 
     async def _flush_queue(self) -> None:
-        """Drain the queue and send all pending events as a single batch.
+        """Drain the queue and send pending events in ``_batch_size`` chunks.
+
+        One request per chunk, not one for the whole backlog: after an outage
+        the backlog can be far larger than Segment accepts in a single batch.
 
         Runs inside the worker's event loop. Called by flush() via
         run_coroutine_threadsafe to bridge from the main event loop.
@@ -360,6 +425,9 @@ class SegmentClient:
                 self._queue.task_done()
             except asyncio.QueueEmpty:  # conformance: ignore[E014] QueueEmpty on get_nowait terminates drain loop; not an error
                 break
+            if len(batch) >= self._batch_size:
+                await self._send_batch_to_segment(batch)
+                batch = []
         if batch:
             await self._send_batch_to_segment(batch)
 
@@ -462,9 +530,16 @@ class SegmentClient:
         the final batch) then waits for the worker thread to exit. The httpx
         client is closed inside the worker thread after the final batch is sent,
         ensuring the HTTP connection pool is never torn down mid-request.
+
+        Marks the client closed first, so a later ``send_metric`` (e.g. a
+        metric emitted after the ``atexit`` close) is dropped rather than
+        starting a worker thread nothing would join.
         """
         if not self.enabled:
             return
+
+        with self._start_lock:
+            self._closed = True
 
         # Signal cancellation; the CancelledError handler in _process_queue
         # sends any remaining batch before the task exits.

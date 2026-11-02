@@ -775,6 +775,14 @@ ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 
 See [Configuration](../configuration.md#logging) for all observability variables.
 
+### Flushing under failure
+
+A full batch is written by a background flush task. At most four run per signal at once; while an object-store outage holds them, new records wait in the buffer and the next flush takes them. Shutdown (`AtlanObservability.flush_all()`) waits for in-flight flushes before writing what is left, so the last records before a worker drains are not lost. A failed periodic flush is logged and retried on the next interval.
+
+An unhandled asyncio exception schedules a flush too, but only one at a time and at most one every 5 seconds, so an exception storm against an unreachable OTLP collector does not pile up flushes or `otlp-log-flush` threads. Only one `otlp-log-flush` thread is alive at a time; a flush that finds an earlier one still exporting waits for it within its own timeout instead of starting another.
+
+Segment metrics are queued up to 10,000 events; past that, new events are dropped and counted (`SegmentClient.dropped_count`), with one warning per overflow episode. A flush sends the backlog in `ATLAN_SEGMENT_BATCH_SIZE` chunks. After `close()`, further metrics are dropped.
+
 ---
 
 ## Activity Sizing Telemetry

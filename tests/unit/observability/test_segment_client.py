@@ -391,8 +391,10 @@ class TestSendMetricEnabled:
         mrun.assert_not_called()
 
     def test_happy_path_schedules_via_loop(self):
-        """When everything is initialized, send_metric should hand the
-        coroutine to asyncio.run_coroutine_threadsafe with the worker loop."""
+        """When everything is initialized, send_metric hands the record to the
+        worker loop's ``_enqueue`` via ``call_soon_threadsafe`` — never a parked
+        ``await queue.put`` coroutine, which a bounded queue would turn into an
+        unbounded backlog of its own."""
         client = _enabled_client_no_thread()
         fake_thread = mock.MagicMock()
         fake_thread.is_alive.return_value = True
@@ -400,37 +402,21 @@ class TestSendMetricEnabled:
         fake_event = mock.MagicMock()
         fake_event.wait.return_value = True
         client._initialized_event = fake_event
-        # Fake loop and queue (queue.put returns a real coroutine that we will
-        # close to avoid "coroutine was never awaited" warnings).
         client._loop = mock.MagicMock()
-
-        async def _put(_record):
-            return None
-
         client._queue = mock.MagicMock()
-        client._queue.put = _put
 
         record = _make_record(labels={"send_to_segment": "true"})
         with (
             private_stdlib(sc_module, "asyncio") as local_asyncio,
             mock.patch.object(local_asyncio, "run_coroutine_threadsafe") as mrun,
         ):
-            # capture the coroutine handed to run_coroutine_threadsafe so we can close it
-            captured = {}
-
-            def _capture(coro, loop):
-                captured["coro"] = coro
-                captured["loop"] = loop
-                return mock.MagicMock()
-
-            mrun.side_effect = _capture
             client.send_metric(record)
-        assert mrun.called
-        assert captured["loop"] is client._loop
-        # Close coroutine to avoid "never awaited" warning.
-        captured["coro"].close()
+        mrun.assert_not_called()
+        client._loop.call_soon_threadsafe.assert_called_once_with(
+            client._enqueue, record
+        )
 
-    def test_run_coroutine_threadsafe_failure_swallowed(self):
+    def test_scheduling_failure_swallowed(self):
         """Any exception while scheduling must be swallowed, not propagated."""
         client = _enabled_client_no_thread()
         fake_thread = mock.MagicMock()
@@ -440,23 +426,11 @@ class TestSendMetricEnabled:
         fake_event.wait.return_value = True
         client._initialized_event = fake_event
         client._loop = mock.MagicMock()
-
-        async def _put(_r):
-            return None
-
+        client._loop.call_soon_threadsafe.side_effect = RuntimeError("boom")
         client._queue = mock.MagicMock()
-        client._queue.put = _put
 
-        with (
-            private_stdlib(sc_module, "asyncio") as local_asyncio,
-            mock.patch.object(
-                local_asyncio,
-                "run_coroutine_threadsafe",
-                side_effect=RuntimeError("boom"),
-            ),
-        ):
-            # Must not raise.
-            client.send_metric(_make_record(labels={"send_to_segment": "true"}))
+        # Must not raise.
+        client.send_metric(_make_record(labels={"send_to_segment": "true"}))
 
 
 # ---------------------------------------------------------------------------
@@ -824,3 +798,115 @@ class TestFlush:
             await client.flush()
 
         mrun.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bounded queue, chunked flush, serialised start, closed flag
+# ---------------------------------------------------------------------------
+
+
+class TestBoundedQueue:
+    async def test_enqueue_drops_and_counts_when_full(self):
+        """At ``max_queue_size`` new events are dropped and counted rather than
+        growing the queue (or parking one coroutine each) for the length of a
+        Segment outage."""
+        with mock.patch.object(
+            SegmentClient, "_start_worker_thread", return_value=None
+        ):
+            client = SegmentClient(write_key="fake-key", max_queue_size=3)
+        client._queue = asyncio.Queue(maxsize=client._max_queue_size)
+
+        with mock.patch.object(sc_module.logging, "warning") as warn:
+            for i in range(10):
+                client._enqueue(_make_record(value=float(i)))
+
+        assert client._queue.qsize() == 3
+        assert client.dropped_count == 7
+        # One warning for the overflow episode, not one per dropped event.
+        assert warn.call_count == 1
+
+    async def test_drop_warning_rearms_after_queue_drains(self):
+        with mock.patch.object(
+            SegmentClient, "_start_worker_thread", return_value=None
+        ):
+            client = SegmentClient(write_key="fake-key", max_queue_size=1)
+        client._queue = asyncio.Queue(maxsize=1)
+
+        with mock.patch.object(sc_module.logging, "warning") as warn:
+            client._enqueue(_make_record())
+            client._enqueue(_make_record())  # drop → warn
+            client._queue.get_nowait()
+            client._enqueue(_make_record())  # accepted → episode over
+            client._enqueue(_make_record())  # drop → warn again
+
+        assert client.dropped_count == 2
+        assert warn.call_count == 2
+
+    def test_default_max_queue_size_is_bounded(self):
+        client = _enabled_client_no_thread()
+        assert client._max_queue_size == sc_module._DEFAULT_MAX_QUEUE_SIZE > 0
+
+
+class TestFlushQueueChunking:
+    async def test_backlog_is_sent_in_batch_size_chunks(self):
+        """A post-outage backlog is posted ``_batch_size`` events per request,
+        not as one oversized request Segment rejects."""
+        client = _enabled_client_no_thread()
+        client._batch_size = 4
+        client._queue = asyncio.Queue()
+        client._client = mock.AsyncMock()
+        for i in range(10):
+            client._queue.put_nowait(_make_record(value=float(i)))
+
+        sent: list[int] = []
+
+        async def _capture(batch):
+            sent.append(len(batch))
+
+        with mock.patch.object(client, "_send_batch_to_segment", side_effect=_capture):
+            await client._flush_queue()
+
+        assert sent == [4, 4, 2]
+        assert client._queue.empty()
+
+
+class TestWorkerStartAndClose:
+    def test_concurrent_start_starts_one_thread(self):
+        """Concurrent callers that all see a dead worker start exactly one."""
+        import threading  # noqa: PLC0415 — only this test needs real threads
+
+        client = _enabled_client_no_thread()
+        started: list[int] = []
+        gate = threading.Event()
+
+        def _fake_start_locked() -> None:
+            # Hold the start long enough for every caller to reach it.
+            gate.wait(2.0)
+            started.append(1)
+            alive = mock.MagicMock()
+            alive.is_alive.return_value = True
+            client._worker_thread = alive
+
+        with mock.patch.object(
+            client, "_start_worker_thread_locked", side_effect=_fake_start_locked
+        ):
+            callers = [
+                threading.Thread(target=client._start_worker_thread) for _ in range(8)
+            ]
+            for t in callers:
+                t.start()
+            gate.set()
+            for t in callers:
+                t.join(5.0)
+
+        assert started == [1]
+
+    def test_send_metric_after_close_starts_no_thread(self):
+        """A metric emitted after the atexit ``close()`` is dropped; it must
+        not start a worker thread nothing will join."""
+        client = _enabled_client_no_thread()
+        client.close()
+        with mock.patch.object(client, "_start_worker_thread_locked") as start:
+            client.send_metric(_make_record(labels={"send_to_segment": "true"}))
+            client._start_worker_thread()
+        start.assert_not_called()
