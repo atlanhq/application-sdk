@@ -13,6 +13,8 @@ from conformance.suite.schema.extensions import (
     AtlanResultProperties,
     AtlanRuleProperties,
     AtlanRunProperties,
+    SafeSwap,
+    SafeSwapRequires,
 )
 from conformance.suite.schema.findings import Finding, findings_to_report
 from conformance.suite.schema.sarif import (
@@ -60,6 +62,8 @@ __all__ = [
     "AtlanResultProperties",
     "AtlanRunProperties",
     "AtlanRuleProperties",
+    "SafeSwap",
+    "SafeSwapRequires",
     "Location",
     "PhysicalLocation",
     "Region",
