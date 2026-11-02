@@ -258,7 +258,7 @@ The ref `download()` returns gets its tier from `DownloadInput.tier`. When that 
 
 `App` runs two cleanup tasks in `on_complete()`:
 
-- **`cleanup_files()`** — removes local temp paths from tracked `FileReference` objects and convention-based directories listed in `ATLAN_CLEANUP_BASE_PATHS`.
+- **`cleanup_files()`** — removes local temp paths from tracked `FileReference` objects, then the run's scratch directory (`{TEMPORARY_PATH}/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}/`), or instead the directories listed in `ATLAN_CLEANUP_BASE_PATHS` when that is set. A `download()` or materialise with no `local_path` lands in the run's scratch directory, so the default sweep removes it. `ATLAN_CLEANUP_BASE_PATHS` replaces that sweep rather than adding to it.
 - **`cleanup_storage()`** — deletes remote files according to their `StorageTier`.
 
 Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — cleanup is tied to workflow completion, not mid-run state.

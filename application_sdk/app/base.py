@@ -2263,7 +2263,8 @@ class App(ABC):
         1. ``FileReference`` local paths tracked during the run (auto-materialised
            or persisted files, including their ``.sha256`` sidecars).
         2. Convention-based temp directories: ``input.extra_paths`` if provided,
-           otherwise ``CLEANUP_BASE_PATHS`` / ``TEMPORARY_PATH + build_output_path()``.
+           otherwise ``CLEANUP_BASE_PATHS`` / ``TEMPORARY_PATH + build_output_path()``
+           — which is also where path-less ``FileReference`` objects materialise.
 
         All errors are swallowed per-path so a cleanup failure never fails the
         workflow.
@@ -2274,11 +2275,13 @@ class App(ABC):
 
         from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             CLEANUP_BASE_PATHS,
-            TEMPORARY_PATH,
             TRACKED_FILE_REFS_KEY,
         )
-        from application_sdk.execution import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
-            build_output_path,
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            RunTempDirEscapeError,
+        )
+        from application_sdk.execution._temporal.activity_utils import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
+            run_temp_dir,
         )
 
         path_results: dict[str, bool] = {}
@@ -2318,7 +2321,19 @@ class App(ABC):
         elif CLEANUP_BASE_PATHS:
             dir_paths = CLEANUP_BASE_PATHS
         else:
-            dir_paths = [os.path.join(TEMPORARY_PATH, build_output_path())]
+            # The same directory a path-less FileReference materialises into
+            # (storage/reference.py ``_default_materialize_dir``), so those
+            # downloads go with the run instead of piling up on the pod.
+            try:
+                dir_paths = [run_temp_dir()]
+            except RunTempDirEscapeError:
+                # A workflow ID with ``..`` segments: deleting what it points
+                # at would reach outside TEMPORARY_PATH, so sweep nothing.
+                _task_logger.warning(
+                    "Skipping the run scratch directory sweep: it resolves "
+                    "outside TEMPORARY_PATH"
+                )
+                dir_paths = []
 
         for base_path in dir_paths:
             try:
