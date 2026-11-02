@@ -17,9 +17,11 @@ path outside the destination root.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest import mock
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -170,17 +172,18 @@ def test_get_object_store_prefix_converts_backslashes() -> None:
     )
 
 
+@pytest.mark.skipif(os.name != "nt", reason="drive letters exist only on Windows")
 def test_normalize_key_strips_drive_letter() -> None:
-    """A Windows drive is never part of a store key.
+    """A Windows drive is never part of a store key (runs on the Windows CI legs)."""
+    assert normalize_key("C:\\Users\\runner\\raw\\records.json") == (
+        "Users/runner/raw/records.json"
+    )
 
-    ``os.path.splitdrive`` is patched to its Windows behaviour so the
-    branch runs on POSIX CI too.
-    """
-    import ntpath
 
-    with mock.patch(
-        "application_sdk.storage.ops.os.path.splitdrive", ntpath.splitdrive
-    ):
-        assert normalize_key("C:\\Users\\runner\\raw\\records.json") == (
-            "Users/runner/raw/records.json"
-        )
+def test_activity_utils_temporary_path_is_a_deprecated_alias() -> None:
+    """The old accidental re-export still resolves, and says where it lives."""
+    from application_sdk.execution._temporal import activity_utils
+
+    with pytest.warns(DeprecationWarning, match="application_sdk.constants"):
+        value = activity_utils.TEMPORARY_PATH
+    assert value == constants.TEMPORARY_PATH

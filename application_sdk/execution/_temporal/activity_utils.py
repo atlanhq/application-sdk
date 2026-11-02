@@ -32,6 +32,7 @@
     from ``input.workflow_id``.
 """
 
+import warnings
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -42,6 +43,34 @@ from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+#: name -> (replacement, why). These names stopped being used here and were importable
+#: from here only by accident; they are served once more so imports of them
+#: keep working, with a warning pointing at their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "TEMPORARY_PATH": (
+        "application_sdk.constants.TEMPORARY_PATH",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module_name, _, attr = replacement.rpartition(".")
+    from importlib import import_module  # noqa: PLC0415 — resolved on access only
+
+    return getattr(import_module(module_name), attr)
 
 
 F = TypeVar("F", bound=Callable[..., Any])

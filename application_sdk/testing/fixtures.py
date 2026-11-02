@@ -183,6 +183,9 @@ def _redirect_temporary_path(patcher: pytest.MonkeyPatch, path: str) -> None:
             name.startswith("application_sdk")
             and module is not None
             and module is not constants
-            and getattr(module, "TEMPORARY_PATH", None) == previous
+            # ``vars``, not ``getattr``: a module serving TEMPORARY_PATH as a
+            # deprecated PEP 562 alias would warn on every scan, and its alias
+            # already resolves through ``constants``.
+            and vars(module).get("TEMPORARY_PATH") == previous
         ):
             patcher.setattr(module, "TEMPORARY_PATH", path)
