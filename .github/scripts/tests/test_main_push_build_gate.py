@@ -185,7 +185,8 @@ def test_shard_matrix_has_one_leg_per_shard() -> None:
 
 
 def test_shard_matrix_has_no_entry_outside_the_range() -> None:
-    # No entry -> empty matrix -> certify-unit fails -> certify/publish skip.
+    # No entry -> no leg runs; certify's verdict then rejects the count
+    # (covered in test_certify_unit_shards.py), so publish is blocked.
     table, _ = _shard_matrix()
     assert not {"0", "-1", "11"} & table.keys()
 

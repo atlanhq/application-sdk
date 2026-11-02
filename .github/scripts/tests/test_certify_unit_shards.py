@@ -183,6 +183,28 @@ def test_verdict_fails_when_a_shard_result_is_missing(tmp_path: Path) -> None:
     assert "[2]" in reasons[0]
 
 
+@pytest.mark.parametrize("total", [0, -1, 11])
+def test_verdict_fails_on_a_shard_count_outside_the_range(
+    tmp_path: Path, total: int
+) -> None:
+    # No matrix entry -> no leg runs -> no results. With total 0, "no missing
+    # shards" and all() over nothing would otherwise read as skipped, which
+    # does not block publish.
+    outcome, reasons = decide_verdict(tmp_path / "absent", total)
+    assert outcome == "failure"
+    assert str(total) in reasons[0]
+
+
+def test_verdict_fails_on_a_zero_count_even_via_main(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    argv = ["verdict", "--results-dir", str(tmp_path / "absent"), "--total", "0"]
+    assert main(argv) == 0
+    assert output.read_text(encoding="utf-8") == "outcome=failure\n"
+
+
 def test_verdict_fails_with_no_results_at_all(tmp_path: Path) -> None:
     assert decide_verdict(tmp_path / "absent", 2)[0] == "failure"
 

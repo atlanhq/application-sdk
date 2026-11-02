@@ -48,6 +48,12 @@ PYTEST_NO_TESTS_COLLECTED = 5
 
 UNIT_TESTS_DIR = "tests/unit"
 
+#: The shard counts ``unit_test_shards`` accepts. The workflow's matrix table
+#: has no entry outside this range, so no leg runs; the verdict must then fail
+#: rather than read "no results" as "nothing to test".
+MIN_SHARDS = 1
+MAX_SHARDS = 10
+
 Runner = Callable[[Sequence[str]], int]
 
 
@@ -121,6 +127,12 @@ def decide_verdict(results_dir: Path, total: int) -> tuple[str, list[str]]:
     gate's existing meaning: no unit tests to run, or app deps that did not
     install (warn-only, as before sharding).
     """
+    if not MIN_SHARDS <= total <= MAX_SHARDS:
+        return "failure", [
+            f"unit_test_shards must be {MIN_SHARDS} (default, no split) or "
+            f"2..{MAX_SHARDS}, got {total}; no unit tests ran."
+        ]
+
     outcomes: dict[int, str] = {}
     for path in sorted(results_dir.glob("shard-*.json")):
         try:

@@ -517,8 +517,10 @@ jobs:
       matrix:
         # Expressions cannot build a range, so the shard list is looked up
         # rather than computed by a planning job (one fewer billed job).
-        # A count outside 1-10 has no entry: the empty matrix fails this job,
-        # and `!failure()` then skips certify and publish.
+        # A count outside 1-10 has no entry, so no leg runs. `certify` still
+        # runs, and its verdict step rejects the count (certify_unit_shards.py
+        # `verdict`), so the gate fails closed rather than reading "no
+        # results" as "nothing to test".
         shard: ${{ fromJSON('{"1":[1],"2":[1,2],"3":[1,2,3],"4":[1,2,3,4],"5":[1,2,3,4,5],"6":[1,2,3,4,5,6],"7":[1,2,3,4,5,6,7],"8":[1,2,3,4,5,6,7,8],"9":[1,2,3,4,5,6,7,8,9],"10":[1,2,3,4,5,6,7,8,9,10]}')[format('{0}', inputs.unit_test_shards)] }}
     steps:
       - name: Checkout app
