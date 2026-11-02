@@ -114,9 +114,24 @@ It goes further than the JSON Schema, because it also runs the contract's
   some dialects accept (`\p{L}`, POSIX classes, a lone `)`) is left for the
   source to judge. The error names the field and position, never the pattern.
 
-Inline `credentials` (v2 or v3 shape) and `workflow_id` / `workflow_type` are
-stripped before validation, as `/start` does. They are never part of a
-workflow's configuration.
+`workflow_id` / `workflow_type` and inline `credentials` (v2 or v3 shape) are
+taken out before the contract judges the body, as `/start` does: credentials are
+never part of a workflow's configuration. Instead, the route checks credentials
+for the fields the app's own generated forms mark `required` per auth type
+(`required = true` on each `FieldSpec` in `credentials.pkl`):
+
+| What the body carries | Checked against | 422 field |
+|---|---|---|
+| Inline `credentials`, e.g. at credential creation | The credential form, `<credential-type>.json`, for the selected `authType` (else the form's default), including its `anyOf` implications | `credentials.extra.atlan_oauth_id` |
+| `extraction_method: "agent"` | The workflow form's agent schema (`agent-json` → `agentConfigs`): every required field must map to a secret key | `agent_json.gcp-wif.extra.atlan_oauth_id`, or `agent_json` when there is no populated spec |
+| A GUID-routed method (`direct`, …) | The workflow form's credential slot: when it is `required`, the body must reference a credential (`credential_guid`, or any populated `CredentialRef` field) | `credential_guid` |
+
+Each check runs only when the form that governs it ships in `generated/`.
+A required field with a non-empty declared default counts as provided. A vault
+credential's stored values can't be read here, so send the credential inline
+when it is created to have its fields checked. A declared-source (format 2)
+agent spec is left to its own validation. Each gap is a pydantic `missing`
+error naming the field. No credential value is returned or logged.
 
 | Outcome | Status | Body |
 |---|---|---|
