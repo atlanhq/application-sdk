@@ -27,6 +27,7 @@ from temporalio.worker import Worker
 
 with workflow.unsafe.imports_passed_through():
     from application_sdk._runtime.offload import run_in_thread
+    from application_sdk.dev._embedded import _download_dir
     from application_sdk.execution.heartbeat import TemporalHeartbeatController
     from application_sdk.storage.rolling import RollingFileWriter
 
@@ -103,7 +104,9 @@ class HeartbeatProbeWorkflow:
 async def test_sdk_heartbeat_from_a_thread_reaches_temporal(
     activity_fn: object, expected: list[str]
 ) -> None:
-    async with await WorkflowEnvironment.start_local() as env:
+    async with await WorkflowEnvironment.start_local(
+        download_dest_dir=_download_dir()
+    ) as env:
         task_queue = f"heartbeat-probe-{uuid.uuid4().hex[:8]}"
         async with Worker(
             env.client,
