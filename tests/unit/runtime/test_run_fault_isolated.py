@@ -181,24 +181,23 @@ def _sleep_for(seconds: float) -> float:
     return seconds
 
 
-async def _wait_until_reaped(width: int) -> None:
-    """Wait until the width's idle pool has shut down and joined its children.
+async def _wait_until_reaped(pool: offload._IsolationPool) -> None:
+    """Wait until ``pool``'s idle shutdown has joined every child.
 
-    Waits on ``reaped`` rather than joining the children here: the reaper's
-    ``shutdown(wait=True)`` already reaps them, and a second ``waitpid`` racing it
-    gets ``ECHILD``, which ``multiprocessing`` reads as "still running".
+    Takes the pool object, not its width: the reaper drops the pool from the
+    registry *before* joining the children, so "no longer registered" is not yet
+    "reaped". Waits on ``reaped`` rather than joining the children here, because
+    the reaper's ``shutdown(wait=True)`` already reaps them, and a second
+    ``waitpid`` racing it gets ``ECHILD``, which ``multiprocessing`` reads as
+    "still running".
     """
-    pool = offload._PROCESS_POOLS.get(width)
     deadline = time.monotonic() + _REAP_DEADLINE_SECONDS
-    while pool is not None and not pool.reaped.is_set():
-        assert time.monotonic() < deadline, f"width-{width} pool was never reaped"
+    while not pool.reaped.is_set():
+        assert time.monotonic() < deadline, "the idle pool was never reaped"
         await asyncio.sleep(0.05)
-    assert (
-        width not in offload._PROCESS_POOLS or offload._PROCESS_POOLS[width] is not pool
-    )
+    assert all(p is not pool for p in offload._PROCESS_POOLS.values())
 
 
-@pytest.mark.asyncio
 async def test_an_idle_pool_shuts_down_and_its_children_exit(monkeypatch):
     """The FND-4278 leak: before, the pool and its children lived forever."""
     monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "0.1")
@@ -210,7 +209,7 @@ async def test_an_idle_pool_shuts_down_and_its_children_exit(monkeypatch):
     children = list(pool.executor._processes.values())
     assert children
 
-    await _wait_until_reaped(width)
+    await _wait_until_reaped(pool)
 
     # Every child has exited: the reaper's join recorded each exit code.
     assert all(child.exitcode is not None for child in children)
@@ -218,7 +217,6 @@ async def test_an_idle_pool_shuts_down_and_its_children_exit(monkeypatch):
     assert await run_fault_isolated(_echo, "again", max_workers=width) == "echo:again"
 
 
-@pytest.mark.asyncio
 async def test_a_pool_is_reused_while_calls_keep_arriving(monkeypatch):
     monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "30")
     width = 6
@@ -229,7 +227,6 @@ async def test_a_pool_is_reused_while_calls_keep_arriving(monkeypatch):
     offload._discard_process_pool(width, pool)
 
 
-@pytest.mark.asyncio
 async def test_a_call_still_in_flight_keeps_the_pool_alive(monkeypatch):
     """Going idle is "no child working", not "no caller waiting" on one call."""
     monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "0.05")
@@ -244,10 +241,9 @@ async def test_a_call_still_in_flight_keeps_the_pool_alive(monkeypatch):
     assert offload._PROCESS_POOLS.get(width) is pool
 
     assert await long_call == 1.5
-    await _wait_until_reaped(width)
+    await _wait_until_reaped(pool)
 
 
-@pytest.mark.asyncio
 async def test_a_cancelled_caller_does_not_reap_its_running_child(monkeypatch):
     """Cancelling the await leaves the child working; the pool must outlive it."""
     monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "0.05")
@@ -263,7 +259,7 @@ async def test_a_cancelled_caller_does_not_reap_its_running_child(monkeypatch):
     assert offload._PROCESS_POOLS.get(width) is pool
     assert pool.in_flight == 1
 
-    await _wait_until_reaped(width)
+    await _wait_until_reaped(pool)
 
 
 @pytest.mark.parametrize(
