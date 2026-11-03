@@ -951,6 +951,7 @@ async def _lists_under_itself(store: ObjectStore, path: str) -> bool:
     obstore lists *path* as the prefix ``path/``, which holds an S3
     ``path/`` marker (listed as *path*) but never a plain key named *path*.
     """
+
     async def _probe() -> bool:
         async for batch in obstore.list(store, prefix=path, chunk_size=1):
             if batch:

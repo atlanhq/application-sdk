@@ -397,6 +397,15 @@
       "symbol": "PreflightStatus.PARTIAL"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "DAPR_SECRET_STORE_COMPONENT is deprecated; use application_sdk.infrastructure.DAPR_SECRET_STORE_COMPONENT \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.infrastructure._dapr.credential_vault",
+      "removal_version": "4.0.0",
+      "symbol": "DAPR_SECRET_STORE_COMPONENT"
+    },
+    {
       "kind": "class",
       "marker_via": "warn",
       "message": "BindingError is deprecated; use application_sdk.errors.DependencyUnavailableError \u2014 will be removed in v4.0",
