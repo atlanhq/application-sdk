@@ -100,7 +100,8 @@ A finding whose fix is one fixed text change that keeps behaviour carries
   receiver is left unmarked even when the name matches.
 
 Apply it on the finding's line only: `find` occurs there exactly once;
-replace it with `replace`. Apply it only when `uv.lock` pins `package` at or
+replace it with `replace`. Then run the app's own import sorter and formatter on the
+file (for ruff: `ruff check --fix --select I`, then `ruff format`). Apply it only when `uv.lock` pins `package` at or
 above `requires.min`; otherwise the site is a **swap** that needs the SDK
 raised first. Nothing else changes: a module-level import swap leaves every
 patch target as it was, and a rename is marked only when no test names the

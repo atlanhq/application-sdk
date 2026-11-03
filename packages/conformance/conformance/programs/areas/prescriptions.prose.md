@@ -529,11 +529,17 @@ is always `"judgment"`:
   - workflow primitives `now`/`sleep`/`uuid4`/`wait_condition` and the
     interaction decorators `signal`/`query`/`update` (and `task` in place of
     `activity`) → `from application_sdk.app import …`;
-  - `temporalio.client.Client` / `Client.connect(...)` →
-    `from application_sdk.execution import create_temporal_client`
-    (`client = await create_temporal_client(host=...)`);
-  - `temporalio.worker.Worker` →
-    `from application_sdk.execution import AppWorker, create_worker`;
+  - `temporalio.client.Client` / `Client.connect(...)` and
+    `temporalio.worker.Worker` → production boot through the SDK launcher
+    (`application-sdk --mode worker|handler|combined`), local dev through
+    `application_sdk.main.run_dev_combined`, and in tests the integration
+    fixture kit (`application_sdk.testing.integration.fixtures`), which owns
+    the client and the worker. A `create_temporal_client` / `create_worker`
+    call fires P017 outside `tests/integration/`; see the
+    `migrate-orchestration` skill;
+  - a temporalio failure class → its `Temporal*` alias from
+    `application_sdk.execution` (`TemporalApplicationError`,
+    `TemporalTimeoutError`, `TemporalWorkflowFailureError`, …);
   - `temporalio.converter` data-converter use →
     `from application_sdk.execution import create_data_converter`.
 
