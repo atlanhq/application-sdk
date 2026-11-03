@@ -713,7 +713,10 @@ def _current_run_key() -> tuple[str, str]:
         AppContextError: If called outside a task.
     """
     workflow_id = _get_execution_id_from_task()
-    return workflow_id, activity.info().workflow_run_id
+    run_id = activity.info().workflow_run_id
+    if not run_id:
+        raise AppContextError("activity workflow_run_id is empty")
+    return workflow_id, run_id
 
 
 def _track_credential_dir(path: str) -> None:
