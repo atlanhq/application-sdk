@@ -1260,136 +1260,38 @@ class TestDirectHttpFallback:
     def test_non_delivery_classifier(self, text, expected):
         assert events_module._proves_non_delivery(BindingError(text)) is expected
 
-    # -- FND-4280: a failure that may have delivered is flagged non-retryable --
 
-    async def _publish_failing(
-        self, tmp_path, binding_text, *, enabled=True, post_side_effect=None
-    ):
-        """Publish once against a binding that fails with *binding_text*; return
-        (raised BindingError, httpx.AsyncClient mock)."""
-        _component(tmp_path)
-        infra = self._infra(
-            BindingError(binding_text, binding_name="eventstore", operation="create")
-        )
-        client = _http_client(post_side_effect=post_side_effect)
-        p = self._patches(infra, client, enabled=enabled)
-        with (
-            p[0],
-            p[1],
-            p[2],
-            mock.patch("httpx.AsyncClient", return_value=client) as http_client,
-            p[4],
-        ):
-            with pytest.raises(BindingError) as exc:
-                await _publish_event_via_binding(self._event())
-        return exc.value, http_client
+class TestPublishEventIsAtLeastOnce:
+    """FND-4280: lifecycle events are at-least-once. A failure that may have
+    delivered the event is still retried by the ``publish_event`` activity's
+    retry policy, because a missing ``workflow_end`` costs consumers more than
+    a duplicate they can dedupe on ``metadata.event_id``."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "enabled", [True, False], ids=["fallback-on", "fallback-off"]
+        "text", [_AMBIGUOUS, _NON_DELIVERY], ids=["ambiguous", "non-delivery"]
     )
-    async def test_ambiguous_error_is_flagged_uncertain(self, tmp_path, enabled):
-        err, http_client = await self._publish_failing(
-            tmp_path, _AMBIGUOUS, enabled=enabled
-        )
-        http_client.assert_not_called()
-        assert err.retryable is False
-        assert events_module._is_delivery_uncertain(err)
-
-    @pytest.mark.asyncio
-    async def test_proven_non_delivery_without_fallback_stays_retryable(self, tmp_path):
-        err, _ = await self._publish_failing(tmp_path, _NON_DELIVERY, enabled=False)
-        assert not events_module._is_delivery_uncertain(err)
-        assert err.effective_retryable is True
-
-    @pytest.mark.asyncio
-    async def test_direct_connect_failure_stays_retryable(self, tmp_path):
-        import httpx
-
-        err, http_client = await self._publish_failing(
-            tmp_path,
-            _NON_DELIVERY,
-            post_side_effect=httpx.ConnectError("connection refused"),
-        )
-        http_client.assert_called_once()
-        assert not events_module._is_delivery_uncertain(err)
-
-    @pytest.mark.asyncio
-    async def test_direct_read_timeout_is_flagged_uncertain(self, tmp_path):
-        """The request body went out; Event Ingress may have accepted it."""
-        import httpx
-
-        err, http_client = await self._publish_failing(
-            tmp_path,
-            _NON_DELIVERY,
-            post_side_effect=httpx.ReadTimeout("no response"),
-        )
-        http_client.assert_called_once()
-        assert events_module._is_delivery_uncertain(err)
-
-    @pytest.mark.parametrize(
-        "status,proves",
-        [(400, True), (401, True), (429, True), (500, False), (502, False)],
-    )
-    def test_direct_status_classifier(self, status, proves):
-        import httpx
-
-        request = httpx.Request("POST", "https://t/")
-        error = httpx.HTTPStatusError(
-            "x", request=request, response=httpx.Response(status, request=request)
-        )
-        assert events_module._direct_error_proves_non_delivery(error) is proves
-
-
-class TestPublishEventDeliveryUncertain:
-    """FND-4280: the ``publish_event`` activity must not be retried after a
-    failure that may have delivered the event, or the workflow's
-    ``RetryPolicy(maximum_attempts=3)`` re-sends it up to three times."""
-
-    _EVENT_DATA = {
-        "event_type": EventTypes.APPLICATION_EVENT.value,
-        "event_name": ApplicationEventNames.WORKFLOW_START.value,
-        "data": {},
-    }
-
-    @pytest.mark.asyncio
-    async def test_uncertain_failure_is_non_retryable(self) -> None:
-        from application_sdk.execution.errors import ApplicationError
-
-        err = BindingError(_AMBIGUOUS, binding_name="eventstore", operation="create")
-        events_module._mark_delivery_uncertain(err)
-        with mock.patch.object(
-            events_module,
-            "_publish_event_via_binding",
-            mock.AsyncMock(side_effect=err),
-        ) as publish:
-            with pytest.raises(ApplicationError) as exc:
-                await publish_event(dict(self._EVENT_DATA))
-
-        publish.assert_awaited_once()
-        assert exc.value.non_retryable is True
-        assert exc.value.type == "EventDeliveryUncertainError"
-        assert exc.value.__cause__ is err
-        (details,) = exc.value.details
-        assert details.code == "DEPENDENCY_UNAVAILABLE_EVENT_DELIVERY_UNCERTAIN"
-        assert details.retryable is False
-        assert details.evidence["event_name"] == "workflow_start"
-
-    @pytest.mark.asyncio
-    async def test_proven_non_delivery_stays_retryable(self) -> None:
+    async def test_binding_failure_stays_retryable(self, text) -> None:
         from application_sdk.execution._temporal._activity_errors import (
             EventPublishError,
         )
 
-        err = BindingError(_NON_DELIVERY, binding_name="eventstore", operation="create")
+        err = BindingError(text, binding_name="eventstore", operation="create")
         with mock.patch.object(
             events_module,
             "_publish_event_via_binding",
             mock.AsyncMock(side_effect=err),
         ):
             with pytest.raises(EventPublishError) as exc:
-                await publish_event(dict(self._EVENT_DATA))
+                await publish_event(
+                    {
+                        "event_type": EventTypes.APPLICATION_EVENT.value,
+                        "event_name": ApplicationEventNames.WORKFLOW_END.value,
+                        "data": {},
+                    }
+                )
         assert exc.value.effective_retryable is True
+        assert exc.value.__cause__ is err
 
 
 class TestEventId:

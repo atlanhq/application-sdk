@@ -295,7 +295,7 @@ async def test_activity_end_event_contains_duration_ms(
 
 
 # ---------------------------------------------------------------------------
-# FND-4280: an ambiguous publish failure is sent once, not once per retry
+# FND-4280: a failed workflow event is retried, and every copy shares an event_id
 # ---------------------------------------------------------------------------
 
 _AMBIGUOUS_DAPR_ERROR = (
@@ -364,42 +364,33 @@ def _sent(sent: list[dict], event_name: str) -> list[dict]:
 
 
 @pytest.mark.integration
-async def test_ambiguous_workflow_start_failure_is_sent_exactly_once(
-    run_worker, executor, reregister_app, monkeypatch
+@pytest.mark.parametrize(
+    "dapr_error",
+    [_AMBIGUOUS_DAPR_ERROR, _NON_DELIVERY_DAPR_ERROR],
+    ids=["ambiguous-upstream-502", "proven-non-delivery"],
+)
+async def test_failed_workflow_event_is_retried_with_one_event_id(
+    run_worker, executor, reregister_app, monkeypatch, dapr_error
 ):
-    """An upstream 502 may mean Event Ingress took the event: the
-    ``publish_event`` activity fails non-retryably, so the workflow's
-    ``RetryPolicy(maximum_attempts=3)`` does not send it twice more. The
-    workflow itself still completes."""
-    binding, sent = _failing_event_binding(_AMBIGUOUS_DAPR_ERROR)
+    """Lifecycle events are at-least-once. Whether or not the failure proves
+    non-delivery, the ``publish_event`` activity is retried by the workflow's
+    ``RetryPolicy(maximum_attempts=3)``, so a consumer may see the event more
+    than once, and every copy carries the same ``event_id`` to dedupe on. The
+    fallback is off so both cases go through Dapr only, and the workflow still
+    completes."""
+    monkeypatch.setattr(
+        "application_sdk.constants.EVENT_INGRESS_DIRECT_FALLBACK", False
+    )
+    binding, sent = _failing_event_binding(dapr_error)
 
     direct = await _run_with_event_binding(
         binding, run_worker, executor, reregister_app, monkeypatch
     )
 
     starts = _sent(sent, ApplicationEventNames.WORKFLOW_START.value)
-    assert len(starts) == 1, f"workflow_start sent {len(starts)} times"
-    assert starts[0]["metadata"]["event_id"]
-    assert len(_sent(sent, ApplicationEventNames.WORKFLOW_END.value)) == 1
-    direct.assert_not_called()
-
-
-@pytest.mark.integration
-async def test_proven_non_delivery_is_retried_with_one_event_id(
-    run_worker, executor, reregister_app, monkeypatch
-):
-    """Contrast: an error that proves nothing was delivered (fallback off)
-    stays retryable, and every retried copy carries the same ``event_id``."""
-    monkeypatch.setattr(
-        "application_sdk.constants.EVENT_INGRESS_DIRECT_FALLBACK", False
-    )
-    binding, sent = _failing_event_binding(_NON_DELIVERY_DAPR_ERROR)
-
-    await _run_with_event_binding(
-        binding, run_worker, executor, reregister_app, monkeypatch
-    )
-
-    starts = _sent(sent, ApplicationEventNames.WORKFLOW_START.value)
     assert len(starts) == 3, f"workflow_start sent {len(starts)} times"
     assert len({p["metadata"]["event_id"] for p in starts}) == 1
+    assert starts[0]["metadata"]["event_id"]
     assert len({p["metadata"]["attempt"] for p in starts}) == 3
+    assert len(_sent(sent, ApplicationEventNames.WORKFLOW_END.value)) == 1
+    direct.assert_not_called()

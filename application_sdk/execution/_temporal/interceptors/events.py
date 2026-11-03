@@ -8,9 +8,10 @@ When the binding *is* configured but the Dapr call fails in a way that
 proves the event never got a response (connection/TLS/DNS failure, missing
 binding), the event is re-sent directly to Event Ingress over HTTPS from this
 process (see :func:`_publish_event_direct`), with a WARNING that names the
-fallback. Errors that may already have been delivered are not re-sent, and
-fail the ``publish_event`` activity non-retryably so Temporal does not re-send
-them either. Every event carries ``metadata.event_id`` for consumer dedupe. The
+fallback. Errors that may already have been delivered are not re-sent over
+that channel; the ``publish_event`` activity's Temporal retry re-sends them
+through Dapr (at-least-once). Every event carries ``metadata.event_id``,
+stable across those retries, so consumers can dedupe. The
 Dapr sidecar is the only Go TLS client in an SDR pod and has been seen
 rejected by customer middleboxes that pass every other client; without the
 fallback that leaves the agent unregistered. ``ATLAN_EVENT_INGRESS_DIRECT_FALLBACK=false``
@@ -264,7 +265,6 @@ async def _get_event_auth_headers() -> dict[str, str]:
 
 if TYPE_CHECKING:
     from application_sdk.credentials.oauth import OAuthTokenService
-    from application_sdk.errors import AppError
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
@@ -342,13 +342,16 @@ _PER_ATTEMPT_EVENTS = frozenset(
 def _event_id(event: Event) -> str:
     """Dedupe id for *event*: the same for every retry of the same publish.
 
-    Inside a workflow it is a UUIDv5 of ``workflow_id``, ``workflow_run_id``
-    and ``event_name``, so the copies a retried ``publish_event`` activity
-    sends (which differ in ``attempt``) share one id. ``activity_start`` /
-    ``activity_end`` also key on ``activity_id`` and ``attempt``: each attempt
-    is a separate event. Outside a workflow there is nothing stable to key on,
-    so it is a random UUID; it still identifies the one payload that both the
-    Dapr binding and the direct-HTTPS fallback send.
+    Lifecycle events are delivered at least once: an ambiguous failure (an
+    upstream 5xx, a timeout after sending) is retried by the ``publish_event``
+    activity's retry policy, so a consumer can see the same event twice.
+    Inside a workflow the id is a UUIDv5 of ``workflow_id``,
+    ``workflow_run_id`` and ``event_name``, so those copies (which differ in
+    ``attempt``) share one id. ``activity_start`` / ``activity_end`` also key
+    on ``activity_id`` and ``attempt``: each attempt is a separate event.
+    Outside a workflow there is nothing stable to key on, so it is a random
+    UUID; it still identifies the one payload that both the Dapr binding and
+    the direct-HTTPS fallback send.
     """
     md = event.metadata
     if not (md.workflow_id and md.workflow_run_id):
@@ -512,19 +515,16 @@ async def _publish_event_via_binding(
         EVENT_INGRESS_DIRECT_FALLBACK,
     )
 
-    delivery_unproven = not _proves_non_delivery(binding_error)
-
     if not EVENT_INGRESS_DIRECT_FALLBACK:
-        if delivery_unproven:
-            _mark_delivery_uncertain(binding_error)
         raise binding_error
 
-    if delivery_unproven:
-        _mark_delivery_uncertain(binding_error)
+    if not _proves_non_delivery(binding_error):
         logger.warning(
             "FALLBACK SKIPPED: Dapr eventstore binding failed for event %s but the error "
             "does not prove the event never reached Event Ingress, so it is not re-sent "
-            "or retried (re-sending could double-deliver). dapr_error=%s",
+            "over direct HTTPS. A caller that retries (the publish_event activity) "
+            "re-sends it through Dapr; consumers dedupe on metadata.event_id. "
+            "dapr_error=%s",
             event.event_name,
             binding_error,
             exc_info=binding_error,
@@ -590,8 +590,6 @@ async def _publish_event_via_binding(
             f"direct HTTPS fallback to {url} also failed: "
             f"{type(direct_error).__name__}: {direct_error}"
         )
-        if not _direct_error_proves_non_delivery(direct_error):
-            _mark_delivery_uncertain(binding_error)
         raise binding_error
 
     logger.warning(
@@ -658,42 +656,6 @@ def _proves_non_delivery(binding_error: BaseException) -> bool:
     if "received status code" in text:
         return False
     return any(marker in text for marker in _NON_DELIVERY_MARKERS)
-
-
-def _direct_error_proves_non_delivery(direct_error: BaseException) -> bool:
-    """True when a failed direct-HTTPS publish cannot have delivered the event.
-
-    A connect failure (refused, DNS, TLS handshake, connect timeout) never
-    sent the request, and a 4xx is Event Ingress refusing it. A 5xx, a read
-    timeout or a dropped connection after the body was sent may have been
-    accepted upstream.
-    """
-    import httpx  # noqa: PLC0415 — cold path: only after both channels failed
-
-    if isinstance(direct_error, (httpx.ConnectError, httpx.ConnectTimeout)):
-        return True
-    if isinstance(direct_error, httpx.HTTPStatusError):
-        return 400 <= direct_error.response.status_code < 500
-    return False
-
-
-def _mark_delivery_uncertain(binding_error: "AppError") -> None:
-    """Flag a publish failure that may already have reached Event Ingress.
-
-    Sets ``retryable=False`` on the error itself, so callers keep catching the
-    same ``BindingError`` while :func:`publish_event` can tell this failure
-    from one that is safe to retry (see :func:`_is_delivery_uncertain`).
-    """
-    binding_error.retryable = False
-
-
-def _is_delivery_uncertain(exc: BaseException) -> bool:
-    """Whether *exc* was flagged by :func:`_mark_delivery_uncertain`."""
-    from application_sdk.errors import (  # noqa: PLC0415 — cold path: only on a failed publish
-        AppError,
-    )
-
-    return isinstance(exc, AppError) and exc.retryable is False
 
 
 def _event_store_name() -> str:
@@ -834,12 +796,6 @@ async def _publish_event_direct(
 async def publish_event(event_data: dict) -> None:
     """Activity to publish events outside the workflow sandbox.
 
-    A failure that proves the event was not delivered raises a retryable
-    :class:`EventPublishError`. One that may already have delivered it (see
-    :func:`_mark_delivery_uncertain`) raises a non-retryable
-    ``ApplicationError`` of type ``EventDeliveryUncertainError``, so the
-    workflow's retry policy does not send the event again.
-
     Args:
         event_data (dict): Event data to publish containing event_type, event_name,
                           metadata, and data fields.
@@ -848,23 +804,12 @@ async def publish_event(event_data: dict) -> None:
         event = Event(**event_data)
         await _publish_event_via_binding(event)
         logger.info("Published event: %s", event_data.get("event_name", ""))
-    # conformance: ignore[E004] re-raises as a typed EventPublishError (non-retryable when delivery is uncertain); exception is propagated to caller
+    # conformance: ignore[E004] re-raises as typed EventPublishError; exception is propagated to caller
     except Exception as e:
         from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
-            EventDeliveryUncertainError,
             EventPublishError,
         )
 
-        if _is_delivery_uncertain(e):
-            from application_sdk.execution._temporal.activities import (  # noqa: PLC0415 — circular: activities imports the execution package
-                _to_application_error,
-            )
-
-            raise _to_application_error(
-                EventDeliveryUncertainError(
-                    cause=e, event_name=event_data.get("event_name")
-                )
-            ) from e
         raise EventPublishError(cause=e) from e
 
 

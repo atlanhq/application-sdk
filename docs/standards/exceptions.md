@@ -270,4 +270,3 @@ When reviewing code, check for:
   raise ApplicationError("invalid schema", type="ValidationError", non_retryable=True)
   ```
   Use the categorical `AppError` leaf classes for framework-level errors that Temporal does not need to classify.
-- **Non-idempotent side effects are not retried after an ambiguous failure**: a leaf's `retryable` is about whether the dependency may recover, not whether repeating the call is safe. When a failure may have already taken effect (an upstream answered with an error status, a request timed out after it was sent) and the call has no server-side dedupe, raise it non-retryably even if its category defaults to retryable — a subclass with `default_retryable = False`, converted to `ApplicationError(non_retryable=True)` at the activity boundary. `EventDeliveryUncertainError` (a `publish_event` that may have delivered the event) is the reference case.

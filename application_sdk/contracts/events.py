@@ -69,7 +69,8 @@ class EventMetadata(BaseModel):
             ``workflow_id``, ``workflow_run_id`` and ``event_name`` (plus
             ``activity_id`` and ``attempt`` for ``activity_start`` /
             ``activity_end``, which each attempt emits afresh), so a retried
-            ``publish_event`` activity sends the same id. A random UUID outside
+            ``publish_event`` activity sends the same id. Lifecycle events
+            are at-least-once; consumers dedupe on this field. A random UUID outside
             a workflow (``worker_start``, ``token_refresh``).
     """
 
