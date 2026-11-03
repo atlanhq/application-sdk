@@ -32,6 +32,9 @@ on:
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
+      BOT_SIGNING_KEY:
+        required: false
+        description: "SSH signing key of the atlan-ci machine user (org secret), so the fix commit is Verified. Auto-available via 'secrets: inherit'; without it the commit is unsigned."
 
 permissions:
   contents: write
@@ -329,6 +332,12 @@ jobs:
 
           print(f"\nDone: {len(fixed)} fixed, {len(failed)} failed")
           PYEOF
+
+      - name: Sign bot commits
+        if: steps.fix.outputs.fixed_count > 0
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
 
       - name: Commit fixes
         if: steps.fix.outputs.fixed_count > 0

@@ -146,6 +146,12 @@ jobs:
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         run: uv run poe regen-capabilities
 
+      - name: Sign bot commits
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
       - name: Commit and push
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         id: commit

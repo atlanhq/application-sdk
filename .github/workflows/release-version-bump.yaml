@@ -250,8 +250,8 @@ jobs:
             --base "${TARGET_BRANCH}" \
             --head "bump-version-${TARGET_BRANCH}"
 
-      # Signs the bump commit as atlan-ci so the PR isn't blocked by the
-      # signed-commits ruleset; the push below still uses the same token.
+      # Signs the bump commit so the PR isn't blocked by the signed-commits
+      # ruleset; the push below still uses the same token.
       - name: Sign bot commits
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
         uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
@@ -265,6 +265,9 @@ jobs:
           NEW_VERSION: ${{ steps.bump.outputs.new }}
         run: |
           set -euo pipefail
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
           BRANCH="bump-version-${TARGET_BRANCH}"
           git checkout -b "$BRANCH"
           git add pyproject.toml uv.lock CHANGELOG.md
