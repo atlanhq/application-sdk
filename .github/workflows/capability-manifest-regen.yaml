@@ -2,15 +2,18 @@
 #
 # Triggered when a PR participant comments "/regen-manifest".
 # Regenerates docs/agents/sdk-capabilities.md via `uv run poe regen-capabilities`
-# and pushes the result as github-actions[bot].
+# and publishes the result to the PR branch as a commit GitHub signs.
 #
 # Modelled on auto-fix-vulnerabilities.yaml. Key design choices:
 #   - A minted atlan-app-fleet App checkout token so the resulting push re-fires
 #     PR check workflows (same pattern as auto-fix-vulnerabilities.yaml and
 #     release-version-bump.yaml). Confirmed empirically that App-token pushes
 #     re-trigger downstream workflows the same way a real PAT identity does.
-#   - github-actions[bot] identity, NOT atlan-ci (nor the App), so the bot commit
-#     does not auto-satisfy the wildcard CODEOWNERS rule that includes @atlan-ci.
+#   - The commit is published through createCommitOnBranch (signed_commit.py),
+#     because the signed-commits ruleset blocks an unsigned one. Its author is
+#     the App token's bot, NOT atlan-ci, so it does not auto-satisfy the
+#     wildcard CODEOWNERS rule that includes @atlan-ci; the local git identity
+#     never reaches GitHub.
 #   - Fork PRs are rejected immediately with an explanatory comment.
 #   - fetch-depth: 0 for the same reason as the drift-check workflow (source-sha).
 

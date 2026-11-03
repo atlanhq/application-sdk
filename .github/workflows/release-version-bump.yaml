@@ -267,9 +267,10 @@ jobs:
           # commit, and this runner-made commit is unsigned whatever token pushes
           # it. signed_commit.py publishes the same change through
           # createCommitOnBranch, which GitHub signs. The bump branch is rebuilt
-          # from the target branch on every run, so it is reset to that base
-          # first, under a lease: it fails if another CI run moved the branch
-          # since this checkout, which is the correct behaviour.
+          # from the target branch on every run: the helper commits on a scratch
+          # branch at that base, then moves the bump branch onto the commit under
+          # a lease. It fails if another CI run moved the branch since this
+          # checkout, which is the correct behaviour.
           SIGNED_COMMIT=.sdk-scripts/.github/scripts/signed_commit.py
           if [ -f "$SIGNED_COMMIT" ]; then
             LEASE=$(git rev-parse --verify -q "refs/remotes/origin/${BRANCH}" || echo absent)
