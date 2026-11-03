@@ -33,6 +33,7 @@ from conformance.suite.rules.persistence_seam import RULES as _PERSISTENCE_SEAM_
 from conformance.suite.rules.portability import RULES as _PORTABILITY_RULES
 from conformance.suite.rules.preflight import RULES as _PREFLIGHT_RULES
 from conformance.suite.rules.prescriptions import RULES as _P_RULES
+from conformance.suite.rules.retry_ladder import RULES as _RETRY_LADDER_RULES
 from conformance.suite.rules.sdr import RULES as _SDR_RULES
 from conformance.suite.rules.security import RULES as _S_RULES
 from conformance.suite.rules.storage import RULES as _STORAGE_RULES
@@ -82,6 +83,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _S_RULES,
     _PORTABILITY_RULES,
     _ATOMIC_PUBLISH_RULES,
+    _RETRY_LADDER_RULES,
 )
 
 

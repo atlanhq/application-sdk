@@ -65,6 +65,7 @@ from conformance.suite.checks import (
     preflight,
     prescriptions,
     release_contract,
+    retry_ladder,
     sdr_test_checks,
     security,
     test_quality,
@@ -360,6 +361,11 @@ _CHECKS: list[CheckRegistration] = [
         series=atomic_publish.SERIES,
         discover=atomic_publish.discover,
         scan_path=atomic_publish.scan_path,
+    ),
+    CheckRegistration(
+        series=retry_ladder.SERIES,
+        discover=retry_ladder.discover,
+        scan_path=retry_ladder.scan_path,
     ),
 ]
 

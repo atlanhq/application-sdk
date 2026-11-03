@@ -119,7 +119,7 @@ from ._raw_dict_entity import check_p058
 from ._relationship_direction import check_p055
 from ._store_construction import check_p009
 from ._typed_boundaries import check_p013_p014
-from ._unbounded_fields import UnboundedContractFieldsChecker
+from ._unbounded_fields import UnboundedContractFieldsChecker, reused_class_names
 
 SERIES = "P"
 
@@ -236,6 +236,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     by_name: dict[str, ClassRecord] = {}
     alias_targets: dict[str, str] = {}
     code_consts: dict[str, str] = {}
+    reused: frozenset[str] | None = None
 
     for path in paths:
         try:
@@ -256,8 +257,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         file_trees[path] = tree
 
         # P001 (per-file)
+        if reused is None:
+            reused = reused_class_names(root)
         checker = UnboundedContractFieldsChecker(
-            filename=rel_str, directives=directives
+            filename=rel_str,
+            directives=directives,
+            lines=text.splitlines(),
+            reused=reused,
         )
         checker.visit(tree)
         findings.extend(checker._findings)
