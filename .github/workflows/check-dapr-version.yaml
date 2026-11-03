@@ -186,6 +186,7 @@ jobs:
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
             git fetch origin "$branch"
             git checkout "$branch"
+            on_remote=true
             # Defensive re-apply: normally a no-op (the existing branch tip already
             # has __dapr_version = ${baked}). Only does anything in the rare case
             # where that branch's version.py drifted from ${baked} — e.g. a manual
@@ -194,6 +195,7 @@ jobs:
               application_sdk/version.py
           else
             git checkout -b "$branch"
+            on_remote=false
           fi
 
           git add application_sdk/version.py
@@ -212,7 +214,24 @@ jobs:
           fi
 
           git commit -m "chore(deps): sync daprd pin to ${baked} from base image"
-          git push origin "$branch" --force-with-lease
+          # Published through createCommitOnBranch, not `git push`: the org's
+          # signed-commits ruleset blocks a PR carrying an unsigned commit, and
+          # a runner-made commit is unsigned whatever token pushes it. Same
+          # guard as the `--force-with-lease` it replaces: on an existing
+          # branch the commit sits on the tip fetched above and fails if the
+          # branch moved since; a new branch fails if another run created it.
+          if [[ "$on_remote" == "true" ]]; then
+            python3 .github/scripts/signed_commit.py push \
+              --repo "$GITHUB_REPOSITORY" \
+              --branch "$branch" \
+              --expect-head "$(git rev-parse HEAD~1)"
+          else
+            python3 .github/scripts/signed_commit.py push \
+              --repo "$GITHUB_REPOSITORY" \
+              --branch "$branch" \
+              --reset-to "$(git rev-parse HEAD~1)" \
+              --lease absent
+          fi
 
           existing=$(gh pr list \
             --head "$branch" \

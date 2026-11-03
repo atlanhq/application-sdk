@@ -132,10 +132,17 @@ jobs:
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
 
+      # Published through createCommitOnBranch rather than `git push --force`:
+      # the org's signed-commits ruleset blocks a PR carrying an unsigned commit,
+      # and this runner-made commit is unsigned whatever token pushes it. The
+      # bump branch is rebuilt from the merge commit on every run and
+      # overwritten unconditionally (`--lease any`, the `--force` it replaces),
+      # with the job token the checkout pushed with.
       - name: Commit and push bump branch
         if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
         env:
           TARGET_BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           git config --global user.name 'atlan-ci'
@@ -148,7 +155,11 @@ jobs:
           # (its version and the SDK's == pin), and the SDK pins that exact version.
           git add pyproject.toml uv.lock CHANGELOG.md application_sdk/version.py packages/api/pyproject.toml
           git commit -m "chore: bump version to ${NEW_VERSION}"
-          git push origin "$branch_name" --force
+          python3 .github/scripts/signed_commit.py push \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "$branch_name" \
+            --reset-to "$(git rev-parse HEAD~1)" \
+            --lease any
 
       - name: Open or sync bump PR
         if: steps.version_update.outputs.skip != 'true'

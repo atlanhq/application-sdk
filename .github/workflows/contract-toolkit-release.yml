@@ -112,7 +112,17 @@ jobs:
           git add contract-toolkit/src/PklProject contract-toolkit/CHANGELOG.md \
             packages/conformance/conformance/data/toolkit_baseline.json
           git commit -m "chore(contract-toolkit): release v${new_version}"
-          git push origin "${BUMP_BRANCH}" --force-with-lease
+          # Published through createCommitOnBranch, not `git push`: the org's
+          # signed-commits ruleset blocks a PR carrying an unsigned commit, and
+          # a runner-made commit is unsigned whatever token pushes it. The bump
+          # branch is rebuilt from main under the lease `--force-with-lease`
+          # took: it fails if another run moved the branch since this checkout.
+          lease=$(git rev-parse --verify -q "refs/remotes/origin/${BUMP_BRANCH}" || echo absent)
+          python3 .github/scripts/signed_commit.py push \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "${BUMP_BRANCH}" \
+            --reset-to "$(git rev-parse HEAD~1)" \
+            --lease "$lease"
 
           body_file="$(mktemp)"
           {

@@ -167,9 +167,32 @@ jobs:
       - name: Commit the synced outputs
         run: python3 .github/scripts/renovate_pyatlan_sync.py --apply-from "$RUNNER_TEMP/pyatlan-sync"
 
-      # Unchanged outputs commit nothing, so this is a no-op push.
+      # Published through createCommitOnBranch, not `git push`: the org's
+      # signed-commits ruleset blocks a PR carrying an unsigned commit, and a
+      # runner-made commit is unsigned whatever token pushes it. GitHub signs a
+      # commit it creates through the API. Unchanged outputs commit nothing, so
+      # there is nothing to publish. A branch that moved since `sync` fails
+      # expectedHeadOid, and the newer push's own run takes over.
       - name: Push
-        run: git push origin "HEAD:$GITHUB_REF"
+        id: publish
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python3 .github/scripts/signed_commit.py push \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "${GITHUB_REF#refs/heads/}" \
+            --expect-head "$GITHUB_SHA"
+
+      # The published commit is GitHub's, not the local one, so the carry below
+      # (which reads HEAD and HEAD^) must look at the branch's real head.
+      - name: Move HEAD to the published commit
+        if: steps.publish.outputs.oid != ''
+        env:
+          PUBLISHED: ${{ steps.publish.outputs.oid }}
+        run: |
+          set -euo pipefail
+          git fetch -q --depth=2 origin "$PUBLISHED"
+          git reset -q --hard FETCH_HEAD
 
       - name: Carry renovate/artifacts forward
         env:

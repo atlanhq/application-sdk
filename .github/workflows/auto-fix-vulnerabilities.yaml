@@ -330,8 +330,34 @@ jobs:
           print(f"\nDone: {len(fixed)} fixed, {len(failed)} failed")
           PYEOF
 
+      # The signed-commit helper, at this reusable workflow's own commit: the
+      # caller's checkout is an app repo, which does not carry it. Its own
+      # `path:`, after the PR checkout (a checkout into the workspace root
+      # cleans out anything placed before it).
+      - name: Checkout signed-commit helper
+        if: steps.fix.outputs.fixed_count > 0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          path: .signed-commit
+          sparse-checkout: |
+            .github/scripts/signed_commit.py
+            .github/scripts/_gh_refs.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # Published through createCommitOnBranch, not `git push`: the org's
+      # signed-commits ruleset blocks a PR carrying an unsigned commit, and a
+      # runner-made commit is unsigned whatever token pushes it. Same token the
+      # checkout pushed with, App first and the org PAT as its fallback, so the
+      # fallback is signed too. Fails, like a rejected push, if the PR branch
+      # moved since it was checked out.
       - name: Commit fixes
         if: steps.fix.outputs.fixed_count > 0
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          PR_BRANCH: ${{ steps.pr.outputs.branch }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -341,7 +367,10 @@ jobs:
 
           Updated packages with known CRITICAL/HIGH CVEs to their fixed versions.
           Triggered by /fix-vulnerabilities comment on PR #${{ steps.pr.outputs.number }}."
-            git push
+            python3 .signed-commit/.github/scripts/signed_commit.py push \
+              --repo "$GITHUB_REPOSITORY" \
+              --branch "$PR_BRANCH" \
+              --expect-head "$(git rev-parse HEAD~1)"
             echo "Fixes committed and pushed — scan will re-run automatically"
           else
             echo "No lockfile changes to commit"

@@ -42,7 +42,7 @@ def test_release_runs_gate_after_build_before_push() -> None:
     runs = _step_runs("conformance-release.yml", "open-release-pr")
     build = _index(runs, "uv build")
     smoke = _index(runs, GATE_CMD)
-    push = _index(runs, "git push")
+    push = _index(runs, "signed_commit.py push")
     assert build < smoke < push
 
 
