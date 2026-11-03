@@ -975,7 +975,14 @@ drafting.
     `await run_in_thread(fh.close)` in a `finally`, with any `fsync` before it)
     rather than leaving a `with open(...)` on the loop around the chunk loop.
     Do not move the async producer into a sync worker or buffer the full
-    response.
+    response.  File `open` / `write` / `close` take no timeout, so the offload
+    alone cannot bound a sink that stalls (a hung network mount): the worker
+    thread cannot be reclaimed, and `run_in_thread`'s own hold is unbounded.
+    Bound the task instead — wrap the open-through-close span in
+    `async with self.task_context.holding_progress("<call site>", timeout=...)`,
+    sized to the longest you would let the transfer run — so a wedged sink
+    fails the task at that bound rather than at the duration backstop.  Say in
+    the draft that the stuck thread itself is not recovered.
   - *wait* — `threading.Event` → `asyncio.Event`; a `Future` from
     `executor.submit` → `await asyncio.wrap_future(future)`; otherwise offload
     the wait.
