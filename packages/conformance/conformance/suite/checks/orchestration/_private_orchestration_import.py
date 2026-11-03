@@ -29,8 +29,8 @@ def check_p005(
         swap = None
         if isinstance(node, ast.ImportFrom):
             target = private_sdk_target(node)
-            if target is not None and id(node) in top_level:
-                swap = reexport_swap(node, target)
+            if target is not None:
+                swap = reexport_swap(node, target, top_level)
         elif isinstance(node, ast.Import):
             target = next(
                 (a.name for a in node.names if private_sdk_import_name(a.name)),

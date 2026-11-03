@@ -48,9 +48,15 @@ def top_level_ids(tree: ast.AST) -> set[int]:
     return {id(n) for n in getattr(tree, "body", [])}
 
 
-def reexport_swap(node: ast.ImportFrom, module: str) -> SafeSwap | None:
+def reexport_swap(
+    node: ast.ImportFrom, module: str, top_level: set[int]
+) -> SafeSwap | None:
     entry = PUBLIC_REEXPORTS.get(module)
-    if entry is None or any(alias.name not in entry[2] for alias in node.names):
+    if (
+        id(node) not in top_level
+        or entry is None
+        or any(alias.name not in entry[2] for alias in node.names)
+    ):
         return None
     public, since, _ = entry
     return SafeSwap(

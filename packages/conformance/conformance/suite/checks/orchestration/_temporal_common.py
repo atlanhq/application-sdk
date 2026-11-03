@@ -21,6 +21,10 @@ import ast
 
 from conformance.suite.checks._ast_common._safe_swap import PUBLIC_ALIASES
 
+_SANDBOX_NAMES = frozenset(
+    {"SandboxRestrictions", "SandboxedWorkflowRunner", "UnsandboxedWorkflowRunner"}
+)
+
 TEMPORAL_ROOT = "temporalio"
 SDK_TOP = "application_sdk"
 
@@ -79,17 +83,22 @@ def temporal_import_hint(node: ast.stmt) -> str:
         "activity",
     }
     hints: list[str] = []
-    aliased = sorted(
-        PUBLIC_ALIASES[(module, n)][0] for n in names if (module, n) in PUBLIC_ALIASES
-    )
+    aliased = {n for n in names if (module, n) in PUBLIC_ALIASES}
     if aliased:
+        public = sorted(PUBLIC_ALIASES[(module, n)][0] for n in aliased)
         hints.append(
             "Import the same class from 'application_sdk.execution' under its "
-            f"alias ({', '.join(aliased)}), bound to the old name."
+            f"alias ({', '.join(public)}), bound to the old name."
         )
-    if module == "temporalio.exceptions" and names - {
-        n for m, n in PUBLIC_ALIASES if m == module
-    }:
+    if "WorkflowExecutionStatus" in names:
+        hints.append(
+            "Compare a status string with the literal member name "
+            '("COMPLETED", "RUNNING", ...) instead of '
+            "WorkflowExecutionStatus.<MEMBER>.name."
+        )
+    if module in {"temporalio.exceptions", "temporalio.client"} and (
+        names - aliased - {"Client", "WorkflowExecutionStatus"}
+    ):
         hints.append(
             "Some of these temporalio names have no public SDK equivalent; see "
             "the migrate-orchestration skill's no-public-equivalent list."
@@ -100,7 +109,7 @@ def temporal_import_hint(node: ast.stmt) -> str:
             "('application_sdk.testing.integration.fixtures'), which owns the "
             "Temporal server, worker and client."
         )
-    if "Client" in names or module == "temporalio.client" and not names:
+    if "Client" in names or (module == "temporalio.client" and not names):
         hints.append(
             "Annotate with 'TemporalClient' from 'application_sdk.execution'. An "
             "app does not connect its own client in production (the SDK boots it "
@@ -109,7 +118,12 @@ def temporal_import_hint(node: ast.stmt) -> str:
             "'application_sdk.execution.create_temporal_client', whose call "
             "fires P017 anywhere else."
         )
-    if module.startswith("temporalio.worker") or "Worker" in names:
+    if "workflow_sandbox" in module or names & _SANDBOX_NAMES:
+        hints.append(
+            "List the modules the workflow sandbox must pass through in "
+            "'passthrough_modules' on the App class."
+        )
+    elif "Worker" in names or (module == "temporalio.worker" and not names):
         hints.append(
             "Production boots the worker with 'application-sdk --mode "
             "worker|handler|combined' and local dev with "

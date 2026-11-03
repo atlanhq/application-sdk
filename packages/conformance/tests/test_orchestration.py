@@ -17,9 +17,9 @@ from conformance.suite.checks._ast_common._safe_swap import (
     PUBLIC_ALIAS_MODULE,
     PUBLIC_ALIASES,
 )
+from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
 from conformance.suite.schema.extensions import SafeSwap
-from packaging.version import Version
 
 
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:
@@ -230,7 +230,9 @@ def test_p004_leaves_other_temporal_imports_unmarked() -> None:
 
 
 def _at_or_above(installed: str, since: str) -> bool:
-    return Version(installed).release >= Version(since).release
+    current, floor = parse_version(installed), parse_version(since)
+    assert current is not None and floor is not None
+    return version_reached(floor, current)
 
 
 def test_floor_compare_treats_a_pre_release_as_its_release() -> None:
@@ -284,6 +286,35 @@ def test_p004_client_and_worker_hints_name_the_production_launcher() -> None:
     ):
         (finding,) = _rule(src, "P004")
         assert "application-sdk --mode worker|handler|combined" in finding.message
+
+
+def test_p004_hint_sends_every_unaliased_exception_or_client_name_to_the_list() -> None:
+    for src in (
+        "from temporalio.exceptions import RetryState\n",
+        "from temporalio.exceptions import WorkflowAlreadyStartedError\n",
+        "from temporalio.client import WorkflowHandle\n",
+        "from temporalio.client import (\n    Client,\n    ScheduleSpec,\n)\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "no public SDK equivalent" in finding.message, src
+
+
+def test_p004_status_enum_gets_the_literal_hint_not_the_no_public_one() -> None:
+    (finding,) = _rule(
+        "from temporalio.client import WorkflowExecutionStatus\n", "P004"
+    )
+    assert '"COMPLETED"' in finding.message
+    assert "no public SDK equivalent" not in finding.message
+
+
+def test_p004_sandbox_names_get_the_passthrough_hint() -> None:
+    for src in (
+        "from temporalio.worker.workflow_sandbox import SandboxRestrictions\n",
+        "from temporalio.worker import UnsandboxedWorkflowRunner\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "passthrough_modules" in finding.message
+        assert "application-sdk --mode" not in finding.message
 
 
 # ── P006 TemporalImportOutsideAdapter (sdk) ─────────────────────────────────

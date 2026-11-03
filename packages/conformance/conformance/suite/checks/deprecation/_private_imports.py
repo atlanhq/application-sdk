@@ -249,7 +249,7 @@ def scan_private_imports(
                 continue
             component = _private_component(module)
             if component:
-                swap = reexport_swap(node, module) if id(node) in top_level else None
+                swap = reexport_swap(node, module, top_level)
                 emit(node, module, component, swap)
                 continue
             # Public module, private member:
