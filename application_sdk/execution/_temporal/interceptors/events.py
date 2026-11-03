@@ -9,8 +9,10 @@ proves the event never got a response (connection/TLS/DNS failure, missing
 binding), the event is re-sent directly to Event Ingress over HTTPS from this
 process (see :func:`_publish_event_direct`), with a WARNING that names the
 fallback. Errors that may already have been delivered are not re-sent over
-that channel; the ``publish_event`` activity's Temporal retry re-sends them
-through Dapr (at-least-once). Every event carries ``metadata.event_id``,
+that channel; the ``publish_event`` activity's Temporal retry re-sends
+``workflow_start`` / ``workflow_end`` through Dapr (at-least-once). Activity
+events, ``worker_start`` and ``token_refresh`` are sent inline and not
+retried. Every event carries ``metadata.event_id``,
 stable across those retries, so consumers can dedupe. The
 Dapr sidecar is the only Go TLS client in an SDR pod and has been seen
 rejected by customer middleboxes that pass every other client; without the

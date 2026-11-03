@@ -1372,3 +1372,71 @@ class TestEventId:
             ),
         ):
             assert _enrich_event_metadata(event).metadata.event_id == "given"
+
+    @pytest.mark.asyncio
+    async def test_pre_event_id_payload_gets_one_id_across_retries(self) -> None:
+        """A ``publish_event`` input recorded before ``event_id`` existed.
+
+        Workflow histories written by an older SDK carry ``metadata`` without
+        an ``event_id`` key. A retry of that activity on this SDK must still
+        reconstruct the event and send one stable id on every attempt.
+        """
+        import json
+
+        import orjson
+
+        from application_sdk.contracts.events import EventMetadata
+        from application_sdk.infrastructure.context import InfrastructureContext
+
+        old_metadata = json.loads(json.dumps(EventMetadata().model_dump(mode="json")))
+        old_metadata.pop("event_id")
+        old_payload = {
+            "event_type": EventTypes.APPLICATION_EVENT.value,
+            "event_name": ApplicationEventNames.WORKFLOW_START.value,
+            "data": {},
+            "metadata": old_metadata,
+        }
+
+        sent: list[dict] = []
+
+        async def _invoke(*, operation, data, metadata):
+            sent.append(orjson.loads(data))
+
+        binding = mock.MagicMock()
+        binding.invoke = mock.AsyncMock(side_effect=_invoke)
+        infra = InfrastructureContext(event_binding=binding)
+
+        for attempt in (1, 2):
+            act_info = mock.MagicMock(
+                activity_type="publish_event",
+                activity_id="7",
+                attempt=attempt,
+                workflow_type="wf-type",
+                workflow_id="wf-1",
+                workflow_run_id="run-1",
+            )
+            with (
+                mock.patch(
+                    "application_sdk.infrastructure.context.get_infrastructure",
+                    return_value=infra,
+                ),
+                mock.patch.object(
+                    events_module,
+                    "_get_event_auth_headers",
+                    new_callable=mock.AsyncMock,
+                    return_value={},
+                ),
+                mock.patch.object(events_module, "_send_lifecycle_event_to_segment"),
+                mock.patch.object(
+                    events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+                ),
+                mock.patch.object(
+                    events_module.activity, "info", return_value=act_info
+                ),
+            ):
+                await publish_event(dict(old_payload))
+
+        assert len(sent) == 2
+        ids = {p["metadata"]["event_id"] for p in sent}
+        assert len(ids) == 1
+        assert ids != {None}
