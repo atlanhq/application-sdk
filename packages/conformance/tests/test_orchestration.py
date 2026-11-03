@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
+import json
+import re
 from pathlib import Path
 
 from conformance.suite.checks._ast_common._safe_swap import (
@@ -20,6 +22,8 @@ from conformance.suite.checks._ast_common._safe_swap import (
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
 from conformance.suite.schema.extensions import SafeSwap
+
+import conformance
 
 
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:
@@ -229,22 +233,19 @@ def test_p004_leaves_other_temporal_imports_unmarked() -> None:
         assert _swap(finding) is None, src
 
 
-def _at_or_above(installed: str, since: str) -> bool:
-    current, floor = parse_version(installed), parse_version(since)
-    assert current is not None and floor is not None
-    return version_reached(floor, current)
-
-
 def test_floor_compare_treats_a_pre_release_as_its_release() -> None:
-    assert _at_or_above("3.50.0.dev0", "3.50.0")
-    assert not _at_or_above("3.49.2", "3.50.0")
+    assert version_reached((3, 50, 0), parse_version("3.50.0.dev0") or ())
+    assert not version_reached((3, 50, 0), parse_version("3.49.2") or ())
 
 
 def test_p004_public_aliases_are_the_same_objects_from_their_floor() -> None:
-    installed = importlib.metadata.version("atlan-application-sdk")
+    installed = parse_version(importlib.metadata.version("atlan-application-sdk"))
+    assert installed is not None
     seam = importlib.import_module(PUBLIC_ALIAS_MODULE)
     for (module, name), (public, since) in PUBLIC_ALIASES.items():
-        if not _at_or_above(installed, since):
+        floor = parse_version(since)
+        assert floor is not None
+        if not version_reached(floor, installed):
             assert not hasattr(seam, public), (public, since, installed)
             continue
         assert getattr(seam, public) is getattr(importlib.import_module(module), name)
@@ -307,14 +308,81 @@ def test_p004_status_enum_gets_the_literal_hint_not_the_no_public_one() -> None:
     assert "no public SDK equivalent" not in finding.message
 
 
-def test_p004_sandbox_names_get_the_passthrough_hint() -> None:
+def test_p004_sandbox_settings_get_the_passthrough_hint() -> None:
     for src in (
         "from temporalio.worker.workflow_sandbox import SandboxRestrictions\n",
-        "from temporalio.worker import UnsandboxedWorkflowRunner\n",
+        "from temporalio.worker import SandboxedWorkflowRunner\n",
     ):
         (finding,) = _rule(src, "P004")
         assert "passthrough_modules" in finding.message
         assert "application-sdk --mode" not in finding.message
+
+
+def test_p004_unsandboxed_runner_has_no_public_equivalent() -> None:
+    (finding,) = _rule(
+        "from temporalio.worker import UnsandboxedWorkflowRunner\n", "P004"
+    )
+    assert "passthrough_modules" not in finding.message
+    assert "no public SDK equivalent" in finding.message
+
+
+def test_p004_other_worker_names_keep_the_launcher_hint() -> None:
+    for src in (
+        "from temporalio.worker import Interceptor\n",
+        "from temporalio.worker import WorkerConfig\n",
+        "from temporalio.worker import Worker, UnsandboxedWorkflowRunner\n",
+        "import temporalio.worker\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "application-sdk --mode worker|handler|combined" in finding.message, src
+
+
+def test_p004_bare_module_import_points_at_per_name_treatment() -> None:
+    for src in ("import temporalio.exceptions\n", "import temporalio.common\n"):
+        (finding,) = _rule(src, "P004")
+        assert "Each name used through this module" in finding.message
+
+
+def _p004_preplanning_blocks() -> list[re.Pattern[str]]:
+    skill = (
+        Path(conformance.__file__).parent
+        / "skills"
+        / "migrate-orchestration"
+        / "SKILL.md"
+    )
+    block = re.search(r"```decided-defaults\n(.*?)```", skill.read_text(), re.S)
+    assert block is not None
+    rows = [json.loads(line) for line in block.group(1).splitlines() if line.strip()]
+    return [
+        re.compile(r["match"])
+        for r in rows
+        if r["rule"] == "P004" and r.get("block") and isinstance(r.get("match"), str)
+    ]
+
+
+def test_skill_preplanning_block_holds_every_no_public_hint() -> None:
+    blocks = _p004_preplanning_blocks()
+    for src in (
+        "from temporalio.exceptions import RetryState\n",
+        "from temporalio.client import WorkflowHandle\n",
+        "from temporalio.common import (\n    SearchAttributeKey,\n)\n",
+        "from temporalio.worker import UnsandboxedWorkflowRunner\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert any(b.search(finding.message) for b in blocks), src
+
+
+def test_skill_preplanning_block_leaves_fixable_imports_alone() -> None:
+    blocks = _p004_preplanning_blocks()
+    for src in (
+        "from temporalio.exceptions import ApplicationError\n",
+        "from temporalio.client import WorkflowExecutionStatus\n",
+        "from temporalio.client import Client\n",
+        "from temporalio.common import RetryPolicy\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert not any(b.search(finding.message) for b in blocks), src
+        assert not any(b.search(src.splitlines()[0]) for b in blocks), src
 
 
 # ── P006 TemporalImportOutsideAdapter (sdk) ─────────────────────────────────

@@ -21,9 +21,12 @@ import ast
 
 from conformance.suite.checks._ast_common._safe_swap import PUBLIC_ALIASES
 
-_SANDBOX_NAMES = frozenset(
-    {"SandboxRestrictions", "SandboxedWorkflowRunner", "UnsandboxedWorkflowRunner"}
+_SANDBOX_SETTINGS = frozenset({"SandboxRestrictions", "SandboxedWorkflowRunner"})
+_NO_PUBLIC_WORKER_NAMES = frozenset({"UnsandboxedWorkflowRunner"})
+_NAME_MODULES = frozenset(
+    {"temporalio.exceptions", "temporalio.client", "temporalio.common"}
 )
+_HAS_OWN_HINT = frozenset({"Client", "WorkflowExecutionStatus", "RetryPolicy"})
 
 TEMPORAL_ROOT = "temporalio"
 SDK_TOP = "application_sdk"
@@ -92,16 +95,22 @@ def temporal_import_hint(node: ast.stmt) -> str:
         )
     if "WorkflowExecutionStatus" in names:
         hints.append(
-            "Compare a status string with the literal member name "
-            '("COMPLETED", "RUNNING", ...) instead of '
-            "WorkflowExecutionStatus.<MEMBER>.name."
+            "Where the code compares a status string with "
+            "WorkflowExecutionStatus.<MEMBER>.name, compare it with the literal "
+            '("COMPLETED", "RUNNING", ...); any other use (an enum compare, a '
+            "value) is a no-public-equivalent case: plan it as such."
         )
-    if module in {"temporalio.exceptions", "temporalio.client"} and (
-        names - aliased - {"Client", "WorkflowExecutionStatus"}
-    ):
+    unaliased = names - aliased - _HAS_OWN_HINT
+    if module in _NAME_MODULES and unaliased or names & _NO_PUBLIC_WORKER_NAMES:
         hints.append(
             "Some of these temporalio names have no public SDK equivalent; see "
             "the migrate-orchestration skill's no-public-equivalent list."
+        )
+    if module in _NAME_MODULES and not names:
+        hints.append(
+            "Each name used through this module takes its Temporal* alias from "
+            "'application_sdk.execution' where one exists; any other name is a "
+            "no-public-equivalent case."
         )
     if module.startswith("temporalio.testing") or "WorkflowEnvironment" in names:
         hints.append(
@@ -118,12 +127,17 @@ def temporal_import_hint(node: ast.stmt) -> str:
             "'application_sdk.execution.create_temporal_client', whose call "
             "fires P017 anywhere else."
         )
-    if "workflow_sandbox" in module or names & _SANDBOX_NAMES:
+    sandbox_module = "workflow_sandbox" in module
+    if sandbox_module or names & _SANDBOX_SETTINGS:
         hints.append(
             "List the modules the workflow sandbox must pass through in "
             "'passthrough_modules' on the App class."
         )
-    elif "Worker" in names or (module == "temporalio.worker" and not names):
+    if (
+        module.startswith("temporalio.worker")
+        and not sandbox_module
+        and (not names or names - _SANDBOX_SETTINGS - _NO_PUBLIC_WORKER_NAMES)
+    ):
         hints.append(
             "Production boots the worker with 'application-sdk --mode "
             "worker|handler|combined' and local dev with "
