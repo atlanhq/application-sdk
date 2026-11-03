@@ -35,7 +35,7 @@ dependencies = [
     "certifi>=2026.10.19",  # GHSA-6q48-6c7w-9gw2
     # Arrives via pyatlan (~=1.9.1 on Python >=3.10). Published as well so the
     # api wheel's pyatlan extra can carry the same pin (test_api_distribution).
-    "authlib>=1.9.1,<2",  # CVE-2026-96760
+    "authlib==1.9.3",  # CVE-2026-96760
     # Transitive runtime deps, published for the same reason as certifi:
     # protobuf arrives via temporalio / opentelemetry-proto, pyjwt via
     # azure-identity -> msal, python-multipart via fastapi[standard]. The api
