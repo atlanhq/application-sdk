@@ -74,8 +74,11 @@ runs:
           exit 0
         fi
 
+        # ubuntu-latest and ubuntu-slim both ship openssh-client, and slim cannot
+        # install packages, so a runner without it fails here, by name.
         if ! command -v ssh-keygen >/dev/null 2>&1; then
-          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-client >/dev/null
+          echo "::error::ssh-keygen is not on this runner; SSH commit signing needs openssh-client."
+          exit 1
         fi
 
         # RUNNER_TEMP is wiped when the job ends, so the key never outlives it.
