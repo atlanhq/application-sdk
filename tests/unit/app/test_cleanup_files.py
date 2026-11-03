@@ -436,8 +436,9 @@ class TestCleanupCredentialFiles:
             mock.patch.object(
                 app_base, "_get_execution_id_from_task", return_value="wf-1"
             ),
-            mock.patch("shutil.rmtree", side_effect=PermissionError("denied")),
+            private_stdlib(app_base, "shutil") as local_shutil,
         ):
+            local_shutil.rmtree = mock.Mock(side_effect=PermissionError("denied"))
             result = await _CleanupApp().cleanup_files(
                 CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
             )

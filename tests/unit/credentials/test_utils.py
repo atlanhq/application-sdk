@@ -2,10 +2,11 @@ import base64
 import os
 import warnings
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from application_sdk.credentials import utils as credential_utils
 from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
@@ -14,6 +15,7 @@ from application_sdk.credentials.utils import (
     parse_credentials_extra,
     resolve_credential_file,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 class TestParseCredentialsExtra:
@@ -561,7 +563,8 @@ class TestResolveCredentialFilePerCallPaths:
         assert os.listdir(os.path.dirname(result)) == ["ca_cert.pem"]
 
     async def test_a_failed_write_removes_the_call_dir(self, tmp_path):
-        with patch("os.replace", side_effect=OSError("disk full")):
+        with private_stdlib(credential_utils, "os") as local_os:
+            local_os.replace = Mock(side_effect=OSError("disk full"))
             with pytest.raises(OSError, match="disk full"):
                 await resolve_credential_file(
                     base64.b64encode(b"cert").decode(),
