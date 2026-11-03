@@ -778,6 +778,113 @@ def transform_entities():
     assert "L006" not in _ids(src)
 
 
+def test_l006_silent_for_small_mapping_get_values() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind):
+    try:
+        input_sets = {
+            "tables": ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+            "views": ["j"],
+        }
+        required = input_sets.get(kind, [])
+        if not required:
+            raise ValueError("no inputs")
+        logger.info("downloading %s inputs", len(required))
+        for item in required:
+            logger.info("missing optional input %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_with_large_possible_value() -> None:
+    items = ", ".join(f'"item_{index}"' for index in range(11))
+    src = f"""
+from loguru import logger
+
+def process_inputs(kind):
+    try:
+        input_sets = {{
+            "small": ["alpha"],
+            "large": [{items}],
+        }}
+        required = input_sets.get(kind, [])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_with_large_default() -> None:
+    items = ", ".join(f'"item_{index}"' for index in range(11))
+    src = f"""
+from loguru import logger
+
+def process_inputs(kind):
+    try:
+        input_sets = {{"tables": ["alpha"]}}
+        required = input_sets.get(kind, [{items}])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_with_unknown_default() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind, fallback):
+    try:
+        input_sets = {"tables": ["alpha", "beta"]}
+        required = input_sets.get(kind, fallback)
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_from_unknown_mapping() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind, input_sets):
+    try:
+        required = input_sets.get(kind, [])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_after_mapping_mutation() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind, extra_inputs):
+    try:
+        input_sets = {"tables": ["alpha"]}
+        input_sets.update(extra_inputs)
+        required = input_sets.get(kind, [])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_mapping_with_more_than_ten_items() -> None:
     entries = ",\n        ".join(
         f'"ENTITY_{index}": "processed/{index}"' for index in range(11)

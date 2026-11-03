@@ -454,10 +454,209 @@ def _caps_before(bindings: dict[str, tuple[int, int]], line: int) -> dict[str, i
     }
 
 
+def _mapping_get_parts(expression: ast.expr) -> tuple[ast.expr, ast.expr] | None:
+    """Return the receiver and explicit default for a positional ``dict.get``."""
+    if (
+        not isinstance(expression, ast.Call)
+        or not isinstance(expression.func, ast.Attribute)
+        or expression.func.attr != "get"
+        or len(expression.args) != 2
+        or expression.keywords
+    ):
+        return None
+    return expression.func.value, expression.args[1]
+
+
+def _literal_mapping_get_cap(
+    mapping: ast.Dict, default: ast.expr, shadowed: frozenset[str]
+) -> int | None:
+    """Prove the maximum iterable length returned by a literal mapping's ``get``."""
+    if any(key is None for key in mapping.keys):
+        return None
+    caps = [_literal_iterable_cap(value, shadowed) for value in mapping.values]
+    default_cap = _literal_iterable_cap(default, shadowed)
+    if default_cap is None or any(cap is None for cap in caps):
+        return None
+    return max([default_cap, *(cap for cap in caps if cap is not None)])
+
+
+def _statement_suite_and_index(
+    statement: ast.stmt, parents: dict[ast.AST, ast.AST]
+) -> tuple[list[ast.AST], int] | None:
+    """Return the containing statement list and *statement*'s index in it."""
+    parent = parents.get(statement)
+    if parent is None:
+        return None
+    for _, values in ast.iter_fields(parent):
+        if isinstance(values, list):
+            index = next(
+                (index for index, value in enumerate(values) if value is statement),
+                None,
+            )
+            if index is not None:
+                return values, index
+    return None
+
+
+def _simple_name_assignment(
+    statement: ast.stmt,
+) -> tuple[ast.Name, ast.expr] | None:
+    """Return the target and value of a single-name assignment statement."""
+    if isinstance(statement, ast.Assign) and len(statement.targets) == 1:
+        target = statement.targets[0]
+        value = statement.value
+    elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+        target = statement.target
+        value = statement.value
+    else:
+        return None
+    return (target, value) if isinstance(target, ast.Name) else None
+
+
+def _preceding_name_assignment(
+    name: str, before: ast.stmt, parents: dict[ast.AST, ast.AST]
+) -> tuple[ast.Name, ast.expr, ast.stmt] | None:
+    """Find the nearest direct assignment to *name* earlier in *before*'s suite."""
+    suite_info = _statement_suite_and_index(before, parents)
+    if suite_info is None:
+        return None
+    suite, index = suite_info
+    for statement in reversed(suite[:index]):
+        if not isinstance(statement, ast.stmt):
+            continue
+        binding = _simple_name_assignment(statement)
+        if binding is not None and binding[0].id == name:
+            return binding[0], binding[1], statement
+    return None
+
+
+def _is_length_reference(
+    node: ast.Name, parents: dict[ast.AST, ast.AST], shadowed: frozenset[str]
+) -> bool:
+    """True when *node* is the sole argument to the unshadowed builtin ``len``."""
+    call = parents.get(node)
+    return (
+        isinstance(call, ast.Call)
+        and _is_builtin_call(call, "len", shadowed)
+        and len(call.args) == 1
+        and call.args[0] is node
+        and not call.keywords
+    )
+
+
+def _is_truthiness_reference(node: ast.Name, parents: dict[ast.AST, ast.AST]) -> bool:
+    """True when *node* is read directly as an ``if`` truthiness test."""
+    parent = parents.get(node)
+    if isinstance(parent, ast.If) and parent.test is node:
+        return True
+    if isinstance(parent, ast.UnaryOp) and isinstance(parent.op, ast.Not):
+        ancestor = parents.get(parent)
+        return isinstance(ancestor, ast.If) and ancestor.test is parent
+    return False
+
+
+def _function_nonlocal_names(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> set[str]:
+    return {
+        name
+        for node in _function_scope_nodes(function)
+        if isinstance(node, (ast.Global, ast.Nonlocal))
+        for name in node.names
+    }
+
+
+def _is_read_only_loop_binding(
+    target: ast.Name,
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    parents: dict[ast.AST, ast.AST],
+    shadowed: frozenset[str],
+) -> bool:
+    """True when a local binding is only measured or used as a loop source."""
+    name = target.id
+    if _function_store_counts(function).get(
+        name
+    ) != 1 or name in _function_nonlocal_names(function):
+        return False
+    references = [
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Name) and node.id == name
+    ]
+    return all(
+        _enclosing_function(node, parents) is function
+        and (
+            node is target
+            or (
+                isinstance(node.ctx, ast.Load)
+                and (
+                    _is_loop_source_reference(node, parents, shadowed)
+                    or _is_length_reference(node, parents, shadowed)
+                    or _is_truthiness_reference(node, parents)
+                )
+            )
+        )
+        for node in references
+    )
+
+
+def _literal_mapping_get_loop_cap(
+    loop: ast.For | ast.AsyncFor,
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+    parents: dict[ast.AST, ast.AST],
+    shadowed: frozenset[str],
+) -> int | None:
+    """Prove a loop cap for a local, unmutated literal mapping's ``get`` result."""
+    if not isinstance(loop.iter, ast.Name):
+        return None
+    result_binding = _preceding_name_assignment(loop.iter.id, loop, parents)
+    if result_binding is None:
+        return None
+    result_target, expression, result_statement = result_binding
+    if not _is_read_only_loop_binding(result_target, function, parents, shadowed):
+        return None
+    get_parts = _mapping_get_parts(expression)
+    if get_parts is None:
+        return None
+    receiver, default = get_parts
+    if isinstance(receiver, ast.Dict):
+        mapping = receiver
+    elif isinstance(receiver, ast.Name):
+        mapping_binding = _preceding_name_assignment(
+            receiver.id, result_statement, parents
+        )
+        if mapping_binding is None:
+            return None
+        mapping_target, mapping_expression, _ = mapping_binding
+        if not isinstance(mapping_expression, ast.Dict):
+            return None
+        mapping_name = mapping_target.id
+        if _function_store_counts(function).get(
+            mapping_name
+        ) != 1 or mapping_name in _function_nonlocal_names(function):
+            return None
+        references = [
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Name) and node.id == mapping_name
+        ]
+        if any(
+            _enclosing_function(node, parents) is not function
+            or (node is not mapping_target and node is not receiver)
+            for node in references
+        ):
+            return None
+        mapping = mapping_expression
+    else:
+        return None
+    return _literal_mapping_get_cap(mapping, default, shadowed)
+
+
 def _function_loop_caps(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
     local_bindings: dict[str, tuple[int, int]],
     shadowed: frozenset[str],
+    parents: dict[ast.AST, ast.AST],
 ) -> dict[ast.For | ast.AsyncFor, int]:
     loop_caps: dict[ast.For | ast.AsyncFor, int] = {}
     for node in _function_scope_nodes(function):
@@ -466,6 +665,8 @@ def _function_loop_caps(
         cap = _iterable_cap(
             node.iter, _caps_before(local_bindings, node.lineno), shadowed
         )
+        if cap is None:
+            cap = _literal_mapping_get_loop_cap(node, function, parents, shadowed)
         if cap is not None:
             loop_caps[node] = cap
     return loop_caps
@@ -516,7 +717,7 @@ def collect_bounded_loop_caps(tree: ast.Module) -> dict[ast.For | ast.AsyncFor, 
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             bindings = _local_literal_bindings(node, parents, shadowed)
-            all_loop_caps.update(_function_loop_caps(node, bindings, shadowed))
+            all_loop_caps.update(_function_loop_caps(node, bindings, shadowed, parents))
     for node in ast.walk(tree):
         if isinstance(node, (ast.For, ast.AsyncFor)) and node not in all_loop_caps:
             cap = _literal_iterable_cap(node.iter, shadowed)
