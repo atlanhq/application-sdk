@@ -149,6 +149,43 @@ class TestRunBounded:
 
         assert [type(e) for e in exc_info.value.exceptions] == [ValueError]
 
+    async def test_lone_failure_surfaces_bare_when_asked(self) -> None:
+        """For callers migrating off ``asyncio.gather`` whose own callers
+        classify by type: one leaf is re-raised as itself, its own cause kept
+        and the group attached as context."""
+        root = OSError("disk")
+
+        async def fail() -> None:
+            raise ValueError("not a storage failure") from root
+
+        with pytest.raises(ValueError) as exc_info:
+            await _run_bounded([fail()], 2, unwrap_lone_failure=True)
+
+        assert exc_info.value.__cause__ is root
+        assert isinstance(exc_info.value.__context__, BaseExceptionGroup)
+
+    async def test_several_failures_stay_a_group_even_when_lone_is_asked(
+        self,
+    ) -> None:
+        """Unwrapping two leaves would demote one; the group is kept whole."""
+        both_running = asyncio.Barrier(2)
+
+        async def fail(exc: Exception) -> None:
+            await both_running.wait()
+            raise exc
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            await _run_bounded(
+                [fail(ValueError("a")), fail(KeyError("b"))],
+                2,
+                unwrap_lone_failure=True,
+            )
+
+        assert sorted(type(e).__name__ for e in exc_info.value.exceptions) == [
+            "KeyError",
+            "ValueError",
+        ]
+
     async def test_results_keep_input_order_and_respect_the_bound(self) -> None:
         running = 0
         peak = 0

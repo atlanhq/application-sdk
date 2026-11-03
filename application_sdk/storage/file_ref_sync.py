@@ -58,6 +58,7 @@ from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.contracts.types import FileReference, Lazy, StoreTarget
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage._local_marker import (
     file_fingerprint,
     hash_fingerprinted,
@@ -323,8 +324,10 @@ async def _replace_refs(
       the same ``storage_path`` are coalesced — only the first-encountered ref
       triggers an actual download. Whether a ref needs materialising is
       decided once here, off the event loop, and reused by pass 3.
-    - **Pass 2 (execute)**: run all unique coroutines concurrently under a
-      bounded ``asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)``.
+    - **Pass 2 (execute)**: run all unique coroutines concurrently, at most
+      ``MAX_CONCURRENT_STORAGE_TRANSFERS`` at a time. The first failure
+      cancels the rest and waits for them, threads included, before it
+      propagates (see ``_run_bounded``).
     - **Pass 3 (scatter)**: rebuild the tree synchronously via ``model_copy``
       for frozen ``BaseModel`` parents, writing results from the dict.
       Subsequent refs sharing a ``storage_path`` adopt the winner's
@@ -410,15 +413,26 @@ async def _replace_refs(
     _collect(data)
 
     if _candidates:
-        check_sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
         rehashes: dict[str, asyncio.Task[bool]] = {}
-
-        async def _check(ref: FileReference) -> bool:
-            async with check_sem:
-                return await _needs_materialize(ref, rehashes)
-
         unique = list({id(ref): ref for ref in _candidates}.values())
-        verdicts = await asyncio.gather(*[_check(ref) for ref in unique])
+        try:
+            verdicts = await _run_bounded(
+                (_needs_materialize(ref, rehashes) for ref in unique),
+                MAX_CONCURRENT_STORAGE_TRANSFERS,
+                unwrap_lone_failure=True,
+            )
+        except BaseException:
+            # A rehash is its own task, shared by the refs naming its path, so
+            # the fan-out does not own it. Cancelling its waiters cancels it,
+            # but it may not have unwound yet; wait, so none outlives the raise.
+            # (Its thread is already drained: it was offloaded inside the
+            # fan-out's tracking scope.)
+            leftover = [t for t in rehashes.values() if not t.done()]
+            for task in leftover:
+                task.cancel()
+            if leftover:
+                await asyncio.wait(leftover)
+            raise
         _needs = {id(ref): needs for ref, needs in zip(unique, verdicts)}
         for node in _candidates:
             if not _needs[id(node)]:
@@ -431,16 +445,13 @@ async def _replace_refs(
                 _winners[key] = node
 
     if not _factories:
-        return data  # nothing to do — skip gather entirely
+        return data  # nothing to do — skip the fan-out entirely
 
-    # ── Pass 2: execute concurrently under bounded semaphore ──────────────────
-    sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
-
+    # ── Pass 2: execute concurrently, bounded ─────────────────────────────────
     async def _run(
         key: str, factory: Callable[[], Coroutine[Any, Any, FileReference]]
     ) -> tuple[str, FileReference]:
-        async with sem:
-            result = await factory()
+        result = await factory()
         # One ref persisted or materialised is one unit of work (ADR-0018).
         # The per-file and per-part marks inside transfer/ops already keep a
         # single large ref visible; this coarser mark exists for the label,
@@ -449,7 +460,15 @@ async def _replace_refs(
         current_progress_tracker().mark_progress(f"file_ref.{mode}")
         return key, result
 
-    pairs = await asyncio.gather(*[_run(k, f) for k, f in _factories.items()])
+    # Not asyncio.gather: it leaves siblings running after the first failure,
+    # still holding their path locks, transfer-budget bytes and threads, so
+    # Temporal's retry on this worker queues behind them. The first failure
+    # here cancels the rest and drains their threads before it propagates.
+    pairs = await _run_bounded(
+        (_run(k, f) for k, f in _factories.items()),
+        MAX_CONCURRENT_STORAGE_TRANSFERS,
+        unwrap_lone_failure=True,
+    )
     _results: dict[str, FileReference] = dict(pairs)
 
     # ── Pass 3: scatter results back through the tree ─────────────────────────

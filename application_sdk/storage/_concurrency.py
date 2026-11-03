@@ -30,6 +30,8 @@ T = TypeVar("T")
 async def _run_bounded(
     coros: Iterable[Coroutine[Any, Any, T]],
     max_concurrency: int | None,
+    *,
+    unwrap_lone_failure: bool = False,
 ) -> list[T]:
     """Run *coros* concurrently, at most *max_concurrency* at a time.
 
@@ -49,6 +51,13 @@ async def _run_bounded(
             Unwrapping a mixed group would demote every other leaf to
             ``__cause__`` — reachable in a traceback, invisible to an
             ``except`` clause — so something unforeseen is surfaced whole.
+        Exception: With *unwrap_lone_failure*, a group holding exactly one
+            ``Exception`` surfaces as that exception, whatever its type, with
+            the group as its ``__context__``. Nothing is demoted when there is
+            one leaf, and it is the shape ``asyncio.gather`` gave: for callers
+            migrating off it whose own callers classify by type (the activity
+            boundary maps an ``AppError`` leaf such as ``UnsafeUploadPathError``
+            to a typed, non-retryable failure; a group would reach it untyped).
         asyncio.CancelledError: If the caller is cancelled, after the same
             drain.
     """
@@ -111,13 +120,19 @@ async def _run_bounded(
                     unstarted.close()
         except BaseExceptionGroup as group:
             await drain_offloads(pending)
-            if all(isinstance(leaf, StorageError) for leaf in group.exceptions):
+            leaves = group.exceptions
+            lone = (
+                unwrap_lone_failure
+                and len(leaves) == 1
+                and isinstance(leaves[0], Exception)
+            )
+            if lone or all(isinstance(leaf, StorageError) for leaf in leaves):
                 # Not `from group`: that would overwrite the leaf's own
                 # __cause__ (the OSError or provider error behind it) with the
                 # group, and any caller walking the cause chain for the real
                 # reason would find only the wrapper. Raised in this handler,
                 # the group is still attached as __context__.
-                raise group.exceptions[0]
+                raise leaves[0]
             raise
         except BaseException:
             await drain_offloads(pending)

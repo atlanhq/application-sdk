@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Annotated
 
 import pytest
 from pydantic import Field
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, Lazy
+from application_sdk.storage.errors import StorageError, UnsafeUploadPathError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.file_ref_sync import (
     has_refs_to_materialize,
@@ -762,3 +767,146 @@ class TestBlockedPathPatternsAreSeparatorAgnostic:
             PureWindowsPath("C:/work/export/secretsauce/t.txt"),
             _parse_blocked_paths(),
         )
+
+
+# ---------------------------------------------------------------------------
+# First failure: no sibling outlives the raise (FND-4277)
+# ---------------------------------------------------------------------------
+
+#: How long a sibling's offloaded call blocks its thread. Long enough that an
+#: undrained fan-out raises well before it ends.
+_SIBLING_THREAD_SECONDS = 0.3
+
+
+class _SiblingProbe:
+    """Siblings that block in ``run_in_thread``, and one ref that fails once
+    every sibling's thread is running.
+
+    ``completed`` records each sibling coroutine that ran past its thread. With
+    ``asyncio.gather`` they did, after the caller had seen the failure; with the
+    SDK fan-out they are cancelled, and their threads drained before the raise.
+    """
+
+    def __init__(self, siblings: int) -> None:
+        self.started = [threading.Event() for _ in range(siblings)]
+        self.finished = [threading.Event() for _ in range(siblings)]
+        self.completed: list[int] = []
+
+    async def sibling(self, index: int) -> None:
+        def _block() -> None:
+            self.started[index].set()
+            time.sleep(_SIBLING_THREAD_SECONDS)
+            self.finished[index].set()
+
+        await run_in_thread(_block)
+        self.completed.append(index)
+
+    async def fail(self, exc: Exception) -> None:
+        for event in self.started:
+            if not await asyncio.to_thread(event.wait, 5.0):
+                raise AssertionError("sibling thread did not start")
+        raise exc
+
+    async def assert_no_sibling_outlived_the_raise(self) -> None:
+        assert all(
+            e.is_set() for e in self.finished
+        ), "a sibling's thread was still running when the failure propagated"
+        # Give an orphaned coroutine every chance to resume and finish.
+        await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
+        assert self.completed == [], "a sibling completed after the raise"
+
+
+class _ThreeRefOutput(Output, allow_unbounded_fields=True):
+    r0: FileReference = Field(default_factory=FileReference)
+    r1: FileReference = Field(default_factory=FileReference)
+    r2: FileReference = Field(default_factory=FileReference)
+
+
+class TestFirstFailureStopsSiblings:
+    async def test_materialize_failure_cancels_and_drains_siblings(
+        self, monkeypatch
+    ) -> None:
+        from application_sdk.storage import reference as _ref_mod
+
+        probe = _SiblingProbe(siblings=2)
+        order = {"p/r0": 0, "p/r1": 1}
+
+        async def _materialize(store, ref, **kwargs):
+            if ref.storage_path == "p/bad":
+                await probe.fail(StorageError("bad ref"))
+            await probe.sibling(order[ref.storage_path])
+            return ref
+
+        monkeypatch.setattr(_ref_mod, "materialize_file_reference", _materialize)
+        inp = _MultiRefInput(
+            ref_a=FileReference(is_durable=True, storage_path="p/r0"),
+            ref_b=FileReference(is_durable=True, storage_path="p/bad"),
+            ref_c=FileReference(is_durable=True, storage_path="p/r1"),
+        )
+
+        with pytest.raises(StorageError, match="bad ref"):
+            await materialize_file_refs(create_memory_store(), inp)
+
+        await probe.assert_no_sibling_outlived_the_raise()
+
+    async def test_persist_failure_cancels_drains_and_stays_typed(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """A lone ``AppError`` that is not a ``StorageError`` reaches the
+        activity boundary bare, as it did through ``asyncio.gather`` — a group
+        would lose the typed, non-retryable translation it maps to."""
+        from application_sdk.storage import reference as _ref_mod
+
+        probe = _SiblingProbe(siblings=2)
+        paths = {}
+        for name in ("r0", "r1", "bad"):
+            path = tmp_path / name
+            path.write_bytes(b"x")
+            paths[str(path)] = name
+
+        async def _persist(store, ref, **kwargs):
+            name = paths[ref.local_path]
+            if name == "bad":
+                await probe.fail(UnsafeUploadPathError(unsafe_path=ref.local_path))
+            await probe.sibling(int(name[1:]))
+            return ref
+
+        monkeypatch.setattr(_ref_mod, "persist_file_reference", _persist)
+        by_name = {name: path for path, name in paths.items()}
+        output = _ThreeRefOutput(
+            r0=FileReference(local_path=by_name["r0"]),
+            r1=FileReference(local_path=by_name["bad"]),
+            r2=FileReference(local_path=by_name["r1"]),
+        )
+
+        with pytest.raises(UnsafeUploadPathError) as exc_info:
+            await persist_file_refs(create_memory_store(), output)
+
+        assert not isinstance(exc_info.value, BaseExceptionGroup)
+        await probe.assert_no_sibling_outlived_the_raise()
+
+    async def test_check_failure_cancels_and_drains_siblings(self, monkeypatch) -> None:
+        """The needs-materialise pass hashes local files in threads; one check
+        failing must not leave the others hashing after the raise."""
+        from application_sdk.storage import file_ref_sync as _sync_mod
+
+        probe = _SiblingProbe(siblings=2)
+        order = {"p/r0": 0, "p/r1": 1}
+
+        async def _needs(ref, rehashes=None):
+            if ref.storage_path == "p/bad":
+                await probe.fail(OSError("unreadable local copy"))
+            await probe.sibling(order[ref.storage_path])
+            return False
+
+        monkeypatch.setattr(_sync_mod, "_needs_materialize", _needs)
+        inp = _MultiRefInput(
+            ref_a=FileReference(is_durable=True, storage_path="p/r0"),
+            ref_b=FileReference(is_durable=True, storage_path="p/bad"),
+            ref_c=FileReference(is_durable=True, storage_path="p/r1"),
+        )
+
+        with pytest.raises(OSError, match="unreadable local copy"):
+            await materialize_file_refs(create_memory_store(), inp)
+
+        await probe.assert_no_sibling_outlived_the_raise()
