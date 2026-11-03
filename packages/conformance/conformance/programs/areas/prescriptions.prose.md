@@ -1618,3 +1618,20 @@ path component, and this rule governs that package's sources too).
   `# conformance: ignore[P053] <reason>` naming what is resolved, and return
   `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
   the tier is already WARN for that.
+
+  **For the migration lane.**  A P053 site inside the app's own
+  `_resolve_credential_ref` / `resolve_credential_ref` is an owner decision:
+  `SqlApp.run()` and the preflight gate call that method, so its body decides
+  which credential every task and the gate use.  An inline flattening whose
+  output `normalize_inline_credentials` would change (it raises on a repeated
+  key or a non-scalar value, gives `""` for a missing `value`, and keeps
+  `extra.*` keys flat and dotted) is an owner decision too; read the readers of
+  the flattened dict first.  A fix never logs, prints or copies a credential
+  value.
+
+```decided-defaults
+{"rule": "P053", "fix_shape": "route-credentials", "decision": "Replace CredentialRef.resolve(input) or CredentialRef.resolve_or_none(input) on the entry-point input, and any try/except CredentialRoutingError that falls back to inline credentials around it, with ref, inline = route_credentials(input) from application_sdk.credentials; pass inline on where the code used the inline credentials, and delete the local router. Where the old code raised when no credential was given, keep that: raise CredentialRoutingError() when ref is None and inline is empty. A misrouted input (agent mode with an empty spec) now raises CredentialRoutingError instead of falling back to a GUID or to inline credentials; the PR names that change.", "why": "route_credentials is the routing the preflight gate uses, so the gate and the tasks resolve the same credential; every input that routes today resolves to the same ref.", "pr_note": "A misrouted credential input now fails at routing with CredentialRoutingError instead of falling back to a GUID or inline credentials."}
+{"rule": "P053", "match": "^`_?resolve_credential_ref`", "block": "The site is the app's own resolve_credential_ref override, which SqlApp.run() and the preflight gate call: its body decides which credential every task and the gate use.", "brief": "Should this override become ref, _ = route_credentials(input) (the gate and the tasks then route the same way), or keep its own routing?"}
+{"rule": "P053", "fix_shape": "^inline-shape-change$", "block": "normalize_inline_credentials would change the flattened dict a reader uses (a repeated key or non-scalar value now raises, a missing value becomes \"\", or extra.* keys stay dotted where the app nested them).", "brief": "Accept the SDK's inline credential shape (name the readers that change), or keep the app's own flattening with a reasoned ignore?"}
+{"rule": "P053", "fix_shape": "^not-entry-input-ignore$", "block": "CredentialRef.resolve runs over an object that is not the entry-point input; the guide's end state is an ignore whose reason names what is resolved.", "brief": "What does this resolve, so the ignore[P053] reason can name it?"}
+```
