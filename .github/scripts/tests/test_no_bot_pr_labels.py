@@ -97,10 +97,6 @@ _GRANDFATHERED: dict[str, tuple[int, str]] = {
         1,
         "vuln-auto-merge label at create, on application-sdk vuln-fix PRs.",
     ),
-    ".github/scripts/sdk_review_approve.py": (
-        4,
-        "sdk-review-* verdict labels on application-sdk PRs after review.",
-    ),
     ".github/workflows/check-dapr-version.yaml": (
         1,
         "dependencies label at create, on application-sdk Dapr bump PRs.",

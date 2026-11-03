@@ -1,6 +1,6 @@
 """The code-owner approval, as the workflow's last step.
 
-Modelled on sdk-review's stamp (`.github/scripts/sdk_review_approve.py`):
+Modelled on the retired sdk-review stamp (`sdk_review_approve.py`, now removed):
 
 - Two tokens, deliberately. `atlan-ci` is a CODEOWNER, so the APPROVE review
   must carry that identity; GitHub Apps cannot be code owners. Nothing else
