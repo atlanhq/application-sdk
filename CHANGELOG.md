@@ -1,5 +1,51 @@
 # Changelog
 
+## v3.54.0 (November 03, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.53.2...v3.54.0
+
+### Features
+
+- validate workflow config and required credentials at submission (FND-501, FND-502) (#4677) (by @cmgrote in [7fa5e93](https://github.com/atlanhq/application-sdk/commit/7fa5e93))
+
+### Bug Fixes
+
+- reap idle fault-isolation children and size the pool from the CPU quota [FND-4278] (#4692) (by @cmgrote in [da8b362](https://github.com/atlanhq/application-sdk/commit/da8b362))
+- never let sizing telemetry replace a finished activity's outcome [FND-4281] (#4689) (by @cmgrote in [b3e60a2](https://github.com/atlanhq/application-sdk/commit/b3e60a2))
+- track and bound flush tasks, loop-handler flushes and Segment queue [FND-4283] (#4691) (by @cmgrote in [89d46ac](https://github.com/atlanhq/application-sdk/commit/89d46ac))
+- apply the SDK SSL context to BaseClient's shared transport [FND-4276] (#4688) (by @cmgrote in [1f4a730](https://github.com/atlanhq/application-sdk/commit/1f4a730))
+- one path normaliser, AzureClient teardown, idempotent lock acquire, late heartbeat [FND-4285] (#4693) (by @cmgrote in [8223361](https://github.com/atlanhq/application-sdk/commit/8223361))
+- a missing Dapr secret fails after one request, and event auth stops re-fetching it [FND-4279] (#4690) (by @cmgrote in [4114a8e](https://github.com/atlanhq/application-sdk/commit/4114a8e))
+- materialise path-less FileReferences under the run's scratch dir [FND-4282] (#4696) (by @cmgrote in [0a68d24](https://github.com/atlanhq/application-sdk/commit/0a68d24))
+- typed-I/O and CloudStore fan-outs stop leaving siblings running after the first failure [FND-4277] (#4699) (by @cmgrote in [74f29b3](https://github.com/atlanhq/application-sdk/commit/74f29b3))
+- keep lifecycle events at-least-once and dedupable by event_id [FND-4280] (#4697) (by @cmgrote in [3f373cd](https://github.com/atlanhq/application-sdk/commit/3f373cd))
+- give each resolved credential file its own private path and remove it with the run [FND-4275] (#4698) (by @cmgrote in [db87206](https://github.com/atlanhq/application-sdk/commit/db87206))
+- one jittered retry helper, resettable Dapr readiness gates, gateway-404 retry at the store seam (#4716) (by @cmgrote in [c7ecde8](https://github.com/atlanhq/application-sdk/commit/c7ecde8))
+
+### Documentation
+
+- keep the [tests] extra in the dev group in the pyproject example (#4679) (by @vaibhavatlan in [b593c60](https://github.com/atlanhq/application-sdk/commit/b593c60))
+
+### Chores
+
+- update atlanhq/application-sdk action to v3.53.2 (#4667) (by @renovate[bot] in [d922a82](https://github.com/atlanhq/application-sdk/commit/d922a82))
+- sync daprd pin to 1.19.1 (#4668) (by @atlan-app-fleet[bot] in [08ed6ed](https://github.com/atlanhq/application-sdk/commit/08ed6ed))
+- remove 2 resolved allowlist entries (#4671) (by @atlan-app-fleet[bot] in [070f5e8](https://github.com/atlanhq/application-sdk/commit/070f5e8))
+- lock file maintenance (#4666) (by @renovate[bot] in [ef9a524](https://github.com/atlanhq/application-sdk/commit/ef9a524))
+- lock file maintenance (#4674) (by @renovate[bot] in [28727e6](https://github.com/atlanhq/application-sdk/commit/28727e6))
+- lock file maintenance (#4675) (by @renovate[bot] in [9b00d71](https://github.com/atlanhq/application-sdk/commit/9b00d71))
+- lock file maintenance (#4681) (by @renovate[bot] in [1c5c522](https://github.com/atlanhq/application-sdk/commit/1c5c522))
+- lock file maintenance (#4686) (by @renovate[bot] in [9e748d2](https://github.com/atlanhq/application-sdk/commit/9e748d2))
+- test_worker_health_settles_after_a_slow_start (#4694) (by @cmgrote in [d9494ed](https://github.com/atlanhq/application-sdk/commit/d9494ed))
+- lock file maintenance (#4687) (by @renovate[bot] in [7cfbd51](https://github.com/atlanhq/application-sdk/commit/7cfbd51))
+- lock file maintenance (#4701) (by @renovate[bot] in [9be009e](https://github.com/atlanhq/application-sdk/commit/9be009e))
+- update dependency pyatlan to >=11.7.0,<12 (#4709) (by @renovate[bot] in [35fccb2](https://github.com/atlanhq/application-sdk/commit/35fccb2))
+- add APP-SCOPE-001 for client defaults changed for one server (#4710) (by @connectivity-ai[bot] in [4c3b9ef](https://github.com/atlanhq/application-sdk/commit/4c3b9ef))
+- lock file maintenance (#4704) (by @renovate[bot] in [1222a14](https://github.com/atlanhq/application-sdk/commit/1222a14))
+- lock file maintenance (#4713) (by @renovate[bot] in [c292ed7](https://github.com/atlanhq/application-sdk/commit/c292ed7))
+- SSH-sign every bot commit, committing as atlan-ci (#4715) (by @vaibhavatlan in [6b5b5d5](https://github.com/atlanhq/application-sdk/commit/6b5b5d5))
+
+
 ## v3.53.2 (November 01, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.53.1...v3.53.2
