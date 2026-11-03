@@ -252,6 +252,7 @@ jobs:
         env:
           TARGET_BRANCH: ${{ inputs.target_branch }}
           NEW_VERSION: ${{ steps.bump.outputs.new }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
           git config --global user.name 'atlan-ci'
@@ -261,9 +262,26 @@ jobs:
           git checkout -b "$BRANCH"
           git add pyproject.toml uv.lock CHANGELOG.md
           git commit -m "chore: bump version to ${NEW_VERSION}"
-          # --force-with-lease: safer than --force — fails if another CI run pushed
-          # to this bot-owned bump branch concurrently, which is the correct behavior.
-          git push origin "$BRANCH" --force-with-lease
+
+          # The org's signed-commits ruleset blocks a PR carrying an unsigned
+          # commit, and this runner-made commit is unsigned whatever token pushes
+          # it. signed_commit.py publishes the same change through
+          # createCommitOnBranch, which GitHub signs. The bump branch is rebuilt
+          # from the target branch on every run, so it is reset to that base
+          # first, under a lease: it fails if another CI run moved the branch
+          # since this checkout, which is the correct behaviour.
+          SIGNED_COMMIT=.sdk-scripts/.github/scripts/signed_commit.py
+          if [ -f "$SIGNED_COMMIT" ]; then
+            LEASE=$(git rev-parse --verify -q "refs/remotes/origin/${BRANCH}" || echo absent)
+            python3 "$SIGNED_COMMIT" push \
+              --repo "$GITHUB_REPOSITORY" \
+              --branch "$BRANCH" \
+              --reset-to "$(git rev-parse HEAD~1)" \
+              --lease "$LEASE"
+          else
+            # An sdk_scripts_ref that predates the helper: the old, unsigned push.
+            git push origin "$BRANCH" --force-with-lease
+          fi
 
       # Runs whether or not the branch was pushed: it re-attaches the release
       # label and creates the PR if a human closed it, and is a no-op when the

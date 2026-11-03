@@ -33,6 +33,7 @@ import base64
 import json
 import os
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -161,12 +162,17 @@ def gh_request(
     payload: dict | None = None,
     *,
     sleep=time.sleep,
+    body_via_file: bool = False,
 ) -> Response:
     """Call the GitHub API, returning the status rather than raising on 4xx.
 
     Retries transport failures and 5xx (transient); a 4xx is an answer the caller
     interprets. The token is read from stdin (``-K -``) so it never appears in
     argv, where anything on the same runner could read it while the request runs.
+
+    ``body_via_file`` sends the payload from a temp file instead of argv. Linux
+    caps a single argument at 128 KiB, which a payload carrying whole files
+    (a commit of ``uv.lock``) exceeds.
     """
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
@@ -188,11 +194,31 @@ def gh_request(
         "X-GitHub-Api-Version: 2022-11-28",
     ]
     config = f'header = "Authorization: Bearer {token}"\n'
-    if payload is not None:
+    body_path: str | None = None
+    if payload is not None and body_via_file:
+        fd, body_path = tempfile.mkstemp(prefix="gh-request-", suffix=".json")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        cmd += [
+            "-H",
+            "Content-Type: application/json",
+            "--data-binary",
+            f"@{body_path}",
+        ]
+    elif payload is not None:
         cmd += ["-H", "Content-Type: application/json", "-d", json.dumps(payload)]
     cmd.append(f"https://api.github.com/{path}")
 
     label = f"{method} {path}"
+    try:
+        return _send(cmd, config, label, sleep)
+    finally:
+        if body_path is not None:
+            os.unlink(body_path)
+
+
+def _send(cmd: list[str], config: str, label: str, sleep) -> Response:
+    """Run one request, retrying transport failures and 5xx."""
     for transport_attempt in range(1, _TRANSPORT_ATTEMPTS + 1):
         result = run(cmd, input=config, capture_output=True, text=True, check=False)
         last = transport_attempt == _TRANSPORT_ATTEMPTS
