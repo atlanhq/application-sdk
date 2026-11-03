@@ -4,6 +4,11 @@ Below-the-prescription-bar recommendations and optimisations: things worth
 nudging toward (performance, canonical-dependency choices) but not mandatory
 enough to block a merge.  O-series rules are ``WARN`` by default; a rule that
 earns mandatory status graduates into a category series or the P-series.
+
+O007 and O008 are vacant: they were drafted as worker-disk recommendations and
+graduated to the mandatory P060 (UploadedFileNotDeleted) and P061
+(TempFileOutsideWorkerVolume) before any release, so no suppression ever cited
+them.  Those O-ids stay vacant.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ from conformance.suite.schema.catalog import (
 )
 from conformance.suite.schema.disposition import (
     EnforcementTier,
+    FixLocus,
     RuleMechanism,
     RuleScope,
 )
@@ -430,6 +436,199 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="O009",
+        canonical_reference=(
+            "atlan-mysql-app atlan.yaml — its `deploy:` block declares no `storage` "
+            "or `storageWorker` entry, so there is no fixed-size worker volume for "
+            "this rule to grade. No reference app declares a worker volume, so none "
+            "shows the compliant entry: a small base `size` plus the "
+            "`resize.topolvm.io/storage_limit`, `threshold` and `increase` "
+            "annotations, the shape this rule's description spells out."
+        ),
+        fix_locus=FixLocus.PACKAGING,
+        scope=RuleScope.APP,
+        name="WorkerVolumeWithoutAutoresize",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="worker-disk",
+        autofixable=True,
+        orthogonal_gate="skip",
+        since="0.51.0",
+        rationale=(
+            "A worker volume declared in atlan.yaml's deploy block without "
+            "pvc-autoresizer annotations is a fixed-size PVC: it never grows, so it "
+            "must be sized up front for the largest run any tenant makes, and every "
+            "pod that mounts it gets that full size whether its own run needs it or "
+            "not. A review of connector worker disks found a connector giving every "
+            "worker a fixed volume more than ten times larger than its largest "
+            "normal run used. The connector on the fleet's smallest worker disk "
+            "declares 8Gi that grows by 8Gi when half of it is used, up to 192Gi "
+            "(atlan-snowflake-app contract/app.pkl). WARN because a fixed size is a "
+            "cost and headroom trade-off rather than a broken deploy: the "
+            "annotations can be added mechanically, but how far the base can come "
+            "down depends on the app's own disk use."
+        ),
+        short_description=(
+            "atlan.yaml worker storage entry has no resize.topolvm.io/storage_limit "
+            "annotation, so the volume is a fixed size sized for the largest tenant"
+        ),
+        full_description=(
+            "Flags each worker storage entry in ``atlan.yaml``'s ``deploy:`` block\n"
+            "— ``deploy.storage`` (mounted on every pod) and\n"
+            "``deploy.storageWorker`` (worker pods only) — that carries no\n"
+            "``resize.topolvm.io/storage_limit`` annotation.  The finding sits on\n"
+            "the entry's ``-`` line and names its ``name``, ``mountPath`` and\n"
+            "declared ``size``.  ``deploy.storageServer`` is not graded: it mounts\n"
+            "on server pods only.\n"
+            "\n"
+            "Without a ``storage_limit`` the pvc-autoresizer never grows the PVC, so\n"
+            "the volume is a fixed ``size``: it must cover the largest run any\n"
+            "tenant makes, and every pod that mounts it gets the full size.\n"
+            "\n"
+            "**Fix, in two steps.**  The first is mechanical: add whichever of the\n"
+            "three annotations is missing, keep any already present, and leave the\n"
+            "declared ``size`` alone — ``storage_limit: 192Gi`` (twice the declared\n"
+            "size when that is already 192Gi or more, since a limit at or below the\n"
+            'base never lets the volume grow), ``threshold: "50%"`` and\n'
+            "``increase: 8Gi``:\n"
+            "\n"
+            ".. code-block:: yaml\n"
+            "\n"
+            "    storage:\n"
+            "      - name: local-data\n"
+            "        mountPath: /app/local\n"
+            "        size: 100Gi\n"
+            "        annotations:\n"
+            "          resize.topolvm.io/storage_limit: 192Gi\n"
+            '          resize.topolvm.io/threshold: "50%"\n'
+            "          resize.topolvm.io/increase: 8Gi\n"
+            "\n"
+            "The second is not: once the app is clean on P060–P062 and O010, lower\n"
+            "the base toward ``8Gi`` from each pod's 30-day disk peak, so that about\n"
+            "1% of pods need to grow (roughly the p99 peak).\n"
+            "\n"
+            "**Where to edit.**  ``atlan.yaml`` is graded because it is what the\n"
+            "platform deploys, hand-written or generated.  When\n"
+            "``contract/app.pkl`` emits it, the storage list comes from the\n"
+            "contract's ``deploy`` → ``overrides`` mapping (the toolkit models no\n"
+            "storage field), so make the change there and regenerate; never\n"
+            "hand-edit a generated ``atlan.yaml``:\n"
+            "\n"
+            ".. code-block:: pkl\n"
+            "\n"
+            "    overrides {\n"
+            '      ["storage"] = new Listing {\n'
+            "        new Mapping {\n"
+            '          ["name"] = "local-data"\n'
+            '          ["mountPath"] = "/app/local"\n'
+            '          ["size"] = "100Gi"\n'
+            '          ["annotations"] = new Mapping {\n'
+            '            ["resize.topolvm.io/storage_limit"] = "192Gi"\n'
+            '            ["resize.topolvm.io/threshold"] = "50%"\n'
+            '            ["resize.topolvm.io/increase"] = "8Gi"\n'
+            "          }\n"
+            "        }\n"
+            "      }\n"
+            "    }\n"
+            "\n"
+            "Otherwise ``atlan.yaml`` is hand-owned; edit it directly.\n"
+            "\n"
+            "The scan is line-based (no YAML dependency) and reads block-style\n"
+            "sequences in both layouts the fleet uses; a flow-style sequence, a\n"
+            "YAML anchor or merge key, per-pool storage under ``workerPools`` and\n"
+            "raw ``extraVolumes`` PVC templates are not graded.  Suppress with\n"
+            "``# conformance: ignore[O009] <reason>`` on the entry's ``-`` line or\n"
+            "the line above it — possible only in a hand-written ``atlan.yaml``,\n"
+            "since regeneration drops comments from a generated one.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="O010",
+        canonical_reference=(
+            "application_sdk/storage/transfer.py — `_upload_from_store` copies a "
+            "single object between stores through a temp file it unlinks in a "
+            "`finally`, and the SDK's cross-store hand-off runs it per object, so "
+            "moving a prefix from one store to another never stages the whole "
+            "prefix on the worker. No reference app calls download_prefix."
+        ),
+        scope=RuleScope.APP,
+        name="WholePrefixStagedOnDisk",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="worker-disk",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.51.0",
+        rationale=(
+            "download_prefix followed by upload_prefix of the same directory puts "
+            "every object under the prefix on the worker's disk before any of it "
+            "leaves, so the step's disk need grows with the largest prefix any "
+            "tenant has instead of with a batch. Moving data across stores through "
+            "the worker is expected — a self-deployed runtime hands data from the "
+            "customer's deployment store to Atlan's upstream store — but staging "
+            "the whole prefix to do it is not needed. The connector on the fleet's "
+            "smallest worker disk writes and ships one bounded slice at a time "
+            "(256 MiB of decoded input per slice, uploaded with upload_prefix and "
+            "removed before the next: atlan-snowflake-app "
+            "app/pipeline/crawler/duckdb_transform.py). WARN because some steps "
+            "need every file at once (a merge, a baseline build), and only the "
+            "code's owner can say which."
+        ),
+        short_description=(
+            "download_prefix() then upload_prefix() of the same local tree stages a "
+            "whole prefix on the worker's disk — move it in bounded batches"
+        ),
+        full_description=(
+            "Flags an SDK ``upload_prefix`` call whose local directory was filled\n"
+            "by a ``download_prefix`` earlier in the same function — the same\n"
+            "directory, one under it, or one holding it — so every object under the\n"
+            "prefix sits on the worker's disk at once.  The finding sits on the\n"
+            "``upload_prefix`` call and names the ``download_prefix`` line.  Calls\n"
+            "resolve through import bindings, like P060.\n"
+            "\n"
+            "Not flagged: moving data across stores, which the SDK expects; a\n"
+            "per-file move (``download_file`` → ``upload_file`` → delete); the\n"
+            "SDK's own cross-store hand-off (``App.upload`` / ``App.upload_refs``\n"
+            "and the ``application_sdk.storage.transfer`` helpers behind them,\n"
+            "which move one object at a time); and a loop that downloads, uploads\n"
+            "and removes its local batch in the same iteration, which is bounded\n"
+            "by the batch.\n"
+            "\n"
+            "Fix, in order of preference:\n"
+            "\n"
+            "1. **Bounded batches.**  List the keys, group them into batches capped\n"
+            "   by bytes (256 MiB slices are a proven size), and per batch download,\n"
+            "   upload — the bulk helpers keep their ``max_concurrency=4`` within\n"
+            "   each batch — and delete the batch before the next.\n"
+            "2. **A bounded pipeline.**  Move single files with about 4 in flight,\n"
+            "   each download → upload → delete, matching the bulk helpers'\n"
+            "   ``max_concurrency=4`` rather than a strictly serial loop (up to 4x\n"
+            "   slower on many small files).  It overlaps download and upload and\n"
+            "   holds only a few files on disk.\n"
+            "\n"
+            "Only when both calls provably use the same store (both omit\n"
+            "``store=``, or pass the same expression) is a copy inside the store\n"
+            "worth asking about; the message says when.  Not a mechanical rewrite:\n"
+            "a step that needs every file at once (a merge, a baseline build) is a\n"
+            "deliberate staging — suppress with\n"
+            "``# conformance: ignore[O010] <reason>`` naming why.\n"
+        ),
+        rule_interactions=(
+            "P060: removing the staged directory after the upload clears P060 but "
+            "not this rule, which stays until the move is bounded."
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o010",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
             target="programs/areas/optimizations.prose.md",
         ),
     ),

@@ -152,7 +152,8 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/app_name_alignment.py, "
             "conformance/suite/rules/transform_templates.py, "
             "conformance/suite/rules/portability.py, "
-            "conformance/suite/rules/atomic_publish.py"
+            "conformance/suite/rules/atomic_publish.py, "
+            "conformance/suite/rules/worker_disk.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -169,7 +170,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.text_io_encoding` (P046), "
             "`suite.checks.atomic_publish` (P050), "
             "`suite.checks.credential_seam` (P053, gated on the app's locked SDK), "
-            "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) "
+            "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK), "
+            "`suite.checks.worker_disk` (P060–P062) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
@@ -203,9 +205,17 @@ _SERIES_META: list[SeriesMeta] = [
         prefix="O",
         source_module="conformance/suite/rules/optimizations.py",
         output_filename="optimizations.md",
-        checker="`suite.checks.optimizations` (AST-based)",
+        checker=(
+            "`suite.checks.optimizations` (AST-based) and "
+            "`suite.checks.worker_volume` (O009, line-based over `atlan.yaml`)"
+        ),
         suppression_example="# conformance: ignore[O001] intentional: stdlib json required here",
-        stability_note=_ID_STABILITY_NOTE,
+        stability_note=(
+            _ID_STABILITY_NOTE
+            + " O007 and O008 were drafted as worker-disk recommendations and "
+            "graduated to the mandatory P060 and P061 before any release; those "
+            "O-ids stay vacant."
+        ),
     ),
     SeriesMeta(
         title="Test-Quality Rules (T-series)",

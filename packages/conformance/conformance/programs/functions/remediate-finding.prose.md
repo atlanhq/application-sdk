@@ -128,6 +128,13 @@ contract and `atlan.yaml` is rewritten by regeneration, not by this function.  S
 mandatory, because neither the presence of `contract/app.pkl` nor the contract's
 `amends` line reliably predicts the answer.
 
+**O009 may write `atlan.yaml` or `contract/app.pkl`** — its fix adds the three
+autoresize annotations to one worker storage entry and touches nothing else in
+either file.  Run the same emission test as K014 first: when the contract emits
+`atlan.yaml`, the annotations go into the contract's `deploy` → `overrides`
+storage listing and `atlan.yaml` is rewritten by regeneration (both paths in
+`touched_files`); otherwise `atlan.yaml` is hand-owned and is edited directly.
+
 **For B006 findings only**, running the ledger generator — and committing the
 `contract_schema.lock.json` it writes in the repo root — is permitted, even
 though that file is neither Python source nor the `Dockerfile`.  Without this
@@ -412,7 +419,7 @@ relevant area file — this is the progressive-disclosure boundary.
 |---|---|---|
 | `error-handling` | PHASE 1 | `areas/error-handling.prose.md` |
 | `optimizations` | PHASE 1 | `areas/optimizations.prose.md` |
-| `prescriptions` | PHASE 1 (suggest-only) | `areas/prescriptions.prose.md` |
+| `prescriptions` | PHASE 1 (suggest-only; worker-disk P060–P062 applied) | `areas/prescriptions.prose.md` |
 | `preflight` | PHASE 1 (suggest-only) | `areas/preflight.prose.md` |
 | `logging` | PHASE 2 | `areas/logging.prose.md` |
 | `dependency` | PHASE 1 | `areas/dependency.prose.md` |

@@ -40,6 +40,7 @@ from conformance.suite.rules.tests import RULES as _T_RULES
 from conformance.suite.rules.transform_templates import (
     RULES as _TRANSFORM_TEMPLATE_RULES,
 )
+from conformance.suite.rules.worker_disk import RULES as _WORKER_DISK_RULES
 from conformance.suite.schema.catalog import RuleDefinition
 
 
@@ -82,6 +83,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _S_RULES,
     _PORTABILITY_RULES,
     _ATOMIC_PUBLISH_RULES,
+    _WORKER_DISK_RULES,
 )
 
 
