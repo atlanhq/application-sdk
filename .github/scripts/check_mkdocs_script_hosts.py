@@ -5,8 +5,12 @@ site. A third-party host there hands that host the site: polyfill.io was
 listed here after its domain changed hands in 2024 and began serving
 malicious JavaScript (FND-4243).
 
-Local paths (relative to `docs_dir`) always pass. A URL passes only when its
-host is in `ALLOWED_HOSTS`. The allowlist is empty on purpose: vendor a script
+A local path (relative to `docs_dir`, letters, digits and `._-/` only, no
+`//`) passes. Anything else must be an `https` URL whose host is in
+`ALLOWED_HOSTS`. Local paths are matched against an allowlist rather than
+"has no scheme" because browsers strip leading whitespace and treat `\\` as
+`/`, so `"\t//evil.example/x.js"` or `"/\\evil.example/x.js"` load from another
+host while looking schemeless. The allowlist is empty on purpose: vendor a script
 into `docs/static/javascripts/` instead of loading it from a CDN. Adding a host
 here is a reviewed change to this file.
 
@@ -16,6 +20,7 @@ Exits 1 and prints one line per offending entry when any entry is rejected.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Sequence
@@ -26,6 +31,8 @@ import yaml
 ALLOWED_HOSTS: frozenset[str] = frozenset()
 
 DEFAULT_CONFIG = Path("mkdocs.yml")
+
+_LOCAL_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/-]*")
 
 
 class _MkdocsLoader(yaml.SafeLoader):
@@ -59,7 +66,8 @@ def find_violations(config_text: str) -> list[str]:
     """Return a message per `extra_javascript` entry that is not allowed."""
     config = yaml.load(config_text, Loader=_MkdocsLoader)  # noqa: S506 - SafeLoader subclass
     if not isinstance(config, dict):
-        return []
+        # Empty or truncated config: fail closed rather than pass vacuously.
+        return ["mkdocs config must be a YAML mapping"]
     entries = config.get("extra_javascript") or []
     if not isinstance(entries, list):
         return ["extra_javascript must be a list"]
@@ -70,18 +78,16 @@ def find_violations(config_text: str) -> list[str]:
         if path is None:
             violations.append(f"unrecognised extra_javascript entry: {entry!r}")
             continue
-        parts = urlsplit(path)
-        # A scheme (https:, http:, data:, javascript:) or a protocol-relative
-        # `//host/...` means the browser fetches it from somewhere other than
-        # the built site.
-        if not parts.scheme and not path.startswith("//"):
+        if _LOCAL_PATH.fullmatch(path) and "//" not in path:
             continue
+        parts = urlsplit(path)
         host = (parts.hostname or "").lower()
-        if parts.scheme == "https" and host in ALLOWED_HOSTS:
+        if path.startswith("https://") and host in ALLOWED_HOSTS and "\\" not in path:
             continue
         violations.append(
-            f"extra_javascript loads {path!r} from host {host or parts.scheme!r}, "
-            "which is not in ALLOWED_HOSTS; vendor it under docs/static/javascripts/"
+            f"extra_javascript entry {path!r} is neither a plain local path nor an "
+            "https URL on a host in ALLOWED_HOSTS; vendor it under "
+            "docs/static/javascripts/"
         )
     return violations
 

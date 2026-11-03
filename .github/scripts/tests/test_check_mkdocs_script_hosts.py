@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -49,6 +50,15 @@ def test_pre_fix_config_is_rejected() -> None:
         "data:text/javascript,alert(1)",
         "javascript:alert(1)",
         "{path: 'https://example.com/a.js', type: module}",
+        # Browsers strip leading whitespace and read `\\` as `/`, so each of
+        # these loads from evil.example while urlsplit sees no scheme.
+        '"\\t//evil.example/x.js"',
+        '" //evil.example/x.js"',
+        '"/\\\\evil.example/x.js"',
+        '"\\\\\\\\evil.example/x.js"',
+        # Outside the plain-relative allowlist: site-absolute and parent paths.
+        "/js/a.js",
+        "../a.js",
     ],
 )
 def test_remote_entries_are_rejected(entry: str) -> None:
@@ -75,9 +85,22 @@ def test_allowlisted_host_passes_only_over_https(
     assert len(check.find_violations(other)) == 1
 
 
-def test_python_tags_are_not_executed() -> None:
+@pytest.mark.parametrize("config", ["", "# truncated\n", "- a\n", "just text\n"])
+def test_non_mapping_config_fails_closed(config: str) -> None:
+    assert check.find_violations(config) == ["mkdocs config must be a YAML mapping"]
+
+
+def test_python_tags_are_not_executed(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def record(*args: object) -> int:
+        calls.append(args)
+        return 0
+
+    monkeypatch.setattr(os, "system", record)
     config = "x: !!python/object/apply:os.system ['exit 1']\nextra_javascript: []\n"
     assert check.find_violations(config) == []
+    assert calls == []
 
 
 def test_main_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
