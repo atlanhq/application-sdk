@@ -36,7 +36,6 @@ markdown_extensions:
   - tables
   - footnotes
   - pymdownx.details
-  - pymdownx.superfences
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.critic
@@ -55,16 +54,9 @@ markdown_extensions:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
-  - pymdownx.arithmatex:
-      generic: true
 
 extra_css:
   - static/stylesheets/extra.css
-
-extra_javascript:
-  - static/javascripts/mathjax.js
-  - https://polyfill.io/v3/polyfill.min.js?features=es6
-  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
 nav:
   - Home: index.md

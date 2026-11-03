@@ -85,3 +85,16 @@ repos:
     rev: v1.1.410
     hooks:
       - id: pyright
+  # Every `extra_javascript` entry in mkdocs.yml runs on every docs page.
+  # polyfill.io sat there after its domain was taken over in 2024 and began
+  # serving malicious JavaScript (FND-4243). Only local paths and hosts in the
+  # script's (empty) ALLOWED_HOSTS pass; vendor scripts into docs/static/.
+  - repo: local
+    hooks:
+      - id: check-mkdocs-script-hosts
+        name: check mkdocs extra_javascript hosts
+        entry: python .github/scripts/check_mkdocs_script_hosts.py
+        language: python
+        additional_dependencies: ["pyyaml==6.0.3"]
+        files: ^(mkdocs\.yml|\.github/scripts/check_mkdocs_script_hosts\.py)$
+        pass_filenames: false
