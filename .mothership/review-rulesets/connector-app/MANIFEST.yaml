@@ -16,4 +16,5 @@ rules:
   - rules/app-staleness-001.md
   - rules/app-validation-001.md
   - rules/app-preflight-001.md
+  - rules/app-scope-001.md
   - rules/app-gates-001.md
