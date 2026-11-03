@@ -30,7 +30,6 @@ import contextlib
 import faulthandler
 import importlib.util as _importlib_util
 import os
-import random
 import signal
 import sys
 import threading
@@ -55,6 +54,7 @@ if _importlib_util.find_spec("application_sdk.handler.base") is None:
 
 from application_sdk.common import restart_marker
 from application_sdk.common._env import env_int as _env_int
+from application_sdk.common.backoff import Backoff
 from application_sdk.common.task_queue import task_queue_from_env
 from application_sdk.discovery import (
     load_app_class,
@@ -1503,16 +1503,14 @@ async def _supervise_worker(
                         exc_info=True,
                     )
 
-            # Full-jitter exponential backoff (matches create_temporal_client),
-            # raced against shutdown so SIGTERM stays responsive during backoff.
-            # Clamp the exponent: the cap already bounds the result, but a raised
-            # ATLAN_WORKER_MAX_CONSECUTIVE_RESTARTS would otherwise compute an
-            # arbitrarily large power of two just to throw it away.
-            cap_at_attempt = min(
-                2 ** min(consecutive_failures - 1, 16),
-                _WORKER_RESTART_BACKOFF_CAP_SECONDS,
+            # Full-jitter exponential backoff from the shared Backoff, raced
+            # against shutdown so SIGTERM stays responsive during backoff. This
+            # loop keeps its own control flow (the streak reset above, the
+            # shutdown race below), so it takes only the delay. The cap is
+            # read per restart because it is env-overridable.
+            delay = Backoff(base=1.0, cap=_WORKER_RESTART_BACKOFF_CAP_SECONDS).delay(
+                consecutive_failures
             )
-            delay = random.uniform(0, cap_at_attempt)
             logger.warning(
                 "Worker exited with a fatal error (attempt %d/%d, ran %.0fs); "
                 "restarting in %.1fs",
@@ -2332,6 +2330,7 @@ async def _run_dev_combined_inner(
                             exc,
                             exc_info=True,
                         )
+                    # conformance: ignore[P060] readiness poll of this pod's own handler /health at a fixed 1s, not a retry against a shared dependency
                     await asyncio.sleep(1)
 
                 # Step 1: Provision credentials (mimics Heracles)

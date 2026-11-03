@@ -377,6 +377,51 @@ The wire contract is recorded in
 
 ---
 
+## Utility: resolve_credential_file
+
+`resolve_credential_file(value, filename, dest_dir=..., raise_on_error=True)` turns a credential field that carries a file (a keytab, a CA certificate, a `krb5.conf`) into a local path. It accepts three formats: an Atlan upload reference, an `objectstore://<key>` in the deployment object store, or base64 content from the secret store.
+
+```python
+from application_sdk.credentials.utils import resolve_credential_file
+
+keytab_path = await resolve_credential_file(
+    credentials.get("keytab"), "keytab.keytab", raise_on_error=True
+)
+```
+
+For the `objectstore://` and base64 formats, every file lands in its own **private directory**: new, owner-only (0700), with the file itself 0600.
+
+- **What it protects against:** other OS users on the host reading the file, and two connections that resolve the same `filename` overwriting each other's file.
+- **What it doesn't:** code running as the same OS user, such as another connection handled by the same worker process, can still list the directory and open the file. Separating connections from each other at that level needs OS-level isolation (separate users or containers), which this utility doesn't provide.
+
+- **One file:** omit `dest_dir`. Each call gets its own directory, so the returned path is different every time. Use the returned value; don't build the path yourself.
+- **Several files in one directory:** create the directory with `credential_dir()` and pass it as `dest_dir`. Files go straight into it. Do this when a library reads several files from one directory, such as SAP CommonCryptoLib's `SECUDIR`:
+
+  ```python
+  from application_sdk.credentials.utils import credential_dir, resolve_credential_file
+
+  secudir = credential_dir()
+  await resolve_credential_file(pse_ref, "SAPSNCS.pse", secudir, raise_on_error=True)
+  await resolve_credential_file(cred_ref, "cred_v2", secudir, raise_on_error=True)
+  # Hand `secudir` to the library through per-connection configuration.
+  ```
+
+  Avoid passing the directory through a process-wide setting, such as an environment variable, if connections can overlap in one process. One connection can replace the setting after another sets it, but before the library reads its files, so a connection ends up using the other's credentials. If the library only reads a process-wide setting, serialize every connection that depends on it: hold one lock from setting the value until the library has read the files.
+
+  Resolving a second file of the same name into one `credential_dir()` raises `FileExistsError` instead of replacing the first, including when two resolutions of the name run at once: the name is reserved atomically (as an empty 0600 file) before its content arrives.
+
+  Only `credential_dir()` makes a `CredentialDir`. Constructing one directly raises `TypeError`, and `resolve_credential_file` honours one only if `credential_dir()` made that path in this process and it hasn't been removed yet; anything else raises `PermissionError`. A shared path can't pass as private on any platform.
+- **A plain-string `dest_dir` is deprecated.** It still works, but the file goes into a new private directory *inside* it, not into `dest_dir` itself, and a `DeprecationWarning` is emitted. Plain strings are rejected in v4.0. Apps that need a fixed, shared directory switch to `credential_dir()`.
+- **`filename` is a bare name.** A name that is empty, `.`, `..`, or contains a path separator raises `CredentialParseError`.
+- **Owner-only and never half-written.** Each file is 0600. It is written to a temp file and renamed into place, so a reader never sees a partial keytab.
+- **Removed with its scope.** Every private directory is registered with the narrowest scope that will remove it:
+  - **A handler call** (`test_auth`, `preflight_check`, `fetch_metadata`, over HTTP, SDR or the preflight gate): deleted when the handler returns, so a long-lived server doesn't accumulate a directory of secrets per request. Don't keep a resolved path past the handler call.
+  - **A task:** registered with the run on the worker that wrote it. The run's `cleanup_files` (called by the default `on_complete()`) deletes it when it runs on that worker, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say. Temporal can schedule `cleanup_files` on another worker, so every worker also checks, once a minute, whether the runs it holds directories for have closed, and deletes those directories. It deletes all of them when it shuts down.
+  - **Anywhere else** (a script): nothing tracks it, and the caller deletes it when done.
+- **One store.** `objectstore://` downloads use the deployment store the app built at startup. A new store is built from the `DEPLOYMENT_OBJECT_STORE_NAME` binding only when no app context exists.
+
+---
+
 ## Utility: parse_credentials_extra
 
 For connectors that receive credentials as a flat dict (e.g. from Heracles), use `parse_credentials_extra` to extract nested fields:

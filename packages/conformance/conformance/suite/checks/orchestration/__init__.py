@@ -41,6 +41,7 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     make_cli_main,
 )
+from conformance.suite.checks._ast_common._safe_swap import source_lines
 from conformance.suite.schema.findings import Finding
 
 from ._direct_temporal_import import check_p004
@@ -86,9 +87,10 @@ def scan_text(text: str, file: str) -> list[Finding]:
     except SyntaxError:
         return []
     directives = _parse_directives(text)
+    lines = source_lines(text)
     return [
-        *check_p004(tree, file, directives),
-        *check_p005(tree, file, directives),
+        *check_p004(tree, file, directives, lines=lines),
+        *check_p005(tree, file, directives, lines=lines),
         *check_p006(tree, file, directives),
     ]
 
@@ -131,8 +133,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             p007_files.append((rel_str, tree))
             directives_by_rel[rel_str] = directives
 
-        findings.extend(check_p004(tree, rel_str, directives))
-        findings.extend(check_p005(tree, rel_str, directives))
+        lines = source_lines(text)
+        findings.extend(check_p004(tree, rel_str, directives, lines=lines))
+        findings.extend(check_p005(tree, rel_str, directives, lines=lines))
         findings.extend(check_p006(tree, rel_str, directives))
 
     findings.extend(emit_p007(p007_files, directives_by_rel))

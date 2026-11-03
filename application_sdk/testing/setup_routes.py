@@ -1286,6 +1286,7 @@ class TenantRoutes:
                         f"attempts: {earlier or ['none']}."
                     ) from exc
                 earlier.append(f"{type(exc).__name__}: {exc}")
+            # conformance: ignore[P060] synchronous single-process test harness (tenant GET) — one caller per machine, so no fleet retry storm; retry_async is async-only
             time.sleep(_RETRY_BACKOFF_SECONDS * 2 ** (attempt - 1))
 
         # Unreachable: the loop's final attempt always returns or raises. Kept
@@ -1583,6 +1584,7 @@ def _await_route(
                     "answered, so this is the deployment reconciling onto the "
                     f"pod. Retrying in {_CATALOG_POLL_SECONDS}s"
                 )
+            # conformance: ignore[P060] test-harness deadline poll for catalog readiness, not a retry ladder
             time.sleep(_CATALOG_POLL_SECONDS)
             continue
         if failure is None:
@@ -1597,6 +1599,7 @@ def _await_route(
                 f"{entrypoint.name}: setup route not ready yet ({failure}); "
                 f"retrying in {_CATALOG_POLL_SECONDS}s"
             )
+        # conformance: ignore[P060] test-harness deadline poll for catalog readiness, not a retry ladder
         time.sleep(_CATALOG_POLL_SECONDS)
 
 

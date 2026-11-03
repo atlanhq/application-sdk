@@ -778,6 +778,158 @@ def transform_entities():
     assert "L006" not in _ids(src)
 
 
+def test_l006_silent_for_small_mapping_get_values() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind):
+    try:
+        input_sets = {
+            "tables": ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+            "views": ["j"],
+        }
+        required = input_sets.get(kind, [])
+        if not required:
+            raise ValueError("no inputs")
+        logger.info("downloading %s inputs", len(required))
+        for item in required:
+            logger.info("missing optional input %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_with_large_possible_value() -> None:
+    items = ", ".join(f'"item_{index}"' for index in range(11))
+    src = f"""
+from loguru import logger
+
+def process_inputs(kind):
+    try:
+        input_sets = {{
+            "small": ["alpha"],
+            "large": [{items}],
+        }}
+        required = input_sets.get(kind, [])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_with_large_default() -> None:
+    items = ", ".join(f'"item_{index}"' for index in range(11))
+    src = f"""
+from loguru import logger
+
+def process_inputs(kind):
+    try:
+        input_sets = {{"tables": ["alpha"]}}
+        required = input_sets.get(kind, [{items}])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_with_unknown_default() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind, fallback):
+    try:
+        input_sets = {"tables": ["alpha", "beta"]}
+        required = input_sets.get(kind, fallback)
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_from_unknown_mapping() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind, input_sets):
+    try:
+        required = input_sets.get(kind, [])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mapping_get_after_mapping_mutation() -> None:
+    src = """
+from loguru import logger
+
+def process_inputs(kind, extra_inputs):
+    try:
+        input_sets = {"tables": ["alpha"]}
+        input_sets.update(extra_inputs)
+        required = input_sets.get(kind, [])
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
+@pytest.mark.parametrize(
+    "rebind",
+    [
+        "match rows:\n            case required:\n                pass",
+        "match rows:\n            case [*required]:\n                pass",
+        "match rows:\n            case {**required}:\n                pass",
+        "match rows:\n            case [_, required]:\n                pass",
+        "try:\n            pass\n        except Exception as required:\n            pass",
+        "from os import environ as required",
+        "def required():\n            pass",
+        "_ = [(required := row) for row in rows]",
+    ],
+    ids=[
+        "match-as",
+        "match-star",
+        "match-mapping-rest",
+        "match-sequence-capture",
+        "except-as",
+        "import-as",
+        "nested-def",
+        "comprehension-walrus",
+    ],
+)
+@pytest.mark.parametrize("rebound", ["required", "input_sets"])
+def test_l006_fires_when_non_name_binding_rebinds_mapping_get(
+    rebind: str, rebound: str
+) -> None:
+    rebind = rebind.replace("required", rebound)
+    src = f"""
+from loguru import logger
+
+def process_inputs(kind, rows):
+    try:
+        input_sets = {{"tables": ["alpha"]}}
+        {rebind if rebound == "input_sets" else "pass"}
+        required = input_sets.get(kind, [])
+        {rebind if rebound == "required" else "pass"}
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_mapping_with_more_than_ten_items() -> None:
     entries = ",\n        ".join(
         f'"ENTITY_{index}": "processed/{index}"' for index in range(11)

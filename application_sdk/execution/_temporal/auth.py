@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from application_sdk.common.backoff import Backoff, Jitter
 from application_sdk.constants import APPLICATION_NAME, APPLICATION_VERSION, COMMIT_SHA
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -36,6 +37,7 @@ if TYPE_CHECKING:
 # Refresh timing constants
 _MIN_REFRESH_INTERVAL_SECONDS = 30
 _MAX_REFRESH_INTERVAL_SECONDS = 300
+#: Mean wait before retrying a failed refresh (each wait is spread x0.5-1.5).
 _RETRY_INTERVAL_SECONDS = 30
 
 
@@ -242,15 +244,23 @@ class TemporalAuthManager:
             try:
                 await self._do_refresh(client)
             except Exception:
+                # Spread around the fixed interval: every worker in the fleet
+                # loses the token endpoint at the same moment, and a fixed
+                # 30s would bring them all back in lockstep.
+                retry_delay = Backoff(
+                    base=float(_RETRY_INTERVAL_SECONDS),
+                    factor=1.0,
+                    jitter=Jitter.SPREAD,
+                ).delay(1)
                 logger.warning(
-                    "Token refresh failed, will retry in %ss",
-                    _RETRY_INTERVAL_SECONDS,
+                    "Token refresh failed, will retry in %.0fs",
+                    retry_delay,
                     exc_info=True,
                 )
                 try:
                     await asyncio.wait_for(
                         self._shutdown_event.wait(),
-                        timeout=float(_RETRY_INTERVAL_SECONDS),
+                        timeout=retry_delay,
                     )
                     break
                 except TimeoutError:  # conformance: ignore[E002,E014] wait_for timeout = retry duration elapsed; loop continues

@@ -3035,7 +3035,9 @@ class TestRunWorkerWithRestart:
             backing_off.set()
             return 10.0
 
-        monkeypatch.setattr("application_sdk.main.random.uniform", long_backoff)
+        monkeypatch.setattr(
+            "application_sdk.common.backoff.random.uniform", long_backoff
+        )
         shutdown = asyncio.Event()
         calls = {"n": 0}
 

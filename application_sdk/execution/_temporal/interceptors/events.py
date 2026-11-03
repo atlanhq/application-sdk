@@ -8,7 +8,12 @@ When the binding *is* configured but the Dapr call fails in a way that
 proves the event never got a response (connection/TLS/DNS failure, missing
 binding), the event is re-sent directly to Event Ingress over HTTPS from this
 process (see :func:`_publish_event_direct`), with a WARNING that names the
-fallback. Errors that may already have been delivered are not re-sent. The
+fallback. Errors that may already have been delivered are not re-sent over
+that channel; the ``publish_event`` activity's Temporal retry re-sends
+``workflow_start`` / ``workflow_end`` through Dapr (at-least-once). Activity
+events, ``worker_start`` and ``token_refresh`` are sent inline and not
+retried. Every event carries ``metadata.event_id``,
+stable across those retries, so consumers can dedupe. The
 Dapr sidecar is the only Go TLS client in an SDR pod and has been seen
 rejected by customer middleboxes that pass every other client; without the
 fallback that leaves the agent unregistered. ``ATLAN_EVENT_INGRESS_DIRECT_FALLBACK=false``
@@ -17,6 +22,7 @@ turns it off.
 
 import asyncio
 import time
+import uuid
 import weakref
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -316,7 +322,46 @@ def _enrich_event_metadata(event: Event) -> Event:
     except Exception:
         logger.debug("Not in activity context, cannot enrich event metadata")
 
+    if event.metadata.event_id is None:
+        event.metadata.event_id = _event_id(event)
+
     return event
+
+
+#: Namespace for :func:`_event_id`'s UUIDv5. Fixed: changing it changes every
+#: deterministic event id, which would defeat dedupe across an SDK upgrade.
+_EVENT_ID_NAMESPACE = uuid.UUID("5b0f3c2e-6a51-4d8e-9a57-2f0b8f6a1c44")
+
+#: Events each activity attempt emits afresh; their id includes the attempt.
+_PER_ATTEMPT_EVENTS = frozenset(
+    {
+        ApplicationEventNames.ACTIVITY_START.value,
+        ApplicationEventNames.ACTIVITY_END.value,
+    }
+)
+
+
+def _event_id(event: Event) -> str:
+    """Dedupe id for *event*: the same for every retry of the same publish.
+
+    Lifecycle events are delivered at least once: an ambiguous failure (an
+    upstream 5xx, a timeout after sending) is retried by the ``publish_event``
+    activity's retry policy, so a consumer can see the same event twice.
+    Inside a workflow the id is a UUIDv5 of ``workflow_id``,
+    ``workflow_run_id`` and ``event_name``, so those copies (which differ in
+    ``attempt``) share one id. ``activity_start`` / ``activity_end`` also key
+    on ``activity_id`` and ``attempt``: each attempt is a separate event.
+    Outside a workflow there is nothing stable to key on, so it is a random
+    UUID; it still identifies the one payload that both the Dapr binding and
+    the direct-HTTPS fallback send.
+    """
+    md = event.metadata
+    if not (md.workflow_id and md.workflow_run_id):
+        return str(uuid.uuid4())
+    parts = [md.workflow_id, md.workflow_run_id, event.event_name]
+    if event.event_name in _PER_ATTEMPT_EVENTS:
+        parts += [md.activity_id or "", str(md.attempt or "")]
+    return str(uuid.uuid5(_EVENT_ID_NAMESPACE, "\x1f".join(parts)))
 
 
 def _send_lifecycle_event_to_segment(event: Event) -> None:
@@ -479,7 +524,9 @@ async def _publish_event_via_binding(
         logger.warning(
             "FALLBACK SKIPPED: Dapr eventstore binding failed for event %s but the error "
             "does not prove the event never reached Event Ingress, so it is not re-sent "
-            "(re-sending could double-deliver). dapr_error=%s",
+            "over direct HTTPS. A caller that retries (the publish_event activity) "
+            "re-sends it through Dapr; consumers dedupe on metadata.event_id. "
+            "dapr_error=%s",
             event.event_name,
             binding_error,
             exc_info=binding_error,

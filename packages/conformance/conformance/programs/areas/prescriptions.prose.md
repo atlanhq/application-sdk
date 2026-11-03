@@ -539,11 +539,17 @@ is always `"judgment"`:
   - workflow primitives `now`/`sleep`/`uuid4`/`wait_condition` and the
     interaction decorators `signal`/`query`/`update` (and `task` in place of
     `activity`) → `from application_sdk.app import …`;
-  - `temporalio.client.Client` / `Client.connect(...)` →
-    `from application_sdk.execution import create_temporal_client`
-    (`client = await create_temporal_client(host=...)`);
-  - `temporalio.worker.Worker` →
-    `from application_sdk.execution import AppWorker, create_worker`;
+  - `temporalio.client.Client` / `Client.connect(...)` and
+    `temporalio.worker.Worker` → production boot through the SDK launcher
+    (`application-sdk --mode worker|handler|combined`), local dev through
+    `application_sdk.main.run_dev_combined`, and in tests the integration
+    fixture kit (`application_sdk.testing.integration.fixtures`), which owns
+    the client and the worker. A `create_temporal_client` / `create_worker`
+    call fires P017 outside `tests/integration/`; see the
+    `migrate-orchestration` skill;
+  - a temporalio failure class → its `Temporal*` alias from
+    `application_sdk.execution` (`TemporalApplicationError`,
+    `TemporalTimeoutError`, `TemporalWorkflowFailureError`, …);
   - `temporalio.converter` data-converter use →
     `from application_sdk.execution import create_data_converter`.
 
@@ -1054,12 +1060,29 @@ drafting.
     worse than none.
   - *subprocess* — prefer `asyncio.create_subprocess_exec` and `await` it;
     offload only when the sync API is unavoidable.
-  - *client / handle work, query, fsync* — offload the whole block that owns
-    the client in one hop: `await run_in_thread(_read_rows, path)` around the
-    `with open(...)` / `with engine.connect()` / `s3.get_object(...)` it
-    contains.  Offloading the send alone while the connect or open stays on
-    the loop moves half the cost.  An `fsync` goes with the write it makes
-    durable.
+  - *client / handle work, query, fsync* — for wholly synchronous operations,
+    offload the whole block that owns the client in one hop:
+    `await run_in_thread(_read_rows, path)` around the `with open(...)` /
+    `with engine.connect()` / `s3.get_object(...)` it contains.  Offloading the
+    send alone while the connect or open stays on the loop moves half the cost.
+    An `fsync` goes with the write it makes durable.  When a synchronous sink
+    consumes an async producer (for example, `async for chunk in
+    response.aiter_bytes()`), preserve streaming by keeping the producer awaited
+    and offloading each sink call sequentially at the boundary:
+    `await run_in_thread(handle.write, chunk)`.  The one-hop rule above still
+    holds for the sink's own lifecycle: offload its open and close too
+    (`fh = await run_in_thread(open, path, "wb")`, then
+    `await run_in_thread(fh.close)` in a `finally`, with any `fsync` before it)
+    rather than leaving a `with open(...)` on the loop around the chunk loop.
+    Do not move the async producer into a sync worker or buffer the full
+    response.  File `open` / `write` / `close` take no timeout, so the offload
+    alone cannot bound a sink that stalls (a hung network mount): the worker
+    thread cannot be reclaimed, and `run_in_thread`'s own hold is unbounded.
+    Bound the task instead — wrap the open-through-close span in
+    `async with self.task_context.holding_progress("<call site>", timeout=...)`,
+    sized to the longest you would let the transfer run — so a wedged sink
+    fails the task at that bound rather than at the duration backstop.  Say in
+    the draft that the stuck thread itself is not recovered.
   - *wait* — `threading.Event` → `asyncio.Event`; a `Future` from
     `executor.submit` → `await asyncio.wrap_future(future)`; otherwise offload
     the wait.
@@ -1489,6 +1512,33 @@ path component, and this rule governs that package's sources too).
   writing its own ASCII fixture and reading it back, where the locale cannot
   bite.  The one dangerous test-side shape — a test reading *repo sources* — is
   a much smaller population and is not graded by this rule.
+
+**Retry-ladder rule (P060)** — suggest-only, scope=sdk,
+`classification = "judgment"`; backed by `suite.checks.retry_ladder`.
+
+- **P060 HandRolledRetryLadder** (WARN) — a `sleep` call (`asyncio.sleep`,
+  `time.sleep`, `anyio.sleep`, or a bare `sleep` imported from one of them) in
+  a `for` / `while` / `async for` loop whose body also holds a `try` with an
+  `except` handler.  The finding sits on the sleep's line.  `sleep(0)`,
+  `workflow.sleep`, loops with no `try`/`except`, code inside a nested `def`,
+  and `application_sdk/common/backoff.py` itself are not flagged.
+
+  **Read the loop before drafting.**  A genuine retry ladder — attempt, catch,
+  wait, attempt again — migrates onto
+  `application_sdk.common.backoff.retry_async(call, backoff=Backoff(...),
+  retry_if=..., on_retry=..., on_giveup=...)`: state the ladder's shape as a
+  `Backoff` (geometric `base`/`factor`/`cap`, or explicit `steps`) and let the
+  helper own the loop.  Preserve the old ladder's attempt count and budget, and
+  choose jitter deliberately: `Jitter.FULL` (the default), `Jitter.SPREAD` where
+  the floor matters, `Jitter.NONE` only on the workflow path.  A loop with its
+  own control flow — a supervisor that resets its streak, a loop racing a
+  shutdown event — keeps its loop and takes the number from
+  `Backoff.delay(retry)`.
+
+  **Not every match is a ladder.**  A poller whose `try` only guards a log call
+  or a best-effort side task, with the sleep as its fixed cadence, is not a
+  retry.  Propose `# conformance: ignore[P060] <reason>` naming the cadence,
+  not a migration.
 
 - **P048 AppDerivedPersistentArtifactPrefix** (WARN) — app code assembles the
   connection-scoped layout `persistent-artifacts/apps/<app>/connection/…`

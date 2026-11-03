@@ -7,7 +7,10 @@ concerns), HandlerContext is focused on HTTP request handling.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import os
+import shutil
+import threading
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -39,6 +42,36 @@ class SecretStore(Protocol):
     async def get(self, name: str) -> str: ...
 
     async def get_optional(self, name: str) -> str | None: ...
+
+
+#: Credential directories a handler invocation failed to remove, with their
+#: on-removed callbacks. Process-wide, because the invocation's context is
+#: discarded on exit: every later invocation's exit retries them, so a
+#: transient failure does not leave secrets behind for the process lifetime.
+_pending_credential_dirs: dict[str, Callable[[str], None]] = {}
+_pending_credential_dirs_lock = threading.Lock()
+
+
+def _remove_credential_dirs(dirs: dict[str, Callable[[str], None]]) -> None:
+    """Remove each directory in *dirs*, then call its ``on_removed`` callback.
+
+    A directory that is still there afterwards goes to the process-wide
+    retry queue (logged, path only); one that is gone leaves the queue.
+    """
+    for path, on_removed in dirs.items():
+        shutil.rmtree(path, ignore_errors=True)
+        if os.path.lexists(path):
+            get_logger(__name__).warning(
+                "Could not remove credential directory %s; retrying on the next "
+                "handler exit",
+                path,
+            )
+            with _pending_credential_dirs_lock:
+                _pending_credential_dirs[path] = on_removed
+        else:
+            with _pending_credential_dirs_lock:
+                _pending_credential_dirs.pop(path, None)
+            on_removed(path)
 
 
 def _utc_now() -> datetime:
@@ -75,6 +108,13 @@ class HandlerContext:
 
     _logger: Any = field(default=None, repr=False)
     """Cached bound logger instance."""
+
+    _credential_dirs: dict[str, Callable[[str], None]] = field(
+        default_factory=dict, repr=False
+    )
+    """Private credential directories made during this invocation, each with
+    the callback to run once it is removed; removed when
+    :func:`bind_handler_context` exits."""
 
     @property
     def request_id_str(self) -> str:
@@ -145,6 +185,25 @@ class HandlerContext:
     def log_error(self, message: str, **kwargs: Any) -> None:
         self.log.error(message, **kwargs)
 
+    def _track_credential_dir(
+        self, path: str, on_removed: Callable[[str], None]
+    ) -> None:
+        """Remove *path* (a private credential directory) when this invocation
+        ends, then call ``on_removed(path)``.
+
+        The callback keeps this module free of a credentials import, which
+        would pull the credentials package into every handler install.
+        """
+        self._credential_dirs.setdefault(path, on_removed)
+
+    def _remove_credential_dirs(self) -> None:
+        """Remove the credential directories this invocation made, and retry
+        any earlier invocation failed to remove."""
+        with _pending_credential_dirs_lock:
+            dirs = {**_pending_credential_dirs, **self._credential_dirs}
+        self._credential_dirs.clear()
+        _remove_credential_dirs(dirs)
+
     def elapsed_ms(self) -> float:
         """Elapsed time since request started in milliseconds."""
         delta = datetime.now(UTC) - self.started_at
@@ -177,6 +236,11 @@ def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
     Blocking calls offloaded inside the block are charged to ``ctx.app_name``
     (FND-2973), so on a pod serving several apps each app's share of the
     blocking pool is counted and capped separately.
+
+    Credential directories made inside the block (``resolve_credential_file``,
+    ``credential_dir``) are removed when it exits: a handler call is their
+    scope, as a run is inside a task, so a long-lived server does not
+    accumulate one private directory of secrets per request.
     """
     token = _current_handler_context.set(ctx)
     try:
@@ -184,6 +248,7 @@ def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
             yield ctx
     finally:
         _current_handler_context.reset(token)
+        ctx._remove_credential_dirs()
 
 
 @contextmanager

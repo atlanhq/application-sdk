@@ -607,7 +607,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # only one in the fleet that runs a Windows CI leg, where the platform
     # default codec is cp1252 rather than UTF-8 — and publish destination
     # files atomically (P050, CONNECT-1126): the transfer and writer seams
-    # live in the SDK, so the in-place-write hazard does too.
+    # live in the SDK, so the in-place-write hazard does too.  P060
+    # (FND-4284) keeps hand-rolled retry ladders off the SDK now that
+    # application_sdk.common.backoff owns them; apps on an older SDK lack it.
     sdk_scoped = {r.id for r in rules if r.scope == RuleScope.SDK}
     assert sdk_scoped == {
         "B002",
@@ -617,6 +619,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P007",
         "P046",
         "P050",
+        "P060",
     }, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
@@ -791,6 +794,8 @@ def test_catalog_p_series_present() -> None:
     subclass constructed in a function with no ``async with`` and no ``close()``
     in a ``finally``) and CloseOverrideSkipsSuper (a ``close()`` override that
     never calls ``super().close()``); gated on an app SDK >= 3.46.0 (FND-3778).
+    P060 is HandRolledRetryLadder — a sleep in a loop that also catches
+    exceptions, outside application_sdk.common.backoff (FND-4284).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -850,6 +855,7 @@ def test_catalog_p_series_present() -> None:
         "P057",
         "P058",
         "P059",
+        "P060",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

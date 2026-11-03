@@ -1,10 +1,12 @@
-"""``upload_file`` retries a gateway "no Route matched" 404, and only that 404.
+"""Every store request retries a gateway "no Route matched" 404, and only that 404.
 
 Atlan's ``/api/blobstorage`` route is served through a Kong gateway. A gateway
 instance that joins the load balancer before its route table has synced
 answers every request with ``404 {"message":"no Route matched with those
 values"}`` for a few seconds. The Rust object_store client never retries a 404,
-so without a Python-level retry that single blip fails the whole upload.
+so without a Python-level retry that single blip fails the request. The retry
+sits at the store seam (``ops._past_gateway_no_route``), so the upload, its
+post-upload HEAD, the integrity sidecar PUT, downloads and listings share it.
 """
 
 from __future__ import annotations
@@ -75,8 +77,15 @@ def sleeps(monkeypatch) -> list[float]:
         recorded.append(delay)
 
     monkeypatch.setattr("application_sdk.storage.ops._retry_sleep", fake_sleep)
-    monkeypatch.setattr("application_sdk.storage.ops._retry_jitter", lambda: 1.0)
+    _pin_spread(monkeypatch, 1.0)
     return recorded
+
+
+def _pin_spread(monkeypatch, factor: float) -> None:
+    """Pin the Jitter.SPREAD multiplier the seam's Backoff draws."""
+    monkeypatch.setattr(
+        "application_sdk.common.backoff.random.uniform", lambda _lo, _hi: factor
+    )
 
 
 @pytest.fixture
@@ -143,7 +152,7 @@ async def test_retry_delays_are_scaled_by_jitter(src, monkeypatch, factor) -> No
         recorded.append(delay)
 
     monkeypatch.setattr("application_sdk.storage.ops._retry_sleep", fake_sleep)
-    monkeypatch.setattr("application_sdk.storage.ops._retry_jitter", lambda: factor)
+    _pin_spread(monkeypatch, factor)
     opener = _writer_factory([_GATEWAY_NO_ROUTE, _GATEWAY_NO_ROUTE, None])
     with patch("application_sdk.storage.ops.obstore.open_writer_async", opener):
         await upload_file("k", src, MagicMock(), normalize=False, verify=False)
@@ -174,18 +183,22 @@ def test_gateway_no_route_is_not_a_missing_key() -> None:
     assert ops._is_not_found(RuntimeError(_PLAIN_NOT_FOUND)) is True
 
 
-@pytest.mark.parametrize(
+_READ_PATHS = pytest.mark.parametrize(
     ("call", "target"),
     [
         (lambda: ops.exists("k", MagicMock(), normalize=False), "head_async"),
         (lambda: ops.get_file_meta("k", MagicMock(), normalize=False), "head_async"),
         (lambda: ops._get_bytes("k", MagicMock(), normalize=False), "get_async"),
+        (lambda: ops._put("k", b"x", MagicMock(), normalize=False), "put_async"),
         (lambda: ops.delete("k", MagicMock(), normalize=False), "delete_async"),
     ],
-    ids=["exists", "get_file_meta", "_get_bytes", "delete"],
+    ids=["exists", "get_file_meta", "_get_bytes", "_put", "delete"],
 )
-async def test_read_path_raises_gateway_no_route_instead_of_absent(
-    call, target
+
+
+@_READ_PATHS
+async def test_request_path_raises_gateway_no_route_instead_of_absent(
+    call, target, sleeps
 ) -> None:
     failing = AsyncMock(side_effect=RuntimeError(_GATEWAY_NO_ROUTE))
     with (
@@ -193,3 +206,135 @@ async def test_read_path_raises_gateway_no_route_instead_of_absent(
         pytest.raises(StorageGatewayNoRouteError),
     ):
         await call()
+
+    assert failing.await_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+    assert sleeps == list(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS)
+
+
+@_READ_PATHS
+async def test_request_path_recovers_after_transient_gateway_no_route(
+    call, target, sleeps
+) -> None:
+    head_meta = {"size": 1, "e_tag": "e"}
+    get_result = MagicMock()
+    get_result.bytes.return_value = b"x"
+    ok = {"head_async": head_meta, "get_async": get_result}.get(target)
+    flaky = AsyncMock(side_effect=[RuntimeError(_GATEWAY_NO_ROUTE), ok])
+    with patch(f"application_sdk.storage.ops.obstore.{target}", flaky):
+        await call()
+
+    assert flaky.await_count == 2
+    assert sleeps == [5.0]
+
+
+async def test_post_upload_head_rides_out_gateway_no_route(src, sleeps) -> None:
+    """A no-route 404 on the readback HEAD no longer fails a finished upload
+    (which made Temporal re-upload the whole file)."""
+    head = AsyncMock(
+        side_effect=[RuntimeError(_GATEWAY_NO_ROUTE), {"size": 7, "e_tag": "e"}]
+    )
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            _writer_factory([None]),
+        ),
+        patch("application_sdk.storage.ops.obstore.head_async", head),
+        patch("application_sdk.storage.ops.obstore.put_async", AsyncMock()),
+    ):
+        await upload_file("k", src, MagicMock(), normalize=False, verify=True)
+
+    assert head.await_count == 2
+    assert sleeps == [5.0]
+
+
+async def test_sidecar_put_rides_out_gateway_no_route(src, sleeps) -> None:
+    """The integrity sidecar write used to swallow a no-route 404, silently
+    losing the sidecar. It now retries and lands."""
+    put = AsyncMock(side_effect=[RuntimeError(_GATEWAY_NO_ROUTE), None])
+    with (
+        patch(
+            "application_sdk.storage.ops.obstore.open_writer_async",
+            _writer_factory([None]),
+        ),
+        patch("application_sdk.storage.ops.obstore.put_async", put),
+    ):
+        await upload_file(
+            "k", src, MagicMock(), normalize=False, verify=False, write_sidecar=True
+        )
+
+    assert put.await_count == 2
+    assert put.await_args.args[1] == "k.sha256"
+    assert sleeps == [5.0]
+
+
+async def test_download_rides_out_gateway_no_route(tmp_path, sleeps) -> None:
+    get_result = MagicMock()
+    get_result.meta = {"size": 7}
+
+    async def _stream(**_kw):
+        yield b"payload"
+
+    get_result.stream = MagicMock(side_effect=lambda **kw: _stream(**kw))
+    get = AsyncMock(side_effect=[RuntimeError(_GATEWAY_NO_ROUTE), get_result])
+    with patch("application_sdk.storage.ops.obstore.get_async", get):
+        await ops.download_file(
+            "k", tmp_path / "out.bin", MagicMock(), normalize=False, verify=False
+        )
+
+    assert get.await_count == 2
+    assert (tmp_path / "out.bin").read_bytes() == b"payload"
+    assert sleeps == [5.0]
+
+
+async def test_listing_restarts_after_gateway_no_route(sleeps) -> None:
+    """A retried listing starts over, so a page from the failed attempt is
+    never duplicated in the result."""
+    calls = {"n": 0}
+
+    async def _pages():
+        yield [{"path": "a", "size": 1, "e_tag": None}]
+        if calls["n"] == 1:
+            raise RuntimeError(_GATEWAY_NO_ROUTE)
+        yield [{"path": "b", "size": 1, "e_tag": None}]
+
+    def _list(*_a, **_kw):
+        calls["n"] += 1
+        return _pages()
+
+    with patch("application_sdk.storage.ops.obstore.list", _list):
+        items = await ops._list_items(MagicMock(), "p", include_markers=True)
+
+    assert [i[0] for i in items] == ["a", "b"]
+    assert calls["n"] == 2
+    assert sleeps == [5.0]
+
+
+async def test_marker_head_probe_does_not_read_exhausted_gateway_404_as_absent(
+    sleeps,
+) -> None:
+    """A gateway 404 that outlasts the retries is the gateway, not the key, even
+    when obstore types it as not-found."""
+    head = AsyncMock(side_effect=FileNotFoundError(_GATEWAY_NO_ROUTE))
+    with patch("application_sdk.storage.ops.obstore.head_async", head):
+        assert await ops._head_not_found(MagicMock(), "p") is False
+
+    assert head.await_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+
+
+async def test_marker_list_probe_rides_out_gateway_no_route(sleeps) -> None:
+    calls = {"n": 0}
+
+    async def _pages():
+        if calls["n"] == 1:
+            raise RuntimeError(_GATEWAY_NO_ROUTE)
+        yield [{"path": "p/child", "size": 1}]
+
+    def _list(*_a, **_kw):
+        calls["n"] += 1
+        return _pages()
+
+    with patch("application_sdk.storage.ops.obstore.list", _list):
+        assert await ops._lists_under_itself(MagicMock(), "p") is True
+
+    assert calls["n"] == 2
+    assert sleeps == [5.0]

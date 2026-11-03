@@ -9,9 +9,23 @@ wires Temporal directly is caught.
 
 from __future__ import annotations
 
+import ast
+import importlib
+import importlib.metadata
+import json
+import re
 from pathlib import Path
 
+from conformance.suite.checks._ast_common._safe_swap import (
+    PUBLIC_ALIAS_MODULE,
+    PUBLIC_ALIASES,
+    source_lines,
+)
+from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
+from conformance.suite.schema.extensions import SafeSwap
+
+import conformance
 
 
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:
@@ -103,6 +117,295 @@ def test_p005_suppressed_inline() -> None:
     )
     fs = _rule(src, "P005")
     assert len(fs) == 1 and fs[0].suppressed
+
+
+# ── Safe-swap markers (atlan/safeSwap) ──────────────────────────────────────
+
+
+def _swap(finding) -> SafeSwap | None:
+    return SafeSwap.from_properties(finding.properties)
+
+
+def _apply(src: str, finding) -> str:
+    swap = _swap(finding)
+    assert swap is not None
+    lines = src.splitlines(keepends=True)
+    assert lines[finding.line - 1].count(swap.find) == 1
+    lines[finding.line - 1] = lines[finding.line - 1].replace(swap.find, swap.replace)
+    return "".join(lines)
+
+
+def test_p005_marks_a_module_level_public_reexport_import_as_a_safe_swap() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    build_output_path,\n"
+        "    get_object_store_prefix as prefix,\n"
+        ")\n"
+    )
+    (finding,) = _rule(src, "P005", "tests/unit/test_x.py")
+    swap = _swap(finding)
+    assert swap is not None and swap.id == "public-reexport"
+    assert (swap.requires.package, swap.requires.min) == (
+        "atlan-application-sdk",
+        "3.0.0",
+    )
+    fixed = _apply(src, finding)
+    assert fixed.startswith("from application_sdk.execution import (\n")
+    assert _rule(fixed, "P005") == []
+
+
+def test_p005_leaves_a_function_local_reexport_import_unmarked() -> None:
+    src = (
+        "def f():\n"
+        "    from application_sdk.execution._temporal.activity_utils import (\n"
+        "        get_object_store_prefix,\n"
+        "    )\n"
+        "    return get_object_store_prefix\n"
+    )
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_p005_leaves_a_name_without_a_public_home_unmarked() -> None:
+    src = (
+        "from application_sdk.execution._temporal.activity_utils import (\n"
+        "    get_object_store_prefix,\n"
+        "    get_workflow_id,\n"
+        ")\n"
+    )
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_p005_leaves_a_dotted_module_import_unmarked() -> None:
+    src = "import application_sdk.execution._temporal.activity_utils as au\n"
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_p005_leaves_other_private_modules_unmarked() -> None:
+    src = "from application_sdk.execution._temporal.worker import create_worker\n"
+    (finding,) = _rule(src, "P005", "tests/integration/test_x.py")
+    assert _swap(finding) is None
+
+
+def test_p004_marks_a_failure_class_import_keeping_the_bound_name() -> None:
+    src = "from temporalio.exceptions import ApplicationError\n"
+    (finding,) = _rule(src, "P004")
+    swap = _swap(finding)
+    assert swap is not None and swap.id == "public-alias"
+    assert swap.requires.min == "3.50.0"
+    fixed = _apply(src, finding)
+    assert fixed == (
+        "from application_sdk.execution import TemporalApplicationError as ApplicationError\n"
+    )
+    assert _rule(fixed, "P004") == []
+
+
+def test_p004_marks_an_aliased_failure_class_import_keeping_its_alias() -> None:
+    src = "from temporalio.exceptions import TimeoutError as TT  # noqa: A004\n"
+    (finding,) = _rule(src, "P004", "tests/unit/test_x.py")
+    swap = _swap(finding)
+    assert swap is not None and swap.requires.min == "3.21.0"
+    assert _apply(src, finding).startswith(
+        "from application_sdk.execution import TemporalTimeoutError as TT"
+    )
+
+
+def test_p004_marks_the_client_failure_class() -> None:
+    (finding,) = _rule("from temporalio.client import WorkflowFailureError\n", "P004")
+    assert _apply("from temporalio.client import WorkflowFailureError\n", finding) == (
+        "from application_sdk.execution import TemporalWorkflowFailureError as WorkflowFailureError\n"
+    )
+
+
+def test_p004_leaves_other_temporal_imports_unmarked() -> None:
+    for src in (
+        "from temporalio.client import Client\n",
+        "from temporalio.exceptions import TimeoutType\n",
+        "from temporalio.exceptions import ApplicationError, TimeoutError\n",
+        "from temporalio.exceptions import (\n    ApplicationError,\n)\n",
+        "from temporalio.exceptions import (ApplicationError)\n",
+        "from temporalio.exceptions import  ApplicationError\n",
+        "from temporalio.exceptions import\tApplicationError\n",
+        "from temporalio.exceptions\timport ApplicationError\n",
+        "from temporalio.exceptions import ApplicationError; x = 'temporalio.exceptions import ApplicationError'\n",
+        "import temporalio.exceptions\n",
+        "def f():\n    from temporalio.exceptions import ApplicationError\n    return ApplicationError\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert _swap(finding) is None, src
+
+
+def test_p004_marks_an_import_with_odd_spacing_outside_find() -> None:
+    src = "from  temporalio.exceptions import ApplicationError\n"
+    (finding,) = _rule(src, "P004")
+    assert _rule(_apply(src, finding), "P004") == []
+
+
+def test_p005_leaves_a_module_path_not_written_as_find_unmarked() -> None:
+    src = "from application_sdk.execution._temporal .activity_utils import build_output_path\n"
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_source_lines_index_matches_ast_lineno_for_every_line_ending() -> None:
+    for eol in ("\n", "\r\n", "\r"):
+        src = eol.join(["x = 1", "y = '\x0c\x0b'", "z = 3", ""])
+        nodes = ast.parse(src).body
+        assert [source_lines(src)[n.lineno - 1][:1] for n in nodes] == ["x", "y", "z"]
+
+
+def test_floor_compare_treats_a_pre_release_as_its_release() -> None:
+    assert version_reached((3, 50, 0), parse_version("3.50.0.dev0") or ())
+    assert not version_reached((3, 50, 0), parse_version("3.49.2") or ())
+
+
+def test_p004_public_aliases_are_the_same_objects_from_their_floor() -> None:
+    installed = parse_version(importlib.metadata.version("atlan-application-sdk"))
+    assert installed is not None
+    seam = importlib.import_module(PUBLIC_ALIAS_MODULE)
+    for (module, name), (public, since) in PUBLIC_ALIASES.items():
+        floor = parse_version(since)
+        assert floor is not None
+        if not version_reached(floor, installed):
+            assert not hasattr(seam, public), (public, since, installed)
+            continue
+        assert getattr(seam, public) is getattr(importlib.import_module(module), name)
+
+
+def test_p004_hints_never_suggest_a_call_that_fires_p017() -> None:
+    for src in (
+        "from temporalio.client import Client\n",
+        "from temporalio.worker import Worker\n",
+        "from temporalio.testing import WorkflowEnvironment\n",
+    ):
+        (finding,) = _rule(src, "P004", "tests/unit/test_x.py")
+        assert "import create_" not in finding.message
+        assert "fixture kit" in finding.message
+
+
+def test_p004_hint_names_the_failure_alias() -> None:
+    (finding,) = _rule("from temporalio.exceptions import ApplicationError\n", "P004")
+    assert "TemporalApplicationError" in finding.message
+
+
+def test_p004_hint_names_no_alias_for_a_name_without_one() -> None:
+    (finding,) = _rule("from temporalio.exceptions import TimeoutType\n", "P004")
+    assert "alias (" not in finding.message
+    assert "no public SDK equivalent" in finding.message
+
+
+def test_p004_hint_keeps_every_kind_of_name_in_a_mixed_import() -> None:
+    src = "from temporalio.client import Client, WorkflowFailureError\n"
+    (finding,) = _rule(src, "P004")
+    assert "TemporalWorkflowFailureError" in finding.message
+    assert "TemporalClient" in finding.message
+
+
+def test_p004_client_and_worker_hints_name_the_production_launcher() -> None:
+    for src in (
+        "from temporalio.client import Client\n",
+        "from temporalio.worker import Worker\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "application-sdk --mode worker|handler|combined" in finding.message
+
+
+def test_p004_hint_sends_every_unaliased_exception_or_client_name_to_the_list() -> None:
+    for src in (
+        "from temporalio.exceptions import RetryState\n",
+        "from temporalio.exceptions import WorkflowAlreadyStartedError\n",
+        "from temporalio.client import WorkflowHandle\n",
+        "from temporalio.client import (\n    Client,\n    ScheduleSpec,\n)\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "no public SDK equivalent" in finding.message, src
+
+
+def test_p004_status_enum_gets_the_literal_hint_not_the_no_public_one() -> None:
+    (finding,) = _rule(
+        "from temporalio.client import WorkflowExecutionStatus\n", "P004"
+    )
+    assert '"COMPLETED"' in finding.message
+    assert "no public SDK equivalent" not in finding.message
+
+
+def test_p004_sandbox_settings_get_the_passthrough_hint() -> None:
+    for src in (
+        "from temporalio.worker.workflow_sandbox import SandboxRestrictions\n",
+        "from temporalio.worker import SandboxedWorkflowRunner\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "passthrough_modules" in finding.message
+        assert "application-sdk --mode" not in finding.message
+
+
+def test_p004_unsandboxed_runner_has_no_public_equivalent() -> None:
+    (finding,) = _rule(
+        "from temporalio.worker import UnsandboxedWorkflowRunner\n", "P004"
+    )
+    assert "passthrough_modules" not in finding.message
+    assert "no public SDK equivalent" in finding.message
+
+
+def test_p004_other_worker_names_keep_the_launcher_hint() -> None:
+    for src in (
+        "from temporalio.worker import Interceptor\n",
+        "from temporalio.worker import WorkerConfig\n",
+        "from temporalio.worker import Worker, UnsandboxedWorkflowRunner\n",
+        "import temporalio.worker\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "application-sdk --mode worker|handler|combined" in finding.message, src
+
+
+def test_p004_bare_module_import_points_at_per_name_treatment() -> None:
+    for src in ("import temporalio.exceptions\n", "import temporalio.common\n"):
+        (finding,) = _rule(src, "P004")
+        assert "Each name used through this module" in finding.message
+
+
+def _p004_preplanning_blocks() -> list[re.Pattern[str]]:
+    skill = (
+        Path(conformance.__file__).parent
+        / "skills"
+        / "migrate-orchestration"
+        / "SKILL.md"
+    )
+    block = re.search(r"```decided-defaults\n(.*?)```", skill.read_text(), re.S)
+    assert block is not None
+    rows = [json.loads(line) for line in block.group(1).splitlines() if line.strip()]
+    return [
+        re.compile(r["match"])
+        for r in rows
+        if r["rule"] == "P004" and r.get("block") and isinstance(r.get("match"), str)
+    ]
+
+
+def test_skill_preplanning_block_holds_every_no_public_hint() -> None:
+    blocks = _p004_preplanning_blocks()
+    for src in (
+        "from temporalio.exceptions import RetryState\n",
+        "from temporalio.client import WorkflowHandle\n",
+        "from temporalio.common import (\n    SearchAttributeKey,\n)\n",
+        "from temporalio.worker import UnsandboxedWorkflowRunner\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert any(b.search(finding.message) for b in blocks), src
+
+
+def test_skill_preplanning_block_leaves_fixable_imports_alone() -> None:
+    blocks = _p004_preplanning_blocks()
+    for src in (
+        "from temporalio.exceptions import ApplicationError\n",
+        "from temporalio.client import WorkflowExecutionStatus\n",
+        "from temporalio.client import Client\n",
+        "from temporalio.common import RetryPolicy\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert not any(b.search(finding.message) for b in blocks), src
+        assert not any(b.search(src.splitlines()[0]) for b in blocks), src
 
 
 # ── P006 TemporalImportOutsideAdapter (sdk) ─────────────────────────────────

@@ -42,6 +42,7 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
 )
+from conformance.suite.checks._ast_common._safe_swap import source_lines
 from conformance.suite.schema.disposition import RuleScope
 from conformance.suite.schema.findings import Finding
 
@@ -121,7 +122,11 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             )
         if run_consumer:
             findings.extend(scan_daft_runtime(tree, rel, directives))
-            findings.extend(scan_private_imports(tree, rel, directives, own_roots))
+            findings.extend(
+                scan_private_imports(
+                    tree, rel, directives, own_roots, lines=source_lines(text)
+                )
+            )
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
 

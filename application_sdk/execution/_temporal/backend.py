@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
-import random
 import socket
 import threading
 import urllib.request
@@ -25,6 +24,7 @@ from temporalio.runtime import (
 )
 
 from application_sdk.app.entrypoint import canonical_workflow_type
+from application_sdk.common.backoff import Backoff, RetryExhausted, retry_async
 from application_sdk.common.dispatch import (
     StampFailurePolicy,
     resolve_dispatch_workflow_id,
@@ -39,6 +39,9 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.utils import get_metric_enrichment_labels
 
 logger = get_logger(__name__)
+
+#: Ceiling on a single connect backoff draw (see ``create_temporal_client``).
+_CONNECT_BACKOFF_CAP_SECONDS = 5.0
 
 _prometheus_runtime: Runtime | None = None
 _prometheus_lock = threading.Lock()
@@ -638,8 +641,9 @@ async def create_temporal_client(
         tls_client_cert_path: Path to client cert PEM file (mTLS).
         tls_client_private_key_path: Path to client private key PEM file (mTLS).
         tls_domain: TLS server name override.
-        connect_max_attempts: Maximum connection attempts (default 5).
-        connect_retry_delay_seconds: Initial delay between retries (default 2.0s).
+        connect_max_attempts: Maximum connection attempts (default 10).
+        connect_retry_delay_seconds: First backoff cap; each retry sleeps a
+            full-jitter draw under ``min(this * 2**(n-1), 5s)`` (default 0.5s).
         enable_prometheus: Enable Temporal Prometheus metrics endpoint.
         prometheus_bind_address: Bind address for Prometheus metrics (e.g. "0.0.0.0:9464").
 
@@ -748,41 +752,42 @@ async def create_temporal_client(
     # capped exponential growth but draws each sleep from U(0, cap_at_attempt)
     # to spread concurrent reconnects across the window and avoid thundering
     # herd on Temporal frontend recovery.
-    last_exc: Exception | None = None
-    backoff_cap = 5.0
-    for attempt in range(1, connect_max_attempts + 1):
-        try:
-            client = await Client.connect(**kwargs)
-            # conformance: ignore[L006] fires exactly once on successful connect then returns; a genuine INFO lifecycle event, not per-iteration retry-loop volume
-            logger.info("Connected to Temporal: host=%s namespace=%s", host, namespace)
-            return client
-        except Exception as exc:
-            last_exc = exc
-            if attempt < connect_max_attempts:
-                cap_at_attempt = min(
-                    connect_retry_delay_seconds * (2 ** (attempt - 1)),
-                    backoff_cap,
-                )
-                jittered = random.uniform(0, cap_at_attempt)
-                logger.warning(
-                    "Temporal connection attempt %d/%d failed, retrying in %.2fs "
-                    "(jittered, cap=%.1fs)",
-                    attempt,
-                    connect_max_attempts,
-                    jittered,
-                    cap_at_attempt,
-                    exc_info=True,
-                )
-                await asyncio.sleep(jittered)
-            else:
-                logger.error(
-                    "Temporal connection failed after %d attempts",
-                    connect_max_attempts,
-                    exc_info=True,
-                )
-
-    from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
-        TemporalConnectError,
+    backoff = Backoff(
+        base=connect_retry_delay_seconds,
+        cap=_CONNECT_BACKOFF_CAP_SECONDS,
+        max_attempts=connect_max_attempts,
     )
 
-    raise TemporalConnectError(target=host, cause=last_exc) from last_exc
+    def _log_retry(attempt: int, exc: Exception, delay: float) -> None:
+        logger.warning(
+            "Temporal connection attempt %d/%d failed, retrying in %.2fs "
+            "(jittered, cap=%.1fs)",
+            attempt,
+            connect_max_attempts,
+            delay,
+            backoff.nominal(attempt),
+            exc_info=True,
+        )
+
+    def _giveup(exhausted: RetryExhausted) -> Exception:
+        logger.error(
+            "Temporal connection failed after %d attempts",
+            exhausted.attempts,
+            exc_info=exhausted.error,
+        )
+        from application_sdk.execution._temporal._backend_errors import (  # noqa: PLC0415
+            TemporalConnectError,
+        )
+
+        return TemporalConnectError(target=host, cause=exhausted.error)
+
+    client = await retry_async(
+        lambda: Client.connect(**kwargs),
+        backoff=backoff,
+        retry_if=lambda _exc: True,
+        on_retry=_log_retry,
+        on_giveup=_giveup,
+        sleep=asyncio.sleep,
+    )
+    logger.info("Connected to Temporal: host=%s namespace=%s", host, namespace)
+    return client

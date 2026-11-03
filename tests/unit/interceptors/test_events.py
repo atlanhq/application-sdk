@@ -1259,3 +1259,184 @@ class TestDirectHttpFallback:
     )
     def test_non_delivery_classifier(self, text, expected):
         assert events_module._proves_non_delivery(BindingError(text)) is expected
+
+
+class TestPublishEventIsAtLeastOnce:
+    """FND-4280: lifecycle events are at-least-once. A failure that may have
+    delivered the event is still retried by the ``publish_event`` activity's
+    retry policy, because a missing ``workflow_end`` costs consumers more than
+    a duplicate they can dedupe on ``metadata.event_id``."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "text", [_AMBIGUOUS, _NON_DELIVERY], ids=["ambiguous", "non-delivery"]
+    )
+    async def test_binding_failure_stays_retryable(self, text) -> None:
+        from application_sdk.execution._temporal._activity_errors import (
+            EventPublishError,
+        )
+
+        err = BindingError(text, binding_name="eventstore", operation="create")
+        with mock.patch.object(
+            events_module,
+            "_publish_event_via_binding",
+            mock.AsyncMock(side_effect=err),
+        ):
+            with pytest.raises(EventPublishError) as exc:
+                await publish_event(
+                    {
+                        "event_type": EventTypes.APPLICATION_EVENT.value,
+                        "event_name": ApplicationEventNames.WORKFLOW_END.value,
+                        "data": {},
+                    }
+                )
+        assert exc.value.effective_retryable is True
+        assert exc.value.__cause__ is err
+
+
+class TestEventId:
+    """``metadata.event_id`` lets consumers dedupe: one id per logical event."""
+
+    @staticmethod
+    def _enrich(event_name: str, *, attempt: int = 1, activity_id: str = "7"):
+        act_info = mock.MagicMock(
+            activity_type="publish_event",
+            activity_id=activity_id,
+            attempt=attempt,
+            workflow_type="wf-type",
+            workflow_id="wf-1",
+            workflow_run_id="run-1",
+        )
+        with (
+            mock.patch.object(
+                events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+            ),
+            mock.patch.object(events_module.activity, "info", return_value=act_info),
+        ):
+            return _enrich_event_metadata(
+                Event(event_type="application_events", event_name=event_name, data={})
+            ).metadata.event_id
+
+    def test_workflow_event_id_is_stable_across_attempts(self) -> None:
+        start = ApplicationEventNames.WORKFLOW_START.value
+        assert self._enrich(start, attempt=1) == self._enrich(start, attempt=3)
+        assert self._enrich(start) != self._enrich(
+            ApplicationEventNames.WORKFLOW_END.value
+        )
+
+    def test_activity_event_id_differs_per_attempt(self) -> None:
+        start = ApplicationEventNames.ACTIVITY_START.value
+        assert self._enrich(start, attempt=1) != self._enrich(start, attempt=2)
+        assert self._enrich(start, activity_id="1") != self._enrich(
+            start, activity_id="2"
+        )
+        assert self._enrich(start) == self._enrich(start)
+
+    def test_outside_a_workflow_each_event_gets_a_fresh_id(self) -> None:
+        with (
+            mock.patch.object(
+                events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+            ),
+            mock.patch.object(
+                events_module.activity, "info", side_effect=RuntimeError("no ctx")
+            ),
+        ):
+            ids = {
+                _enrich_event_metadata(
+                    Event(
+                        event_type="application_events",
+                        event_name="worker_start",
+                        data={},
+                    )
+                ).metadata.event_id
+                for _ in range(2)
+            }
+        assert len(ids) == 2
+        assert all(ids)
+
+    def test_preset_event_id_is_kept(self) -> None:
+        from application_sdk.contracts.events import EventMetadata
+
+        event = Event(
+            event_type="application_events",
+            event_name="worker_start",
+            data={},
+            metadata=EventMetadata(event_id="given"),
+        )
+        with (
+            mock.patch.object(
+                events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+            ),
+            mock.patch.object(
+                events_module.activity, "info", side_effect=RuntimeError("no ctx")
+            ),
+        ):
+            assert _enrich_event_metadata(event).metadata.event_id == "given"
+
+    @pytest.mark.asyncio
+    async def test_pre_event_id_payload_gets_one_id_across_retries(self) -> None:
+        """A ``publish_event`` input recorded before ``event_id`` existed.
+
+        Workflow histories written by an older SDK carry ``metadata`` without
+        an ``event_id`` key. A retry of that activity on this SDK must still
+        reconstruct the event and send one stable id on every attempt.
+        """
+        import json
+
+        import orjson
+
+        from application_sdk.contracts.events import EventMetadata
+        from application_sdk.infrastructure.context import InfrastructureContext
+
+        old_metadata = json.loads(json.dumps(EventMetadata().model_dump(mode="json")))
+        old_metadata.pop("event_id")
+        old_payload = {
+            "event_type": EventTypes.APPLICATION_EVENT.value,
+            "event_name": ApplicationEventNames.WORKFLOW_START.value,
+            "data": {},
+            "metadata": old_metadata,
+        }
+
+        sent: list[dict] = []
+
+        async def _invoke(*, operation, data, metadata):
+            sent.append(orjson.loads(data))
+
+        binding = mock.MagicMock()
+        binding.invoke = mock.AsyncMock(side_effect=_invoke)
+        infra = InfrastructureContext(event_binding=binding)
+
+        for attempt in (1, 2):
+            act_info = mock.MagicMock(
+                activity_type="publish_event",
+                activity_id="7",
+                attempt=attempt,
+                workflow_type="wf-type",
+                workflow_id="wf-1",
+                workflow_run_id="run-1",
+            )
+            with (
+                mock.patch(
+                    "application_sdk.infrastructure.context.get_infrastructure",
+                    return_value=infra,
+                ),
+                mock.patch.object(
+                    events_module,
+                    "_get_event_auth_headers",
+                    new_callable=mock.AsyncMock,
+                    return_value={},
+                ),
+                mock.patch.object(events_module, "_send_lifecycle_event_to_segment"),
+                mock.patch.object(
+                    events_module.workflow, "info", side_effect=RuntimeError("no ctx")
+                ),
+                mock.patch.object(
+                    events_module.activity, "info", return_value=act_info
+                ),
+            ):
+                await publish_event(dict(old_payload))
+
+        assert len(sent) == 2
+        ids = {p["metadata"]["event_id"] for p in sent}
+        assert len(ids) == 1
+        assert ids != {None}

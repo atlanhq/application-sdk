@@ -432,6 +432,7 @@ class AtlanObservability(Generic[T], ABC):
             first = True
             while True:
                 if not first:
+                    # conformance: ignore[P060] fixed-cadence flush interval, not a retry ladder
                     await asyncio.sleep(self._flush_interval)
                 first = False
                 try:

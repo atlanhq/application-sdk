@@ -296,6 +296,7 @@ async def _periodic_drain_flush(complete: Any, interval: float) -> None:
     """
     while True:
         try:
+            # conformance: ignore[P060] fixed-cadence flush interval, not a retry ladder
             await asyncio.sleep(interval)
             await _drain_and_flush(complete)
         except asyncio.CancelledError:

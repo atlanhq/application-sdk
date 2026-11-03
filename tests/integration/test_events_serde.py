@@ -292,3 +292,105 @@ async def test_activity_end_event_contains_duration_ms(
             "duration_ms" in end_event.data
         ), f"activity_end event missing duration_ms in data: {end_event.data}"
         assert isinstance(end_event.data["duration_ms"], (int, float))
+
+
+# ---------------------------------------------------------------------------
+# FND-4280: a failed workflow event is retried, and every copy shares an event_id
+# ---------------------------------------------------------------------------
+
+_AMBIGUOUS_DAPR_ERROR = (
+    "Failed to invoke binding: 500 (dapr errorCode=ERR_INVOKE_OUTPUT_BINDING: "
+    "received status code 502)"
+)
+_NON_DELIVERY_DAPR_ERROR = (
+    "Failed to invoke binding: 500 (dapr errorCode=ERR_INVOKE_OUTPUT_BINDING: "
+    'Post "https://t/api/eventingress/": EOF)'
+)
+
+
+def _failing_event_binding(workflow_start_error: str) -> tuple[mock.MagicMock, list]:
+    """An event binding that records every payload and fails ``workflow_start``.
+
+    Every other event is accepted, so the workflow runs to completion.
+    """
+    import orjson
+
+    from application_sdk.infrastructure.bindings import BindingError
+
+    sent: list[dict] = []
+
+    async def _invoke(*, operation, data, metadata):
+        payload = orjson.loads(data)
+        sent.append(payload)
+        if payload["event_name"] == ApplicationEventNames.WORKFLOW_START.value:
+            raise BindingError(
+                workflow_start_error, binding_name="eventstore", operation=operation
+            )
+
+    binding = mock.MagicMock()
+    binding.invoke = mock.AsyncMock(side_effect=_invoke)
+    return binding, sent
+
+
+async def _run_with_event_binding(
+    binding, run_worker, executor, reregister_app, monkeypatch
+):
+    from application_sdk.infrastructure.context import InfrastructureContext
+
+    reregister_app(_NullApp)
+    infra = InfrastructureContext(event_binding=binding)
+    with (
+        mock.patch(
+            "application_sdk.infrastructure.context.get_infrastructure",
+            return_value=infra,
+        ),
+        mock.patch(
+            "application_sdk.execution._temporal.interceptors.events._publish_event_direct",
+            new_callable=mock.AsyncMock,
+        ) as direct,
+    ):
+        async with _run_worker_with_events(run_worker, monkeypatch):
+            context = AppContext(
+                app_name=_NullApp._app_name, app_version=_NullApp._app_version
+            )
+            await executor.execute(
+                _NullApp, _NullInput(), context=context, retry_policy=NO_RETRY
+            )
+    return direct
+
+
+def _sent(sent: list[dict], event_name: str) -> list[dict]:
+    return [p for p in sent if p["event_name"] == event_name]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "dapr_error",
+    [_AMBIGUOUS_DAPR_ERROR, _NON_DELIVERY_DAPR_ERROR],
+    ids=["ambiguous-upstream-502", "proven-non-delivery"],
+)
+async def test_failed_workflow_event_is_retried_with_one_event_id(
+    run_worker, executor, reregister_app, monkeypatch, dapr_error
+):
+    """Lifecycle events are at-least-once. Whether or not the failure proves
+    non-delivery, the ``publish_event`` activity is retried by the workflow's
+    ``RetryPolicy(maximum_attempts=3)``, so a consumer may see the event more
+    than once, and every copy carries the same ``event_id`` to dedupe on. The
+    fallback is off so both cases go through Dapr only, and the workflow still
+    completes."""
+    monkeypatch.setattr(
+        "application_sdk.constants.EVENT_INGRESS_DIRECT_FALLBACK", False
+    )
+    binding, sent = _failing_event_binding(dapr_error)
+
+    direct = await _run_with_event_binding(
+        binding, run_worker, executor, reregister_app, monkeypatch
+    )
+
+    starts = _sent(sent, ApplicationEventNames.WORKFLOW_START.value)
+    assert len(starts) == 3, f"workflow_start sent {len(starts)} times"
+    assert len({p["metadata"]["event_id"] for p in starts}) == 1
+    assert starts[0]["metadata"]["event_id"]
+    assert len({p["metadata"]["attempt"] for p in starts}) == 3
+    assert len(_sent(sent, ApplicationEventNames.WORKFLOW_END.value)) == 1
+    direct.assert_not_called()
