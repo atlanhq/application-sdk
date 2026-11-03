@@ -132,12 +132,6 @@ jobs:
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
 
-      - name: Sign bot commits
-        if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
-        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
-        with:
-          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
-
       - name: Commit and push bump branch
         if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
         env:

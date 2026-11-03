@@ -364,13 +364,31 @@ jobs:
           fi
 
       - name: Upload the fixed lockfile
+        id: upload-fix
         if: steps.handover.outputs.changed == 'true'
+        continue-on-error: true
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: vulnerability-fix
+          name: vuln-fix-commit-files
           path: |
             ${{ runner.temp }}/fix/uv.lock
             ${{ runner.temp }}/fix/pyproject.toml
+          overwrite: true
+          retention-days: 1
+
+      - name: Wait before the the fixed lockfile retry
+        if: steps.handover.outputs.changed == 'true' && steps.upload-fix.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload the fixed lockfile (retry)
+        if: steps.handover.outputs.changed == 'true' && steps.upload-fix.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vuln-fix-commit-files-retry
+          path: |
+            ${{ runner.temp }}/fix/uv.lock
+            ${{ runner.temp }}/fix/pyproject.toml
+          overwrite: true
           retention-days: 1
 
       - name: Comment on PR
@@ -429,10 +447,27 @@ jobs:
             exit 1
           fi
 
+      # Glob, not the bare name: the upload's retry lands under `vuln-fix-commit-files-retry`.
+      # Both upload attempts overwrite, so the glob resolves to one artifact.
       - name: Download the fixed lockfile
+        id: download-fix
+        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: vulnerability-fix
+          pattern: vuln-fix-commit-files*
+          merge-multiple: true
+          path: ${{ runner.temp }}/fix
+
+      - name: Wait before the the fixed lockfile download retry
+        if: steps.download-fix.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download the fixed lockfile (retry)
+        if: steps.download-fix.outcome == 'failure'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: vuln-fix-commit-files*
+          merge-multiple: true
           path: ${{ runner.temp }}/fix
 
       - name: Sign bot commits

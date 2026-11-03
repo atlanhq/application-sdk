@@ -164,11 +164,6 @@ jobs:
           path: ${{ runner.temp }}/pyatlan-sync
 
       # Stdlib only: nothing from the new dependency set runs beside the token.
-      - name: Sign bot commits
-        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
-        with:
-          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
-
       - name: Commit the synced outputs
         run: python3 .github/scripts/renovate_pyatlan_sync.py --apply-from "$RUNNER_TEMP/pyatlan-sync"
 

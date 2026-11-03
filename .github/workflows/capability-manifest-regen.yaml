@@ -13,10 +13,6 @@
 #     does not auto-satisfy the wildcard CODEOWNERS rule that includes @atlan-ci.
 #   - Fork PRs are rejected immediately with an explanatory comment.
 #   - fetch-depth: 0 for the same reason as the drift-check workflow (source-sha).
-#   - Regenerating runs the PR's own `poe` task, so that job never holds the
-#     commit-signing key: the task could leave a git hook or config behind that
-#     reads it. It hands over only the regenerated manifest, and a fresh `commit`
-#     job (which runs no PR code) signs, commits and pushes it.
 
 name: Regenerate Capability Manifest
 
@@ -49,12 +45,6 @@ jobs:
        github.event.comment.author_association == 'COLLABORATOR')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    outputs:
-      branch: ${{ steps.pr.outputs.branch }}
-      number: ${{ steps.pr.outputs.number }}
-      skipped: ${{ steps.pr.outputs.is_fork == 'true' || steps.pr.outputs.is_bump_version == 'true' }}
-      changed: ${{ steps.handover.outputs.changed }}
-      head_sha: ${{ steps.head.outputs.sha }}
 
     steps:
       - name: Get PR metadata
@@ -147,13 +137,6 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
           fetch-depth: 0
 
-      # Recorded before any PR code runs, so the commit job can refuse a branch
-      # that moved (or a HEAD the regen task itself moved).
-      - name: Record the PR head
-        id: head
-        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         with:
@@ -163,106 +146,34 @@ jobs:
         if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         run: uv run poe regen-capabilities
 
-      - name: Hand over the regenerated manifest
-        id: handover
-        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
-        run: |
-          set -euo pipefail
-          if [ -z "$(git status --porcelain -- docs/agents/sdk-capabilities.md)" ]; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            mkdir -p "$RUNNER_TEMP/manifest"
-            cp docs/agents/sdk-capabilities.md "$RUNNER_TEMP/manifest/sdk-capabilities.md"
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Upload the regenerated manifest
-        if: steps.handover.outputs.changed == 'true'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
-        with:
-          name: regenerated-capability-manifest
-          path: ${{ runner.temp }}/manifest/sdk-capabilities.md
-          retention-days: 1
-
-  # A fresh job: it runs no PR code, so the signing key is never on disk beside
-  # anything the PR controls. It writes only the one file the regen job produced.
-  commit:
-    name: Commit regenerated manifest
-    needs: regen
-    if: needs.regen.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Mint fleet App token
-        id: app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: application-sdk
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.regen.outputs.branch }}
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Refuse a branch that moved since regeneration
-        env:
-          EXPECTED: ${{ needs.regen.outputs.head_sha }}
-        run: |
-          actual=$(git rev-parse HEAD)
-          if [ "$actual" != "$EXPECTED" ]; then
-            echo "::error::The PR branch moved from $EXPECTED to $actual during regeneration; run /regen-manifest again."
-            exit 1
-          fi
-
-      - name: Download the regenerated manifest
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: regenerated-capability-manifest
-          path: ${{ runner.temp }}/manifest
-
-      - name: Sign bot commits
-        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
-        with:
-          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
-
       - name: Commit and push
-        env:
-          PR_NUMBER: ${{ needs.regen.outputs.number }}
-          BRANCH: ${{ needs.regen.outputs.branch }}
+        if: steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
+        id: commit
         run: |
-          set -euo pipefail
-          cp "$RUNNER_TEMP/manifest/sdk-capabilities.md" docs/agents/sdk-capabilities.md
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add docs/agents/sdk-capabilities.md
-          git commit -m "chore(docs): regenerate capability manifest" \
-            -m "Triggered by /regen-manifest on PR #${PR_NUMBER}." \
-            -m "Generated by .claude/skills/capability-manifest."
-          git push origin "HEAD:refs/heads/${BRANCH}"
+          if git diff --staged --quiet; then
+            echo "status=clean" >> "$GITHUB_OUTPUT"
+          else
+            git commit -m "chore(docs): regenerate capability manifest
 
-  reply:
-    name: Reply on PR
-    needs: [regen, commit]
-    if: always() && needs.regen.result != 'skipped' && needs.regen.outputs.skipped != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
+          Triggered by /regen-manifest on PR #${{ steps.pr.outputs.number }}.
+          Generated by .claude/skills/capability-manifest."
+            git push
+            echo "status=pushed" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Reply on PR
+        if: always() && steps.pr.outputs.is_fork != 'true' && steps.pr.outputs.is_bump_version != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        env:
-          REGEN_RESULT: ${{ needs.regen.result }}
-          CHANGED: ${{ needs.regen.outputs.changed }}
-          COMMIT_RESULT: ${{ needs.commit.result }}
         with:
           script: |
-            const { REGEN_RESULT, CHANGED, COMMIT_RESULT } = process.env;
+            const status = '${{ steps.commit.outputs.status }}';
             let body;
-            if (REGEN_RESULT === 'success' && CHANGED === 'true' && COMMIT_RESULT === 'success') {
+            if (status === 'pushed') {
               body = '✅ Capability manifest regenerated and pushed. The updated SDK-surface diff is now visible in **Files changed**.';
-            } else if (REGEN_RESULT === 'success' && CHANGED === 'false') {
+            } else if (status === 'clean') {
               body = 'ℹ️ Capability manifest is already current — nothing to commit.';
             } else {
               body = '⚠️ Regeneration failed or was skipped. Check the [workflow logs](' +

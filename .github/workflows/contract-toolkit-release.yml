@@ -97,12 +97,6 @@ jobs:
         if: steps.versions.outputs.skip != 'true'
         run: pkl project package contract-toolkit/src/ --output-path .out/ --skip-publish-check
 
-      - name: Sign bot commits
-        if: steps.versions.outputs.skip != 'true'
-        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
-        with:
-          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
-
       - name: Push bump branch and open or update PR
         if: steps.versions.outputs.skip != 'true'
         env:

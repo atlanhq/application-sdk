@@ -134,11 +134,6 @@ jobs:
       - name: Scan SDK with Trivy (fresh, at release time)
         uses: ./.github/actions/sdk-trivy-scan
 
-      - name: Sign bot commits
-        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
-        with:
-          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
-
       - name: Reconcile resolved CVEs (on release)
         env:
           # atlan-ci PAT: the actions: read the debounce window needs. (The branch

@@ -268,11 +268,6 @@ jobs:
 
       # Stdlib only, on the runner's python3: no resolver, no install, nothing
       # from the refreshed dependency set runs beside the App token.
-      - name: Sign bot commits
-        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
-        with:
-          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
-
       - name: Commit the bounded locks
         run: python3 .github/scripts/bound_lock_branch.py --apply-from "$RUNNER_TEMP/bounded-locks"
 
