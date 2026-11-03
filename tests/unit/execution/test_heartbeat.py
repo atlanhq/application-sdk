@@ -11,7 +11,9 @@ under 1 second with pre-set events to avoid hangs.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import sys
+import threading
 import types
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -21,6 +23,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from application_sdk._runtime.progress import ProgressTracker
+from application_sdk.execution import heartbeat as heartbeat_mod
 from application_sdk.execution.heartbeat import (
     NoopHeartbeatController,
     TemporalHeartbeatController,
@@ -28,6 +31,7 @@ from application_sdk.execution.heartbeat import (
     stop_heartbeat_task,
 )
 from application_sdk.execution.progress import ProgressWatchdogMode
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # NoopHeartbeatController
@@ -76,6 +80,11 @@ def fake_temporalio(monkeypatch):
     return fake_activity
 
 
+async def _build_controller() -> TemporalHeartbeatController:
+    """Construct on a running loop, as the activity wrapper does."""
+    return TemporalHeartbeatController()
+
+
 class TestTemporalHeartbeatController:
     def test_heartbeat_calls_activity_heartbeat(self, fake_temporalio) -> None:
         """Exercises the function-local import of ``temporalio.activity``."""
@@ -98,6 +107,76 @@ class TestTemporalHeartbeatController:
         details = ctl.get_last_heartbeat_details()
         assert details == ("resumed", 42)
         fake_temporalio.info.assert_called_once()
+
+    async def test_heartbeat_from_a_worker_thread_is_sent_on_the_loop(
+        self, fake_temporalio
+    ) -> None:
+        """Temporal's heartbeat needs the loop's thread (``asyncio.create_task``).
+
+        A beat from ``run_in_thread`` — e.g. a ``RollingFileWriter`` sync
+        ``on_chunk_complete`` — must be handed back to the loop, in the
+        caller's context, rather than raising "no running event loop".
+        """
+        loop_thread = threading.get_ident()
+        marker: contextvars.ContextVar[str] = contextvars.ContextVar("marker")
+        sent: list[tuple[tuple[Any, ...], int, str]] = []
+        done = asyncio.Event()
+
+        def _heartbeat(*details: Any) -> None:
+            asyncio.get_running_loop()  # what Temporal's create_task requires
+            sent.append((details, threading.get_ident(), marker.get("")))
+            done.set()
+
+        fake_temporalio.heartbeat.side_effect = _heartbeat
+        ctl = TemporalHeartbeatController()
+
+        def _in_thread() -> None:
+            marker.set("activity-context")
+            ctl.heartbeat("chunk", 3)
+
+        await asyncio.to_thread(_in_thread)
+        await asyncio.wait_for(done.wait(), timeout=5)
+
+        assert sent == [(("chunk", 3), loop_thread, "activity-context")]
+        assert ctl.last_sent_details() == ("chunk", 3)
+
+    async def test_heartbeat_on_the_loop_is_sent_inline(self, fake_temporalio) -> None:
+        ctl = TemporalHeartbeatController()
+        ctl.heartbeat("inline")
+        fake_temporalio.heartbeat.assert_called_once_with("inline")
+
+    def test_heartbeat_from_a_thread_after_the_loop_closed_is_dropped(
+        self, fake_temporalio
+    ) -> None:
+        """At shutdown the loop can close under a ``run_in_thread`` worker.
+
+        The beat cannot be delivered; it must be dropped, not raised into
+        the user's thread as ``RuntimeError: Event loop is closed``.
+        """
+        loop = asyncio.new_event_loop()
+        ctl = loop.run_until_complete(_build_controller())
+        loop.close()
+
+        errors: list[BaseException] = []
+
+        def _in_thread() -> None:
+            try:
+                ctl.heartbeat("late", 1)
+                ctl.heartbeat_keepalive()
+            except BaseException as exc:  # noqa: BLE001 — the assertion is "nothing escapes"
+                errors.append(exc)
+
+        worker = threading.Thread(target=_in_thread)
+        with patch("application_sdk.execution.heartbeat.logger") as log:
+            worker.start()
+            worker.join(timeout=5)
+
+        assert errors == []
+        fake_temporalio.heartbeat.assert_not_called()
+        assert ctl.last_sent_details() == ("late", 1)
+        # Reported once, with the traceback, however many beats are dropped.
+        log.warning.assert_called_once()
+        assert log.warning.call_args.kwargs.get("exc_info") is True
 
 
 # ---------------------------------------------------------------------------
@@ -185,9 +264,9 @@ class TestAutoHeartbeatLoop:
             stop.set()
             return None  # no TimeoutError → break
 
-        with patch(
-            "application_sdk.execution.heartbeat.asyncio.wait_for",
-            side_effect=fake_wait_for,
+        with (
+            private_stdlib(heartbeat_mod, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "wait_for", side_effect=fake_wait_for),
         ):
             await auto_heartbeat_loop(
                 interval_seconds=0.5, heartbeat_fn=hb, stop_event=stop, task_name="t"
@@ -227,14 +306,10 @@ class TestAutoHeartbeatLoop:
             return 0.0 if state["n"] == 1 else 100.0
 
         with (
-            patch(
-                "application_sdk.execution.heartbeat.asyncio.wait_for",
-                side_effect=fake_wait_for,
-            ),
-            patch(
-                "application_sdk.execution.heartbeat.time.monotonic",
-                side_effect=fake_monotonic,
-            ),
+            private_stdlib(heartbeat_mod, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "wait_for", side_effect=fake_wait_for),
+            private_stdlib(heartbeat_mod, "time") as local_time,
+            patch.object(local_time, "monotonic", side_effect=fake_monotonic),
             caplog.at_level(logging.WARNING),
         ):
             await auto_heartbeat_loop(
@@ -993,7 +1068,9 @@ class TestStopHeartbeatTask:
             return "completed"
 
         caller_task = asyncio.ensure_future(caller())
-        await asyncio.sleep(0.05)
+        # stop_heartbeat_task sets the event and goes straight into its bounded
+        # wait, so the cancel below lands in that wait, not before it starts.
+        await asyncio.wait_for(stop.wait(), timeout=5)
         caller_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await caller_task

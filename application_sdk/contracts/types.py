@@ -15,7 +15,6 @@ Key types:
 
 from __future__ import annotations
 
-import dataclasses
 import uuid
 from enum import StrEnum
 from pathlib import Path
@@ -32,7 +31,11 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 from typing_extensions import TypeAliasType
 
+from application_sdk._install import worker_only_missing
 from application_sdk.common._listing import safe_list_directory
+from application_sdk.contracts.base import (  # noqa: F401 — re-exported; defined with the contract base
+    MaxItems,
+)
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
@@ -197,21 +200,6 @@ class StorageTier(StrEnum):
             if app_name
             else "persistent-artifacts/file_refs"
         )
-
-
-@dataclasses.dataclass(frozen=True)
-class MaxItems:
-    """Constraint marker indicating maximum collection size.
-
-    Use with Annotated to declare bounded collections in contracts:
-
-        class MyInput(Input):
-            settings: Annotated[dict[str, str], MaxItems(100)]
-            items: Annotated[list[Record], MaxItems(1000)]
-    """
-
-    limit: int
-    """Maximum number of items allowed in the collection."""
 
 
 class Lazy:
@@ -478,6 +466,13 @@ class FileReference(BaseModel, frozen=True):
             rather than listing an empty prefix in the deployment store. An
             app on an older SDK drops the field on decode and reads the
             deployment store, as it always did.
+        size_bytes: Size in bytes of the single file this ref names, as
+            recorded when it was persisted or materialised. ``None`` for
+            directory refs and for refs from an SDK that predates the field.
+            A hint, not a check of the stored object: a same-pod hand-off
+            reuses ``local_path`` without hashing it only while the file
+            still has this size and the stat its local ``.sha256`` marker
+            recorded. An app on an older SDK drops the field on decode.
     """
 
     local_path: str | None = None
@@ -488,6 +483,7 @@ class FileReference(BaseModel, frozen=True):
     auto_materialize: bool = True
     manifest_path: str | None = None
     store: StoreTarget = StoreTarget.DEPLOYMENT
+    size_bytes: int | None = Field(default=None, ge=0)
 
     @staticmethod
     def from_local(
@@ -521,9 +517,17 @@ class FileReference(BaseModel, frozen=True):
         # Best-effort file_count. We swallow OSError so the constructor
         # stays usable from inside Temporal sandbox where filesystem
         # inspection may not be permitted.
-        from application_sdk.storage.integrity import (  # noqa: PLC0415 — circular: storage modules import contracts.types
-            is_sidecar_key,
-        )
+        try:
+            from application_sdk.storage.integrity import (  # noqa: PLC0415 — circular: storage modules import contracts.types; absent on an api-only install
+                is_sidecar_key,
+            )
+        except ModuleNotFoundError as exc:
+            if not worker_only_missing(exc):
+                raise
+
+            def is_sidecar_key(key: str) -> bool:
+                # api-only install: no storage layer, so nothing writes sidecars
+                return False
 
         file_count = 1
         try:

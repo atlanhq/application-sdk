@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -15,6 +15,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import check_allowlist
+from _frozen_clock import freeze_clock  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,12 +47,24 @@ def _vuln(vid: str, severity: str = "CRITICAL", pkg: str = "libfoo") -> dict[str
     }
 
 
+# check_allowlist compares expiries against its own ``datetime.now()``. Freeze
+# that clock for every test and derive expiries from the same instant, so a
+# midnight rollover between the test's "today" and the gate's cannot turn
+# ``_past(1)`` into today (_frozen_clock).
+_NOW = datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    freeze_clock(monkeypatch, check_allowlist, _NOW)
+
+
 def _future(days: int = 365) -> str:
-    return (date.today() + timedelta(days=days)).strftime("%Y-%m-%d")
+    return (_NOW.date() + timedelta(days=days)).strftime("%Y-%m-%d")
 
 
 def _past(days: int = 1) -> str:
-    return (date.today() - timedelta(days=days)).strftime("%Y-%m-%d")
+    return (_NOW.date() - timedelta(days=days)).strftime("%Y-%m-%d")
 
 
 # ---------------------------------------------------------------------------

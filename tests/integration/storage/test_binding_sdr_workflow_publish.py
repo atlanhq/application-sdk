@@ -42,6 +42,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from application_sdk.contracts.types import FileReference, StorageTier
+from application_sdk.dev._embedded import _download_dir
 from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
@@ -57,6 +58,7 @@ from tests.integration.storage.conftest import (
     GCS_PROJECT_ID,
     S3_BUCKET,
     S3_REGION,
+    emulator_unavailable,
     write_dapr_component,
 )
 
@@ -142,7 +144,7 @@ async def _run_extract_workflow(base_path: str) -> str:
     local output directory the activity wrote the asset parquet to."""
     qid = uuid.uuid4().hex[:8]
     async with (
-        await WorkflowEnvironment.start_local() as env,
+        await WorkflowEnvironment.start_local(download_dest_dir=_download_dir()) as env,
         Worker(
             env.client,
             task_queue=f"sdr-extract-{qid}",
@@ -371,7 +373,7 @@ async def test_emulator_sdr_workflow_publish_lands_assets(tmp_path):
     Same connector-agnostic harness as the real-cloud tests, on an emulator, so
     it can run on every connector PR without real-cloud creds or cost."""
     if not _minio_reachable():
-        pytest.skip(f"MinIO not reachable at {_MINIO_ENDPOINT}")
+        emulator_unavailable(f"MinIO not reachable at {_MINIO_ENDPOINT}")
     write_dapr_component(
         tmp_path / "components",
         name="minio-sdr-wf-store",

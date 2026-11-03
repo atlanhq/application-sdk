@@ -207,6 +207,15 @@ result = requests.get(url)
 result = await self.run_in_thread(requests.get, url)
 ```
 
+Give the blocking call its own driver-level timeout (connect, socket, statement). An
+`asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` frees only the caller.
+The thread keeps its pool slot until the driver returns, and is reported as
+*stranded* (a WARNING plus the `offload.stranded_threads` gauge, per app).
+
+When `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` is set, an app with that many calls in flight
+gets a retryable `ResourceExhaustedError` instead of queueing. See ADR-0010 →
+*Addendum: containing stranded threads per app*.
+
 ## Writing Files
 
 Never write an artifact directly to its final name. Use `application_sdk.common.atomic`:
@@ -319,8 +328,10 @@ that encapsulates the common pattern:
   - `max_buffer_bytes` — buffer ceiling in bytes (default **50 MB**)
   - `max_buffer_records` — buffer ceiling in records (default `None`,
     opt-in)
-- Optional `on_chunk_complete(chunk_index, chunk_path)` callback wires
-  cleanly to `activity.heartbeat(...)` for within-heartbeat checkpointing.
+- Optional `on_chunk_complete(chunk_index, chunk_path)` callback for
+  per-chunk checkpointing. Heartbeat with the SDK's `self.heartbeat(...)`.
+  A plain-function callback runs in the SDK's blocking pool, like `flush_fn`,
+  so it never stalls the event loop. `self.heartbeat` works from there.
 - `writer.file_reference` returns an ephemeral `FileReference` for your
   typed Output; the activity interceptor uploads on task return.
 
@@ -362,16 +373,12 @@ async def extract_users(self, inp: ExtractInput) -> ExtractOutput:
         extension=".parquet",
         flush_fn=_flush_parquet,
         chunk_interval_seconds=60.0,
-        on_chunk_complete=self._heartbeat_chunk,   # optional — see below
+        # optional: per-chunk checkpoint, resumable via get_last_heartbeat_details()
+        on_chunk_complete=lambda idx, path: self.heartbeat(f"wrote {path}"),
     ) as writer:
         async for df in self._stream_users():
             await writer.append(df)
     return ExtractOutput(data=writer.file_reference)
-
-
-async def _heartbeat_chunk(self, chunk_index: int, chunk_path: str) -> None:
-    from temporalio import activity  # noqa: PLC0415
-    activity.heartbeat(f"wrote {chunk_path}")
 ```
 
 #### JSON (line-delimited, `orjson`)
@@ -406,6 +413,27 @@ async def extract_events(self, inp: ExtractInput) -> ExtractOutput:
 To support a new format, write a 3-line `flush_fn` and plug it in. CSV via
 `pandas.to_csv`, Arrow IPC via `pyarrow.ipc`, msgpack via `msgpack.pack` —
 all the same shape.
+
+#### Throughput vs the deprecated writers
+
+Each run writes 200k rows (20 batches of 10k, 4 columns), with uploads
+excluded on both sides. `RollingFileWriter` uses the two examples above:
+DataFrame batches for Parquet, `list[dict]` + orjson for JSON.
+
+| Writer | Parquet | JSON |
+|---|---|---|
+| `ParquetFileWriter` / `JsonFileWriter`, as shipped (per-slice `gc.collect()`) | 0.77 s | 0.80 s |
+| same, `gc.collect()` removed | 0.11 s | 0.19 s |
+| `RollingFileWriter` | **0.07 s** | **0.07 s** |
+
+Measured on arm64 macOS, Python 3.12, with the worker's imports loaded.
+The `gc.collect()` cost grows with the heap. With a production-sized heap
+the deprecated writers took 11.7 s (Parquet) and 15.5 s (JSON); without the
+GC they took 1.1 s and 1.4 s.
+
+`tests/unit/storage/test_rolling_throughput.py` re-runs this comparison once
+per CI run, in the `Unit Perf Tests` job (it is marked `perf`). It fails if `RollingFileWriter` is slower than the deprecated
+writer it replaces.
 
 ### Alternative: bare copy-paste (no helper class)
 
@@ -474,9 +502,20 @@ async def transform_users(self, inp: TransformInput) -> TransformOutput:
 ```
 
 For JSON inputs, swap `pd.read_parquet` for an `orjson.loads` loop over the
-file lines. No `ParquetFileReader` / `JsonFileReader` construction required —
-they exist only to bridge the legacy inline-upload contract and will be
-deleted in v4.0.
+file lines. `JsonFileReader` coerced values through pandas: an int column
+with a missing key came back as float (`3` → `3.0`), the missing key as
+`NaN`. The orjson loop returns the values in the file, so fix the callers
+that relied on the coercion rather than rebuilding a DataFrame:
+
+- `row[key]` on an optional key raises `KeyError` — use `row.get(key)`.
+- `pd.isna` / `math.isnan` checks for absence — use `is None` or
+  `key not in row`.
+- A value formatted into a published key or qualified name changes
+  (`"3.0"` → `"3"`) — record it as an owner decision, don't paper over it.
+
+No
+`ParquetFileReader` / `JsonFileReader` construction required — they exist
+only to bridge the legacy inline-upload contract and will be deleted in v4.0.
 
 ### Transitional opt-in on the legacy `ParquetFileWriter`
 

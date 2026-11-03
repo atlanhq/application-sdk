@@ -17,9 +17,11 @@ path outside the destination root.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest import mock
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -134,3 +136,54 @@ def test_safe_join_under_never_escapes_root(
     except StorageError:
         return  # rejected — the guard did its job
     assert joined.is_relative_to(root)
+
+
+# ---------------------------------------------------------------------------
+# One normaliser: get_object_store_prefix is normalize_key
+# ---------------------------------------------------------------------------
+
+
+@given(key=_clean_key, spelling=_key_spellings)
+@settings(max_examples=100)
+def test_get_object_store_prefix_agrees_with_normalize_key(key: str, spelling) -> None:
+    """The execution-side helper and the storage normaliser never diverge."""
+    from application_sdk.execution import get_object_store_prefix
+
+    with mock.patch.object(constants, "TEMPORARY_PATH", _STAGING_ROOT):
+        path = spelling(key)
+        assert get_object_store_prefix(path) == normalize_key(path)
+
+
+def test_get_object_store_prefix_maps_staging_root_to_store_root() -> None:
+    """The staging root is the store root (``''``), not ``'.'``."""
+    from application_sdk.execution import get_object_store_prefix
+
+    with mock.patch.object(constants, "TEMPORARY_PATH", _STAGING_ROOT):
+        assert get_object_store_prefix(_STAGING_ROOT) == ""
+        assert get_object_store_prefix(f"{_STAGING_ROOT}/") == ""
+
+
+def test_get_object_store_prefix_converts_backslashes() -> None:
+    """A backslash path yields the forward-slash key on every platform."""
+    from application_sdk.execution import get_object_store_prefix
+
+    assert get_object_store_prefix("artifacts\\apps\\x\\f.json") == (
+        "artifacts/apps/x/f.json"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="drive letters exist only on Windows")
+def test_normalize_key_strips_drive_letter() -> None:
+    """A Windows drive is never part of a store key (runs on the Windows CI legs)."""
+    assert normalize_key("C:\\Users\\runner\\raw\\records.json") == (
+        "Users/runner/raw/records.json"
+    )
+
+
+def test_activity_utils_temporary_path_is_a_deprecated_alias() -> None:
+    """The old accidental re-export still resolves, and says where it lives."""
+    from application_sdk.execution._temporal import activity_utils
+
+    with pytest.warns(DeprecationWarning, match="application_sdk.constants"):
+        value = activity_utils.TEMPORARY_PATH
+    assert value == constants.TEMPORARY_PATH

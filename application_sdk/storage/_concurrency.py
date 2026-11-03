@@ -30,11 +30,15 @@ T = TypeVar("T")
 async def _run_bounded(
     coros: Iterable[Coroutine[Any, Any, T]],
     max_concurrency: int | None,
+    *,
+    unwrap_lone_failure: bool = False,
 ) -> list[T]:
     """Run *coros* concurrently, at most *max_concurrency* at a time.
 
     ``None`` applies no bound of its own, for callers that already hold one.
-    Results are returned in input order.
+    Results are returned in input order. With a bound, *coros* is consumed
+    lazily by a fixed pool of workers, so pass a generator to keep a large
+    fan-out from building every coroutine up front.
 
     Raises:
         StorageError: The first failure, when every failure is a
@@ -47,6 +51,13 @@ async def _run_bounded(
             Unwrapping a mixed group would demote every other leaf to
             ``__cause__`` — reachable in a traceback, invisible to an
             ``except`` clause — so something unforeseen is surfaced whole.
+        Exception: With *unwrap_lone_failure*, a group holding exactly one
+            ``Exception`` surfaces as that exception, whatever its type, with
+            the group as its ``__context__``. Nothing is demoted when there is
+            one leaf, and it is the shape ``asyncio.gather`` gave: for callers
+            migrating off it whose own callers classify by type (the activity
+            boundary maps an ``AppError`` leaf such as ``UnsafeUploadPathError``
+            to a typed, non-retryable failure; a group would reach it untyped).
         asyncio.CancelledError: If the caller is cancelled, after the same
             drain.
     """
@@ -55,37 +66,86 @@ async def _run_bounded(
         StorageError,
     )
 
-    sem = asyncio.Semaphore(max_concurrency) if max_concurrency is not None else None
-
-    async def _run(coro: Coroutine[Any, Any, T]) -> T:
-        if sem is None:
-            return await coro
-        async with sem:
-            return await coro
-
     # A TaskGroup (vs gather) gives cancel-and-await semantics for the *tasks*:
     # on the first failure, or when the caller is cancelled, it cancels the rest
     # and does not return until they have unwound. That is not enough on its
     # own — a task awaiting run_in_thread unwinds the moment it is cancelled,
     # while its thread runs on — so the offloads are tracked and drained too.
+    #
+    # With a bound, a fixed pool of workers pulls from one shared iterator, so
+    # a 100k-key fan-out holds *max_concurrency* tasks rather than one per key
+    # (FND-4082). A coroutine the pool never reached is closed, not left to
+    # warn that it was never awaited.
+    #
+    # A coroutine that raises CancelledError of its own accord is not a
+    # failure to a TaskGroup: it drops the task without cancelling the rest.
+    # Its result is then missing, so once the others finish the call raises
+    # CancelledError, as reading that task's result always did. Returning
+    # the results that did arrive would pass off an incomplete fan-out as a
+    # complete one.
+    results: dict[int, T] = {}
+    started = 0
+    pending_coros = enumerate(coros)
+
+    async def _worker() -> None:
+        nonlocal started
+        for index, coro in pending_coros:
+            started += 1
+            # Its own task, as when every coroutine got one up front: each
+            # runs in a copy of the context, so none leaks a contextvar into
+            # the next on this worker. Cancelling the worker cancels it and
+            # waits for it to unwind. Only the running ones are alive at once.
+            task = asyncio.ensure_future(coro)
+            try:
+                results[index] = await task
+            except asyncio.CancelledError:
+                current = asyncio.current_task()
+                if not task.cancelled() or (current and current.cancelling()):
+                    raise
+                # The item cancelled itself; the worker moves on to the next.
+
     with tracking_offloads() as pending:
         try:
-            async with asyncio.TaskGroup() as tg:
-                tasks = [tg.create_task(_run(c)) for c in coros]
+            try:
+                async with asyncio.TaskGroup() as tg:
+                    if max_concurrency is None:
+                        for index, coro in pending_coros:
+                            started += 1
+                            tg.create_task(_store(results, index, coro))
+                    else:
+                        for _ in range(max(max_concurrency, 1)):
+                            tg.create_task(_worker())
+            finally:
+                for _, unstarted in pending_coros:
+                    unstarted.close()
         except BaseExceptionGroup as group:
             await drain_offloads(pending)
-            if all(isinstance(leaf, StorageError) for leaf in group.exceptions):
+            leaves = group.exceptions
+            lone = (
+                unwrap_lone_failure
+                and len(leaves) == 1
+                and isinstance(leaves[0], Exception)
+            )
+            if lone or all(isinstance(leaf, StorageError) for leaf in leaves):
                 # Not `from group`: that would overwrite the leaf's own
                 # __cause__ (the OSError or provider error behind it) with the
                 # group, and any caller walking the cause chain for the real
                 # reason would find only the wrapper. Raised in this handler,
                 # the group is still attached as __context__.
-                raise group.exceptions[0]
+                raise leaves[0]
             raise
         except BaseException:
             await drain_offloads(pending)
             raise
-    return [t.result() for t in tasks]
+    if len(results) < started:
+        raise asyncio.CancelledError
+    return [results[index] for index in range(started)]
+
+
+async def _store(
+    results: dict[int, T], index: int, coro: Coroutine[Any, Any, T]
+) -> None:
+    results[index] = await coro
 
 
 async def _gather_with_semaphore(

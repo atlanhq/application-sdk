@@ -19,6 +19,7 @@ import pytest
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.errors import STORAGE_DISK_FULL, DiskFullError
+from application_sdk.storage import chunked as chunked_module
 from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.chunked import (
@@ -31,6 +32,7 @@ from application_sdk.storage.errors import StorageDiskFullError, StorageError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _put, download_file, download_file_chunked
 from application_sdk.storage.reference import _materialize_lock
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -315,7 +317,8 @@ class TestCleanupCannotReplaceTheTransferResult:
 
         with (
             patch.dict(download_file_chunked.__kwdefaults__, {"chunk_size_bytes": 64}),
-            patch("application_sdk.storage.chunked.os.replace", new=record_and_publish),
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "replace", new=record_and_publish),
             patch.object(Path, "unlink", deny_part_unlink),
         ):
             # A third element, the copied object's digest, since FND-3796:
@@ -532,8 +535,20 @@ class TestTransferLockRegistry:
             task_a = asyncio.create_task(_download())
             await second_chunk_requested.wait()
             gets_before_b = len(gets)
-            task_b = asyncio.create_task(_download())
-            await asyncio.sleep(0.05)
+            # The destination lock task_a holds. Once task_b calls its acquire
+            # it is parked there until task_a lets go, so the check below runs
+            # at a known point instead of after a guessed delay.
+            lock = chunked_module._TRANSFER_LOCKS.lock(str(path))
+            real_acquire = lock.acquire
+            b_queued = asyncio.Event()
+
+            async def queued_acquire() -> bool:
+                b_queued.set()
+                return await real_acquire()
+
+            with patch.object(lock, "acquire", new=queued_acquire):
+                task_b = asyncio.create_task(_download())
+                await asyncio.wait_for(b_queued.wait(), timeout=5)
             assert len(gets) == gets_before_b, (
                 "second download reached the store while the first still "
                 "held the shared staging file"
@@ -579,7 +594,10 @@ class TestPublishFailureIsResumable:
                 raise OSError("transient rename failure")
             return real_replace(src, dst, *args, **kwargs)
 
-        with patch("application_sdk.storage.chunked.os.replace", new=failing_publish):
+        with (
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "replace", new=failing_publish),
+        ):
             with pytest.raises(StorageError, match="Failed to publish"):
                 await _download()
         assert not path.exists()
@@ -702,7 +720,8 @@ class TestOwnedTempCleanupRemovesBothStagingFiles:
         # the object under test actually goes down the chunked path.
         with (
             patch.dict(download_file_chunked.__kwdefaults__, {"chunk_size_bytes": 64}),
-            patch("application_sdk.storage.chunked.os.replace", new=failing_publish),
+            private_stdlib("application_sdk.storage.chunked", "os") as local_os,
+            patch.object(local_os, "replace", new=failing_publish),
         ):
             with pytest.raises(StorageError):
                 await _upload_from_store(store, "copy/src.bin", target, "copy/dst.bin")
@@ -823,9 +842,9 @@ class TestDiskFullDuringDownload:
                 "application_sdk.storage.ops.obstore.get_async",
                 new=AsyncMock(return_value=_Result()),
             ),
-            patch(
-                "application_sdk.storage.ops.os.fsync",
-                side_effect=OSError(errno.ENOSPC, "no space"),
+            private_stdlib("application_sdk.storage.ops", "os") as local_os,
+            patch.object(
+                local_os, "fsync", side_effect=OSError(errno.ENOSPC, "no space")
             ),
         ):
             with pytest.raises(DiskFullError):
@@ -844,6 +863,144 @@ class TestDiskFullDuringDownload:
                 await download_file(
                     "k", tmp_path / "f.bin", MagicMock(), normalize=False, verify=False
                 )
+
+    async def test_chunked_download_fails_a_full_volume_before_fetching(
+        self, store, tmp_path
+    ) -> None:
+        """The checkpoint is not fsynced, so on a flush-time-ENOSPC filesystem
+        nothing would report a full volume until the publish fsync, after the
+        whole object. The free-space check fails it before the first range GET."""
+        await _put("df/c.bin", bytes(40), store, normalize=False)
+        range_gets: list[object] = []
+        real_get = obstore.get_async
+
+        async def counting_get(st, key, **kw):
+            range_gets.append(kw)
+            return await real_get(st, key, **kw)
+
+        with (
+            patch("application_sdk.common.atomic._free_bytes", return_value=39),
+            patch("application_sdk.storage.ops.obstore.get_async", new=counting_get),
+        ):
+            with pytest.raises(StorageDiskFullError) as caught:
+                await download_file_chunked(
+                    "df/c.bin",
+                    tmp_path / "c.bin",
+                    store,
+                    chunk_size_bytes=10,
+                    normalize=False,
+                    verify=False,
+                    resume=True,
+                )
+
+        assert caught.value.key == "df/c.bin"
+        assert caught.value.required_bytes == 40
+        assert range_gets == []
+
+    async def test_chunked_resume_needs_room_only_for_the_missing_chunks(
+        self, store, tmp_path
+    ) -> None:
+        content = bytes(range(40))
+        await _put("df/r.bin", content, store, normalize=False)
+        path = tmp_path / "r.bin"
+
+        def _download():
+            return download_file_chunked(
+                "df/r.bin",
+                path,
+                store,
+                chunk_size_bytes=10,
+                max_concurrent_chunks=1,
+                normalize=False,
+                verify=False,
+                resume=True,
+            )
+
+        # First attempt checkpoints three chunks, then fails on the fourth's
+        # checkpoint: a resume state with one chunk (10 bytes) left to fetch.
+        import application_sdk.storage.chunked as chunked
+
+        real_save = chunked._save_transfer_state
+        saves = 0
+
+        def save_three(state_path, state):
+            nonlocal saves
+            saves += 1
+            if saves > 3:
+                raise OSError("stop after three chunks")
+            real_save(state_path, state)
+
+        with patch.object(chunked, "_save_transfer_state", save_three):
+            with pytest.raises(StorageError):
+                await _download()
+
+        # 10 bytes free: enough for the one missing chunk, not the object.
+        with patch("application_sdk.common.atomic._free_bytes", return_value=10):
+            await _download()
+        assert path.read_bytes() == content
+
+    async def test_fresh_attempt_drops_a_stale_part_before_the_space_check(
+        self, store, tmp_path
+    ) -> None:
+        """A part file left by an earlier attempt holds blocks the fresh
+        download is about to truncate; counted against free space, it would fail
+        a volume that has room once the stale part is gone."""
+        await _put("df/s.bin", bytes(40), store, normalize=False)
+        path = tmp_path / "s.bin"
+        part = _part_path(path)
+        part.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(b"\xff" * 40)
+        seen: list[bool] = []
+
+        import application_sdk.storage.chunked as chunked
+
+        real_check = chunked.ensure_free_space
+
+        def recording_check(p, required, *, operation):
+            seen.append(part.exists())
+            real_check(p, required, operation=operation)
+
+        with patch.object(chunked, "ensure_free_space", recording_check):
+            await download_file_chunked(
+                "df/s.bin",
+                path,
+                store,
+                chunk_size_bytes=10,
+                normalize=False,
+                verify=False,
+                resume=False,
+            )
+
+        assert seen == [False]
+        assert path.read_bytes() == bytes(40)
+
+    @pytest.mark.parametrize("bad", [-1, 4])
+    def test_a_checkpoint_naming_a_chunk_outside_the_object_is_not_trusted(
+        self, tmp_path, bad
+    ) -> None:
+        """done=[-1] would count the last chunk as on disk while every chunk is
+        still fetched, so the free-space check would undercount."""
+        from application_sdk.storage.chunked import (
+            _load_and_validate_checkpoint,
+            _save_transfer_state,
+        )
+
+        part = tmp_path / "x.part"
+        part.write_bytes(bytes(40))
+        state = tmp_path / "x.transfer-state"
+        identity = {"key": "k", "file_size": 40, "chunk_size": 10, "etag": "e"}
+        _save_transfer_state(state, {**identity, "done": [0, bad]})
+
+        done = _load_and_validate_checkpoint(
+            state, key="k", size=40, chunk_size_bytes=10, etag="e", path=part
+        )
+
+        assert done == set()
+        assert not state.exists()
+        _save_transfer_state(state, {**identity, "done": [0, 3]})
+        assert _load_and_validate_checkpoint(
+            state, key="k", size=40, chunk_size_bytes=10, etag="e", path=part
+        ) == {0, 3}
 
     def test_the_code_is_the_disk_full_code_both_classes_share(self) -> None:
         """Consumers classify a full disk by this code, so the subclass must not drift from it."""

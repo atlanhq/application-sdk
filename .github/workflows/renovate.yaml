@@ -39,7 +39,10 @@ on:
   schedule:
     # Baseline cadence. Best-effort (GitHub may delay scheduled runs under load);
     # on-demand immediacy comes from the release fan-out that dispatches this
-    # workflow from tag-and-publish.yaml / contract-toolkit-publish.yml.
+    # workflow from tag-and-publish.yaml / conformance-publish.yml /
+    # contract-toolkit-publish.yml. All three wait for PyPI visibility
+    # first, then dispatch `repos`-scoped re-runs for fleet repos the sweep
+    # missed (renovate_release_followup.py, FND-4330).
     - cron: "0 */4 * * *"
 
 permissions:
@@ -216,9 +219,9 @@ jobs:
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
-      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.6"
 
       # Version omitted deliberately — as it now is at every call site: the
       # action resolves the single pin in application_sdk/pkl_version.py, so no
@@ -229,7 +232,7 @@ jobs:
       # so pin the runtime explicitly rather than relying on the preinstalled one.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "26"
 
       - name: Install Renovate CLI
         # Exact pin for reproducibility; bump deliberately (Renovate releases

@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.contracts.storage import UploadOutput
+from application_sdk.storage._local_marker import parse_marker, read_local_marker
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.transfer import download, upload
 
@@ -25,6 +26,12 @@ def _hash_bytes(data: bytes) -> str:
     h = hashlib.sha256()
     h.update(data)
     return h.hexdigest()
+
+
+def _marker_digest(local: Path) -> str | None:
+    """The digest the local ``.sha256`` marker beside *local* records."""
+    marker = read_local_marker(str(local))
+    return marker.sha256 if marker is not None else None
 
 
 # ``_sha256_file`` / ``_sha256_file_async`` moved to
@@ -574,7 +581,10 @@ class TestDownloadDirectory:
         # materialise of this ref reuses instead of downloading again.
         assert dl.ref.file_count == 1
         local_marker = dest / "data.txt.sha256"
-        assert local_marker.read_text().strip() == hashlib.sha256(b"data").hexdigest()
+        assert (
+            parse_marker(local_marker.read_text()).sha256  # type: ignore[union-attr]
+            == hashlib.sha256(b"data").hexdigest()
+        )
 
     async def test_path_traversal_in_listed_key_rejected(self, store, tmp_path) -> None:
         """A listed key containing ``..`` must not write outside dest_dir.
@@ -1261,15 +1271,21 @@ class TestDownloadOnTheSharedEngine:
         self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from application_sdk.storage.errors import StorageError
+        from application_sdk.testing.fixtures import _redirect_temporary_path
 
         scratch = tmp_path / "tmp"
         scratch.mkdir()
         monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        # Path-less downloads land under TEMPORARY_PATH (FND-4282), so that is
+        # where a leaked temp file would be.
+        sdk_tmp = tmp_path / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
 
         with pytest.raises(StorageError):
             await download("missing/key.json", store=store)
 
         assert list(scratch.iterdir()) == []
+        assert [p for p in sdk_tmp.rglob("*") if p.is_file()] == []
 
     async def test_a_cancelled_download_leaves_no_temp_file(
         self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -1277,11 +1293,14 @@ class TestDownloadOnTheSharedEngine:
         import asyncio
 
         from application_sdk.storage.ops import _put
+        from application_sdk.testing.fixtures import _redirect_temporary_path
 
         await _put("cx/key.json", b"{}", store)
         scratch = tmp_path / "tmp"
         scratch.mkdir()
         monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        sdk_tmp = tmp_path / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
 
         with (
             patch(
@@ -1293,6 +1312,39 @@ class TestDownloadOnTheSharedEngine:
             await download("cx/key.json", store=store)
 
         assert list(scratch.iterdir()) == []
+        assert [p for p in sdk_tmp.rglob("*") if p.is_file()] == []
+
+    async def test_path_less_downloads_land_in_the_run_scratch_dir(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-4282: no local_path → under the run's dir, which cleanup_files sweeps."""
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal.activity_utils import run_temp_dir
+        from application_sdk.storage.ops import _put
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        _redirect_temporary_path(monkeypatch, str(tmp_path / "sdk-tmp"))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
+        )
+        await _put("pl/one.json", b"{}", store)
+        await _put("pd/a.txt", b"a", store)
+
+        file_dl = await download("pl/one.json", store=store)
+        dir_dl = await download("pd/", store=store)
+
+        run_dir = Path(run_temp_dir()).resolve()
+        assert run_dir.is_relative_to((tmp_path / "sdk-tmp").resolve())
+        assert file_dl.ref.local_path is not None
+        assert dir_dl.ref.local_path is not None
+        assert Path(file_dl.ref.local_path).resolve().parent == run_dir
+        assert Path(dir_dl.ref.local_path).resolve().parent == run_dir
+        assert (Path(dir_dl.ref.local_path) / "a.txt").read_bytes() == b"a"
 
 
 class TestUploadOnTheSharedEngine:
@@ -1317,7 +1369,7 @@ class TestUploadOnTheSharedEngine:
         src.mkdir()
         (src / "data.txt").write_bytes(b"old")
         await upload(str(src), "mk/", store=store)
-        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"old")
+        assert _marker_digest(src / "data.txt") == _hash_bytes(b"old")
 
         (src / "data.txt").write_bytes(b"new")
         up = await upload(str(src), "mk/", store=store, skip_if_exists=True)
@@ -1326,7 +1378,7 @@ class TestUploadOnTheSharedEngine:
         dest = tmp_path / "dest"
         await download("mk/", str(dest), store=store)
         assert (dest / "data.txt").read_bytes() == b"new"
-        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"new")
+        assert _marker_digest(src / "data.txt") == _hash_bytes(b"new")
 
     async def test_a_cancelled_store_copy_leaves_no_temp_file(
         self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
@@ -1339,7 +1391,7 @@ class TestUploadOnTheSharedEngine:
         await _put("cc/key.json", b"{}", store)
         scratch = tmp_path / "tmp"
         scratch.mkdir()
-        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+        monkeypatch.setattr("application_sdk.constants.TEMPORARY_PATH", str(scratch))
 
         with (
             patch(
@@ -1353,6 +1405,46 @@ class TestUploadOnTheSharedEngine:
             )
 
         assert list(scratch.iterdir()) == []
+
+    async def test_a_cross_store_copy_stages_under_temporary_path(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The download-and-reupload copy stages on the work volume, not ``/tmp``.
+
+        ``/tmp`` sits on the node's root disk, which is far smaller than the
+        volume mounted at ``TEMPORARY_PATH``: a single large object copied
+        between stores filled it and failed the run's last step.
+        """
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.transfer import _upload_from_store
+
+        await _put("cs/key.json", b"{}", store)
+        work = tmp_path / "work"
+        sys_tmp = tmp_path / "sys"
+        sys_tmp.mkdir()
+        monkeypatch.setattr("application_sdk.constants.TEMPORARY_PATH", str(work))
+        monkeypatch.setattr("tempfile.tempdir", str(sys_tmp))
+
+        from application_sdk.storage import ops
+
+        real_download = ops.download_file_chunked
+        staged: list[Path] = []
+
+        async def recording_download(key, dest, *args, **kwargs):
+            staged.append(Path(dest))
+            return await real_download(key, dest, *args, **kwargs)
+
+        with patch(
+            "application_sdk.storage.ops.download_file_chunked",
+            side_effect=recording_download,
+        ):
+            uploaded, _, _ = await _upload_from_store(
+                store, "cs/key.json", create_memory_store(), "cs/key.json"
+            )
+
+        assert uploaded is True
+        assert len(staged) == 1
+        assert staged[0].resolve().is_relative_to(work.resolve())
 
     async def test_the_manifest_lands_in_the_run_file_refs_namespace(
         self, store, tmp_path

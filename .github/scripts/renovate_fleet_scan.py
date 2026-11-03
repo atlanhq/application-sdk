@@ -101,10 +101,18 @@ MAX_LOCK_FETCHES = 25
 # retrying them only delays the report of a fault that needs a human.
 _RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
 GRAPHQL_ATTEMPTS = 4
-# 1s, 2s, 4s between the four attempts. Bounded at ~7s added latency in the worst
-# case, against a job that already runs for minutes — cheap enough that it is not
-# worth making configurable, and short enough not to mask a sustained outage.
-_BACKOFF_BASE_SECONDS = 1.0
+# 15s, 30s, 60s between the four attempts: ~2 min worst case per call. 1s/2s/4s
+# (FND-909) was too short to outlast the blips GitHub actually has: from
+# 2026-10-09 to 10-21 every remaining failed run had exhausted all four attempts
+# on 502/504 inside seven seconds (FND-4240). Two minutes still fails a sustained
+# outage, which is what the run should report.
+_BACKOFF_BASE_SECONDS = 15.0
+
+# A GraphQL 200 whose `errors` carry only this message is GitHub failing the
+# query server-side (it names a request ID to report) — the same class of fault
+# as a 502, just delivered in the body. Any other `errors` entry is a fault in
+# the query and is raised as before by the caller.
+_SERVER_ERROR_PREFIX = "Something went wrong while executing your query"
 
 # The one 403 that is NOT a token problem. A one-day merged window (FND-3214)
 # took the pass from 10 merged searches to 62, and from 2026-10-03 roughly two
@@ -277,7 +285,15 @@ def _post_graphql_once(token: str, payload: dict) -> dict:
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode())
+            data = json.loads(resp.read().decode())
+        errors = data.get("errors") if isinstance(data, dict) else None
+        if errors and all(
+            isinstance(err, dict)
+            and str(err.get("message", "")).startswith(_SERVER_ERROR_PREFIX)
+            for err in errors
+        ):
+            raise RuntimeError(f"GraphQL server error: {errors}")
+        return data
     except urllib.error.HTTPError as exc:
         # The error body can be cut short just like a success body. Keep the
         # status rather than the read failure: it is what decides whether to
@@ -326,6 +342,8 @@ def _is_retryable(exc: RuntimeError) -> bool:
     # Transport-level: connection reset, DNS blip, read timeout. None of these
     # carry a status, and all are the same kind of transient as a 502.
     if "response cut short" in text:
+        return True
+    if text.startswith("GraphQL server error:"):
         return True
     return "failed: <urlopen error" in text or "timed out" in text.lower()
 

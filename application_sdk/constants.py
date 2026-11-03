@@ -51,7 +51,6 @@ Example:
     >>> print(f"Running application {APPLICATION_NAME}")
 """
 
-import json
 import math
 import os
 import warnings
@@ -112,63 +111,28 @@ DOMAIN_NAME = os.getenv("ATLAN_DOMAIN_NAME", "atlan.com")
 # touches — can now answer the same question.
 
 
-def load_build_info(path: str | None = None) -> dict[str, str]:
-    """Read the build-identity file the reusable CI bakes into the image.
-
-    ``build-and-publish-app.yaml`` writes ``app/atlan_build.json`` into the
-    build context and the template Dockerfile's ``COPY app/ app/`` carries it
-    into the image. Keys: ``app_version`` (the exact string Global Marketplace
-    stores as ``versions.version``), ``commit_sha``, ``build_id`` (the immutable
-    image tag, the same value ``ATLAN_BUILD_ID`` carries on the e2e path),
-    ``image``, ``built_at``.
-
-    Missing or malformed file → ``{}``; callers fall back to the env vars.
-    ``ATLAN_BUILD_INFO_PATH`` overrides the lookup for non-template layouts.
-
-    Public because :mod:`application_sdk.app.build_identity` reads the same file
-    through it. A second parser there would be a second place for the key names
-    to drift from what CI writes.
-    """
-    if path:
-        candidates = [path]
-    else:
-        override = os.getenv("ATLAN_BUILD_INFO_PATH", "")
-        generated_dir = os.environ.get("ATLAN_CONTRACT_GENERATED_DIR", "app/generated")
-        candidates = (
-            [override]
-            if override
-            else [
-                "app/atlan_build.json",
-                os.path.join(
-                    os.path.dirname(generated_dir.rstrip("/")) or ".",
-                    "atlan_build.json",
-                ),
-            ]
-        )
-    for candidate in candidates:
-        try:
-            with open(candidate, encoding="utf-8") as fh:
-                data = json.load(fh)
-        except (OSError, ValueError):
-            continue
-        if isinstance(data, dict):
-            return {
-                str(k): str(v)
-                for k, v in data.items()
-                if isinstance(v, (str, int, float)) and not isinstance(v, bool)
-            }
-    return {}
-
+from application_sdk._build_info import (  # noqa: E402 — public here as before
+    load_build_info,
+)
 
 _BUILD_INFO = load_build_info()
 
+
+def _load_application_version(build_info: dict[str, str]) -> str:
+    return build_info.get("app_version", "") or os.getenv(
+        "ATLAN_APPLICATION_VERSION", ""
+    )
+
+
+def _load_commit_sha(build_info: dict[str, str]) -> str:
+    return build_info.get("commit_sha", "") or os.getenv("ATLAN_COMMIT_SHA", "")
+
+
 #: Version of the app release exactly as Global Marketplace stores it
 #: (release tag for semver apps, sha7 for CD apps). Baked value first.
-APPLICATION_VERSION = _BUILD_INFO.get("app_version", "") or os.getenv(
-    "ATLAN_APPLICATION_VERSION", ""
-)
+APPLICATION_VERSION = _load_application_version(_BUILD_INFO)
 #: Git commit the image was built from. Baked only — no deployer stamps it.
-COMMIT_SHA = _BUILD_INFO.get("commit_sha", "") or os.getenv("ATLAN_COMMIT_SHA", "")
+COMMIT_SHA = _load_commit_sha(_BUILD_INFO)
 #: Release UUID from Global Marketplace
 RELEASE_ID = os.getenv("ATLAN_RELEASE_ID", "")
 #: Release channel (all, beta, staging, specific)
@@ -205,6 +169,12 @@ PREFLIGHT_RESULTS_ENDPOINT = os.getenv(
 #: table and commits a Parquet file. Nothing waits on it.
 PREFLIGHT_RESULTS_TIMEOUT_SECONDS = float(
     os.getenv("ATLAN_PREFLIGHT_RESULTS_TIMEOUT_SECONDS", "30")
+)
+#: Bound on a SQL client's ``load()``: building the connection string (an STS
+#: AssumeRole for IAM-role auth) plus the first connect. Also handed to drivers
+#: with no connect timeout of their own, so a hung connect frees its thread.
+SQL_CLIENT_CONNECT_TIMEOUT_SECONDS = float(
+    os.getenv("ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS", "60")
 )
 # REMOVED: APP_DASHBOARD_HOST, APP_DASHBOARD_PORT, SQL_SERVER_MIN_VERSION,
 # SQL_QUERIES_PATH — unused internally, v2-only external consumers.
@@ -390,6 +360,7 @@ STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
     os.getenv("ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS", "30")
 )
 
+
 #: Interval (seconds) between progress marks while an activity waits on a
 #: per-destination storage lock (materialise dedupe, chunked-transfer
 #: exclusion). Must stay under the stall watchdog's no-progress budget, or a
@@ -399,13 +370,17 @@ STORAGE_PROGRESS_LOG_INTERVAL_SECONDS = float(
 #: ``max_no_progress_seconds`` below that cap is the operator's explicit
 #: exception and is not defended here). Floored at 1s so a zero cannot turn
 #: the wait into a busy spin. (CONNECT-1126)
-STORAGE_LOCK_WAIT_PROGRESS_SECONDS = max(
-    1.0,
-    min(
-        float(os.getenv("ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS", "30")),
-        float(os.getenv("ATLAN_MAX_NO_PROGRESS_SECONDS", "900")) / 4.0,
-    ),
-)
+def _load_storage_lock_wait_progress_seconds() -> float:
+    return max(
+        1.0,
+        min(
+            float(os.getenv("ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS", "30")),
+            float(os.getenv("ATLAN_MAX_NO_PROGRESS_SECONDS", "900")) / 4.0,
+        ),
+    )
+
+
+STORAGE_LOCK_WAIT_PROGRESS_SECONDS = _load_storage_lock_wait_progress_seconds()
 
 #: Multipart part size for uploads (default 8 MiB). Raise this per deployment
 #: when the destination makes *part count* expensive rather than part size.
@@ -442,6 +417,18 @@ STORAGE_UPLOAD_PART_SIZE_OVERRIDDEN = (
 #: peak memory steady.
 STORAGE_UPLOAD_MAX_CONCURRENCY = int(
     os.getenv("ATLAN_STORAGE_UPLOAD_MAX_CONCURRENCY", "12")
+)
+
+#: Bytes of transfer buffers the SDK's file transfers in the process may hold
+#: at once: the range GETs, streaming downloads and multipart uploads behind
+#: ``download_file`` / ``upload_file`` / the prefix operations / FileReference
+#: hand-offs all reserve from it (FND-4082). Whole-object byte reads and
+#: writes — ``CloudStore`` among them — do not. The per-call concurrency limits above multiply
+#: with each other; this is the one bound on their product. ``0`` (default)
+#: takes a quarter of the container memory limit, never under 128 MiB, and
+#: 1 GiB when no limit is known.
+STORAGE_TRANSFER_MEMORY_BUDGET_BYTES = int(
+    os.getenv("ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES", "0")
 )
 
 #: Kill-switch for resumable chunked downloads (BLDX-1523). When enabled
@@ -481,13 +468,16 @@ STORAGE_WRITE_SIDECARS = (
     os.getenv("ATLAN_STORAGE_WRITE_SIDECARS", "true").strip().lower() != "false"
 )
 
+
 #: Opt-in for the e2e ``sdk:store-assert`` node (FND-3571). The workflow is
 #: registered on every worker so worker start-up is identical everywhere; with
 #: this unset the node reads nothing and reports itself disabled. Only e2e
 #: installs set it, per tenant, through ``deploy.env_overrides``.
-STORE_ASSERT_ENABLED = (
-    os.getenv("ATLAN_STORE_ASSERT_ENABLED", "false").strip().lower() == "true"
-)
+def _load_store_assert_enabled() -> bool:
+    return os.getenv("ATLAN_STORE_ASSERT_ENABLED", "false").strip().lower() == "true"
+
+
+STORE_ASSERT_ENABLED = _load_store_assert_enabled()
 
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
@@ -687,9 +677,13 @@ OOM_RESTART_CHECK = _load_oom_restart_check()
 #: Whether to use server-side cursors for SQL operations.
 #: Enabled by default; set ATLAN_SQL_USE_SERVER_SIDE_CURSOR to any value other
 #: than "true" (e.g. "false") to opt out.
-USE_SERVER_SIDE_CURSOR = (
-    os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true").strip().lower() == "true"
-)
+def _load_use_server_side_cursor() -> bool:
+    return (
+        os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true").strip().lower() == "true"
+    )
+
+
+USE_SERVER_SIDE_CURSOR = _load_use_server_side_cursor()
 
 # DAPR Constants
 #: Name of the state store component in DAPR
@@ -737,6 +731,9 @@ _HTTP_POOL_LIMITS = httpx.Limits(
     keepalive_expiry=30.0,
 )
 _HTTP_POOL_TIMEOUT_SECONDS = 30.0
+# BaseClient's default transport retries a failed connection setup this many
+# times (httpcore backoff: 0s, 0.5s, 1s) before the request fails.
+_HTTP_CONNECT_RETRIES = 3
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
@@ -794,12 +791,13 @@ if DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED:
 #:
 #: Defaulted ON (CNCT-85). The scan runs the pyatlan/msgspec decode in an isolated
 #: child process (``run_best_effort`` over ``run_fault_isolated``), so a native
-#: fault — e.g. the msgspec 0.20.0 concurrent-decode segfault on py3.13 — is
-#: contained to the child and surfaces as a swallowed best-effort skip, never
-#: killing the worker. This branch (PR #2769) is intended to merge only once the
-#: msgspec 0.21.1 bump is in place, at which point concurrent decode is itself
-#: safe and on-by-default validation is the right posture. Set to "false" to
-#: disable per-deployment.
+#: fault in any C extension on that path is contained to the child and surfaces
+#: as a swallowed best-effort skip, never killing the worker. The fault that
+#: motivated it (msgspec 0.20.0's concurrent-decode segfault) is fixed in the
+#: locked msgspec 0.21.1; isolation stays because it contains the whole class,
+#: not that one bug (ADR-0017). Its children exit once the pool is idle for
+#: ``ATLAN_FAULT_ISOLATION_IDLE_SECONDS`` (FND-4278), so the scan holds memory
+#: only while it runs. Set to "false" to disable per-deployment.
 VALIDATE_ASSETS_ON_UPLOAD: bool = (
     os.getenv("ATLAN_VALIDATE_ASSETS_ON_UPLOAD", "true").lower() == "true"
 )
@@ -863,12 +861,17 @@ LOG_LEVEL = (os.getenv("ATLAN_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")).upp
 #: Used by traces_adaptor.py and metrics_adaptor.py at module level for
 #: tracer/meter initialization. AppConfig.service_name is the runtime equivalent.
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
-#: Service version for OpenTelemetry
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "")
-if not SERVICE_VERSION:
-    from application_sdk.version import __version__
 
-    SERVICE_VERSION = __version__
+
+from application_sdk.version import __version__  # noqa: E402
+
+
+def _load_service_version() -> str:
+    return os.getenv("OTEL_SERVICE_VERSION", "") or __version__
+
+
+#: Service version for OpenTelemetry
+SERVICE_VERSION: str = _load_service_version()
 #: Additional resource attributes for OpenTelemetry
 OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 #: Endpoint for the OpenTelemetry collector
@@ -883,6 +886,11 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 #: holding a token or a credential dict renders its contents onto a live
 #: worker's stderr. Frames themselves are always kept — ``backtrace`` is
 #: untouched — so only the value annotation is gated.
+#:
+#: A console line carrying an exception goes through ``redact_secrets``, which
+#: masks URL userinfo/query/fragment and known ``key=value`` names in the
+#: annotated values too. It does not mask a repr such as ``{'password': 'x'}``,
+#: so turning this on still exposes credentials held in locals.
 #:
 #: Deliberately its own variable rather than a function of ``LOG_LEVEL``: raising
 #: a tenant's log verbosity to DEBUG must not silently re-enable value rendering.

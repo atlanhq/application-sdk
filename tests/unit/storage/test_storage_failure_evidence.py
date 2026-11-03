@@ -111,6 +111,20 @@ def test_http_status_and_provider_code_are_parsed_from_the_driver_error() -> Non
     assert provider_code == "PreconditionFailed"
 
 
+def test_http_status_is_parsed_from_the_retry_layer_client_error_shape() -> None:
+    """GCS 4xx arrive as "Client error with status 403 Forbidden", not "status code: 403"."""
+    status, provider_code = _obstore_http_evidence(
+        _GenericError(
+            "Generic GCS error: Error performing list request: Error performing "
+            "GET https://storage.googleapis.com/storage/v1/b/example-bucket/o: "
+            "Client error with status 403 Forbidden: <?xml version='1.0'?><Error>"
+            "<Code>SecurityPolicyViolated</Code><Message>m</Message></Error>"
+        )
+    )
+    assert status == 403
+    assert provider_code == "SecurityPolicyViolated"
+
+
 def test_http_evidence_is_none_for_a_non_http_failure() -> None:
     """A timeout or credential error has no status; the parse must not invent one."""
     status, provider_code = _obstore_http_evidence(

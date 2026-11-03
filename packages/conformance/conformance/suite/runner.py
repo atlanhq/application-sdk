@@ -142,6 +142,8 @@ _CHECKS: list[CheckRegistration] = [
         series=error_handling.SERIES,
         discover=error_handling.discover,
         scan_path=error_handling.scan_path,
+        # scan_all builds F005's preflight scope across files for E004.
+        scan_all=error_handling.scan_all,
     ),
     CheckRegistration(
         series=error_seam.SERIES,

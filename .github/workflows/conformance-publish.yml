@@ -36,14 +36,14 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.6"
 
       - name: Read release version
         id: meta
@@ -60,11 +60,17 @@ jobs:
           echo "merge_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Publishing conformance ${tag} from $(git rev-parse HEAD)"
 
-      - name: Build and publish to PyPI
-        run: |
-          cd packages/conformance
-          uv build
-          uv publish --trusted-publishing automatic
+      - name: Build package
+        run: cd packages/conformance && uv build
+
+      # The exact artifacts uv publish uploads, checked as an install: every
+      # module imported first, every console script and subcommand run, a
+      # slice of the tests run against it (FND-4176).
+      - name: Smoke-test built wheel
+        run: python .github/scripts/conformance_wheel_gate.py
+
+      - name: Publish to PyPI
+        run: cd packages/conformance && uv publish --trusted-publishing automatic
 
       - name: Create source tag
         run: |
@@ -93,12 +99,36 @@ jobs:
     # minutes rather than waiting for the next scheduled (4-hourly) run. Consumers
     # pin conformance in-range, so this lands as an auto-merging lockFileMaintenance
     # PR. Skipped automatically when `publish` is skipped (non-release PR) or fails.
+    #
+    # KEEP IN STEP with tag-and-publish.yaml's fan-out (FND-4330): same
+    # concurrency group, same wait for EVERY first-party version on main, so an
+    # SDK and a conformance release minutes apart fan out once, after both are
+    # visible on PyPI. See that job's comment.
     name: Fan out Renovate to consumers
     needs: [publish]
     runs-on: ubuntu-latest
+    # Visibility wait (<=15 min) + full sweep + up to two scoped re-runs.
+    timeout-minutes: 120
+    concurrency:
+      group: renovate-release-fanout
+      cancel-in-progress: true
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the release to be visible on PyPI
+        id: pypi
+        continue-on-error: true
+        run: |
+          python3 .github/scripts/wait_for_pypi_release.py \
+            --pyproject pyproject.toml \
+            --pyproject packages/api/pyproject.toml \
+            --pyproject packages/conformance/pyproject.toml
+
       - name: Mint fleet App token
         id: app-token
         continue-on-error: true
@@ -107,13 +137,9 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
-          repositories: application-sdk
-      - name: Trigger the self-hosted Renovate runner
-        # No dry_run/repos overrides: inherits renovate.yaml's live defaults (full
-        # discovery, dry_run=null). Soft-fail so a fan-out hiccup never fails the
-        # release — the 4-hourly schedule is the backstop.
+
+      - name: Trigger Renovate and re-dispatch repos it missed
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-        run: |
-          gh workflow run renovate.yaml --repo atlanhq/application-sdk \
-          || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."
+          PACKAGES: ${{ steps.pypi.outputs.packages }}
+        run: python3 .github/scripts/renovate_release_followup.py --packages "$PACKAGES"

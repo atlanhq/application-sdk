@@ -21,6 +21,8 @@ from application_sdk.execution._temporal.preflight_gate import (
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
+from application_sdk.observability.events import PREFLIGHT_OUTCOME_EVENT
+from application_sdk.observability.logger_adaptor import _extract_exception_attributes
 from application_sdk.templates.contracts.sql_metadata import ExtractionInput
 from application_sdk.testing.preflight import PreflightOutcomeCapture
 
@@ -84,6 +86,21 @@ class TestUnidentifiableConnectionBlocks:
         assert row["failure.check"] == "connection_qualified_name"
         assert "no qualifiedName" in row["failure.message"]
         handler.preflight_check.assert_not_called()
+
+    async def test_error_row_shows_the_reason(
+        self, mode: PreflightGateMode, loguru_capture: list[dict[str, Any]]
+    ) -> None:
+        """The run log panel shows an ERROR record's ``exception.message``; the
+        block row's Body is the pinned event name, so the reason rides there."""
+        gate = build_preflight_gate_activity(_handler(), app_name="myapp", mode=mode)
+        with _patches(), pytest.raises(ApplicationError):
+            await gate(_gate_input(connection=_INCIDENT_CONNECTION))
+
+        [row] = [r for r in loguru_capture if r["message"] == PREFLIGHT_OUTCOME_EVENT]
+        assert row["level"].name == "ERROR"
+        message = _extract_exception_attributes(row["exception"])["exception.message"]
+        assert message.startswith("Preflight failed: ")
+        assert "no qualifiedName" in message
 
     async def test_explicit_empty_qualified_name_blocks(self) -> None:
         gate = build_preflight_gate_activity(

@@ -6,6 +6,7 @@ from temporalio.client import Client as _TemporalClientImpl
 from temporalio.client import WorkflowFailureError as _TemporalWorkflowFailureErrorImpl
 from temporalio.converter import DataConverter
 from temporalio.exceptions import ActivityError as _TemporalActivityErrorImpl
+from temporalio.exceptions import ApplicationError as _TemporalApplicationErrorImpl
 from temporalio.exceptions import CancelledError as _TemporalCancelledErrorImpl
 from temporalio.exceptions import ChildWorkflowError as _TemporalChildWorkflowErrorImpl
 from temporalio.exceptions import TerminatedError as _TemporalTerminatedErrorImpl
@@ -13,7 +14,9 @@ from temporalio.exceptions import TimeoutError as _TemporalTimeoutErrorImpl
 
 from application_sdk.contracts.base import Input, Output
 from application_sdk.execution import (
+    ApplicationError,
     TemporalActivityError,
+    TemporalApplicationError,
     TemporalCancelledError,
     TemporalChildWorkflowError,
     TemporalClient,
@@ -47,6 +50,14 @@ class TestPublicSurface:
     def test_temporal_activity_error_is_exported(self) -> None:
         assert TemporalActivityError is _TemporalActivityErrorImpl
 
+    def test_temporal_application_error_is_exported(self) -> None:
+        assert TemporalApplicationError is _TemporalApplicationErrorImpl
+
+    def test_raw_application_error_matches_only_the_temporal_alias(self) -> None:
+        error = _TemporalApplicationErrorImpl("boom", type="PreflightFailed")
+        assert isinstance(error, TemporalApplicationError)
+        assert not isinstance(error, ApplicationError)
+
     def test_temporal_cancelled_error_is_exported(self) -> None:
         assert TemporalCancelledError is _TemporalCancelledErrorImpl
 
@@ -65,6 +76,7 @@ class TestPublicSurface:
         assert {
             "TemporalWorkflowFailureError",
             "TemporalActivityError",
+            "TemporalApplicationError",
             "TemporalCancelledError",
             "TemporalChildWorkflowError",
             "TemporalTerminatedError",

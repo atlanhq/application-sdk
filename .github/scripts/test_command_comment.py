@@ -201,10 +201,17 @@ def e2e_verdict_state(
 
 #: The check runs the SDK's connector e2e fan-out completes on its PR head.
 SDK_E2E_CHECK_PREFIX = "Connector E2E run / "
+#: The SDR leg's row. It is a job in the gate's own run, so its result comes
+#: from ``needs`` rather than the check runs (FND-4486).
+SDR_ROW = "SDR K8s E2E (LM)"
 
 
-def sdk_e2e_state(*, sha: str, checks: list, run_url: str) -> CommentState:
-    """application-sdk's `/e2e` verdict: one row per connector e2e check."""
+def sdk_e2e_state(
+    *, sha: str, checks: list, run_url: str, sdr_result: str = ""
+) -> CommentState:
+    """application-sdk's `/e2e` verdict: one row per connector e2e check, plus
+    the SDR leg when it ran (``sdr_result`` is its ``needs`` result; empty or
+    ``skipped`` adds no row)."""
     rows = sorted(
         (
             str(c.get("name"))[len(SDK_E2E_CHECK_PREFIX) :],
@@ -214,14 +221,16 @@ def sdk_e2e_state(*, sha: str, checks: list, run_url: str) -> CommentState:
         for c in checks
         if str(c.get("name") or "").startswith(SDK_E2E_CHECK_PREFIX)
     )
+    if sdr_result and sdr_result != "skipped":
+        rows.append((SDR_ROW, sdr_result, run_url))
     failed = sum(1 for _, result, _ in rows if result != "success")
     if not rows:
         stage, summary = NO_VERDICT, "no connector e2e check reported"
     elif failed:
-        stage, summary = FAILED, f"{failed} of {len(rows)} connector(s) failed"
+        stage, summary = FAILED, f"{failed} of {len(rows)} e2e leg(s) failed"
     else:
-        stage, summary = PASSED, f"{len(rows)} connector(s) passed"
-    table = ["| connector | result |", "|---|---|"]
+        stage, summary = PASSED, f"{len(rows)} e2e leg(s) passed"
+    table = ["| leg | result |", "|---|---|"]
     table += [
         f"| {name} | [{glyph(result)}]({url}) |"
         if url
@@ -286,7 +295,10 @@ def main(argv: list | None = None) -> int:
     verdict.add_argument("--run-id", required=True, type=int)
     verdict.add_argument("--verdict", required=True)
     verdict.add_argument("--clouds", default="")
-    sub.add_parser("sdk-e2e-verdict")
+    sdk_verdict = sub.add_parser("sdk-e2e-verdict")
+    sdk_verdict.add_argument(
+        "--sdr-result", default="", help="needs.sdr-k8s-e2e.result"
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     if not args.pr.strip().isdigit():
         _notice("no PR number; the /e2e comment is not updated")
@@ -308,7 +320,12 @@ def main(argv: list | None = None) -> int:
         except GitHubError as error:
             print(f"::warning::could not read the check runs: {error}", file=sys.stderr)
             return 0
-        state = sdk_e2e_state(sha=args.sha, checks=checks, run_url=args.run_url)
+        state = sdk_e2e_state(
+            sha=args.sha,
+            checks=checks,
+            run_url=args.run_url,
+            sdr_result=args.sdr_result,
+        )
     else:
         clouds = [c.strip() for c in args.clouds.split(",") if c.strip()]
         try:

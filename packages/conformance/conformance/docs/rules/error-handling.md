@@ -154,20 +154,16 @@ root-cause analysis impossible.
   exits are closed by other rules. The checker accepts logger.exception(), or
   warning/error/critical carrying exc_info=True, or warning/error/critical routed
   through a redaction helper. logger.exception() is not available: L017 forbids it under
-  ADR-0011. And DEBUG is accepted by none of the three, even with exc_info=True — while
-  E005 never inspects a DEBUG line at all. So a handler that deliberately logs a broad
-  catch at DEBUG with a full traceback satisfies E005 and cannot satisfy E004. Raising
-  the level is the only way through, which is a real decision on a cleanup path that
-  runs inside a finally: the WARNING lands beside the error actually being reported.
-  Reported from a consumer app in FND-2542; whether DEBUG should join the accepted set
-  is an owner call, not a mechanical fix. The same gap meets F005 inside a
-  preflight_check override, including helpers it calls: a best-effort cleanup handler
-  (close a client, release a session) has no verdict to return, DEBUG does not clear
-  E004 even through a redaction helper, and WARNING is what F005 forbids there. The
-  recommended log that satisfies both is logger.error (logger.critical also clears both)
-  with the exception routed through a redaction helper (safe_traceback,
-  sanitize_cause_repr); the alternative is to return the failure as typed data. Found in
-  a consumer app in FND-2569.
+  ADR-0011. DEBUG is accepted only in the shapes that prove a WARNING would be wrong
+  (FND-2542, decided): best-effort cleanup with exc_info=True, a predicate-gated skip
+  that re-raises everything else, and anywhere inside F005's preflight scope when the
+  log carries the exception. Elsewhere a DEBUG line, even with exc_info=True, still does
+  not clear E004 while satisfying E005. Inside a preflight_check override and the
+  helpers F005 follows from it (FND-2569), E004 reuses F005's own scope predicate, so
+  the two rules agree: DEBUG/INFO carrying the exception clears E004 there, and WARNING
+  is what F005 forbids. Never raise such a line to WARNING; logger.error through a
+  redaction helper still clears both, and returning the failure as typed data remains
+  the preferred shape for a probe arm.
 
 Catches everything but the specific type is unknown.  HIGH severity when not logged;
 MEDIUM when logged but missing `exc_info=True`.  Acceptable only at top-level handlers
@@ -178,13 +174,13 @@ None` that drops the cause, and a conditional re-raise that can fall through, st
 fire.
 
 Exempt: handlers whose warning/error/critical log call formats the exception through a
-recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged
-at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify. A
-direct call to an undecorated same-module helper also counts when it receives the caught
-binding as a parameter and every control-flow path through the helper passes that
-parameter through a recognized sanitizer among the warning/error/critical call
-arguments. The helper call must be on a straight-line handler path; a prior branch that
-can bypass it does not prove the failure was logged.
+recognised redaction helper (redact*/sanitiz*/safe_traceback/safe_exception*/…) — the
+failure is logged at a deliberate no-traceback boundary.  A sanitized debug/info call
+does not qualify. A direct call to an undecorated same-module helper also counts when it
+receives the caught binding as a parameter and every control-flow path through the
+helper passes that parameter through a recognized sanitizer among the
+warning/error/critical call arguments. The helper call must be on a straight-line
+handler path; a prior branch that can bypass it does not prove the failure was logged.
 
 Also exempt: `raise X(...) from None` whose raised error carries the caught exception
 through such a helper (directly, or via a local assigned from one), or hands it as
@@ -207,15 +203,16 @@ an opaque raw hand-off (`failed_check(name, exc, start)`) proves nothing about t
 under a broad catch.  A same-module straight-line helper also qualifies, within limits
 the checker can prove:
 
-- the helper is an undecorated, synchronous, top-level function with one   final
-`return`, no branching, and no `*args`/`**kwargs`; - its returned value *is* a
-class-like constructor built from the   parameter the binding is passed to (`return
-Outcome(error=err)`), not   an expression that merely contains one (`(Outcome(...),
-None)[1]`); - the handler returns the helper's result directly, stages it in a local
-that the return hands back, or passes it only into class-like   constructors or literal
-containers; a lowercase wrapper   (`discard(helper(exc))`) keeps it opaque; - the name
-still resolves to that helper: not rebound in any enclosing   function, not declared
-`nonlocal` or `global`, and not reassigned   at module level.
+- the helper is an undecorated, synchronous, top-level function with one final `return`,
+  no branching, and no `*args`/`**kwargs`;
+- its returned value *is* a class-like constructor built from the parameter the binding
+  is passed to (`return Outcome(error=err)`), not an expression that merely contains one
+  (`(Outcome(...), None)[1]`);
+- the handler returns the helper's result directly, stages it in a local that the return
+  hands back, or passes it only into class-like constructors or literal containers; a
+  lowercase wrapper (`discard(helper(exc))`) keeps it opaque;
+- the name still resolves to that helper: not rebound in any enclosing function, not
+  declared `nonlocal` or `global`, and not reassigned at module level.
 
 A helper that branches — a classifier walking the cause chain — is proven from its
 signature instead: its return annotation names an error class (`-> AppError`, `->
@@ -228,25 +225,107 @@ the call must be assigned to a name that the very next statement exits on when i
 
 `except Exception:` with no `as` binding still fires.
 
-The three exemptions are one principle: the exception must leave the frame in some
-inspectable form — re-raised with its trace, re-raised with a redacted cause, or
-returned as typed data.
+The binding itself is typed data too: `return exc`, or a literal tuple/list holding it
+(`return (Result(ok=False), exc)`), while the handler never rebinds it.  A local staged
+through a conditional expression counts when one arm carries the failure and the other
+is a typed error — an error-class constructor, or a same-module helper that always
+returns one (`admin_denied(u) if denied(exc) else _check_error(exc)`); a `None` or
+opaque arm still fires.  The annotation route also accepts `-> PreflightCheck` / `->
+PreflightOutput`, under the same every-return proof.  A class-like name may start with
+underscores (`_ProbeAnswer(...)`).
+
+Also exempt — the failure is deferred, not swallowed: a handler that only stashes the
+exception (`error = exc` or `holder.append(exc)`, plus assignments and logs) when the
+function owning the stashed name — the handler's own, or the enclosing one for a
+worker-thread target writing a closure list or `nonlocal` — reaches `raise NAME` /
+`raise NAME[i]` after the `try` in its own top-level statements (bare, or under an `if`
+whose test is only a presence check on NAME: `NAME`, `NAME is not None`, `len(NAME)`,
+`len(NAME) > 0`), with no `return` and no rebinding of NAME on the way.  A compound
+guard (`if error is not None and should_reraise:`) still fires: its false branch can
+drop the stash.  E009 uses the same predicate.
+
+Also exempt, each a shape where a WARNING would be wrong:
+
+- best-effort cleanup: the handler is only log calls, one at DEBUG/INFO with a truthy
+  `exc_info`, and the `try` body is only release calls (leading verb
+  `close`/`aclose`/`dispose`/`shutdown`/
+  `disconnect`/`cleanup`/`release`/`terminate`/`stop`/`kill`/ `unlink`/`rmtree`) or
+  metric emits (a `record_metric` leaf, or a `get_metrics()` receiver); or a lookup then
+  release — single-name assignments from a getter or attribute read guarded by `if NAME`
+  / `if NAME is not None:` around release calls, or `result = close()` then `if
+  hasattr(result, "__await__"): await result` — where every bound name only feeds its
+  guard and at least one release runs; or only call statements when the `try` sits in a
+  `finally`.  A WARNING there lands beside the error actually being reported, and
+  narrowing would let a cleanup failure mask it;
+- a predicate-gated skip: one or more `if <test reading the binding>:` blocks (no
+  `else`) holding only log calls — one with `exc_info` — and ending in
+  `return`/`continue`/`pass`, followed by a cause-preserving re-raise on every other
+  path.  Leading assignments that only read the binding (`msg = str(exc)`, `kind =
+  type(exc).__name__`) may precede them, and the test may read those aliases instead;
+- inside F005's preflight scope (the functions F005's `reachable_preflight_sites`
+  inspects, followed across files in a repo scan), a DEBUG/INFO log carrying the
+  exception (`exc_info`, or the binding formatted raw, via `str`/`repr`, an f-string or
+  a sanitizer, or a local the handler assigned earlier from a sanitizer applied to the
+  binding and never rebound): F005 bars the WARNING E004 would otherwise demand;
+- outside it, a DEBUG/INFO log of the binding through a recognised sanitizer (never raw)
+  when the handler is only log calls and falls through to a computed fallback: the
+  statement after the `try` (climbing out of `if` blocks it ends) returns a call or
+  comprehension that is not an empty sentinel and reads nothing the `try` body assigned
+  (`return [d[0] for d in cursor.description]`). A `return None`, an empty literal or a
+  pre-set result still fires;
+- an app durable failure record handed the binding — a callee whose name holds
+  `failure`/`residual` and a write verb (`write`, `record`, `store`, `persist`, `save`)
+  — directly or through a local built from it (`record = {"message": str(e)}`), in a
+  handler of assignments, logs, assign-only `for` loops and `if` blocks whose every
+  branch records (or follows a record) and returns any value, ending in a per-item
+  `return None` or `continue`, or in an empty literal (`return []`) when a WARNING/ERROR
+  also logged the binding through a sanitizer;
+- a typed failure recorded as a preflight check row: after optional constant
+  assignments, the handler's only statement calls a nested helper of the enclosing
+  function, passing the binding wrapped in a same-class method annotated to return an
+  error class (`error=self._typed_error(e, Denied)`), and the helper appends a
+  `PreflightCheck`/`PreflightOutput` built from that argument to an enclosing list
+  before anything can return or raise;
+- in a standalone script (L005's `is_script_file`: a shebang or a `__main__` guard), a
+  `print(...)` of the caught exception.
+
+The sanitized-helper exemption also resolves a same-class method (`self._report(name,
+exc)`, static ones too), follows a helper call the handler returns (`return
+self._failure(check, exc)`, or an element of `return None, self._failure(check, exc)`),
+lets the helper assign before it logs and read `type(exc).__name__`, and counts
+`safe_exception_frames` as a sanitizer.  A preceding `if ...: raise <cause-preserving>`
+guard does not count as a bypass, and neither does `if ...: raise helper(..., exc) from
+None` when that helper is proven to log the binding through a sanitizer the same way.
+
+A same-class method (`self.X(exc)`, `cls.X(exc)`, or `ClassName.X(exc)` for a static or
+class method) whose return annotation is a bare class-like name, returned as the
+handler's only exit with the bare binding among its arguments, is typed data too
+(`return self.connectivity_verdict(exc)`).
+
+A `raise NAME from None` re-raises the failure when NAME is bound once, earlier in the
+handler, by `NAME = f(..., exc, ...)` receiving the bare binding (`typed =
+to_typed(exc)`): the converted error is built from it.
+
+The exemptions are one principle: the exception must leave the frame in some inspectable
+form — re-raised with its trace, re-raised with a redacted cause, returned as typed
+data, deferred to a proven re-raise, or recorded where a WARNING is barred or would
+mislead.
 
 **Fixing it well**
 
 * Before narrowing, read what the `try` body and its callees raise today, driver and
-bridge errors included (JDBC/JPype exceptions reach app code raw unless a client
-converts them). Narrow to those types and keep handling them the same way: the same
-classifier, the same check rows, the same log.
+  bridge errors included (JDBC/JPype exceptions reach app code raw unless a client
+  converts them). Narrow to those types and keep handling them the same way: the same
+  classifier, the same check rows, the same log.
 
 * Never narrow to `AppError` at a catch that raw driver errors reach: they would escape
-and turn a reported failure into a crash.
+  and turn a reported failure into a crash.
 
 * Keep a shared helper a helper: change the helper's `except`; do not inline it into
-each caller.
+  each caller.
 
 * Tests keep asserting the old behaviour (a raw driver error still becomes a failed
-check); never change a fake so it stops raising what the real client raises.
+  check); never change a fake so it stops raising what the real client raises.
 
 ---
 
@@ -266,15 +345,24 @@ often impossible under production data volumes.
   WARNING with exc_info=True before returning None. The message says what failed; the
   traceback says where.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+- **Interacts with:** L009 at a pre-raise log: a warning/error within the three statements before a raise in
+  the same block is also an L009 site (and usually L004). Enriching it with
+  exc_info=True or safe_traceback(exc) clears E005 and L004 but not L009, whose fix then
+  deletes the line. Apply L009's resolution instead: delete the line when the exception
+  has an upstream record (which may leave a bare raise), otherwise downgrade it to a
+  sanitized DEBUG through locals. Never reduce the handler to a bare raise without an
+  upstream record: that drops the only record of the failure. That one edit clears E005,
+  L004 and L009 together.
 
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
 is exempt (it implies `exc_info=True`).
 
 Exempt: calls whose arguments flow through a recognised redaction helper
-(redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
-no-traceback boundary where exc_info=True would serialize the raw exception past the
-sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies).
+(redact*/sanitiz*/safe_traceback/safe_exception*/scrub_secret*/mask_secret*) — these
+mark a deliberate no-traceback boundary where exc_info=True would serialize the raw
+exception past the sanitizer and can leak credentials (JDBC URLs, Authorization headers,
+OAuth bodies).
 
 ---
 
@@ -306,7 +394,7 @@ SystemExit.  Always specify at least `except Exception:`.
 
 **Tier:** `warn` · **Scope:** `both` · **Category:** `error-to-return-value` · **Autofixable:** yes · **Since:** 0.2.0
 
-> except block returns a value without logging — error hidden
+> except block returns a value that hides the error
 
 **Rationale:** Converting an exception to a falsy return value (None, [], False) shifts the failure
 point: the caller sees a plausible empty result and fails later, often somewhere
@@ -316,10 +404,18 @@ unrelated, making the original failure invisible.
 
 - **Compliant example:** atlan-openapi-app app/api_client.py — `redact_url` catches the ValueError from urlsplit,
   logs it, and only then returns its '<unparseable url>' sentinel; the sentinel is the
-  function's contract, and because the event is logged first it needs no suppression. It
-  is the credential-boundary form of the fix: the log is `logger.debug` through
-  sanitize_cause_repr with no exc_info, because the url it guards may be a pre-signed
-  secret held in that frame. Outside such a boundary, log with exc_info=True.
+  function's contract. It needs no suppression for two reasons, and both are required:
+  the log before the return clears E007's no-log arm, and because the catch is narrow
+  and the value is a non-empty placeholder, the logged-sentinel arm does not apply.
+  Logging alone is not enough: under a broad catch (`except Exception`), logging before
+  an empty return (None, [], {}) still fires E007 (FND-4080, which deliberately
+  supersedes the log-then-sentinel reading in #4428). The one broad-catch exception is
+  atlan-metabase-app app/extracts/questions.py: a per-item `return None` after
+  `record_residual_failure(output_path, category, ...)`, which writes the failure to a
+  durable residual trail rather than only the log. It is the credential-boundary form of
+  the fix: the log is `logger.debug` through sanitize_cause_repr with no exc_info,
+  because the url it guards may be a pre-signed secret held in that frame. Outside such
+  a boundary, log with exc_info=True.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 - **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
   (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the
@@ -331,14 +427,28 @@ unrelated, making the original failure invisible.
   the predicate per return and E004 applies it to every exit. Bare sentinels and
   stringified exceptions (`str(exc)`, `repr(exc)`, an f-string or `.format(exc)`) still
   fire, because a string is the failure laundered into a plain value. Found by a
-  consumer app's preflight probe arms in FND-2493.
+  consumer app's preflight probe arms in FND-2493. Under a broad catch, a log before an
+  empty-sentinel return does not clear E007 (FND-4080): there the fix is to raise or
+  return typed data, never to add or move a log line. Only a per-item `return None`
+  after the imported `residuals.record_residual_failure` clears it (FND-4199). E004
+  still applies to the same handler independently, so its exc_info requirement holds
+  whichever way the E007 is fixed. E020 is the response-guard variant of the same advice
+  and shares its per-object caveat: inside a batch or per-item loop, raising where one
+  object was skipped turns that object's failure into a run-wide one. Keep the per-item
+  skip (record it with record_residual_failure, or catch the typed error at the loop),
+  and keep tests that assert the skip passing.
 - **Already correct when:** A justified inline `# conformance: ignore[E007] <reason>` IS the correct end state where
   the sentinel genuinely IS the function's contract — the caller is documented to treat
   the empty/None return as a normal outcome rather than as success. The reason must say
-  which contract, as atlan-openapi-app `redact_url` does. Where the sentinel instead
+  which contract, as atlan-openapi-app `redact_url` does. An optional cache whose misses
+  fall back to another lookup is such a contract: suppress it in the app with the
+  contract named; the detector does not try to prove it. Where the sentinel instead
   stands in for a failure the caller cannot distinguish from success, the directive is
   unremediated: either raise, or record the failure to a durable evidence trail and
-  declare the gap (see E020).
+  declare the gap (see E020). A per-item skip inside a batch whose empty aggregate
+  (`{}`, `[]`) tests assert is such a contract when no clearing shape keeps it: suppress
+  it with the per-item skip contract named rather than raising, which would fail the
+  whole run.
 
 Exception is converted to a return value (None, {}, [], False) with no trace.  Callers
 see a wrong result with no idea why.  At minimum log before returning; prefer raising a
@@ -346,7 +456,44 @@ domain-specific exception instead.
 
 A return that hands the caught exception back as typed data is not flagged: the failure
 leaves the frame for the caller to report. This is the same typed-failure predicate E004
-uses.
+uses, so `return exc` and a tuple/list holding the binding count too.
+
+Also not flagged: under a narrow catch, a return of a same-module helper proven to
+return a typed result (a class-like return annotation, or a class-like constructor on
+every path), such as `return _finish(log, Outcome.SKIPPED, ...)` — an inline constructor
+still needs a log; a per-item `return None` after an app durable failure record handed
+the binding (`write_failure`, `record_failure`; a name holding `failure`/`residual` and
+a write verb); and a `return <non-zero int>` after a top-level `print(...,
+file=sys.stderr)` or `sys.stderr.write(...)` in the same handler, a CLI surfacing the
+failure in its exit status. `return 0` / `None` / `True` still fire.  A same-class
+helper that logs the binding counts whatever its parameter is named, static methods
+included, and so does a helper the return itself calls (`return self._failure(check,
+exc)`, `return None, self._failure(check, exc)`).  Under any catch, a same-class method
+(`self.X` / `cls.X` / `ClassName.X`, static ones included) whose return annotation is a
+bare class-like name, called with the bare binding (`return
+self.connectivity_verdict(exc)`), is typed data. The durable-record arm follows a local
+built from the binding (`record = {"message": str(e)}`; `write_failure(..., record)`),
+and accepts an empty literal (`return []`) when a WARNING/ERROR also logged the binding
+through a sanitizer before it.
+
+Under a broad catch (`Exception`, `BaseException`, bare `except:`) logging first does
+not clear it: `logger.<level>(...); return None` (or `[]`, `{}`, `()`, `""`, `dict()`
+...) leaves the trace in the log only, and the caller still cannot tell the failure from
+a genuine empty result. Raise a domain error or return the failure as typed data. A
+per-item `return None` after an imported `residuals.record_residual_failure(output_path,
+category, ...)` call is not flagged: the failure is recorded as durable data. A narrow
+catch, a bare `return`, a `return None` inside a `-> None` function, and any file in a
+wholesale-deprecated module (one whose own top level, or an enclosing package
+`__init__.py`, emits a module-level `DeprecationWarning`) are left out of this arm.
+
+Per-object skips.  Inside a batch or per-item loop, replacing one item's empty return
+with a raise is a behaviour change: one bad item then fails the whole run.  It is never
+the default fix.  Keep the skip and make the failure durable instead (the per-item
+`record_residual_failure` shape above), or raise the typed error and catch it at the
+loop.  Tests that assert the skip keep passing unchanged.  When the per-item value is an
+empty aggregate (`{}`, `[]`) and no clearing shape keeps the tested skip, the end state
+is a justified `# conformance: ignore[E007] <per-item skip contract>` or a judgment
+residue, never a raise.  E020 gives the same advice for HTTP response guards.
 
 ---
 
@@ -374,20 +521,25 @@ fallback path is correct AND there is a comment.  Log at DEBUG if the module is
 preferred but not required.  Flag if the module is expected to be present (will fail
 later with a confusing AttributeError). A cause-preserving re-raise on every path
 (including a typed error raised from the ImportError) surfaces the failure and does not
-need a duplicate log.
+need a duplicate log. An explanatory comment on the `except` line or inside the handler
+is honoured as this text says (tool directives — `noqa`, `type: ignore`, `conformance:
+ignore` — do not count), and so is a reporter call that states the problem with a
+message (a callee named for error/warn/report/ fail/fatal/abort/die with a string
+argument: `_error(path, "... missing")`) made directly in the handler body — one nested
+under an `if` or a loop is not recognised.
 
 **Fixing it well**
 
 * Fix it at the existing `except ImportError` site, in the shape this rule describes: an
-optional module the code falls back from is logged at `DEBUG` with the module name; a
-required one is re-raised with its cause on every path (`raise ... from exc`), which
-needs no log of its own.
+  optional module the code falls back from is logged at `DEBUG` with the module name; a
+  required one is re-raised with its cause on every path (`raise ... from exc`), which
+  needs no log of its own.
 
 * Keep the import where it is: moving it to module level or into a function changes when
-the app loads its drivers, and the repo's ruff rules then reject the new shape.
+  the app loads its drivers, and the repo's ruff rules then reject the new shape.
 
 * Never add `noqa` to get past ruff; if ruff objects, the shape is wrong — log at the
-original site.
+  original site.
 
 ---
 
@@ -410,6 +562,10 @@ under production conditions where it produces wrong results at scale.
 
 Exception sets a flag or default value with no trace.  Combines P007's error-hiding with
 no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
+
+Not flagged: a stash the owning function provably re-raises (`error = exc` ... `if error
+is not None: raise error`), the same predicate E004 uses — the failure is deferred, not
+hidden.
 
 ---
 
@@ -485,15 +641,30 @@ blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/failures.py — every leaf subclasses an SDK category (e.g.
-  `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Raise
-  one of these, never a bare ValueError or RuntimeError.
+  `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Use one
+  of these for failures that leave the error boundary; a builtin used only as a sentinel
+  inside a matching typed-translation handler does not escape as the outward failure.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
-SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
-— no category, code, audience, or retryable field. Dashboards are blind; on-call routing
-is impossible.  Use the typed error leaf from `application_sdk.errors`.  Acceptable only
-inside dataclass `__post_init__` / stdlib validator methods where Python semantics
-require `TypeError`/`ValueError` for stdlib interoperability.
+SDK code that lets a bare Python builtin reach the Automation Engine sends an opaque
+string — no category, code, audience, or retryable field. Dashboards are blind; on-call
+routing is impossible.  Use the typed error leaf from `application_sdk.errors`.  A
+builtin used as an internal validation sentinel is acceptable only when a matching
+`except` handler unconditionally translates it into a typed `AppError` before it leaves
+that boundary; swallowing, conditional handling, and re-raising do not qualify. Builtin
+raises are also acceptable inside dataclass `__post_init__` / `__init__` where Python
+semantics require `TypeError` or `ValueError` for stdlib interoperability, and inside
+Pydantic validators (`@field_validator`, `@validator`), where Pydantic converts a
+`ValueError` into a `ValidationError` and a typed error would escape unconverted.  In
+`@model_validator` / `@root_validator` only `ValueError` is exempt: Pydantic v2 lets
+`TypeError`, `RuntimeError` and the other builtins escape a model validator unconverted.
+A mapping method defined in a class body may raise `KeyError` from `__getitem__`,
+`__delitem__` or `__missing__`, where `Mapping.get` and `in` catch it; any other builtin
+in those methods still reports, as does a same-named module class or a module-level
+function.  `IndexError`, `AttributeError` and `StopIteration` are not reported by this
+rule. Files under the repo-root `tools/` and `contract/` directories are build and dev
+tooling that never reaches the error envelope and are not checked; an app package with
+the same name (`app/tools/`) still is.
 
 ---
 
@@ -584,13 +755,13 @@ summary.
 
 **Tier:** `warn` · **Scope:** `both` · **Category:** `exception-chaining` · **Autofixable:** yes · **Since:** 0.2.0
 
-> raise inside except block missing 'from exc' cause — breaks exception chain
+> raise inside except block missing an explicit or SDK-visible cause — breaks exception chaining
 
 **Rationale:** When the Automation Engine rebuilds the typed wire envelope it walks the
-.cause/__cause__ chain (set by 'raise X from e'); its reconstruction path does not
-follow __context__. Without explicit chaining the original exception — attached only as
-__context__ — is visible at the interpreter level but dropped from the wire envelope and
-every downstream system that reads it.
+.cause/__cause__ chain, not __context__. A replacing raise that neither explicitly
+chains the caught exception nor carries it as the SDK error's cause leaves the original
+attached only as __context__; it is visible at the interpreter level but dropped from
+the wire envelope and every downstream system that reads it.
 
 ### What correct looks like
 
@@ -599,14 +770,25 @@ every downstream system that reads it.
   the Python chain.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
-A non-bare `raise` inside an `except … as e:` block that does not include `from e` (or
-`from None`).  Without explicit chaining, Python attaches the original as `__context__`
-with `__suppress_context__=False` — the chain is preserved at the interpreter level but
-AE's wire serialiser only follows the `__cause__` chain, so the original exception is
-lost in dashboards.  Fix: `raise NewError(...) from e`.  Use `from None` only when
-intentionally hiding the original (requires a comment explaining why). Acceptable
-patterns: bare `raise` (re-raise), `raise X() from e` (already chained), `raise X() from
-None` (intentional suppression).
+A non-bare `raise` inside an `except … as e:` block that neither includes `from e` (or
+`from None`) nor carries `e` as a proven SDK error's cause.  Without either, Python
+attaches the original only as `__context__` — preserved at the interpreter level, but
+AE's wire serialiser follows the `__cause__`/`.cause` chain, so the original exception
+is lost in dashboards.  Fix: `raise NewError(...) from e`, and for an SDK `AppError`
+also pass `cause=e`.  Use `from None` only when intentionally hiding the original
+(requires a comment explaining why). Acceptable patterns: bare `raise` (re-raise);
+`raise X() from e` (already chained); `raise X() from None` (intentional suppression);
+`raise SdkError(..., cause=e)` where `SdkError` is proven to come from
+`application_sdk.errors`, is not rebound or shadowed, and the call has no
+`*args`/`**kwargs` unpacking; `raise classify(e)` where `classify` is an unshadowed
+top-level function in this module or imported from the scanned repo whose every return
+either passes through `e` already proven to be an SDK error or builds an SDK error with
+`cause=e`.  A cause the rule cannot prove (`cause=str(e)`, an app-defined class, an
+opaque helper) still needs `from e`.  `raise group.exceptions[i]` inside `except
+BaseExceptionGroup as group` (or `except*`) is accepted: the member keeps its own
+`__cause__`, which `from group` would overwrite. Only a proven group counts: an app
+class that merely exposes an `exceptions` sequence (`except AggregateError as group`)
+still fires.
 
 ---
 
@@ -738,16 +920,28 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
   records a residual and returns [], and the run declares the gap as PARTIAL_SUCCESS. No
   site needs a suppression.
 - **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+- **Interacts with:** E007 gives the same advice for the except-shaped variant (a broad catch that logs and
+  returns an empty sentinel) and carries the same per-object caveat: inside a batch, a
+  raise in place of one object's skip fails the whole extraction. For both rules, raise
+  for a failure of the whole request or a transient outcome. A permanent per-object
+  rejection stays a logged skip, and tests that assert the skip (`== {}`) keep passing
+  unchanged. A lane fix that turned a per-object skip into a raise converted one bad
+  object into a run-wide failure in production.
 - **Already correct when:** The failed response raises a typed AppError at the guard. That is the whole fix where
-  the failure should abort the run. Where the app must degrade instead, the end state
-  keeps the raise and adds an explicit `except <ThatTypedError>` at the tolerating
-  function. That handler logs with exc_info=True, records the failure to a durable
-  evidence trail (a residual file), returns the empty sentinel, and the run declares the
-  gap (e.g. OutputStatus.PARTIAL_SUCCESS) rather than reporting a complete crawl. Do NOT
-  apply a raise-only edit to a site that already records and declares its gap: that
-  deletes the app's ability to degrade, so a single flaky endpoint aborts the entire
-  crawl. Convert it to the typed catch instead. An inline ignore[E020] is not the end
-  state, because the typed catch keeps the same degradation with nothing suppressed.
+  the failure of the whole request, or a transient outcome, should abort the run. A
+  permanent per-object rejection inside a batch (HTTP 400/404/410 on one object's detail
+  fetch) is a different end state: a warning that carries the status and the source's
+  error reason (never the body), then the skip, and the batch continues. The detector
+  does not report that shape, and turning it into a raise is a behaviour change, never
+  the default fix. Where the app must degrade instead, the end state keeps the raise and
+  adds an explicit `except <ThatTypedError>` at the tolerating function. That handler
+  logs with exc_info=True, records the failure to a durable evidence trail (a residual
+  file), returns the empty sentinel, and the run declares the gap (e.g.
+  OutputStatus.PARTIAL_SUCCESS) rather than reporting a complete crawl. Do NOT apply a
+  raise-only edit to a site that already records and declares its gap: that deletes the
+  app's ability to degrade, so a single flaky endpoint aborts the entire crawl. Convert
+  it to the typed catch instead. An inline ignore[E020] is not the end state, because
+  the typed catch keeps the same degradation with nothing suppressed.
 
 An `if` whose test inspects an HTTP response for failure (a negation or comparison on
 `is_success` / `ok` / `status_code`) and whose branch `return`\ s an empty/None sentinel
@@ -767,7 +961,46 @@ see E012).  Where one failure must not abort the crawl, keep the raise and catch
 typed error in the tolerating function.  The handler logs with `exc_info=True`, records
 a residual and returns the empty sentinel, and the run declares the gap as
 `PARTIAL_SUCCESS`.  Anchored on HTTP-response markers and a failure-shaped test to avoid
-flagging ordinary `if x is None: return None` guards.
+flagging ordinary `if x is None: return None` guards.  `!=` against a single non-2xx
+constant (`status_code != 401`) is not failure-shaped: that branch also takes every 2xx
+response.  `!= 200` and `>= 400` still are.
+
+`.ok` and `.is_success` are also plain field names on non-HTTP result objects (a
+`StageResult` dataclass), so they count only on an owner that is plausibly an HTTP
+response: its name says so (`resp`), the same function reads a response-only attribute
+on it (`.status_code`, `.json()`, `.headers`), it is a parameter annotated
+`...Response`, or the function binds it (`=`, `:=`, `with ... as`) from an httpx /
+requests / aiohttp call, an HTTP verb (`.get` / `.post` / `.request` ...) or a callee
+named for `http` / `request`; or it is that HTTP call itself (`httpx.get(url).ok`).
+`status_code` needs no such evidence.  A bare `return` / `return None` inside a function
+annotated `-> None` is not reported either: a procedure has no result to publish.  This
+is E020's own carve-out: E007 still flags such a handler when it does not log the caught
+exception.  `return []` there still fires.
+
+Raise versus skip.  Raise the typed error for a failure of the whole request, and for
+transient outcomes (no response, 408, 429, 5xx).  A permanent rejection of ONE object
+inside a batch or iteration (its detail fetch answers 400/404/410 because the object was
+dropped between listing and fetch, or is invalid) is a skip: log the status and the
+source's error reason at WARNING, never the response body, and continue. Converting such
+a skip into a raise is a behaviour change: one bad object then fails the whole
+extraction.  It is never the default fix, and existing tests that assert the skip (`==
+{}`) must keep passing unchanged.
+
+Exempt: an empty return directly in the body of an `if` that pins the status to
+permanent per-object rejections (`r.status_code in (400, 404)`, `r.status_code == 404`;
+codes from {400, 404, 410}; `and`-ed terms allowed) on the response the failure test is
+about, when a warning/error-level log call earlier in that body says the object is
+skipped and passes the status itself as an argument (a status inside another expression
+does not count).  A local (`status = r.status_code`, or `... if r is not None else
+None`) counts when that is its last binding among the guard's earlier siblings and it is
+not rebound before the log. Still reported: a bare `if not r.is_success: return {}`;
+transient codes or a missing response returning empty; a skip with no log, a debug/info
+log, a log without the status or without saying it skips; a guard on a different
+response than the one that failed; an `or`-ed guard; a range such as `400 <=
+r.status_code < 500`; a named code constant (`in PERMANENT_CODES`); and 401/407 (a
+credential rejection hits every object).  A 403 skip also still reports: whether a
+permission denial should skip or raise is a site-level judgment that this rule does not
+make.
 
 ---
 

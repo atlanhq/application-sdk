@@ -675,7 +675,10 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
-        autofixable=True,
+        # Not the remediation lane's: the self-hosted Renovate runner opens the
+        # toolkit bump and regenerates in postUpgradeTasks, so this rule only
+        # reports the lag until that PR merges.
+        autofixable=False,
         since="0.12.0",
         orthogonal_gate="pkl-eval",
         rationale=(
@@ -701,7 +704,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "actually in use; a missing or stale lock is K003's concern, so K007 "
             "stays quiet in that case rather than guessing from a broad pin.\n"
             "\n"
-            "**Fix:** bump the ``@<version>`` in ``contract/PklProject`` to the "
+            "**Fix:** merge the Renovate toolkit-bump PR: the self-hosted Renovate "
+            "runner opens it and regenerates in postUpgradeTasks, so the remediation "
+            "lane does not take this rule. By hand: bump the ``@<version>`` in "
+            "``contract/PklProject`` to the "
             "latest, run ``pkl project resolve`` to refresh the lock, then "
             "regenerate with ``pkl eval -m . contract/app.pkl``. On a "
             "``renovate/**`` branch the self-hosted Renovate runner does this "
@@ -716,7 +722,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k007"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
@@ -1350,8 +1356,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "rule -- now routes off the manifest block. A drifted block does not "
             "merely go unnoticed; it changes what another blocking rule "
             "concludes, so the two must be held together at the same strength. "
-            "The surface is new and no app declares aliases yet, so nothing in "
-            "the fleet is blocked by adopting it at this tier."
+            "Apps whose declaration already drifts from the manifest block go "
+            "red at this tier and are fixed after the release that turns the "
+            "check on for them."
         ),
         short_description=(
             "the manifest's legacy_workflow_types block and the SDK App's "

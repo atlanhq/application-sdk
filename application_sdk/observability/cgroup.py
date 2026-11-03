@@ -10,6 +10,7 @@ import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+from application_sdk._runtime import cgroup as _runtime_cgroup
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.resource_sampler import parse_pod_memory_limit
 
@@ -32,9 +33,9 @@ _MEMORY_PEAK_PATHS = (
 _CPU_STAT_V2 = "/sys/fs/cgroup/cpu.stat"
 _CPU_STAT_V1 = "/sys/fs/cgroup/cpu/cpu.stat"
 _CPUACCT_USAGE_V1 = "/sys/fs/cgroup/cpuacct/cpuacct.usage"
-_CPU_MAX_V2 = "/sys/fs/cgroup/cpu.max"
-_CPU_QUOTA_V1 = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"
-_CPU_PERIOD_V1 = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
+_CPU_MAX_V2 = _runtime_cgroup.CPU_MAX_V2
+_CPU_QUOTA_V1 = _runtime_cgroup.CPU_QUOTA_V1
+_CPU_PERIOD_V1 = _runtime_cgroup.CPU_PERIOD_V1
 
 # v1 spells "no limit" as a near-2**63 sentinel; unlimited means unknown here.
 _V1_UNLIMITED_FLOOR = 1 << 62
@@ -202,25 +203,12 @@ def _parse_kv(raw: str) -> dict[str, float]:
 
 
 def cpu_quota_cores() -> float | None:
-    """CPU limit in cores, or ``None``. The denominator for throttling."""
-    raw = _read_first((_CPU_MAX_V2,))
-    if raw:
-        parts = raw.split()
-        if len(parts) == 2 and parts[0] != "max":
-            try:
-                quota, period = float(parts[0]), float(parts[1])
-            except ValueError:
-                _logger.debug("unparseable cpu.max: %r", raw, exc_info=True)
-            else:
-                if quota > 0 and period > 0:
-                    return quota / period
+    """CPU limit in cores, or ``None``. The denominator for throttling.
 
-    quota_us = _read_int((_CPU_QUOTA_V1,))
-    period_us = _read_int((_CPU_PERIOD_V1,))
-    # v1 writes -1 for unlimited, which _read_int already rejects as negative.
-    if quota_us and period_us and quota_us > 0 and period_us > 0:
-        return quota_us / period_us
-    return None
+    Parsed by :func:`application_sdk._runtime.cgroup.cpu_quota_cores`, the same
+    reader that sizes the fault-isolation pool, so telemetry and sizing agree.
+    """
+    return _runtime_cgroup.cpu_quota_cores(_CPU_MAX_V2, _CPU_QUOTA_V1, _CPU_PERIOD_V1)
 
 
 @dataclass

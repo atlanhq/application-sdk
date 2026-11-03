@@ -19,6 +19,7 @@ import pytest
 import trustme
 from aiohttp import web
 
+from application_sdk.clients.base import BaseClient
 from application_sdk.clients.ssl_utils import get_ssl_context
 
 
@@ -127,6 +128,47 @@ class TestSslContextWithPrivateServer:
                             assert response.status == 200
                             text = await response.text()
                             assert text == "Hello from private HTTPS server!"
+            finally:
+                await runner.cleanup()
+
+    @pytest.mark.asyncio
+    async def test_base_client_connects_to_private_https_server(
+        self, trustme_ca, server_ssl_ctx
+    ):  # type: ignore[no-untyped-def]
+        """BaseClient's shared transport trusts CAs from SSL_CERT_DIR.
+
+        Regression: the transport was built without ``verify=`` and the
+        per-call ``AsyncClient(verify=...)`` is ignored by httpx when a
+        transport is passed, so private-CA endpoints failed TLS.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ca_cert_path = f"{tmpdir}/ca.pem"
+            trustme_ca.cert_pem.write_to_path(ca_cert_path)  # type: ignore[no-untyped-call]
+
+            async def handle_request(request):  # type: ignore[no-untyped-def]
+                return web.Response(text="Hello from private HTTPS server!")
+
+            app = web.Application()
+            app.router.add_get("/", handle_request)
+
+            runner = web.AppRunner(app)
+            await runner.setup()
+
+            site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=server_ssl_ctx)
+            await site.start()
+
+            port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+
+            try:
+                with patch("application_sdk.clients.ssl_utils.SSL_CERT_DIR", tmpdir):
+                    async with BaseClient() as client:
+                        response = await client.execute_http_get_request(
+                            f"https://localhost:{port}/",
+                            timeout=10,
+                            raise_on_error=True,
+                        )
+                assert response.status_code == 200
+                assert response.text == "Hello from private HTTPS server!"
             finally:
                 await runner.cleanup()
 

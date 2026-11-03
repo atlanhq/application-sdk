@@ -10,7 +10,9 @@ Covers the three modes the bump-PR CI opt-in rests on:
   can't be read;
 * ``e2e-requested`` — answers from the ``e2e-request`` status (or, on
   ``bump-version-main``, the ``gate-check`` opt-in), and fails CLOSED: an
-  unreadable request does not justify a live-tenant suite.
+  unreadable request does not justify a live-tenant suite;
+* ``integration-requested`` — always off a PR; on a PR only after ``/e2e`` or
+  ``/gate-check``, failing OPEN when the statuses can't be read (FND-4306).
 """
 
 from __future__ import annotations
@@ -335,3 +337,70 @@ class TestE2eRequested:
         )
         assert rc == 0
         assert f"requested={expected}" in out.read_text().splitlines()
+
+
+# ── integration-requested ─────────────────────────────────────────────────────
+
+
+class TestIntegrationRequested:
+    @pytest.mark.parametrize("event", ["merge_group", "push"])
+    def test_always_runs_off_a_pr(self, gh, event: str) -> None:
+        fake = gh({})
+        ok, _ = bump_pr_opt_in.is_integration_requested("o/r", event, "")
+        assert ok is True
+        assert fake.calls == []
+
+    @pytest.mark.parametrize(
+        ("e2e", "gate_check", "requested"),
+        [
+            ("success", "", True),
+            ("", "success", True),
+            ("", "pending", True),
+            ("", "", False),
+            ("pending", "failure", False),
+        ],
+    )
+    def test_a_pr_runs_it_only_on_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        e2e: str,
+        gate_check: str,
+        requested: bool,
+    ) -> None:
+        monkeypatch.setattr(
+            bump_pr_opt_in, "run", _statuses(e2e_request=e2e, gate_check=gate_check)
+        )
+        ok, _ = bump_pr_opt_in.is_integration_requested("o/r", "pull_request", SHA)
+        assert ok is requested
+
+    @pytest.mark.parametrize(
+        ("e2e", "gate_check"), [(None, ""), ("", None), (None, None)]
+    )
+    def test_unreadable_fails_open(
+        self, monkeypatch: pytest.MonkeyPatch, e2e: str | None, gate_check: str | None
+    ) -> None:
+        monkeypatch.setattr(
+            bump_pr_opt_in, "run", _statuses(e2e_request=e2e, gate_check=gate_check)
+        )
+        ok, _ = bump_pr_opt_in.is_integration_requested("o/r", "pull_request", SHA)
+        assert ok is True
+
+    def test_main_emits_outputs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(bump_pr_opt_in, "run", _statuses())
+        out = tmp_path / "out"
+        monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+        rc = bump_pr_opt_in.main(
+            [
+                "--repo",
+                "o/r",
+                "integration-requested",
+                "--event",
+                "pull_request",
+                "--sha",
+                SHA,
+            ]
+        )
+        assert rc == 0
+        assert "requested=false" in out.read_text().splitlines()

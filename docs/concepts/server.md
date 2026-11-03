@@ -71,6 +71,7 @@ All routes registered by `create_app_handler_service()`:
 | `/workflows/v1/check` | POST | Run preflight connectivity checks |
 | `/workflows/v1/metadata` | POST | Browse source metadata (schemas, tables) |
 | `/workflows/v1/start` | POST | Start a workflow run (use `?entrypoint=<name>` for multi-entry-point apps) |
+| `/workflows/v1/validate` | POST | Validate a workflow configuration against the entry point's published input contract, without starting anything. Also served by the consolidated API host (see [Validating a workflow configuration](#validating-a-workflow-configuration)) |
 | `/workflows/v1/stop/{workflow_id}/{run_id}` | POST | Terminate a running workflow |
 | `/workflows/v1/result/{workflow_id}` | GET | Fetch the final result of a completed workflow |
 | `/workflows/v1/status/{workflow_id}/{run_id}` | GET | Poll workflow execution status |
@@ -89,6 +90,63 @@ All routes registered by `create_app_handler_service()`:
 | `/ready`, `/server/ready` | GET | Readiness probe |
 | `/metrics` | GET | Prometheus metrics (always exposed; merges SDK custom metrics + HTTP server instrumentation + `prometheus_client` defaults, plus Temporal Rust-core families proxied from `127.0.0.1:9464` when enabled and reachable) |
 | `/` | GET | API root / service info |
+
+## Validating a workflow configuration
+
+`POST /workflows/v1/validate?entrypoint=<name>` checks the body a workflow will
+be started with against the entry point's **published** input contract, then
+stops. That is the same model `GET /workflows/v1/input-contract` serves. Call it
+when a workflow is created, so a configuration the runtime cannot execute is
+rejected at submission instead of failing at engine time.
+
+It lives with the metadata routes, so it ships in `atlan-application-sdk-api`.
+The consolidated API host serves it from the app's generated contract, and so
+does the worker, which resolves the same contract. It needs no Temporal
+connection and no running worker.
+
+It goes further than the JSON Schema, because it also runs the contract's
+`field_validator`s. For the SQL templates those reject:
+
+- SQL-unsafe filter values;
+- include/exclude/temp-table patterns that every engine the SQL templates
+  target rejects (POSIX ERE, PostgreSQL, ICU, RE2, Java): an unterminated `(`
+  or `[`, a reversed character range, or a trailing backslash. Syntax that only
+  some dialects accept (`\p{L}`, POSIX classes, a lone `)`) is left for the
+  source to judge. The error names the field and position, never the pattern.
+
+`workflow_id` / `workflow_type` and inline `credentials` (v2 or v3 shape) are
+taken out before the contract judges the body, as `/start` does: credentials are
+never part of a workflow's configuration. Instead, the route checks credentials
+for the fields the app's own generated forms mark `required` per auth type
+(`required = true` on each `FieldSpec` in `credentials.pkl`):
+
+| What the body carries | Checked against | 422 field |
+|---|---|---|
+| Inline `credentials`, e.g. at credential creation | The credential form, `<credential-type>.json`, for the selected `authType` (else the form's default), including its `anyOf` implications | `credentials.extra.atlan_oauth_id` |
+| `extraction_method: "agent"` | The workflow form's agent schema (`agent-json` → `agentConfigs`): every required field must map to a secret key | `agent_json.gcp-wif.extra.atlan_oauth_id`, or `agent_json` when there is no populated spec |
+| A GUID-routed method (`direct`, …) | The workflow form's credential slot: when it is `required`, the body must reference a credential (`credential_guid`, or any populated `CredentialRef` field) | `credential_guid` |
+
+Each check runs only when the form that governs it ships in `generated/`.
+A required field with a non-empty declared default counts as provided. A vault
+credential's stored values can't be read here, so send the credential inline
+when it is created to have its fields checked. A declared-source (format 2)
+agent spec is left to its own validation. Each gap is a pydantic `missing`
+error naming the field. No credential value is returned or logged.
+
+| Outcome | Status | Body |
+|---|---|---|
+| The body fits the contract | 200 | `{"success": true, "data": {"entrypoint"}}` |
+| The body does not fit the contract, or is not a JSON object | 422 | `{"success": false, "message": "Invalid request: <fields>", "detail": [{"field", "message", "type"}]}` |
+| Invalid `?entrypoint=` name / several entry points and none named | 400 | |
+| Unknown `?entrypoint=` | 404 | |
+
+The 422 never includes pydantic's `input`, because the rejected value can be a
+credential. The SDK's own validators (SQL filters, regex structure, incremental
+markers, required credential fields) name the field and the problem, never the
+value. A custom validator in an app's contract is returned as written, so it
+must not put the value in its message either.
+`/workflows/v1/start` (worker only) answers the same 422 shape when its body
+does not fit the entry point's input type, before it touches Temporal.
 
 ## MCP Server Integration
 

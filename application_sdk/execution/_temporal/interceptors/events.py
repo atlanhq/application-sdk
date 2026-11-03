@@ -15,6 +15,9 @@ fallback that leaves the agent unregistered. ``ATLAN_EVENT_INGRESS_DIRECT_FALLBA
 turns it off.
 """
 
+import asyncio
+import time
+import weakref
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -46,10 +49,46 @@ workflow.logger = logger
 # Constructed lazily on first use; None when auth is not configured.
 _event_token_service: "OAuthTokenService | None" = None
 
+#: Seconds a definitive token-service miss (client credentials absent from
+#: the store, or refused by the token endpoint) is remembered before the next
+#: lookup (FND-4279). Without it every ACTIVITY_START/END re-fetched both
+#: deployment secrets, and a rotated credential was never picked up.
+_EVENT_TOKEN_SERVICE_RETRY_SECONDS = 60.0
+
+#: Seconds a lookup the store failed to answer (not ready, throttled) is
+#: remembered. Short: at boot a not-yet-ready store would otherwise send a
+#: minute of events without auth, but still long enough that an outage does
+#: not cost every activity a secret fetch.
+_EVENT_TOKEN_SERVICE_OUTAGE_RETRY_SECONDS = 5.0
+
+#: ``time.monotonic()`` before which no lookup is attempted; 0.0 = no negative
+#: result cached.
+_event_token_service_retry_at: float = 0.0
+
+#: Single-flights the lookup so concurrent activities share one secret fetch.
+#: One lock per event loop: an asyncio.Lock that has made a caller wait is
+#: bound to that loop, and waiting on it from another loop raises.
+_event_token_service_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]" = weakref.WeakKeyDictionary()
+
+
+def _event_token_service_lock() -> asyncio.Lock:
+    """The lookup lock for the running event loop."""
+    loop = asyncio.get_running_loop()
+    lock = _event_token_service_locks.get(loop)
+    if lock is None:
+        lock = _event_token_service_locks[loop] = asyncio.Lock()
+    return lock
+
 
 async def _get_event_token_service() -> "OAuthTokenService | None":
-    """Return the singleton OAuthTokenService for event auth, or None if unconfigured."""
-    global _event_token_service
+    """Return the singleton OAuthTokenService for event auth, or None if unconfigured.
+
+    A ``None`` result (credentials absent) is cached for
+    :data:`_EVENT_TOKEN_SERVICE_RETRY_SECONDS`, a lookup that raised (the
+    store did not answer) for :data:`_EVENT_TOKEN_SERVICE_OUTAGE_RETRY_SECONDS`;
+    concurrent callers share one lookup.
+    """
+    global _event_token_service, _event_token_service_retry_at
 
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: AUTH_ENABLED guard
         AUTH_ENABLED,
@@ -58,37 +97,163 @@ async def _get_event_token_service() -> "OAuthTokenService | None":
     if not AUTH_ENABLED:
         return None
 
-    if _event_token_service is None:
-        from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when AUTH_ENABLED
-            AUTH_URL,
-            WORKFLOW_AUTH_CLIENT_ID_KEY,
-            WORKFLOW_AUTH_CLIENT_SECRET_KEY,
-        )
-        from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            OAuthTokenService,
-        )
-        from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
-            OAuthClientCredential,
-        )
-        from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
-            get_deployment_secret,
-        )
+    if _event_token_service is not None:
+        return _event_token_service
+    if time.monotonic() < _event_token_service_retry_at:
+        return None
 
-        client_id = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
-        client_secret = await get_deployment_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
-        token_url = AUTH_URL
-
-        if not client_id or not client_secret or not token_url:
+    async with _event_token_service_lock():
+        # Another caller may have finished the lookup while this one waited.
+        if _event_token_service is not None:
+            return _event_token_service
+        if time.monotonic() < _event_token_service_retry_at:
             return None
+        try:
+            service = await _build_event_token_service()
+        # conformance: ignore[E004] caches the failure for the retry window, then re-raises unchanged
+        except Exception:
+            _event_token_service_retry_at = (
+                time.monotonic() + _EVENT_TOKEN_SERVICE_OUTAGE_RETRY_SECONDS
+            )
+            raise
+        if service is None:
+            _event_token_service_retry_at = (
+                time.monotonic() + _EVENT_TOKEN_SERVICE_RETRY_SECONDS
+            )
+        else:
+            _event_token_service = service
+            _event_token_service_retry_at = 0.0
+        return service
 
-        cred = OAuthClientCredential(
-            client_id=client_id,
-            client_secret=client_secret,
-            token_url=token_url,
+
+def _invalidate_event_token_service() -> None:
+    """Drop the cached service after a rejected token exchange.
+
+    The next lookup, :data:`_EVENT_TOKEN_SERVICE_RETRY_SECONDS` later, re-reads
+    the client credentials, so a rotation is picked up without a restart.
+    """
+    global _event_token_service, _event_token_service_retry_at
+    _event_token_service = None
+    _event_token_service_retry_at = (
+        time.monotonic() + _EVENT_TOKEN_SERVICE_RETRY_SECONDS
+    )
+
+
+async def _read_event_auth_secret(key: str) -> Any:
+    """One attempt at a deployment secret: ``None`` when it is absent.
+
+    Unlike ``get_deployment_secret(raise_on_error=False)``, a store that did
+    not answer raises, so the caller can retry it sooner than a missing key.
+    No cold-start wait: it would stall the interceptor.
+
+    Raises:
+        SecretStoreError: The store failed or was unreachable.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when AUTH_ENABLED
+        DEPLOYMENT_NAME,
+        LOCAL_ENVIRONMENT,
+    )
+    from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
+        SecretNotFoundError,
+        _fetch_deployment_secret,
+    )
+
+    if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+        return None
+    try:
+        return await _fetch_deployment_secret(key)
+    # conformance: ignore[E007] an absent client credential means "no event auth", cached by the caller
+    except SecretNotFoundError:
+        return None
+
+
+async def _build_event_token_service() -> "OAuthTokenService | None":
+    """Read the client credentials and build a token service, or None if any is missing."""
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only when AUTH_ENABLED
+        AUTH_URL,
+        WORKFLOW_AUTH_CLIENT_ID_KEY,
+        WORKFLOW_AUTH_CLIENT_SECRET_KEY,
+    )
+    from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        OAuthTokenService,
+    )
+    from application_sdk.credentials.types import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        OAuthClientCredential,
+    )
+
+    client_id = await _read_event_auth_secret(WORKFLOW_AUTH_CLIENT_ID_KEY)
+    client_secret = await _read_event_auth_secret(WORKFLOW_AUTH_CLIENT_SECRET_KEY)
+    token_url = AUTH_URL
+
+    if not client_id or not client_secret or not token_url:
+        return None
+
+    cred = OAuthClientCredential(
+        client_id=client_id,
+        client_secret=client_secret,
+        token_url=token_url,
+    )
+    return OAuthTokenService(cred)
+
+
+def _is_credential_rejection(exc: BaseException) -> bool:
+    """Whether a failed token exchange means the client credentials were refused.
+
+    True for a 4xx from the token endpoint (``invalid_client`` and friends,
+    except 408/429), or a 2xx with no ``access_token``. False for a 5xx, a
+    408/429 or a transport failure: the endpoint is struggling, and the same
+    credentials may work on the next publish.
+    """
+    import httpx  # noqa: PLC0415 — cold path: only after a failed token exchange
+
+    cause = exc.__cause__
+    if cause is None:
+        return True
+    if isinstance(cause, httpx.HTTPStatusError):
+        status = cause.response.status_code
+        return 400 <= status < 500 and status not in (408, 429)
+    return False
+
+
+async def _get_event_auth_headers() -> dict[str, str]:
+    """Auth headers for an event publish; empty when auth is off or failing.
+
+    A token exchange that refuses the credentials drops the cached service, so
+    rotated credentials are re-read after
+    :data:`_EVENT_TOKEN_SERVICE_RETRY_SECONDS`. A transient exchange failure
+    keeps the service, and the next publish retries the exchange.
+    """
+    from application_sdk.credentials.oauth import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
+        OAuthTokenError,
+    )
+
+    try:
+        token_service = await _get_event_token_service()
+        if token_service is None:
+            return {}
+        return await token_service.get_headers()
+    except OAuthTokenError as exc:
+        if _is_credential_rejection(exc):
+            _invalidate_event_token_service()
+            logger.warning(
+                "Token endpoint refused the event binding client credentials, "
+                "proceeding without authentication; client credentials are "
+                "re-read in %.0fs",
+                _EVENT_TOKEN_SERVICE_RETRY_SECONDS,
+                exc_info=True,
+            )
+        else:
+            logger.warning(
+                "Token exchange for event binding auth failed transiently, "
+                "proceeding without authentication; the next publish retries",
+                exc_info=True,
+            )
+    except Exception:
+        logger.warning(
+            "Failed to get auth headers for event binding, proceeding without authentication",
+            exc_info=True,
         )
-        _event_token_service = OAuthTokenService(cred)
-
-    return _event_token_service
+    return {}
 
 
 # Type alias for the annotation above (resolved at import time by TYPE_CHECKING
@@ -276,15 +441,7 @@ async def _publish_event_via_binding(
     payload = orjson.dumps(event.model_dump(mode="json"))
     binding_metadata: dict[str, str] = {"content-type": "application/json"}
 
-    try:
-        token_service = await _get_event_token_service()
-        if token_service is not None:
-            binding_metadata.update(await token_service.get_headers())
-    except Exception:
-        logger.warning(
-            "Failed to get auth headers for event binding, proceeding without authentication",
-            exc_info=True,
-        )
+    binding_metadata.update(await _get_event_auth_headers())
 
     from application_sdk.infrastructure.bindings import (  # noqa: PLC0415 — circular: infrastructure imports execution transitively
         BindingError,

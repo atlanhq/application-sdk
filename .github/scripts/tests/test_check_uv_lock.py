@@ -75,6 +75,36 @@ def test_refused_lock_fails(tmp_path: Path, reason: str) -> None:
     assert check_uv_lock.main(root, {"BASE_SHA": "abc"}, _uv_in(root), _changed) == 1
 
 
+def _member(root: Path, name: str, version: str, deps: str = "") -> None:
+    (root / name).mkdir()
+    (root / name / "pyproject.toml").write_text(
+        f'[project]\nname = "{name}"\nversion = "{version}"\n'
+        f'requires-python = ">=3.11"\ndependencies = [{deps}]\n'
+    )
+
+
+@needs_uv
+def test_an_unresolvable_pyproject_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """The shape that reddened ~15 SDK Gate jobs per Renovate rebase (FND-4240):
+    a bumped range in pyproject.toml that nothing can satisfy. Local path
+    packages, so the resolver conflict needs no index."""
+    root = _project(tmp_path)
+    _member(root, "dep-a", "1.0.0", '"dep-b>=2"')
+    _member(root, "dep-b", "1.0.0")
+    (root / "pyproject.toml").write_text(
+        PYPROJECT.replace("dependencies = []", 'dependencies = ["dep-a", "dep-b"]')
+        + '\n[tool.uv.sources]\ndep-a = { path = "dep-a" }\ndep-b = { path = "dep-b" }\n'
+    )
+    monkeypatch.setenv("UV_OFFLINE", "1")
+
+    assert check_uv_lock.main(root, {"BASE_SHA": "abc"}, _uv_in(root), _changed) == 1
+    out, err = capfd.readouterr()
+    assert "No solution found" in err
+    assert "cannot be satisfied" in out
+
+
 def test_no_lock_passes_without_running_uv(tmp_path: Path) -> None:
     def run(cmd: Sequence[str]) -> int:
         raise AssertionError("uv must not run")
@@ -215,3 +245,35 @@ def test_conformance_gate_runs_the_lock_check_on_every_pr() -> None:
     )
     assert names.index("Authenticate private atlanhq git dependencies") < check_at
     assert check_at < remove_at < first_series
+
+
+def test_sdk_gate_detection_fails_on_an_unresolvable_lock() -> None:
+    """FND-4240: the check sits in `changes`, which every area needs, so a lock
+    that cannot resolve fails one job and skips the whole matrix instead of
+    failing every leg's `setup-deps` on the same resolver error."""
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/sdk-gate.yaml").read_text()
+    )
+    jobs = workflow["jobs"]
+    steps = jobs["changes"]["steps"]
+    (check_at,) = [
+        i for i, s in enumerate(steps) if "check_uv_lock.py" in str(s.get("run", ""))
+    ]
+    check = steps[check_at]
+    assert "if" not in check
+    assert check["run"] == "python3 .github/scripts/check_uv_lock.py"
+    assert check["env"]["BASE_SHA"] == (
+        "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+    )
+    setup_uv = [
+        i
+        for i, s in enumerate(steps)
+        if str(s.get("uses", "")).startswith("astral-sh/setup-uv@")
+    ]
+    assert setup_uv and setup_uv[0] < check_at
+    assert "continue-on-error" not in check
+    areas = [name for name, job in jobs.items() if name not in ("changes", "gate")]
+    assert areas
+    for name in areas:
+        needs = jobs[name]["needs"]
+        assert needs == "changes" or "changes" in needs, name

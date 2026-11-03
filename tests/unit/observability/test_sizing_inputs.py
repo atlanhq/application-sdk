@@ -8,6 +8,7 @@ import pytest
 from pydantic import BaseModel
 
 from application_sdk.contracts.types import FileReference
+from application_sdk.observability import sizing_inputs
 from application_sdk.observability.sizing_inputs import (
     InputSize,
     _walk,
@@ -17,6 +18,7 @@ from application_sdk.observability.sizing_inputs import (
     report_input_bytes,
     report_local_paths,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 class _Nested(BaseModel):
@@ -201,8 +203,14 @@ class TestRobustness:
                 raise OSError("vanished")
             return real(path)
 
-        monkeypatch.setattr(os.path, "getsize", flaky)
-        got = describe_inputs(_Model(ref=FileReference(local_path=str(tmp_path / "d"))))
+        with (
+            private_stdlib(sizing_inputs, "os") as local_os,
+            private_stdlib(local_os, "path") as local_path,
+        ):
+            monkeypatch.setattr(local_path, "getsize", flaky)
+            got = describe_inputs(
+                _Model(ref=FileReference(local_path=str(tmp_path / "d")))
+            )
         assert got is not None
         assert got.file_count == 1
         assert got.bytes in (100, 200)

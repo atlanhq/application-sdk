@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**15 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**16 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -30,6 +30,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
 | [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | yes | 0.31.0 |
 | [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
+| [D016](#d016) | `RequiresPythonExcludesRuntimePython` | `warn` | `app` | `python-version` | yes | 0.54.0 |
 
 ---
 
@@ -162,14 +163,17 @@ sync` first.  In an isolated runner (e.g. `uvx atlan-application-sdk-conformance
 reports nothing; that is an unresolved environment, not a clean repo.  The conformance
 CI runs the D-series leg in a synced environment for this reason.  See BLDX-1462.
 **Constraint floors:** in an app repo, every `[tool.uv] constraint-dependencies` entry
-is still a D003 finding. Generic transitive floors belong in the SDK, not in an app's
-direct dependencies or constraints; remove the app-local floor and move any generally
-required transitive floor upstream, since an app-local copy can go stale when the SDK's
-range moves. By contrast, do not remove a documented app-specific security floor merely
-to clear D003 when the SDK's declared range does not guarantee the required minimum.
-Retain that app-specific requirement with a reasoned D003 exception naming the app
-requirement and SDK range gap until the SDK range guarantees the floor; a currently
-resolved lockfile version alone is not enough. The SDK's own pyproject is exempt.
+is still a D003 finding; the check surfaces it but does not mean every app-local floor
+should be deleted. Generic transitive floors belong in the SDK, not in an app's direct
+dependencies or constraints; remove a generic app-local requirement or constraint and
+move any generally required floor upstream rather than merely relocating it, since an
+app-local copy can go stale when the SDK's range moves. By contrast, retain a documented
+app-specific minimum when the SDK's declared range does not guarantee the required
+version, whether declared as a direct dependency or a constraint. Because the entry is
+still a D003 finding, retain it with a reasoned D003 exception naming the app floor and
+the SDK range gap. Remove the app-local requirement and exception only after the SDK
+range guarantees that floor; a currently resolved lockfile version alone is not enough.
+The SDK's own pyproject is exempt.
 
 ---
 
@@ -177,12 +181,13 @@ resolved lockfile version alone is not enough. The SDK's own pyproject is exempt
 
 **Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.5.0
 
-> SDK-managed dependency redeclared in a [dependency-groups] table
+> Redundant SDK-managed dependency in a [dependency-groups] table
 
-**Rationale:** D002 only covers [project.dependencies] and the optional-dependencies arrays; an
-SDK-managed package re-pinned in a PEP 735 [dependency-groups] table escapes it. A
-dev/test group that re-pins a package the SDK already manages drifts from the SDK's
-validated dev environment and must be touched on every SDK bump.
+**Rationale:** D002 only covers [project.dependencies] and the optional-dependencies arrays; a
+redundant SDK-managed tooling pin in a PEP 735 [dependency-groups] table escapes it.
+Such a dev/test group entry drifts from the SDK's validated environment and must be
+touched on every SDK bump. A package directly imported by app-owned test source is
+instead a direct test dependency, not a redundant SDK tooling pin.
 
 ### What correct looks like
 
@@ -194,10 +199,12 @@ validated dev environment and must be touched on every SDK bump.
 - **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Packages pinned by `atlan-application-sdk` must not be redeclared in the app's PEP 735
-`[dependency-groups.*]` tables (dev/test groups).  This is the coverage gap left by
-D002, which scans only `[project.dependencies]` and `[project.optional-dependencies.*]`.
-Pull SDK-managed dev/test tooling in via `atlan-application-sdk[tests]` rather than
-re-pinning it.  The managed set is read via
+`[dependency-groups.*]` tables (dev/test groups) merely to pull in SDK-managed tooling.
+This is the coverage gap left by D002, which scans only `[project.dependencies]` and
+`[project.optional-dependencies.*]`. A package directly imported by app-owned test
+source is a direct test dependency rather than a redundant tooling pin, so it may remain
+in the group. Pull other SDK-managed test tooling in via `atlan-application-sdk[tests]`
+rather than re-pinning it. The managed set is read via
 `importlib.metadata.requires('atlan-application-sdk')`; if the SDK is not importable,
 this rule is skipped silently. Cite: BLDX-1410.
 
@@ -402,16 +409,16 @@ extras.
 
 Resolution order of the check:
 
-* with a parseable `uv.lock` present, `duckdb` must be reachable   from the app's OWN
-production dependencies — the lock is walked   from the app's `[[package]]` entry along
-`dependencies` and the   `optional-dependencies` groups an incoming extra activates.
-`uv.lock` is a *universal* resolution graph covering dev groups   and every extra, so
-duckdb merely appearing somewhere in it does   NOT mean a default `uv sync --no-dev`
-installs it;   `[package.dev-dependencies]` is deliberately not traversed; * without a
-usable lock, the app's `pyproject.toml` must declare   `duckdb` directly or reference
-`atlan-application-sdk` with a   `sql` or `incremental` extra — in `[project]
-dependencies`   specifically.  Dependency groups and optional-dependency arrays do   not
-count: they are not installed by default.
+* with a parseable `uv.lock` present, `duckdb` must be reachable from the app's OWN
+  production dependencies — the lock is walked from the app's `[[package]]` entry along
+  `dependencies` and the `optional-dependencies` groups an incoming extra activates.
+  `uv.lock` is a *universal* resolution graph covering dev groups and every extra, so
+  duckdb merely appearing somewhere in it does NOT mean a default `uv sync --no-dev`
+  installs it; `[package.dev-dependencies]` is deliberately not traversed;
+* without a usable lock, the app's `pyproject.toml` must declare `duckdb` directly or
+  reference `atlan-application-sdk` with a `sql` or `incremental` extra — in `[project]
+  dependencies` specifically.  Dependency groups and optional-dependency arrays do not
+  count: they are not installed by default.
 
 **Remediation:** first confirm the import site the finding names is live — that a
 production code path imports that module.  The check matches the import anywhere in the
@@ -501,18 +508,20 @@ Every app should declare `atlan-application-sdk-conformance` in a dev/test depen
 array, with a specifier that can float, and have it resolved in `uv.lock`.  At most one
 finding is reported per repo; four things are checked, in order:
 
-1. **Declared at all** — satisfied by an entry in **any**    `[dependency-groups.*]`
-group or any    `[project.optional-dependencies.*]` array, because apps    legitimately
-differ on which group they use. 2. **Not in** `[project.dependencies]` — graded
-separately,    because a floating runtime entry satisfies every other check    (the
-console script really does spawn) while shipping a    dev-only tool in the runtime
-image.  Reported even when a    correct dev-group entry also exists: the runtime line
-still    has to be deleted.  The fix is to move the entry, not to    add a second one.
-3. **Specifier can float** — an upper bound, and not a pin.    `==0.13.0`, `===0.13.0`,
-`~=0.17.0` and a bare    `>=0.17.0` are all rejected.  A floor is optional: it does
-not change which version resolves under the cap, so both    `<=1.0.0` and
-`>=0.17.0,<1.0.0` are accepted. 4. **Present in** `uv.lock` — checked only when a lock
-exists    and parses, so a missing or malformed lock never manufactures    a finding.
+1. **Declared at all** — satisfied by an entry in **any** `[dependency-groups.*]` group
+  or any `[project.optional-dependencies.*]` array, because apps legitimately differ on
+  which group they use.
+2. **Not in** `[project.dependencies]` — graded separately, because a floating runtime
+  entry satisfies every other check (the console script really does spawn) while
+  shipping a dev-only tool in the runtime image.  Reported even when a correct dev-group
+  entry also exists: the runtime line still has to be deleted.  The fix is to move the
+  entry, not to add a second one.
+3. **Specifier can float** — an upper bound, and not a pin. `==0.13.0`, `===0.13.0`,
+  `~=0.17.0` and a bare `>=0.17.0` are all rejected.  A floor is optional: it does not
+  change which version resolves under the cap, so both `<=1.0.0` and `>=0.17.0,<1.0.0`
+  are accepted.
+4. **Present in** `uv.lock` — checked only when a lock exists and parses, so a missing
+  or malformed lock never manufactures a finding.
 
 The canonical form is `[dependency-groups].dev`:
 `"atlan-application-sdk-conformance<=1.0.0"`.  A repo already carrying the earlier
@@ -576,10 +585,10 @@ default = true
 
 Two branches, reported at most once per repo:
 
-1. **No default index** — no `[[tool.uv.index]]` entry is    marked `default = true`, so
-whatever default the machine    supplies is what resolves. 2. **Default index is not
-PyPI** — an entry is marked default    but its URL names some other host, which is the
-proxy rewrite    already committed into the pyproject.
+1. **No default index** — no `[[tool.uv.index]]` entry is marked `default = true`, so
+  whatever default the machine supplies is what resolves.
+2. **Default index is not PyPI** — an entry is marked default but its URL names some
+  other host, which is the proxy rewrite already committed into the pyproject.
 
 Anchored on the root `pyproject.toml` only: this is a property of the repo's resolution,
 not of each sub-package, so a monorepo gets one finding rather than one per member.
@@ -625,12 +634,12 @@ code.
 Every download URL in the repo's `uv.lock` must name a PyPI host —
 `files.pythonhosted.org` or `pypi.org`.  Two branches:
 
-1. **Credentialed URL** — a URL carrying userinfo, or one of    the known index-key
-markers.  Reported first and alone: this is    a secret in version control, and the
-credential must be rotated    before the lock is regenerated. 2. **Non-PyPI host** — the
-lock resolves from an internal    mirror or proxy.  Restore the committed lock; if a
-dependency    genuinely changed, re-lock with    `uv lock --default-index
-https://pypi.org/simple`.
+1. **Credentialed URL** — a URL carrying userinfo, or one of the known index-key
+  markers.  Reported first and alone: this is a secret in version control, and the
+  credential must be rotated before the lock is regenerated.
+2. **Non-PyPI host** — the lock resolves from an internal mirror or proxy.  Restore the
+  committed lock; if a dependency genuinely changed, re-lock with `uv lock
+  --default-index https://pypi.org/simple`.
 
 **Findings never quote a URL — only a host and a count.**  They reach SARIF, GitHub code
 scanning, CI logs and the remediation run artifacts, so interpolating a credentialed URL
@@ -804,5 +813,50 @@ type-checked*, which is not a safe automatic rewrite.
 
 Scope is `both`: application-sdk's own `pyproject.toml` carries this exact shape.  Cite:
 FND-2229.
+
+---
+
+## D016 — `RequiresPythonExcludesRuntimePython` {#d016}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `python-version` · **Autofixable:** yes · **Since:** 0.54.0
+
+> App requires-python excludes Python 3.13, the version the runtime image ships
+
+**Rationale:** Every app ships on app-runtime-base:3, whose interpreter is Python 3.13, and the SDR e2e
+harness pins its host Python to the same version so the suite tests what ships. An app
+whose requires-python excludes 3.13 declares itself unsupported on the only Python it
+ever runs on, and uv quietly resolves around the cap: CI builds the venv on an older
+interpreter, so e2e exercises a Python production never uses. On ubuntu-26.04 runners
+there is no system 3.12, so uv downloads one into an uncached temp directory; the cached
+venv then links to an interpreter that is gone on the next runner, uv rebuilds it
+without the test group, and every warm e2e run fails with 'Failed to spawn: pytest'
+(FND-4505). Nothing in the app's diff points at the cause.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`: the SDK floor and no
+  upper cap, so the range admits the Python 3.13 that app-runtime-base:3 ships. An app
+  that needs an upper bound sets one above the runtime's version, e.g. `">=3.11,<3.14"`.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
+
+The app's `[project].requires-python` must admit the Python that `app-runtime-base:3`
+ships (**3.13**).  The image's base tag pins only the minor; its patch floats, so the
+range must admit every `3.13.x`.  It is evaluated as a PEP 440 specifier set, so every
+spelling that shuts any of 3.13 out is caught -- `<3.13`, `<=3.12`, `==3.12.*`,
+`~=3.12.0`, `!=3.13.*`, `==3.13.0`:
+
+```python
+requires-python = ">=3.11,<3.13"   # flagged
+requires-python = ">=3.11,<3.14"   # passes
+requires-python = ">=3.11"         # passes
+```
+
+An absent `requires-python` is not graded (D006 owns the floor).  The runtime version is
+a drift-guarded constant in the checker, kept equal to the golden base tag in the SDK's
+`Dockerfile`, so the rule needs no resolved environment.
+
+Autofixable: raise only the upper-bound clause so 3.13 is admitted, keep the lower
+bound, then re-run `uv lock`.  An exclusion clause (`!=`) or a micro-version pin/bound
+is routed to human review instead. Cite: FND-4505.
 
 ---

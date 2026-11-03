@@ -16,11 +16,16 @@ SDR-active surface:
 * an upstream-store upload failure is swallowed by ``_flush_records`` and never
   crashes the flush.
 
+It also covers the batch-flush tasks ``add_record`` starts on the way to those
+stores: ``flush_all`` must wait for them, and a stalled store must not let
+them pile up.
+
 Stores are always mocked — no real cloud calls.
 """
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import importlib.util
 from datetime import datetime
@@ -30,6 +35,7 @@ from unittest import mock
 import pytest
 
 from application_sdk.constants import LOG_FILE_NAME, METRICS_FILE_NAME, TRACES_FILE_NAME
+from application_sdk.observability import observability as obs_module
 from application_sdk.observability.observability import AtlanObservability
 
 
@@ -376,3 +382,166 @@ class TestUpstreamUploadFailureSwallowed:
 
         # Even though the upstream upload raised, the local file is cleaned up.
         assert not local.exists()
+
+
+# ---------------------------------------------------------------------------
+# add_record batch-flush tasks: tracked, awaited by flush_all, capped
+# ---------------------------------------------------------------------------
+
+
+def _store_sink(sink: list[dict[str, Any]], release: asyncio.Event | None = None):
+    """A fake ``upload_file`` that reads each uploaded partition into *sink*.
+
+    With *release*, every upload first waits for it — a stalled object store.
+    Without, it still yields once so the upload is genuinely asynchronous.
+    """
+    import orjson
+
+    async def _upload(key, local_path, store=None, **_kw):
+        if release is not None:
+            await release.wait()
+        else:
+            await asyncio.sleep(0.01)
+        with gzip.open(local_path, "rb") as fh:
+            sink.extend(orjson.loads(line) for line in fh if line.strip())
+
+    return _upload
+
+
+def _patched_sink(obs_instance, upload):
+    return (
+        mock.patch(
+            "application_sdk.observability.observability.ENABLE_OBSERVABILITY_STORE_SINK",
+            True,
+        ),
+        mock.patch(
+            "application_sdk.observability.observability.ENABLE_ATLAN_UPLOAD", False
+        ),
+        mock.patch("application_sdk.storage.upload_file", side_effect=upload),
+        mock.patch.object(
+            obs_instance, "_get_deployment_store", return_value=mock.MagicMock()
+        ),
+    )
+
+
+class TestAddRecordFlushTasks:
+    async def test_flush_all_delivers_every_record(self, obs_instance):
+        """Records whose batch flush is still uploading when ``flush_all`` runs
+        reach the sink before ``flush_all`` returns. Previously ``flush_all``
+        only drained the buffer, so at shutdown ``asyncio.run`` cancelled the
+        in-flight upload and deleted its half-written file."""
+        obs_instance._batch_size = 5
+        sink: list[dict[str, Any]] = []
+        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        p1, p2, p3, p4 = _patched_sink(obs_instance, _store_sink(sink))
+        with p1, p2, p3, p4:
+            for i in range(23):
+                obs_instance.add_record(_make_record(base_ts + i, f"msg-{i}"))
+            # Batch flushes are in flight; 3 records are still buffered.
+            assert obs_instance._flush_tasks
+            await AtlanObservability.flush_all()
+
+        assert sorted(r["message"] for r in sink) == sorted(
+            f"msg-{i}" for i in range(23)
+        )
+        assert not obs_instance._flush_tasks
+
+    async def test_flush_all_waits_for_flushes_started_while_it_waits(
+        self, obs_instance
+    ):
+        """A batch flush that ``add_record`` starts while ``flush_all`` is
+        waiting on earlier ones is awaited too. Its batch has already left the
+        buffer, so ``flush_all``'s own drain cannot pick it up; a one-time
+        snapshot of in-flight tasks returned with it still uploading."""
+        import orjson
+
+        obs_instance._batch_size = 2
+        sink: list[dict[str, Any]] = []
+        first_upload = asyncio.Event()
+        uploads = 0
+
+        async def _upload(key, local_path, store=None, **_kw):
+            nonlocal uploads
+            uploads += 1
+            if uploads == 1:
+                await first_upload.wait()
+            else:
+                # Later uploads outlast the first, so a flush_all that stopped
+                # after the first returns before they finish.
+                await asyncio.sleep(0.05)
+            with gzip.open(local_path, "rb") as fh:
+                sink.extend(orjson.loads(line) for line in fh if line.strip())
+
+        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        p1, p2, p3, p4 = _patched_sink(obs_instance, _upload)
+        with p1, p2, p3, p4:
+            for i in range(2):
+                obs_instance.add_record(_make_record(base_ts + i, f"msg-{i}"))
+            await asyncio.sleep(0)  # first flush reaches its stalled upload
+            drain = asyncio.get_running_loop().create_task(
+                AtlanObservability.flush_all()
+            )
+            await asyncio.sleep(0)  # flush_all is now waiting on the first
+            for i in range(2, 4):
+                obs_instance.add_record(_make_record(base_ts + i, f"msg-{i}"))
+            first_upload.set()
+            await drain
+            delivered = sorted(r["message"] for r in sink)
+
+        assert delivered == [f"msg-{i}" for i in range(4)]
+        assert not obs_instance._flush_tasks
+
+    async def test_stalled_store_bounds_inflight_flushes(self, obs_instance):
+        """With uploads stalled, ``add_record`` keeps at most
+        ``_MAX_INFLIGHT_FLUSHES`` flush tasks; further records wait in the
+        buffer instead of each batch spawning another task. Nothing is lost
+        once the store recovers."""
+        obs_instance._batch_size = 2
+        sink: list[dict[str, Any]] = []
+        release = asyncio.Event()
+        base_ts = datetime(2025, 6, 15, 10, 30, 0).timestamp()
+        tasks_before = len(asyncio.all_tasks())
+        p1, p2, p3, p4 = _patched_sink(obs_instance, _store_sink(sink, release))
+        with p1, p2, p3, p4:
+            for i in range(200):
+                obs_instance.add_record(_make_record(base_ts + i, f"msg-{i}"))
+                if i % 10 == 0:
+                    await asyncio.sleep(0)  # let started flushes reach the stall
+            cap = obs_module._MAX_INFLIGHT_FLUSHES
+            assert len(obs_instance._flush_tasks) == cap
+            assert len(asyncio.all_tasks()) - tasks_before <= cap
+            assert len(obs_instance._buffer) == 200 - cap * 2
+
+            release.set()
+            await AtlanObservability.flush_all()
+
+        assert len(sink) == 200
+        assert not obs_instance._flush_tasks
+
+
+class TestPeriodicFlushSurvivesErrors:
+    async def test_failed_flush_does_not_stop_periodic_flushing(self, obs_instance):
+        """A flush that raises is logged and the next interval flushes again.
+        The ``try`` used to wrap the whole loop, so one error ended periodic
+        flushing for the life of the process."""
+        obs_instance._flush_interval = 0
+        calls = 0
+        third_call = asyncio.Event()
+
+        async def _flaky_flush(force=False):
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                third_call.set()
+            if calls == 1:
+                raise RuntimeError("store down")
+
+        with mock.patch.object(obs_instance, "_flush_buffer", side_effect=_flaky_flush):
+            task = asyncio.get_running_loop().create_task(
+                obs_instance._periodic_flush()
+            )
+            await asyncio.wait_for(third_call.wait(), timeout=5)
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+        assert calls >= 3

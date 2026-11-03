@@ -66,12 +66,26 @@ What this means in practice:
   effective_retryable` on the `ApplicationError`, so it *is* Temporal's retry
   decision. Flipping it for an existing failure class changes production retry
   behaviour, not just a dashboard label — coordinate it before landing.
+- **A non-retryable task failure is non-retryable for the whole workflow.**
+  Temporal reads `non_retryable` only on a workflow's *top-level* failure, and
+  a task's error arrives wrapped in an `ActivityError`. So the generated
+  workflow (`_lift_non_retryable_activity_failure()` in
+  `application_sdk/app/base.py`) re-raises a non-retryable cause as a
+  top-level `ApplicationError` with the same `type`, `message` and `details`,
+  `non_retryable=True`, chained `from` the `ActivityError`. A workflow-level
+  `RetryPolicy` then stops after one attempt instead of re-running a run that
+  fails the same way each time. The workflow's terminal failure therefore
+  carries the envelope at `details[0]` on the top level as well as on the
+  wrapped activity failure underneath. A consumer may read either, but must
+  not assume the top level is an `ActivityError`. `WorkerEvicted` is not
+  lifted: it is non-retryable only so the eviction re-dispatch loop sees it at
+  once. A retryable cause that used up its task retries is not lifted either.
 
 ## The served manifest's resolved `task_queue`
 
 | | |
 |---|---|
-| **Produced by** | `resolve_manifest_tokens()` in `application_sdk/common/task_queue.py`, applied by the manifest route in `application_sdk/handler/service.py` |
+| **Produced by** | `resolve_manifest_tokens()` in `application_sdk/common/task_queue.py`, applied by the manifest route in `application_sdk/handler/metadata_routes.py`, which both the worker's handler service and the consolidated host (`handler/asgi.py`) register |
 | **Served at** | `GET`/`POST /workflows/v1/manifest` (and the deprecated unversioned `/manifest` alias) |
 | **Key** | `task_queue`, at `dag.<node>.task_queue`, `dag.<node>.inputs.task_queue`, and top level on single-node manifests |
 | **Read by** | The Automation Engine, which writes it into the DAG and submits work to it; from FND-224, the runtime scenario suite's contract tier, which diffs it against the TWD trigger, the KEDA metadata and the rerouter's formula |
@@ -85,6 +99,24 @@ explicit `ATLAN_TASK_QUEUE` / `--task-queue` override is not reproducible by
 re-derivation. Two paths deriving the same answer is a convention that holds
 until someone's inputs differ; one path copying the other's answer is
 structural.
+
+**On the consolidated host** the serving process is not the worker, so it
+cannot copy the worker's in-process value. It stamps the worker's
+`ATLAN_TASK_QUEUE` override when the host's app-env sync carries one
+(`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`, from the app's `atlan.yaml`
+`deploy.env`), and otherwise derives from the app's name and the deployment
+name. It never reads the bare `ATLAN_TASK_QUEUE` or `ATLAN_APPLICATION_NAME`:
+an override and an app name are one app's, and the host serves many
+(`resolve_manifest_tokens(from_process_env=False)`). The deployment name is
+`ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` when set, else the host's own
+`ATLAN_DEPLOYMENT_NAME`: the atlan-app chart gives the host and every app's
+worker the same tenant-wide `deploymentName`. A Self-Deployed Runtime run
+polls a different queue, but Heracles re-stamps every agent-side node with
+`atlan-<sdr deployment>` on create and update (`stampSDRTaskQueue`), so the
+served queue only reaches cloud-side nodes. With no deployment name at all it
+stamps nothing and logs an ERROR. The residual risk is an override set on the
+worker some other way (not in `deploy.env`): the host cannot see it. Pinned by
+`test_metadata_route_parity.py`.
 
 That is the FND-195 fix, and the failure it removed is silent by construction:
 when the served queue and the polled queue disagree, nothing errors. AE submits
@@ -183,6 +215,24 @@ it is read instead of listing the prefix.
   same worker build, so one SDK bump covers both sides. Do not rely on an older
   worker honouring the tag during a rolling deploy: it drops the field and
   reads the deployment store.
+
+## The `FileReference` size hint (`size_bytes`)
+
+| | |
+|---|---|
+| **Produced by** | `persist_file_reference()` and the single-file branch of `materialize_file_reference()` in `application_sdk/storage/reference.py` |
+| **Served at** | `FileReference.size_bytes` in Temporal payloads, an `int` or `null` |
+| **Read by** | `materialize_file_refs()` / `has_refs_to_materialize()` (via `_local_copy` in `application_sdk/storage/file_ref_sync.py`), as one condition for reusing `local_path` on the same pod without a download |
+| **Pinned by** | `TestSizeBytesWireContract` in `tests/unit/storage/test_file_ref_handoff.py` |
+
+- **The field is additive and must stay optional, defaulting to `null`.** A
+  producer on an older SDK sends none, and the consumer falls back to the
+  local marker alone. A consumer on an older SDK drops the field on decode.
+- **It is a hint, never a check of the stored object.** A wrong value can only
+  force a re-hash or a re-download, never make a stale file look current —
+  the local marker's stat and digest still have to agree. That is why a value
+  from outside the run needs no reset at the workflow boundary, unlike `store`.
+- **Directory refs leave it `null`.**
 
 ## The connection-scoped `persistent-artifacts` layout
 
@@ -304,6 +354,23 @@ with a later `AUTH` row now names the `AUTH` row. Since FND-3774 a hard gate als
 `PreflightNoVerdict` on a non-final attempt whose `details[0]` is `SOURCE_UNAVAILABLE` or
 `RATE_LIMITED`, so that
 marker now appears on ordinary runs, not only with storage verification opted in.
+
+## Submission-time validation: `/workflows/v1/validate` and `/start`'s 422
+
+| | |
+|---|---|
+| **Produced by** | `validate_workflow_config` in `register_metadata_routes()` (`application_sdk/handler/metadata_routes.py`, in the api distribution), which resolves the contract through the same `_resolve_input_contract` as `/input-contract`; `/start`'s 422 comes from `_parse_start_request()` in `application_sdk/handler/service.py`. Both 422 bodies are built by the `RequestContractError` handler in `application_sdk/handler/routes.py` |
+| **Served at** | `POST /workflows/v1/validate?entrypoint=<name>` on the consolidated API host and on the worker (200 or 422, never dispatches), and the same 422 shape from the worker's `POST /workflows/v1/start` |
+| **Key** | 422: `success: false`, `message`, `detail[]` of `{field, message, type}`. `field` is the dotted pydantic location (a missing required field has `type: "missing"`); pydantic's `input` is never included, and the SDK's own validators never embed the value in `message` (an app's custom validator is passed through as written). Missing credential fields (FND-502) use three prefixes: `credentials.<path>` (inline credential), `agent_json.<auth-type>.<path>` (agent mapping) and `credential_guid` (no reference) |
+| **Read by** | Workflow creation callers (Heracles), which call `/validate` on the API host with the body they will later send to `/start`, and surface `detail[]` to the user |
+| **Pinned by** | `tests/unit/handler/test_validate_route_host.py` and `tests/unit/handler/test_validate_route_credentials.py` (host), `TestValidateWorkflowConfig` and `test_start_contract_misfit_answers_422_naming_the_field` in `tests/unit/handler/test_service.py` (worker) |
+
+`/validate` judges the body against the **published** contract, the model
+`/input-contract` serves. The schema a caller reads and the verdict it gets
+come from one resolution, so they cannot drift. Don't give `/validate` its own
+contract lookup. A caller must treat 422 as final: the same body never succeeds
+on retry. Before FND-501, `/start` answered these as 500 "Failed to start
+workflow", so a caller that retried 5xx retried them uselessly.
 
 ## The preflight-results write route
 
@@ -457,6 +524,33 @@ entry rather than a comment:
   AE's `_validate_event_ack_paths` rejects an event trigger with a falsy value.
   `[""]` is AE's fire-and-forget form. Suppressing it needs the AE change
   shipped first — the same ordering as the first bullet.
+
+## The declared-source `agent_json` (format 2)
+
+| | |
+|---|---|
+| **Produced by** | The SDR setup form (Agent widget) through Heracles, and any one-off migration that rewrites a published workflow's `agent_json` (create-version → publish) |
+| **Read by** | `AgentCredentialSpec` (`application_sdk/credentials/spec.py`) at ingress; resolution in `application_sdk/credentials/agent.py` |
+| **Key** | Top-level `"format": 2`; every non-envelope field is `{"value": X}` or `{"valueFrom": {"secretKeyRef": {"name", "key"}}}` / `{"valueFrom": {"fileRef": {"path"}}}`; internal round-trip key `value-sources` |
+| **Pinned by** | `tests/unit/credentials/test_agent_json_declared_sources.py` |
+
+The full field rules are in [credentials](../concepts/credentials.md#declared-sources-format-2).
+This entry is about rollout, because the producer and the reader ship
+separately:
+
+- **The reader must ship first.** An SDK without this parser receives
+  `{"value": 3306}` where `port: int` expects an int and fails typed
+  validation; it would also probe the `format` value. Emit format 2 only for
+  an app whose SDK reads it. The contract toolkit's generated credential config
+  is the planned gate (FND-4361).
+- **Migrating a published workflow** has the same ordering: bump and deploy
+  the app first, then publish the new version.
+- **`value-sources` is internal.** It is the normalized form a re-parsed spec
+  carries (`to_raw_dict()`, serialized workflow inputs). Producers never write
+  it; a producer that sends it alongside `"format": 2` is rejected.
+- **A legacy payload is unchanged on the wire**, and its serialized form gains
+  no key. Legacy probing, and the FND-4407 single-key fallback that keeps a
+  value the store rejects, are removed only once no legacy payload remains.
 
 ## The PR test-command statuses and dispatch inputs (`/e2e`, `/gate-check`)
 

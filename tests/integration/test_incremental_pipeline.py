@@ -458,10 +458,9 @@ async def test_transformed_recovery_from_store_feeds_current_state(
         create_current_state_snapshot,
         download_transformed_data,
     )
-    from application_sdk.execution._temporal import activity_utils
 
     staging = tmp_path / "staging"
-    monkeypatch.setattr(activity_utils, "TEMPORARY_PATH", str(staging))
+    monkeypatch.setattr(constants, "TEMPORARY_PATH", str(staging))
     output_path = staging / "artifacts/apps/oracle/workflows/wf-1/run-1"
     run_prefix = "artifacts/apps/oracle/workflows/wf-1/run-1/transformed"
 

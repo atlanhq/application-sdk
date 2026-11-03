@@ -8,14 +8,34 @@ reviewer of a red CI leg actually depends on.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.testing.e2e import logs as logs_mod
 from application_sdk.testing.e2e.logs import LogCollector
 from application_sdk.testing.harness.cluster import PodPhase, PodState
+from tests.unit.private_stdlib import private_stdlib
+
+
+@pytest.fixture(autouse=True)
+def _private_asyncio() -> Iterator[None]:
+    """Give the collector its own ``asyncio`` so a patched
+    ``create_subprocess_exec`` reaches nothing else on the worker."""
+    with private_stdlib(logs_mod, "asyncio"):
+        yield
+
+
+def _local_asyncio() -> ModuleType:
+    """The collector's private ``asyncio`` copy, the one a test patches."""
+    local = logs_mod.asyncio
+    assert local is not asyncio, "the _private_asyncio fixture is not active"
+    return local
 
 
 def _make_proc(stdout: bytes = b"log output", returncode: int = 0) -> MagicMock:
@@ -83,7 +103,9 @@ def output_dir(tmp_path: Path) -> Path:
 
 @pytest.mark.asyncio
 async def test_collect_creates_output_dir(output_dir: Path):
-    with patch("asyncio.create_subprocess_exec", return_value=_make_proc()):
+    with patch.object(
+        _local_asyncio(), "create_subprocess_exec", return_value=_make_proc()
+    ):
         collector = LogCollector("test-ns", output_dir, reader=_FakeReader([]))
         await collector.collect()
 
@@ -92,8 +114,9 @@ async def test_collect_creates_output_dir(output_dir: Path):
 
 @pytest.mark.asyncio
 async def test_collect_writes_pods_wide(output_dir: Path):
-    with patch(
-        "asyncio.create_subprocess_exec",
+    with patch.object(
+        _local_asyncio(),
+        "create_subprocess_exec",
         return_value=_make_proc(stdout=b"NAME   READY   STATUS\npod-1  1/1  Running"),
     ):
         collector = LogCollector("test-ns", output_dir, reader=_FakeReader([]))
@@ -108,7 +131,9 @@ async def test_collect_writes_pods_wide(output_dir: Path):
 async def test_collect_writes_container_logs(output_dir: Path):
     reader = _FakeReader([_pod("my-pod", handler=0)], log_text="handler log line")
 
-    with patch("asyncio.create_subprocess_exec", return_value=_make_proc()):
+    with patch.object(
+        _local_asyncio(), "create_subprocess_exec", return_value=_make_proc()
+    ):
         collector = LogCollector("test-ns", output_dir, reader=reader)
         await collector.collect()
 
@@ -130,7 +155,9 @@ async def test_collect_writes_previous_logs_on_restart(output_dir: Path):
     """A crash loop's actual cause is in the *previous* container's output."""
     reader = _FakeReader([_pod("crash-pod", worker=2)], log_text="crash logs")
 
-    with patch("asyncio.create_subprocess_exec", return_value=_make_proc()):
+    with patch.object(
+        _local_asyncio(), "create_subprocess_exec", return_value=_make_proc()
+    ):
         collector = LogCollector("test-ns", output_dir, reader=reader)
         await collector.collect()
 
@@ -147,7 +174,7 @@ async def test_collect_describes_every_pod(output_dir: Path):
         commands.append(args)
         return _make_proc()
 
-    with patch("asyncio.create_subprocess_exec", side_effect=_record):
+    with patch.object(_local_asyncio(), "create_subprocess_exec", side_effect=_record):
         collector = LogCollector(
             "test-ns", output_dir, reader=_FakeReader([_pod("my-pod", handler=0)])
         )
@@ -159,8 +186,9 @@ async def test_collect_describes_every_pod(output_dir: Path):
 
 @pytest.mark.asyncio
 async def test_collect_events_writes_events_file(output_dir: Path):
-    with patch(
-        "asyncio.create_subprocess_exec",
+    with patch.object(
+        _local_asyncio(),
+        "create_subprocess_exec",
         return_value=_make_proc(stdout=b"Warning BackOff  ..."),
     ):
         collector = LogCollector("test-ns", output_dir, reader=_FakeReader([]))
@@ -174,8 +202,10 @@ async def test_collect_events_writes_events_file(output_dir: Path):
 @pytest.mark.asyncio
 async def test_collect_never_raises_on_subprocess_error(output_dir: Path):
     """LogCollector is best-effort — subprocess failures must not propagate."""
-    with patch(
-        "asyncio.create_subprocess_exec", side_effect=OSError("kubectl not found")
+    with patch.object(
+        _local_asyncio(),
+        "create_subprocess_exec",
+        side_effect=OSError("kubectl not found"),
     ):
         collector = LogCollector("test-ns", output_dir, reader=_FakeReader([]))
         # Should not raise
@@ -195,8 +225,10 @@ async def test_an_unreadable_pod_listing_still_collects_the_namespace_artefacts(
     """
     reader = _FakeReader(RuntimeError("cluster unreachable"))
 
-    with patch(
-        "asyncio.create_subprocess_exec", return_value=_make_proc(stdout=b"wide output")
+    with patch.object(
+        _local_asyncio(),
+        "create_subprocess_exec",
+        return_value=_make_proc(stdout=b"wide output"),
     ):
         collector = LogCollector("test-ns", output_dir, reader=reader)
         await collector.collect()
@@ -212,7 +244,9 @@ async def test_an_unreadable_container_log_does_not_stop_the_rest(output_dir: Pa
         side_effect=RuntimeError("forbidden")
     )
 
-    with patch("asyncio.create_subprocess_exec", return_value=_make_proc()):
+    with patch.object(
+        _local_asyncio(), "create_subprocess_exec", return_value=_make_proc()
+    ):
         collector = LogCollector("test-ns", output_dir, reader=reader)
         await collector.collect()
 
@@ -265,7 +299,9 @@ async def test_container_logs_are_written_as_utf8_not_as_the_locale_encoding(
         return real_write_text(self, data, **kwargs)
 
     with (
-        patch("asyncio.create_subprocess_exec", return_value=_make_proc()),
+        patch.object(
+            _local_asyncio(), "create_subprocess_exec", return_value=_make_proc()
+        ),
         patch.object(Path, "write_text", _record),
     ):
         collector = LogCollector("test-ns", output_dir, reader=reader)
@@ -293,7 +329,7 @@ async def test_the_kubectl_artefacts_pin_the_readers_context(output_dir: Path):
 
     reader = _FakeReader([_pod("my-pod", handler=0)], kube_context="e2e-gcp")
 
-    with patch("asyncio.create_subprocess_exec", side_effect=_record):
+    with patch.object(_local_asyncio(), "create_subprocess_exec", side_effect=_record):
         collector = LogCollector("test-ns", output_dir, reader=reader)
         await collector.collect()
         await collector.collect_events()
@@ -313,7 +349,7 @@ async def test_no_context_named_leaves_the_kubectl_argv_alone(output_dir: Path):
         commands.append(args)
         return _make_proc()
 
-    with patch("asyncio.create_subprocess_exec", side_effect=_record):
+    with patch.object(_local_asyncio(), "create_subprocess_exec", side_effect=_record):
         collector = LogCollector(
             "test-ns", output_dir, reader=_FakeReader([_pod("my-pod", handler=0)])
         )

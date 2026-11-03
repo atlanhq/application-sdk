@@ -264,6 +264,15 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
+      "message": "TEMPORARY_PATH is deprecated; use application_sdk.constants.TEMPORARY_PATH \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.execution._temporal.activity_utils",
+      "removal_version": "4.0.0",
+      "symbol": "TEMPORARY_PATH"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
       "message": "APPLICATION_VERSION is deprecated; use application_sdk.constants.APPLICATION_VERSION \u2014 the same constant, at the module that owns it. Will be removed in v3.41.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.interceptors.log",
@@ -426,7 +435,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": "JsonFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with orjson / json. See docs/agents/coding-standards.md.",
+      "message": "JsonFileReader is deprecated and will be removed in v4.0. Migrate now: declare the upstream artifact as a FileReference field on your task's typed Input \u2014 the SDK's activity interceptor auto-materialises it to a local path before the task runs (with sha256 sidecar verification + parallel transfers), then read it directly with orjson / json. This reader coerces values through pandas (an int column with a missing key comes back as float, 3 \u2192 3.0; the missing key as NaN); orjson returns the values in the file. Fix callers that relied on the coercion: row.get(key) for an optional key (row[key] raises KeyError), `is None` for NaN checks, and record any value formatted into a published key or name, since 3.0 becomes 3. See docs/agents/coding-standards.md.",
       "migration_target": true,
       "module": "application_sdk.storage.formats.json",
       "removal_version": "4.0",
@@ -498,7 +507,7 @@
     {
       "kind": "class",
       "marker_via": "warn",
-      "message": " subclasses BaseMetadataExtractor which is deprecated. Use application_sdk.templates.SqlApp instead. Will be removed in v4.0.0.",
+      "message": " subclasses BaseMetadataExtractor which is deprecated. Use application_sdk.app.App for non-SQL sources, or application_sdk.templates.SqlApp for SQL sources, instead. Will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.templates.base_metadata_extractor",
       "removal_version": "4.0.0",

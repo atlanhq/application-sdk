@@ -1655,9 +1655,13 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
 
     So a not-found is only source-attributable when it is *provably* an absence:
     no cause at all, or a cause that is itself a definitive
-    ``SecretNotFoundError``. Anything else is a collapsed plumbing failure and
-    fails open.
+    ``SecretNotFoundError`` or ``CredentialConfigNotFoundError``. The latter is
+    raised only after the object store's not-found re-read ladder is exhausted.
+    Anything else is a collapsed plumbing failure and fails open.
     """
+    from application_sdk.infrastructure.credential_vault import (  # noqa: PLC0415 — avoid import cycle at module load
+        CredentialConfigNotFoundError,
+    )
     from application_sdk.infrastructure.secrets import (  # noqa: PLC0415 — avoid import cycle at module load
         SecretNotFoundError,
     )
@@ -1665,7 +1669,9 @@ def _is_definitive_credential_absence(exc: BaseException) -> bool:
     if not isinstance(exc, CredentialNotFoundError):
         return False
     cause = exc.__cause__ or exc.cause
-    return cause is None or isinstance(cause, SecretNotFoundError)
+    return cause is None or isinstance(
+        cause, (SecretNotFoundError, CredentialConfigNotFoundError)
+    )
 
 
 def _current_attempt() -> int:
@@ -2203,6 +2209,13 @@ def build_preflight_gate_activity(
             failed advisory row. Clean proceeds, skips and soft-mode verdict
             ``would_block`` stay INFO.
 
+            A ``blocked`` verdict or unidentifiable-connection row passes its
+            block error as ``exc_info``. Body is the pinned event name, and the
+            run log panel shows the reason only from a record's
+            ``exception.message``. The error is built, not raised, so it brings
+            the message without stack frames. An unverifiable source passes the
+            handler's own exception instead, in both modes.
+
             ``gate_duration_ms`` is measured here rather than summed from
             ``check_matrix``: per-check durations are handler-authored and a
             handler abandoned at ``start_to_close`` keeps running and reports a
@@ -2397,6 +2410,7 @@ def build_preflight_gate_activity(
                     PreflightClassification.VERDICT,
                     primary=block_error.details[0],
                     audience=block_error.details[0].audience.value,
+                    exc_info=block_error,
                 )
                 raise block_error
 
@@ -2578,6 +2592,7 @@ def build_preflight_gate_activity(
                     PreflightClassification.VERDICT,
                     audience=block_error.details[0].audience.value,
                     primary=block_error.details[0],
+                    exc_info=block_error if blocks else None,
                 )
                 if blocks:
                     raise block_error

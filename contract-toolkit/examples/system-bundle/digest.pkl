@@ -1,0 +1,20 @@
+/// `digest` entrypoint of the system-bundle example: a second UI-less system
+/// sub-contract with its own `inputs`.
+amends "../../src/App.pkl"
+
+name = "digest"
+displayName = "Digest"
+icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
+type = "system"
+workflowType = "DigestWorkflow"
+
+inputs {
+  ["input_prefix"] = new StringField {
+    required = true
+    doc = "Object-store prefix the upstream node wrote its output to."
+  }
+  ["max_items"] = new IntField { default = 100 }
+}
+
+// See usage-analysis.pkl.
+inputContractToolkitImport = "../../../../../src/App.pkl"

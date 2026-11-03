@@ -301,6 +301,9 @@ async def test_retry_is_isolated_from_a_live_writer_in_current_state(
                 pass
             i += 1
             started.set()
+            # Yield between files: a loop that never sleeps holds the GIL
+            # against the retry under test and every other test on the box.
+            stop.wait(0.001)
 
     writer = threading.Thread(target=_abandoned_attempt_copy, daemon=True)
     writer.start()
@@ -327,6 +330,9 @@ async def test_retry_is_isolated_from_a_live_writer_in_current_state(
     finally:
         stop.set()
         writer.join(timeout=5)
+    # Still writing would race tmp_path's teardown (the ENOTEMPTY cleanup
+    # failure) and make the assertions below read a moving tree.
+    _require(not writer.is_alive(), "the abandoned-attempt writer must stop")
 
     _require(read.current_state_available, "the retry must find the seeded state")
     assert read.current_state_path == "", "the probe must not download anything"

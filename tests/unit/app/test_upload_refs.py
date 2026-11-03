@@ -25,6 +25,7 @@ from application_sdk.contracts.storage import (
 )
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
 from application_sdk.storage.errors import UnplaceableDeclaredFileError
+from application_sdk.validation import AssetCreationRules
 
 SOURCE = "artifacts/apps/a/workflows/wf-1/run-1/transformed"
 DEST = "artifacts/apps/atlan/workflows/wf-1/run-1/transformed"
@@ -151,7 +152,10 @@ class TestUploadRefs(_ResetsRegistries):
         # None of these refs is on this pod (their local paths do not exist), so
         # each is handed over by store key for the incomplete-batch warning.
         self.validation_hook.assert_awaited_once_with(
-            [], app._app_name, not_local=[f.ref.storage_path for f in files]
+            [],
+            app._app_name,
+            not_local=[f.ref.storage_path for f in files],
+            creation_rules=frozenset(),
         )
         # ...and never again per file inside the upload.
         assert all(
@@ -188,6 +192,49 @@ class TestUploadRefs(_ResetsRegistries):
             [str(local)],
             app._app_name,
             not_local=[f"{SOURCE}/column/entities.json"],
+            creation_rules=frozenset(),
+        )
+
+    async def test_the_apps_creation_rules_reach_the_validation(self) -> None:
+        rules = frozenset({AssetCreationRules.SQL_PARENTS})
+        app = self._app()
+        type(app).asset_validation_rules = rules
+        try:
+            with (
+                self._patch_upload(app),
+                mock.patch.object(
+                    app, "_verify_refs_impl", new_callable=mock.AsyncMock
+                ),
+            ):
+                await app.upload_refs(
+                    UploadRefsInput(
+                        files=[DeclaredFile(ref=_ref("table"))],
+                        source_prefix=SOURCE,
+                        prefix=DEST,
+                    )
+                )
+        finally:
+            del type(app).asset_validation_rules
+        assert self.validation_hook.await_args.kwargs["creation_rules"] == rules
+
+    async def test_a_single_upload_passes_the_apps_creation_rules(self) -> None:
+        from application_sdk.contracts.storage import UploadInput
+
+        class _Stop(Exception):
+            pass
+
+        rules = frozenset({AssetCreationRules.SQL_PARENTS})
+        app = self._app()
+        type(app).asset_validation_rules = rules
+        # The hook runs before any transfer; stop there so no store is touched.
+        self.validation_hook.side_effect = _Stop
+        try:
+            with pytest.raises(_Stop):
+                await app._upload_impl(UploadInput(local_path="/tmp/transformed"))
+        finally:
+            del type(app).asset_validation_rules
+        self.validation_hook.assert_awaited_once_with(
+            "/tmp/transformed", app._app_name, creation_rules=rules
         )
 
     async def test_a_label_names_the_leaf(self) -> None:

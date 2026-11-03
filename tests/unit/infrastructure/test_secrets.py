@@ -2,8 +2,10 @@
 
 import json
 import os
+import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from application_sdk.errors.categories import FailureCategory
@@ -15,6 +17,7 @@ from application_sdk.infrastructure.secrets import (
     EnvironmentSecretStore,
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreNotConfiguredError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
     get_deployment_secret,
@@ -373,7 +376,7 @@ class TestGetDeploymentSecret:
             patch("application_sdk.constants.DEPLOYMENT_NAME", "local"),
             patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
         ):
-            result = await get_deployment_secret("any_key")
+            result = await get_deployment_secret("any_key", raise_on_error=False)
 
         assert result is None
 
@@ -391,7 +394,7 @@ class TestGetDeploymentSecret:
                 side_effect=Exception("not found"),
             ),
         ):
-            result = await get_deployment_secret("MY_KEY")
+            result = await get_deployment_secret("MY_KEY", raise_on_error=False)
 
         assert result is None
 
@@ -421,7 +424,7 @@ class TestGetDeploymentSecret:
                 return_value=mock_client,
             ),
         ):
-            result = await get_deployment_secret("DB_HOST")
+            result = await get_deployment_secret("DB_HOST", raise_on_error=False)
 
         assert result == "db.example.com"
 
@@ -457,7 +460,7 @@ class TestGetDeploymentSecret:
                 return_value=mock_client,
             ),
         ):
-            result = await get_deployment_secret("DB_PORT")
+            result = await get_deployment_secret("DB_PORT", raise_on_error=False)
 
         assert result == "5432"
 
@@ -471,6 +474,246 @@ class TestGetDeploymentSecret:
                 side_effect=RuntimeError("Dapr unavailable"),
             ),
         ):
-            result = await get_deployment_secret("ANY_KEY")
+            result = await get_deployment_secret("ANY_KEY", raise_on_error=False)
 
         assert result is None
+
+
+class TestGetDeploymentSecretSingleEntryFallback:
+    """The single-key fallback must never return a field of a different secret."""
+
+    async def test_does_not_return_inner_field_of_unwrapped_json_secret(
+        self,
+    ) -> None:
+        # The secret named DB_PORT holds a JSON document without a DB_PORT
+        # field. process_secret_data unwraps it to {"user": "admin"}; the
+        # single-entry fallback must not hand back "admin" as the port.
+        mock_client = MagicMock(
+            get_secret=AsyncMock(
+                side_effect=[
+                    {"ATLAN_DEPLOYMENT_SECRETS": json.dumps({"OTHER": "x"})},
+                    {"DB_PORT": json.dumps({"user": "admin"})},
+                ]
+            ),
+            close=AsyncMock(),
+        )
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "prod"),
+            patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
+            patch(
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                return_value=mock_client,
+            ),
+        ):
+            result = await get_deployment_secret("DB_PORT", raise_on_error=False)
+
+        assert result != "admin"
+        assert result == json.dumps({"user": "admin"})
+
+
+def _dapr_secret_error(
+    status: int, error_code: str, message: str
+) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", "http://localhost:3500/v1.0/secrets/store/k")
+    response = httpx.Response(
+        status, json={"errorCode": error_code, "message": message}, request=request
+    )
+    return httpx.HTTPStatusError("dapr error", request=request, response=response)
+
+
+def _not_found(key: str) -> httpx.HTTPStatusError:
+    return _dapr_secret_error(
+        500,
+        "ERR_SECRET_GET",
+        f"failed getting secret with key {key} from secret store "
+        f"deployment-secret-store: secret {key} not found",
+    )
+
+
+@pytest.fixture
+def _deployed():
+    with (
+        patch("application_sdk.constants.DEPLOYMENT_NAME", "prod"),
+        patch("application_sdk.constants.LOCAL_ENVIRONMENT", "local"),
+        patch(
+            "application_sdk.constants.DEPLOYMENT_SECRET_STORE_NAME",
+            "deployment-secret-store",
+        ),
+        patch(
+            "application_sdk.constants.DEPLOYMENT_SECRET_PATH",
+            "ATLAN_DEPLOYMENT_SECRETS",
+        ),
+    ):
+        yield
+
+
+def _client(*responses: object) -> MagicMock:
+    return MagicMock(
+        get_secret=AsyncMock(side_effect=list(responses)), close=AsyncMock()
+    )
+
+
+def _patch_client(client: MagicMock):
+    return patch(
+        "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+        return_value=client,
+    )
+
+
+@pytest.mark.usefixtures("_deployed")
+class TestGetDeploymentSecretRaiseOnError:
+    """raise_on_error=True: typed failures and the cold-start retry."""
+
+    async def test_retries_cold_start_transient_then_returns_value(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        client = _client(
+            httpx.ConnectError("connection refused"),
+            {"ATLAN_DEPLOYMENT_SECRETS": json.dumps({"DB_HOST": "db.example.com"})},
+        )
+        with _patch_client(client):
+            result = await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+        assert result == "db.example.com"
+        assert client.get_secret.await_count == 2
+
+    async def test_cold_start_exhausted_raises_unreachable(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        client = MagicMock(
+            get_secret=AsyncMock(side_effect=httpx.ConnectError("refused")),
+            close=AsyncMock(),
+        )
+        with _patch_client(client), pytest.raises(SecretStoreUnreachableError) as ei:
+            await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+        assert ei.value.component == "deployment-secret-store"
+        assert ei.value.attempts == 2
+
+    async def test_missing_key_raises_not_found(self) -> None:
+        client = _client(
+            {"ATLAN_DEPLOYMENT_SECRETS": json.dumps({"OTHER": "x"})},
+            _not_found("DB_HOST"),
+        )
+        with _patch_client(client), pytest.raises(SecretNotFoundError) as ei:
+            await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+        assert ei.value.secret_name == "DB_HOST"
+
+    async def test_missing_bundle_falls_through_to_single_key(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"DB_HOST": "h"})
+        with _patch_client(client):
+            result = await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+        assert result == "h"
+
+    async def test_store_failure_raises_store_error_with_cause(self) -> None:
+        failure = _dapr_secret_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key ATLAN_DEPLOYMENT_SECRETS from secret "
+            "store deployment-secret-store: AccessDeniedException: denied",
+        )
+        client = _client(failure)
+        with _patch_client(client), pytest.raises(SecretStoreError) as ei:
+            await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+        assert not isinstance(ei.value, SecretNotFoundError)
+        assert ei.value.cause is failure
+        # A store failure never reaches the single-key lookup.
+        assert client.get_secret.await_count == 1
+
+    async def test_local_environment_raises_not_configured(self) -> None:
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "local"),
+            pytest.raises(SecretStoreNotConfiguredError),
+        ):
+            await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+    async def test_sole_entry_under_another_name_is_the_value(self) -> None:
+        # A Kubernetes secret named DB_PASSWORD whose one data key is "password".
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"password": "pw"})
+        with _patch_client(client):
+            result = await get_deployment_secret("DB_PASSWORD", raise_on_error=True)
+
+        assert result == "pw"
+
+
+@pytest.mark.usefixtures("_deployed")
+class TestGetDeploymentSecretDeprecatedDefault:
+    async def test_omitting_raise_on_error_warns_and_returns_none(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), _not_found("K"))
+        with _patch_client(client), pytest.warns(DeprecationWarning, match="v4.0"):
+            result = await get_deployment_secret("K")
+
+        assert result is None
+
+    async def test_explicit_false_does_not_warn(self) -> None:
+        client = _client({"ATLAN_DEPLOYMENT_SECRETS": json.dumps({"K": "v"})})
+        with _patch_client(client), warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            result = await get_deployment_secret("K", raise_on_error=False)
+
+        assert result == "v"
+
+    async def test_legacy_mode_does_not_retry_a_cold_sidecar(self) -> None:
+        client = MagicMock(
+            get_secret=AsyncMock(side_effect=httpx.ConnectError("refused")),
+            close=AsyncMock(),
+        )
+        with _patch_client(client):
+            result = await get_deployment_secret("K", raise_on_error=False)
+
+        assert result is None
+        assert client.get_secret.await_count == 1
+
+
+@pytest.mark.usefixtures("_deployed")
+class TestGetDeploymentSecretEmptyValueIsAbsent:
+    """The local.env store answers an unset variable with "" instead of an error."""
+
+    async def test_empty_single_key_value_raises_not_found(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"DB_PASSWORD": ""})
+        with _patch_client(client), pytest.raises(SecretNotFoundError):
+            await get_deployment_secret("DB_PASSWORD", raise_on_error=True)
+
+    async def test_empty_bundle_value_falls_through_to_single_key(self) -> None:
+        client = _client(
+            {"ATLAN_DEPLOYMENT_SECRETS": json.dumps({"DB_PASSWORD": ""})},
+            {"DB_PASSWORD": "pw"},
+        )
+        with _patch_client(client):
+            result = await get_deployment_secret("DB_PASSWORD", raise_on_error=True)
+
+        assert result == "pw"
+
+    async def test_empty_sole_entry_raises_not_found(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"password": ""})
+        with _patch_client(client), pytest.raises(SecretNotFoundError):
+            await get_deployment_secret("DB_PASSWORD", raise_on_error=True)
+
+    async def test_legacy_mode_returns_none_for_empty_value(self) -> None:
+        client = _client(_not_found("ATLAN_DEPLOYMENT_SECRETS"), {"DB_PASSWORD": ""})
+        with _patch_client(client):
+            result = await get_deployment_secret("DB_PASSWORD", raise_on_error=False)
+
+        assert result is None
+
+
+@pytest.mark.usefixtures("_deployed")
+class TestGetDeploymentSecretClientConstruction:
+    async def test_construction_failure_raises_non_retryable_store_error(
+        self,
+    ) -> None:
+        failure = httpx.InvalidURL("Invalid port: 'abc'")
+        with (
+            patch(
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                side_effect=failure,
+            ),
+            pytest.raises(SecretStoreError) as ei,
+        ):
+            await get_deployment_secret("DB_HOST", raise_on_error=True)
+
+        assert ei.value.cause is failure
+        assert ei.value.effective_retryable is False

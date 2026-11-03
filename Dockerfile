@@ -75,6 +75,19 @@ ENV UV_NO_CACHE=1 \
     DAFT_ANALYTICS_ENABLED=0 \
     ATLAN_CONTRACT_GENERATED_DIR=/app/app/generated
 
+# Point grpcio at the image's system CA bundle.
+#
+# The PyPI `grpcio` wheel ships its own `roots.pem` and uses it instead of the
+# system trust store, so a fix to `ca-certificates-bundle` in the base image
+# never reaches it. That left gRPC-over-TLS clients (e.g. Google Cloud SDKs)
+# trusting the compromised emSign ECC Root CA - G3 after the base was rebuilt
+# on 20260909-r3 (GHSA-6q48-6c7w-9gw2). With this set, grpcio follows the same
+# bundle as OpenSSL (SSL_CERT_FILE), so trust-store fixes land in one place.
+#
+# Only the default roots change: a client that passes its own
+# `root_certificates` (e.g. a customer-supplied CA) is unaffected.
+ENV GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
+
 # Copy entrypoint script for graceful shutdown handling
 COPY --chown=appuser:appuser entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

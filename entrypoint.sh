@@ -27,6 +27,8 @@
 #   DAPR_GRACEFUL_SHUTDOWN_SECONDS  - How long daprd waits for in-flight requests after
 #                                     receiving SIGTERM (default: 3600). Must be >=
 #                                     APP_GRACEFUL_SHUTDOWN_TIMEOUT.
+#   DAPR_STOP_TIMEOUT_SECONDS       - How long to wait for daprd to exit once the Python
+#                                     app has exited, before killing it (default: 30)
 
 set -eu
 
@@ -52,6 +54,7 @@ export DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
 # Must be >= APP_GRACEFUL_SHUTDOWN_TIMEOUT and < terminationGracePeriodSeconds
 # so Kubernetes always gets the last word.
 export DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-3600}"
+DAPR_STOP_TIMEOUT_SECONDS="${DAPR_STOP_TIMEOUT_SECONDS:-30}"
 
 # daprd binds the internal port first, so a clash kills its API server ~10s
 # later while the app keeps running. Fail here instead, with the cause.
@@ -69,18 +72,43 @@ APP_PID=""
 # ---------------------------------------------------------------------------
 # Signal handling — forward SIGTERM to Python first, stop daprd after it exits
 # ---------------------------------------------------------------------------
+# Once the app has exited, daprd has nothing left to do: inbound pub/sub and
+# bindings have no app to deliver to, and the app has no outbound call in
+# flight. Its graceful window must not keep the pod up.
+stop_daprd() {
+    kill -TERM "${DAPRD_PID}" 2>/dev/null || true
+    waited=0
+    while kill -0 "${DAPRD_PID}" 2>/dev/null && [ "${waited}" -lt "${DAPR_STOP_TIMEOUT_SECONDS}" ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if kill -0 "${DAPRD_PID}" 2>/dev/null; then
+        echo "[entrypoint] daprd still running after ${DAPR_STOP_TIMEOUT_SECONDS}s, killing it"
+        kill -KILL "${DAPRD_PID}" 2>/dev/null || true
+    fi
+    wait "${DAPRD_PID}" 2>/dev/null || true
+}
+
+# A graceful stop exits 0. Exit code 3 is the app's post-drain deadline cutting
+# a hung shutdown short; pass it through so it shows as the container's exit code.
+POST_DRAIN_EXIT_CODE=3
+
 forward_signal() {
+    signal_exit=0
     if [ -n "${APP_PID}" ]; then
         echo "[entrypoint] Forwarding SIGTERM to Python app PID ${APP_PID}"
         kill -TERM "${APP_PID}" 2>/dev/null || true
-        wait "${APP_PID}" 2>/dev/null || true
+        app_status=0
+        wait "${APP_PID}" 2>/dev/null || app_status=$?
+        if [ "${app_status}" -eq "${POST_DRAIN_EXIT_CODE}" ]; then
+            signal_exit=${POST_DRAIN_EXIT_CODE}
+        fi
     fi
     if [ -n "${DAPRD_PID}" ]; then
         echo "[entrypoint] Python exited, stopping daprd PID ${DAPRD_PID}"
-        kill -TERM "${DAPRD_PID}" 2>/dev/null || true
-        wait "${DAPRD_PID}" 2>/dev/null || true
+        stop_daprd
     fi
-    exit 0
+    exit ${signal_exit}
 }
 
 trap forward_signal SIGTERM SIGINT
@@ -184,8 +212,7 @@ fi
 # Stop daprd after the app exits (normal path — signal handler covers SIGTERM path)
 if kill -0 "${DAPRD_PID}" 2>/dev/null; then
     echo "[entrypoint] Stopping daprd"
-    kill -TERM "${DAPRD_PID}" 2>/dev/null || true
-    wait "${DAPRD_PID}" 2>/dev/null || true
+    stop_daprd
 fi
 
 exit ${EXIT_CODE}

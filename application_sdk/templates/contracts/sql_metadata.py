@@ -11,10 +11,12 @@ from typing import Annotated, Any, ClassVar
 import orjson
 from pydantic import Field, JsonValue, ValidationInfo, field_validator, model_validator
 
+from application_sdk._logging import get_logger
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
     normalize_legacy_filter_value,
     validate_filter_no_sql_injection,
+    validate_filter_regex_syntax,
 )
 from application_sdk.contracts.base import Input, Output, PublishInputMixin
 from application_sdk.contracts.types import (
@@ -31,7 +33,6 @@ from application_sdk.credentials.ingress import (
 from application_sdk.credentials.ref import CredentialRef
 from application_sdk.credentials.spec import AgentCredentialSpec
 from application_sdk.errors.wire import FailureDetails
-from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
 
@@ -343,7 +344,10 @@ class ExtractionInput(Input):
     @field_validator("include_filter", "exclude_filter", mode="after")
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
-        return _validate_filter_no_sql_injection(v)
+        _validate_filter_no_sql_injection(v)
+        # FND-501: a pattern no regex dialect compiles is rejected at
+        # submission, not at engine time.
+        return validate_filter_regex_syntax(v)
 
     # Also bound to ``exclude_table_regex`` so a connector subclass that
     # redeclares it as a plain ``str`` (every toolkit-generated
@@ -353,6 +357,7 @@ class ExtractionInput(Input):
     @classmethod
     def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
         validate_filter_no_sql_injection(v)
+        validate_filter_regex_syntax(v)
         return v
 
 
@@ -521,12 +526,16 @@ class ExtractionTaskInput(Input):
     @field_validator("include_filter", "exclude_filter", mode="after")
     @classmethod
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
-        return _validate_filter_no_sql_injection(v)
+        _validate_filter_no_sql_injection(v)
+        # FND-501: a pattern no regex dialect compiles is rejected at
+        # submission, not at engine time.
+        return validate_filter_regex_syntax(v)
 
     @field_validator("temp_table_regex", mode="after")
     @classmethod
     def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
         validate_filter_no_sql_injection(v)
+        validate_filter_regex_syntax(v)
         return v
 
 

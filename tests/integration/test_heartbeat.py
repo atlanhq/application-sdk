@@ -18,7 +18,16 @@ from application_sdk.execution.retry import NO_RETRY
 
 # ---------------------------------------------------------------------------
 # App/Input/Output classes at module level (see test_core_execution.py header).
+#
+# The worker throttles heartbeats to min(0.8 x timeout, 10s), so however often
+# the task beats, the server sees one at most every throttle interval. A 5s
+# timeout left 1s between that interval and the timeout for a loaded runner to
+# miss; 15s leaves 5s. Each task still runs past its timeout, which is the
+# subject.
 # ---------------------------------------------------------------------------
+
+_HEARTBEAT_TIMEOUT_SECONDS = 15
+_RUNS_FOR_SECONDS = 18
 
 
 class HbInput(Input):
@@ -30,11 +39,13 @@ class HbOutput(Output):
 
 
 class AutoHeartbeatApp(App):
-    @task(auto_heartbeat_seconds=2, heartbeat_timeout_seconds=5)
+    @task(
+        auto_heartbeat_seconds=2, heartbeat_timeout_seconds=_HEARTBEAT_TIMEOUT_SECONDS
+    )
     async def long_task(self, input: HbInput) -> HbOutput:
-        # Sleep 8s — exceeds heartbeat_timeout_seconds (5s) but
-        # auto_heartbeat fires every 2s keeping the task alive.
-        await asyncio.sleep(8)
+        # Outlives heartbeat_timeout_seconds, but auto_heartbeat fires every 2s
+        # keeping the task alive.
+        await asyncio.sleep(_RUNS_FOR_SECONDS)
         return HbOutput(done=True)
 
     async def run(self, input: HbInput) -> HbOutput:
@@ -50,10 +61,13 @@ class ManualHbOutput(Output):
 
 
 class ManualHeartbeatApp(App):
-    @task(auto_heartbeat_seconds=None, heartbeat_timeout_seconds=5)
+    @task(
+        auto_heartbeat_seconds=None,
+        heartbeat_timeout_seconds=_HEARTBEAT_TIMEOUT_SECONDS,
+    )
     async def heartbeat_task(self, input: ManualHbInput) -> ManualHbOutput:
-        # Manually heartbeat every 2s for a 6s total duration.
-        for _ in range(3):
+        # Manually heartbeat every 2s, for longer than the heartbeat timeout.
+        for _ in range(_RUNS_FOR_SECONDS // 2):
             await asyncio.sleep(2)
             self.heartbeat()
         return ManualHbOutput(done=True)
@@ -69,7 +83,7 @@ class ManualHeartbeatApp(App):
 
 @pytest.mark.integration
 async def test_auto_heartbeat_keeps_task_alive(run_worker, executor, reregister_app):
-    """P3.1: auto_heartbeat_seconds=2 keeps an 8s task alive past 5s timeout."""
+    """P3.1: auto_heartbeat_seconds=2 keeps an 18s task alive past a 15s timeout."""
     reregister_app(AutoHeartbeatApp)
     async with run_worker():
         context = AppContext(app_name=AutoHeartbeatApp._app_name, app_version="1.0.0")

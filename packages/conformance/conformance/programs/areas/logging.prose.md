@@ -64,6 +64,58 @@ _Read by `remediate-finding` when `finding.area == "logging"`._
 Consult the finding's `hint` and `message`, then read the actual source lines
 around `finding.line` in `finding.file` before proposing a fix.
 
+#### Pre-raise carve-out — one edit clears L004, E005 and L009
+
+A `logger.warning(...)` / `logger.error(...)` inside an `except` that sits
+within the three statements before a `raise` in the same block is an **L009
+site**, and the same line is usually reported by L004 and E005 as well.  The
+test: L009 also reports the line, or, reading the code, the call is one of
+the three statements immediately preceding a `raise` in the same statement
+list (a `raise` inside a nested `if`/`with` does not count).  A
+`raise HTTPException(...)` (fastapi/starlette) is never an L009 site: the
+framework answers the request from it without logging it, so the log is the
+only server-side record; resolve L004/E005 there as usual.
+
+At an L009 site, **do not enrich the log**: add neither `exc_info=True` nor
+the sanitized `sanitize_cause_repr(exc)` / `safe_traceback(exc)` arguments.
+Enriching clears L004 and E005 but leaves L009 standing, and the L009 fix
+then deletes the line that was just enriched: a block-tier fix gets undone
+by a later warn-tier one, churning the same lines through two PRs.  Apply
+L009's resolution in the same edit instead, in this order:
+
+1. **Delete the log line** when the exception has an upstream record (L009
+   below says what counts; for anything raised out of an `@task` method on a
+   v3 SDK worker, the SDK's `activity.ended` ERROR record is that record; on
+   a v2 app, confirm the caller logs it).  Deleting it may leave the handler
+   as a bare `except ...: raise`; that is fine only because the upstream
+   record still holds the failure.
+2. **Otherwise downgrade it to a sanitized DEBUG**, binding the redacted
+   cause and traceback to locals, and keep the raise: a bare `raise`, or a
+   classified typed error raised in its place.
+
+   ```python
+   from application_sdk.errors import safe_traceback, sanitize_cause_repr
+
+   try:
+       connect()
+   except ConnectionError as exc:
+       cause = sanitize_cause_repr(exc)
+       trace = safe_traceback(exc)
+       logger.debug("connect failed: %s\n%s", cause, trace)
+       raise
+   ```
+
+Never reduce the handler to a bare `raise` without an upstream record, even
+when the log line carries nothing the exception does not: on a path whose
+caller does not log the exception, that deletes the only record of the
+failure.  Keep the sanitized DEBUG instead.
+
+Both of these clear L004, E005 and L009 together: L004 and E005 inspect
+only `warning`/`error` calls, L009 matches only `warning`/`error`, and L008
+flags only `repr`/`str`/serialisation calls in a DEBUG argument, so the
+sanitizer calls do not trip it.  Say in the edit description which of the
+two you applied, and for a deletion, what the upstream record is.
+
 #### Credential-boundary contraindication — read before adding `exc_info=True`
 
 The raw exception from a database driver, an HTTP client or an auth call can
@@ -73,6 +125,10 @@ serialises the traceback *separately*, so it bypasses whatever redaction the
 message itself performs — adding it at such a site **creates a leak that was
 not there before**.  A production security review over the fleet remediation
 (FND-57) found exactly this shape in five connector repos.
+
+None of this applies at a pre-raise L009 site: there the line is deleted or
+downgraded (the carve-out above), never enriched, with or without a
+sanitizer.
 
 Before adding `exc_info=True` (L004, and the L005/L017 rewrites that add it),
 ask what the caught exception can carry.  If the `try` wraps a connect, an
@@ -106,7 +162,8 @@ recognised sanitizer name, so the call clears the rule the same way.
 whose arguments flow through a sanitizer as a deliberate no-traceback
 boundary (`suite/checks/_ast_common/_sanitizers.py`).  Recognition is **by
 name**: the callable must contain `redact`, `sanitiz`, `scrub_secret`,
-`mask_secret` or `safe_traceback`, or the argument must be a variable named
+`mask_secret`, `safe_traceback` or `safe_exception` (`safe_exception_frames`),
+or the argument must be a variable named
 for redacted output (`safe_traceback`, `redacted`, `sanitized`, `masked`,
 `scrubbed`).  The `application_sdk.errors` helpers above are public API and
 already match; an app-local helper named `clean_message` redacts correctly
@@ -141,9 +198,23 @@ report that site the same way.
   `logger.warning("msg")` → `logger.warning("msg", exc_info=True)`.
   If the call already has keyword arguments, append after them.
 
+  **Carve-out — pre-raise logs.** If the call is within the three
+  statements before a `raise` in the same block (an L009 site), do not add
+  `exc_info=True` and do not switch to the sanitized `safe_traceback` form.
+  Apply L009's resolution in the same edit, in this order: delete the line
+  when there is an upstream record (which may leave a bare `raise`; never
+  reduce the handler to one without that record); otherwise downgrade it to
+  a sanitized DEBUG through locals (`cause = sanitize_cause_repr(exc)`,
+  `trace = safe_traceback(exc)`, `logger.debug("...%s\n%s", cause, trace)`)
+  and keep the raise.  That one edit
+  clears L004, E005 and L009 together; enriching clears L004 and E005 only,
+  and the later L009 fix deletes the enriched line.  See "Pre-raise
+  carve-out" above.
+
   **Contraindication — redaction boundaries.** Never add `exc_info=True` when
   the call's arguments flow through a redaction helper (`redact*`, `sanitiz*`,
-  `safe_traceback`, `scrub_secret*`, `mask_secret*`) or an adjacent comment
+  `safe_traceback`, `safe_exception*`, `scrub_secret*`, `mask_secret*`) or an
+  adjacent comment
   says traceback capture is omitted on purpose: driver/API exception text can
   embed credentials (JDBC URLs, Authorization headers, OAuth bodies), and the
   separately-serialized traceback bypasses the redaction the code performs.
@@ -196,7 +267,10 @@ report that site the same way.
      other usages remain in the file.
   Classification is always `"judgment"` — the import change affects the whole
   file and requires verifying that no other symbols from the removed import
-  are still in use.
+  are still in use.  The finding is file-level: it sits on line 1, or on the
+  first line after a shebang and/or coding line (a coding line 2 also skips a
+  plain comment or blank line 1), and a suppression directive
+  belongs on that same line.
 
 - **L005 PrintInProductionCode** — replace `print(...)` with a logger call.
   Choose level from context:
@@ -296,11 +370,28 @@ report that site the same way.
   one summary after the loop (`logger.info("processed %d assets, %d skipped", total, skipped)`).
   A standalone INFO immediately followed by an unconditional `break` from the
   loop is already an at-most-once terminal summary; keep it there rather than
-  moving or demoting it.  This does not exempt a terminal summary repeated by
-  an unbounded enclosing loop.  Mirror `atlan-metabase-app
+  moving or demoting it.  An INFO at the end of a conditional branch immediately
+  followed by an unconditional `return` from the same function is also terminal;
+  this does not apply when a `finally: continue` overrides the return.  Plain
+  expressions, assignments, and `if`/`with` blocks that contain no `break`,
+  `continue`, `return`, `raise`, `try`, nested loop or nested scope (`def`/`class`) may sit between that INFO
+  and the `return` (a follow-up `if missing: logger.warning(...)` is fine).  A break
+  summary can repeat in an unbounded enclosing loop, while a return exits the
+  function.  A completion summary in the `else` suite of the outermost active
+  `for`, `async for` or `while` loop runs at most once on natural exhaustion (and
+  is skipped after `break`).  An inner-loop `else` under an unbounded outer loop
+  repeats and is still per-item.  Mirror `atlan-metabase-app
   app/extracts/process.py`, where the per-dashboard skip inside `process_assets`
   logs at DEBUG.  Do not simply delete a per-item call: the record is still
-  wanted at DEBUG.
+  wanted at DEBUG.  A throttled progress log is already a milestone and is
+  not reported: an INFO in the body of an `if` inside the loop whose test is
+  a modulo counter (`if count % 1000 == 0:`) or an elapsed-time threshold
+  (`if time.monotonic() - last_log >= 600:`), optionally `or`-ed with an `==`
+  final check (`or completed == total`).  The `else` of such an `if` is still
+  per-item, and so is an `or`-ed per-item filter: an `==` against a string,
+  `None` or `bool` literal or a field of the loop item
+  (`or item.status == "failed"`), or a time difference read from the loop item
+  itself (`now - ts > 5` for `ts` in the loop).
 
 - **L008 UnguardedExpensiveDebug** — an argument to `logger.debug()` is
   computed before the call, so it runs at every level.  Prefer making the
@@ -326,19 +417,56 @@ report that site the same way.
   and `no_new_findings` will not see it because the swallow was already there.
 
   So establish the caller first.  **If you can show the exception is logged
-  upstream** — the handler that catches this type logs it with `exc_info=True`
-  — delete the call; that is the shape `atlan-metabase-app app/connector.py`'s
+  upstream**, delete the call.  "Logged upstream" means the handler that
+  catches this type logs it with the traceback: `exc_info=True`, or the
+  sanitized-traceback form (`safe_traceback(exc)`, see the credential section
+  above).  That is the shape `atlan-metabase-app app/connector.py`'s
   `transform_data` has, raising `MissingTypenameInputError` with no log line
-  before it (as does `_build_client` for `MetabaseCredentialInputError`).  **If you
-  cannot** (no handler in the repo, or the handler swallows), do not delete:
-  **downgrade the level** to `logger.debug(...)`.  The rule matches only
-  `warning` and `error`, so a DEBUG line clears the finding, stops inflating
-  the error count, and keeps the local detail for whoever debugs it.
+  before it (as does `_build_client` for `MetabaseCredentialInputError`).
+
+  **On a v3 SDK, anything raised out of an `@task` method has an upstream
+  record.**  The SDK's activity log interceptor, which every v3 worker installs, catches every
+  exception that leaves an activity and logs an `activity.ended` record at
+  ERROR with `exc_info=True`
+  (`application_sdk/execution/_temporal/interceptors/log.py`).  Every v3 SDK
+  has an equivalent record: before 3.6.0 the default worker installed a
+  failure-logging interceptor that logged "Temporal activity failed" at ERROR
+  with `exc_info=True`.  On a v2 app, establish the caller as for any
+  non-activity path.  The one
+  exception is a preflight-gate block, which it logs at WARNING without a
+  traceback.  So when the `raise` propagates out of the task (nothing between
+  it and the task boundary catches and swallows it), deleting the pre-raise
+  log loses nothing.  **Non-activity paths have no such record.**  For a
+  handler method, preflight, or a helper called from them, check that the
+  caller really logs the exception; if you cannot show it, keep a sanitized
+  DEBUG.
+
+  **If you cannot** show an upstream record (no handler in the repo, or the
+  handler swallows), do not delete: **downgrade the level** to
+  `logger.debug(...)`, passing the exception only through
+  `sanitize_cause_repr(exc)` / `safe_traceback(exc)` bound to locals, never
+  raw `exc` or `exc_info=True`.  The rule matches only `warning` and `error`,
+  so a DEBUG line clears the finding, stops inflating the error count, and
+  keeps the local detail for whoever debugs it.  The sanitized DEBUG also
+  clears L004 and E005 at the same site, which inspect only `warning`/`error`.
 
   Keep the line at its current level only when it carries context the
   exception genuinely cannot (a loop index, the URL being retried) — then the
   honest fix is to move that context into the exception and delete the log.
   Say in the edit description which of the three cases you found.
+
+  The checker already exempts the provable form of that context, so a log
+  that matches it is never reported: outside any `except` handler, a log
+  whose non-constant value arguments share no name or attribute with the
+  arguments of the `raise Err(...)` right after it (`logger.error("bad
+  connection: keys=%s", list(connection.keys()))` before
+  `raise RequestInvalid("Connection is missing required properties")`).
+  Inside a handler the same line is still an L009 site, and the pre-raise
+  carve-out above applies unchanged.
+
+  A `raise HTTPException(...)` from fastapi or starlette is exempt wherever it
+  sits, handler or not: the framework turns it into a response and never logs
+  it, so the line before it is the only server-side record.  Keep that log.
 
 - **L010 CredentialInLogOutput** — BLOCK, and a security finding.  Log the
   credential's *name* or *type*, never its value: drop the offending argument

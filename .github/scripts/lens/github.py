@@ -101,6 +101,16 @@ class GitHub:
             return "unknown"
         return str((data or {}).get("status") or "unknown")
 
+    def merge_base(self, base: str, head: str) -> str:
+        """The merge base of `base...head` (what the PR's diff is against), or ""."""
+        try:
+            data = self._call(
+                "GET", f"/repos/{self.repo}/compare/{base}...{head}?per_page=1"
+            )
+        except GitHubError:
+            return ""
+        return str(((data or {}).get("merge_base_commit") or {}).get("sha") or "")
+
     def file_at(self, path: str, ref: str) -> str | None:
         q = urllib.parse.quote(path)
         try:
@@ -157,6 +167,13 @@ class GitHub:
             f"/repos/{self.repo}/actions/workflows/{workflow_file}/runs?per_page=50",
         )
         return list((data or {}).get("workflow_runs") or [])
+
+    def run_jobs(self, run_id: int) -> list[dict[str, Any]]:
+        """Jobs of a run's latest attempt (lens has one job, so one page)."""
+        data = self._call(
+            "GET", f"/repos/{self.repo}/actions/runs/{run_id}/jobs?per_page=100"
+        )
+        return list((data or {}).get("jobs") or [])
 
     # ---- writes --------------------------------------------------------
     def set_status(

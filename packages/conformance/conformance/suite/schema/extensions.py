@@ -194,6 +194,45 @@ class AtlanResultProperties(BaseModel):
         )
 
 
+SAFE_SWAP_PROPERTY = "atlan/safeSwap"
+
+
+class SafeSwapRequires(BaseModel):
+    """The lowest version of *package* the app must lock for the swap to import."""
+
+    package: str
+    min: str
+
+
+class SafeSwap(BaseModel):
+    """A finding whose fix is one fixed text change that keeps behaviour.
+
+    Set by a checker in ``result.properties["atlan/safeSwap"]`` only when the
+    replacement is the same object, or a public method that delegates to the
+    flagged one with the same signature, so the change cannot alter what the
+    app does.  The rule stays a migration rule; this marks one finding.
+
+    Apply it as: on the finding's line, ``find`` occurs exactly once; replace
+    it with ``replace``.  When ``find`` is not on that line exactly once, or
+    the app's lock has *package* below ``requires.min``, do not apply it.
+    """
+
+    id: str
+    """Recipe id: ``public-reexport`` (import path) or ``public-rename`` (method name)."""
+
+    find: str
+    replace: str
+    requires: SafeSwapRequires
+
+    def to_properties(self) -> dict[str, Any]:
+        return {SAFE_SWAP_PROPERTY: self.model_dump()}
+
+    @classmethod
+    def from_properties(cls, props: dict[str, Any]) -> SafeSwap | None:
+        raw = props.get(SAFE_SWAP_PROPERTY)
+        return cls.model_validate(raw) if isinstance(raw, dict) else None
+
+
 # ---------------------------------------------------------------------------
 # Run-level (run.properties)
 # ---------------------------------------------------------------------------

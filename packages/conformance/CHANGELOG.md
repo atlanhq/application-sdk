@@ -2,6 +2,103 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.53.1] - 2026-11-01
+
+### Bug fixes
+
+- FND-4386 migrate-storage decided defaults and key vs hand-off rule (#4604) ([b70ae24](https://github.com/atlanhq/application-sdk/commit/b70ae24))
+- L006 false positive on compliant code (1 repo) (#4645) ([049d279](https://github.com/atlanhq/application-sdk/commit/049d279))
+- O001 false positive on compliant code (1 repo) (#4648) ([c936442](https://github.com/atlanhq/application-sdk/commit/c936442))
+- D004 false positive on compliant code (1 repo) (#4650) ([490c0c3](https://github.com/atlanhq/application-sdk/commit/490c0c3))
+- FND-4385 P028 guidance keeps creator gaps open (#4603) ([a2e2ae9](https://github.com/atlanhq/application-sdk/commit/a2e2ae9))
+- FND-4313 v3 upgrade guide sends SQL metadata to SqlApp, query logs to App (#4552) ([d78c39e](https://github.com/atlanhq/application-sdk/commit/d78c39e))
+- T005 false positive on compliant code (1 repo) (#4652) ([b04fe85](https://github.com/atlanhq/application-sdk/commit/b04fe85))
+
+### Other changes
+
+- chore(deps): update non-critical python dependencies (#4519) ([28cc215](https://github.com/atlanhq/application-sdk/commit/28cc215))
+
+## [0.53.0] - 2026-10-28
+
+### Features
+
+- declared-source agent_json (format 2), normalized at ingress so apps need no change; refused refs go to the user [FND-4407] (#4610) ([a276a30](https://github.com/atlanhq/application-sdk/commit/a276a30))
+
+### Bug fixes
+
+- retire the Porter CNAB workflow that never ran (FND-4422) (#4623) ([ddaa95b](https://github.com/atlanhq/application-sdk/commit/ddaa95b))
+- stop E012 flagging validators, protocol dunders and build tooling (#4616) ([6e5caef](https://github.com/atlanhq/application-sdk/commit/6e5caef))
+- fix L006, L009 and L002 false positives (#4617) ([e25752b](https://github.com/atlanhq/application-sdk/commit/e25752b))
+- stop E004/E007/E009/E020 false positives with provable exemptions (#4619) ([d6750c1](https://github.com/atlanhq/application-sdk/commit/d6750c1))
+- block on a credential config the object store confirms missing (#4615) ([81a2dec](https://github.com/atlanhq/application-sdk/commit/81a2dec))
+
+## [0.52.1] - 2026-10-23
+
+### Bug fixes
+
+- FND-4311 K015 and P016 recognise apps on SDK template bases (#4551) ([2ee6f98](https://github.com/atlanhq/application-sdk/commit/2ee6f98))
+- FND-4315 P015 target shape by key set; retirement is one ledger status per merge (#4553) ([93555eb](https://github.com/atlanhq/application-sdk/commit/93555eb))
+- FND-4314 JsonFileReader notice keeps pandas values; run() ids from App context (#4550) ([95cb1b4](https://github.com/atlanhq/application-sdk/commit/95cb1b4))
+
+## [0.52.0] - 2026-10-22
+
+### Features
+
+- P023 follows one hop into sync helpers and covers the missing blocking calls (#4515) ([780d837](https://github.com/atlanhq/application-sdk/commit/780d837))
+- serve an app's real handler and metadata, config and file routes from the consolidated host (atlan-application-sdk-api) (#4058) ([e563097](https://github.com/atlanhq/application-sdk/commit/e563097))
+
+### Bug fixes
+
+- run per-entrypoint auth and metadata hooks over SDR (#4518) ([07e32eb](https://github.com/atlanhq/application-sdk/commit/07e32eb))
+- exempt E020 per-object 4xx skips from the raise fix (#4512) ([5774aba](https://github.com/atlanhq/application-sdk/commit/5774aba))
+- E007 accepts a per-item None after a durable residual record (#4491) ([aed2c4a](https://github.com/atlanhq/application-sdk/commit/aed2c4a))
+- resolve pre-raise logs with L009's fix instead of L004/E005 enrichment (#4492) ([2613e20](https://github.com/atlanhq/application-sdk/commit/2613e20))
+- K007 is not auto-fixable; Renovate owns the toolkit bump (#4493) ([f8b90d7](https://github.com/atlanhq/application-sdk/commit/f8b90d7))
+
+### Other changes
+
+- chore(deps): move conformance lock to authlib 1.9.1 (#4564) ([a21af5f](https://github.com/atlanhq/application-sdk/commit/a21af5f))
+- chore(deps): certifi>=2026.10.19 for the conformance lock and the api package (GHSA-6q48-6c7w-9gw2) (#4523) ([826c15a](https://github.com/atlanhq/application-sdk/commit/826c15a))
+
+## [0.51.1] - 2026-10-19
+
+### Bug fixes
+
+- break the 0.51.0 import cycle and gate releases on an installed-wheel smoke test (#4487) ([dd910c8](https://github.com/atlanhq/application-sdk/commit/dd910c8))
+
+## [0.51.0] - 2026-10-19
+
+### Features
+
+- FND-4155 re-export Temporal ApplicationError as TemporalApplicationError (#4464) ([a49e2dd](https://github.com/atlanhq/application-sdk/commit/a49e2dd))
+- E007 flags a broad except that logs then returns an empty sentinel [FND-4080] (#4455) ([5c3cc69](https://github.com/atlanhq/application-sdk/commit/5c3cc69))
+
+### Bug fixes
+
+- resync adds TWINGATE_SHARED_KEY to explicit tests.yaml secrets mappings [FND-4174] (#4481) ([33a3253](https://github.com/atlanhq/application-sdk/commit/33a3253))
+- FND-4162 migrate-orchestration skill lessons from sweep 1 (#4470) ([9ea48b7](https://github.com/atlanhq/application-sdk/commit/9ea48b7))
+- E012 false positive on compliant code (1 repo) (#4467) ([c8ca1be](https://github.com/atlanhq/application-sdk/commit/c8ca1be))
+- L006 false positive on compliant code (1 repo) (#4468) ([7fbf884](https://github.com/atlanhq/application-sdk/commit/7fbf884))
+- FND-4152 BaseMetadataExtractor notice names App for non-SQL sources (#4462) ([b8257f4](https://github.com/atlanhq/application-sdk/commit/b8257f4))
+- E010 false positive on compliant code (1 repo) (#4461) ([27560b3](https://github.com/atlanhq/application-sdk/commit/27560b3))
+- retry and classify the blobstorage gateway's transient "no Route matched" 404 (#4303) ([cfbfdff](https://github.com/atlanhq/application-sdk/commit/cfbfdff))
+
+### Other changes
+
+- chore(deps): update dependency ruff to v0.17.1 (#4451) ([71c8ac9](https://github.com/atlanhq/application-sdk/commit/71c8ac9))
+
+## [0.50.2] - 2026-10-16
+
+### Bug fixes
+
+- E007 false positive on compliant code (1 repo) (#4428) ([a998fcd](https://github.com/atlanhq/application-sdk/commit/a998fcd))
+- correct D003's fix guidance (1 repo) (#4427) ([045f420](https://github.com/atlanhq/application-sdk/commit/045f420))
+- correct O001's fix guidance (1 repo) (#4429) ([1682259](https://github.com/atlanhq/application-sdk/commit/1682259))
+- L006 false positive on compliant code (1 repo) (#4422) ([4d53dea](https://github.com/atlanhq/application-sdk/commit/4d53dea))
+- correct P019's fix guidance (1 repo) (#4423) ([71f76d8](https://github.com/atlanhq/application-sdk/commit/71f76d8))
+- E016 false positive on compliant code (1 repo) (#4413) ([1f701b5](https://github.com/atlanhq/application-sdk/commit/1f701b5))
+- retire Dependabot config in favour of the Renovate preset [FND-4034] (#4415) ([fc19e58](https://github.com/atlanhq/application-sdk/commit/fc19e58))
+
 ## [0.50.1] - 2026-10-15
 
 ### Bug fixes

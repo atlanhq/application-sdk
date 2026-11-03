@@ -7,6 +7,7 @@ deadline, so a regression fails the test instead of hanging the suite.
 """
 
 import asyncio
+import concurrent.futures
 import functools
 import threading
 import time
@@ -17,11 +18,15 @@ import pytest
 from application_sdk._runtime import offload
 from application_sdk._runtime.offload import CancelHandle, run_in_thread
 
-#: How long a blocked call waits before releasing itself.
-_RELEASE_AFTER = 5.0
+#: How long a blocked call waits before releasing itself. Only a regression
+#: ever waits this long.
+_RELEASE_AFTER = 30.0
 
-#: How quickly a cancel must take effect.
-_PROMPT = 1.0
+#: How long to wait for something a healthy run does at once (a cancel taking
+#: effect, a thread starting). Generous: it decides how long a regression takes
+#: to fail, never whether a healthy run passes. A tighter, elapsed-time bar
+#: measured thread-pool spin-up on loaded runners instead (FND-4233).
+_PROMPT = 10.0
 
 
 class _Driver:
@@ -56,44 +61,60 @@ async def _wait_for(event: threading.Event) -> None:
         await asyncio.sleep(0.01)
 
 
-async def _cancel_and_time(task: "asyncio.Task[object]") -> float:
-    start = time.monotonic()
+async def _cancel(task: "asyncio.Task[object]") -> None:
+    """Cancel *task* and require its unwind to finish, not wait out the driver."""
     task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=_PROMPT)
+    assert task in done, f"cancelled task still unwinding after {_PROMPT}s"
     with pytest.raises(asyncio.CancelledError):
         await task
-    return time.monotonic() - start
+
+
+#: Width of the pool :func:`saturated_pool` fills.
+_SATURATED_POOL_WIDTH = 4
 
 
 @pytest.fixture
-def saturated_pool() -> Iterator[int]:
-    """Occupy every ``sdk-blocking-`` slot but one; yields the slots taken."""
+def saturated_pool() -> Iterator[concurrent.futures.ThreadPoolExecutor]:
+    """A private blocking pool with every slot but one occupied.
+
+    Private, bound with :func:`offload.blocking_executor` in the test body,
+    because the process-wide ``sdk-blocking-`` pool is shared with every test
+    on this xdist worker: a thread still draining from an earlier test takes a
+    slot this one needs, and the Barrier below never trips.
+    """
+    pool = concurrent.futures.ThreadPoolExecutor(
+        _SATURATED_POOL_WIDTH, thread_name_prefix="test-saturated-"
+    )
     release = threading.Event()
-    blockers = offload._BLOCKING_EXECUTOR._max_workers - 1
+    blockers = _SATURATED_POOL_WIDTH - 1
     started = threading.Barrier(blockers + 1)
 
     def _block() -> None:
         started.wait(_RELEASE_AFTER)
         release.wait(_RELEASE_AFTER)
 
-    futures = [offload._BLOCKING_EXECUTOR.submit(_block) for _ in range(blockers)]
+    futures = [pool.submit(_block) for _ in range(blockers)]
     started.wait(_RELEASE_AFTER)
     try:
-        yield blockers
+        yield pool
     finally:
         release.set()
         for future in futures:
             future.result(_RELEASE_AFTER)
+        pool.shutdown(wait=True)
 
 
-async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly() -> None:
+async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     handle = CancelHandle()
     driver = _Driver(handle)
     task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
-    elapsed = await _cancel_and_time(task)
+    await _cancel(task)
 
-    assert elapsed < _PROMPT, f"loop blocked {elapsed:.2f}s on cancel"
     await _wait_for(driver.finished)
     assert handle.requested
     assert len(driver.cancel_threads) == 1
@@ -101,8 +122,12 @@ async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly() -> N
     assert driver.cancel_threads[0].startswith("sdk-cancel-")
 
     # A second request (a retry of the unwind, a second cancel) does not re-fire.
+    # request() hands an action to the cancel pool before it returns, so an
+    # empty spy afterwards means nothing can fire later — no wait needed.
+    submitted: list[object] = []
+    monkeypatch.setattr(offload, "_fire_cancel_action", submitted.append)
     handle.request()
-    await asyncio.sleep(0.05)
+    assert submitted == []
     assert len(driver.cancel_threads) == 1
 
 
@@ -116,15 +141,18 @@ async def test_set_after_request_fires_immediately() -> None:
     assert fired.wait(_PROMPT), "action set after the request never fired"
 
 
-async def test_action_runs_while_blocking_pool_is_full(saturated_pool: int) -> None:
+async def test_action_runs_while_blocking_pool_is_full(
+    saturated_pool: concurrent.futures.ThreadPoolExecutor,
+) -> None:
     """The cancel must not queue behind the calls it exists to stop."""
     # Take the last free slot, so the pool is wholly occupied by blocked calls.
     handle = CancelHandle()
     driver = _Driver(handle)
-    task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
+    with offload.blocking_executor(saturated_pool):
+        task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
-    await _cancel_and_time(task)
+    await _cancel(task)
 
     assert driver.cancelled.wait(_PROMPT), "cancel queued behind a full pool"
 
@@ -156,25 +184,34 @@ async def test_failing_action_is_logged_not_raised(
     assert isinstance(record["exception"].value, RuntimeError)  # type: ignore[union-attr]
 
 
-async def test_unblocked_call_frees_its_pool_slot(saturated_pool: int) -> None:
+async def test_unblocked_call_frees_its_pool_slot(
+    saturated_pool: concurrent.futures.ThreadPoolExecutor,
+) -> None:
     """Once the action unblocks the driver, its thread exits and the slot is reusable."""
     handle = CancelHandle()
     driver = _Driver(handle)
-    task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
+    with offload.blocking_executor(saturated_pool):
+        task = asyncio.ensure_future(run_in_thread(handle.bind(driver.execute)))
     await _wait_for(driver.started)
 
-    await _cancel_and_time(task)
+    await _cancel(task)
 
     await _wait_for(driver.finished)
     # Every other slot is still blocked, so this runs only on the freed one.
-    start = time.monotonic()
-    assert await asyncio.wait_for(run_in_thread(lambda: "ran"), _PROMPT) == "ran"
-    assert time.monotonic() - start < _PROMPT
+    with offload.blocking_executor(saturated_pool):
+        assert await asyncio.wait_for(run_in_thread(lambda: "ran"), _PROMPT) == "ran"
 
 
-async def test_completed_call_never_fires_the_action() -> None:
+async def test_completed_call_never_fires_the_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     handle = CancelHandle()
     fired = threading.Event()
+    # Every fire goes through this hand-off, synchronously with the request
+    # or set() that causes it; nothing recorded by the time the call returns
+    # means nothing is queued to fire later either.
+    submitted: list[object] = []
+    monkeypatch.setattr(offload, "_fire_cancel_action", submitted.append)
 
     def _work() -> int:
         handle.set(fired.set)
@@ -182,7 +219,7 @@ async def test_completed_call_never_fires_the_action() -> None:
 
     assert await run_in_thread(handle.bind(_work)) == 42
     assert not handle.requested
-    await asyncio.sleep(0.05)
+    assert submitted == []
     assert not fired.is_set()
 
 

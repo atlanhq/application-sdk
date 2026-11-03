@@ -103,3 +103,26 @@ class TestUploadToAtlanRedirect:
             warnings.simplefilter("ignore", DeprecationWarning)
             with pytest.raises(RuntimeError, match="boom"):
                 await extractor.upload_to_atlan(UploadInput(output_path="/tmp/x"))
+
+
+class TestSubclassDeprecationNotice:
+    def test_notice_names_app_and_sql_app(
+        self, clean_app_registry: object, clean_task_registry: object
+    ) -> None:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", DeprecationWarning)
+
+            class _NoticeExtractor(BaseMetadataExtractor):
+                async def run(self, input: _TestInput) -> _TestOutput:
+                    return _TestOutput()
+
+        messages = [
+            str(w.message)
+            for w in caught
+            if issubclass(w.category, DeprecationWarning)
+            and "_NoticeExtractor subclasses BaseMetadataExtractor" in str(w.message)
+        ]
+        assert len(messages) == 1
+        assert "application_sdk.app.App" in messages[0]
+        assert "application_sdk.templates.SqlApp" in messages[0]
+        assert "v4.0.0" in messages[0]

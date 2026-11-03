@@ -21,6 +21,39 @@ def _missing(tmp_path) -> tuple[str, ...]:
     return (str(tmp_path / "does-not-exist"),)
 
 
+#: Bound for a wait on the poller; a healthy poller answers in milliseconds.
+_TIMEOUT = 5.0
+
+
+class _PollReads:
+    """Wraps ``memory_usage_bytes`` so a test can wait for the poller's reads.
+
+    The poller signals each read itself, so a test waits until the value it
+    wrote has actually been observed, instead of sleeping a few poll intervals
+    and hoping a loaded runner scheduled the poller in time.
+    """
+
+    def __init__(self, monkeypatch) -> None:
+        self._real = cgroup.memory_usage_bytes
+        self.values: list[int | None] = []
+        self._read = asyncio.Event()
+        monkeypatch.setattr(cgroup, "memory_usage_bytes", self)
+
+    def __call__(self) -> int | None:
+        value = self._real()
+        self.values.append(value)
+        self._read.set()
+        return value
+
+    async def until(self, condition) -> None:
+        while not condition(self.values):
+            self._read.clear()
+            await asyncio.wait_for(self._read.wait(), _TIMEOUT)
+
+    async def until_read(self, value: int) -> None:
+        await self.until(lambda values: value in values)
+
+
 class TestMemoryUsage:
     def test_reads_v2(self, tmp_path, monkeypatch):
         p = _write(tmp_path, "memory.current", "4096\n")
@@ -396,9 +429,10 @@ class TestTrackContainerUsage:
             cgroup, "_MEMORY_LIMIT_PATHS", (_write(tmp_path, "memory.max", "10000"),)
         )
 
+        reads = _PollReads(monkeypatch)
         async with cgroup.track_container_usage(poll_interval_seconds=0.01) as trace:
             current.write_text("4200")
-            await asyncio.sleep(0.05)
+            await reads.until_read(4200)
 
         assert trace.peak_source == "poll"
         assert trace.start_memory_bytes == 1200
@@ -417,11 +451,12 @@ class TestTrackContainerUsage:
             cgroup, "_MEMORY_LIMIT_PATHS", (_write(tmp_path, "memory.max", "10000"),)
         )
 
+        reads = _PollReads(monkeypatch)
         async with cgroup.track_container_usage(poll_interval_seconds=0.01) as trace:
             current.write_text("7000")
-            await asyncio.sleep(0.05)
+            await reads.until_read(7000)
             current.write_text("2000")
-            await asyncio.sleep(0.05)
+            await reads.until_read(2000)
 
         assert trace.peak_source == "poll"
         # The spike is kept after usage drops back — that is the whole point of
@@ -509,17 +544,21 @@ class TestTrackContainerUsage:
 
         calls = {"n": 0}
         real = cgroup.memory_usage_bytes
+        raised = asyncio.Event()
 
         def flaky():
             calls["n"] += 1
             if calls["n"] > 1:  # the first call is the setup availability probe
+                raised.set()
                 raise RuntimeError("cgroup went away")
             return real()
 
         monkeypatch.setattr(cgroup, "memory_usage_bytes", flaky)
 
         async with cgroup.track_container_usage(poll_interval_seconds=0.01) as trace:
-            await asyncio.sleep(0.05)
+            # The poller itself says when it has hit the error, so the exit
+            # below always has a failed poll task to await.
+            await asyncio.wait_for(raised.wait(), _TIMEOUT)
             result = "done"
 
         assert result == "done"
@@ -544,7 +583,9 @@ class TestTrackContainerUsage:
             "_MEMORY_CURRENT_PATHS",
             (_write(tmp_path, "memory.current", "1000"),),
         )
+        reads = _PollReads(monkeypatch)
         before = len(asyncio.all_tasks())
         async with cgroup.track_container_usage(poll_interval_seconds=0.01):
-            await asyncio.sleep(0.02)
+            # Past the baseline read: the poller is running, not just created.
+            await reads.until(lambda values: len(values) >= 2)
         assert len(asyncio.all_tasks()) <= before

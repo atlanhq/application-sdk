@@ -9,6 +9,7 @@ get exactly one attempt flagged as its last chance to raise.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import patch
 
@@ -22,6 +23,10 @@ from application_sdk.testing.harness._poll import (
     until_deadline,
     until_deadline_async,
 )
+
+#: Bound on a loop that a healthy run finishes in milliseconds. It decides how
+#: long a regression takes to fail, never whether a healthy run passes.
+_LOOP_BOUND_SECONDS = 30.0
 
 
 def _drain(
@@ -344,20 +349,36 @@ class TestAsyncTwin:
 
         assert clock.slept == [120, 10]
 
-    async def test_awaits_the_real_asyncio_sleep_by_default(self):
-        """No clock injected → real timers, and the budget still bounds the loop."""
-        started = time.monotonic()
-        attempts = [
-            attempt
-            async for attempt in until_deadline_async(
-                0.06, 0.02, label="thing", heartbeat_seconds=0
-            )
-        ]
+    async def test_awaits_the_real_asyncio_sleep_by_default(self, monkeypatch):
+        """No clock injected → real timers, and the budget still bounds the loop.
+
+        A spy on the default records what is awaited and still sleeps for
+        real. That the budget, not budget + one interval, bounds the loop is
+        pinned exactly on the fake clock above; a wall-clock ceiling here
+        measured the runner instead (FND-4233).
+        """
+        assert _poll._async_sleep is asyncio.sleep
+        slept: list[float] = []
+
+        async def _spy(seconds: float) -> None:
+            slept.append(seconds)
+            await asyncio.sleep(seconds)
+
+        monkeypatch.setattr(_poll, "_async_sleep", _spy)
+
+        async def _collect() -> list[Attempt]:
+            return [
+                attempt
+                async for attempt in until_deadline_async(
+                    0.06, 0.02, label="thing", heartbeat_seconds=0
+                )
+            ]
+
+        attempts = await asyncio.wait_for(_collect(), _LOOP_BOUND_SECONDS)
 
         assert len(attempts) >= 2
         assert attempts[-1].is_last is True
-        # Bounded by the budget (plus scheduler slop), not by budget + one interval.
-        assert time.monotonic() - started < 0.5
+        assert slept and all(0 < s <= 0.02 for s in slept)
 
 
 class TestFakeClock:
@@ -396,14 +417,16 @@ class TestFakeClock:
         assert clock.now == 570
 
     async def test_drives_an_async_loop_without_touching_the_event_loop_clock(self):
-        started = time.monotonic()
-        with fake_clock() as clock:
-            attempts = [
+        async def _collect() -> list[Attempt]:
+            return [
                 attempt
                 async for attempt in until_deadline_async(600, 30, label="thing")
             ]
 
+        with fake_clock() as clock:
+            # A 570s simulated wait: on real timers this could not finish
+            # inside the bound, so finishing at all proves none were used.
+            attempts = await asyncio.wait_for(_collect(), _LOOP_BOUND_SECONDS)
+
         assert len(attempts) == 20
         assert clock.now == 570
-        # A 570s simulated wait that took no real time at all.
-        assert time.monotonic() - started < 1.0

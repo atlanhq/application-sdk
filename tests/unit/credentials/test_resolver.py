@@ -322,11 +322,12 @@ class TestGuidResolutionPath:
 class TestEndToEndCredentialResolution:
     """Integration test: write secrets locally + mock object store, verify merged result."""
 
-    async def test_resolve_raw_merges_sensitive_and_nonsensitive(self, tmp_path):
+    async def test_resolve_raw_merges_sensitive_and_nonsensitive(
+        self, tmp_path, monkeypatch
+    ):
         """Full flow: secrets.json (sensitive) + mock vault config (non-sensitive)
         → resolve_raw returns merged dict with all fields.
         """
-        import os
         from unittest.mock import MagicMock, patch
 
         guid = "e2e-test-guid-abc123"
@@ -364,28 +365,24 @@ class TestEndToEndCredentialResolution:
         mock_client.close = AsyncMock()
 
         # In local env, _get_secret reads from local file instead of Dapr
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            with (
-                patch("application_sdk.constants.DEPLOYMENT_NAME", "local"),
-                patch(
-                    "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
-                    MagicMock(return_value=mock_client),
-                ),
-            ):
-                from application_sdk.infrastructure._dapr.credential_vault import (
-                    DaprCredentialVault,
-                )
+        monkeypatch.chdir(tmp_path)
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "local"),
+            patch(
+                "application_sdk.infrastructure._dapr.http.AsyncDaprClient",
+                MagicMock(return_value=mock_client),
+            ),
+        ):
+            from application_sdk.infrastructure._dapr.credential_vault import (
+                DaprCredentialVault,
+            )
 
-                vault = DaprCredentialVault(
-                    mock_client,
-                    upstream_binding_name="upstream",
-                    secret_store_name="secretstore",
-                )
-                result = await vault.get_credentials(guid)
-        finally:
-            os.chdir(original_cwd)
+            vault = DaprCredentialVault(
+                mock_client,
+                upstream_binding_name="upstream",
+                secret_store_name="secretstore",
+            )
+            result = await vault.get_credentials(guid)
 
         # 3. Verify merged result has both sensitive and non-sensitive fields
         assert result["host"] == "db.example.com"

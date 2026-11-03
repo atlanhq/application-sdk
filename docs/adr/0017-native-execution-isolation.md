@@ -65,10 +65,13 @@ best-effort.**
 
 `run_fault_isolated` is the mechanism (isolate a native fault into a catchable
 exception); `run_best_effort` is the policy layer (isolate **and** warn-and-
-continue). Both accept an optional `max_workers` — default `min(4, cpu_count)`
-so concurrent callers decode in parallel; pass `1` to opt into sequential
-execution, or another integer to bound concurrency. Pools are keyed by width so
-one width's crash never disturbs another's.
+continue). Both accept an optional `max_workers` — default `min(4, CPUs
+available to the container)`, read from the cgroup CPU quota rather than
+`os.cpu_count()` (which reports the node's cores) — so concurrent callers decode
+in parallel; pass `1` to opt into sequential execution, or another integer to
+bound concurrency. Pools are keyed by width so one width's crash never disturbs
+another's. A pool with nothing in flight for `ATLAN_FAULT_ISOLATION_IDLE_SECONDS`
+(default 30) is shut down and its children exit; the next call spawns afresh.
 
 Spawn (not fork) is mandatory: forking a multi-threaded worker copies locks in
 arbitrary states — a deadlock/corruption factory.
@@ -106,8 +109,9 @@ wrong granularity (whole activity vs one risky call) and the wrong altitude for
 - A spawn child re-imports the callable's module (e.g. `pyatlan`/`msgspec`) on
   first use — real memory (tens–hundreds of MB per child) against
   `K8S_POD_MEMORY_LIMIT`, and a cold-start latency after idle/crash recycle. The
-  width cap keeps this bounded; validate spawn viability + child RSS in the
-  runtime container (hardened images may restrict `/dev/shm`).
+  width cap bounds it while work runs, and idle reaping (below) returns it once
+  work stops; validate spawn viability + child RSS in the runtime container
+  (hardened images may restrict `/dev/shm`).
 - `run_fault_isolated`/`run_best_effort` inherit process-boundary constraints:
   the callable must be a module-level, picklable function; args/return must
   pickle; ContextVars do **not** propagate (log from the parent).
@@ -124,6 +128,32 @@ wrong granularity (whole activity vs one risky call) and the wrong altitude for
 - **`run_best_effort` as a plain (threaded) Temporal activity.** Gives failure
   *recovery* and visibility, but not *containment* — an activity runs in the
   worker process. Composes with, but does not replace, the process seam.
+
+## Addendum: idle children are reaped (FND-4278)
+
+As first shipped, a width's pool lived for the worker's lifetime. Measured: four
+concurrent calls left four spawn children resident at ~175 MiB each — ~700 MiB
+under the pod limit before decoding any data, held until the pod restarted.
+
+- **Idle shutdown.** A pool whose in-flight count reaches zero starts a timer;
+  if no call arrives within `ATLAN_FAULT_ISOLATION_IDLE_SECONDS` (default 30),
+  it is shut down and its children exit. A call counts as in flight until its
+  *child* finishes, so a caller that is cancelled mid-call never gets the pool
+  reaped under a child that is still working. The cost is a fresh spawn on the
+  first call after a quiet spell, which lands on best-effort work with a
+  minutes-long timeout.
+- **Not `max_tasks_per_child=1`.** CPython replaces a retired child as soon as
+  it exits, not when the next task arrives, so the pool still holds
+  `max_workers` idle children between bursts — it trades a warm child for a
+  cold one without returning the memory.
+- **Width from the CFS quota.** `os.cpu_count()` reports the node's cores, so on
+  a one-CPU pod the default width was four. It is now
+  `min(4, floor(CPU quota), affinity)`, at least 1.
+- **Isolation stays the default.** The lock now pins msgspec 0.21.1, which fixes
+  the concurrent-decode segfault that prompted this ADR. That removes one known
+  trigger, not the exposure this ADR is about — a native fault anywhere on the
+  decode path — and with reaping, keeping isolation costs spawn latency rather
+  than resident memory.
 
 ## References
 - [ADR-0010: Async-First Design and Blocking Code Pitfalls](0010-async-first-blocking-code.md)

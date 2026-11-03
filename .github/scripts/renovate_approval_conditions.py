@@ -23,6 +23,15 @@ order is load-bearing for cost as well as for the log):
   e. every ruleset-required check is green (``gh pr checks --required``)
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
   g. atlan-ci has not already posted an APPROVED review with our signature
+  h. the PR's HEAD is still the evaluated SHA (re-read after any wait)
+  i. no release train is in flight: no open ``bump-version*`` PR has had a
+     ``/gate-check`` (FND-4175, :func:`releases_in_flight`), unless overridden
+     by ``RELEASE_FREEZE``
+
+A PR by ``connectivity-ai[bot]`` on a ``vuln-agent/`` branch in application-sdk
+(the connector-pulse vuln agent, FND-4439) replaces (a) with
+:func:`is_vuln_agent_pr` and skips (f), which only Renovate stamps; (b)–(e) and
+(g)–(i) apply unchanged.
 
 A PR by ``atlan-conformance-sync[bot]`` on ``bot/conformance-resync`` never reaches
 (a)–(g): :func:`process_pr` hands it to ``resync_approval_conditions``, whose
@@ -54,6 +63,10 @@ Environment:
                             polling while required checks are still PENDING
                             before judging (e). Empty or 0 = no wait. See
                             :func:`wait_for_pending_checks`.
+    RELEASE_FREEZE          optional override for condition (i), from the
+                            caller's ``RENOVATE_RELEASE_FREEZE`` variable:
+                            empty/``auto``, ``on`` or ``off``. See
+                            :func:`parse_freeze_mode`.
 """
 
 from __future__ import annotations
@@ -120,8 +133,48 @@ RENOVATE_AUTHORS = (FLEET_AUTHOR, MEND_AUTHOR)
 #: on identity, before the question of whether it happens to look green.
 MEND_REPOS = frozenset({"atlanhq/application-sdk"})
 
+#: The connector-pulse vuln agent (FND-4439): the GitHub App that opens
+#: dependency-fix PRs for findings it traced to this SDK. It is not a Renovate
+#: engine, so it never passes condition (a); :func:`is_vuln_agent_pr` gives its
+#: PRs their own entry, narrowed three ways because the same App also opens
+#: non-dependency PRs elsewhere (conformance remediation, preflight fixes).
+VULN_AGENT_AUTHOR = "connectivity-ai[bot]"
+
+#: Head-ref prefix every vuln-agent PR is opened on. Another of the App's lanes
+#: on a different branch never reaches the vuln-agent path.
+VULN_AGENT_BRANCH_PREFIX = "vuln-agent/"
+
+#: Repos where vuln-agent PRs may be approved, compared case-insensitively.
+#: Only application-sdk: app repos need no code-owner approval to merge, and
+#: this script runs at ``@main`` for every consumer repo, so the allowance must
+#: not travel with it.
+VULN_AGENT_REPOS = frozenset({"atlanhq/application-sdk"})
+
 #: Renovate's own artifact-update status context (condition f).
 ARTIFACT_CONTEXT = "renovate/artifacts"
+
+#: Head-ref prefix of every release bump PR (``bump-version-main``,
+#: ``-conformance``, ``-contract-toolkit``). Shared with bump_pr_opt_in.py.
+BUMP_BRANCH_PREFIX = "bump-version"
+
+#: The commit status ``/gate-check`` posts on a bump PR's head (FND-3839). Its
+#: presence, in any state, is what makes a release train "in flight" for
+#: condition (i). Shared with bump_pr_opt_in.py and pr_test_command.py.
+GATE_CHECK_CONTEXT = "gate-check"
+
+#: Hidden marker of the ``/gate-check`` sticky PR comment, and the identity
+#: that writes it (``github.token``). Pinned to ``test_command_comment.marker``
+#: by a drift test; see :func:`releases_in_flight` for why the comment counts.
+GATE_CHECK_COMMENT_MARKER = "<!-- test-commands:gate-check -->"
+GATE_CHECK_COMMENT_AUTHOR = "github-actions[bot]"
+
+#: Manual override for condition (i), read from the caller repo's
+#: ``RENOVATE_RELEASE_FREEZE`` variable: empty or ``auto`` follows the release
+#: train, ``off`` never freezes, ``on`` always freezes. Anything else freezes —
+#: a typo must not silently turn the freeze off.
+FREEZE_AUTO = "auto"
+FREEZE_ON = "on"
+FREEZE_OFF = "off"
 
 #: Sentinel for "no ``renovate/artifacts`` state could be read". Deliberately a
 #: value that is not ``success`` rather than an empty string or None, so it
@@ -165,11 +218,19 @@ USES_LINE_RE = re.compile(r"[ \t]*(-[ \t]+)?uses:[ \t]*(?P<ref>\S+)[ \t]*(#.*)?"
 #: gate. That covers everything a Renovate app-contract-toolkit bump touches: the
 #: Pkl pin + lock (contract/PklProject, contract/PklProject.deps.json).
 #:
-#: The regenerated artifacts (app/generated/**, atlan.yaml, app.yaml) are matched
-#: ROOT-ONLY, with no ``(.*/)?`` prefix. renovate-pkl-sync only ever writes them
-#: at the repo root, so an unrelated app.yaml/atlan.yaml elsewhere in a consumer
-#: tree must NOT ride this gate. They are otherwise a deterministic function of
-#: the contract and the (already auto-merged) toolkit version.
+#: The regenerated artifacts (app/generated/**, contract/generated/**/input.pkl,
+#: atlan.yaml, app.yaml) are matched ROOT-ONLY, with no ``(.*/)?`` prefix. renovate-pkl-sync
+#: only ever writes them at the repo root, so an unrelated app.yaml/atlan.yaml
+#: elsewhere in a consumer tree must NOT ride this gate. They are otherwise a
+#: deterministic function of the contract and the (already auto-merged) toolkit
+#: version.
+#:
+#: contract/generated/**/input.pkl is a system app's caller node (one per
+#: entrypoint in a system bundle — FND-3563), emitted by the same eval and placed
+#: and freshness-checked through the same ``OUTPUT_PATHS``. Only that file name
+#: matches (``pkl_contract_layout.CALLER_NODE_FILENAME``): anything else under
+#: contract/generated/ is app-owned, and the rest of contract/ is hand-written
+#: source. Both stay off this gate.
 #:
 #: contract_schema.lock.json is here on that same argument, and is ROOT-ONLY for
 #: the same reason: renovate-contract-ledger resolves it as ``repo / NAME`` and
@@ -190,6 +251,7 @@ DEP_FILE_RE = (
     r"|(.*/)?contract/PklProject"
     r"|(.*/)?contract/PklProject\.deps\.json"
     r"|app/generated/.*"
+    r"|contract/generated/(.*/)?input\.pkl"
     r"|atlan\.yaml"
     r"|app\.yaml"
     r"|contract_schema\.lock\.json"
@@ -201,6 +263,18 @@ APPROVAL_BODY = (
     "This is an automated code-owner approval posted by `atlan-ci` for a\n"
     "dependency-only Renovate PR. It is automatically dismissed on any new\n"
     "push (`dismiss_stale_reviews_on_push`) and re-posted once the new\n"
+    "HEAD's required checks are green."
+)
+
+#: Same stable signature as :data:`APPROVAL_BODY`, so condition (g) and the
+#: fleet dashboard scanner treat both alike; only the explanation differs.
+VULN_AGENT_APPROVAL_BODY = (
+    f"{APPROVAL_SIGNATURE} all required CI checks passed.\n"
+    "\n"
+    "This is an automated code-owner approval posted by `atlan-ci` for a\n"
+    "dependency-only vulnerability-fix PR opened by the connector-pulse vuln\n"
+    f"agent (`{VULN_AGENT_AUTHOR}`, `{VULN_AGENT_BRANCH_PREFIX}*`). It is\n"
+    "automatically dismissed on any new push and re-posted once the new\n"
     "HEAD's required checks are green."
 )
 
@@ -316,6 +390,25 @@ def check_author(pr: str, author: str, repo: str) -> tuple[bool, str]:
     return True, ""
 
 
+def is_vuln_agent_pr(meta: dict[str, Any], repo: str) -> bool:
+    """True iff ``meta`` is a vuln-agent PR this repo may approve: the vuln
+    agent's App, on a ``vuln-agent/`` branch, in a :data:`VULN_AGENT_REPOS` repo.
+
+    All three, or the PR takes the Renovate path and fails condition (a). The
+    head must also be this repo, not a fork: a fork can name its branch freely.
+    """
+    author = str(((meta.get("user") or {}).get("login")) or "")
+    head = meta.get("head") or {}
+    ref = str(head.get("ref") or "")
+    head_repo = str(((head.get("repo") or {}).get("full_name")) or "")
+    return (
+        author == VULN_AGENT_AUTHOR
+        and ref.startswith(VULN_AGENT_BRANCH_PREFIX)
+        and repo.lower() in VULN_AGENT_REPOS
+        and head_repo.lower() == repo.lower()
+    )
+
+
 def check_open(pr: str, state: str, draft: bool) -> tuple[bool, str]:
     """Condition (b): the PR must be open and not a draft."""
     if state != "open" or draft:
@@ -338,6 +431,54 @@ def check_head_unchanged(pr: str, head_sha: str, eval_sha: str) -> tuple[bool, s
             False,
             f"PR #{pr}: HEAD moved ({eval_sha} → {head_sha}). "
             "Skipping — a later run will re-evaluate.",
+        )
+    return True, ""
+
+
+def parse_freeze_mode(raw: str) -> str:
+    """The ``RENOVATE_RELEASE_FREEZE`` override as a mode, failing towards ON.
+
+    An unrecognised value freezes and says so: the override exists to be set by
+    hand, and a mistyped ``of`` must not read as "no freeze".
+    """
+    value = raw.strip().lower()
+    if value in ("", FREEZE_AUTO):
+        return FREEZE_AUTO
+    if value in (FREEZE_ON, FREEZE_OFF):
+        return value
+    print(
+        f"::warning::RENOVATE_RELEASE_FREEZE={raw!r} is not one of "
+        f"'{FREEZE_AUTO}', '{FREEZE_ON}', '{FREEZE_OFF}'; treating it as "
+        f"'{FREEZE_ON}'."
+    )
+    return FREEZE_ON
+
+
+def check_release_freeze(pr: str, mode: str, trains: list[str]) -> tuple[bool, str]:
+    """Condition (i): no release train may be in flight (FND-4175).
+
+    A Renovate merge to main moves every open bump branch: the release workflow
+    re-renders it, the push lands a head with no ``gate-check`` status, and the
+    release gate that was running or had passed starts over. So while a train
+    is in flight the approval is withheld. The PR stays open with auto-merge
+    armed, and the thaw (renovate_release_thaw.py) re-evaluates it when the
+    bump PR closes.
+
+    ``trains`` names the bump PRs a train is running on (see
+    :func:`releases_in_flight`); ``mode`` is from :func:`parse_freeze_mode`.
+    """
+    if mode == FREEZE_OFF:
+        return True, ""
+    if mode == FREEZE_ON:
+        return (
+            False,
+            f"PR #{pr}: Renovate is frozen by RENOVATE_RELEASE_FREEZE=on — " "holding.",
+        )
+    if trains:
+        return (
+            False,
+            f"PR #{pr}: release train in flight ({', '.join(trains)}) — holding "
+            "until the bump PR closes.",
         )
     return True, ""
 
@@ -876,6 +1017,76 @@ def fetch_artifact_state(repo: str, eval_sha: str, runner: Runner) -> str:
     return classify_artifact_state(payload)
 
 
+def _gh_list(args: list[str], runner: Runner, *, what: str) -> list[Any]:
+    """A paginated ``gh api`` listing as one flat list, or raise :class:`GhError`."""
+    payload = _gh_json([*args, "--paginate", "--slurp"], runner, what=what)
+    if not isinstance(payload, list):
+        raise GhError(f"{what}: unexpected payload shape")
+    return payload
+
+
+def releases_in_flight(repo: str, runner: Runner) -> list[str]:
+    """The open bump PRs a release train is running on, as ``#N``.
+
+    A bump PR is open almost all the time — a new one opens on the first merge
+    after each release — so "a bump PR is open" would freeze Renovate for good.
+    The train starts at the first ``/gate-check`` on the bump PR and ends only
+    when that PR closes. Two signals, either one enough:
+
+    * a ``gate-check`` status on the head, in any state, ``failure`` included
+      (a failed gate is still a release someone is driving);
+    * the ``/gate-check`` sticky comment (:data:`GATE_CHECK_COMMENT_MARKER`).
+      This is what keeps the train across a head move: the status is bound to
+      one commit, so a push leaves a head without it, while the comment is
+      edited in place and survives every push. Without it, a merge that slipped
+      past the freeze (a human one, or a Renovate PR already queued) would
+      re-push the bump branch and lift the freeze, inviting the next merge.
+      Only the comment ``github-actions[bot]`` writes counts.
+
+    Raises :class:`GhError` on any unreadable listing, which aborts the step
+    and approves nothing.
+    """
+    pulls = _gh_list(
+        ["api", f"repos/{repo}/pulls?state=open&per_page=100"],
+        runner,
+        what="listing open PRs for the release freeze",
+    )
+    trains = []
+    for pull in pulls:
+        head = (pull.get("head") or {}) if isinstance(pull, dict) else {}
+        if not str(head.get("ref") or "").startswith(BUMP_BRANCH_PREFIX):
+            continue
+        number = pull.get("number")
+        sha = str(head.get("sha") or "")
+        # The per-commit list, paged, not the combined status: the combined
+        # endpoint pages its `statuses` too, and a gate-check past its first
+        # page would read as "no train".
+        statuses = _gh_list(
+            ["api", f"repos/{repo}/commits/{sha}/statuses?per_page=100"],
+            runner,
+            what=f"reading the {GATE_CHECK_CONTEXT} status of bump PR #{number}",
+        )
+        if any(
+            isinstance(s, dict) and s.get("context") == GATE_CHECK_CONTEXT
+            for s in statuses
+        ):
+            trains.append(f"#{number}")
+            continue
+        comments = _gh_list(
+            ["api", f"repos/{repo}/issues/{number}/comments?per_page=100"],
+            runner,
+            what=f"reading the /{GATE_CHECK_CONTEXT} comment on bump PR #{number}",
+        )
+        if any(
+            isinstance(c, dict)
+            and ((c.get("user") or {}).get("login")) == GATE_CHECK_COMMENT_AUTHOR
+            and GATE_CHECK_COMMENT_MARKER in str(c.get("body") or "")
+            for c in comments
+        ):
+            trains.append(f"#{number}")
+    return trains
+
+
 def fetch_reviews(repo: str, pr: str, runner: Runner) -> list[Any]:
     payload = _gh_json(
         ["api", f"repos/{repo}/pulls/{pr}/reviews", "--paginate", "--slurp"],
@@ -887,7 +1098,9 @@ def fetch_reviews(repo: str, pr: str, runner: Runner) -> list[Any]:
     return payload
 
 
-def approve(repo: str, pr: str, eval_sha: str, runner: Runner) -> None:
+def approve(
+    repo: str, pr: str, eval_sha: str, runner: Runner, *, body: str = APPROVAL_BODY
+) -> None:
     """Post the atlan-ci code-owner approval ON ``eval_sha``. A failure aborts
     the step.
 
@@ -910,7 +1123,7 @@ def approve(repo: str, pr: str, eval_sha: str, runner: Runner) -> None:
             "-f",
             "event=APPROVE",
             "-f",
-            f"body={APPROVAL_BODY}",
+            f"body={body}",
         ],
         check=True,
     )
@@ -930,6 +1143,7 @@ def process_pr(
     *,
     budget: FanInBudget | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    freeze_mode: str = FREEZE_AUTO,
 ) -> bool:
     """Evaluate one PR and approve it if every condition holds.
 
@@ -944,13 +1158,16 @@ def process_pr(
     # other PR falls through to the Renovate conditions below, unchanged.
     if resync.is_candidate(meta):
         return resync.process_resync_pr(repo, pr, eval_sha, meta, runner)
+    # Vuln-agent PRs replace condition (a) with is_vuln_agent_pr and skip (f),
+    # a Renovate-only status; every other condition applies to them unchanged.
+    vuln_agent = is_vuln_agent_pr(meta, repo)
     author = str(((meta.get("user") or {}).get("login")) or "")
     state = str(meta.get("state") or "")
     draft = bool(meta.get("draft"))
     head_sha = str(((meta.get("head") or {}).get("sha")) or "")
 
     for ok, message in (
-        check_author(pr, author, repo),
+        (True, "") if vuln_agent else check_author(pr, author, repo),
         check_open(pr, state, draft),
         check_head_unchanged(pr, head_sha, eval_sha),
     ):
@@ -1002,15 +1219,16 @@ def process_pr(
         return False
     print(f"PR #{pr}: all required checks are green.")
 
-    # f. Renovate's artifact status must be green.
-    artifact_state = fetch_artifact_state(repo, eval_sha, runner)
-    if artifact_state != "success":
-        print(
-            f"PR #{pr}: {ARTIFACT_CONTEXT} is '{artifact_state}', "
-            "not 'success' — skipping."
-        )
-        return False
-    print(f"PR #{pr}: {ARTIFACT_CONTEXT} is green.")
+    # f. Renovate's artifact status must be green (Renovate PRs only).
+    if not vuln_agent:
+        artifact_state = fetch_artifact_state(repo, eval_sha, runner)
+        if artifact_state != "success":
+            print(
+                f"PR #{pr}: {ARTIFACT_CONTEXT} is '{artifact_state}', "
+                "not 'success' — skipping."
+            )
+            return False
+        print(f"PR #{pr}: {ARTIFACT_CONTEXT} is green.")
 
     # g. Idempotency.
     if count_signature_approvals(fetch_reviews(repo, pr, runner)):
@@ -1026,8 +1244,21 @@ def process_pr(
     if not _head_still_at(repo, pr, eval_sha, runner):
         return False
 
-    approve(repo, pr, eval_sha, runner)
-    print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
+    # i. No release train in flight. Last, so it reads the bump PRs as close
+    # to the approval as possible: a train that started during the fan-in
+    # wait still holds this PR.
+    trains = [] if freeze_mode == FREEZE_OFF else releases_in_flight(repo, runner)
+    ok, message = check_release_freeze(pr, freeze_mode, trains)
+    if not ok:
+        print(message)
+        return False
+
+    if vuln_agent:
+        approve(repo, pr, eval_sha, runner, body=VULN_AGENT_APPROVAL_BODY)
+        print(f"✅ Approved PR #{pr} as atlan-ci (vuln-agent auto-approval).")
+    else:
+        approve(repo, pr, eval_sha, runner)
+        print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
     return True
 
 
@@ -1041,6 +1272,7 @@ def main(
     extra_pattern = os.environ.get("EXTRA_DEP_PATTERN", "")
     workflow_ref = os.environ.get("CALLER_WORKFLOW_REF", "")
     follow_up = os.environ.get("FOLLOW_UP_WHEN_PENDING", "").strip().lower() == "true"
+    freeze_mode = parse_freeze_mode(os.environ.get("RELEASE_FREEZE", ""))
     budget = FanInBudget.from_seconds(
         parse_wait_seconds(os.environ.get("CHECKS_WAIT_MINUTES", ""))
     )
@@ -1062,6 +1294,7 @@ def main(
                 runner,
                 budget=budget,
                 sleep=sleep,
+                freeze_mode=freeze_mode,
             )
         if budget.still_pending:
             request_follow_up(

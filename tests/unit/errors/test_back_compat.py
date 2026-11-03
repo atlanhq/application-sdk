@@ -994,6 +994,7 @@ def test_errors_package_does_not_import_storage() -> None:
         ],
         capture_output=True,
         text=True,
+        timeout=120,
     )
 
     assert result.returncode == 0, result.stderr

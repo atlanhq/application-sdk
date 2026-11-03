@@ -48,6 +48,10 @@ from application_sdk.handler.service import (
     _wrap_response,
     create_app_handler_service,
 )
+from application_sdk.templates.contracts.sql_metadata import (  # entry-point annotations resolve at module level
+    ExtractionInput,
+    ExtractionOutput,
+)
 
 # ---------------------------------------------------------------------------
 # Test Handler implementation
@@ -4906,10 +4910,10 @@ class TestProvisionLocalVault:
         svc_module.DEPLOYMENT_NAME = restore["dep"]  # type: ignore[attr-defined]
         svc_module.LOCAL_ENVIRONMENT = restore["local"]  # type: ignore[attr-defined]
 
-    def test_happy_path_returns_200_with_credential_guid(self, tmp_path: Path) -> None:
+    def test_happy_path_returns_200_with_credential_guid(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """POST full credential body returns 200 with credential_guid, writes secrets.json."""
-        import os
-
         # storage=None means objectstore save is a no-op (returns False)
         client, restore = self._make_local_vault_client(storage=None)
 
@@ -4923,12 +4927,8 @@ class TestProvisionLocalVault:
         }
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post("/workflows/v1/dev/local-vault", json=body)
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post("/workflows/v1/dev/local-vault", json=body)
 
             assert response.status_code == 200
             resp_body = response.json()
@@ -4970,9 +4970,10 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_sensitive_nonsensitive_split(self, tmp_path: Path) -> None:
+    def test_sensitive_nonsensitive_split(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Verify SENSITIVE_FIELDS go to secrets.json, everything else to object storage."""
-        import os
         from unittest.mock import MagicMock, patch
 
         mock_storage = MagicMock()  # non-None so objectstore save runs
@@ -5000,12 +5001,8 @@ class TestProvisionLocalVault:
                 "application_sdk.storage.ops.put_json",
                 side_effect=capture_put_json,
             ):
-                original_cwd = os.getcwd()
-                os.chdir(tmp_path)
-                try:
-                    response = client.post("/workflows/v1/dev/local-vault", json=body)
-                finally:
-                    os.chdir(original_cwd)
+                monkeypatch.chdir(tmp_path)
+                response = client.post("/workflows/v1/dev/local-vault", json=body)
 
             assert response.status_code == 200
             guid = response.json()["data"]["credential_guid"]
@@ -5036,21 +5033,17 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_auto_generates_uuid_hex(self, tmp_path: Path) -> None:
+    def test_auto_generates_uuid_hex(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Verify the returned guid is a valid 32-char hex string."""
-        import os
-
         client, restore = self._make_local_vault_client(storage=None)
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post(
-                    "/workflows/v1/dev/local-vault", json={"host": "example.com"}
-                )
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post(
+                "/workflows/v1/dev/local-vault", json={"host": "example.com"}
+            )
 
             assert response.status_code == 200
             guid = response.json()["data"]["credential_guid"]
@@ -5061,19 +5054,15 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_empty_body_succeeds(self, tmp_path: Path) -> None:
+    def test_empty_body_succeeds(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Empty body should still work — empty secrets + empty config."""
-        import os
-
         client, restore = self._make_local_vault_client(storage=None)
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post("/workflows/v1/dev/local-vault", json={})
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post("/workflows/v1/dev/local-vault", json={})
 
             assert response.status_code == 200
             guid = response.json()["data"]["credential_guid"]
@@ -5087,22 +5076,18 @@ class TestProvisionLocalVault:
         finally:
             self._restore(restore)
 
-    def test_no_storage_still_writes_secrets(self, tmp_path: Path) -> None:
+    def test_no_storage_still_writes_secrets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """When storage is None, secrets are written but objectstore save is a no-op."""
-        import os
-
         client, restore = self._make_local_vault_client(storage=None)
 
         try:
-            original_cwd = os.getcwd()
-            os.chdir(tmp_path)
-            try:
-                response = client.post(
-                    "/workflows/v1/dev/local-vault",
-                    json={"username": "u", "host": "h"},
-                )
-            finally:
-                os.chdir(original_cwd)
+            monkeypatch.chdir(tmp_path)
+            response = client.post(
+                "/workflows/v1/dev/local-vault",
+                json={"username": "u", "host": "h"},
+            )
 
             # The endpoint still succeeds because _config_save_to_objectstore
             # returns False (no-op) when storage is None, but doesn't raise.
@@ -6903,6 +6888,47 @@ class TestConfigEndpointPersistence:
         assert response.status_code == 404
         assert "abc-123" in response.json()["detail"]
 
+    @pytest.mark.parametrize(
+        ("error", "status"),
+        [
+            (PermissionError("denied"), 503),
+            (OSError("connection reset"), 503),
+        ],
+    )
+    def test_get_config_load_failure_is_not_a_missing_config(
+        self, error: Exception, status: int
+    ) -> None:
+        """Only a missing key is a 404; any other load failure is a 503."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cfg-test", storage=MagicMock()
+        )
+        client = TestClient(app, raise_server_exceptions=False)
+        with patch(
+            "application_sdk.storage.ops.download_file",
+            new=AsyncMock(side_effect=error),
+        ):
+            response = client.get("/workflows/v1/config/abc-123")
+        assert response.status_code == status
+        assert response.json()["detail"] == "Object store unavailable"
+
+    def test_get_config_404_on_a_storage_not_found(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from application_sdk.storage.errors import StorageNotFoundError
+
+        app = create_app_handler_service(
+            _TestHandler(), app_name="cfg-test", storage=MagicMock()
+        )
+        client = TestClient(app)
+        with patch(
+            "application_sdk.storage.ops.download_file",
+            new=AsyncMock(side_effect=StorageNotFoundError("missing", key="k")),
+        ):
+            response = client.get("/workflows/v1/config/abc-123")
+        assert response.status_code == 404
+
     def test_post_config_200_when_storage_present(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8339,46 +8365,224 @@ class TestAgentJsonIngressOnTheHandlerPath:
         assert response.status_code == 500
         assert response.json()["detail"] == "Internal server error"
 
-    def test_start_internal_validation_failure_stays_a_500(self) -> None:
-        """``/start`` validates its body *inside* its error boundary.
+    def test_start_contract_misfit_answers_422_naming_the_field(self) -> None:
+        """A ``/start`` body that does not fit the input contract is a 422 (FND-501).
 
-        The app-level 422 handler exists for the form endpoints (auth /
-        preflight / metadata), which validate *outside* any boundary. A
-        ValidationError escaping ``/start``'s boundary is an internal bug, so
-        ``/start`` re-raises it past the 422 handler — it must surface as the
-        sanitized 500 the boundary answers, never as "the request did not fit
-        the contract".
+        The body is the caller's workflow configuration: a misfit never
+        succeeds on retry, so it is rejected naming the field — and before
+        Temporal is touched, so the rejection does not depend on Temporal
+        being reachable.
         """
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock, MagicMock
 
         from application_sdk.app.base import App
         from application_sdk.app.entrypoint import entrypoint
 
-        class _StartValidationApp(App):
+        class _StartMisfitApp(App):
             @entrypoint
             async def run(self, input: _RoutingInput) -> _RoutingOutput:
                 return _RoutingOutput()
 
         svc = create_app_handler_service(
             _TestHandler(),
-            app_name="start-validation",
-            app_class=_StartValidationApp,
+            app_name="start-misfit",
+            app_class=_StartMisfitApp,
             temporal_host="temporal:7233",
         )
-        patcher = patch(
-            "application_sdk.handler.service._get_temporal_client",
-            new=AsyncMock(return_value=MagicMock()),
-        )
-        patcher.start()
-        try:
-            # Input.correlation_id is a `str`; pydantic v2 rejects an int, so
-            # model_validate raises inside the /start try block.
+        get_client = AsyncMock(return_value=MagicMock())
+        with patch(
+            "application_sdk.handler.service._get_temporal_client", new=get_client
+        ):
+            # Input.correlation_id is a `str`; pydantic v2 rejects an int.
             response = TestClient(svc, raise_server_exceptions=False).post(
                 "/workflows/v1/start", json={"correlation_id": 123}
             )
-            assert response.status_code == 500
-        finally:
-            patcher.stop()
+
+        assert response.status_code == 422
+        body = response.json()
+        assert body["success"] is False
+        assert [d["field"] for d in body["detail"]] == ["correlation_id"]
+        assert "123" not in response.text  # the rejected value is never echoed
+        get_client.assert_not_awaited()
+
+    def test_start_internal_validation_failure_stays_a_500(self) -> None:
+        """A ValidationError raised past body validation is still a sanitized 500.
+
+        Only the body's contract check answers 422; a ValidationError from
+        the SDK's own stamping is an internal bug, never "the request did
+        not fit the contract".
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _StartInternalApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        svc = create_app_handler_service(
+            _TestHandler(),
+            app_name="start-internal",
+            app_class=_StartInternalApp,
+            temporal_host="temporal:7233",
+        )
+
+        def _stamp_fails(*_args: object, **_kwargs: object) -> str:
+            _RoutingInput.model_validate({"correlation_id": 123})
+            raise AssertionError("unreachable")
+
+        with (
+            patch(
+                "application_sdk.handler.service._get_temporal_client",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "application_sdk.handler.service.resolve_dispatch_workflow_id",
+                new=_stamp_fails,
+            ),
+        ):
+            response = TestClient(svc, raise_server_exceptions=False).post(
+                "/workflows/v1/start", json={}
+            )
+
+        assert response.status_code == 500
+        assert response.json()["detail"] == "Failed to start workflow"
+
+
+class TestValidateWorkflowConfig:
+    """``POST /workflows/v1/validate`` — a dry-run ``/start`` (FND-501)."""
+
+    @staticmethod
+    def _client(*, temporal_host: str = "") -> TestClient:
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _ValidateRouteApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        return TestClient(
+            create_app_handler_service(
+                _TestHandler(),
+                app_name="validate-route",
+                app_class=_ValidateRouteApp,
+                temporal_host=temporal_host,
+            ),
+            raise_server_exceptions=False,
+        )
+
+    def test_valid_config_answers_200_without_temporal(self) -> None:
+        response = self._client().post(
+            "/workflows/v1/validate",
+            json={"name": "ok", "credentials": [{"key": "password", "value": "s"}]},
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"]["entrypoint"] == "run"
+
+    def test_invalid_config_answers_the_same_422_as_start(self) -> None:
+        response = self._client().post(
+            "/workflows/v1/validate", json={"correlation_id": 123}
+        )
+
+        assert response.status_code == 422
+        assert [d["field"] for d in response.json()["detail"]] == ["correlation_id"]
+
+    def test_validate_never_dispatches(self) -> None:
+        from unittest.mock import AsyncMock
+
+        get_client = AsyncMock()
+        with patch(
+            "application_sdk.handler.service._get_temporal_client", new=get_client
+        ):
+            response = self._client(temporal_host="temporal:7233").post(
+                "/workflows/v1/validate", json={"name": "ok"}
+            )
+
+        assert response.status_code == 200
+        get_client.assert_not_awaited()
+
+    def test_unknown_entrypoint_is_rejected(self) -> None:
+        response = self._client().post(
+            "/workflows/v1/validate?entrypoint=no-such-entrypoint", json={}
+        )
+
+        # Same resolution, and so the same answer, as /input-contract.
+        assert response.status_code == 404
+
+    def test_non_object_body_answers_422(self) -> None:
+        response = self._client().post("/workflows/v1/validate", json=[1, 2])
+
+        assert response.status_code == 422
+
+    def test_rejected_filter_pattern_is_not_echoed(self) -> None:
+        """A regex rejection names the field, never the pattern (no-echo)."""
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _ValidateFilterApp(App):
+            @entrypoint
+            async def run(self, input: ExtractionInput) -> ExtractionOutput:
+                return ExtractionOutput()
+
+        client = TestClient(
+            create_app_handler_service(
+                _TestHandler(),
+                app_name="validate-filter",
+                app_class=_ValidateFilterApp,
+            ),
+            raise_server_exceptions=False,
+        )
+        response = client.post(
+            "/workflows/v1/validate",
+            json={"include_filter": {"^db$": ["^SECRET_SCHEMA["]}},
+        )
+
+        assert response.status_code == 422
+        assert [d["field"] for d in response.json()["detail"]] == ["include_filter"]
+        assert "SECRET_SCHEMA" not in response.text
+
+    def test_each_service_resolves_against_its_own_app(self) -> None:
+        """A second service built in-process must not repoint the first.
+
+        ``create_app_handler_service`` rebinds the module-level workflow
+        config; the routes resolve against the config captured when their
+        own service was built.
+        """
+        from application_sdk.app.base import App
+        from application_sdk.app.entrypoint import entrypoint
+
+        class _FirstServiceApp(App):
+            @entrypoint
+            async def run(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        class _SecondServiceApp(App):
+            @entrypoint
+            async def extract(self, input: _RoutingInput) -> _RoutingOutput:
+                return _RoutingOutput()
+
+        first = TestClient(
+            create_app_handler_service(
+                _TestHandler(), app_name="first-svc", app_class=_FirstServiceApp
+            ),
+            raise_server_exceptions=False,
+        )
+        before = first.post("/workflows/v1/validate", json={}).json()
+        create_app_handler_service(
+            _TestHandler(), app_name="second-svc", app_class=_SecondServiceApp
+        )
+
+        response = first.post("/workflows/v1/validate", json={})
+
+        assert response.status_code == 200, response.text
+        assert response.json()["data"] == before["data"]
+        assert response.json()["data"]["entrypoint"] == "run"
 
 
 class TestManifestPostTransport:
@@ -8900,7 +9104,7 @@ class TestBoundaryLogRedaction:
         self, route: str, chained: bool
     ) -> None:
         client = _make_client(handler=_LeakyHandler(chained=chained))
-        with patch("application_sdk.handler.service.logger") as ml:
+        with patch("application_sdk.handler.routes.logger") as ml:
             response = client.post(route, json={"credentials": []})
         assert response.status_code >= 500
         assert _LEAKY_SECRET not in response.text

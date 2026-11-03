@@ -55,6 +55,14 @@ before changing either value.
 
 ---
 
+## SQL clients
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_SQL_CLIENT_CONNECT_TIMEOUT_SECONDS` | `60` | Bound on a SQL client's `load()`: building the connection string (including the STS `AssumeRole` for IAM-role auth) plus the first connect. Expiry raises `SqlClientConnectTimeoutError`. Also passed as `connect_timeout` to psycopg2, psycopg and MySQLdb, which have no connect timeout of their own, unless `DB_CONFIG.connect_args` or the URL already sets one. For IAM-role auth, the STS `AssumeRole` call's limits (5 s connect, 15 s read, 2 attempts) shrink to fit the time left, so a hung STS call frees its worker thread by the deadline too. |
+
+---
+
 ## Temporal / Workflow
 
 | Variable | Default | Description |
@@ -106,6 +114,8 @@ Bounds the restart supervisor that rebuilds the worker after a fatal poll error 
 | `ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS` | `60` | How often (seconds) to read Temporal core's live poller gauge and log a state transition, so a worker that is alive but claiming no work is visible in logs and in the `/live` / `/ready` probe details. Purely observational — it never restarts the worker and never flips a probe. Set to `0` to disable. |
 | `ATLAN_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE` | `3` | Consecutive definitive zero-poller readings before this worker stops emitting `token_refresh` health events. At the default 60s observer interval that is ~3 minutes of confirmed-parked polling. `unknown` / `polling` never accumulate toward this threshold. |
 | `ATLAN_WORKER_FATAL_TEARDOWN_TIMEOUT_SECONDS` | graceful shutdown timeout + `60` | Upper bound (seconds) on temporalio's own worker teardown after a fatal poll error. The supervisor regains control only when that teardown returns; if it has not returned within this bound the process exits with code 1 so the pod or container restart policy brings up a fresh worker. `0` or negative disables the bound. |
+| `ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS` | `120` | Upper bound (seconds) on shutdown after the worker has drained on a shutdown signal: closing infrastructure, flushing telemetry and interpreter exit hooks. No activity is in flight by then; if these steps have not finished within the bound the process exits with code 3, so a stuck telemetry flush cannot hold the pod for its whole grace period. The container entrypoint passes code 3 through as the container's exit code. Applies when the app is started through the SDK's entry point (`python -m application_sdk.main`); awaiting `run_worker_mode` / `run_combined_mode` directly does not start it unless `bound_post_drain_exit=True`. `0` or negative disables the bound. |
+| `DAPR_STOP_TIMEOUT_SECONDS` | `30` | Read by the container entrypoint. How long to wait for daprd to exit once the Python app has exited before killing it. Once the app has exited, daprd has nothing left to do: inbound pub/sub and bindings have no app to deliver to, and the app has no outbound call in flight. |
 | `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES` | `1048576` | Upper bound (bytes) on the metrics payload read from the loopback endpoint when reading Temporal core's poller gauge for the poll-state diagnostic. Guards the observer against an unbounded allocation if the local exporter misbehaves or grows high-cardinality. An oversize payload is reported as *unknown*, never as zero. |
 
 Reading the poller gauge requires Temporal core's Prometheus exporter, bound by
@@ -134,6 +144,12 @@ unavailable the poll state is reported as *unknown*, never as zero.
 | `ATLAN_HANDLER_MODULE` | _(empty)_ | Handler class to load (`module:ClassName`). Auto-discovered from the app module when unset. |
 | `ATLAN_SHUTDOWN_DRAIN_DELAY_SECONDS` | `5` | Event-loop yield (seconds) before tearing down the worker transport, giving in-flight activity completion RPCs a chance to flush. Distinct from `TEMPORAL_GRACEFUL_SHUTDOWN_TIMEOUT`. |
 
+## Blocking offload (`run_in_thread`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` | _(unset: no cap)_ | Process-wide: set it in the deployment environment of the process that runs the apps (on the consolidated API host, the host's own deployment), not as an `ATLAN_APPENV__<APP>__...` setting. One value applies to every app in the process; there is no per-app override. Most `run_in_thread` calls each app may have in flight (running or queued). A call past it fails at once with a retryable `ResourceExhaustedError` (`resource="offload_threads"`) instead of queueing. A call counts until its thread finishes, not until its caller stops waiting. On the consolidated API host, keep it at or below the app's `blocking_threads` pool width. A value that isn't a positive integer is ignored, with one warning. See [ADR-0010](adr/0010-async-first-blocking-code.md#addendum-containing-stranded-threads-per-app-fnd-2973). |
+
 ---
 
 ## Authentication (Temporal)
@@ -151,6 +167,8 @@ Set these when `ATLAN_AUTH_ENABLED=true` to authenticate the worker and handler 
 | `ATLAN_DEPLOYMENT_SECRET_PATH` | `ATLAN_DEPLOYMENT_SECRETS` | Key name in the deployment secret store that holds the auth credentials. |
 | `ATLAN_AUTH_CLIENT_ID_KEY` | `ATLAN_AUTH_CLIENT_ID` | Key name for the client ID within the deployment secret. |
 | `ATLAN_AUTH_CLIENT_SECRET_KEY` | `ATLAN_AUTH_CLIENT_SECRET` | Key name for the client secret within the deployment secret. |
+
+When `ATLAN_AUTH_ENABLED` is on, lifecycle events read the client credentials for their bearer token once and reuse them. If the credentials are missing or the token endpoint refuses them (a 4xx other than 408/429, or no `access_token`), events go out without auth and the lookup is not repeated for 60 s. If the secret store does not answer (not ready yet, throttled), the lookup is repeated after 5 s. A refusal discards the cached credentials, so a rotated credential is picked up within 60 s, without a restart. A transient exchange failure (5xx, 408/429, timeout) keeps the credentials, and the next event retries the exchange.
 
 ---
 
@@ -175,6 +193,8 @@ Dapr component names are read at module-import time (not at runtime) because the
 |----------|---------|-------------|
 | `ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT` | `60` | Max seconds to poll `/v1.0/healthz` at startup for daprd to start accepting connections. Startup proceeds as soon as daprd answers the probe at all (per-component readiness is covered by each call site's cold-start retry budget); only connection errors poll to this deadline. Increase for pathologically slow cold starts (image pull + daprd boot). |
 | `ATLAN_DAPR_COLD_START_MAX_WAIT_SECONDS` | `120.0` | Seconds a Dapr-backed call (secret fetch, credential-vault config fetch, ...) may retry a cold-sidecar race before giving up. Shared by every call site that opts into `retry_past_dapr_cold_start`. Env-overridable for pathologically slow runners. |
+
+Within each attempt of that budget, the Dapr HTTP client replays a failed GET up to 3 times (2-12 s of backoff) on a connection error or HTTP 500/502/503/504. One answer is not replayed: a secret GET that Dapr answers with HTTP 500 `ERR_SECRET_GET` and a "not found" message (including Kubernetes' invalid-name rejection) fails after one request, since the answer won't change. Every other 500, such as a throttled secret store, is still replayed.
 
 ---
 
@@ -217,6 +237,8 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_MAX_CONCURRENT_STORAGE_TRANSFERS` | `4` | Maximum concurrent object-store uploads/downloads. |
 | `ATLAN_OBSTORE_READ_TIMEOUT` | `90s` | **Progress-based** liveness bound: a transfer fails only if no bytes arrive for this long (the timer resets on every successful read). The primary timeout — a slow-but-progressing transfer survives; a genuine stall fails fast. |
 | `ATLAN_OBSTORE_TIMEOUT` | `30m` | **Overall-request** wall-clock backstop per object-store request. Scales with file size, not throughput, so it is deliberately generous; `ATLAN_OBSTORE_READ_TIMEOUT` is the real liveness bound. |
+| `ATLAN_OBSTORE_RETRY_MAX_RETRIES` | obstore default (`10`) | Maximum retries the object-store client (obstore's Rust layer) makes for a failed request, with backoff. The SDK adds no Python-level retry on top. |
+| `ATLAN_OBSTORE_RETRY_TIMEOUT_SECONDS` | obstore default (`180`) | Integer seconds the object-store client keeps retrying a failed request before giving up. An invalid value logs a warning and keeps the default. |
 | `ATLAN_STORAGE_RESUME_DOWNLOADS` | `true` | Kill-switch for resumable chunked downloads. When enabled, an interrupted chunked download keeps its in-flight part file and checkpoint sidecar (`.sdk-partial/{name}.part` and `.sdk-partial/{name}.transfer-state` beside the destination), and a retry fetches only the missing ranges. Set to `false` to restore delete-partial-on-failure behaviour. |
 | `ATLAN_STORAGE_PROGRESS_LOG_INTERVAL_SECONDS` | `30` | Interval (seconds) between in-progress heartbeat log lines during a long upload/download. `0` disables heartbeats. |
 | `ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS` | `30` | Interval (seconds) between progress marks while an activity waits on a per-destination storage lock (a second download of the same path queues behind the first). Capped at a quarter of `ATLAN_MAX_NO_PROGRESS_SECONDS` so a queued activity is never killed as stalled; floored at `1`. |
@@ -226,10 +248,12 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES` | `33554432` (32 MiB) | FileReference size threshold above which downloads use parallel range GETs. |
 | `ATLAN_FILE_REF_CHUNK_SIZE_BYTES` | `16777216` (16 MiB) | Size of each range-GET chunk in a chunked download. |
 | `ATLAN_FILE_REF_CHUNK_CONCURRENCY` | `4` | Maximum concurrent range-GET chunks per file. |
+| `ATLAN_STORAGE_TRANSFER_MEMORY_BUDGET_BYTES` | `0` (derived) | Bytes of transfer buffers the SDK's file transfers in the process may hold at once — the range GETs, streaming downloads and multipart uploads behind `download_file`, `upload_file`, the prefix operations and FileReference hand-offs reserve from one budget, so the per-call concurrency limits cannot multiply past it. Whole-object byte reads and writes are not covered: `CloudStore` (including `CloudStore.get_bytes()`) holds each object it moves in memory outside the budget. `0` takes a quarter of the container memory limit (never under 128 MiB; 1 GiB when no limit is known). A transfer queued on the budget marks progress, so it is never killed as stalled. |
 | `ENABLE_ATLAN_UPLOAD` | `false` | Enable uploading processed artifacts to the Atlan platform object store. |
 | `ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE` | `best_effort` | Controls dual-write behaviour when both stores are configured (SDR only). `best_effort` (default): artifact is written to the deployment (customer) store and the upstream (Atlan) store; a deployment-write failure logs a `WARNING` and the run continues. `required`: same dual-write, but a deployment-write failure causes the run to fail after the upstream write completes (a copy is guaranteed somewhere). `disabled`: upstream-only write (pre-BLDX-1464 behaviour). |
 | `ATLAN_VALIDATE_ASSETS_ON_UPLOAD` | `true` | Validate transformed assets against the pyatlan_v9 backbone before the SDR→Atlan upload handoff. Warn-only — invalid/orphaned assets are logged, never block the upload. Set to `false` to disable the check entirely. |
 | `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS` | `600` | Upper bound in seconds for one upload's asset-validation scan. The scan runs in an isolated child process (CNCT-85); past this bound the child is killed and the upload proceeds with a warning, so warn-only validation can neither stall nor crash a handoff. |
+| `ATLAN_FAULT_ISOLATION_IDLE_SECONDS` | `30` | Seconds a fault-isolation process pool (`run_fault_isolated` / `run_best_effort`, which the asset-validation scans use) keeps its spawn children after its last call finishes. Past it the children exit and their memory returns to the pod; the next call spawns afresh. `0` shuts the pool down as soon as it goes idle. Read when a pool goes idle, so a change applies from the next idle period. A value that isn't a non-negative number is ignored, with one warning. See [ADR-0017](adr/0017-native-execution-isolation.md#addendum-idle-children-are-reaped-fnd-4278). |
 | `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
 
 ---

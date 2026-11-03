@@ -325,7 +325,7 @@ def test_a_real_pyatlan_bundle_is_split_into_per_field_rules() -> None:
     details = {row["detail"] for row in _summary(report)}
 
     assert "pattern:qualified_name" in details
-    assert "required_for_creation:schema_qualified_name" in details
+    assert "required_for_creation:connection_qualified_name" in details
     assert (
         "one_of_required_for_creation:table|table_partition|view|materialised_view"
         in details

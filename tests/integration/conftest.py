@@ -49,9 +49,14 @@ def _integration_env_vars():
             os.environ[k] = v
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture
 def task_queue() -> str:
-    """Unique task queue name for this test session."""
+    """Unique task queue name for each test.
+
+    Function-scoped: the Temporal server is shared by the whole session, so a
+    session-wide queue would let a workflow left running by one test (or by an
+    earlier attempt of the same test) be picked up by the next test's worker.
+    """
     return f"integ-test-{uuid4().hex[:8]}"
 
 
@@ -138,11 +143,18 @@ def run_worker(temporal_client, task_queue):
 
         async with run_worker():
             result = await executor.execute(MyApp, ...)
+
+    The shutdown drain delay defaults to zero here. Every test exits the
+    worker after awaiting the workflow result, so the activity result RPCs
+    the delay waits for have already landed; the production default was
+    five idle seconds per test, about half the suite's wall time (FND-4305).
+    A test that wants the delay can pass ``shutdown_drain_delay_seconds``.
     """
     from application_sdk.execution._temporal.worker import create_worker
 
     @asynccontextmanager
     async def _ctx(**kwargs):
+        kwargs.setdefault("shutdown_drain_delay_seconds", 0)
         worker = create_worker(
             temporal_client,
             task_queue,
@@ -170,7 +182,7 @@ _DAPR_SECRETS_FILE = str(Path(__file__).parent / "secrets.json")
 
 
 @pytest_asyncio.fixture(scope="module", loop_scope="module")
-async def embedded_dapr_sidecar():
+async def embedded_dapr_sidecar(tmp_path_factory):
     """Embedded ``daprd`` for the module, provisioned in-process by the SDK.
 
     Uses :func:`embedded_dapr` (same code path as local development); the
@@ -182,7 +194,14 @@ async def embedded_dapr_sidecar():
     """
     from application_sdk.dev import embedded_dapr
 
-    async with embedded_dapr(secrets_file=_DAPR_SECRETS_FILE) as dapr:
+    # Per-module object/event roots: the defaults (``./local/dapr/...``) are
+    # relative to the cwd, so every module — and every run — would share them.
+    root = tmp_path_factory.mktemp("dapr")
+    async with embedded_dapr(
+        secrets_file=_DAPR_SECRETS_FILE,
+        objectstore_root=str(root / "objectstore"),
+        eventstore_root=str(root / "eventstore"),
+    ) as dapr:
         yield dapr
 
 

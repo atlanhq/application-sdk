@@ -26,8 +26,9 @@ class BaseMetadataExtractor(App):
     """Base App for all metadata extraction connectors.
 
     .. deprecated::
-        Will be removed in v4.0.0. Use
-        :class:`application_sdk.templates.SqlApp` instead.
+        Will be removed in v4.0.0. Use :class:`application_sdk.app.App`
+        for non-SQL sources, or :class:`application_sdk.templates.SqlApp`
+        for SQL sources, instead.
 
     ``upload_to_atlan`` is preserved as a thin deprecated wrapper so existing
     connectors continue to work.  Subclasses must implement ``run()`` with their
@@ -46,7 +47,8 @@ class BaseMetadataExtractor(App):
             return
         warnings.warn(
             f"{cls.__name__} subclasses BaseMetadataExtractor which is deprecated. "
-            "Use application_sdk.templates.SqlApp instead. "
+            "Use application_sdk.app.App for non-SQL sources, or "
+            "application_sdk.templates.SqlApp for SQL sources, instead. "
             "Will be removed in v4.0.0.",
             DeprecationWarning,
             stacklevel=2,

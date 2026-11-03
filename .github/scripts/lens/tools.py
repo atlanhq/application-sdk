@@ -230,6 +230,10 @@ COMMENT_ITEM = {
         },
         "severity": {"type": "string", "enum": list(SEVERITIES)},
         "category": {"type": "string", "enum": list(CATEGORIES)},
+        "compatibility": {
+            "type": "boolean",
+            "description": "true when the harm lands on something that existed BEFORE this PR: existing callers, a public or released contract, stored or persisted data, workflow replay, wire values. false for a defect in what the new code itself does.",
+        },
         "title": {"type": "string", "description": "One line, under 90 characters."},
         "content": {
             "type": "string",
@@ -240,7 +244,15 @@ COMMENT_ITEM = {
             "description": "Optional. Replacement for existing_code, complete and drop-in (same indentation). Omit if the fix is not a local edit.",
         },
     },
-    "required": ["path", "existing_code", "severity", "category", "title", "content"],
+    "required": [
+        "path",
+        "existing_code",
+        "severity",
+        "category",
+        "compatibility",
+        "title",
+        "content",
+    ],
 }
 
 

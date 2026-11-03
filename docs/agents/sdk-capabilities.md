@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.48.0
-source-sha:    c997fdd00ed75137f1d70809eace2117031881bb
-source-date:   2026-10-14T16:20:28+01:00
+sdk-version:   3.52.0
+source-sha:    ceb8a22d9d759347423105132ab8c83faa44127d
+source-date:   2026-10-27T15:56:40+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -18,25 +18,25 @@ do-not-edit:   re-run the skill instead of hand-editing
 
 | Subpackage | Purpose | Exports |
 |---|---|---|
-| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
+| `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 48 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 56 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 71 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 47 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 27 |
-| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 75 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 48 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 28 |
+| `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 40 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 48 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 425 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 85 |
 
 ## Subpackage Details
 
@@ -60,6 +60,13 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Signature:** `class AppContext(app_name: str, ...)`
 - **Summary:** Execution context passed to Apps during execution.
 - **Defined in:** `application_sdk/app/context.py`
+
+#### `AppContextError`
+
+- **Import:** `from application_sdk.app.base import AppContextError`
+- **Signature:** `class AppContextError(message: str, *, error_code: ErrorCode | None = None)`
+- **Summary:** Raised when App or task context is accessed outside of valid execution scope.
+- **Defined in:** `application_sdk/_context_errors.py`
 
 #### `AppError`
 
@@ -721,6 +728,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Use DuckDB to compare current tables vs previous current-state.
 - **Defined in:** `application_sdk/common/incremental/column_extraction/backfill.py`
 
+#### `get_logger`
+
+- **Import:** `from application_sdk.common.logger import get_logger`
+- **Signature:** `get_logger(name: str | None = None)`
+- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
+- **Defined in:** `application_sdk/_logging.py`
+
 #### `get_persistent_artifacts_path`
 
 - **Import:** `from application_sdk.common.incremental import get_persistent_artifacts_path`
@@ -993,7 +1007,7 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Import:** `from application_sdk.contracts import MaxItems`
 - **Signature:** `class MaxItems(limit: int)`
 - **Summary:** Constraint marker indicating maximum collection size.
-- **Defined in:** `application_sdk/contracts/types.py`
+- **Defined in:** `application_sdk/contracts/base.py`
 
 #### `Output`
 
@@ -1537,7 +1551,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Import:** `from application_sdk.credentials import parse_credentials_extra`
 - **Signature:** `parse_credentials_extra(credentials: dict[str, Any], *, strict: bool = True)`
 - **Summary:** Decode the ``extra`` field of a credential dict.
-- **Defined in:** `application_sdk/credentials/utils.py`
+- **Defined in:** `application_sdk/credentials/extra.py`
 
 #### `register_credential_type`
 
@@ -1837,11 +1851,25 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 ### Functions
 
+#### `classify_http_exception`
+
+- **Import:** `from application_sdk.errors import classify_http_exception`
+- **Signature:** `classify_http_exception(exc: BaseException, *, overrides: Mapping[int, type[AppError]] | None = None)`
+- **Summary:** Return the leaf class for the httpx failure behind ``exc``, or ``None``.
+- **Defined in:** `application_sdk/errors/http.py`
+
+#### `classify_http_status`
+
+- **Import:** `from application_sdk.errors import classify_http_status`
+- **Signature:** `classify_http_status(status: int, *, overrides: Mapping[int, type[AppError]] | None = None)`
+- **Summary:** Return the leaf class for an HTTP status, or ``None`` when unmapped.
+- **Defined in:** `application_sdk/errors/http.py`
+
 #### `redact_secrets`
 
 - **Import:** `from application_sdk.errors import redact_secrets`
 - **Signature:** `redact_secrets(text: str)`
-- **Summary:** Redact URL userinfo and known secret query-params from a string.
+- **Summary:** Redact credentials from a string bound for a log or the wire.
 - **Defined in:** `application_sdk/errors/base.py`
 
 #### `redact_wire_value`
@@ -2042,6 +2070,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_AUTH`
+
+- **Import:** `from application_sdk.errors import STORAGE_AUTH`
+- **Signature:** `STORAGE_AUTH`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_CONFIG`
 
 - **Import:** `from application_sdk.errors import STORAGE_CONFIG`
@@ -2067,6 +2102,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 
 - **Import:** `from application_sdk.errors import STORAGE_GATEWAY_AUTH`
 - **Signature:** `STORAGE_GATEWAY_AUTH`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
+#### `STORAGE_GATEWAY_NO_ROUTE`
+
+- **Import:** `from application_sdk.errors import STORAGE_GATEWAY_NO_ROUTE`
+- **Signature:** `STORAGE_GATEWAY_NO_ROUTE`
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
@@ -2229,6 +2271,12 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Import:** `from application_sdk.execution import TemporalActivityError`
 - **Signature:** `class TemporalActivityError(message: str, ...)`
 - **Summary:** Error raised on activity failure. _(re-exported from `temporalio.exceptions.ActivityError`)_
+
+#### `TemporalApplicationError`
+
+- **Import:** `from application_sdk.execution import TemporalApplicationError`
+- **Signature:** `class TemporalApplicationError(message: str, ...)`
+- **Summary:** Error raised during workflow/activity execution. _(re-exported from `temporalio.exceptions.ApplicationError`)_
 
 #### `TemporalAuthConfig`
 
@@ -2565,6 +2613,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Deprecated: use a typed ``AppError`` subclass — removed in v4.0.
 - **Defined in:** `application_sdk/handler/base.py`
 
+#### `ManifestInput`
+
+- **Import:** `from application_sdk.handler import ManifestInput`
+- **Signature:** `class ManifestInput`
+- **Summary:** Input for the optional ``Handler.compute_manifest`` operation.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
 #### `MetadataInput`
 
 - **Import:** `from application_sdk.handler import MetadataInput`
@@ -2670,6 +2725,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool)
 
 ### Classes
+
+#### `AgentSecretReadError`
+
+- **Import:** `from application_sdk.infrastructure import AgentSecretReadError`
+- **Signature:** `class AgentSecretReadError(label: str, *, fields: str, retryable: bool | None = None)`
+- **Summary:** The store refused to return a *declared* agent secret.
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
 
 #### `AsyncDaprClient`
 
@@ -2839,6 +2901,13 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 - **Summary:** Generic secret-store failure (category=DEPENDENCY_UNAVAILABLE).
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
+#### `SecretStoreTransientError`
+
+- **Import:** `from application_sdk.infrastructure import SecretStoreTransientError`
+- **Signature:** `class SecretStoreTransientError`
+- **Summary:** The secret store answered, but with a temporary failure (throttling or a
+- **Defined in:** `application_sdk/infrastructure/secrets.py`
+
 #### `SecretStoreUnavailableError`
 
 - **Import:** `from application_sdk.infrastructure import SecretStoreUnavailableError`
@@ -2900,7 +2969,7 @@ Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, Capaci
 #### `get_deployment_secret`
 
 - **Import:** `from application_sdk.infrastructure import get_deployment_secret`
-- **Signature:** `get_deployment_secret(key: str)`
+- **Signature:** `get_deployment_secret(key: str, *, raise_on_error: bool | None = None)`
 - **Summary:** Get a specific key from deployment configuration in the deployment secret store.
 - **Defined in:** `application_sdk/infrastructure/secrets.py`
 
@@ -3308,6 +3377,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** One or more object stores failed the SDR boot-time access preflight.
 - **Defined in:** `application_sdk/storage/errors.py`
 
+#### `StorageAuthError`
+
+- **Import:** `from application_sdk.storage import StorageAuthError`
+- **Signature:** `class StorageAuthError(message: str, ...)`
+- **Summary:** The store rejected the credential itself (HTTP 401).
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageBindingBrokenError`
 
 - **Import:** `from application_sdk.storage import StorageBindingBrokenError`
@@ -3355,6 +3431,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageGatewayAuthUnavailableError`
 - **Signature:** `class StorageGatewayAuthUnavailableError(message: str, ...)`
 - **Summary:** A request was rejected by the object-store gateway's own auth backend.
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageGatewayNoRouteError`
+
+- **Import:** `from application_sdk.storage import StorageGatewayNoRouteError`
+- **Signature:** `class StorageGatewayNoRouteError(message: str, ...)`
+- **Summary:** The object-store gateway answered 404 because its route table is not loaded yet.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageIntegrityError`
@@ -6395,7 +6478,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `validate_asset`
 
 - **Import:** `from application_sdk.testing.integration import validate_asset`
-- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True, creation_rules: frozenset[AssetCreationRules] = frozenset())`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -6811,6 +6894,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** How one validated hand-off was assembled — context the report cannot know.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `AssetCreationRules`
+
+- **Import:** `from application_sdk.validation import AssetCreationRules`
+- **Signature:** `class AssetCreationRules`
+- **Summary:** Named sets of extra create-time checks, each off unless an app asks for it.
+- **Defined in:** `application_sdk/validation/asset_rules.py`
+
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.validation import AssetValidationFailure`
@@ -7071,7 +7161,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_asset`
 
 - **Import:** `from application_sdk.validation import validate_asset`
-- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True)`
+- **Signature:** `validate_asset(asset: Asset, *, for_creation: bool = True, creation_rules: frozenset[AssetCreationRules] = frozenset())`
 - **Summary:** Run pyatlan_v9's ``.validate()`` and return its error messages.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -7517,6 +7607,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `auto_materialize: bool` `= True`
   - `manifest_path: str | None`
   - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
+  - `size_bytes: int | None` `= Field(default=None, ge=0)`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`
@@ -7690,6 +7781,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `aws_region: str` `= Field(default='', alias='aws-region')` — AWS region for the secret manager.
   - `aws_auth_method: str` `= Field(default='', alias='aws-auth-method')` — AWS auth method: ``iam``, ``iam-assume-role``, ``access-key``.
   - `azure_auth_method: str` `= Field(default='', alias='azure-auth-method')` — Azure auth method: ``managed_identity``, ``service_principal``.
+  - `value_sources: dict[str, dict[str, str]] | None` `= Field(default=None, alias=VALUE_SOURCES_KEY)` — Declared ``secretKeyRef`` sources, ``{field: {"name", "key"}}``, of a
 - **Defined in:** `application_sdk/credentials/spec.py`
 
 #### `ApiMetadataObject`
@@ -7817,6 +7909,16 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `key: str` — Credential key (e.g., 'api_key', 'username').
   - `value: str` — Credential value (sensitive — never log this directly).
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `ManifestInput`
+
+- **Import:** `from application_sdk.handler.contracts import ManifestInput`
+- **Summary:** Input for the optional ``Handler.compute_manifest`` operation.
+- **Fields:**
+  - `entrypoint: str` — The entry point whose manifest is requested.
+  - `manifest: dict[str, Any]` — Its generated manifest, tokens already resolved. Open on purpose: the
+  - `fe_inputs: dict[str, Any]` `= Field(default_factory=dict)` — The decoded setup-form values; empty when the request sends none.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `MetadataInput`

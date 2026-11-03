@@ -41,6 +41,10 @@ with workflow.unsafe.imports_passed_through():
         PreconditionError,
         SourceUnavailableError,
     )
+    from application_sdk.handler._dispatch import (
+        mirror_template_key,
+        resolve_handler_op,
+    )
     from application_sdk.handler._preflight_outcome import (
         PreflightSurface,
         emit_preflight_check_outcome,
@@ -275,55 +279,40 @@ def _env_seconds(name: str, default: int) -> int:
 # activity.heartbeat(), so setting a heartbeat_timeout would hard-cap runtime at
 # that interval and fail any real source check that runs longer than it —
 # start_to_close is the correct in-flight bound here.
-_AUTH_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", 300)
-)
-_PREFLIGHT_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_SCHEDULE_TO_CLOSE_SECONDS", 300)
-)
-_METADATA_SCHEDULE_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", 300)
-)
+def _load_timeout_pair(op: str, env_label: str) -> tuple[timedelta, timedelta]:
+    """Read one activity's ``(start_to_close, schedule_to_close)`` from env.
 
-_AUTH_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", 300)
-)
-_PREFLIGHT_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_PREFLIGHT_START_TO_CLOSE_SECONDS", 300)
-)
-_METADATA_START_TO_CLOSE = timedelta(
-    seconds=_env_seconds("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", 300)
-)
-
-# The default pairs are equal (flat 300s cap), but an operator can override
-# either half independently. Warn (don't raise) at module load only if a pair is
-# truly *inverted* — start_to_close > schedule_to_close — which Temporal rejects
-# at schedule time; equal pairs are a valid flat cap and stay silent.
-for _op, _env_label, _start, _schedule in (
-    ("test_auth", "AUTH", _AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE),
-    (
-        "preflight_check",
-        "PREFLIGHT",
-        _PREFLIGHT_START_TO_CLOSE,
-        _PREFLIGHT_SCHEDULE_TO_CLOSE,
-    ),
-    (
-        "fetch_metadata",
-        "METADATA",
-        _METADATA_START_TO_CLOSE,
-        _METADATA_SCHEDULE_TO_CLOSE,
-    ),
-):
-    if _start > _schedule:
+    The default pairs are equal (flat 300s cap), but an operator can override
+    either half independently. Warn (don't raise) only if the pair is truly
+    *inverted* — start_to_close > schedule_to_close — which Temporal rejects at
+    schedule time; equal pairs are a valid flat cap and stay silent.
+    """
+    start = timedelta(
+        seconds=_env_seconds(f"ATLAN_SDR_{env_label}_START_TO_CLOSE_SECONDS", 300)
+    )
+    schedule = timedelta(
+        seconds=_env_seconds(f"ATLAN_SDR_{env_label}_SCHEDULE_TO_CLOSE_SECONDS", 300)
+    )
+    if start > schedule:
         logger.warning(
             "SDR %s: start_to_close (%.0fs) > schedule_to_close (%.0fs); Temporal "
             "rejects a start_to_close larger than schedule_to_close. Check the "
             "ATLAN_SDR_%s_{START,SCHEDULE}_TO_CLOSE_SECONDS overrides.",
-            _op,
-            _start.total_seconds(),
-            _schedule.total_seconds(),
-            _env_label,
+            op,
+            start.total_seconds(),
+            schedule.total_seconds(),
+            env_label,
         )
+    return start, schedule
+
+
+_AUTH_START_TO_CLOSE, _AUTH_SCHEDULE_TO_CLOSE = _load_timeout_pair("test_auth", "AUTH")
+_PREFLIGHT_START_TO_CLOSE, _PREFLIGHT_SCHEDULE_TO_CLOSE = _load_timeout_pair(
+    "preflight_check", "PREFLIGHT"
+)
+_METADATA_START_TO_CLOSE, _METADATA_SCHEDULE_TO_CLOSE = _load_timeout_pair(
+    "fetch_metadata", "METADATA"
+)
 
 # test_auth: fail-fast. A wrong password should not retry; transient network
 # errors get one extra attempt only because the user is sitting on the UI.
@@ -398,6 +387,7 @@ SDR_WORKFLOWS: tuple[type, ...] = (
 class _SdrBinding:
     handler: Handler
     app_name: str
+    app_package: str = "app"
 
 
 async def _resolve_agent_credentials(
@@ -578,15 +568,24 @@ def _secret_store_check_row(result: SecretStoreCheckResult) -> PreflightCheck:
 def build_sdr_activities(
     handler: Handler,
     app_name: str,
+    *,
+    app_package: str = "app",
 ) -> list[Callable[..., Awaitable[Any]]]:
     """Build three Temporal activity callables bound to a Handler instance.
 
-    Each activity mirrors the dispatch done by ``handler/service.py`` for
-    its HTTP counterpart: it builds a ``HandlerContext`` from the input's
-    credentials (and the worker's secret store, if any), binds it via
-    ``bind_handler_context`` (ContextVar-backed) for the duration of the
-    call, ensuring concurrent activities on a shared handler cannot
-    overwrite each other's context.
+    Each activity builds a ``HandlerContext`` from the input's credentials (and
+    the worker's secret store, if any) and binds it via ``bind_handler_context``
+    (ContextVar-backed) for the duration of the call, ensuring concurrent
+    activities on a shared handler cannot overwrite each other's context.
+
+    ``test_auth`` and ``fetch_metadata`` resolve the callable through
+    :func:`~application_sdk.handler._dispatch.resolve_handler_op`, the same
+    helper the HTTP routes use, so a per-entrypoint
+    ``app.<segment>.handler.<op>`` hook answers for ``input.entrypoint`` over SDR
+    exactly as it does over HTTP. ``app_package`` names the package holding those
+    modules, as it does for :func:`~application_sdk.handler.routes.register_handler_routes`;
+    the worker uses the default ``app`` for both. ``preflight_check`` still calls
+    the app-level ``Handler`` directly.
 
     When the input carries an ``agent_json`` reference (SDR / customer-infra
     connections, where the credential is a ``secret-path`` reference the worker
@@ -599,14 +598,20 @@ def build_sdr_activities(
     Activities registered here have closure access to ``handler``; they
     are resolved by name from the workflows in :data:`SDR_WORKFLOWS`.
     """
-    binding = _SdrBinding(handler=handler, app_name=app_name)
+    binding = _SdrBinding(handler=handler, app_name=app_name, app_package=app_package)
 
     @activity.defn(name=SDR_TEST_AUTH_ACTIVITY)
     async def test_auth(input: AuthInput) -> AuthOutput:
         if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
-        with bind_invocation_context(binding.app_name, input.credentials):
-            return await binding.handler.test_auth(input)
+        run_test_auth = resolve_handler_op(
+            binding.handler,
+            "test_auth",
+            input.entrypoint,
+            app_package=binding.app_package,
+        )
+        with bind_invocation_context(binding.app_name, input.credentials) as context:
+            return await run_test_auth(input, context)
 
     @activity.defn(name=SDR_PREFLIGHT_ACTIVITY)
     async def preflight_check(input: PreflightInput) -> PreflightOutput:
@@ -694,12 +699,14 @@ def build_sdr_activities(
     async def fetch_metadata(input: MetadataInput) -> MetadataOutput:
         if input.agent_json is not None and input.agent_json.is_populated():
             input.credentials = await _resolve_agent_credentials(input.agent_json)
-        # Mirror the widget routing key onto object_filter when that's empty, matching
-        # the HTTP /metadata route, so per-entrypoint hooks reading the legacy field
-        # keep working over SDR (e.g. the warehouse-vs-schema-tree metadata widget).
-        if not input.object_filter and input.metadata_template_key:
-            input.object_filter = input.metadata_template_key
-        with bind_invocation_context(binding.app_name, input.credentials):
-            return await binding.handler.fetch_metadata(input)
+        input = mirror_template_key(input)
+        run_fetch_metadata = resolve_handler_op(
+            binding.handler,
+            "fetch_metadata",
+            input.entrypoint,
+            app_package=binding.app_package,
+        )
+        with bind_invocation_context(binding.app_name, input.credentials) as context:
+            return await run_fetch_metadata(input, context)
 
     return [test_auth, preflight_check, fetch_metadata]

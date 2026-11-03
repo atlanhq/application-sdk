@@ -30,6 +30,7 @@ from application_sdk.common.incremental.incremental_errors import (
     ConnectionQualifiedNameMissingError,
 )
 from application_sdk.storage.ops import _put
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # extract_epoch_id_from_qualified_name
@@ -258,7 +259,8 @@ class TestCountJsonFilesRecursive:
             return real_scandir(path)
 
         with (
-            patch("application_sdk.common._listing.os.scandir", _scandir),
+            private_stdlib("application_sdk.common._listing", "os") as local_os,
+            patch.object(local_os, "scandir", _scandir),
             pytest.raises(PermissionError),
         ):
             count_json_files_recursive(tmp_path)

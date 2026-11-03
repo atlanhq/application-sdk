@@ -82,6 +82,7 @@ from pathlib import Path
 # regenerate_contract.py / check_generated_freshness.py — see that module.
 sys.path.insert(0, str(Path(__file__).parent))
 from pkl_contract_layout import (  # noqa: E402
+    CALLER_NODE_PATHSPEC,
     GENERATED_DIR,
     ROOT_FILES,
     baseline_contract_ref,
@@ -94,9 +95,11 @@ from pkl_contract_layout import (  # noqa: E402
 # Lock file produced by `pkl project resolve`.
 LOCK_PATH = "contract/PklProject.deps.json"
 
-# Everything a contract can emit, relative to the repo root. Mirrors the
-# cleanup list in contract-toolkit/scripts/regenerate-all.sh.
-OUTPUT_PATHS = [GENERATED_DIR, *ROOT_FILES]
+# Everything a contract can emit, relative to the repo root, as git pathspecs.
+# Mirrors the cleanup list in contract-toolkit/scripts/regenerate-all.sh.
+# CALLER_NODE_PATHSPEC names a system app's caller nodes only (FND-3563): the
+# rest of contract/generated/ is the app's.
+OUTPUT_PATHS = [GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
 
 # `pkl eval` can fail transiently on a cold CI runner while fetching the remote
 # @app-contract-toolkit package — a network blip returns a non-zero code (not an
@@ -420,6 +423,30 @@ def _format_generated() -> None:
     format_generated_python(run)
 
 
+def _git_matches(pathspec: str) -> bool:
+    """Whether git tracks, or would add, anything matching *pathspec*.
+
+    ``os.path.exists`` cannot answer for a magic pathspec such as
+    ``CALLER_NODE_PATHSPEC``, nor for a tracked file that regeneration deleted
+    along with its directory, and ``git add`` fails on a pathspec that matches
+    nothing. ``--cached`` keeps a deleted tracked file in the answer, so its
+    deletion is staged."""
+    proc = subprocess.run(
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            pathspec,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode == 0 and bool(proc.stdout.strip())
+
+
 def stage_and_commit(message: str) -> bool:
     """Stage the known sync outputs and commit iff something changed.
 
@@ -433,7 +460,7 @@ def stage_and_commit(message: str) -> bool:
         check=True,
     )
     for path in [LOCK_PATH, *OUTPUT_PATHS]:
-        if os.path.exists(path):
+        if os.path.exists(path) or _git_matches(path):
             run(["git", "add", "-A", "--", path], check=True)
 
     if run(["git", "diff", "--cached", "--quiet"]).returncode == 0:

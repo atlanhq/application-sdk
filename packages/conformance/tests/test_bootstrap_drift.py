@@ -722,7 +722,8 @@ def test_tests_yaml_explicit_secrets_mapping_not_flagged(
     block = (
         "    secrets:\n"
         "      E2E_SOURCE_ENV_JSON: |\n"
-        '        {"E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}'
+        '        {"E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}\n'
+        "      TWINGATE_SHARED_KEY: ${{ secrets.TWINGATE_SHARED_KEY }}"
     )
     wf_dir = tmp_path / ".github" / "workflows"
     wf_dir.mkdir(parents=True)
@@ -730,6 +731,24 @@ def test_tests_yaml_explicit_secrets_mapping_not_flagged(
     wf.write_text(render("tests.yaml", app_name="mysql", secrets_block=block))
     findings = scan_path(wf, tmp_path)
     assert findings == [], [f.message for f in findings]
+
+
+def test_tests_yaml_explicit_mapping_missing_a_required_secret_is_drift(
+    tmp_path: pathlib.Path,
+) -> None:
+    block = (
+        "    secrets:\n"
+        "      E2E_SOURCE_ENV_JSON: |\n"
+        '        {"E2E_WIDGET_HOST": ${{ toJSON(secrets.E2E_WIDGET_HOST) }}}'
+    )
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    wf = wf_dir / "tests.yaml"
+    wf.write_text(render("tests.yaml", app_name="mysql", secrets_block=block))
+    findings = scan_path(wf, tmp_path)
+    assert [f.rule_id for f in findings] == ["C002"]
+    assert "TWINGATE_SHARED_KEY" in findings[0].message
+    assert "structural changes" not in findings[0].message
 
 
 def test_tests_yaml_unpreservable_declaration_explained_in_the_finding(

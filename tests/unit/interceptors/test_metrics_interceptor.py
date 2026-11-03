@@ -13,6 +13,7 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
     InternalError,
 )
+from application_sdk.execution._temporal.interceptors import metrics as metrics_mod
 from application_sdk.execution._temporal.interceptors.metrics import (
     _INSTRUMENTS,
     CLASSIFIED_TYPED,
@@ -27,6 +28,7 @@ from application_sdk.execution._temporal.interceptors.metrics import (
     _workflow_failures_classified,
 )
 from application_sdk.observability.resource_sampler import ResourceSample
+from tests.unit.private_stdlib import private_stdlib
 
 _METER_TARGET = (
     "application_sdk.execution._temporal.interceptors.metrics._otel_metrics.get_meter"
@@ -437,10 +439,8 @@ class TestMetricsActivityInboundInterceptor:
                 "application_sdk.execution._temporal.interceptors.metrics.resource_sampler.sample",
                 side_effect=[fake_start, fake_end],
             ),
-            patch(
-                "application_sdk.execution._temporal.interceptors.metrics.time.monotonic_ns",
-                side_effect=[0, 1_000_000_000],
-            ),
+            private_stdlib(metrics_mod, "time") as local_time,
+            patch.object(local_time, "monotonic_ns", side_effect=[0, 1_000_000_000]),
         ):
             mock_act.info.return_value = MockActivityInfo()
             await interceptor.execute_activity(MockExecuteActivityInput())
@@ -477,10 +477,8 @@ class TestMetricsActivityInboundInterceptor:
                 "application_sdk.execution._temporal.interceptors.metrics.resource_sampler.sample",
                 side_effect=[fake_start, fake_end],
             ),
-            patch(
-                "application_sdk.execution._temporal.interceptors.metrics.time.monotonic_ns",
-                side_effect=[0, 1_000_000_000],
-            ),
+            private_stdlib(metrics_mod, "time") as local_time,
+            patch.object(local_time, "monotonic_ns", side_effect=[0, 1_000_000_000]),
         ):
             mock_act.info.return_value = MockActivityInfo()
             with pytest.raises(ValueError):

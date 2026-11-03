@@ -26,9 +26,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import context, prompts, trace
+from .baseline import PRAdditions
 from .bundle import Bundle
 from .diff import anchor, locate_in_text
-from .findings import Finding
+from .findings import BLOCKING, Finding
 from .llm import (
     BudgetExhausted,
     Client,
@@ -139,6 +140,14 @@ def build_context(
             "<released_surface_removals>\n"
             f"{pr_meta['released_surface_removals']}\n</released_surface_removals>"
         )
+    if pr_meta.get("paths_added"):
+        parts.append(
+            f"<paths_added_by_this_pr>\n{pr_meta['paths_added']}\n</paths_added_by_this_pr>"
+        )
+    if pr_meta.get("symbols_added"):
+        parts.append(
+            f"<symbols_added_by_this_pr>\n{pr_meta['symbols_added']}\n</symbols_added_by_this_pr>"
+        )
     # Callers (followed through thin wrappers), ranked tests, public-API flags,
     # each changed function in full, and repo code the change or the PR names.
     ctx_block, _api = context.build(
@@ -178,6 +187,7 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
         body=str(raw.get("content") or "")[:1500],
         evidence=evidence,
         suggestion=str(raw.get("suggestion_code") or ""),
+        compatibility=raw.get("compatibility") is True,
     )
     if not f.body or not evidence.strip():
         return None
@@ -205,7 +215,10 @@ def place(ws: Workspace, bundle: Bundle, raw: dict[str, Any]) -> Finding | None:
 
 
 def calibrate(
-    found: list[Finding], limits: "AgentLimits"
+    found: list[Finding],
+    limits: "AgentLimits",
+    ws: Workspace | None = None,
+    added: PRAdditions | None = None,
 ) -> tuple[list[Finding], list[str]]:
     """Severity rules enforced in code, never by asking.
 
@@ -213,6 +226,10 @@ def calibrate(
       low, at most `max_unchanged` per bundle — a pointer, never a rabbit hole.
     - A finding only in a test file is test hygiene: capped at low, unless it is
       a security finding (a real credential in a fixture is still critical).
+    - A compatibility claim about a file or symbol this PR itself added
+      (`added`, measured against the merge base) is capped at medium: nothing
+      before this PR could depend on it, so it cannot block merge. It stays
+      visible in case the model mislabelled a real defect.
     Returns the kept findings and a note per change made."""
     notes: list[str] = []
     kept: list[Finding] = []
@@ -235,6 +252,14 @@ def calibrate(
         ):
             notes.append(f"{f.id}: {f.severity} → low (test-only)")
             f.severity = "low"
+        elif f.compatibility and f.severity in BLOCKING and ws and added:
+            line = f.line or f.head_line
+            why = added.added(
+                f.path, ws.index.enclosing(f.path, line) if line else None
+            )
+            if why:
+                notes.append(f"{f.id}: {f.severity} → medium ({why})")
+                f.severity = "medium"
         kept.append(f)
     return kept, notes
 
@@ -253,6 +278,7 @@ def review_bundle(
     *,
     reflect: bool = True,
     budget_usd: float | None = None,
+    added: PRAdditions | None = None,
 ) -> BundleResult:
     res = BundleResult(label=bundle.label)
     messages: list[dict[str, Any]] = [
@@ -334,7 +360,7 @@ def review_bundle(
                 else ""
             )
         )
-    placed, calibration = calibrate(placed, limits)
+    placed, calibration = calibrate(placed, limits, ws, added)
     for note in calibration:
         trace.line(f"[{bundle.label}] severity rule: {note}")
     # Nits are capped in code, never by asking: every finding at medium+ is kept.

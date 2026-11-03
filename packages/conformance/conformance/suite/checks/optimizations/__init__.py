@@ -64,7 +64,11 @@ from ._app_name_placeholder import check_o005
 from ._asset_mapper import check_o002, check_o003
 from ._pyatlan_v9 import check_o004
 from ._rocksdict import check_o006
-from ._stdlib_json import OrjsonOverStdlibJsonChecker, _collect_json_bindings
+from ._stdlib_json import (
+    OrjsonOverStdlibJsonChecker,
+    _collect_json_bindings,
+    _collect_json_fallback_calls,
+)
 
 SERIES = "O"
 
@@ -86,12 +90,14 @@ def scan_text(text: str, file: str) -> list[Finding]:
         return []
 
     module_names, func_names = _collect_json_bindings(tree)
+    fallback_calls = _collect_json_fallback_calls(tree, module_names, func_names)
     directives = _parse_directives(text)
     checker = OrjsonOverStdlibJsonChecker(
         filename=file,
         directives=directives,
         json_module_names=module_names,
         json_func_names=func_names,
+        fallback_calls=fallback_calls,
     )
     checker.visit(tree)
     return (

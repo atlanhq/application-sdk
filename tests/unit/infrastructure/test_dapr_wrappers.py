@@ -22,6 +22,7 @@ from application_sdk.infrastructure.pubsub import PubSubError
 from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
 )
 from application_sdk.infrastructure.state import StateStoreError
@@ -191,6 +192,309 @@ class TestDaprSecretStore:
         )
         with pytest.raises(SecretNotFoundError) as exc:
             await self.store.get("x")
+        assert not isinstance(exc.value, SecretStoreUnavailableError)
+        assert exc.value.effective_retryable is False
+
+    def _dapr_error(self, status: int, code: str, message: str) -> None:
+        req = httpx.Request("GET", "http://localhost/secret")
+        resp = httpx.Response(
+            status, request=req, json={"errorCode": code, "message": message}
+        )
+        self.client.get_secret.side_effect = httpx.HTTPStatusError(
+            "dapr error", request=req, response=resp
+        )
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            # secretstores.local.file
+            "secret db/creds not found",
+            # Kubernetes
+            'secrets "db/creds" not found',
+            # AWS Secrets Manager (aws-sdk-go-v2 wording)
+            "couldn't get secret: operation error Secrets Manager: "
+            "GetSecretValue, https response error StatusCode: 400, RequestID: "
+            "00000000-0000-0000-0000-000000000000, ResourceNotFoundException: "
+            "Secrets Manager can't find the specified secret.",
+            # Azure Key Vault
+            "SecretNotFound: A secret with (name/id) example was not found",
+            # GCP Secret Manager
+            "failed to access secret version: rpc error: code = NotFound desc "
+            "= Secret [projects/123/secrets/db/creds] not found or has no versions.",
+            # HashiCorp Vault
+            "getSecret db/creds failed secret key or version not exist",
+        ],
+    )
+    async def test_err_secret_get_with_not_found_shape_is_not_found(
+        self, backend_error: str
+    ):
+        """FND-4077: ``ERR_SECRET_GET`` is "absent" only with a not-found message."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretNotFoundError) as exc:
+            await self.store.get("db/creds")
+        assert exc.value.effective_retryable is False
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            pytest.param(
+                "couldn't get secret: operation error Secrets Manager: "
+                "GetSecretValue, https response error StatusCode: 400, "
+                "RequestID: 00000000-0000-0000-0000-000000000000, api error "
+                "ThrottlingException: Rate exceeded",
+                id="throttled",
+            ),
+            pytest.param(
+                "couldn't get secret: operation error Secrets Manager: "
+                "GetSecretValue, https response error StatusCode: 400, "
+                "RequestID: 00000000-0000-0000-0000-000000000000, api error "
+                "AccessDeniedException: User: arn:aws:sts::000000000000:"
+                "assumed-role/example-role/example is not authorized to "
+                "perform: secretsmanager:GetSecretValue on resource: db/creds",
+                id="access-denied",
+            ),
+            pytest.param(
+                "couldn't get secret: operation error Secrets Manager: "
+                "GetSecretValue, https response error StatusCode: 400, "
+                "RequestID: 00000000-0000-0000-0000-000000000000, api error "
+                "DecryptionFailure: Access to KMS is not allowed",
+                id="kms",
+            ),
+            pytest.param(
+                "couldn't get secret: operation error Secrets Manager: "
+                "GetSecretValue, KMS key not found",
+                id="other-resource-not-found",
+            ),
+        ],
+    )
+    async def test_err_secret_get_store_failure_is_retryable_store_error(
+        self, backend_error: str
+    ):
+        """FND-4077: a throttled / denied / KMS ``ERR_SECRET_GET`` is the store
+        failing, not the key being absent — a retryable ``SecretStoreError``
+        carrying the cause, never ``SecretNotFoundError``."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretNotFoundError)
+        assert not isinstance(exc.value, SecretStoreUnavailableError)
+        assert exc.value.effective_retryable is True
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+        # The backend's own wording reaches the message for diagnosis.
+        assert backend_error.split(": ")[-1] in exc.value.message
+
+    @pytest.mark.parametrize(
+        "name,reason",
+        [
+            ("arn:aws:iam::123456789012:role/example-role", "may not contain '/'"),
+            ("example%name", "may not contain '%'"),
+        ],
+    )
+    async def test_k8s_invalid_resource_name_is_not_found(self, name: str, reason: str):
+        """A name the store rejects as invalid cannot exist there: a literal,
+        not a ref, so it classifies as not-found."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            f"failed getting secret with key {name} from secret store "
+            f'glue-secretstore: invalid resource name "{name}": [{reason}]',
+        )
+        with pytest.raises(SecretNotFoundError):
+            await self.store.get(name)
+        assert await self.store.get_optional(name) is None
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            pytest.param("ThrottlingException: Rate exceeded", id="throttled"),
+            pytest.param("invalid credentials", id="invalid-credentials"),
+            pytest.param('invalid resource name "db/creds"', id="no-may-not-reason"),
+        ],
+    )
+    async def test_invalid_wording_without_name_reason_stays_store_failure(
+        self, backend_error: str
+    ):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretNotFoundError)
+
+    async def test_dapr_wrapper_words_never_count_as_absence(self):
+        """Only the backend's own error is matched: Dapr's
+        ``failed getting secret with key … from secret store …:`` wrapper says
+        "secret" too, and must not combine with a later "not found" about
+        another resource."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            "secretstore: KMS key not found",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretNotFoundError)
+
+    async def test_key_containing_not_found_does_not_mask_a_store_failure(self):
+        """The key name is removed before matching, so a key that itself says
+        "not found" can't make a throttled lookup read as an absence."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key not found from secret store "
+            "secretstore: couldn't get secret: ThrottlingException: Rate exceeded",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("not found")
+        assert not isinstance(exc.value, SecretNotFoundError)
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            pytest.param(
+                "couldn't get secret: ThrottlingException: Rate exceeded",
+                id="aws-throttling",
+            ),
+            pytest.param(
+                "couldn't get secret: TooManyRequestsException: slow down",
+                id="aws-too-many-requests",
+            ),
+            pytest.param(
+                "rpc error: code = Unavailable desc = the service is unavailable",
+                id="gcp-unavailable",
+            ),
+            pytest.param(
+                "rpc error: code = ResourceExhausted desc = quota",
+                id="gcp-resource-exhausted",
+            ),
+            pytest.param(
+                "GET https://example.vault.azure.net/secrets/x RESPONSE 429: "
+                "429 Too Many Requests",
+                id="azure-429",
+            ),
+            pytest.param(
+                "GET https://example.vault.azure.net/secrets/x RESPONSE 503: "
+                "503 Service Unavailable",
+                id="azure-5xx",
+            ),
+            pytest.param(
+                "the server is currently unable to handle the request",
+                id="kubernetes-unavailable",
+            ),
+            pytest.param("etcdserver: request timed out", id="etcd-timeout"),
+        ],
+    )
+    async def test_transient_backend_wording_is_transient_error(
+        self, backend_error: str
+    ):
+        """A throttle or transient server error is the store answering "try
+        again", not a rejection: the ``SecretStoreTransientError`` subtype,
+        which callers retry rather than keep a value or blame the user."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretStoreTransientError) as exc:
+            await self.store.get("db/creds")
+        assert exc.value.effective_retryable is True
+        assert isinstance(exc.value.cause, httpx.HTTPStatusError)
+        assert exc.value.code == "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
+
+    @pytest.mark.parametrize(
+        "backend_error",
+        [
+            pytest.param(
+                "couldn't get secret: AccessDeniedException: not authorized",
+                id="aws-access-denied",
+            ),
+            pytest.param(
+                "BadParameter: The request URI contains an invalid name",
+                id="azure-invalid-name",
+            ),
+            pytest.param("some wording no backend documents", id="unrecognised"),
+        ],
+    )
+    async def test_non_transient_wording_is_not_transient_error(
+        self, backend_error: str
+    ):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key db/creds from secret store "
+            f"secretstore: {backend_error}",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("db/creds")
+        assert not isinstance(exc.value, SecretStoreTransientError)
+        assert not isinstance(exc.value, SecretNotFoundError)
+
+    @pytest.mark.parametrize("short_key", ["e", "x", "in"])
+    async def test_a_short_key_does_not_erase_the_backend_wording(self, short_key):
+        """The key is stripped only as a whole token. Removing every
+        occurrence of a one-letter name (``e``) would mangle
+        ``ThrottlingException: Rate exceeded`` past recognition, and a
+        throttled declared ref would be routed to the user."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            f"failed getting secret with key {short_key} from secret store "
+            f"secretstore: couldn't get secret {short_key}: api error "
+            "ThrottlingException: Rate exceeded",
+        )
+        with pytest.raises(SecretStoreTransientError):
+            await self.store.get(short_key)
+
+    async def test_a_short_key_does_not_erase_the_not_found_wording(self):
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key e from secret store secretstore: "
+            "secret e not found",
+        )
+        assert await self.store.get_optional("e") is None
+
+    async def test_key_named_like_a_throttle_does_not_make_a_denial_transient(self):
+        """The key is stripped before matching, so a key that reads like a
+        throttling wording can't turn an access denial into a transient."""
+        self._dapr_error(
+            500,
+            "ERR_SECRET_GET",
+            "failed getting secret with key ThrottlingException from secret "
+            "store secretstore: AccessDeniedException: not authorized",
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("ThrottlingException")
+        assert not isinstance(exc.value, SecretStoreTransientError)
+
+    async def test_403_permission_denied_is_non_retryable_rejection(self):
+        """Dapr's secret-scoping denial is the store refusing the request, not
+        the key being absent: a definitive, non-retryable rejection. Collapsing
+        it to not-found would let single-key resolution skip the field and send
+        the ref-key as its value."""
+        self._dapr_error(
+            403,
+            "ERR_PERMISSION_DENIED",
+            'access denied by policy to get "svc_reader" from "secretstore"',
+        )
+        with pytest.raises(SecretStoreError) as exc:
+            await self.store.get("svc_reader")
+        assert not isinstance(exc.value, SecretNotFoundError)
         assert not isinstance(exc.value, SecretStoreUnavailableError)
         assert exc.value.effective_retryable is False
 

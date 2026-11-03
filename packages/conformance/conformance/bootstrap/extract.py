@@ -404,8 +404,53 @@ def extract_tests_yaml_params(text: str) -> dict[str, str]:
         params["force_external_runtime"] = force_external
     secrets_block = extract_secrets_block(text)
     if secrets_block:
-        params["secrets_block"] = secrets_block
+        params["secrets_block"] = with_required_secrets(secrets_block)
     return params
+
+
+REQUIRED_PASSTHROUGH_SECRETS: tuple[str, ...] = ("TWINGATE_SHARED_KEY",)
+
+
+def with_required_secrets(block: str) -> str:
+    """Return *block* with each ``REQUIRED_PASSTHROUGH_SECRETS`` entry present.
+
+    *block* is an explicit ``secrets:`` mapping as ``extract_secrets_block``
+    returns it. A missing name is appended as a same-name pass-through at the
+    mapping's own child indent. Names compare case-insensitively, as GitHub
+    secret names do, and a name already declared is left exactly as written.
+
+    Keys are read through ``structural_lines`` and ``_KEY_LINE_RE`` like every
+    other reader here. When a direct child cannot be read as a key (a
+    ``KEY :`` spelling, a tab indent, no children at all) the block is returned
+    unchanged: appending to a mapping whose keys are not all known could add a
+    duplicate, which GitHub rejects outright.
+    """
+    lines = block.split("\n")
+    structural = structural_lines(block)
+    head = next(
+        (i for i, line in enumerate(structural) if _SECRETS_MAPPING_RE.match(line)),
+        None,
+    )
+    if head is None:
+        return block
+    children = [line for line in structural[head + 1 :] if line.strip()]
+    if not children:
+        return block
+    pad = min((line[: len(line) - len(line.lstrip())] for line in children), key=len)
+    if not pad or "\t" in pad:
+        return block
+    declared: set[str] = set()
+    for line in children:
+        if not line.startswith(pad) or line[len(pad)] in " \t":
+            continue
+        m = _KEY_LINE_RE.match(line)
+        if m is None or m.group("indent") != pad:
+            return block
+        declared.add(_yaml_key(m.group("key")).casefold())
+    for name in REQUIRED_PASSTHROUGH_SECRETS:
+        if name.casefold() not in declared:
+            lines.append(f"{pad}{name}: ${{{{ secrets.{name} }}}}")
+    return "\n".join(lines)
 
 
 def structural_lines(text: str) -> list[str]:

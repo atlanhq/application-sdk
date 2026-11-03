@@ -109,10 +109,19 @@ calls `conformance-reusable.yaml` on its bump PRs and leaves the input off too (
 *The SDK repo* cannot use caller skips: SDK Gate and Connector Tests Gate are inline required
 jobs, and a skipped inline job files `skipped`, which reads as a pass. So both gates run and
 **fail fast** on an un-opted bump PR, and every job they compose skips. Only the Admin role
-may comment `/gate-check` here (app repos accept Write, Maintain or Admin). It posts a
+may comment `/gate-check` here (app repos accept Write, Maintain or Admin, plus a plain
+`/gate-check` on a `bump-version*` PR from the fleet App itself, matched on the comment's
+`performed_via_github_app.id`, for the release train — FND-4037). It posts a
 `gate-check` status on the head and re-runs SDK Gate, PR Checks and CodeQL there; each reads
 the status live (`bump_pr_opt_in.py check --sha`), since a re-run replays the original event
 payload.
+
+In the SDK repo that `gate-check` status is an **opt-in marker, not a verdict**: it is posted
+`success` ("opted in by @…") the moment the comment lands, before anything has run, and
+nothing settles it later. The SDK bump PR's verdict is its required checks: SDK Gate, and
+Connector Tests Gate, which rolls up the connector e2e checks **and the SDR K8s E2E (LM) leg**
+(FND-4486). A red SDR leg therefore keeps the PR out of the merge queue, and the queue waits on
+it too. Read the green `gate-check` on an SDK bump PR as "opted in", never as "passed".
 
 **Release Gate passes a release PR only on a `success` `gate-check` status on its head**
 (`.github/scripts/release_gate.py`, vendored by bootstrap). In an app repo `/gate-check` posts
@@ -125,6 +134,20 @@ gate fails until `/gate-check` is asked again. A release PR is recognised by its
 branch as well as the `release` label, because the label is added after the PR opens and the
 `opened` payload can lack it. Labels never pass the gate any more, and Release Gate no longer
 subscribes to `labeled`/`unlabeled`.
+
+**Recovering from one failed leg: re-run it, don't restart the gate** (FND-4331). When a
+`/gate-check` fails on one job (typically a single cloud's `End-to-end` leg), open that
+dispatched run and choose **Re-run failed jobs**. That re-runs the failed job and the jobs that
+depend on it, including `Tests Gate`, which re-posts the `e2e` status. The re-run attempt's
+completion fires the same `workflow_run` callback. `gate_check_verdict.py` re-checks a recorded
+`failure` on every callback and turns it to `success` once each dispatched workflow's newest
+run has passed, then re-runs Release Gate. So `e2e`, `gate-check` and Release Gate all go green
+with no new commit and no full `/gate-check force`. A recorded `success` is never re-decided.
+Only a request posted by `github-actions[bot]` is re-checked, the same identity Release Gate
+trusts. The re-run leg holds no tenant lease, because the lease was taken and given back by
+attempt 1. It still asserts the app version attempt 1 installed, so if another run has installed
+onto that tenant since, the leg fails on the version mismatch instead of passing. In that case,
+comment `/gate-check force`.
 
 **Two guards decide whether a run acts at all** (`.github/scripts/release_guard.py`, called
 from `release.py` before any file is touched; each sets `skip=true`, which every mutating

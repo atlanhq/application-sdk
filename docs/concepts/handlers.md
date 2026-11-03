@@ -115,44 +115,98 @@ reads `{}` and silently falls back to the single-credential path. Apps that
 declare nothing keep the unchanged single-credential path via `input.credentials`.
 
 An agent credential spec routes to agent resolution only when it is
-*populated*: `agent-name` plus a fetch anchor — `secret-path` (bundle fetch) or
-`key-type: single-key` (per-key fetch). A name-only spec (for example the
+*populated*: `agent-name` plus a fetch anchor — `secret-path` (bundle fetch),
+`key-type: single-key` (per-key fetch), or declared value sources (`"format": 2`,
+see [declared sources](credentials.md#declared-sources-format-2)). A name-only spec (for example the
 Automation Engine placeholder `{"agent-name": "agent-name", ...}` stamped on
 non-agent runs) is not populated and falls through to `credential_guid`
 routing.
 
 #### Single-key secret resolution
 
-When a credential arrives as a flat dict of fields rather than a named ref, the
-SDK probes each string value to see whether it is a key in the secret store
-(`application_sdk/credentials/agent.py`). These probes are independent point
-lookups, so they run **concurrently**, bounded by a small fan-out cap
-(`_MAX_CONCURRENT_SINGLE_KEY_PROBES = 8`) so a wide credential does not pay one
-full store retry ladder per field. Results are merged in candidate order, so
-resolution is byte-identical to the previous serial behavior.
+!!! warning "Deprecated for agent payloads"
+    Probing exists because a legacy `agent_json` can't say which fields are
+    secret names. A `"format": 2` payload declares each field's source and is
+    never probed. Legacy agent payloads log a `DEPRECATED agent_json format`
+    WARNING and will be migrated (FND-4361). **Declared sources are the way
+    forward**; legacy payloads, and probing with them, are **removed in SDK
+    v4.0.0**.
 
-What the logs tell you, and what they cannot:
+When a credential arrives as a flat dict of fields rather than a named ref, the
+SDK probes each string value to see whether it is a key in the secret store.
+Both resolvers — agent-shape payloads (`application_sdk/credentials/agent.py`)
+and GUID credential configs (`application_sdk/infrastructure/_dapr/credential_vault.py`)
+— share one implementation, `application_sdk/infrastructure/_single_key_probe.py`.
+These probes are independent point lookups, so they run **concurrently**,
+bounded by a small fan-out cap (`MAX_CONCURRENT_SINGLE_KEY_PROBES = 8`) so a wide
+credential does not pay one full store retry ladder per field. Results are
+merged in candidate order, so resolution is byte-identical to serial probing.
+
+Each probe has one of four outcomes:
+
+- **Resolved** — the field's value is replaced with the secret.
+- **Absent** — the store definitively has no such key, so the field keeps its
+  literal value (a host, a database name, an inline credential). "Absent" means
+  Dapr's `500`/`ERR_SECRET_GET` with a not-found message (`secret … not found`,
+  `ResourceNotFoundException`, `SecretNotFound`, …).
+- **Store outage** — the sidecar or store is unreachable, cold-starting or
+  unavailable. Resolution **stops** with a hash-labelled `SecretStoreError`
+  subtype, and the run retries.
+- **Store answer** — anything else: an IAM or KMS denial, a `403`
+  `ERR_PERMISSION_DENIED` from the store's secret-scoping policy, an invalid
+  secret name, a throttle, or wording no backend documents. The field keeps its
+  value, with a WARNING. This is SDK <= 3.49 behaviour, restored for legacy
+  payloads as a deprecated fallback that is removed in SDK v4.0.0 (FND-4407).
+  No error wording decides the outcome, so no unrecognised store answer can
+  fail a plain-value config. Declared sources (`"format": 2`) are the way
+  forward: new and migrated workflows should use them.
+  - Probing only ever runs for legacy SDR payloads: legacy agent_json payloads
+    and agent-sourced GUID configs (the form Heracles turns an SDR's
+    agent_json into for Test Authentication, preflight and metadata calls).
+    Both read the customer's SDR store. Direct (hosted) configs fetch one
+    bundle by GUID and never probe.
+  - A probe can't tell a plain username, database name, URL or role ARN from a
+    ref-key, and stores that reject those as names failed runs whose config
+    hadn't changed (SDK 3.50 to 3.5x).
+  - The known cost, as in 3.49: a *real* ref-key that the store denies or
+    throttles is sent as the value, so the connection fails with an auth error.
+    Declared sources (`"format": 2`, below) remove both problems: plain values
+    never reach the store, and refs are looked up strictly.
+
+What the logs tell you:
 
 - **Some fields resolved** logs INFO with the counts ("resolved N of M probed
   fields"). Ref-key names are never logged — they encode secret-store topology —
   so probes are identified by a `sha256:` prefix.
 - **Nothing resolved** also logs INFO ("resolved 0 of N probed fields"). This is
-  *not* treated as an error: a credential that carries literal usernames and
-  passwords inline rather than ref-keys legitimately resolves nothing, and those
-  workflows work. It is deliberately not a WARNING, because for such a
-  credential it is the expected steady state on every run.
-- **A probe hit a store-level error** logs a WARNING for that probe. Note that a
-  scope-restricted store answers a non-allowlisted key with `403`
-  (`ERR_PERMISSION_DENIED`) rather than an "absent" `500`, so an inline-literal
-  credential against such a store produces one of these per field while still
-  being a working configuration.
-
-The limitation worth knowing: Dapr's secrets API returns `500`/`ERR_SECRET_GET`
-for *any* backend error, and models "not found" nowhere — so a genuinely missing
-key, a throttled vault, and an expired vault credential are indistinguishable to
-the SDK. That is why nothing here can be raised on: "resolved nothing" cannot be
-told apart from "nothing to resolve". Tracked in
-[#2995](https://github.com/atlanhq/application-sdk/issues/2995).
+  *not* an error: a credential that carries literal usernames and passwords
+  inline rather than ref-keys legitimately resolves nothing.
+- **A probe hit a store error** logs a WARNING with a redacted traceback. On an
+  outage the run then fails with that error. A store answer logs
+  `DEPRECATED single-key fallback` and the value is used as entered.
+- **Every legacy agent payload** that reaches the store also logs
+  `DEPRECATED agent_json format` once per resolution.
+- **Every legacy agent single-key resolution** logs one WARNING,
+  `agent_json legacy single-key probe outcomes`, even when the run then fails.
+  It is evidence for migrating the workflow to declared sources (FND-4407),
+  not a verdict on its own.
+  - `atlan.agent_json.probe.outcomes`, e.g.
+    `basic.password=resolved,basic.username=refused`, gives each probed
+    field's outcome. `resolved` means the store returned a secret for the
+    value, so the field is a real ref (`secretKeyRef`).
+  - `absent`, `refused` and `refused_kept` (a refusal the legacy bridge kept as
+    the value) are **inconclusive**. A missing or denied lookup doesn't show
+    whether the field was meant as a secret ref: `absent` can be a ref whose
+    secret was never created, and a refusal can be a real ref the SDR identity
+    may not read. Before converting such a field to `value`, corroborate it,
+    e.g. the run succeeded with the kept value. If there is no such evidence,
+    ask the customer.
+  - `transient_kept` is a throttle the legacy bridge kept as the value. The
+    other outcomes are `outage` and `error`.
+  - It also carries a count per outcome, `atlan.agent_json.format` and
+    `atlan.agent_json.secret_manager`.
+  - Field names only, never values or ref names.
+  - The extras are allowlisted, so they survive the SDR log upload to Atlan.
 
 #### Check tiers and warmup
 
@@ -259,6 +313,28 @@ class SqlMetadataOutput(MetadataOutput):
 class ApiMetadataOutput(MetadataOutput):
     objects: list[ApiMetadataObject] = []  # for apitree widget
 ```
+
+### ManifestInput and compute_manifest
+
+A manifest that cannot be static (it depends on the submission's `fe_inputs`,
+or on the tenant) is computed by one optional `Handler` method. The worker's
+handler service and the consolidated API host both call it, so it is the form
+of a dynamic manifest that can be hosted:
+
+```python
+class ManifestInput(BaseModel):
+    entrypoint: str                  # the entry point whose manifest is requested
+    manifest: dict[str, Any]         # its generated manifest, tokens resolved
+    fe_inputs: dict[str, Any] = {}   # the decoded setup-form values
+
+async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
+    ...  # return the manifest to serve, or None for the generated one
+```
+
+The default returns `None`. Task-queue templates in the result
+(`atlan-<app>-{deployment_name}`) are stamped with the queue the app's worker
+polls, so build them from `self.context.app_name`. See
+[Apps — Dynamic manifest](apps.md#dynamic-manifest-compute_manifest).
 
 ### Event and Subscription Contracts
 
@@ -424,6 +500,7 @@ These are **module-level `async` functions** taking `(input, ctx)` — not metho
 > - **Per-op, not all-or-nothing.** A module that defines only `fetch_metadata` leaves `test_auth`/`preflight_check` for that entry point falling back to the app-level `Handler`. One entry point's lifecycle can therefore be split across two files — don't assume `handler.py` owns everything.
 > - **Wrong name / wrong shape falls through quietly.** A misspelled function name, or a non-`async def`, won't match discovery and silently falls back to the app-level `Handler` (which may be `DefaultHandler`, returning a generic success). If your per-entry-point hook "isn't running," check the exact name and that it's `async`.
 > - **Which code runs depends on the request.** The same endpoint routes to `app.<segment>.handler` vs the app-level `Handler` purely based on the request's `entrypoint` field — you can't tell from the code alone.
+> - **SDR honours `test_auth` and `fetch_metadata`, not `preflight_check`.** The SDR test-auth and fetch-metadata activities resolve the hook through `application_sdk.handler._dispatch.resolve_handler_op`, the same helper the HTTP routes use, so these two hooks answer identically on both surfaces. Over SDR a malformed `entrypoint` raises `InvalidInputError` instead of a `400`. The SDR preflight activity still calls the app-level `Handler.preflight_check`.
 > - **The preflight gate does not use them.** The injected gate calls the app-level `Handler` only, so a module `preflight_check` or `warmup` hook is honoured by `/check` and `/warmup` but not on a real run: the gate runs the app-level checks, and an entry point whose warmup lives only in a module hook is not warmed up before its `WARMUP`-tier checks. Put gate-relevant checks and the warmup on the app-level `Handler` until FND-3345 lands.
 
 > The `entrypoint`/`entrypoint_ref` fields on the input contracts: `entrypoint` is the authoritative bare name used for routing; `entrypoint_ref` carries the legacy `connector` wire value (accepted via a validation alias, serialized back as `connector`) and is **informational only** — it is not parsed for dispatch. See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the kebab→snake module-name rule.

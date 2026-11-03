@@ -48,6 +48,7 @@ __all__ = [
     "NON_FORM_STEMS",
     "choose_form_configmap",
     "eligible_form_configmaps",
+    "entrypoint_dirs",
     "form_configmap",
     "generated_layout",
     "is_form_configmap",
@@ -138,6 +139,28 @@ def names_entrypoint(stem: str, entrypoint: str) -> bool:
         entrypoint: The entry point's kebab-case wire name.
     """
     return stem == entrypoint or stem.endswith(f"-{entrypoint}")
+
+
+def entrypoint_dirs(generated: Path, entrypoint: str) -> tuple[Path, ...]:
+    """Where *entrypoint*'s generated files may live, most specific first.
+
+    The kebab-case wire name, then its snake_case spelling. The contract toolkit
+    writes a UI-less system entry point's files under the snake_case directory
+    (FND-3563) so ``app.generated.<entrypoint_snake>._input`` imports; every
+    other entry point keeps the wire-name directory. One path when the two
+    spellings agree.
+
+    The kebab-to-snake rule is
+    :func:`application_sdk.app.entrypoint.entrypoint_module_segment`'s, restated
+    because this module must not import ``application_sdk.app``.
+
+    Args:
+        generated: The generated directory, usually ``app/generated``.
+        entrypoint: The entry point's kebab-case wire name.
+    """
+    kebab = generated / entrypoint
+    snake = generated / entrypoint.replace("-", "_")
+    return (kebab,) if snake == kebab else (kebab, snake)
 
 
 def eligible_form_configmaps(directory: Path) -> list[Path]:

@@ -28,6 +28,7 @@ import argparse
 import asyncio
 import contextlib
 import faulthandler
+import importlib.util as _importlib_util
 import os
 import random
 import signal
@@ -39,6 +40,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 
 import orjson
+
+# The handler surface (application_sdk.handler, .contracts, .errors, …) ships in
+# atlan-application-sdk-api, which this SDK depends on at the same version. A pip
+# upgrade from a release that predates the split deletes those files when it
+# removes the old SDK. Say so plainly instead of failing on the first import.
+if _importlib_util.find_spec("application_sdk.handler.base") is None:
+    raise ImportError(
+        "atlan-application-sdk-api's files are missing (application_sdk.handler "
+        "and the rest of the handler surface). This happens after a pip upgrade "
+        "from an SDK release that predates atlan-application-sdk-api. Fix: "
+        "pip install --force-reinstall --no-deps atlan-application-sdk-api"
+    )
 
 from application_sdk.common import restart_marker
 from application_sdk.common._env import env_int as _env_int
@@ -918,8 +931,8 @@ async def _flush_observability() -> None:
     # path is still up, and there is grace-period budget left. ``flush_all`` only
     # drains the object-store buffer; the OTLP BatchLogRecordProcessor queue is
     # separate. ``atexit.register(shutdown_otlp_logs)`` remains the last-resort
-    # backstop (interpreter exit), not the primary channel. ``force_flush`` is
-    # synchronous and blocking (up to timeout_millis), so offload it to a thread:
+    # backstop (interpreter exit), not the primary channel. ``flush_otlp_logs``
+    # blocks (up to its own timeout bound), so offload it to a thread:
     # this coroutine is also reached via ``loop.create_task`` from
     # ``_loop_exception_handler`` with the loop still live, where a bare blocking
     # call would stall it. Do NOT call ``shutdown_otlp_logs`` here — its one-shot
@@ -934,13 +947,42 @@ async def _flush_observability() -> None:
         logger.warning("Failed to drain OTLP logs on shutdown", exc_info=True)
 
 
+# Minimum gap between flushes scheduled by ``_loop_exception_handler``. Each
+# flush takes a ``to_thread`` slot and, against an unreachable collector, an
+# OTLP flush that only returns at its timeout; an exception storm scheduling one
+# per exception would queue them without bound.
+_LOOP_HANDLER_FLUSH_MIN_INTERVAL_SECONDS = 5.0
+# The handler's flush task, and when it was last scheduled (``time.monotonic``).
+_loop_handler_flush_task: asyncio.Task[None] | None = None
+_loop_handler_flush_last: float | None = None
+
+
+def _schedule_loop_handler_flush(loop: asyncio.AbstractEventLoop) -> None:
+    """Schedule ``_flush_observability`` unless one is still running or one
+    was scheduled within ``_LOOP_HANDLER_FLUSH_MIN_INTERVAL_SECONDS``."""
+    global _loop_handler_flush_task, _loop_handler_flush_last
+    if _loop_handler_flush_task is not None and not _loop_handler_flush_task.done():
+        return
+    now = time.monotonic()
+    if (
+        _loop_handler_flush_last is not None
+        and now - _loop_handler_flush_last < _LOOP_HANDLER_FLUSH_MIN_INTERVAL_SECONDS
+    ):
+        return
+    _loop_handler_flush_last = now
+    _loop_handler_flush_task = loop.create_task(_flush_observability())
+
+
 def _loop_exception_handler(
     loop: asyncio.AbstractEventLoop, context: dict[str, Any]
 ) -> None:
     """Log unhandled asyncio task exceptions and schedule a flush.
 
     Registered via ``loop.set_exception_handler()`` in each async run mode.
-    The loop is still alive when this fires, so ``create_task`` is safe.
+    The loop is still alive when this fires, so ``create_task`` is safe. At
+    most one handler flush runs at a time, and a new one starts no sooner than
+    ``_LOOP_HANDLER_FLUSH_MIN_INTERVAL_SECONDS`` after the last; the shutdown
+    paths flush unconditionally, so nothing skipped here is lost at exit.
     """
     exc = context.get("exception")
     msg = context.get("message", "Unhandled asyncio exception")
@@ -949,7 +991,7 @@ def _loop_exception_handler(
     else:
         logger.error("Asyncio exception (no exception object): %s", msg)
     # Schedule a flush — non-blocking so the loop can continue
-    loop.create_task(_flush_observability())
+    _schedule_loop_handler_flush(loop)
     # Preserve the default stderr output
     loop.default_exception_handler(context)
 
@@ -1141,6 +1183,55 @@ class _FatalTeardownWatchdog:
                 _WORKER_FATAL_TEARDOWN_EXIT_CODE,
             )
             self._exit_fn(_WORKER_FATAL_TEARDOWN_EXIT_CODE)
+
+
+# Upper bound on what runs after the worker has drained on a shutdown signal:
+# closing infrastructure, flushing telemetry and the interpreter's exit hooks.
+# No activity is in flight by then, yet these steps have been seen to block for
+# the whole pod grace period when a telemetry endpoint is unreachable, holding
+# the pod's requests and its node. 0 or negative disables the bound.
+# The exit code is non-zero and distinct (1 is the fatal-teardown watchdog, 2 is
+# argparse) so a cut-short shutdown shows in the container's last exit code
+# instead of passing as a clean stop.
+_POST_DRAIN_EXIT_TIMEOUT_ENV = "ATLAN_POST_DRAIN_EXIT_TIMEOUT_SECONDS"
+_POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS = 120
+_POST_DRAIN_EXIT_CODE = 3
+
+
+def _start_post_drain_exit_deadline(
+    exit_fn: Callable[[int], Any] = os._exit,
+) -> threading.Timer | None:
+    """Exit the process if shutdown has not finished soon after the worker drained.
+
+    Started only once the worker has returned from its drain, so cutting the
+    remaining teardown short cannot interrupt an activity. It ends the whole
+    process, so only the process-owning entry point (``run_main``) turns it on;
+    a caller that awaits a run mode directly and keeps the process gets no
+    timer. The timer is never
+    cancelled: it also bounds the interpreter's exit hooks, and on a normal exit
+    it dies with the process. It writes to stderr directly because the logging
+    pipeline is one of the things that can be stuck.
+    """
+    timeout = _env_int(
+        _POST_DRAIN_EXIT_TIMEOUT_ENV, _POST_DRAIN_EXIT_TIMEOUT_DEFAULT_SECONDS
+    )
+    if timeout <= 0:
+        return None
+
+    def _expire() -> None:
+        # Best effort: a closed or broken stderr must not stop the exit.
+        with contextlib.suppress(OSError):
+            os.write(
+                2,
+                f"Shutdown did not finish within {timeout}s of the worker draining; "
+                f"exiting with code {_POST_DRAIN_EXIT_CODE}\n".encode(),
+            )
+        exit_fn(_POST_DRAIN_EXIT_CODE)
+
+    timer = threading.Timer(timeout, _expire)
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 async def _observe_worker_poll_state(
@@ -1441,11 +1532,16 @@ async def _supervise_worker(
                 logger.debug("Restart backoff elapsed; rebuilding worker")
 
 
-async def run_worker_mode(config: AppConfig) -> None:
+async def run_worker_mode(
+    config: AppConfig, *, bound_post_drain_exit: bool = False
+) -> None:
     """Run in worker mode (Temporal workflow execution).
 
     Loads the app class, connects to Temporal, creates a worker, and
     runs until a shutdown signal is received.
+    ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
+    the whole process if teardown hangs. Only the process-owning entry point
+    sets it; leave it off when awaiting this from code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -1653,6 +1749,9 @@ async def run_worker_mode(config: AppConfig) -> None:
         # leaves the marker in place, which is what makes the next start a restart.
         restart_marker.clear()
 
+    if bound_post_drain_exit:
+        _start_post_drain_exit_deadline()
+
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
     )
@@ -1758,12 +1857,17 @@ def run_handler_mode(config: AppConfig) -> None:
     asyncio.run(_flush_observability())
 
 
-async def run_combined_mode(config: AppConfig) -> None:
+async def run_combined_mode(
+    config: AppConfig, *, bound_post_drain_exit: bool = False
+) -> None:
     """Run worker + handler in a single process (SDR / docker-compose mode).
 
     Combines Temporal worker execution with the HTTP handler service,
     enabling single-container deployment. Both components share the same
     event loop and shut down together on SIGINT/SIGTERM.
+    ``bound_post_drain_exit`` starts the post-drain exit deadline, which ends
+    the whole process if teardown hangs. Only the process-owning entry point
+    sets it; leave it off when awaiting this from code that keeps the process.
     """
     global _worker_event_loop
     _worker_event_loop = asyncio.get_running_loop()
@@ -2015,6 +2119,9 @@ async def run_combined_mode(config: AppConfig) -> None:
                 teardown_watchdog=teardown_watchdog,
             ),
         )
+
+    if bound_post_drain_exit:
+        _start_post_drain_exit_deadline()
 
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
         close_infrastructure,
@@ -2326,11 +2433,11 @@ def run_main(config: AppConfig) -> None:
     get_metrics()
 
     if config.mode == "worker":
-        asyncio.run(run_worker_mode(config))
+        asyncio.run(run_worker_mode(config, bound_post_drain_exit=True))
     elif config.mode == "handler":
         run_handler_mode(config)
     elif config.mode == "combined":
-        asyncio.run(run_combined_mode(config))
+        asyncio.run(run_combined_mode(config, bound_post_drain_exit=True))
     else:
         raise UnknownModeError(received_mode=config.mode)
 

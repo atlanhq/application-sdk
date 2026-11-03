@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Annotated
 
 import pytest
 from pydantic import Field
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import FileReference, Lazy
+from application_sdk.storage.errors import StorageError, UnsafeUploadPathError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.file_ref_sync import (
     has_refs_to_materialize,
@@ -108,13 +113,16 @@ class TestHasRefsToMaterialize:
     def test_returns_false_for_durable_ref_with_valid_sidecar(self) -> None:
         import hashlib
 
+        from application_sdk.storage._local_marker import file_fingerprint
+        from application_sdk.storage.reference import _write_local_sidecar
+
         content = b"verified content"
         fd, path = tempfile.mkstemp()
         try:
             os.write(fd, content)
             os.close(fd)
             digest = hashlib.sha256(content).hexdigest()
-            Path(path + ".sha256").write_text(digest)
+            _write_local_sidecar(path, digest, file_fingerprint(path))
             inp = _TaskInput(
                 ref=FileReference(
                     is_durable=True, storage_path="file_refs/abc", local_path=path
@@ -205,6 +213,52 @@ class TestPersistAndMaterialize:
             os.unlink(path)
 
 
+class TestPathLessMaterialiseLocation:
+    """FND-4282: the interceptor never passes ``local_dir``.
+
+    A ref carrying only a ``storage_path`` must land under the run's scratch
+    directory — the one ``cleanup_files`` removes — not the system temp dir.
+    """
+
+    async def test_file_and_directory_refs_land_in_the_run_scratch_dir(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal.activity_utils import run_temp_dir
+        from application_sdk.storage.ops import _put
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        _redirect_temporary_path(monkeypatch, str(tmp_path / "sdk-tmp"))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
+        )
+        store = create_memory_store()
+        await _put("hand/off.bin", b"file", store, normalize=False)
+        await _put("hand/dir/a.txt", b"a", store, normalize=False)
+
+        file_in = await materialize_file_refs(
+            store,
+            _TaskInput(ref=FileReference(is_durable=True, storage_path="hand/off.bin")),
+        )
+        dir_in = await materialize_file_refs(
+            store,
+            _TaskInput(ref=FileReference(is_durable=True, storage_path="hand/dir/")),
+        )
+
+        run_dir = Path(run_temp_dir()).resolve()
+        assert run_dir.is_relative_to((tmp_path / "sdk-tmp").resolve())
+        for ref in (file_in.ref, dir_in.ref):
+            assert ref.local_path is not None
+            assert Path(ref.local_path).resolve().parent == run_dir
+        assert Path(file_in.ref.local_path).read_bytes() == b"file"
+        assert (Path(dir_in.ref.local_path) / "a.txt").read_bytes() == b"a"
+
+
 class TestDirectoryPersistMaterialize:
     async def test_persist_directory_sets_file_count(self, tmp_path) -> None:
         store = create_memory_store()
@@ -252,11 +306,6 @@ class TestDirectoryPersistMaterialize:
         ).read() == b"x content"
         assert materialised.ref.file_count == 2
 
-    async def test_local_sidecar_ok_returns_false_for_directory(self, tmp_path) -> None:
-        from application_sdk.storage.file_ref_sync import _local_sidecar_ok
-
-        assert _local_sidecar_ok(str(tmp_path)) is False
-
     async def test_needs_materialize_true_for_dir_ref(self, tmp_path) -> None:
         from application_sdk.storage.file_ref_sync import _needs_materialize
 
@@ -265,8 +314,10 @@ class TestDirectoryPersistMaterialize:
             storage_path="file_refs/abc/",
             local_path=str(tmp_path),
         )
-        # Directory always needs materialize (no fast path).
-        assert _needs_materialize(ref) is True
+        # Directory always needs materialize (no fast path), even with a
+        # marker beside it.
+        (tmp_path.parent / (tmp_path.name + ".sha256")).write_text("a" * 64)
+        assert await _needs_materialize(ref) is True
 
 
 # ---------------------------------------------------------------------------
@@ -716,3 +767,192 @@ class TestBlockedPathPatternsAreSeparatorAgnostic:
             PureWindowsPath("C:/work/export/secretsauce/t.txt"),
             _parse_blocked_paths(),
         )
+
+
+# ---------------------------------------------------------------------------
+# First failure: no sibling outlives the raise (FND-4277)
+# ---------------------------------------------------------------------------
+
+#: How long a sibling's offloaded call blocks its thread. Long enough that an
+#: undrained fan-out raises well before it ends.
+_SIBLING_THREAD_SECONDS = 0.3
+
+
+class _SiblingProbe:
+    """Siblings that block in ``run_in_thread``, and one ref that fails once
+    every sibling's thread is running.
+
+    ``completed`` records each sibling coroutine that ran past its thread. With
+    ``asyncio.gather`` they did, after the caller had seen the failure; with the
+    SDK fan-out they are cancelled, and their threads drained before the raise.
+    """
+
+    def __init__(self, siblings: int) -> None:
+        self.started = [threading.Event() for _ in range(siblings)]
+        self.finished = [threading.Event() for _ in range(siblings)]
+        self.completed: list[int] = []
+
+    async def sibling(self, index: int) -> None:
+        def _block() -> None:
+            self.started[index].set()
+            time.sleep(_SIBLING_THREAD_SECONDS)
+            self.finished[index].set()
+
+        await run_in_thread(_block)
+        self.completed.append(index)
+
+    async def fail(self, exc: Exception) -> None:
+        for event in self.started:
+            if not await asyncio.to_thread(event.wait, 5.0):
+                raise AssertionError("sibling thread did not start")
+        raise exc
+
+    async def assert_no_sibling_outlived_the_raise(self) -> None:
+        assert all(
+            e.is_set() for e in self.finished
+        ), "a sibling's thread was still running when the failure propagated"
+        # Give an orphaned coroutine every chance to resume and finish.
+        await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
+        assert self.completed == [], "a sibling completed after the raise"
+
+
+class _ThreeRefOutput(Output, allow_unbounded_fields=True):
+    r0: FileReference = Field(default_factory=FileReference)
+    r1: FileReference = Field(default_factory=FileReference)
+    r2: FileReference = Field(default_factory=FileReference)
+
+
+class TestFirstFailureStopsSiblings:
+    async def test_materialize_failure_cancels_and_drains_siblings(
+        self, monkeypatch
+    ) -> None:
+        from application_sdk.storage import reference as _ref_mod
+
+        probe = _SiblingProbe(siblings=2)
+        order = {"p/r0": 0, "p/r1": 1}
+
+        async def _materialize(store, ref, **kwargs):
+            if ref.storage_path == "p/bad":
+                await probe.fail(StorageError("bad ref"))
+            await probe.sibling(order[ref.storage_path])
+            return ref
+
+        monkeypatch.setattr(_ref_mod, "materialize_file_reference", _materialize)
+        inp = _MultiRefInput(
+            ref_a=FileReference(is_durable=True, storage_path="p/r0"),
+            ref_b=FileReference(is_durable=True, storage_path="p/bad"),
+            ref_c=FileReference(is_durable=True, storage_path="p/r1"),
+        )
+
+        with pytest.raises(StorageError, match="bad ref"):
+            await materialize_file_refs(create_memory_store(), inp)
+
+        await probe.assert_no_sibling_outlived_the_raise()
+
+    async def test_persist_failure_cancels_drains_and_stays_typed(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """A lone ``AppError`` that is not a ``StorageError`` reaches the
+        activity boundary bare, as it did through ``asyncio.gather`` — a group
+        would lose the typed, non-retryable translation it maps to."""
+        from application_sdk.storage import reference as _ref_mod
+
+        probe = _SiblingProbe(siblings=2)
+        paths = {}
+        for name in ("r0", "r1", "bad"):
+            path = tmp_path / name
+            path.write_bytes(b"x")
+            paths[str(path)] = name
+
+        async def _persist(store, ref, **kwargs):
+            name = paths[ref.local_path]
+            if name == "bad":
+                await probe.fail(UnsafeUploadPathError(unsafe_path=ref.local_path))
+            await probe.sibling(int(name[1:]))
+            return ref
+
+        monkeypatch.setattr(_ref_mod, "persist_file_reference", _persist)
+        by_name = {name: path for path, name in paths.items()}
+        output = _ThreeRefOutput(
+            r0=FileReference(local_path=by_name["r0"]),
+            r1=FileReference(local_path=by_name["bad"]),
+            r2=FileReference(local_path=by_name["r1"]),
+        )
+
+        with pytest.raises(UnsafeUploadPathError) as exc_info:
+            await persist_file_refs(create_memory_store(), output)
+
+        assert not isinstance(exc_info.value, BaseExceptionGroup)
+        await probe.assert_no_sibling_outlived_the_raise()
+
+    async def test_check_failure_cancels_and_drains_siblings(self, monkeypatch) -> None:
+        """The needs-materialise pass hashes local files in threads; one check
+        failing must not leave the others hashing after the raise."""
+        from application_sdk.storage import file_ref_sync as _sync_mod
+
+        probe = _SiblingProbe(siblings=2)
+        order = {"p/r0": 0, "p/r1": 1}
+
+        async def _needs(ref, rehashes=None):
+            if ref.storage_path == "p/bad":
+                await probe.fail(OSError("unreadable local copy"))
+            await probe.sibling(order[ref.storage_path])
+            return False
+
+        monkeypatch.setattr(_sync_mod, "_needs_materialize", _needs)
+        inp = _MultiRefInput(
+            ref_a=FileReference(is_durable=True, storage_path="p/r0"),
+            ref_b=FileReference(is_durable=True, storage_path="p/bad"),
+            ref_c=FileReference(is_durable=True, storage_path="p/r1"),
+        )
+
+        with pytest.raises(OSError, match="unreadable local copy"):
+            await materialize_file_refs(create_memory_store(), inp)
+
+        await probe.assert_no_sibling_outlived_the_raise()
+
+    async def test_check_failure_leaves_no_shared_rehash_running(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Two refs naming one UNVERIFIED local copy share a single rehash
+        task, which the fan-out does not own. A third ref's check failing
+        must not leave that rehash running after the raise."""
+        from application_sdk.storage import file_ref_sync as _sync_mod
+
+        shared = tmp_path / "shared.bin"
+        shared.write_bytes(b"x")
+        rehash_started = threading.Event()
+        rehash_tasks: list[asyncio.Task[object]] = []
+
+        def _local_copy(ref):
+            if ref.storage_path == "p/bad":
+                if not rehash_started.wait(5.0):
+                    raise AssertionError("shared rehash did not start")
+                raise OSError("unreadable local copy")
+            return _sync_mod._LocalCopy.UNVERIFIED
+
+        async def _rehash(local_path):
+            task = asyncio.current_task()
+            assert task is not None
+            rehash_tasks.append(task)
+            rehash_started.set()
+            await asyncio.sleep(30)  # only cancellation ends it
+            return True
+
+        monkeypatch.setattr(_sync_mod, "_local_copy", _local_copy)
+        monkeypatch.setattr(_sync_mod, "_rehash_matches_marker", _rehash)
+        inp = _MultiRefInput(
+            ref_a=FileReference(
+                is_durable=True, storage_path="p/r0", local_path=str(shared)
+            ),
+            ref_b=FileReference(is_durable=True, storage_path="p/bad"),
+            ref_c=FileReference(
+                is_durable=True, storage_path="p/r1", local_path=str(shared)
+            ),
+        )
+
+        with pytest.raises(OSError, match="unreadable local copy"):
+            await materialize_file_refs(create_memory_store(), inp)
+
+        assert len(rehash_tasks) == 1, "refs naming one path share one rehash"
+        assert rehash_tasks[0].done(), "shared rehash still running after raise"

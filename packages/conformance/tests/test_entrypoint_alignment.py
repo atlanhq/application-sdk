@@ -333,6 +333,73 @@ def test_p016_kebab_conversion_mismatch(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Multi-EP mode — App on an SDK template base
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_BASES = ["SqlApp", "BaseMetadataExtractor"]
+
+
+@pytest.mark.parametrize("base", _TEMPLATE_BASES)
+def test_p016_contract_only_finding_anchors_on_a_template_base_app(
+    tmp_path: Path, base: str
+) -> None:
+    """A subclass of an SDK template base is the App the missing tile belongs on.
+
+    The scan read only ``App`` subclasses, so the contract-only finding fell
+    back to the first ``@entrypoint`` instead of the class to add it to.
+    """
+    py = {
+        "app/connector.py": dedent(f"""\
+            from application_sdk.app import entrypoint
+            from application_sdk.templates import {base}
+
+            class MyConnector({base}):
+                @entrypoint(name="crawler")
+                async def crawl(self, input: Input) -> Output: ...
+        """)
+    }
+    findings = _run(tmp_path, py, ["crawler", "miner"])
+    p016 = [f for f in findings if f.rule_id == "P016"]
+    assert len(p016) == 1 and "'miner'" in p016[0].message
+    assert (p016[0].file, p016[0].line) == ("app/connector.py", 4)
+
+
+@pytest.mark.parametrize("base", _TEMPLATE_BASES)
+def test_p016_contract_only_finding_on_a_template_base_app_is_suppressible(
+    tmp_path: Path, base: str
+) -> None:
+    """With no ``@entrypoint`` in the app's own code the finding used to sit on a
+    synthetic line 1, where no inline directive could reach it."""
+    py = {
+        "app/connector.py": dedent(f"""\
+            from application_sdk.templates import {base}
+
+            # conformance: ignore[P016] entry points come from the template base
+            class MyConnector({base}):
+                pass
+        """)
+    }
+    findings = _run(tmp_path, py, ["crawler"])
+    p016 = [f for f in findings if f.rule_id == "P016"]
+    assert len(p016) == 1 and p016[0].suppressed
+
+
+def test_p016_same_named_non_sdk_base_is_not_an_app(tmp_path: Path) -> None:
+    """A ``SqlApp`` imported from anywhere but ``application_sdk`` is not the SDK's."""
+    py = {
+        "app/connector.py": dedent("""\
+            from vendor.templates import SqlApp
+
+            class MyConnector(SqlApp):
+                pass
+        """)
+    }
+    findings = _run(tmp_path, py, ["crawler"])
+    p016 = [f for f in findings if f.rule_id == "P016"]
+    assert len(p016) == 1 and p016[0].file != "app/connector.py"
+
+
+# ---------------------------------------------------------------------------
 # Single-EP mode
 # ---------------------------------------------------------------------------
 

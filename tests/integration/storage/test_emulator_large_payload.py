@@ -31,7 +31,10 @@ from application_sdk.storage import ops
 from application_sdk.storage.binding import create_store_from_binding
 from application_sdk.storage.cloud import CloudStore
 from application_sdk.storage.errors import StorageError
-from tests.integration.storage.conftest import write_dapr_component
+from tests.integration.storage.conftest import (
+    emulator_unavailable,
+    write_dapr_component,
+)
 
 pytestmark = pytest.mark.storage_emulator
 
@@ -134,10 +137,10 @@ def cloud_store(request, tmp_path) -> CloudStore:
     """Parametrized CloudStore over MinIO (S3) + Azurite (Azure)."""
     if request.param == "s3":
         if not _reachable(f"{_S3_ENDPOINT}/minio/health/live"):
-            pytest.skip("MinIO not reachable")
+            emulator_unavailable("MinIO not reachable")
         return _s3_cloud_store(tmp_path / "components")
     if not _reachable(_AZ_BLOB_ENDPOINT):
-        pytest.skip("Azurite not reachable")
+        emulator_unavailable("Azurite not reachable")
     return _azure_cloud_store(tmp_path / "components")
 
 
@@ -193,7 +196,7 @@ async def test_upload_respects_short_request_timeout(
     propagation is cloud-agnostic.
     """
     if not _reachable(f"{_S3_ENDPOINT}/minio/health/live"):
-        pytest.skip("MinIO not reachable")
+        emulator_unavailable("MinIO not reachable")
     monkeypatch.setenv("ATLAN_OBSTORE_TIMEOUT", "1ms")
     monkeypatch.setenv("ATLAN_OBSTORE_RETRY_MAX_RETRIES", "0")
     cs = _s3_cloud_store(tmp_path / "components")  # built AFTER the env overrides

@@ -17,8 +17,10 @@ threads or loops beyond pytest-asyncio.
 
 from __future__ import annotations
 
+import os
 import shutil
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -26,6 +28,7 @@ import pytest
 
 from application_sdk.common.types import DataframeType
 from application_sdk.storage.formats import Reader, WriteMode, Writer
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # Concrete stubs so we can instantiate the abstract classes.
@@ -50,10 +53,15 @@ class _StubReader(Reader):
 class _StubWriter(Writer):
     """Minimal concrete Writer used to exercise the base methods."""
 
+    #: Set per test by :func:`_stub_writer_root`. A writer creates its staging
+    #: tree beside ``path`` on first write, so a fixed default (``/tmp/out``
+    #: once) shares that tree across xdist workers and leaves it behind.
+    default_path: str
+
     def __init__(
-        self, path: str = "/tmp/out", dataframe_type=DataframeType.pandas
+        self, path: str | None = None, dataframe_type=DataframeType.pandas
     ) -> None:
-        self.path = path
+        self.path = path if path is not None else self.default_path
         self.output_prefix = "out"
         self.total_record_count = 0
         self.chunk_count = 0
@@ -74,6 +82,13 @@ class _StubWriter(Writer):
 
     async def _write_chunk(self, chunk: Any, output_file_name: str) -> None:
         return None
+
+
+@pytest.fixture(autouse=True)
+def _stub_writer_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        _StubWriter, "default_path", str(tmp_path / "out"), raising=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +140,9 @@ class TestReaderClose:
                 raise OSError("permission")
             return original_remove(path)
 
-        with patch(
-            "application_sdk.storage.formats.os.remove", side_effect=_flaky_remove
+        with (
+            private_stdlib("application_sdk.storage.formats", "os") as local_os,
+            patch.object(local_os, "remove", side_effect=_flaky_remove),
         ):
             await reader._cleanup_downloaded_files()
 
@@ -289,6 +305,45 @@ class TestWriterWrite:
             for w in captured
         )
 
+    async def test_buffer_chunks_do_not_force_a_garbage_collection(self) -> None:
+        """No chunk runs a full ``gc.collect()`` on the event loop.
+
+        One per chunk used to block the loop for the full-heap walk, ~20ms a
+        chunk in a small process, and freed nothing measurable: over 8.7 GB
+        through each writer it found under 50 objects in total, and peak RSS
+        was unchanged, because each chunk is freed by refcount when dropped
+        (FND-4304). With automatic collection off for the write, every
+        collection ``gc.callbacks`` sees is an explicit call.
+        """
+        import gc
+
+        import pandas as pd
+
+        writer = _StubWriter()
+        frame = pd.DataFrame({"id": range(10 * writer.buffer_size)})
+        collections: list[int] = []
+
+        def _record(phase: str, info: dict[str, int]) -> None:
+            if phase == "start":
+                collections.append(info["generation"])
+
+        was_enabled = gc.isenabled()
+        gc.disable()
+        gc.callbacks.append(_record)
+        try:
+            with (
+                patch.object(writer, "_upload_file", new_callable=AsyncMock),
+                patch.object(writer, "_write_chunk", new_callable=AsyncMock) as chunk,
+            ):
+                await writer.write(frame)
+        finally:
+            gc.callbacks.remove(_record)
+            if was_enabled:
+                gc.enable()
+
+        assert chunk.await_count == 10
+        assert collections == []
+
 
 # ---------------------------------------------------------------------------
 # Writer.write_batches and _write_batched_dataframe
@@ -387,17 +442,20 @@ class TestWriterUploadFile:
     @pytest.mark.asyncio
     async def test_upload_file_propagates_retain_local_copy(self) -> None:
         writer = _StubWriter()
+        # Under writer.path: the upload key is its path relative to that root,
+        # which on Windows cannot span drives.
+        local = os.path.join(writer.path, "foo.parquet")
         writer.retain_local_copy = False  # type: ignore[attr-defined]
         writer.current_buffer_size_bytes = 999
 
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            await writer._upload_file("/tmp/out/foo.parquet")
+            await writer._upload_file(local)
 
         mock_upload.assert_awaited_once_with(
-            "/tmp/out/foo.parquet",
-            "/tmp/out/foo.parquet",
+            local,
+            local,
             retain_local_copy=False,
         )
         assert writer.current_buffer_size_bytes == 0
@@ -406,13 +464,16 @@ class TestWriterUploadFile:
     async def test_upload_file_default_retain_is_false_when_attr_missing(self) -> None:
         """Default for ``retain_local_copy`` is False if the attribute is unset."""
         writer = _StubWriter()
+        # Under writer.path: the upload key is its path relative to that root,
+        # which on Windows cannot span drives.
+        local = os.path.join(writer.path, "foo.parquet")
         with patch(
             "application_sdk.storage.formats._upload_file", new_callable=AsyncMock
         ) as mock_upload:
-            await writer._upload_file("/tmp/out/foo.parquet")
+            await writer._upload_file(local)
         mock_upload.assert_awaited_once_with(
-            "/tmp/out/foo.parquet",
-            "/tmp/out/foo.parquet",
+            local,
+            local,
             retain_local_copy=False,
         )
 

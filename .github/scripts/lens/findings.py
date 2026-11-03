@@ -56,6 +56,9 @@ class Finding:
     suggestion: str = ""
     rule_id: str = ""
     origin: str = "llm"  # llm | gate
+    # The reviewer's claim that the harm lands on something that existed before
+    # this PR (callers, a released contract, stored data, replay, wire values).
+    compatibility: bool = False
     confidence: float = 0.0
     id: str = ""
     status: str = "open"  # open | fixed | wontfix | stale

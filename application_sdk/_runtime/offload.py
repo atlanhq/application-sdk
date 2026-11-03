@@ -32,14 +32,15 @@ from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Generic, ParamSpec, TypeVar
 
+from application_sdk._logging import get_logger
+from application_sdk._runtime.cgroup import available_cpus
 from application_sdk._runtime.progress import (
     DEFAULT_MAX_NO_PROGRESS_SECONDS,
     ProgressTracker,
     current_progress_tracker,
     declared_hold_active,
 )
-from application_sdk.errors import InvalidInputValueError
-from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
+from application_sdk.errors import InvalidInputValueError, ResourceExhaustedError
 
 logger = get_logger(__name__)
 
@@ -66,6 +67,25 @@ _BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=min(32, (os.cpu_count() or 1) + 4),
     thread_name_prefix="sdk-blocking-",
 )
+
+# The pool ``run_in_thread`` uses instead of _BLOCKING_EXECUTOR in this context.
+# The consolidated API host serves many apps from one process and gives each its
+# own pool (``handler.asgi``), so one app's stuck blocking calls exhaust only
+# that app's pool. Unset on the worker, which keeps the shared pool.
+_BLOCKING_EXECUTOR_OVERRIDE: contextvars.ContextVar[
+    concurrent.futures.Executor | None
+] = contextvars.ContextVar("_BLOCKING_EXECUTOR_OVERRIDE", default=None)
+
+
+@contextlib.contextmanager
+def blocking_executor(executor: concurrent.futures.Executor) -> Iterator[None]:
+    """Make ``run_in_thread`` use ``executor`` for the duration of the block."""
+    token = _BLOCKING_EXECUTOR_OVERRIDE.set(executor)
+    try:
+        yield
+    finally:
+        _BLOCKING_EXECUTOR_OVERRIDE.reset(token)
+
 
 # Executor for CancelHandle actions — a driver cancel (cursor.cancel(), a
 # statement-cancel request) fired when the task awaiting a run_in_thread call is
@@ -354,6 +374,314 @@ def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
         tracker.exit_hold(hold)
 
 
+# ---------------------------------------------------------------------------
+# Per-app containment of the blocking pool (FND-2973)
+# ---------------------------------------------------------------------------
+#
+# A timeout frees the *caller* of a ``run_in_thread`` call but cannot stop its
+# thread, so a driver call hung on a dead host keeps its pool slot until the
+# driver returns on its own. On the worker (one app per pod, the process-wide
+# ``_BLOCKING_EXECUTOR``) that damage stays inside the app that caused it. The
+# consolidated API host gives each app its own pool (``blocking_executor``), so
+# one app's hung calls cannot take another app's slots; within that app they
+# can still take every slot and queue the app's other calls behind them.
+#
+# Two pieces contain it:
+#
+# * **A per-app cap**, opt-in through :data:`OFFLOAD_MAX_THREADS_PER_APP_ENV`.
+#   A call that would take an app past its cap fails at once with a retryable
+#   ``ResourceExhaustedError`` instead of queueing, so a misbehaving app
+#   degrades only itself. On the host, keep the cap at or below the app's pool
+#   width (``blocking_threads``): above it, hung calls fill the pool first and
+#   the app's next calls queue behind them until the cap is reached. Unset (the
+#   default), nothing changes: calls queue
+#   exactly as before. A default cap would turn today's queueing into failures
+#   for any fan-out wider than the cap, and the pool width it would be derived
+#   from is not a reliable number — ``os.cpu_count()`` reports the node's
+#   cores, not the pod's CPU limit.
+# * **A per-app stranded count**: calls whose caller stopped waiting while the
+#   thread kept running. Exported as the ``offload.stranded_threads`` gauge,
+#   labelled by app only, and logged once per strand with the callable's name.
+#
+# A slot is held from submit until the *thread* finishes — released in the
+# executor future's done callback, never when the awaiting coroutine returns.
+# Releasing on the caller's side would let a hung thread hand back its quota
+# while it still holds its pool slot, which is the one thing the cap exists to
+# prevent. The done callback also fires for a queued call cancelled before it
+# started, so that case does not leak a slot either.
+
+#: Env var capping how many ``run_in_thread`` calls one app may have in flight
+#: (running or queued) at once. Unset or empty means no cap.
+OFFLOAD_MAX_THREADS_PER_APP_ENV = "ATLAN_OFFLOAD_MAX_THREADS_PER_APP"
+
+#: The app a ``run_in_thread`` call is charged to. Bound by the handler layer
+#: (``bind_handler_context``) for each handler invocation, and on the
+#: consolidated host for every request to an app (``handler.asgi``); otherwise
+#: the process's own ``ATLAN_APPLICATION_NAME``. On the host that fallback is
+#: the host's name, which is correct for what reaches it: startup and background
+#: work that belongs to no single app.
+_OFFLOAD_OWNER: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_OFFLOAD_OWNER", default=None
+)
+
+#: Read at call time, not through ``application_sdk.constants``: that module
+#: loads ``.env`` and is not part of the api distribution's core.
+_APPLICATION_NAME_ENV = "ATLAN_APPLICATION_NAME"
+
+#: Owner used when neither a binding nor ``ATLAN_APPLICATION_NAME`` names the app.
+_UNKNOWN_OWNER = "<unknown>"
+
+#: Cap values already reported as invalid, so a bad setting warns once.
+_REPORTED_BAD_CAPS: set[str] = set()
+
+
+@contextlib.contextmanager
+def offload_owner(app_name: str) -> Iterator[None]:
+    """Charge every ``run_in_thread`` call made in this block to *app_name*.
+
+    The binding is a ContextVar, so it is per task and is inherited by tasks
+    created inside the block. An empty *app_name* leaves the fallback in place.
+    """
+    token = _OFFLOAD_OWNER.set(app_name or None)
+    try:
+        yield
+    finally:
+        _OFFLOAD_OWNER.reset(token)
+
+
+def _current_offload_owner() -> str:
+    """The app the current ``run_in_thread`` call is charged to."""
+    bound = _OFFLOAD_OWNER.get()
+    if bound:
+        return bound
+    return os.environ.get(_APPLICATION_NAME_ENV, "").strip() or _UNKNOWN_OWNER
+
+
+def _per_app_cap() -> int | None:
+    """The configured per-app cap, or ``None`` when no cap applies.
+
+    Read on every call so a deployment can change it without a code path that
+    caches a stale value. An unparseable or non-positive value is logged once
+    and ignored rather than raised: raising here would fail every offload in
+    the process over a configuration typo.
+    """
+    raw = os.environ.get(OFFLOAD_MAX_THREADS_PER_APP_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        cap = int(raw)
+    except ValueError:
+        cap = 0
+    if cap >= 1:
+        return cap
+    if raw not in _REPORTED_BAD_CAPS:
+        _REPORTED_BAD_CAPS.add(raw)
+        logger.warning(
+            "Ignoring %s=%r: expected a positive integer; offloads are not capped "
+            "per app",
+            OFFLOAD_MAX_THREADS_PER_APP_ENV,
+            raw,
+        )
+    return None
+
+
+class _OffloadSlot:
+    """One ``run_in_thread`` call's claim on its app's share of the pool."""
+
+    __slots__ = ("owner", "label", "stranded_at", "finished")
+
+    def __init__(self, owner: str, label: str) -> None:
+        self.owner = owner
+        self.label = label
+        self.stranded_at: float | None = None
+        self.finished = False
+
+
+class _AppOffloadLedger:
+    """Per-app in-flight and stranded counts for the blocking pool. Thread-safe.
+
+    Mutated from the event loop (claim, strand) and from pool threads (the
+    executor future's done callback), hence a ``threading.Lock`` rather than
+    anything asyncio-side.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._in_flight: dict[str, int] = {}
+        self._stranded: dict[str, int] = {}
+
+    def claim(self, owner: str, label: str, cap: int | None) -> _OffloadSlot | None:
+        """Take a slot for *owner*; ``None`` if that would exceed *cap*."""
+        with self._lock:
+            held = self._in_flight.get(owner, 0)
+            if cap is not None and held >= cap:
+                return None
+            self._in_flight[owner] = held + 1
+        return _OffloadSlot(owner, label)
+
+    def strand(self, slot: _OffloadSlot) -> int | None:
+        """Record that *slot*'s caller stopped waiting while its thread runs on.
+
+        Returns the owner's stranded count after this one, or ``None`` if the
+        thread had already finished (nothing is stranded).
+        """
+        with self._lock:
+            if slot.finished or slot.stranded_at is not None:
+                return None
+            slot.stranded_at = time.monotonic()
+            count = self._stranded.get(slot.owner, 0) + 1
+            self._stranded[slot.owner] = count
+            return count
+
+    def release(self, slot: _OffloadSlot) -> float | None:
+        """Give *slot* back once its thread is done.
+
+        Returns how long the thread ran after being stranded, or ``None`` if it
+        was never stranded.
+        """
+        with self._lock:
+            if slot.finished:
+                return None
+            slot.finished = True
+            self._in_flight[slot.owner] = self._in_flight.get(slot.owner, 1) - 1
+            if self._in_flight[slot.owner] <= 0:
+                del self._in_flight[slot.owner]
+            if slot.stranded_at is None:
+                return None
+            self._stranded[slot.owner] = self._stranded.get(slot.owner, 1) - 1
+            if self._stranded[slot.owner] <= 0:
+                del self._stranded[slot.owner]
+            return time.monotonic() - slot.stranded_at
+
+    def in_flight(self, owner: str) -> int:
+        with self._lock:
+            return self._in_flight.get(owner, 0)
+
+    def stranded(self) -> dict[str, int]:
+        """A snapshot of every app's stranded count, omitting apps at zero."""
+        with self._lock:
+            return dict(self._stranded)
+
+
+_LEDGER = _AppOffloadLedger()
+
+#: Lazily-created OTel instruments, keyed by name.
+_INSTRUMENTS: dict[str, Any] = {}
+_INSTRUMENTS_LOCK = threading.Lock()
+
+
+def _observe_stranded(_options: Any) -> Iterator[Any]:
+    try:
+        from opentelemetry.metrics import (  # noqa: PLC0415 — only reached from the OTel collection callback
+            Observation,
+        )
+    except ImportError:
+        # Absent on an api-only install; the gauge is never registered there.
+        return
+    for owner, count in _LEDGER.stranded().items():
+        yield Observation(count, {"app.name": owner})
+
+
+def _ensure_stranded_gauge() -> None:
+    """Register the ``offload.stranded_threads`` gauge, once, on the first strand.
+
+    Observable rather than pushed: the count only matters while it is non-zero,
+    and a callback reads the ledger at collection time instead of every strand
+    and release writing a sample. Never raises — telemetry must not turn a
+    cancellation into a different failure.
+    """
+    if "stranded" in _INSTRUMENTS:
+        return
+    with _INSTRUMENTS_LOCK:
+        if "stranded" in _INSTRUMENTS:
+            return
+        try:
+            from opentelemetry import (  # noqa: PLC0415 — cold path: only reached on the first strand
+                metrics as _otel_metrics,
+            )
+
+            _INSTRUMENTS["stranded"] = _otel_metrics.get_meter(
+                "application_sdk.runtime"
+            ).create_observable_gauge(
+                "offload.stranded_threads",
+                callbacks=[_observe_stranded],
+                unit="1",
+                description=(
+                    "run_in_thread calls whose caller stopped waiting (timeout or "
+                    "cancellation) while the thread is still running and holding a "
+                    "blocking-pool slot. Labelled by app; a sustained non-zero value "
+                    "names the app whose blocking calls ignore their own deadlines."
+                ),
+            )
+        except ImportError:
+            # An api-only install has no OpenTelemetry: the strand is still
+            # logged, there is just no gauge.
+            _INSTRUMENTS["stranded"] = None
+        except Exception:
+            _INSTRUMENTS["stranded"] = None
+            logger.debug("Could not register offload.stranded_threads", exc_info=True)
+
+
+def _on_offload_done(slot: _OffloadSlot) -> None:
+    """Executor done callback: release *slot*, reporting a stranded thread's end."""
+    stranded_for = _LEDGER.release(slot)
+    if stranded_for is not None:
+        logger.info(
+            "Stranded offloaded call %s for app %s finished %.1fs after its caller "
+            "stopped waiting; its blocking-pool slot is free again",
+            slot.label,
+            slot.owner,
+            stranded_for,
+        )
+
+
+def _abandon(slot: _OffloadSlot, future: "concurrent.futures.Future[Any]") -> None:
+    """The caller of *future* stopped waiting: cancel it if queued, else record a strand."""
+    if future.cancel():
+        # Still queued: it will never start, and the done callback has already
+        # given the slot back.
+        return
+    if future.done():
+        return
+    count = _LEDGER.strand(slot)
+    if count is None:
+        return
+    _ensure_stranded_gauge()
+    logger.warning(
+        "Offloaded call %s for app %s outlived its caller; the thread keeps a "
+        "blocking-pool slot until the call returns on its own (%d stranded for "
+        "this app). Give the blocking call a driver-level timeout so it returns "
+        "when its caller gives up",
+        slot.label,
+        slot.owner,
+        count,
+    )
+
+
+def _claim_slot(label: str) -> _OffloadSlot:
+    """Claim a slot for the current app, or raise if that app is at its cap."""
+    owner = _current_offload_owner()
+    cap = _per_app_cap()
+    slot = _LEDGER.claim(owner, label, cap)
+    if slot is not None:
+        return slot
+    stranded = _LEDGER.stranded().get(owner, 0)
+    raise ResourceExhaustedError(
+        message=(
+            f"App {owner!r} already has {cap} blocking calls in flight "
+            f"({stranded} stranded past their caller); refusing {label} rather "
+            "than queueing it behind them"
+        ),
+        resource="offload_threads",
+        limit=str(cap),
+        observed=str(_LEDGER.in_flight(owner)),
+        suggested_action=(
+            "Give this app's blocking calls driver-level timeouts so a hung call "
+            f"returns its slot, or raise {OFFLOAD_MAX_THREADS_PER_APP_ENV}."
+        ),
+    )
+
+
 async def run_in_thread(
     func: Callable[..., T],
     *args: Any,
@@ -410,6 +738,18 @@ async def run_in_thread(
       isolated from the caller (copy semantics).
     - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
       Temporal's activity pool, to avoid deadlocking the worker.
+    - Each call is charged to an app: the handler invocation's app when one is
+      bound (see :func:`offload_owner`), else the process's
+      ``ATLAN_APPLICATION_NAME``. When ``ATLAN_OFFLOAD_MAX_THREADS_PER_APP`` is set,
+      a call that would take its app past that many calls in flight raises a
+      retryable ``ResourceExhaustedError`` at once instead of queueing. Unset,
+      calls queue as they always have. A call counts against its app until its
+      **thread** finishes, not until its caller stops waiting.
+    - A call whose caller stops waiting (timeout, cancellation) while its
+      thread runs on is *stranded*: logged at WARNING with the callable's name
+      and counted per app on the ``offload.stranded_threads`` gauge until the
+      thread returns. A call still queued when its caller stops waiting is
+      cancelled and never starts.
     - The offload is automatically wrapped in an **unbounded** progress hold
       (ADR-0018), so the stall watchdog never accuses a legitimately long
       blocking call of stalling. Nothing to do at the call site, and nothing
@@ -477,14 +817,29 @@ async def run_in_thread(
     if scopes:
         call = _tracked_offload(call, scopes, label)
     cancel_handle = _bound_handle(func)
+    # The app's own pool on the consolidated host (``blocking_executor``), else
+    # the process-wide one.
+    executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
+    # Claimed before the hold opens: an app at its cap fails here at once, with
+    # nothing to unwind (FND-2973).
+    slot = _claim_slot(label)
     with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
-        if cancel_handle is None:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
         try:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+            future = executor.submit(call)
+        except BaseException:
+            # Never submitted (pool shut down at interpreter exit): no thread
+            # will ever release the slot, so release it here.
+            _LEDGER.release(slot)
+            raise
+        # Released when the *thread* is done — see the containment notes above.
+        future.add_done_callback(lambda _done: _on_offload_done(slot))
+        try:
+            return await asyncio.wrap_future(future, loop=loop)
         except asyncio.CancelledError:
-            # Non-blocking: the action is handed to the cancel pool.
-            cancel_handle.request()
+            if cancel_handle is not None:
+                # Non-blocking: the action is handed to the cancel pool.
+                cancel_handle.request()
+            _abandon(slot, future)
             raise
 
 
@@ -685,10 +1040,9 @@ def submit_in_thread(
         never ran. Ignoring the return value is the normal case.
     """
     ctx = contextvars.copy_context()
+    executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     try:
-        future = _BLOCKING_EXECUTOR.submit(
-            ctx.run, functools.partial(func, *args, **kwargs)
-        )
+        future = executor.submit(ctx.run, functools.partial(func, *args, **kwargs))
     except RuntimeError:
         # The pool refuses work only once it has been shut down, which happens
         # at interpreter exit. Nothing is left running to clean up after, and the
@@ -735,47 +1089,177 @@ def _report_detached_failure(future: "concurrent.futures.Future[Any]") -> None:
 #   single thread but every lock, in whatever state the other threads left
 #   them — a deadlock/corruption factory. spawn starts a clean interpreter.
 #
-# Lazy and cached by width: callers passing the same max_workers share one
-# ProcessPoolExecutor of that width, created on first use; distinct widths get
-# distinct pools, so discarding one width's pool on a crash never disturbs
-# another's. Processes that never need isolation never pay for a child.
+# Lazy, keyed by width, and reaped when idle: callers passing the same
+# max_workers share one ProcessPoolExecutor of that width, created on first use;
+# distinct widths get distinct pools, so discarding one width's pool on a crash
+# never disturbs another's. Processes that never need isolation never pay for a
+# child.
+#
+# Why reaped (FND-4278)? Each spawn child re-imports the parent's main module
+# and the decode stack — ~175 MiB apiece before it decodes a byte — and a pool
+# never shut down keeps every child it ever started for the worker's lifetime:
+# ~700 MiB of idle children sitting under the pod's memory limit after a single
+# burst of uploads. So once a pool has had nothing in flight for
+# FAULT_ISOLATION_IDLE_SECONDS it is shut down and its children exit; the next
+# call spawns afresh. That spawn cost lands on best-effort work with a
+# minutes-long timeout, which is the right side of the trade.
+#
+# Why not ``max_tasks_per_child=1``? CPython replaces a retired child eagerly,
+# as soon as the old one exits, not when the next task arrives — so the pool
+# still holds max_workers idle children between bursts. It only trades a warm
+# child for a cold one; it does not give the memory back.
 #
 # Concurrency: the default pool runs several children so concurrent best-effort
 # callers decode in PARALLEL, not serialised behind one child. Isolation here is
-# purely fault containment — NOT a serialisation crutch to dodge the msgspec
-# 0.20.0 concurrent-decode segfault: that bug is same-process (a shared
-# in-process decoder across threads); separate child processes don't share that
-# state, and once msgspec 0.21.1 lands even same-process concurrent decode is
-# safe. The default width is capped low because each spawn child re-imports the
-# decode stack (pyatlan/msgspec), which costs memory under a pod limit. A caller
-# that wants to bound — or serialise (max_workers=1) — its own work passes an
-# explicit width. (A crash in any one child breaks the whole ProcessPoolExecutor
-# — inherent to the executor — so concurrent callers on that width then see
-# BrokenProcessPool; for best-effort work that is a benign skip.)
-_DEFAULT_PROCESS_POOL_MAX_WORKERS = min(4, (os.cpu_count() or 1))
-_PROCESS_EXECUTORS: dict[int, concurrent.futures.ProcessPoolExecutor] = {}
-_PROCESS_EXECUTORS_LOCK = threading.Lock()
+# purely fault containment. It was introduced while msgspec 0.20.0 could
+# segfault on concurrent decode (CNCT-85); that bug was same-process and the
+# lock now pins 0.21.1, which fixes it. Isolation stays the default anyway:
+# ADR-0017's reason is that a native fault in *any* C extension on the decode
+# path must not take the worker down, and that holds whatever the msgspec
+# version. Now that the children exist only while there is work, keeping them
+# costs spawn latency, not resident memory.
+#
+# Width: ``min(4, CPUs available to the container)`` — the CFS quota, not
+# ``os.cpu_count()``, which reports the node's cores. A caller that wants to
+# bound — or serialise (max_workers=1) — its own work passes an explicit width.
+# (A crash in any one child breaks the whole ProcessPoolExecutor — inherent to
+# the executor — so concurrent callers on that width then see BrokenProcessPool;
+# for best-effort work that is a benign skip.)
+_MAX_DEFAULT_PROCESS_POOL_WIDTH = 4
+
+#: Env var: seconds a fault-isolation pool with nothing in flight keeps its
+#: children before shutting down. ``0`` shuts it down as soon as it goes idle.
+FAULT_ISOLATION_IDLE_SECONDS_ENV = "ATLAN_FAULT_ISOLATION_IDLE_SECONDS"
+_DEFAULT_FAULT_ISOLATION_IDLE_SECONDS = 30.0
+_REPORTED_BAD_IDLE_SECONDS: set[str] = set()
 
 
-def _get_process_executor(max_workers: int) -> concurrent.futures.ProcessPoolExecutor:
-    with _PROCESS_EXECUTORS_LOCK:
-        executor = _PROCESS_EXECUTORS.get(max_workers)
-        if executor is None:
-            executor = concurrent.futures.ProcessPoolExecutor(
-                max_workers=max_workers,
-                mp_context=multiprocessing.get_context("spawn"),
-            )
-            _PROCESS_EXECUTORS[max_workers] = executor
-        return executor
+@functools.cache
+def _default_process_pool_max_workers() -> int:
+    """``min(4, CPUs the container may use)``, read once per process."""
+    return min(_MAX_DEFAULT_PROCESS_POOL_WIDTH, available_cpus())
 
 
-def _discard_process_executor(max_workers: int) -> None:
-    """Drop the width-``max_workers`` pool (and kill its children) so the next
-    call at that width starts fresh."""
-    with _PROCESS_EXECUTORS_LOCK:
-        executor = _PROCESS_EXECUTORS.pop(max_workers, None)
-    if executor is None:
-        return
+def _idle_seconds() -> float:
+    """The configured idle period, read on every release so it can be retuned.
+
+    An unparseable or negative value is logged once and replaced by the
+    default rather than raised: raising here would fail isolated work over a
+    configuration typo.
+    """
+    raw = os.environ.get(FAULT_ISOLATION_IDLE_SECONDS_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if value >= 0 and value != float("inf"):
+        return value
+    if raw not in _REPORTED_BAD_IDLE_SECONDS:
+        _REPORTED_BAD_IDLE_SECONDS.add(raw)
+        logger.warning(
+            "Ignoring %s=%r: expected a non-negative number of seconds; using %ss",
+            FAULT_ISOLATION_IDLE_SECONDS_ENV,
+            raw,
+            _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS,
+        )
+    return _DEFAULT_FAULT_ISOLATION_IDLE_SECONDS
+
+
+class _IsolationPool:
+    """One width's executor and its in-flight count. Guarded by the pools lock.
+
+    ``in_flight`` counts submitted calls until their *child* finishes, not until
+    their caller stops waiting: a caller that is cancelled leaves its child
+    running, and reaping the pool under it would kill work still in progress.
+    ``idle_generation`` invalidates an idle timer the moment new work arrives,
+    so a timer that fires late can never reap a pool that has been busy since.
+    ``reaped`` is set once an idle shutdown has joined every child, so a reader
+    can observe the children's exit without calling ``waitpid`` itself (a second
+    ``waitpid`` racing the executor's own join can misreport a reaped child as
+    still running).
+    """
+
+    __slots__ = ("executor", "in_flight", "idle_generation", "idle_timer", "reaped")
+
+    def __init__(self, max_workers: int) -> None:
+        self.executor = concurrent.futures.ProcessPoolExecutor(
+            max_workers=max_workers,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+        self.in_flight = 0
+        self.idle_generation = 0
+        self.idle_timer: threading.Timer | None = None
+        self.reaped = threading.Event()
+
+    def stop_idle_timer(self) -> None:
+        self.idle_generation += 1
+        if self.idle_timer is not None:
+            self.idle_timer.cancel()
+            self.idle_timer = None
+
+
+_PROCESS_POOLS: dict[int, _IsolationPool] = {}
+_PROCESS_POOLS_LOCK = threading.Lock()
+
+
+def _acquire_process_pool(max_workers: int) -> _IsolationPool:
+    """The width-``max_workers`` pool, with one more call counted in flight."""
+    with _PROCESS_POOLS_LOCK:
+        pool = _PROCESS_POOLS.get(max_workers)
+        if pool is None:
+            pool = _IsolationPool(max_workers)
+            _PROCESS_POOLS[max_workers] = pool
+        pool.in_flight += 1
+        pool.stop_idle_timer()
+        return pool
+
+
+def _release_process_pool(max_workers: int, pool: _IsolationPool) -> None:
+    """Count one call out; start the idle timer when the pool has none left."""
+    with _PROCESS_POOLS_LOCK:
+        pool.in_flight -= 1
+        if pool.in_flight or _PROCESS_POOLS.get(max_workers) is not pool:
+            return
+        pool.stop_idle_timer()
+        timer = threading.Timer(
+            _idle_seconds(),
+            _reap_idle_pool,
+            args=(max_workers, pool, pool.idle_generation),
+        )
+        timer.daemon = True
+        timer.name = f"sdk-isolation-idle-{max_workers}"
+        pool.idle_timer = timer
+        timer.start()
+
+
+def _reap_idle_pool(max_workers: int, pool: _IsolationPool, generation: int) -> None:
+    """Shut the pool down if it is still the live, idle pool this timer was for."""
+    with _PROCESS_POOLS_LOCK:
+        if (
+            pool.in_flight
+            or pool.idle_generation != generation
+            or _PROCESS_POOLS.get(max_workers) is not pool
+        ):
+            return
+        del _PROCESS_POOLS[max_workers]
+        pool.idle_timer = None
+    # Outside the lock: a caller arriving now builds a fresh pool rather than
+    # waiting for this one's children to exit. Nothing is queued or running, so
+    # the children take the sentinel and exit, and joining them leaves no zombie.
+    pool.executor.shutdown(wait=True)
+    pool.reaped.set()
+
+
+def _discard_process_pool(max_workers: int, pool: _IsolationPool) -> None:
+    """Drop ``pool`` (and kill its children) so the next call at this width
+    starts fresh."""
+    with _PROCESS_POOLS_LOCK:
+        if _PROCESS_POOLS.get(max_workers) is pool:
+            del _PROCESS_POOLS[max_workers]
+        pool.stop_idle_timer()
+    executor = pool.executor
     # Kill the children BEFORE shutdown(): a dead child is the pool's
     # well-trodden unwind path — the manager thread sees it, marks the pool
     # broken, resolves every still-queued work item with BrokenProcessPool,
@@ -821,8 +1305,11 @@ async def run_fault_isolated(
       ``func`` must be a module-level function (pickled by reference).
     - ContextVars do **not** propagate — the child is a fresh interpreter.
       Have the child return data and log from the parent.
-    - The child imports ``func``'s module on first use (one-time cost,
-      amortized by the pooled worker).
+    - The child imports ``func``'s module on first use. Children are pooled
+      while calls keep arriving and exit once the pool has been idle for
+      ``ATLAN_FAULT_ISOLATION_IDLE_SECONDS`` (default 30), so a call after a
+      quiet spell pays a fresh spawn and import; idle children never hold
+      memory for the worker's lifetime.
 
     Like :func:`run_in_thread`, the call is automatically wrapped in a progress
     hold (ADR-0018) so an isolated call — which emits nothing at all until the
@@ -836,8 +1323,9 @@ async def run_fault_isolated(
         timeout: Seconds to wait before killing the child and raising
             ``TimeoutError``. ``None`` waits forever.
         max_workers: Width of the (width-keyed) process pool this call runs on.
-            ``None`` (default) uses ``min(4, cpu_count)`` so concurrent callers
-            decode in parallel. Pass ``1`` to opt into sequential execution —
+            ``None`` (default) uses ``min(4, CPUs available to the container)``
+            — the cgroup CPU limit, not the node's core count — so concurrent
+            callers decode in parallel. Pass ``1`` to opt into sequential execution —
             all ``max_workers=1`` callers share a single child and queue behind
             one another; pass another integer to bound concurrency at a
             different width. Must be >= 1.
@@ -851,7 +1339,9 @@ async def run_fault_isolated(
             discarded.
         InvalidInputValueError: ``max_workers`` is < 1 (also a ``ValueError``).
     """
-    workers = _DEFAULT_PROCESS_POOL_MAX_WORKERS if max_workers is None else max_workers
+    workers = (
+        _default_process_pool_max_workers() if max_workers is None else max_workers
+    )
     if workers < 1:
         raise InvalidInputValueError(
             message=f"max_workers must be >= 1, got {workers}",
@@ -881,9 +1371,21 @@ async def run_fault_isolated(
     # the child, so the call returns at its deadline whether or not a hold is
     # watching.
     with _auto_hold(_ISOLATED_HOLD_PREFIX + _offloaded_callable_name(func), timeout):
-        future = loop.run_in_executor(
-            _get_process_executor(workers), functools.partial(func, *args, **kwargs)
+        pool = _acquire_process_pool(workers)
+        try:
+            child_future = pool.executor.submit(
+                functools.partial(func, *args, **kwargs)
+            )
+        except BaseException:
+            # Never submitted (pool broken or shut down): nothing will release
+            # the in-flight count, so release it here.
+            _release_process_pool(workers, pool)
+            raise
+        # Released when the *child* is done, not when this caller stops waiting.
+        child_future.add_done_callback(
+            lambda _done: _release_process_pool(workers, pool)
         )
+        future = asyncio.wrap_future(child_future, loop=loop)
         if timeout is not None:
             # Not asyncio.wait_for: on timeout it cancels the future and then
             # waits for the cancellation to land — but a running executor call
@@ -892,7 +1394,7 @@ async def run_fault_isolated(
             # ourselves.
             done, _ = await asyncio.wait({future}, timeout=timeout)
             if not done:
-                _discard_process_executor(workers)
+                _discard_process_pool(workers, pool)
                 # The kill resolves the abandoned future with BrokenProcessPool;
                 # consume it so asyncio never logs "exception was never
                 # retrieved".
@@ -903,7 +1405,7 @@ async def run_fault_isolated(
         try:
             return await future
         except BrokenProcessPool:
-            _discard_process_executor(workers)
+            _discard_process_pool(workers, pool)
             raise
         except asyncio.CancelledError:
             task = asyncio.current_task()
@@ -922,7 +1424,7 @@ async def run_best_effort(
     func: Callable[..., T],
     *args: Any,
     label: str,
-    logger: AtlanLoggerAdapter,
+    logger: Any,
     timeout: float | None = None,
     max_workers: int | None = None,
     **kwargs: Any,
@@ -950,8 +1452,8 @@ async def run_best_effort(
             caller's module (OTel source) rather than this one.
         timeout: Seconds before the child is killed and the run is skipped.
         max_workers: Pool width, forwarded to :func:`run_fault_isolated`. ``None``
-            uses the default ``min(4, cpu_count)``; pass ``1`` to serialise this
-            work.
+            uses the default ``min(4, CPUs available to the container)``; pass
+            ``1`` to serialise this work.
 
     Returns:
         ``func``'s result, or ``None`` if the run crashed, timed out, or errored.
@@ -977,3 +1479,25 @@ async def run_best_effort(
     except Exception:  # noqa: BLE001 — best-effort work must never break the caller
         logger.warning("%s skipped due to an unexpected error", label, exc_info=True)
     return None
+
+
+#: Names this module re-exported before it moved to the light logger; served on
+#: first access (the worker's structured logger class — absent on an api-only
+#: install, which never asks for it).
+_LAZY: dict[str, tuple[str, str]] = {
+    "AtlanLoggerAdapter": (
+        "application_sdk.observability.logger_adaptor",
+        "AtlanLoggerAdapter",
+    ),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib  # noqa: PLC0415 — only for the lazy names above
+
+    value = getattr(importlib.import_module(target[0]), target[1])
+    globals()[name] = value
+    return value

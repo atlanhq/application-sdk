@@ -36,11 +36,24 @@
       "packageNameTemplate": "apple/pkl",
       "datasourceTemplate": "github-tags",
       "versioningTemplate": "semver"
+    },
+    {
+      "description": "uv binary cache key in setup-deps (FND-4242). The github-actions manager bumps astral-sh/setup-uv's `version:` input (dep astral-sh/uv) but cannot see the same version inside the actions/cache key one step earlier, so the key drifted (0.11.21 against an installed 0.13.4) and the cache restored a uv nobody used. This manager tracks the key literal under the same depName; the packageRule below groups it into the github-actions PR so both land in one Renovate branch. If it ever stops matching, .github/scripts/tests/test_setup_deps_uv_cache_key.py fails on the bump PR instead of the drift going silent.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/actions/setup-deps/action\\.yaml$/"
+      ],
+      "matchStrings": [
+        "key: uv-bin-\\$\\{\\{ runner\\.os \\}\\}-\\$\\{\\{ runner\\.arch \\}\\}-(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "depNameTemplate": "astral-sh/uv",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
     {
-      "description": "Pkl toolchain bumps are reviewed, never auto-merged — deliberately unlike every other lane in the fleet preset. pkl is a language, not a pinned library: one line here changes the renderer that every contract in the fleet is evaluated with, and a release that alters generated output would drift 22 connector repos at once with no PR of their own to notice it on. The SDK's own CI does prove the bump is safe — application_sdk/pkl_version.py is in sdk-gate.yaml's `toolkit` filter, so contract-toolkit-reusable.yaml regenerates every examples/ tree with the new pkl and fails on any diff — but 'green' there means 'the toolkit examples are unchanged', which is evidence for a human to weigh against the real contracts, not a substitute for weighing it. Also excluded from the release-age cooldown's PyPI lane by construction (different datasource), so the review IS the hold.",
+      "description": "Pkl toolchain bumps are reviewed, never auto-merged — deliberately unlike every other lane in the fleet preset. pkl is a language, not a pinned library: one line here changes the renderer that every contract in the fleet is evaluated with, and a release that alters generated output would drift 22 connector repos at once with no PR of their own to notice it on. The SDK's own CI does prove the bump is safe — application_sdk/pkl_version.py is in sdk-gate.yaml's `toolkit` filter, so contract-toolkit-reusable.yaml regenerates every examples/ tree with the new pkl and fails on any diff — but 'green' there means 'the toolkit examples are unchanged', which is evidence for a human to weigh against the real contracts, not a substitute for weighing it. The review does not replace a release-age hold: the next rule holds the bump for the fleet's 3-day cooldown before a PR is opened at all.",
       "matchManagers": [
         "custom.regex"
       ],
@@ -51,6 +64,21 @@
       "platformAutomerge": false,
       "semanticCommitType": "chore",
       "commitMessageTopic": "the pinned pkl toolchain"
+    },
+    {
+      "description": "Hold pkl bumps for the fleet's 3-day release-age cooldown (FND-4356), the same window as the preset's third-party PyPI rule and renovate-lock-cooldown.yaml's --window P3D. The preset's rule matches only the pypi datasource, so without this the pkl lane had no hold. That let Renovate open application-sdk#4539 in the hour between apple/pkl pushing the 0.32.2 tag and publishing the release that carries the binaries, and every install-pkl download in its CI returned 404. The github-tags datasource gives each tag a releaseTimestamp: the annotated tag's tagger date, raised to the GitHub release's publishedAt when the release is later. So the 3 days run from when the binaries exist whenever the release is visible to Renovate, and the tag-before-assets race is closed either way. apple/pkl's tags are annotated and carry tagger dates, which matters because Renovate's default minimumReleaseAgeBehaviour (timestamp-required) silently suppresses an update with no timestamp. Positive matchUpdateTypes, the same shape as the preset rule, so no timestamp-less update type is caught. A separate rule from the review rule above, so that rule's automerge: false still covers every pkl update type.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "pkl"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "3 days"
     },
     {
       "description": "Action bumps inside the shipped conformance bootstrap templates are conformance-package source changes: the PR-title gate requires a fix(conformance) scope for anything under packages/conformance/ (except tests/ and lock files), and these bumps change the package's scaffolded output so they should version it. Give them their own group + semantic type/scope so the PR title is deterministic and never collides with plain .github/workflows or .github/workflow-templates action bumps (which stay chore(deps)). Repo-local packageRules are appended after the fleet preset, so this overrides both the preset's force-chore rule and its github-actions groupName — but only for deps whose file lives under the templates dir (matchFileNames).",
@@ -73,6 +101,48 @@
         "python"
       ],
       "allowedVersions": "<3.15"
+    },
+    {
+      "description": "Put the uv cache-key bump in the same PR as the setup-uv `version:` bump it must track. The fleet preset's github-actions group rule matches on matchManagers github-actions only, so a shared depName is not enough: the regex manager's astral-sh/uv bump fell outside the group and a github-actions PR bumped the install without the key, failing test_setup_deps_uv_cache_key.py. Same groupName and auto-merge settings as the preset's rule, because Renovate auto-merges a group only when every member does.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "astral-sh/uv"
+      ],
+      "groupName": "github-actions",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "pyatlan floor lane (FND-4439): on every pyatlan release, raise the `pyatlan>=X` floor the SDK PUBLISHES (root pyproject.toml and packages/api's `pyatlan` extra) instead of only moving this repo's lock, so the next SDK release carries the new pyatlan to every app. Under the preset's default rangeStrategy an in-range release produces no PR at all and reaches only this repo's uv.lock through lockFileMaintenance, which apps never see. groupName splits pyatlan out of the preset's 'non-critical python dependencies' group so both manifests move in one PR on its own branch (renovate/pyatlan; a major lands on renovate/major-pyatlan via separateMajorMinor). packages/conformance does not declare pyatlan, so Renovate cannot touch its lock: .github/workflows/renovate-pyatlan-sync.yaml moves that lock to the root's pyatlan and regenerates relationship_directions.json on the minor/patch branch. No matchUpdateTypes: the rule applies to every update type, and the next rule takes majors back out of auto-merge (under rangeStrategy bump Renovate keeps updateType minor/patch and only adds `bump` as a second matchable type, so either shape would match; this one does not depend on that). semanticCommitType is restated so the commit type does not hinge on rule order against config:recommended's fix-for-deps preset. No minimumReleaseAge: pyatlan is Atlan-published and exempt from the cooldown (FND-378), and upstream exempts `bump` regardless. Mend cannot run postUpgradeTasks, which is why the regeneration is a workflow and not a task here.",
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "pyatlan"
+      ],
+      "groupName": "pyatlan",
+      "rangeStrategy": "bump",
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "semanticCommitType": "chore"
+    },
+    {
+      "description": "pyatlan majors are reviewed, never auto-merged: a major raises the SDK's `<N+1` cap, which is the control point for a pyatlan major reaching every connector (see the preset's FND-378 note), and the conformance lock cannot follow it until an SDK release does. Separate from the rule above so that rule can stay update-type-agnostic; the preset's major rule still gives it the lowest prPriority.",
+      "matchDatasources": [
+        "pypi"
+      ],
+      "matchPackageNames": [
+        "pyatlan"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "platformAutomerge": false
     }
   ],
   "ignorePaths": [

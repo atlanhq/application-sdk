@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.observability import dapr_log_forwarder as dlf
+from tests.unit.private_stdlib import private_stdlib
 
 
 class TestSplitChildCommand:
@@ -215,8 +216,9 @@ class TestMain:
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
             # The re-exec is POSIX-only (see test_no_reexec_on_windows), so pin
             # the branch rather than letting the runner's platform decide.
-            patch.object(dlf.os, "name", "posix"),
-            patch.object(dlf.os, "execve", side_effect=SystemExit(0)) as execve,
+            private_stdlib(dlf, "os") as local_os,
+            patch.object(local_os, "name", "posix"),
+            patch.object(local_os, "execve", side_effect=SystemExit(0)) as execve,
             patch.object(dlf, "_run") as run_mock,
             pytest.raises(SystemExit),
         ):
@@ -244,7 +246,8 @@ class TestMain:
 
         with (
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
-            patch.object(dlf.os, "execve") as execve,
+            private_stdlib(dlf, "os") as local_os,
+            patch.object(local_os, "execve") as execve,
             patch.object(dlf, "_run", _fake_run),
         ):
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
@@ -263,8 +266,9 @@ class TestMain:
 
         with (
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
-            patch.object(dlf.os, "name", "nt"),
-            patch.object(dlf.os, "execve") as execve,
+            private_stdlib(dlf, "os") as local_os,
+            patch.object(local_os, "name", "nt"),
+            patch.object(local_os, "execve") as execve,
             patch.object(dlf, "_run", _fake_run),
         ):
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
@@ -282,7 +286,8 @@ class TestMain:
 
         with (
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
-            patch.object(dlf.os, "execve") as execve,
+            private_stdlib(dlf, "os") as local_os,
+            patch.object(local_os, "execve") as execve,
             patch.object(dlf, "_run", _fake_run),
         ):
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
@@ -299,7 +304,8 @@ class TestMain:
 
         with (
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
-            patch.object(dlf.os, "execve") as execve,
+            private_stdlib(dlf, "os") as local_os,
+            patch.object(local_os, "execve") as execve,
             patch.object(dlf, "_run", _fake_run),
         ):
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 0
@@ -317,8 +323,9 @@ class TestMain:
             patch("application_sdk.constants.ENABLE_ATLAN_UPLOAD", True),
             # Without this the case is vacuous off POSIX: no exec is attempted
             # there, so the OSError path would never be reached.
-            patch.object(dlf.os, "name", "posix"),
-            patch.object(dlf.os, "execve", side_effect=OSError("no exec")),
+            private_stdlib(dlf, "os") as local_os,
+            patch.object(local_os, "name", "posix"),
+            patch.object(local_os, "execve", side_effect=OSError("no exec")),
             patch.object(dlf, "_run", _fake_run),
         ):
             assert dlf.main(["dapr_log_forwarder", "--", "daprd"]) == 3
@@ -385,7 +392,8 @@ class TestRun:
                 "_make_emitter",
                 return_value=(lambda lvl, msg: emitted.append((lvl, msg)), None),
             ),
-            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            private_stdlib(dlf, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_subprocess_exec", _create),
             patch.object(dlf, "_install_signal_forwarding"),
             patch.object(dlf, "_drain_and_flush", new=_async_noop),
         ):
@@ -432,7 +440,8 @@ class TestRun:
                 "_make_emitter",
                 return_value=(lambda lvl, msg: emitted.append((lvl, msg)), None),
             ),
-            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            private_stdlib(dlf, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_subprocess_exec", _create),
             patch.object(dlf, "_install_signal_forwarding"),
             patch.object(dlf, "_drain_and_flush", new=_async_noop),
         ):
@@ -455,7 +464,8 @@ class TestRun:
 
         with (
             patch.object(dlf, "_make_emitter", return_value=(lambda *a: None, None)),
-            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            private_stdlib(dlf, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_subprocess_exec", _create),
             patch.object(dlf, "_install_signal_forwarding"),
             patch.object(dlf, "_drain_and_flush", new=_drain),
         ):
@@ -489,7 +499,8 @@ class TestRun:
                 "application_sdk.observability.logger_adaptor.get_logger",
                 return_value=fake_logger,
             ),
-            patch.object(dlf.asyncio, "create_subprocess_exec", _create),
+            private_stdlib(dlf, "asyncio") as local_asyncio,
+            patch.object(local_asyncio, "create_subprocess_exec", _create),
             patch.object(dlf, "_install_signal_forwarding"),
             patch(
                 "application_sdk.observability.observability.AtlanObservability.flush_all",

@@ -145,6 +145,102 @@ def test_prefixed_reserved_subdir_yields_to_a_real_emitted_key(tree, capsys):
     assert "collides with a reserved name" in capsys.readouterr().out
 
 
+def test_prefixed_places_caller_nodes_overwrite_only(tree):
+    """A system app's caller node is emitted repo-root-relative under
+    `contract/generated/` — one file, or one per entrypoint of a system bundle
+    (FND-3563). It must land where the key says, and since `contract/` is the
+    app's own source tree, nothing but a caller node there is deleted."""
+    _write(tree / "contract" / "app.pkl", "app\n")
+    _write(tree / "contract" / "generated" / "input.pkl", "stale\n")
+    _write(tree / "contract" / "generated" / "notes.md", "app-owned\n")
+    _write(tree / "out" / "app" / "generated" / "_input.py", "x\n")
+    _write(tree / "out" / "contract" / "generated" / "input.pkl", "fresh\n")
+    _write(tree / "out" / "contract" / "generated" / "keifu" / "input.pkl", "ep\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    contract = tree / "contract"
+    assert contract.joinpath("generated", "input.pkl").read_text() == "fresh\n"
+    assert contract.joinpath("generated", "keifu", "input.pkl").read_text() == "ep\n"
+    assert contract.joinpath("generated", "notes.md").read_text() == "app-owned\n"
+    assert contract.joinpath("app.pkl").read_text() == "app\n"
+    # Not misplaced under the generated dir.
+    assert not (tree / "app" / "generated" / "contract").exists()
+
+
+def test_prefixed_prunes_caller_nodes_no_longer_emitted(tree):
+    """A bundle entrypoint that is removed, or stops declaring `inputs`, stops
+    emitting its caller node. Left behind, the stale node would also pass the
+    freshness check, so it is removed — with its now-empty dir, and nothing
+    else the app keeps under `contract/generated/`."""
+    gen = tree / "contract" / "generated"
+    _write(gen / "keifu" / "input.pkl", "stale\n")
+    _write(gen / "dropped" / "input.pkl", "stale\n")
+    _write(gen / "dropped-with-notes" / "input.pkl", "stale\n")
+    _write(gen / "dropped-with-notes" / "notes.md", "app-owned\n")
+    _write(gen / "helper.pkl", "app-owned\n")
+    _write(tree / "out" / "app" / "generated" / "_input.py", "x\n")
+    _write(tree / "out" / "contract" / "generated" / "keifu" / "input.pkl", "fresh\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert gen.joinpath("keifu", "input.pkl").read_text() == "fresh\n"
+    assert not gen.joinpath("dropped").exists()
+    assert not gen.joinpath("dropped-with-notes", "input.pkl").exists()
+    assert gen.joinpath("dropped-with-notes", "notes.md").read_text() == "app-owned\n"
+    assert gen.joinpath("helper.pkl").read_text() == "app-owned\n"
+
+
+def test_prefixed_prunes_the_last_caller_node_but_not_contract(tree):
+    """An app that stops being a system app emits no caller node at all. Its
+    old node and the emptied `contract/generated/` go; `contract/` stays."""
+    _write(tree / "contract" / "app.pkl", "app\n")
+    _write(tree / "contract" / "generated" / "input.pkl", "stale\n")
+    _write(tree / "out" / "app" / "generated" / "manifest.json", "fresh\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert not (tree / "contract" / "generated").exists()
+    assert (tree / "contract" / "app.pkl").read_text() == "app\n"
+
+
+def test_prefixed_keeps_a_preserved_caller_node(tree):
+    """A caller node the app post-processes (it differs from what the previous
+    pin emitted) is preserved by override detection, never pruned."""
+    _write(tree / "contract" / "generated" / "input.pkl", "app-patched\n")
+    _write(tree / "base" / "app" / "generated" / "_input.py", "x\n")
+    _write(tree / "base" / "contract" / "generated" / "input.pkl", "old-toolkit\n")
+    _write(tree / "out" / "app" / "generated" / "_input.py", "x\n")
+    _write(tree / "out" / "contract" / "generated" / "input.pkl", "new-toolkit\n")
+
+    assert mod.swap_outputs(tree / "out", baseline_dir=tree / "base") is True
+
+    assert (
+        tree / "contract" / "generated" / "input.pkl"
+    ).read_text() == "app-patched\n"
+
+
+def test_native_never_prunes_caller_nodes(tree):
+    """The native family emits no caller node; it must not delete one."""
+    _write(tree / "app" / "generated" / "manifest.json", "old\n")
+    _write(tree / "contract" / "generated" / "input.pkl", "kept\n")
+    _write(tree / "out" / "manifest.json", "fresh\n")
+
+    assert mod.swap_outputs(tree / "out") is True
+
+    assert (tree / "contract" / "generated" / "input.pkl").read_text() == "kept\n"
+
+
+def test_native_does_not_map_contract_generated(tree):
+    """Only the prefixed family keys output repo-root-relative. A native
+    contract's bare `contract/...` key would be relative to the generated dir."""
+    _write(tree / "out" / "contract" / "generated" / "input.pkl")
+
+    _, plan = mod.plan_swap(tree / "out")
+
+    assert Path("contract/generated/input.pkl") not in plan
+
+
 # ── swap_outputs: native family ──────────────────────────────────────────────
 
 

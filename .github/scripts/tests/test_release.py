@@ -208,6 +208,12 @@ def git_repo(tmp_path: Path) -> Path:
     git("add", ".")
     git("commit", "-m", "fix(contract-toolkit): repair schema")
 
+    # api-package commit — released in lockstep with the SDK, so it COUNTS.
+    (tmp_path / "packages" / "api").mkdir(parents=True)
+    (tmp_path / "packages" / "api" / "s.py").write_text("api\n")
+    git("add", ".")
+    git("commit", "-m", "fix: tighten the task queue derivation")
+
     # SDK-level fix — should appear in results
     (tmp_path / "sdk.py").write_text("sdk-4\n")
     git("add", ".")
@@ -227,6 +233,15 @@ class TestGetCommitsSinceLastTag:
         assert "fix: correct connection handling" in commits
         assert not any("conformance" in c for c in commits)
         assert not any("contract-toolkit" in c for c in commits)
+
+    def test_api_package_commits_count_toward_the_sdk_bump(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """packages/api is released in lockstep with the SDK (same job, same
+        version), so a commit that only touches it must bump the SDK."""
+        monkeypatch.chdir(git_repo)
+        commits = release.get_commits_since_last_tag()
+        assert "fix: tighten the task queue derivation" in commits
 
     def test_empty_lines_are_removed(
         self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
@@ -555,3 +570,39 @@ class TestMainStackedPrGuard:
 
         assert seen["landed_sha"] == ""
         assert outputs["skip"] == "false"
+
+
+class TestUpdateApiLockstep:
+    def _tree(self, tmp_path: Path) -> Path:
+        (tmp_path / "packages" / "api").mkdir(parents=True)
+        (tmp_path / "pyproject.toml").write_text(
+            'version = "3.39.0"\ndependencies = [\n    "atlan-application-sdk-api==3.39.0",\n]\n'
+        )
+        (tmp_path / "packages" / "api" / "pyproject.toml").write_text(
+            '[project]\nname = "atlan-application-sdk-api"\nversion = "3.39.0"\n'
+        )
+        return tmp_path
+
+    def test_moves_the_pin_and_the_api_version(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path)
+        release.update_api_lockstep("3.40.0", root=root)
+        assert (
+            '"atlan-application-sdk-api==3.40.0"'
+            in (root / "pyproject.toml").read_text()
+        )
+        assert (
+            'version = "3.40.0"' in (root / "packages/api/pyproject.toml").read_text()
+        )
+
+    def test_an_app_repo_without_the_api_package_is_untouched(
+        self, tmp_path: Path
+    ) -> None:
+        (tmp_path / "pyproject.toml").write_text('version = "1.2.0"\n')
+        release.update_api_lockstep("1.3.0", root=tmp_path)
+        assert (tmp_path / "pyproject.toml").read_text() == 'version = "1.2.0"\n'
+
+    def test_a_missing_pin_fails_instead_of_half_bumping(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path)
+        (root / "pyproject.toml").write_text('version = "3.39.0"\n')
+        with pytest.raises(RuntimeError, match="expected exactly one"):
+            release.update_api_lockstep("3.40.0", root=root)

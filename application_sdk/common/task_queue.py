@@ -82,7 +82,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk._logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -266,6 +266,7 @@ def resolve_manifest_tokens(
     task_queue: str | None = None,
     app_name: str | None = None,
     deployment_fallback: str | None = None,
+    from_process_env: bool = True,
 ) -> ManifestTokenResolution:
     """Resolve ``{app_name}`` / ``{deployment_name}`` tokens in a served manifest.
 
@@ -324,6 +325,9 @@ def resolve_manifest_tokens(
             residual ``{app_name}`` token. Preferred over
             ``ATLAN_APPLICATION_NAME`` there because it is the value the Workflow
             Center's log filter matches (HYP-1678).
+        from_process_env: Whether this process's own ``ATLAN_APPLICATION_NAME``
+            / ``ATLAN_DEPLOYMENT_NAME`` describe the app (the worker). ``False``
+            on the consolidated API host, where they describe the host.
         deployment_fallback: Value for the residual ``{deployment_name}`` fill
             when ``ATLAN_DEPLOYMENT_NAME`` is unset. Defaults to ``"default"``,
             preserving the pre-FND-195 behaviour of that token. Never used for
@@ -333,11 +337,15 @@ def resolve_manifest_tokens(
     Returns:
         A :class:`ManifestTokenResolution`.
     """
-    env_app_name = application_name_from_env()
-    deployment_name = deployment_name_from_env()
+    # The consolidated API host serves many apps from one process, so its own
+    # ATLAN_APPLICATION_NAME / ATLAN_DEPLOYMENT_NAME belong to the host, not the
+    # app being served: the host passes from_process_env=False and supplies
+    # everything explicitly.
+    env_app_name = application_name_from_env() if from_process_env else ""
+    deployment_name = deployment_name_from_env() if from_process_env else ""
     registered_app_name = (app_name or "").strip()
 
-    resolved_queue = task_queue or task_queue_from_env()
+    resolved_queue = task_queue or (task_queue_from_env() if from_process_env else None)
     resolved_app_name = registered_app_name or env_app_name or None
     had_app_name_token = _APP_NAME_TOKEN_BYTES in raw
 

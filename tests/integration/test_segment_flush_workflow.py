@@ -50,9 +50,10 @@ from application_sdk.observability.utils import in_temporal_workflow
 
 # Wall-clock ceiling for the bridged flush. The bug costs a fixed 10 s
 # (``asyncio.wait_for(..., timeout=10.0)``); anything under this means the
-# bridge was never taken.
+# bridge was never taken. The ceiling is as generous as it can be while staying
+# clear of that 10 s, since the passing (immediate) flush has to beat it.
 _BRIDGE_TIMEOUT_SECONDS = 10.0
-_FAST_SECONDS = 3.0
+_FAST_SECONDS = 5.0
 
 # Set by the ``segment_client`` fixture and read from workflow code. The
 # workflow reaches this module object unchanged because conftest's

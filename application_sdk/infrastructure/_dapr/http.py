@@ -60,9 +60,10 @@ _DEFAULT_TIMEOUT = 30.0
 # wait_for_dapr_sidecar closes the connection race at startup, and activities
 # sit under Temporal retry. A wider ladder here only delays those.
 #
-# Global to the shared transport (state, bindings, pub/sub, secrets), so this is
-# wider than the credential fix it shipped with — see
-# https://github.com/atlanhq/application-sdk/issues/2995.
+# Shared by every call on the transport (state, bindings, pub/sub, secrets), so
+# this is wider than the credential fix it shipped with — see
+# https://github.com/atlanhq/application-sdk/issues/2995. get_secret skips the
+# replay for a "not found" 500 (see _SECRET_RETRY_STATUSES).
 _DEFAULT_RETRY_TOTAL = 3
 #: Base of the ladder above. A constructor parameter rather than a literal so a
 #: test can collapse the ladder to zero and still drive all
@@ -70,6 +71,28 @@ _DEFAULT_RETRY_TOTAL = 3
 #: sleeps out the real 2+4+8s budget to prove something about *propagation*
 #: (FND-962). Production never passes it.
 _DEFAULT_BACKOFF_FACTOR = 1.0
+
+#: Statuses the transport replays for state, binding and pub/sub calls.
+_RETRY_STATUSES = (500, 502, 503, 504)
+#: Statuses ``get_secret`` replays unconditionally (FND-4279). A 500 is
+#: replayed only when its body is not "not found": Dapr answers an absent key
+#: with 500 ``ERR_SECRET_GET``, so replaying every 500 paid the whole ladder
+#: (4 requests, 2-12s) for a definitive answer. Every other 500 (a throttle,
+#: an unrecognised backend wording) is still replayed: no layer above retries
+#: those in-process, and the legacy single-key bridge (FND-4407) keeps a
+#: throttled ref-key as the literal value, so losing the replay would send it
+#: to the source as the credential.
+_SECRET_RETRY_STATUSES = (502, 503, 504)
+
+
+class _ReplayableSecretAnswer(Exception):
+    """Raised by ``get_secret``'s response validator so the transport replays a
+    500 that is not "not found" on the usual ladder.
+
+    Never escapes: httpx-retries returns the last attempt's response without
+    validating it, so the caller sees that response's status as usual.
+    """
+
 
 # ---------------------------------------------------------------------------
 # Metrics
@@ -116,6 +139,8 @@ METADATA_PATH = f"{_API_PREFIX}/metadata"
 
 
 _HEALTHZ_PATH = "/v1.0/healthz"
+
+
 # How long to wait at startup for the Dapr sidecar's HTTP server to start
 # accepting connections. The old 10s was too short for cold starts (image
 # pull + daprd boot on a fresh CI runner routinely exceed it); when we
@@ -126,9 +151,11 @@ _HEALTHZ_PATH = "/v1.0/healthz"
 # connection race is over, and per-component readiness is covered by each call
 # site's retry_past_dapr_cold_start budget. Overridable via env for
 # pathologically slow (or fast) environments.
-_DEFAULT_SIDECAR_WAIT_TIMEOUT = float(
-    os.environ.get("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "60")
-)
+def _load_sidecar_wait_timeout() -> float:
+    return float(os.environ.get("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "60"))
+
+
+_DEFAULT_SIDECAR_WAIT_TIMEOUT = _load_sidecar_wait_timeout()
 _DEFAULT_SIDECAR_POLL_INTERVAL = 0.5
 
 
@@ -450,6 +477,38 @@ class BindingResult(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _build_retry(
+    retries: int,
+    backoff_factor: float,
+    statuses: tuple[int, ...],
+    extra_exceptions: tuple[type[Exception], ...] = (),
+) -> Retry:
+    """The transport retry policy, replaying *statuses* and transport errors."""
+    return Retry(
+        total=retries,
+        backoff_factor=backoff_factor,
+        status_forcelist=list(statuses),
+        # Pin the retried transport errors to httpx-retries' own default
+        # set, stated explicitly so it can't silently narrow/widen if the
+        # library changes its default. These three base classes cover
+        # connect/read/WRITE/close/pool + protocol errors alike; listing
+        # leaf classes like ConnectError/ReadError would have narrowed it
+        # and dropped WriteError/WriteTimeout/CloseError.
+        # httpx-retries' default ``allowed_methods`` excludes POST, so
+        # only GET/PUT/DELETE-style calls are replayed here. POST calls
+        # (save_state/publish_event/invoke_binding) are NOT retried by
+        # the transport; idempotent reads that need a retry get it from
+        # retry_past_dapr_cold_start instead. See _DEFAULT_RETRY_TOTAL
+        # for the ladder arithmetic.
+        retry_on_exceptions=[
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.RemoteProtocolError,
+            *extra_exceptions,
+        ],
+    )
+
+
 class AsyncDaprClient:
     """Thin async wrapper around the Dapr sidecar HTTP API.
 
@@ -467,28 +526,15 @@ class AsyncDaprClient:
         self._base_url = base_url or _dapr_base_url()
         transport = RetryTransport(
             transport=httpx.AsyncHTTPTransport(limits=_HTTP_POOL_LIMITS),
-            retry=Retry(
-                total=retries,
-                backoff_factor=backoff_factor,
-                status_forcelist=[500, 502, 503, 504],
-                # Pin the retried transport errors to httpx-retries' own default
-                # set, stated explicitly so it can't silently narrow/widen if the
-                # library changes its default. These three base classes cover
-                # connect/read/WRITE/close/pool + protocol errors alike; listing
-                # leaf classes like ConnectError/ReadError would have narrowed it
-                # and dropped WriteError/WriteTimeout/CloseError.
-                # httpx-retries' default ``allowed_methods`` excludes POST, so
-                # only GET/PUT/DELETE-style calls are replayed here. POST calls
-                # (save_state/publish_event/invoke_binding) are NOT retried by
-                # the transport; idempotent reads that need a retry get it from
-                # retry_past_dapr_cold_start instead. See _DEFAULT_RETRY_TOTAL
-                # for the ladder arithmetic.
-                retry_on_exceptions=[
-                    httpx.TimeoutException,
-                    httpx.NetworkError,
-                    httpx.RemoteProtocolError,
-                ],
-            ),
+            retry=_build_retry(retries, backoff_factor, _RETRY_STATUSES),
+        )
+        # Passed per request by get_secret (with its response validator);
+        # RetryTransport prefers request.extensions["retry"] over its own.
+        self._secret_retry = _build_retry(
+            retries,
+            backoff_factor,
+            _SECRET_RETRY_STATUSES,
+            extra_exceptions=(_ReplayableSecretAnswer,),
         )
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -537,8 +583,24 @@ class AsyncDaprClient:
     # ------------------------------------------------------------------
 
     async def get_secret(self, store_name: str, key: str) -> dict[str, str]:
+        async def replay_unless_absent(response: httpx.Response) -> None:
+            if response.status_code != 500:
+                return
+            from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — circular: client.py imports this module
+                is_secret_absent_response,
+            )
+
+            await response.aread()
+            if not is_secret_absent_response(key, response):
+                raise _ReplayableSecretAnswer
+
         resp = await self._client.get(
-            SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe=""))
+            SECRET_STORE_PATH.format(store_name=store_name, key=quote(key, safe="")),
+            extensions={
+                "retry": self._secret_retry.copy_with(
+                    validate_response=replay_unless_absent
+                )
+            },
         )
         resp.raise_for_status()
         return resp.json()

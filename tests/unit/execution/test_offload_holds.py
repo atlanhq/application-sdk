@@ -460,6 +460,8 @@ class TestADeclaredAllowanceGoverns:
         assert [hold.allowance_seconds for hold in tracker.holds] == [7200]
         assert tracker.held() is False
 
+    # Spawns pool children; see addopts in pyproject.toml.
+    @pytest.mark.xdist_group("procpool")
     @pytest.mark.asyncio
     async def test_an_isolated_call_stands_down_too(
         self, tracker: RecordingProgressTracker
@@ -843,6 +845,8 @@ class TestWithNoTrackerBound:
 # ---------------------------------------------------------------------------
 
 
+# Spawns pool children; see addopts in pyproject.toml.
+@pytest.mark.xdist_group("procpool")
 class TestTheIsolatedOffloadHold:
     @pytest.mark.asyncio
     async def test_a_declared_timeout_becomes_the_allowance(

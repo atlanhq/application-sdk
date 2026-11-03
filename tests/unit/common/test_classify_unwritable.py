@@ -24,6 +24,7 @@ from unittest import mock
 
 import pytest
 
+from application_sdk.common import atomic
 from application_sdk.common.atomic import classify_unwritable_oserror
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import LocalVolumeUnwritableError
@@ -56,11 +57,14 @@ class TestClassifyUnwritableOSError:
 
     def test_the_temporary_path_root_is_covered_too(self) -> None:
         # Both local write roots count as provenance, not just `artifacts/`.
+        # The live root, not the `./local/tmp/` default: the unit conftest
+        # moves it under tmp_path.
+        path = os.path.join(atomic.TEMPORARY_PATH, "staging.json")
         err = classify_unwritable_oserror(
-            OSError(errno.EROFS, "Read-only file system", "./local/tmp/staging.json")
+            OSError(errno.EROFS, "Read-only file system", path)
         )
         assert isinstance(err, LocalVolumeUnwritableError)
-        assert err.path == "./local/tmp/staging.json"
+        assert err.path == path
 
     def test_enospc_is_left_for_the_disk_full_path(self) -> None:
         # ENOSPC stays disk_full_guard's job — this classifier must not touch it.

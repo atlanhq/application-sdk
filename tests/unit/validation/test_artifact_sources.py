@@ -437,6 +437,17 @@ def test_multi_entrypoint_prefers_its_own_file(tmp_path: Path) -> None:
     )
 
 
+def test_hyphenated_entrypoint_also_tries_its_snake_case_dir(tmp_path: Path) -> None:
+    """FND-3563: a UI-less system entrypoint's files sit in a snake_case dir."""
+    assert artifact_schema_paths(
+        entrypoint="usage-analysis", generated_dir=tmp_path
+    ) == (
+        tmp_path / "usage-analysis" / ARTIFACT_SCHEMAS_FILENAME,
+        tmp_path / "usage_analysis" / ARTIFACT_SCHEMAS_FILENAME,
+        tmp_path / ARTIFACT_SCHEMAS_FILENAME,
+    )
+
+
 def test_entrypoint_file_wins_over_the_flat_one(tmp_path: Path) -> None:
     _load_schemas.cache_clear()
     _write(

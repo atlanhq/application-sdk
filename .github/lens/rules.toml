@@ -20,7 +20,7 @@ cards = ["storage-io", "performance", "error-handling-and-logging", "python-corr
 
 [[path]]
 glob = "application_sdk/handler/**"
-cards = ["security", "v3-architecture", "error-handling-and-logging", "public-api-and-deprecation"]
+cards = ["api-distribution", "security", "error-handling-and-logging", "public-api-and-deprecation"]
 
 [[path]]
 glob = "application_sdk/server/**"
@@ -48,7 +48,7 @@ cards = ["observability", "error-handling-and-logging", "security", "performance
 
 [[path]]
 glob = "application_sdk/errors/**"
-cards = ["error-handling-and-logging", "public-api-and-deprecation", "python-correctness"]
+cards = ["error-handling-and-logging", "public-api-and-deprecation", "api-distribution", "python-correctness"]
 
 [[path]]
 glob = "application_sdk/contracts/**"
@@ -78,6 +78,15 @@ cards = ["python-correctness", "storage-io", "public-api-and-deprecation", "erro
 glob = "application_sdk/constants.py"
 cards = ["public-api-and-deprecation", "security", "python-correctness"]
 
+# Private helpers the api wheel ships (_logging, _install, _context_errors, _runtime).
+[[path]]
+glob = "application_sdk/_runtime/**"
+cards = ["api-distribution", "performance", "python-correctness"]
+
+[[path]]
+glob = "application_sdk/_*.py"
+cards = ["api-distribution", "python-correctness", "error-handling-and-logging"]
+
 [[path]]
 glob = "application_sdk/**/*.py"
 cards = ["python-correctness", "v3-architecture", "error-handling-and-logging", "public-api-and-deprecation"]
@@ -98,6 +107,31 @@ cards = ["github-actions", "security"]
 [[path]]
 glob = ".github/scripts/tests/**"
 cards = ["tests", "ci-scripts"]
+
+# api distribution tooling (docs/standards/api-distribution.md).
+[[path]]
+glob = ".github/scripts/gen_app_api.py"
+cards = ["api-distribution", "ci-scripts", "security"]
+
+[[path]]
+glob = ".github/scripts/gen_api_files.py"
+cards = ["api-distribution", "ci-scripts", "security"]
+
+[[path]]
+glob = ".github/scripts/check_api_surface.py"
+cards = ["api-distribution", "ci-scripts", "security"]
+
+[[path]]
+glob = ".github/scripts/probe_api_wheels.py"
+cards = ["api-distribution", "ci-scripts", "security"]
+
+[[path]]
+glob = ".github/scripts/probe_app_api_member.py"
+cards = ["api-distribution", "ci-scripts", "security"]
+
+[[path]]
+glob = ".github/scripts/detect_api_member.py"
+cards = ["api-distribution", "ci-scripts", "security"]
 
 [[path]]
 glob = ".github/scripts/**"
@@ -120,6 +154,11 @@ cards = ["github-actions", "security"]
 [[path]]
 glob = "packages/conformance/tests/**"
 cards = ["conformance-rules", "tests"]
+
+# The api distribution: its pyproject, file list and build hook.
+[[path]]
+glob = "packages/api/**"
+cards = ["api-distribution", "build-config"]
 
 [[path]]
 glob = "packages/conformance/conformance/package*.json"
@@ -185,6 +224,10 @@ glob = "renovate-config/**"
 cards = ["build-config", "security"]
 
 # --- docs and fallbacks ----------------------------------------------------
+[[path]]
+glob = "docs/standards/api-distribution.md"
+cards = ["api-distribution", "docs"]
+
 [[path]]
 glob = "docs/**"
 cards = ["docs"]

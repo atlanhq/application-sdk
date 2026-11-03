@@ -31,8 +31,8 @@ jobs:
       #          wrappers), so changing *how* those checks run still re-runs them.
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
       # 'false' only on a bump-version PR not yet opted in with `/gate-check`
-      # (FND-3748, FND-3839): the remaining jobs skip and Connector Tests Gate
-      # fails fast.
+      # (FND-3748, FND-3839): the remaining jobs skip, Connector Tests Gate
+      # included. SDK Gate is what fails until the opt-in (FND-4239).
       opted_in: ${{ steps.opt-in.outputs.opted_in }}
       # 'storage' — the object-store layer or its real-cloud suite changed, so
       # Storage Integration runs on the PR without being asked (FND-3839).
@@ -309,13 +309,13 @@ jobs:
         run: |
           echo "image=ghcr.io/atlanhq/app-runtime-base:pr-${PR_NUMBER}-sha-${HEAD_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
       - name: Log in to Chainguard Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: cgr.dev
           username: ${{ secrets.CHAINGUARD_USERNAME }}
@@ -382,7 +382,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -636,14 +636,14 @@ jobs:
           # until that's added there too. Explicit so it doesn't silently
           # inherit a future default change.
           wait-mode: poll
-          # This leg is the single biggest source of merge-queue ejections: it
+          # This leg blocks: Connector Tests Gate needs it (FND-4486), so a red
+          # run keeps a PR out of the merge queue and ejects a queue entry. It
           # dispatches into a k8s e2e that installs its whole toolchain from
-          # github.com at job time, so its failures are overwhelmingly transient
-          # infra rather than regressions (19/23 green on 2026-08-12, with all
-          # four failures being release-asset 503s / refused HTTP/2 streams).
-          # Because this job effectively only runs on merge_group, each of those
-          # ejects a PR and costs a full re-queue. One retry; still visible in
-          # the log and step summary when it fires.
+          # github.com at job time, so many failures are transient infra rather
+          # than regressions (19/23 green on 2026-08-12, with all four failures
+          # being release-asset 503s / refused HTTP/2 streams). One retry, so
+          # one of those does not cost a full re-queue; still visible in the
+          # log and step summary when it fires.
           retry-once: "true"
 
   # (No dedicated two-store-e2e job: mysql's own tests.yaml hardcodes
@@ -669,6 +669,22 @@ jobs:
   # upstream job died. So we require changes + matrix-builder to have SUCCEEDED
   # and build-sdk-base-image to be success|skipped (never failure) before
   # treating a skipped connector-tests as the genuine docs-only skip.
+  #
+  # The one deliberate skip is an un-opted bump-version PR (FND-3748): nothing
+  # upstream ran, and a skipped check run passes the required context. It used
+  # to fail here, which made every push to a bump PR a red PR Checks run that
+  # tested nothing (FND-4239). The PR still cannot merge un-opted: SDK Gate
+  # fails closed on the same opt-in and says to comment /gate-check. The
+  # comment re-runs this whole run, which re-reads the opt-in and runs the
+  # gate. A `/e2e` on an un-opted bump PR runs it too, to wait on and report
+  # the e2e it dispatched.
+  #
+  # SDR K8s E2E (LM) is rolled in here too (FND-4486). It was advisory: no
+  # ruleset context named it and this gate did not need it, so a red SDR leg
+  # let a bump PR into the merge queue and the queue merge past it. Needing it
+  # also makes the gate wait for the leg's poll to finish. It fails closed:
+  # SDR must succeed, or skip only when connector-tests skipped too
+  # (verify_sdr_e2e_gate.py). No ruleset change: this gate is already required.
   connector-gate:
     name: Connector Tests Gate
     needs:
@@ -679,8 +695,16 @@ jobs:
         build-sdk-base-image,
         merge-sdk-base-image,
         connector-tests,
+        sdr-k8s-e2e,
       ]
-    if: always()
+    # A `changes` that did not succeed runs the gate, which then fails on it:
+    # its empty outputs must never read as "not opted in" and skip.
+    if: |
+      always() && (
+        needs.changes.result != 'success' ||
+        needs.changes.outputs.opted_in == 'true' ||
+        needs.e2e-request.outputs.requested == 'true'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -691,14 +715,6 @@ jobs:
       # never notice. Write: the sticky `/e2e` comment's verdict (FND-3839).
       pull-requests: write
     steps:
-      # An un-opted bump-version PR (FND-3748) skipped every upstream job; fail
-      # here, before the upstream check would read those skips as a pass.
-      - name: Require the bump-PR CI opt-in
-        if: needs.changes.result == 'success' && needs.changes.outputs.opted_in != 'true'
-        run: |
-          echo "::error::Bump-version PR CI is opt-in (FND-3748). Comment /gate-check on the PR to run it."
-          exit 1
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # connector-tests now only dispatches (e2e-apps wait-mode: callback) —
@@ -750,9 +766,21 @@ jobs:
             --names-json "$NAMES_JSON" \
             --pr-number "$PR_NUMBER"
 
+      # After the connector wait, so a red SDR leg still lets the connector
+      # verdict land, and the sticky below reports both.
+      - name: Require SDR K8s E2E
+        if: always() && steps.upstream.outcome == 'success'
+        env:
+          SDR_RESULT: ${{ needs.sdr-k8s-e2e.result }}
+          CONNECTOR_RESULT: ${{ needs.connector-tests.result }}
+        run: >-
+          python3 .github/scripts/verify_sdr_e2e_gate.py
+          --sdr-result "$SDR_RESULT" --connector-result "$CONNECTOR_RESULT"
+
       # The PR's sticky `/e2e` comment gets the verdict: one row per connector
-      # e2e check on the head commit (FND-3839). A view of those checks, never
-      # the verdict itself, so fail-open; only when e2e was asked for here.
+      # e2e check on the head commit plus the SDR leg (FND-3839, FND-4486). A
+      # view of those results, never the verdict itself, so fail-open; only
+      # when e2e was asked for here.
       - name: Post the /e2e verdict on the PR
         if: >-
           always() && github.event_name == 'pull_request' &&
@@ -765,10 +793,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SDR_RESULT: ${{ needs.sdr-k8s-e2e.result }}
         run: >-
           python3 .github/scripts/test_command_comment.py
           --repo "$REPO" --pr "$PR_NUMBER" --sha "$HEAD_SHA" --run-url "$RUN_URL"
-          sdk-e2e-verdict
+          sdk-e2e-verdict --sdr-result "$SDR_RESULT"
 
   # Real-cloud storage integration tests (S3 / Azure / GCS) — exercise
   # create_store_from_binding + CloudStore against real buckets/vaults using the

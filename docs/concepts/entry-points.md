@@ -400,9 +400,11 @@ app/
 The mapping between the kebab-case entry-point name (on the wire, and the `app/generated/<name>/` contract dir) and the snake_case Python package is the single canonical conversion `entrypoint_module_segment(name)` (`asset-export-advanced → asset_export_advanced`) — `application_sdk.handler.service` and entry-point registration both route through it, so the two never drift.
 
 - **`app.<segment>.handler`** — optional `async def test_auth(input, ctx)`, `preflight_check`, `fetch_metadata`. When a request to `/workflows/v1/{auth,check,metadata}` carries an `entrypoint` (the bare name, resolved by the orchestrator from the marketplace catalog), the SDK dispatches to this module **by exact name**. See [Handlers — Per-entry-point handlers](handlers.md#per-entry-point-handlers).
-- **`app.<segment>.core.compute_manifest`** — optional dynamic-manifest hook. See [Apps — Dynamic manifest](apps.md#dynamic-manifest-compute_manifest).
+- **`app.<segment>.core.compute_manifest`** — optional dynamic-manifest hook, worker only; an app served by the consolidated API host uses `Handler.compute_manifest`. See [Apps — Dynamic manifest](apps.md#dynamic-manifest-compute_manifest).
 
 Discovery is best-effort and conservative: a missing module / wrong-shaped attribute falls through to the app-level `Handler` (1:1 with single-entry-point behaviour). Both the handler functions and `compute_manifest` must be `async def` — a sync `def` is ignored and falls through. A module that *exists but fails to import* (a real bug in the connector's code) is **not** swallowed — it surfaces.
+
+A bundle's UI-less system entry point (its contract is `type = "system"` with no `uiConfig`) is the exception: the toolkit writes its contract dir as `app/generated/<segment>/`, so `app.generated.<segment>._input` imports. The SDK already imports that module path. `validation.sources.artifact_schema_paths` and the registration-time artifact-schema guard look for its `artifact_schemas.json` under the wire-name dir, then the snake_case dir. Conformance K016 does not check it, because K016 only sees entry-point dirs that hold a `manifest.json`.
 
 ### Dockerfile
 

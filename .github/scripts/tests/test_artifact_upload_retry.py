@@ -87,6 +87,11 @@ EXEMPT = {
         "actions-cost-report",
     ): "weekly scheduled report; nothing gates on it, and the alert and "
     "Kryptonite publish do not read the artifact",
+    (
+        "actions/unit-tests/action.yaml",
+        "unit-test-timings-${{ runner.os }}-${{ inputs.python-version }}",
+    ): "diagnostic per-test timings; continue-on-error, so a failed upload never "
+    "fails the leg, and nothing reads the artifact to gate (FND-4304)",
 }
 
 # Files that are not valid YAML, so their steps cannot be inspected. Empty, and

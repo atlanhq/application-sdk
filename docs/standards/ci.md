@@ -416,19 +416,23 @@ base-sensitive or not:
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
 | `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads the head commit's `gate-check` status (FND-3839). A release PR without a passed one fails on the PR and never enters the queue. |
 | `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
-| `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
+| `tests.yaml` → unit, integration | Yes | Skipped when the queue tree equals the PR head tree, the head already contains the queue's base, and github-actions[bot]'s newest `gate-check` status on that head is `success` (FND-4344). Otherwise always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates, except on a release PR: `/gate-check` already ran the whole suite on the head commit, and refuses a head that is behind its base. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
 | `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
 runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
-head SHA from the queue branch name
-(`gh-readonly-queue/<base>/pr-<N>-<head sha>`) and the queue's base from
-`merge_group.base_sha`, fetches the commits and trees (no blobs, bounded depth)
-behind both, and compares them with the queue commit. It writes two outputs:
-`identical` (the whole tree matches and the head already contains the base) and
-`image_changed` (a path in the script's image-input list may differ). Every git
+number from the queue branch name (`gh-readonly-queue/<base>/pr-<N>-<sha>`) and
+fetches the PR head from `refs/pull/<N>/head`. The SHA in the branch name is
+the commit the entry was built on, the queue commit's parent, not the PR head.
+Until FND-4344 the script read it as the head, so `identical` was never true and
+these skips never fired. It takes the queue's base from `merge_group.base_sha`,
+fetches the commits and trees (no blobs, bounded depth) behind both, and
+compares them with the queue commit. It writes three outputs: `identical` (the
+whole tree matches and the head already contains the base), `image_changed` (a
+path in the script's image-input list may differ) and `pr_head` (the head it
+compared against). Every git
 call has a timeout, and a timeout runs every check. The skipping job's gate is
 `!cancelled() && needs.queue-diff.outputs.<x> != '<skip value>'`, so an empty
 output still runs the check. That covers a skipped `queue-diff` on every
@@ -472,9 +476,44 @@ surface.
   by basename: `Dockerfile*`, `*.dockerfile`, `Containerfile`). `atlan.yaml`,
   which names the Dockerfile, is on the list. A bespoke name still needs adding
   there.
-* Unit tests. They are base-sensitive and could skip on an identical tree too,
-  but they feed `Tests Gate` with the integration tier, so they were left
-  alone.
+* Unit tests, outside a release PR. They are base-sensitive and could skip on
+  an identical tree too, but on an ordinary PR the integration tier they feed
+  `Tests Gate` with has not run anywhere else, so the queue run is still the
+  first one. A release PR's `queue-proof` job (`tests-reusable.yaml`) skips
+  both, together with `Tests Gate`, because `/gate-check` ran them on the head
+  commit. It runs the same `queue_tree_diff.py`, then
+  `queue_gate_check_proof.py` reads the head's `gate-check` status, trusting
+  only github-actions[bot] as Release Gate does.
+
+### The SDK's own integration tier runs in the queue only (FND-4306)
+
+application-sdk follows the connector split. In `sdk-tests-reusable.yaml`,
+Integration Tests and Storage Emulator Tests run on `merge_group` and on `v*`
+tag pushes, and on a PR only when someone asks for the full suite. Unit legs,
+Unit Perf Tests and the script tests still run on every PR push.
+
+**On demand.** A `/e2e` or `/gate-check` comment runs the integration tier on
+that PR commit too. The reusable's `Decide integration request` job reads the
+`e2e-request` and `gate-check` statuses live
+(`bump_pr_opt_in.py integration-requested`), and only the two tier jobs need
+it. `/e2e` re-runs that one job (`pr_test_command.py`, `SDK_E2E_RERUN_JOBS`):
+GitHub re-runs it, the tier and `SDK Gate`'s verdict, and keeps the unit legs'
+result from the first attempt, so `/e2e` never runs or cancels the unit legs.
+`/gate-check` re-runs the whole run, as before. A status that cannot be read
+runs the tier: that costs runner minutes, never a lost request. A new push is
+a new commit with no marker, so the tier skips on it again.
+
+On a PR without a request the skipped jobs report `skipped`,
+`SDK Tests` concludes `success`, and `SDK Gate` reads that as a pass, so the
+required check still concludes on the PR. Every queue entry that touches SDK
+code escalates to the full suite (`sdk-gate.yaml`, "Synthesize final force
+flags"), so nothing lands on `main` without integration passing.
+
+Measured before the change (2026-10-13 → 2026-10-21, 1000 SDK Gate runs): PRs
+averaged 5.8 pushes, and integration ran 8.9 minutes p50 on each, about 50
+runner-minutes per PR. Over the same window, three PR-side integration failures
+came from one PR, and no queue failure was an integration break the PR run had
+missed. The cost of the move is about one extra queue ejection in that window.
 
 ### The vulnerability scan gates the bump PR, not every PR (FND-3328)
 
@@ -715,6 +754,57 @@ against a private git dependency fails on the next build rather than at merge.
 **Scope note:** this covers credentials only. Non-secret build inputs — a
 version string, a target arch, a base-image reference — are what `build-args`
 are for, and recording those in image history is a feature.
+
+## Renovate release freeze
+
+Renovate PRs do not merge into application-sdk `main` while a release train is in
+flight (FND-4175). A Renovate merge moves `main`. `release.yaml` then re-renders and
+force-pushes `bump-version-main` (the SDK renders `chore` commits in its notes, so every
+merge changes the bump branch). The new head has no `gate-check` status, so a release
+gate that was running or had already passed starts over.
+
+**Freeze on.** A train starts with the first `/gate-check` on a bump PR and runs until that
+PR closes. While any open `bump-version*` PR (main, conformance or contract-toolkit) has a
+train running, the Renovate auto-approve gate withholds the atlan-ci code-owner approval
+(condition i in `.github/scripts/renovate_approval_conditions.py`). The gate counts a train if
+either of these is true: the head has a `gate-check` status (any state), or the PR has the
+`/gate-check` sticky comment from `github-actions[bot]`. The comment is what keeps the train
+alive across a push. The status belongs to one commit, so a merge that slipped past the
+freeze would re-push the bump branch and lift the freeze. The comment is edited in place and
+survives every push. A refused `/gate-check` also writes the comment, so it starts a train too.
+ Without that approval the PR cannot
+merge. It keeps auto-merge armed, and its log says `release train in flight (#N) — holding`.
+An open bump PR on its own does not freeze anything. A new one opens on the first merge after
+every release, so it is open nearly all the time.
+
+**Freeze off.** When a bump PR closes (its release merged, or someone closed it),
+`renovate-release-thaw.yml` dispatches `renovate-auto-approve.yml` once for each open
+`renovate/` PR. The gate re-checks every condition, the freeze included. Held PRs that are
+still green are approved and merge as usual. If another bump PR's train is still running,
+nothing is dispatched; that train's own close thaws them.
+
+If a dispatch fails, it is retried once. If it fails again, the thaw run goes red. Re-run it:
+it re-dispatches every open Renovate PR, and the gate never approves the same commit twice. To
+abandon a train without releasing, close the bump PR (the next merge opens a fresh one), or
+set the override to `off`.
+
+**Manual override:** the repo variable `RENOVATE_RELEASE_FREEZE`.
+
+| Value | Effect |
+|---|---|
+| unset / `auto` | follow the release train (default) |
+| `off` | never freeze, e.g. when a release is stuck and a dependency fix must land |
+| `on` | always freeze, e.g. for a release that does not go through `/gate-check` |
+
+Any other value freezes and logs a warning. After you clear `on`, dispatch
+`renovate-auto-approve.yml` per held PR, or wait for their next CI run. A human approval
+always bypasses the freeze. The freeze only withholds the bot's approval.
+
+**Scope.** Only repos whose ruleset requires the atlan-ci approval are frozen, which today
+means application-sdk alone. Fleet repos retired the auto-approve caller (bootstrap
+`RETIRED_FILES`), so their Renovate PRs merge on required checks alone. A Renovate PR that
+was approved and queued just before `/gate-check` can still land; the freeze closes the
+approval, not the queue.
 
 ## Renovate post-upgrade commands
 

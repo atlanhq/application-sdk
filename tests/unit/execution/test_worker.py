@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from dataclasses import dataclass
 from unittest import mock
 
@@ -141,6 +142,33 @@ class TestCreateWorker:
             result = create_worker(client)
 
         assert isinstance(result, AppWorker)
+
+    def test_drain_delay_defaults_to_the_constant_and_forwards_an_override(
+        self,
+    ) -> None:
+        """A worker from ``create_worker`` keeps the production drain unless
+        asked otherwise; the integration suite asks for zero (FND-4305)."""
+
+        class _DrainApp(App):
+            @task(timeout_seconds=60)
+            async def do_work(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        client = _make_mock_client()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker"
+        ) as MockWorker:
+            MockWorker.return_value = mock.MagicMock()
+            default = create_worker(client)
+            zeroed = create_worker(client, shutdown_drain_delay_seconds=0)
+
+        assert default._shutdown_drain_delay_seconds == SHUTDOWN_DRAIN_DELAY_SECONDS
+        assert SHUTDOWN_DRAIN_DELAY_SECONDS > 0
+        assert zeroed._shutdown_drain_delay_seconds == 0
 
     def test_create_worker_includes_observability_trio(
         self, monkeypatch: pytest.MonkeyPatch
@@ -822,6 +850,22 @@ class TestCreateWorker:
 
 class TestAppWorker:
     """Tests for AppWorker wrapper."""
+
+    @pytest.fixture(autouse=True)
+    def _no_dapr_sidecar(self) -> Iterator[None]:
+        """Answer the worker_start binding-type read without a sidecar.
+
+        ``_emit_worker_start_event`` asks the live Dapr sidecar for its
+        component types. Unpatched, every test here opened a real connection
+        to ``localhost:3500``: refused at once on Linux, but ~1s per address on
+        Windows, which runs without the socket guard (FND-4304). An empty map
+        is what the best-effort read returns when no sidecar answers.
+        """
+        with mock.patch(
+            "application_sdk.infrastructure._dapr.http.get_dapr_component_types",
+            new=mock.AsyncMock(return_value={}),
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_run_emits_worker_start_event_before_delegating(self) -> None:

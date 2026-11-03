@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, ClassVar
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any, ClassVar
 
+from application_sdk._context_errors import AppContextError
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
 from application_sdk.errors.base import AppError
 from application_sdk.handler.context import get_handler_context
@@ -20,6 +22,7 @@ from application_sdk.handler.contracts import (
     AuthInput,
     AuthOutput,
     AuthStatus,
+    ManifestInput,
     MetadataInput,
     MetadataOutput,
     PreflightInput,
@@ -32,6 +35,8 @@ from application_sdk.handler.contracts import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import APIRouter
+
     from application_sdk.handler.context import HandlerContext
 
 
@@ -119,16 +124,34 @@ class Handler(ABC):
         """
         ctx = get_handler_context()
         if ctx is None:
-            from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports handler.context transitively
-                AppContextError,
-            )
-
             raise AppContextError(
                 "Handler context is not set. "
                 "Access self.context only inside a handler method "
-                "(test_auth, preflight_check, fetch_metadata, warmup)."
+                "(test_auth, preflight_check, fetch_metadata, warmup, "
+                "compute_manifest)."
             )
         return ctx
+
+    def routers(self) -> Sequence[APIRouter]:
+        """FastAPI routers with this app's own endpoints (none by default).
+
+        Override to serve endpoints beyond auth / check / metadata::
+
+            router = APIRouter(prefix="/workflows/v1/metadata")
+
+            @router.post("/projects")
+            async def projects(body: ProjectsRequest) -> JSONResponse: ...
+
+            class MyHandler(Handler):
+                def routers(self) -> Sequence[APIRouter]:
+                    return [router]
+
+        The worker's handler service and the consolidated API host both serve
+        them, after the SDK's routes; redefining an SDK path is refused at
+        startup. Keep router code in the handler's own files (imported
+        relatively) so it ships to the host with the handler.
+        """
+        return ()
 
     @abstractmethod
     async def test_auth(self, input: AuthInput) -> AuthOutput:
@@ -234,6 +257,30 @@ class Handler(ABC):
             What this probe saw.
         """
         return WarmupObservation(state=WarmupState.READY)
+
+    async def compute_manifest(self, input: ManifestInput) -> dict[str, Any] | None:
+        """The manifest to serve for this request, when it cannot be static.
+
+        Optional. The default returns ``None``, which serves the generated
+        manifest unchanged. Override it for a manifest that depends on the
+        request's ``fe_inputs`` or on the tenant; return ``None`` for an entry
+        point whose generated manifest is right as it is.
+
+        The worker's handler service and the consolidated API host both call
+        it for a request that names an entry point. Task-queue templates in the
+        result (``atlan-<app>-{deployment_name}``) are stamped with the queue
+        the app's worker polls, as in a generated manifest: build them from
+        ``self.context.app_name``. A request carries no credentials here. On
+        the worker an ``app.<segment>.core.compute_manifest`` hook, where one
+        exists, wins; the host never runs one.
+
+        Args:
+            input: The entry point, its generated manifest and the form values.
+
+        Returns:
+            The manifest to serve, or ``None`` for the generated one.
+        """
+        return None
 
 
 class DefaultHandler(Handler):

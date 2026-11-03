@@ -8,12 +8,13 @@ import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
-import conformance.suite.checks.dependency_conformance as dependency_conformance
 import pytest
+from conformance.suite.checks import dependency_conformance
 from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
     _LOCK_URL_RE,
     _REMOTE_COMPONENT_FETCH_RE,
+    RUNTIME_IMAGE_PYTHON,
     SDK_PYTHON_FLOOR,
     _collect_dialect_drivers,
     _collect_dialect_names,
@@ -33,6 +34,7 @@ from conformance.suite.checks.dependency_conformance import (
 )
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition
+from conformance.suite.schema.findings import Finding
 
 #: The ``[[tool.uv.index]]`` stanza D012 requires. Fixtures that assert an
 #: exact rule-id set append it, because D012 fires on its *absence* and would
@@ -515,6 +517,101 @@ def test_d006_sdk_python_floor_matches_sdk_pyproject() -> None:
     assert bound[0] == SDK_PYTHON_FLOOR
 
 
+# ── D016: requires-python must admit the runtime image's Python ──────────────
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ">=3.11,<3.13",
+        ">=3.11,<=3.12",
+        "==3.12.*",
+        "~=3.12.0",
+        "<3.13",
+        # exclusion clauses: no upper bound to raise
+        ">=3.11,!=3.13.*",
+        ">=3.11,!=3.13.4",
+        # micro-version pins/bounds: the image's 3.13 patch floats
+        "==3.13.0",
+        ">=3.11,<3.13.5",
+        ">=3.13.2",
+    ],
+)
+def test_d016_fires_when_runtime_python_excluded(spec: str) -> None:
+    findings = scan_text(
+        _py_pyproject(spec), "pyproject.toml", sdk_managed_packages=set()
+    )
+    assert [f.rule_id for f in findings] == ["D016"]
+    f = findings[0]
+    assert f"'{spec}'" in f.message
+    assert "3.13" in f.message
+    assert f.line == 3  # anchored on the requires-python line
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [">=3.11", ">=3.11,<3.14", ">=3.11,<4.0", "==3.13.*", ">=3.11.10,<4.0", "~=3.11"],
+)
+def test_d016_passes_when_runtime_python_admitted(spec: str) -> None:
+    findings = scan_text(
+        _py_pyproject(spec), "pyproject.toml", sdk_managed_packages=set()
+    )
+    assert [f.rule_id for f in findings if f.rule_id == "D016"] == []
+
+
+def test_d016_absent_requires_python_no_finding() -> None:
+    text = _write_pyproject(deps='    "atlan-application-sdk>=3.17.2,<4.0.0",\n')
+    assert scan_text(text, "pyproject.toml", sdk_managed_packages=set()) == []
+
+
+def test_d016_unparseable_spec_not_graded() -> None:
+    findings = scan_text(
+        _py_pyproject("not a spec"), "pyproject.toml", sdk_managed_packages=set()
+    )
+    assert "D016" not in {f.rule_id for f in findings}
+
+
+def test_d016_suppressed_inline_directive() -> None:
+    text = (
+        "[project]\n"
+        'name = "demo-app"\n'
+        'requires-python = ">=3.11,<3.13"  # conformance: ignore[D016] native ext\n'
+        'version = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.17.2,<4.0.0",\n'
+        "]\n"
+    )
+    findings = scan_text(text, "pyproject.toml", sdk_managed_packages=set())
+    assert [f.rule_id for f in findings] == ["D016"]
+    assert findings[0].suppressed is True
+    assert "native ext" in (findings[0].suppression_justification or "")
+
+
+def test_d016_sdk_pyproject_is_exempt() -> None:
+    text = (
+        "[project]\n"
+        'name = "atlan-application-sdk"\n'
+        'requires-python = ">=3.11,<3.13"\n'
+        'version = "0.1.0"\n'
+    )
+    assert scan_text(text, "pyproject.toml", sdk_managed_packages=set()) == []
+
+
+def test_d016_runtime_python_matches_sdk_dockerfile() -> None:
+    """Drift guard: RUNTIME_IMAGE_PYTHON must track the SDK's golden base tag."""
+    dockerfile = Path(__file__).parents[3] / "Dockerfile"
+    if not dockerfile.is_file():
+        pytest.skip("SDK Dockerfile not locatable from the test tree")
+    tags = set(
+        re.findall(r"app-framework-golden:(\d+)\.(\d+)\b", dockerfile.read_text())
+    )
+    if not tags:
+        pytest.skip("repo-root Dockerfile carries no golden base tag")
+    assert len(tags) == 1, f"conflicting golden base tags: {tags}"
+    (major, minor) = next(iter(tags))
+    assert (int(major), int(minor)) == RUNTIME_IMAGE_PYTHON
+
+
 # ── D004: redeclaration in [dependency-groups] ───────────────────────────────
 
 
@@ -571,6 +668,142 @@ def test_d004_does_not_fire_when_group_dep_unmanaged() -> None:
         sdk_published_extras=set(),
     )
     assert findings == []
+
+
+def _d004_scan_all_with_sources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    sources: dict[str, str],
+) -> list[Finding]:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        'dependencies = ["atlan-application-sdk>=3.17.2,<4.0.0"]\n\n'
+        '[dependency-groups]\ntest = ["sample-transport>=1,<2"]\n',
+        encoding="utf-8",
+    )
+    for relative, source in sources.items():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source, encoding="utf-8")
+
+    monkeypatch.setattr(
+        dependency_conformance,
+        "_sdk_managed_packages",
+        lambda: {"sample-transport"},
+    )
+    monkeypatch.setattr(
+        dependency_conformance.importlib_metadata,
+        "packages_distributions",
+        lambda: {"sample_transport": ["sample-transport"]},
+    )
+    return [
+        finding
+        for finding in scan_all(dependency_conformance.discover(tmp_path), tmp_path)
+        if finding.rule_id == "D004"
+    ]
+
+
+def test_d004_allows_sdk_managed_package_directly_imported_by_test_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    findings = _d004_scan_all_with_sources(
+        tmp_path,
+        monkeypatch,
+        {"tests/conftest.py": "import sample_transport\n"},
+    )
+    assert findings == []
+
+
+def test_d004_still_fires_when_group_package_is_not_used_by_tests(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    findings = _d004_scan_all_with_sources(
+        tmp_path,
+        monkeypatch,
+        {"tests/test_seed.py": "import os\n"},
+    )
+    assert [finding.rule_id for finding in findings] == ["D004"]
+
+
+def test_d004_still_fires_when_group_package_is_imported_only_by_app_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    findings = _d004_scan_all_with_sources(
+        tmp_path,
+        monkeypatch,
+        {"app/client.py": "import sample_transport\n"},
+    )
+    assert [finding.rule_id for finding in findings] == ["D004"]
+
+
+def test_d004_ignores_test_sources_the_caller_excluded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A test file dropped by ``--exclude`` must not grant the exemption."""
+    _d004_scan_all_with_sources(
+        tmp_path, monkeypatch, {"tests/conftest.py": "import sample_transport\n"}
+    )
+    paths = [
+        p
+        for p in dependency_conformance.discover(tmp_path)
+        if not p.is_relative_to(tmp_path / "tests")
+    ]
+    findings = [f for f in scan_all(paths, tmp_path) if f.rule_id == "D004"]
+    assert [finding.rule_id for finding in findings] == ["D004"]
+
+
+def test_d004_test_imports_do_not_leak_across_projects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Project B's test import must not exempt project A's group pin."""
+    pyproject_body = (
+        '[project]\nname = "{name}"\nversion = "0.1.0"\n'
+        'dependencies = ["atlan-application-sdk>=3.17.2,<4.0.0"]\n\n'
+        '[dependency-groups]\ntest = ["sample-transport>=1,<2"]\n'
+    )
+    for name in ("a", "b"):
+        (tmp_path / name / "tests").mkdir(parents=True)
+        (tmp_path / name / "pyproject.toml").write_text(
+            pyproject_body.format(name=f"app-{name}"), encoding="utf-8"
+        )
+    (tmp_path / "b" / "tests" / "test_seed.py").write_text(
+        "import sample_transport\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        dependency_conformance, "_sdk_managed_packages", lambda: {"sample-transport"}
+    )
+    monkeypatch.setattr(
+        dependency_conformance.importlib_metadata,
+        "packages_distributions",
+        lambda: {"sample_transport": ["sample-transport"]},
+    )
+    paths = [
+        *dependency_conformance.discover(tmp_path / "a"),
+        *dependency_conformance.discover(tmp_path / "b"),
+    ]
+    findings = [f for f in scan_all(paths, tmp_path) if f.rule_id == "D004"]
+    assert [f.file for f in findings] == ["a/pyproject.toml"]
+
+
+def test_d003_still_ignores_test_source_imports(tmp_path: Path) -> None:
+    """discover() now returns test files for D004; D003 must not read them."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        'dependencies = ["sample-transport>=1,<2"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "tests" / "test_seed.py").write_text(
+        "import sample_transport\n", encoding="utf-8"
+    )
+    findings = scan_all(
+        dependency_conformance.discover(tmp_path),
+        tmp_path,
+        dist_import_map={"sample-transport": {"sample_transport"}},
+        dialect_entry_points={},
+    )
+    assert "D003" in [f.rule_id for f in findings]
 
 
 # ── D005: unknown SDK extra ──────────────────────────────────────────────────
@@ -1029,7 +1262,7 @@ def _d003_scan(
     dialect_names: set[str] | None = None,
     dialect_entry_points: dict[str, set[str]] | None = None,
     name: str = "my-connector",
-) -> list:
+) -> list[Finding]:
     """Write a pyproject and run scan_all with injected import data (no env/AST).
 
     Returns only the D003 findings so D001/D002 noise is filtered out.
@@ -3734,7 +3967,7 @@ _CONSTRAINTS = (
 )
 
 
-def _floored(findings: list) -> list[str]:
+def _floored(findings: list[Finding]) -> list[str]:
     return sorted(f.message.split("'")[1] for f in findings)
 
 
@@ -3750,7 +3983,10 @@ def test_d003_flags_each_app_constraint_floor(tmp_path: Path) -> None:
     for f in findings:
         name = f.message.split("'")[1]
         assert name in lines[f.line - 1]
-        assert "remove the entry" in f.message
+        assert "generic transitive floors belong in atlan-application-sdk" in f.message
+        assert "documented app-specific minimum" in f.message
+        assert "reasoned D003 exception" in f.message
+        assert "lockfile version alone is not a future guarantee" in f.message
 
 
 def test_d003_constraint_floor_single_line_array(tmp_path: Path) -> None:

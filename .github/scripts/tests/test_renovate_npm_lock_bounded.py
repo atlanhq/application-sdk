@@ -16,6 +16,7 @@ The last one is why the invariant is asserted from inside the stub.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -448,11 +449,16 @@ class TestWorkflowWiring:
     def test_node_is_pinned_rather_than_taken_from_the_runner_image(self):
         # npm's major decides the lockfileVersion it writes; a runner rolling
         # forward to one that writes a different version would turn every bounded
-        # resolve into a whole-file rewrite.
+        # resolve into a whole-file rewrite. The pin is an exact major so
+        # Renovate can bump it deliberately; what must never appear is a moving
+        # alias (`lts/*`, `latest`, `node`) or a range (`24.x`, `>=24`).
         setup = next(
             step
             for step in self.job["steps"]
             if str(step.get("uses", "")).startswith("actions/setup-node@")
         )
         assert setup["uses"].split("@")[1].split()[0], "setup-node must be SHA-pinned"
-        assert setup["with"]["node-version"] == "24"
+        version = str(setup["with"]["node-version"])
+        assert re.fullmatch(
+            r"[1-9][0-9]*", version
+        ), f"node-version must be an exact major, got {version!r}"

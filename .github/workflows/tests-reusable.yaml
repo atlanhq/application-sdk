@@ -42,7 +42,9 @@ name: tests-reusable
 #                      state that will land, the one point a regression could
 #                      actually ship — re-run in place if the base moves under
 #                      the queue. (Skipped on pull_request; unit is the PR
-#                      signal.)
+#                      signal.) A release PR whose `/gate-check` passed on
+#                      the exact tree it queues skips it there too, with unit
+#                      and the gate (`queue-proof`, FND-4344).
 #                    • queue absent  → pull_request, per commit. Without a
 #                      queue there is no batched pre-merge state to test in, so
 #                      gating on the PR is the only way the tier blocks a bad
@@ -566,6 +568,12 @@ on:
       GLOBALPROTECT_PASSWORD:
         required: false
         description: Paired with GLOBALPROTECT_USERNAME.
+      TWINGATE_SHARED_KEY:
+        required: false
+        description: |
+          Org-wide Twingate service-account key; reaches api.dataforge.atlan.dev.
+          The dataforge wake / pause jobs try it before GlobalProtect, which
+          stays the fallback. Empty means GlobalProtect only, as before.
       # Resolved per leg by .github/scripts/resolve_e2e_tenant.py. The pointer
       # lives in a YAML comment rather than in the description below because
       # test_resolve_e2e_tenant.py's call-site guard treats any non-comment
@@ -631,18 +639,88 @@ on:
 
 jobs:
 
+  # ── Merge-queue release proof (FND-4344) ─────────────────────────────────
+  # A release PR's full suite ran before it was queued: `/gate-check`
+  # dispatched this workflow on the PR head, and its pass is the `gate-check`
+  # status on that commit. When the queue commit's tree IS that head's tree
+  # (queue_tree_diff.py, the same decision checks-reusable and
+  # conformance-reusable use), Unit and Integration here can only repeat the
+  # verdict. queue_gate_check_proof.py then answers `proven=true`, and the root
+  # jobs below (unit, detect-integration, detect-api-member, scorecard) and
+  # Tests Gate skip at job level; their children skip with them. Each still
+  # files its static-named check, and a skipped `tests / Tests Gate` passes
+  # the required context.
+  #
+  # Single-leg retry is untouched: it happens on the PR's dispatched run
+  # (FND-4331), before the queue. Any other answer — a base that moved, a
+  # batched group, a status from anyone but github-actions[bot], an error, or
+  # this job skipped or failed (empty output) — runs everything as before.
+  queue-proof:
+    name: Queue release proof
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (github.event_name == 'merge_group')
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
+    outputs:
+      proven: ${{ steps.proof.outputs.proven }}
+    steps:
+      # Credentials stay persisted: the diff fetches the PR head from this
+      # same remote, and the repo may be private.
+      - name: Checkout queue commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Fetch the queue drivers from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: |
+            .github/scripts/queue_tree_diff.py
+            .github/scripts/queue_gate_check_proof.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: Compare the queue commit with the PR head
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+
+      - name: Read the PR head's gate-check verdict
+        id: proof
+        if: steps.diff.outputs.identical == 'true'
+        env:
+          IDENTICAL: ${{ steps.diff.outputs.identical }}
+          PR_HEAD: ${{ steps.diff.outputs.pr_head }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 _sdk/.github/scripts/queue_gate_check_proof.py
+
   # ── Unit (lightweight: no app server / daprd / Temporal / services) ──────
   # Runs on EVERY event as the fast per-commit signal. connector-unit-tests is
   # setup-deps + pytest tests/unit + coverage — none of the runtime infra the
   # integration job spins up, so a PR greens in seconds of test time.
   unit:
     name: Unit
+    needs: [queue-proof]
     # An e2e-only run (a `/e2e` comment) skips the tier its PR run already
     # measured. The run reports under `e2e / …`, so this skip never reaches a
-    # required `tests / …` context (FND-3839).
+    # required `tests / …` context (FND-3839). A proven queue entry skips it
+    # too (queue-proof); `!cancelled()` keeps the skipped queue-proof on every
+    # other event from skipping this job.
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (inputs.run-e2e != 'only')
+      (inputs.run-e2e != 'only' && !cancelled() && needs.queue-proof.outputs.proven != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -815,7 +893,7 @@ jobs:
   # the same events the integration job does, so the two `if`s move together.
   detect-integration:
     name: Detect integration suite
-    needs: detect-merge-queue
+    needs: [detect-merge-queue, queue-proof]
     # `always()` because detect-merge-queue is *skipped* on every non-PR event
     # and a skipped `need` would otherwise block this job. On a PR it runs when
     # no queue was detected, OR when the PR carries the `e2e` label — the same
@@ -823,7 +901,7 @@ jobs:
     # tier that won't.
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() && inputs.run-e2e != 'only' &&
+      (always() && inputs.run-e2e != 'only' && needs.queue-proof.outputs.proven != 'true' &&
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( inputs.e2e-label-trigger &&
@@ -847,6 +925,107 @@ jobs:
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           test-dir: tests/integration
+
+  # ── Hosted api member (consolidated API server) ────────────────────────────
+  # An app served by common-app-server opts in with a [tool.atlan-app-api] block
+  # in its root pyproject.toml (handler stays in app/), or a package declaring an
+  # `atlan.app_api` entry point. detect-api-member finds it (a tested script; the
+  # job-level `if` below does the gating, no inlined conditional shell). It only
+  # reads pyproject files and never fails an app that has not opted in (no root
+  # pyproject, or one that is not valid TOML, reads as not opted in). Repos
+  # without one — worker-only apps, and every app not yet hosted — skip
+  # api-member entirely.
+  detect-api-member:
+    name: Detect hosted api member
+    needs: [queue-proof]
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      (inputs.run-e2e != 'only' && !cancelled() && needs.queue-proof.outputs.proven != 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.detect.outputs.present }}
+      name: ${{ steps.detect.outputs.name }}
+      member: ${{ steps.detect.outputs.member }}
+      package: ${{ steps.detect.outputs.package }}
+      object: ${{ steps.detect.outputs.object }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      - name: Find an atlan.app_api entry point
+        id: detect
+        run: python3 application-sdk-scripts/.github/scripts/detect_api_member.py >> "$GITHUB_OUTPUT"
+
+  # Opted-in apps only. Checks the handler's files are safe to host, then installs
+  # the member ALONE (its own declared dependencies, no atlan-application-sdk) and
+  # mounts it with application_sdk.handler.asgi.build_asgi_app, exactly as the host
+  # does, and runs the host matrix (health, the handler and metadata routes, 422
+  # on a malformed body, no bare 500). common-app-server's image build runs the
+  # same probe, so a change that would break the host fails here, in the app's
+  # own PR.
+  api-member:
+    name: Hosted api member
+    needs: detect-api-member
+    # Implicit success() spans queue-proof, which skips outside a merge queue.
+    if: >-
+      !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
+      !cancelled() && needs.detect-api-member.result == 'success' &&
+      needs.detect-api-member.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      # With [tool.atlan-app-api]: fail on an absolute `from app` import, a
+      # worker-only import, an APPLICATION_NAME read, logging in the handler
+      # module or a compute_manifest hook (none of these work on the host).
+      # Prints "nothing to check" for an entry-point member without the config.
+      - name: Check the handler's files are safe to host
+        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+      - name: Install the api member alone and mount it like the host
+        env:
+          MEMBER: ${{ needs.detect-api-member.outputs.member }}
+          APP_NAME: ${{ needs.detect-api-member.outputs.name }}
+          PACKAGE: ${{ needs.detect-api-member.outputs.package }}
+          OBJECT: ${{ needs.detect-api-member.outputs.object }}
+        run: |
+          set -euo pipefail
+          # Builds from [tool.atlan-app-api] (handler in app/), or the member dir.
+          python3 application-sdk-scripts/.github/scripts/gen_app_api.py build \
+            --member "$MEMBER" --out dist-api
+          uv venv .venv-api
+          # httpx2 is starlette's TestClient transport (the probe mounts the app
+          # with it). Pinned exactly so every app's CI runs the same client; bump
+          # to a release public >= 7 days (org dependency cooldown).
+          uv pip install --python .venv-api dist-api/*.whl httpx2==2.13.1
+          .venv-api/bin/python application-sdk-scripts/.github/scripts/probe_app_api_member.py \
+            --name "$APP_NAME" --package "$PACKAGE" --object "$OBJECT"
 
   # ── Integration (boots the app + testcontainers / services-script) ───────
   # Runs on merge_group / push / dispatch, and on pull_request only when the base
@@ -1138,7 +1317,7 @@ jobs:
 
       - name: Log in to GHCR (private CI images for services-script)
         continue-on-error: true
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1561,7 +1740,7 @@ jobs:
       ((needs.detect-integration.result == 'success' && needs.detect-integration.outputs.count != '0') ||
        (needs.discover-e2e.result == 'success' && needs.discover-e2e.outputs.count != '0')))
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write # create the per-run holder ref
       actions: read # parity with pause (holder-liveness reaping lives there)
@@ -1569,14 +1748,17 @@ jobs:
     env:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
     steps:
       # api.dataforge.atlan.dev admits only the VPN egress IPs, so — exactly like
       # the integration / e2e fetch steps — the job sparse-checks-out this
-      # reusable's scripts + globalprotect-connect at job.workflow_sha and dials
-      # the tunnel BEFORE the lifecycle call. Without this every call fails at
-      # connect on POST /oauth/token. All steps gated on the pin being set and
-      # repo creds absent, so a caller without a dataforge pin does nothing.
-      - name: Fetch SDK CI scripts + globalprotect-connect
+      # reusable's scripts + VPN actions at job.workflow_sha and dials the
+      # tunnel BEFORE the lifecycle call. Twingate first (no shared address
+      # pool), GlobalProtect only when Twingate is absent or fails. Without a
+      # tunnel every call fails at connect on POST /oauth/token. All steps gated
+      # on the pin being set and repo creds absent, so a caller without a
+      # dataforge pin does nothing.
+      - name: Fetch SDK CI scripts + VPN actions
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1585,11 +1767,32 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Clean up after a stopped Twingate step
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        # Straight-line: each command is a no-op when Twingate never got that
+        # far (no client, no resolver snapshot), so there is nothing to branch on.
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:
@@ -1748,7 +1951,7 @@ jobs:
           persist-credentials: false
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -2666,9 +2869,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.6"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2847,7 +3050,7 @@ jobs:
       inputs.dataforge-mode == 'resource' &&
       needs.wake-dataforge-source.result != 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     permissions:
       contents: write # delete holder refs (this run's + reaped abandoned ones)
       actions: read # tell a live holder from a dead one
@@ -2855,9 +3058,10 @@ jobs:
     env:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
+      HAS_TWINGATE_KEY: ${{ secrets.TWINGATE_SHARED_KEY != '' }}
     steps:
       # Same VPN precondition as wake — pause hits the same private API host.
-      - name: Fetch SDK CI scripts + globalprotect-connect
+      - name: Fetch SDK CI scripts + VPN actions
         if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -2866,11 +3070,32 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/actions/globalprotect-connect
+            .github/actions/twingate-connect
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      - name: Connect to Twingate (dataforge path)
+        id: twingate
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && env.HAS_TWINGATE_KEY == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        uses: ./application-sdk-scripts/.github/actions/twingate-connect
+        with:
+          service-key: ${{ secrets.TWINGATE_SHARED_KEY }}
+          mothership-url: https://api.dataforge.atlan.dev
+      - name: Clean up after a stopped Twingate step
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && (steps.twingate.outcome == 'failure' || steps.twingate.outcome == 'cancelled')
+        continue-on-error: true
+        # Straight-line: each command is a no-op when Twingate never got that
+        # far (no client, no resolver snapshot), so there is nothing to branch on.
+        run: |
+          set -euo pipefail
+          sudo timeout -k 5 15 twingate stop || true
+          sudo cp /tmp/resolv.conf.pre-twingate /etc/resolv.conf || true
+          sudo rm -f /etc/apt/sources.list.d/twingate.list
+          sudo timeout -k 5 30 dpkg --configure -a || true
       - name: Connect to GlobalProtect VPN (dataforge path)
-        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == ''
+        if: env.DATAFORGE_RESOURCE_ID != '' && env.E2E_SOURCE_ENV_JSON == '' && steps.twingate.outputs.connected != 'true'
         continue-on-error: true
         uses: ./application-sdk-scripts/.github/actions/globalprotect-connect
         with:
@@ -3167,12 +3392,14 @@ jobs:
     # a job's `needs` gate is evaluated separately from its `if:`, and without a
     # status-check function GitHub applies an implicit success() that a skipped
     # need does not satisfy.
-    needs: [unit, detect-integration, integration, discover-e2e, e2e]
+    needs: [queue-proof, unit, detect-integration, integration, discover-e2e, e2e]
     # Not on an e2e-only run: it skips the unit and integration tiers on
-    # purpose, and a scorecard row reading them as absent would be wrong.
+    # purpose, and a scorecard row reading them as absent would be wrong. Not
+    # on a proven queue entry either, for the same reason (queue-proof).
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always() && github.event_name != 'pull_request' && inputs.run-e2e != 'only')
+      (always() && github.event_name != 'pull_request' && inputs.run-e2e != 'only' &&
+      needs.queue-proof.outputs.proven != 'true')
     runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
@@ -3185,9 +3412,9 @@ jobs:
       HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.6"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
@@ -3431,6 +3658,7 @@ jobs:
     name: Tests Gate
     needs:
       [
+        queue-proof,
         unit,
         detect-merge-queue,
         detect-integration,
@@ -3443,10 +3671,16 @@ jobs:
         prepare-tenant,
         e2e,
         renovate-artifacts,
+        detect-api-member,
+        api-member,
       ]
+    # Skipped on a proven queue entry (queue-proof): the skipped check run
+    # passes the required `tests / Tests Gate` context, as on a bump PR's own
+    # run (FND-3947). An empty output, from a skipped or failed queue-proof,
+    # runs the gate.
     if: >-
       !(inputs.skip-on-bump-pr && github.event_name == 'pull_request' && startsWith(github.head_ref, 'bump-version')) &&
-      (always())
+      (always() && needs.queue-proof.outputs.proven != 'true')
     runs-on: ubuntu-slim
     # Gate-eval, comment, and up to 10 min waiting on the e2e verdict of a
     # sibling run (FND-3650). GitHub kills a slim job at 15 min regardless
@@ -3463,6 +3697,20 @@ jobs:
       # the e2e job declares it too — so asking here clamps nothing.
       statuses: write
     steps:
+      # The hosted api member leg is outside verify-test-gate's inputs (that action
+      # is consumed at @main). It is skipped for repos without an atlan.app_api
+      # entry point; a failure or cancellation of either job fails the gate.
+      - name: Fail the gate when the hosted api member leg failed
+        if: >-
+          contains(fromJSON('["failure", "cancelled"]'), needs.detect-api-member.result) ||
+          contains(fromJSON('["failure", "cancelled"]'), needs.api-member.result)
+        env:
+          DETECT_RESULT: ${{ needs.detect-api-member.result }}
+          MEMBER_RESULT: ${{ needs.api-member.result }}
+        run: |
+          echo "::error::Hosted api member leg did not pass (detect: $DETECT_RESULT, member: $MEMBER_RESULT)"
+          exit 1
+
       # Single source of truth: the tested driver computes both the pass/fail
       # decision and the human-readable status strings the summary table below
       # renders, so displayed status can't drift from the enforced result.

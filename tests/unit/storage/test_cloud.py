@@ -1,19 +1,27 @@
 """Unit tests for CloudStore."""
 
+import asyncio
 import base64
 import json
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from obstore.store import LocalStore, MemoryStore
+from obstore.exceptions import PermissionDeniedError, UnauthenticatedError
+from obstore.store import GCSStore, LocalStore, MemoryStore
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.storage import cloud as _cloud_module
 from application_sdk.storage.cloud import CloudStore, _infer_auth_type
 from application_sdk.storage.errors import (
+    StorageAuthError,
     StorageConfigError,
     StorageError,
+    StorageGatewayAuthUnavailableError,
     StorageNotFoundError,
+    StoragePermissionError,
 )
 
 
@@ -1128,3 +1136,323 @@ class TestS3RegionLookup:
         with pytest.raises(StorageConfigError):
             await store.download(key="k", prefix="p")
         lookup.assert_not_called()
+
+
+_GCS_VPC_SC_403 = (
+    "Generic GCS error: Error performing list request: Error performing GET "
+    "https://storage.googleapis.com/storage/v1/b/example-bucket/o: Client error "
+    "with status 403 Forbidden: <?xml version='1.0'?><Error>"
+    "<Code>SecurityPolicyViolated</Code>"
+    "<Message>Request violates VPC Service Controls.</Message></Error>"
+)
+_S3_ACCESS_DENIED_403 = (
+    "Generic S3 error: Error performing list request: non-2xx status code: 403 "
+    "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+)
+
+
+class TestListPermissionDenied:
+    """A 401/403 listing a bucket is the caller's to fix, not a retryable outage."""
+
+    @pytest.fixture(params=["_list_keys", "_list_keys_with_meta"])
+    def list_fn(self, request):
+        return request.param
+
+    async def _list(self, monkeypatch, list_fn, message, provider="gcs"):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(_cloud_module, "_list_items", _boom)
+        store = CloudStore(
+            GCSStore("example-bucket", skip_signature=True), provider=provider
+        )
+        return await getattr(store, list_fn)("prefix/")
+
+    async def test_gcs_vpc_sc_403_is_user_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _GCS_VPC_SC_403)
+        err = ei.value
+        assert err.effective_retryable is False
+        assert err.audience.name == "USER"
+        assert err.http_status == 403
+        assert err.provider_code == "SecurityPolicyViolated"
+        assert err.target == "gs://example-bucket/prefix/"
+        assert "VPC Service Controls" in str(err)
+
+    async def test_s3_access_denied_403_is_permission_error(self, monkeypatch, list_fn):
+        with pytest.raises(StoragePermissionError) as ei:
+            await self._list(monkeypatch, list_fn, _S3_ACCESS_DENIED_403, provider="s3")
+        assert ei.value.provider_code == "AccessDenied"
+        assert ei.value.http_status == 403
+
+    async def test_503_stays_retryable_storage_error(self, monkeypatch, list_fn):
+        with pytest.raises(StorageError) as ei:
+            await self._list(
+                monkeypatch, list_fn, "non-2xx status code: 503 Service Unavailable"
+            )
+        assert not isinstance(ei.value, StoragePermissionError)
+        assert ei.value.effective_retryable is True
+
+    async def test_typed_obstore_denial_without_status_text(self, monkeypatch, list_fn):
+        async def _boom(*_a, **_k):
+            raise UnauthenticatedError("credential rejected")
+
+        monkeypatch.setattr(_cloud_module, "_list_items", _boom)
+        store = CloudStore(
+            GCSStore("example-bucket", skip_signature=True), provider="gcs"
+        )
+        with pytest.raises(StorageAuthError) as ei:
+            await getattr(store, list_fn)("prefix/")
+        assert ei.value.http_status == 401
+        assert ei.value.provider_code is None
+
+
+def _gcs_store() -> CloudStore:
+    return CloudStore(GCSStore("example-bucket", skip_signature=True), provider="gcs")
+
+
+def _wrapped_403(key: str) -> StorageError:
+    """A 403 as the shared primitives deliver it: a retryable StorageError chained to the driver error."""
+    try:
+        raise RuntimeError(_GCS_VPC_SC_403)
+    except RuntimeError as driver:
+        err = StorageError(f"Failed on {key}", key=key, cause=driver)
+        err.__cause__ = driver
+        return err
+
+
+class TestReadWritePermissionDenied:
+    """Reads and writes map a 401/403 the same way listing does."""
+
+    async def test_get_bytes_403(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise PermissionDeniedError(_GCS_VPC_SC_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert ei.value.target == "gs://example-bucket/data/a.json"
+        assert ei.value.provider_code == "SecurityPolicyViolated"
+        assert ei.value.effective_retryable is False
+
+    async def test_upload_bytes_403(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(_S3_ACCESS_DENIED_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "put_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().upload_bytes("out/a.json", b"x")
+        assert ei.value.provider_code == "AccessDenied"
+
+    async def test_download_single_wrapped_403(self, monkeypatch, tmp_path):
+        async def _boom(key, *_a, **_k):
+            raise _wrapped_403(key)
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value.http_status == 403
+        assert ei.value.key == "data/a.json"
+
+    async def test_upload_wrapped_403(self, monkeypatch, tmp_path):
+        src = tmp_path / "a.json"
+        src.write_bytes(b"x")
+
+        async def _boom(key, *_a, **_k):
+            raise _wrapped_403(key)
+
+        monkeypatch.setattr(_cloud_module, "upload_file", _boom)
+        with pytest.raises(StoragePermissionError):
+            await _gcs_store().upload(src, "out/a.json")
+
+    async def test_wrapped_503_is_reraised_unchanged(self, monkeypatch, tmp_path):
+        original = StorageError("Failed", key="data/a.json")
+
+        async def _boom(*_a, **_k):
+            raise original
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value is original
+
+
+# An Azure service-principal secret the identity provider refused. obstore
+# reports the failed token request as a GenericError, so only the status text
+# says it was a 401.
+_AZURE_TOKEN_401 = (
+    "Generic MicrosoftAzure error: Error performing token request: Error "
+    "performing POST https://login.microsoftonline.com/example-tenant/oauth2/v2.0/"
+    "token in 77ms - Server returned non-2xx status code: 401 Unauthorized: "
+    '{"error":"invalid_client","error_description":"AADSTS7000215: Invalid '
+    'client secret provided.","error_codes":[7000215]}'
+)
+_GATEWAY_1005_401 = (
+    "Generic S3 error: Error performing GET request: non-2xx status code: 401 "
+    '{"code": 1005, "error": "Invalid Client"}'
+)
+
+
+def _wrapped(message: str, key: str) -> StorageError:
+    """A driver error as the head path delivers it: a StorageError chained to it."""
+    try:
+        raise RuntimeError(message)
+    except RuntimeError as driver:
+        err = StorageError(f"Failed to head key '{key}'", key=key, cause=driver)
+        err.__cause__ = driver
+        return err
+
+
+class TestAuthenticationRejected:
+    """A 401 is the credential itself being rejected: AUTH, not PERMISSION."""
+
+    async def test_download_single_azure_token_401(self, monkeypatch, tmp_path):
+        async def _boom(key, *_a, **_k):
+            raise _wrapped(_AZURE_TOKEN_401, key)
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StorageAuthError) as ei:
+            await _gcs_store().download(key="specs/api.json", output_dir=tmp_path)
+        err = ei.value
+        assert err.category.name == "AUTH"
+        assert err.audience.name == "USER"
+        assert err.effective_retryable is False
+        assert err.http_status == 401
+        assert err.key == "specs/api.json"
+        assert "secret value rather than the secret ID" in str(err)
+
+    def test_exported_from_storage_package(self):
+        import application_sdk.storage as storage
+
+        assert "StorageAuthError" in storage.__all__
+        assert storage.StorageAuthError is StorageAuthError
+
+    async def test_auth_error_is_still_a_permission_error(self, monkeypatch):
+        """Existing ``except StoragePermissionError`` blocks keep catching a 401."""
+
+        async def _boom(*_a, **_k):
+            raise RuntimeError(_AZURE_TOKEN_401)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StoragePermissionError):
+            await _gcs_store().get_bytes("specs/api.json")
+
+    async def test_403_stays_permission_not_auth(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise PermissionDeniedError(_GCS_VPC_SC_403)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StoragePermissionError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert not isinstance(ei.value, StorageAuthError)
+        assert ei.value.category.name == "PERMISSION"
+
+    async def test_gateway_leaf_is_reraised_unchanged(self, monkeypatch, tmp_path):
+        original = StorageGatewayAuthUnavailableError(
+            "gateway lookup failed", key="data/a.json", http_status=401
+        )
+
+        async def _boom(*_a, **_k):
+            raise original
+
+        monkeypatch.setattr(_cloud_module, "download_file_chunked", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().download(key="data/a.json", output_dir=tmp_path)
+        assert ei.value is original
+
+    async def test_raw_gateway_1005_is_not_a_credential_error(self, monkeypatch):
+        async def _boom(*_a, **_k):
+            raise RuntimeError(_GATEWAY_1005_401)
+
+        monkeypatch.setattr(_cloud_module.obs, "get_async", _boom)
+        with pytest.raises(StorageError) as ei:
+            await _gcs_store().get_bytes("data/a.json")
+        assert not isinstance(ei.value, StoragePermissionError)
+        assert ei.value.effective_retryable is True
+
+
+# ---------------------------------------------------------------------------
+# First failure: no sibling transfer outlives the raise (FND-4277)
+# ---------------------------------------------------------------------------
+
+_SIBLING_THREAD_SECONDS = 0.3
+
+
+class _SiblingProbe:
+    """Siblings that block in ``run_in_thread``; one transfer fails once every
+    sibling's thread is running. With ``asyncio.gather`` the siblings finished
+    -- wrote into the output dir or the bucket -- after the caller had seen the
+    failure."""
+
+    def __init__(self, siblings: int) -> None:
+        self.started = [threading.Event() for _ in range(siblings)]
+        self.finished = [threading.Event() for _ in range(siblings)]
+        self.completed: list[int] = []
+
+    async def sibling(self, index: int) -> None:
+        def _block() -> None:
+            self.started[index].set()
+            time.sleep(_SIBLING_THREAD_SECONDS)
+            self.finished[index].set()
+
+        await run_in_thread(_block)
+        self.completed.append(index)
+
+    async def fail(self, exc: Exception) -> None:
+        for event in self.started:
+            if not await asyncio.to_thread(event.wait, 5.0):
+                raise AssertionError("sibling thread did not start")
+        raise exc
+
+    async def assert_no_sibling_outlived_the_raise(self) -> None:
+        assert all(
+            e.is_set() for e in self.finished
+        ), "a sibling's thread was still running when the failure propagated"
+        await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
+        assert self.completed == [], "a sibling completed after the raise"
+
+
+class TestFirstFailureStopsSiblings:
+    async def test_download_prefix_failure_cancels_and_drains_siblings(self, tmp_path):
+        store = CloudStore(MemoryStore(), provider="memory")
+        for name in ("a", "bad", "c"):
+            await store.upload_bytes(f"p/{name}.txt", b"x")
+        probe = _SiblingProbe(siblings=2)
+        order = {"p/a.txt": 0, "p/c.txt": 1}
+
+        async def _download(key, local_path, **kwargs):
+            if key == "p/bad.txt":
+                await probe.fail(StorageError("bad object"))
+            await probe.sibling(order[key])
+
+        with (
+            patch.object(_cloud_module, "download_file_chunked", _download),
+            pytest.raises(StorageError, match="bad object"),
+        ):
+            await store.download(prefix="p", output_dir=tmp_path / "out")
+
+        await probe.assert_no_sibling_outlived_the_raise()
+
+    async def test_upload_dir_failure_cancels_drains_and_stays_typed(self, tmp_path):
+        store = CloudStore(MemoryStore(), provider="memory")
+        src = tmp_path / "src"
+        src.mkdir()
+        for name in ("a", "bad", "c"):
+            (src / f"{name}.txt").write_bytes(b"x")
+        probe = _SiblingProbe(siblings=2)
+        order = {"a.txt": 0, "c.txt": 1}
+
+        async def _upload(self, path, key):
+            if key == "bad.txt":
+                await probe.fail(ValueError("not a storage failure"))
+            await probe.sibling(order[key])
+
+        with (
+            patch.object(CloudStore, "upload", _upload),
+            pytest.raises(ValueError, match="not a storage failure") as exc_info,
+        ):
+            await store.upload_dir(src)
+
+        # A lone failure keeps the bare shape asyncio.gather gave callers.
+        assert not isinstance(exc_info.value, BaseExceptionGroup)
+        await probe.assert_no_sibling_outlived_the_raise()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import conformance_release
+from _frozen_clock import freeze_clock  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -243,9 +244,16 @@ class TestFormatBlock:
         block = conformance_release.format_block("1.2.3", self._empty_cats())
         assert "## [1.2.3]" in block
 
-    def test_contains_today(self) -> None:
+    def test_contains_today(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Frozen, so the module's "today" and the expected one are one reading
+        # of the clock rather than two that can straddle midnight.
+        at = freeze_clock(
+            monkeypatch,
+            conformance_release,
+            datetime(2026, 6, 15, 12, 0, tzinfo=timezone.utc),
+        )
         block = conformance_release.format_block("1.2.3", self._empty_cats())
-        assert date.today().isoformat() in block
+        assert f"## [1.2.3] - {at.date().isoformat()}" in block
 
     def test_features_section_present(self) -> None:
         cats = self._empty_cats()

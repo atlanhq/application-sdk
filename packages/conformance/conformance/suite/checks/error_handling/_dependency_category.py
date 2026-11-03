@@ -38,6 +38,7 @@ SDK_DEPENDENCY_UNAVAILABLE_CLASSES: frozenset[str] = frozenset(
         "AzureServiceError",
         "BindingError",
         "ColdStartRaceError",
+        "CredentialConfigNotFoundError",
         "CredentialVaultError",
         "DaprNotDetectedError",
         "DaprSidecarUnreachableError",
@@ -53,6 +54,7 @@ SDK_DEPENDENCY_UNAVAILABLE_CLASSES: frozenset[str] = frozenset(
         "RedisLockError",
         "RedisProtocolError",
         "SecretStoreError",
+        "SecretStoreTransientError",
         "SecretStoreUnavailableError",
         "SecretStoreUnreachableError",
         "StateDownloadError",
@@ -60,6 +62,7 @@ SDK_DEPENDENCY_UNAVAILABLE_CLASSES: frozenset[str] = frozenset(
         "StorageBucketRelocationError",
         "StorageError",
         "StorageGatewayAuthUnavailableError",
+        "StorageGatewayNoRouteError",
         "TemporalAuthTokenAcquireError",
         "TemporalConnectError",
     }
@@ -153,8 +156,8 @@ class _Resolver(_SdkErrorResolver):
                         continue
                     if node.level == 0 and _is_sdk_module(node.module):
                         return _sdk_name_category(alias.name)
-                    target = self._module_file(node.module, node.level, path)
-                    loaded = self._load(target) if target is not None else None
+                    target = self.module_file(node.module, node.level, path)
+                    loaded = self.load(target) if target is not None else None
                     if loaded is None:
                         return None
                     return self.name_category(loaded, target, alias.name, visited)

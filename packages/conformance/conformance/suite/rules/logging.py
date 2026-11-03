@@ -123,6 +123,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "discovery).  Block-tier since CNCT-108 (parent CNCT-93): a\n"
             "rolled-own logger loses correlation IDs and source provenance,\n"
             "making its records unfindable on the tenant UI.\n"
+            "\n"
+            "The finding is file-level and reported on line 1, or on the first\n"
+            "line after a shebang and/or PEP 263 coding line (a coding line 2 also\n"
+            "skips a plain comment or blank line 1), so a\n"
+            "``# conformance: ignore[L002] reason`` directive on that line\n"
+            "suppresses it.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
         remediation_reference=RemediationReference(
@@ -194,7 +200,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "trips it. Narrow the except to what the try raises (E004). A catch "
             "that genuinely must stay broad is left as it is and reported for a "
             "person to decide: never suppress BLE001, and never add exc_info=True "
-            "to satisfy it, which would leak the credentials this exemption protects."
+            "to satisfy it, which would leak the credentials this exemption protects. "
+            "L009 and E005 at a pre-raise log: a warning/error within the three "
+            "statements before a raise in the same block is also an L009 site (and "
+            "usually E005). Enriching it clears L004 and E005 but not L009, whose fix "
+            "then deletes the line. Apply L009's resolution instead: delete the line "
+            "when the exception has an upstream record (which may leave a bare raise), "
+            "otherwise downgrade it to a sanitized DEBUG through locals. Never reduce "
+            "the handler to a bare raise without an upstream record. That one edit "
+            "clears L004, E005 and L009 together."
         ),
         short_description="logger.warning/error in except block without exc_info=True",
         full_description=(
@@ -206,7 +220,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "handler logged its caught exception's sanitized traceback.  ``.exception()``\n"
             "is exempt.\n"
             "\n\nExempt: calls whose arguments flow through a recognised redaction\n"
-            "helper (redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) —\n"
+            "helper\n"
+            "(redact*/sanitiz*/safe_traceback/safe_exception*/scrub_secret*/mask_secret*)\n"
+            "—\n"
             "these mark a deliberate no-traceback boundary where exc_info=True\n"
             "would serialize the raw exception past the sanitizer and can leak\n"
             "credentials (JDBC URLs, Authorization headers, OAuth bodies). A later\n"
@@ -292,7 +308,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "degrades performance.  INFO is for lifecycle milestones, not per-item\n"
             "events.  Use DEBUG per-item and INFO for the loop summary.  The checker\n"
             "should inspect whether the loop is clearly bounded (≤10 items) before\n"
-            "flagging.\n"
+            "flagging.  A throttled progress log is a milestone and is not flagged:\n"
+            "the body of an ``if`` inside the innermost loop whose test is a modulo\n"
+            "counter (``n % N == 0``) or an elapsed-time threshold\n"
+            "(``time.monotonic() - last >= S``).  Under ``or``, every other disjunct\n"
+            "must be a throttle or a one-shot ``==`` comparison such as\n"
+            "``done == total`` — not one against a string/``None``/``bool`` literal\n"
+            "or a field of the loop item, which can hold on every iteration.  A\n"
+            "time difference read from the loop item itself is a per-item filter,\n"
+            "not a throttle. A completion summary in the ``else`` suite of the\n"
+            "outermost active loop also runs only once on natural exhaustion and is\n"
+            "skipped after ``break``; an inner-loop ``else`` repeated by an outer\n"
+            "loop is still per-item.\n"
+            "A terminal summary followed by a ``return`` that exits the function is\n"
+            "not flagged either.  Expressions, assignments, and ``if``/``with``\n"
+            "blocks containing no ``break``, ``continue``, ``return``, ``raise``,\n"
+            "``try``, nested loop or nested scope may sit between the log and that\n"
+            "``return``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l006",
         remediation_reference=RemediationReference(
@@ -399,11 +431,31 @@ RULES: tuple[RuleDefinition, ...] = (
             "site + handler), inflating error counts and making 'how many times did this "
             "fail?' unanswerable without dedup logic."
         ),
+        rule_interactions=(
+            "L004 and E005 at a pre-raise log: inside an except, the same "
+            "warning/error line is usually also reported by L004 (block) and E005, "
+            "whose fix is to enrich it with exc_info=True or safe_traceback(exc). "
+            "Do not enrich an L009 site; resolve it here in one edit, which clears "
+            "all three: delete the line when the exception has an upstream record "
+            "(exc_info=True or the safe_traceback form; for anything raised out of "
+            "an @task on a v3 SDK worker, the SDK's activity.ended ERROR record), "
+            "otherwise downgrade it to a sanitized DEBUG through locals. Deleting may "
+            "leave a bare raise; never reduce the handler to one without an upstream "
+            "record. v2 apps and non-activity paths (handlers, preflight) have no "
+            "SDK record: confirm the caller logs it, or keep the sanitized DEBUG."
+        ),
         short_description="logger.warning/error immediately before raise — duplicate log records",
         full_description=(
             "Logging an error immediately before re-raising creates duplicate records in\n"
             "the log stream, inflating error counts in dashboards.  Acceptable only\n"
             "when adding context not available to the caller.  Otherwise: just re-raise.\n"
+            "The checker exempts the provable form of that context: outside any\n"
+            "``except`` handler, a log whose non-constant value arguments share no\n"
+            "name or attribute with the arguments of the ``raise Err(...)`` it\n"
+            "precedes.  A bare ``raise``, constant-only arguments, or any log inside\n"
+            "a handler (an L004/E005 site) still fires.\n"
+            "A ``raise HTTPException(...)`` (fastapi/starlette) is exempt anywhere:\n"
+            "the framework never logs it, so the preceding log is the only record.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l009",
         remediation_reference=RemediationReference(

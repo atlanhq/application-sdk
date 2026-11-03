@@ -9,12 +9,16 @@ Rules in this check module:
   installed ``atlan-application-sdk`` distribution must not be redeclared in
   the app's ``[project.dependencies]`` or any
   ``[project.optional-dependencies.*]`` array.
-* **D004 RedeclaredSdkManagedDependencyInGroups** — same redeclaration check,
-  extended to PEP 735 ``[dependency-groups]`` (D002's coverage gap).
+* **D004 RedeclaredSdkManagedDependencyInGroups** — D002's coverage gap in PEP 735
+  ``[dependency-groups]``; direct imports from app-owned test source are treated as
+  app test dependencies rather than redundant SDK tooling pins.
 * **D005 UnknownSdkExtra** — an ``atlan-application-sdk[extra]`` reference must
   name an extra the SDK actually publishes (uv silently drops unknown extras).
 * **D006 IncompatibleRequiresPython** — the app's ``[project].requires-python``
   lower bound must not be below the SDK's minimum supported Python.
+* **D016 RequiresPythonExcludesRuntimePython** — the app's
+  ``[project].requires-python`` must admit the Python ``app-runtime-base:3``
+  ships (3.13).
 * **D007 NonStandardBuildBackend** — ``[build-system].build-backend`` must be
   Hatchling.
 * **D008 WeakenedTypeChecking** — ``[tool.pyright].typeCheckingMode`` must not
@@ -86,6 +90,9 @@ from conformance.suite.checks._ast_common import (
     parse_toml_suppressions,
     safe_read_text,
 )
+from conformance.suite.checks._ast_common._discovery import (
+    EXCLUDE_DIRS as _SOURCE_EXCLUDE_DIRS,
+)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "D"
@@ -104,6 +111,7 @@ RULE_D012 = "D012"
 RULE_D013 = "D013"
 RULE_D014 = "D014"
 RULE_D015 = "D015"
+RULE_D016 = "D016"
 
 SDK_PACKAGE = "atlan-application-sdk"
 # The conformance suite itself (D011).  Apps declare it in a dev group so
@@ -163,6 +171,12 @@ _REMOTE_COMPONENT_FETCH_RE = re.compile(
 # by ``test_d006_sdk_python_floor_matches_sdk_pyproject``, which re-reads the
 # SDK's real pyproject.toml and fails if this constant drifts.
 SDK_PYTHON_FLOOR: tuple[int, int] = (3, 11)
+
+# The Python ``app-runtime-base:3`` ships, as ``(major, minor)``. D016 requires
+# every app's requires-python to admit it. Hardcoded for the same reason as
+# SDK_PYTHON_FLOOR; ``test_d016_runtime_python_matches_sdk_dockerfile`` re-reads
+# the golden base tag in the SDK's Dockerfile and fails if this drifts.
+RUNTIME_IMAGE_PYTHON: tuple[int, int] = (3, 13)
 
 # A PEP 508 / requirement-string fragment. Captures the package *name*; the
 # rest of the line is treated as the version-specifier blob.
@@ -701,6 +715,38 @@ def _requires_python_lower_bound(
     return (major, minor), operator, lineno
 
 
+def _requires_python_excludes_runtime(data: Mapping[str, Any]) -> str | None:
+    """Return the app's ``requires-python`` spec when it shuts out the runtime
+    image's Python, else ``None``.
+
+    The runtime image's base tag pins only ``X.Y``; its patch floats as the
+    mutable tag is rebuilt. So the spec must admit *every* ``X.Y.N`` patch
+    (checked for N in 0..99), not just one: ``<3.13``, ``<=3.12``,
+    ``==3.12.*``, ``~=3.12.0``, ``!=3.13.*``, ``==3.13.0`` and ``!=3.13.4`` are
+    all caught while ``<3.14``, ``<4.0`` and ``==3.13.*`` pass. Absent or
+    unparseable specs return ``None``: D006 owns the absent case, and a spec
+    ``packaging`` cannot parse is not graded here.
+    """
+    project = data.get("project")
+    if not isinstance(project, dict):
+        return None
+    spec = project.get("requires-python")
+    if not isinstance(spec, str) or not spec.strip():
+        return None
+    try:
+        from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    except ImportError:  # pragma: no cover - packaging is a declared dependency
+        return None
+    try:
+        specifiers = SpecifierSet(spec)
+    except InvalidSpecifier:
+        return None
+    major, minor = RUNTIME_IMAGE_PYTHON
+    if all(specifiers.contains(f"{major}.{minor}.{patch}") for patch in range(100)):
+        return None
+    return spec.strip()
+
+
 def _line_of(text: str, key: str, *, section: str | None = None) -> int:
     """Return the 1-based line of the ``<key> =`` assignment, else 1.
 
@@ -799,6 +845,7 @@ def scan_text(
     *,
     sdk_managed_packages: Iterable[str] | None = None,
     sdk_published_extras: Iterable[str] | None = None,
+    test_imported_packages: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Scan a pyproject.toml text and return D-series findings.
 
@@ -816,6 +863,10 @@ def scan_text(
         Override for the SDK's published extras set (test injection). When
         ``None``, looked up via ``importlib.metadata`` ``Provides-Extra``; when
         the SDK is not importable, D005 is skipped silently.
+    test_imported_packages:
+        Distribution names directly imported by app-owned test sources. The
+        full-repository scan supplies this context so D004 can distinguish a
+        direct test dependency from redundant SDK-managed tooling.
     """
     data = _safe_load(text)
     if data is None:
@@ -906,6 +957,29 @@ def scan_text(
                 )
             )
 
+    # ── D016 (pure-text) ────────────────────────────────────────────────────
+    excluded = _requires_python_excludes_runtime(data)
+    if excluded is not None:
+        rt_major, rt_minor = RUNTIME_IMAGE_PYTHON
+        findings.append(
+            _make_finding(
+                rule_id=RULE_D016,
+                file=file,
+                line=_line_of(text, "requires-python", section="project"),
+                column=1,
+                message=(
+                    f"requires-python '{excluded}' does not admit every Python "
+                    f"{rt_major}.{rt_minor}.x; app-runtime-base:3 ships "
+                    f"{rt_major}.{rt_minor} (patch floats with the image) and the "
+                    f"e2e harness runs it. Widen the range so the whole "
+                    f"{rt_major}.{rt_minor} line is admitted (e.g. "
+                    f"'<{rt_major}.{rt_minor + 1}', or drop the cap) and re-run "
+                    f"`uv lock`."
+                ),
+                suppressions=suppressions,
+            )
+        )
+
     # ── D007 (pure-text) ────────────────────────────────────────────────────
     backend = _build_backend(text, data=data)
     if backend is not None and backend[0] != HATCHLING_BACKEND:
@@ -988,6 +1062,9 @@ def scan_text(
         managed = {_normalise_name(p) for p in sdk_managed_packages}
 
     group_entries = list(_iter_dependency_group_entries(text, data=data))
+    test_imported = {
+        _normalise_name(package) for package in (test_imported_packages or ())
+    }
 
     if managed is not None:
         # D002 — [project.dependencies] + [project.optional-dependencies.*]
@@ -1014,7 +1091,7 @@ def scan_text(
         for entry in group_entries:
             if entry.name == sdk_norm:
                 continue
-            if entry.name in managed:
+            if entry.name in managed and entry.name not in test_imported:
                 findings.append(
                     _make_finding(
                         rule_id=RULE_D004,
@@ -1109,6 +1186,7 @@ def scan_path(
     *,
     sdk_managed_packages: Iterable[str] | None = None,
     sdk_published_extras: Iterable[str] | None = None,
+    test_imported_packages: Iterable[str] | None = None,
 ) -> list[Finding]:
     """Scan a single pyproject.toml on disk."""
     text = safe_read_text(path)
@@ -1123,6 +1201,7 @@ def scan_path(
         str(rel),
         sdk_managed_packages=sdk_managed_packages,
         sdk_published_extras=sdk_published_extras,
+        test_imported_packages=test_imported_packages,
     )
 
 
@@ -2009,13 +2088,13 @@ def _constraint_entry_lines(text: str) -> Iterator[tuple[str, int, int]]:
 
 
 def _scan_constraint_floors(text: str, rel_pyproject: str) -> list[Finding]:
-    """D003: an app's ``[tool.uv] constraint-dependencies`` floors.
+    """D003: app-local ``[tool.uv] constraint-dependencies`` floors.
 
-    A floor on a package the app does not declare is a second place for a
-    transitive version to be decided.  Transitive floors belong to the SDK,
-    whose dependency ranges the app resolves through; an app-local copy goes
-    stale the moment the SDK's own floor moves, and nothing reports it.  App
-    repos only — the SDK's own pyproject is where these floors live.
+    Surface each entry for review.  Generic transitive floors belong in the
+    SDK's declared dependency ranges, not in app-local direct requirements or
+    constraints.  A documented app-specific minimum may be retained with a
+    reasoned D003 exception only when the SDK's declared range does not
+    guarantee it.  App repos only — the SDK's own pyproject is exempt.
     """
     suppressions = parse_toml_suppressions(text)
     findings: list[Finding] = []
@@ -2030,12 +2109,14 @@ def _scan_constraint_floors(text: str, rel_pyproject: str) -> list[Finding]:
                 column=column,
                 message=(
                     f"'{name}' is floored in [tool.uv] constraint-dependencies "
-                    f"('{raw}'). An app does not carry transitive security floors: "
-                    f"remove the entry. If a CVE fix is needed, it belongs in "
-                    f"atlan-application-sdk's dependency ranges and reaches the app "
-                    f"by upgrading the SDK. Note uv does not propagate an SDK's own "
-                    f"[tool.uv] constraints to dependents, so the lock's resolved "
-                    f"version and CI's vulnerability scan are what guard it."
+                    f"('{raw}'). This finding surfaces app-local floors for review: "
+                    f"generic transitive floors belong in atlan-application-sdk's "
+                    f"declared dependency ranges and should be removed from the app, "
+                    f"not relocated between a direct dependency and a constraint. "
+                    f"A documented app-specific minimum may be retained only when "
+                    f"the SDK's declared range does not guarantee it, with a reasoned "
+                    f"D003 exception naming the app floor and SDK range gap. A resolved "
+                    f"lockfile version alone is not a future guarantee."
                 ),
                 suppressions=suppressions,
             )
@@ -2714,6 +2795,95 @@ def _credentialed(url: str) -> bool:
     return bool(parts.username or parts.password)
 
 
+_TEST_DIRS: frozenset[str] = frozenset({"test", "tests"})
+
+
+def _relative_parts(path: Path, root: Path) -> tuple[str, ...]:
+    try:
+        return path.relative_to(root).parts
+    except ValueError:
+        return path.parts
+
+
+def _is_test_source(path: Path, root: Path) -> bool:
+    """Whether *path* is a test-only Python source (D004's import context)."""
+    parts = _relative_parts(path, root)
+    return (
+        any(part in _TEST_DIRS for part in parts[:-1])
+        or path.name == "conftest.py"
+        or path.name.startswith("test_")
+        or path.name.endswith("_test.py")
+    )
+
+
+def _is_app_source(path: Path, root: Path) -> bool:
+    """Whether *path* is in the shared (non-test) AST walk's scope.
+
+    Mirrors :func:`_discover_sources`, so D003/D010 read the same files they
+    did before :func:`discover` started also returning test sources for D004.
+    """
+    parts = _relative_parts(path, root)
+    return not (
+        any(part in _TEST_DIRS for part in parts[:-1])
+        or path.name.startswith("test_")
+        or path.name.endswith("_test.py")
+    )
+
+
+def _discover_test_sources(root: Path) -> list[Path]:
+    """Find test-only Python sources without changing shared source discovery.
+
+    The common AST walk intentionally excludes tests. D004 needs their imports
+    to tell an app-owned test dependency from a redundant SDK tooling pin, so it
+    makes a separate, test-scoped walk here. Returned through :func:`discover`
+    so the runner's ``--exclude`` prefixes apply to these files too.
+    """
+    excluded_dirs = _SOURCE_EXCLUDE_DIRS - _TEST_DIRS
+    paths: list[Path] = []
+    for path in root.rglob("*.py"):
+        directory_parts = path.relative_to(root).parts[:-1]
+        if not _is_test_source(path, root):
+            continue
+        if set(directory_parts) & excluded_dirs:
+            continue
+        if any(part.startswith(".") for part in directory_parts):
+            continue
+        paths.append(path)
+    return sorted(paths)
+
+
+def _owning_pyproject(path: Path, pyprojects: list[Path]) -> Path | None:
+    """Return the nearest ``pyproject.toml`` whose directory contains *path*."""
+    owner: Path | None = None
+    for pyproject in pyprojects:
+        if not path.is_relative_to(pyproject.parent):
+            continue
+        if owner is None or len(pyproject.parent.parts) > len(owner.parent.parts):
+            owner = pyproject
+    return owner
+
+
+def _test_imported_distributions(test_sources: list[Path]) -> set[str]:
+    """Return uniquely-owned distributions directly imported by *test_sources*."""
+    if not test_sources:
+        return set()
+    imported_modules, _, _ = _collect_source_usage(test_sources)
+    if not imported_modules:
+        return set()
+
+    distributions_by_module = importlib_metadata.packages_distributions()
+    direct: set[str] = set()
+    for module in imported_modules:
+        owners = {
+            _normalise_name(name) for name in distributions_by_module.get(module, ())
+        }
+        # A shared namespace (e.g. ``google``) does not prove which individual
+        # distribution the test uses, so only credit an unambiguous owner.
+        if len(owners) == 1:
+            direct.update(owners)
+    return direct
+
+
 def scan_all(
     paths: list[Path],
     root: Path,
@@ -2730,10 +2900,12 @@ def scan_all(
     plus the repo's Python sources — see :func:`discover`).
 
     D001/D002 run per ``pyproject.toml`` via :func:`scan_path` (the SDK and its
-    sibling packages remain self-exempt).  D003 is computed here *outside* that
-    self-check guard — it is ``scope=both`` and so applies to the SDK itself —
-    by mapping each core dependency to the import names it provides and flagging
-    any whose modules never appear in the collected source imports.
+    sibling packages remain self-exempt). D004 also reads test-only Python
+    sources separately: a package directly imported there is an app-owned test
+    dependency, not a redundant SDK tooling re-pin. D003 is computed here
+    *outside* that self-check guard — it is ``scope=both`` and so applies to the
+    SDK itself — by mapping each core dependency to the import names it provides
+    and flagging any whose modules never appear in the collected source imports.
 
     Test seams: ``dist_import_map`` injects the dependency -> import-name map
     (default: resolved from installed metadata) and ``imported_modules`` injects
@@ -2742,11 +2914,29 @@ def scan_all(
     names and each dependency's ``sqlalchemy.dialects`` entry points.
     """
     pyprojects = [p for p in paths if p.name == "pyproject.toml"]
-    py_files = [p for p in paths if p.suffix == ".py"]
+    all_py_files = [p for p in paths if p.suffix == ".py"]
+    py_files = [p for p in all_py_files if _is_app_source(p, root)]
+
+    # D004 test context, scoped per project: a test file only vouches for the
+    # nearest pyproject that contains it, and only files the caller passed in
+    # (so runner ``--exclude`` prefixes and CLI scan dirs are honoured).
+    tests_by_pyproject: dict[Path, list[Path]] = {}
+    for test_file in (p for p in all_py_files if _is_test_source(p, root)):
+        owner = _owning_pyproject(test_file, pyprojects)
+        if owner is not None:
+            tests_by_pyproject.setdefault(owner, []).append(test_file)
 
     findings: list[Finding] = []
     for pyproject in pyprojects:
-        findings.extend(scan_path(pyproject, root))
+        findings.extend(
+            scan_path(
+                pyproject,
+                root,
+                test_imported_packages=_test_imported_distributions(
+                    tests_by_pyproject.get(pyproject, [])
+                ),
+            )
+        )
 
     root_pyproject = root / "pyproject.toml"
     if not root_pyproject.is_file():
@@ -2871,13 +3061,17 @@ def discover(root: Path) -> list[Path]:
 
     D001/D002 need the ``pyproject.toml``; D003 additionally needs every source
     file's imports.  Source discovery reuses the shared AST walk, which already
-    excludes tests, build dirs, virtualenvs, and dot-directories.
+    excludes tests, build dirs, virtualenvs, and dot-directories.  Test sources
+    are appended separately for D004's test-import context.
     """
     paths: list[Path] = []
     candidate = root / "pyproject.toml"
     if candidate.is_file():
         paths.append(candidate)
     paths.extend(_discover_sources(root))
+    # Test sources feed D004 only; scan_all partitions them back out of D003.
+    seen = set(paths)
+    paths.extend(p for p in _discover_test_sources(root) if p not in seen)
     return paths
 
 

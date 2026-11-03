@@ -11,6 +11,7 @@ from application_sdk.observability.traces_adaptor import (
     TraceRecord,
     get_traces,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -227,9 +228,15 @@ class TestPython314EventLoopCompat:
                 "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
             },
         ):
-            with mock.patch(
-                "application_sdk.observability.traces_adaptor.asyncio.get_running_loop",
-                side_effect=RuntimeError("no running event loop"),
+            with (
+                private_stdlib(
+                    "application_sdk.observability.traces_adaptor", "asyncio"
+                ) as local_asyncio,
+                mock.patch.object(
+                    local_asyncio,
+                    "get_running_loop",
+                    side_effect=RuntimeError("no running event loop"),
+                ),
             ):
                 with mock.patch(
                     "application_sdk.observability.traces_adaptor.threading.Thread"
@@ -256,9 +263,15 @@ class TestPython314EventLoopCompat:
                 "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
             },
         ):
-            with mock.patch(
-                "application_sdk.observability.traces_adaptor.asyncio.get_running_loop",
-                return_value=mock_loop,
+            with (
+                private_stdlib(
+                    "application_sdk.observability.traces_adaptor", "asyncio"
+                ) as local_asyncio,
+                mock.patch.object(
+                    local_asyncio,
+                    "get_running_loop",
+                    return_value=mock_loop,
+                ),
             ):
                 with mock.patch(
                     "application_sdk.observability.traces_adaptor.threading.Thread"

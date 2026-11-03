@@ -659,6 +659,17 @@ If you need replay logs — for example when using `temporalio.worker.Replayer` 
 - **Per-instance** (in-code): `self.logger.log_during_replay = True`
 - **Globally** (env flag): `ENABLE_WORKFLOW_REPLAY_LOGS=true`
 
+### Console output is written off the event loop
+
+Console lines (WARNING and below to stdout, ERROR and above to stderr) are formatted on the thread that logs, so trace and correlation ids are captured where they're set. A background thread then writes them. A stalled stdout or stderr, such as a full pipe or a slow log collector, delays console output but can't block the event loop or the activity heartbeats.
+
+- The queue holds up to 10,000 lines. When it's full, the **oldest** line is dropped. Drops are counted, and at most once every 30 seconds a line like `console log queue full: dropped N records (total M)` is written once the stream accepts writes again.
+- `logger.error()` / `critical()` called on a thread with no running event loop waits up to 1 second for the queue to drain, which gives the error a chance to reach the console before the call returns. It's a best-effort wait: if stdout or stderr is still stalled after 1 second, the call returns with the line still queued. On the event loop it doesn't wait.
+- At interpreter exit the queue gets up to 2 seconds to drain.
+- `application_sdk.observability.console_sink.flush_console_logs(timeout)` drains on demand, for example in tests that read `capsys`. `console_log_drop_count()` returns the drop total.
+
+The OTLP and object-store sinks are unaffected.
+
 ---
 
 ## Memory pressure and OOM diagnostics
@@ -764,6 +775,14 @@ ATLAN_LOG_FLUSH_INTERVAL_SECONDS=10
 
 See [Configuration](../configuration.md#logging) for all observability variables.
 
+### Flushing under failure
+
+A full batch is written by a background flush task. At most four run per signal at once; while an object-store outage holds them, new records wait in the buffer and the next flush takes them. Shutdown (`AtlanObservability.flush_all()`) waits for in-flight flushes before writing what is left, so the last records before a worker drains are not lost. A failed periodic flush is logged and retried on the next interval.
+
+An unhandled asyncio exception schedules a flush too, but only one at a time and at most one every 5 seconds, so an exception storm against an unreachable OTLP collector does not pile up flushes or `otlp-log-flush` threads. Only one `otlp-log-flush` thread is alive at a time; a flush that finds an earlier one still exporting waits for it within its own timeout instead of starting another.
+
+Segment metrics are bounded twice: at most 10,000 events (`max_queue_size`) wait to be handed to the client's worker loop, and at most 10,000 sit in its queue. Past either cap, new events are dropped and counted (`SegmentClient.dropped_count`), with one warning per overflow episode. A negative `max_queue_size` raises `ValueError`. A flush sends the backlog in `ATLAN_SEGMENT_BATCH_SIZE` chunks. After `close()`, further metrics are dropped.
+
 ---
 
 ## Activity Sizing Telemetry
@@ -803,7 +822,11 @@ from application_sdk.observability.sizing_inputs import report_input_bytes
 report_input_bytes(len(payload))
 ```
 
-Every reader returns `None` rather than a guessed `0` — a missing reading has to stay distinguishable from a real zero, or sizing picks the smallest tier. Nothing is emitted at all unless a cgroup reading was obtained, so on a host without one (local macOS/Windows, or a pod with no memory controller) no rows are produced.
+Every reader returns `None` rather than a guessed `0` — a missing reading has to stay distinguishable from a real zero, or sizing picks the smallest tier. Sizing the input happens after the activity returns, still inside its attempt, so it is bounded. It gets at most 10 seconds and never more than the attempt has left before its `start_to_close` or `schedule_to_close` deadline (less a 1-second margin), or half its heartbeat timeout. Past that, the row is recorded with input size unknown. The walk runs on its own single thread, so a walk stuck on an unresponsive filesystem cannot take threads from other offloaded work. While a walk is still running, later rows skip it and record input size unknown.
+
+**Telemetry never changes an activity's outcome.** The row is recorded after the activity has finished, and an error there, or a cancel arriving then (for example a worker shutdown past its graceful timeout), drops the row with a WARNING. The activity's result or original error is what Temporal sees, so a completed activity is never retried because of its own measurement.
+
+Nothing is emitted at all unless a cgroup reading was obtained, so on a host without one (local macOS/Windows, or a pod with no memory controller) no rows are produced.
 
 ### Batching and shutdown
 

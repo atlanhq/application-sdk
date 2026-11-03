@@ -18,7 +18,17 @@ from application_sdk.infrastructure._dapr.credential_vault import (
 from application_sdk.infrastructure._secret_utils import (
     process_secret_data as _process_secret_data,
 )
-from application_sdk.infrastructure.credential_vault import CredentialVaultError
+from application_sdk.infrastructure.credential_vault import (
+    CredentialConfigNotFoundError,
+    CredentialVaultError,
+)
+from tests.unit.infrastructure._credential_vault_fakes import (
+    binding_500 as _binding_500,
+)
+from tests.unit.infrastructure._credential_vault_fakes import (
+    vault_sleep as _vault_sleep,
+)
+from tests.unit.private_stdlib import private_stdlib
 
 # ---------------------------------------------------------------------------
 # _process_secret_data
@@ -149,7 +159,10 @@ class TestDaprCredentialVaultGetCredentials:
             config_bytes=None,
             secret_data={},
         )
-        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep(),
+        ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError):
                 await vault.get_credentials("ghost-guid")
@@ -283,13 +296,13 @@ class TestDaprCredentialVaultGetCredentials:
         # _try_fetch, not the original SecretStoreUnavailableError("secret_key_ref").
         assert "secret_key_ref" not in str(exc_info.value)
 
-    async def test_single_key_failure_summary_does_not_leak_ref_key_in_logs(
+    async def test_single_key_refusal_keeps_value_without_leaking_ref_key(
         self,
     ) -> None:
         """A definitive (non-cold-start) rejection during single-key probing
-        must not leak the raw ref-key in either the per-field DEBUG log or
-        the aggregated ERROR summary — mirrors credentials.agent's ref-key
-        hashing for the identical single-key-probe shape."""
+        of an agent-sourced config keeps the value (FND-4407 bridge: the store
+        is the customer's SDR store, and the probe can't tell a plain value
+        from a ref-key), and the WARNING log never leaks the raw ref-key."""
         ref_key = "SNOWFLAKE_PROD_PASSWORD"
         expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
         config = {"credentialSource": "agent", "password": ref_key}
@@ -306,20 +319,16 @@ class TestDaprCredentialVaultGetCredentials:
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
             patch(
-                "application_sdk.infrastructure._dapr.credential_vault.logger"
+                "application_sdk.infrastructure._single_key_probe.logger"
             ) as mock_logger,
         ):
             vault = self._make_vault(mock_client)
-            result = await vault.get_credentials("my-guid")
+            credentials = await vault.get_credentials("my-guid")
 
-        # Unresolved placeholder retained — mirrors the "not a secret" fallthrough.
-        assert result.get("password") == ref_key
+        assert credentials["password"] == ref_key  # kept as entered
 
         logged = " ".join(
-            str(arg)
-            for call in mock_logger.debug.call_args_list
-            + mock_logger.error.call_args_list
-            for arg in call.args
+            str(arg) for call in mock_logger.warning.call_args_list for arg in call.args
         )
         assert ref_key not in logged
         assert f"sha256:{expected_hash}" in logged
@@ -519,6 +528,53 @@ class TestDaprCredentialVaultColdStartRetry:
         assert result["host"] == "db.example.com"
         assert "password" not in result
 
+    async def test_absent_ref_key_logs_label_only_at_debug(self) -> None:
+        """FND-4279: an absent single-key probe is an expected answer, logged
+        at DEBUG with the hashed label only — no WARNING, no exc_info (the
+        exception's str() and chained httpx URL both carry the raw key)."""
+        ref_key = "SNOWFLAKE_PROD_PASSWORD"
+        expected_hash = hashlib.sha256(ref_key.encode()).hexdigest()[:8]
+        config = {"credentialSource": "agent", "password": ref_key}
+        req = httpx.Request("GET", f"http://localhost/v1.0/secrets/store/{ref_key}")
+        resp = httpx.Response(
+            500,
+            request=req,
+            json={
+                "errorCode": "ERR_SECRET_GET",
+                "message": f"failed getting secret with key {ref_key} from "
+                f"secret store secretstore: secret {ref_key} not found",
+            },
+        )
+        mock_client = _make_mock_dapr_client(
+            config_bytes=json.dumps(config).encode(), secret_data={}
+        )
+        mock_client.get_secret = AsyncMock(
+            side_effect=httpx.HTTPStatusError(
+                f"Server error for url {req.url}", request=req, response=resp
+            )
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            patch(
+                "application_sdk.infrastructure._dapr.credential_vault.logger"
+            ) as mock_logger,
+        ):
+            vault = self._make_vault(mock_client)
+            await vault.get_credentials("my-guid")
+
+        mock_logger.warning.assert_not_called()
+        absent_calls = [
+            call
+            for call in mock_logger.debug.call_args_list
+            if "definitively absent" in call.args[0]
+        ]
+        assert len(absent_calls) == 1
+        assert absent_calls[0].args[1] == f"sha256:{expected_hash}"
+        assert "exc_info" not in absent_calls[0].kwargs
+        every_call = mock_logger.method_calls
+        assert ref_key not in " ".join(str(c) for c in every_call)
+
 
 # ---------------------------------------------------------------------------
 # DaprCredentialVault._fetch_credential_config cold-start retry / classification
@@ -653,9 +709,10 @@ class TestFetchCredentialConfigColdStartRetry:
 
         with (
             patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
-            patch(
-                "application_sdk.infrastructure._dapr.http.asyncio.sleep", AsyncMock()
-            ),
+            private_stdlib(
+                "application_sdk.infrastructure._dapr.http", "asyncio"
+            ) as local_asyncio,
+            patch.object(local_asyncio, "sleep", AsyncMock()),
         ):
             vault = self._make_vault(mock_client)
             with pytest.raises(CredentialVaultError) as exc_info:
@@ -682,10 +739,8 @@ class TestGetLocalSecret:
             secret_store_name="secretstore",
         )
 
-    def test_happy_path_returns_secret_dict(self, tmp_path):
+    def test_happy_path_returns_secret_dict(self, tmp_path, monkeypatch):
         """Create secrets.json with a key, verify _get_local_secret returns it."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
@@ -696,71 +751,49 @@ class TestGetLocalSecret:
         secrets_file.write_text(json.dumps(secrets_data))
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("my-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("my-guid")
 
         assert result == {"username": "admin", "password": "secret"}
 
-    def test_missing_key_returns_empty_dict(self, tmp_path):
+    def test_missing_key_returns_empty_dict(self, tmp_path, monkeypatch):
         """Key not in secrets.json returns {}."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
         secrets_file.write_text(json.dumps({"other-guid": {"key": "val"}}))
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("nonexistent-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("nonexistent-guid")
 
         assert result == {}
 
-    def test_missing_file_returns_empty_dict(self, tmp_path):
+    def test_missing_file_returns_empty_dict(self, tmp_path, monkeypatch):
         """secrets.json doesn't exist returns {}."""
-        import os
-
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("any-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("any-guid")
 
         assert result == {}
 
-    def test_malformed_json_returns_empty_dict(self, tmp_path):
+    def test_malformed_json_returns_empty_dict(self, tmp_path, monkeypatch):
         """secrets.json has invalid JSON returns {}."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
         secrets_file.write_text("NOT VALID JSON {{{")
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            result = vault._get_local_secret("my-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        result = vault._get_local_secret("my-guid")
 
         assert result == {}
 
-    async def test_get_secret_uses_local_secret_in_local_env(self, tmp_path):
+    async def test_get_secret_uses_local_secret_in_local_env(
+        self, tmp_path, monkeypatch
+    ):
         """When DEPLOYMENT_NAME == LOCAL_ENVIRONMENT, _get_secret calls _get_local_secret."""
-        import os
-
         secrets_dir = tmp_path / "local" / "dapr" / "secrets"
         secrets_dir.mkdir(parents=True)
         secrets_file = secrets_dir / "secrets.json"
@@ -771,13 +804,9 @@ class TestGetLocalSecret:
         )
 
         vault = self._make_vault()
-        original_cwd = os.getcwd()
-        os.chdir(tmp_path)
-        try:
-            with patch("application_sdk.constants.DEPLOYMENT_NAME", "local"):
-                result = await vault._get_secret("my-guid")
-        finally:
-            os.chdir(original_cwd)
+        monkeypatch.chdir(tmp_path)
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "local"):
+            result = await vault._get_secret("my-guid")
 
         assert result == {"username": "local-user", "password": "local-pass"}
 
@@ -831,11 +860,11 @@ class TestSingleKeyProbeConcurrency:
 
     async def test_concurrency_is_bounded(self) -> None:
         """Fan-out is capped so a wide config can't burst a vault into
-        throttling — which Dapr reports indistinguishably from 'key absent'."""
+        throttling."""
         import asyncio
 
-        from application_sdk.infrastructure._dapr.credential_vault import (
-            _MAX_CONCURRENT_SINGLE_KEY_PROBES as CAP,
+        from application_sdk.infrastructure._single_key_probe import (
+            MAX_CONCURRENT_SINGLE_KEY_PROBES as CAP,
         )
 
         state = {"in_flight": 0, "peak": 0}
@@ -959,18 +988,210 @@ class TestSingleKeyProbeConcurrency:
         assert "sha256:" in str(err)
         assert err.cause is None
 
-    async def test_store_errors_still_fall_through_and_are_summarised(self) -> None:
-        """A genuine store error on one field stays non-fatal (it may simply
-        not be a secret), and the existing failure summary is preserved."""
+    async def test_throttle_on_one_field_keeps_the_value(self) -> None:
+        """FND-4407 bridge, SDK <= 3.49 behaviour: a throttle is a store
+        answer, so the field is kept and the resolved field still merges."""
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
+
+        async def _get_secret(value: str, *, log_label: str | None = None):
+            if value == "real-key":
+                return {"password": "resolved"}
+            raise SecretStoreTransientError(
+                "ThrottlingException", secret_name=value, retryable=True
+            )
+
+        config = {"a": "real-key", "b": "throttled-key"}
+
+        result = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+
+        assert result == {"password": "resolved"}
+
+    async def test_refusal_on_one_field_keeps_the_value(self) -> None:
+        """FND-4407 bridge on the SDR vault path. Single-key mode only runs
+        for agent-sourced configs, whose store is the customer's SDR store,
+        so a refused plain value is kept, exactly as on the agent_json path."""
         from application_sdk.infrastructure.secrets import SecretStoreError
 
         async def _get_secret(value: str, *, log_label: str | None = None):
             if value == "real-key":
                 return {"password": "resolved"}
-            raise SecretStoreError("vault denied", secret_name=value)
+            raise SecretStoreError("AccessDenied", secret_name=value, retryable=True)
 
-        config = {"a": "real-key", "b": "literal-value"}
+        config = {"a": "real-key", "b": "plain-value"}
 
-        collected = await self._vault(_get_secret)._fetch_single_key_secrets(config)
+        secrets = await self._vault(_get_secret)._fetch_single_key_secrets(config)
 
-        assert collected == {"password": "resolved"}
+        assert secrets == {"password": "resolved"}
+
+
+def test_outage_types_stay_importable_from_this_module() -> None:
+    """These shipped as importable names of ``credential_vault``; dropping the
+    re-export would turn an app's import into ``ImportError``
+    (docs/standards/symbols.md)."""
+    from application_sdk.errors.leaves import DaprSidecarUnreachableError
+    from application_sdk.infrastructure._dapr import credential_vault
+    from application_sdk.infrastructure.secrets import (
+        SecretStoreUnavailableError,
+        SecretStoreUnreachableError,
+    )
+
+    assert credential_vault.DaprSidecarUnreachableError is DaprSidecarUnreachableError
+    assert credential_vault.SecretStoreUnavailableError is SecretStoreUnavailableError
+    assert credential_vault.SecretStoreUnreachableError is SecretStoreUnreachableError
+
+
+class TestDaprCredentialVaultMissingConfigBlob:
+    """Some object-store bindings (Azure Blob among them) answer a GET for a
+    key that does not exist with HTTP 500 and a "not found" Dapr error body,
+    not a 200 with empty data. That is a missing credential config. It gets
+    a short re-read ladder of its own (a not-found can be transient) and then
+    fails with the real cause, rather than being retried for the whole
+    cold-start budget and reported as an unreachable sidecar."""
+
+    def _make_vault(self, mock_client: MagicMock) -> DaprCredentialVault:
+        return DaprCredentialVault(
+            mock_client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+
+    @pytest.mark.parametrize(
+        "dapr_message",
+        [
+            "error invoking output binding upstream-objectstore: blob not found",
+            "error invoking output binding upstream-objectstore: "
+            "BlobNotFound: The specified blob does not exist.",
+            "error invoking output binding upstream-objectstore: "
+            "NoSuchKey: The specified key does not exist.",
+            # The AWS S3 binding maps NoSuchKey to this text before it
+            # reaches the sidecar's error body.
+            "error invoking output binding upstream-objectstore: object not found",
+        ],
+    )
+    async def test_missing_credential_config_blob_is_not_retried_as_cold_start(
+        self, deterministic_dapr_cold_start_deadline, dapr_message: str
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(side_effect=_binding_500(dapr_message))
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep() as sleep,
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert "No credential config found" in str(exc_info.value)
+        # One read per ladder step, each answered at once: no cold-start retry.
+        assert mock_client.invoke_binding.await_count == 4
+        assert [c.args[0] for c in sleep.await_args_list] == [2.0, 5.0, 10.0]
+
+    async def test_missing_config_that_appears_within_the_ladder_resolves(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        config = {"credentialSource": "direct", "host": "db.example.com"}
+        mock_client = _make_mock_dapr_client(config_bytes=b"{}", secret_data={})
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=[
+                _binding_500("error invoking output binding: object not found"),
+                _binding_500("error invoking output binding: object not found"),
+                BindingResult(data=json.dumps(config).encode(), metadata={}),
+            ]
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep(),
+        ):
+            vault = self._make_vault(mock_client)
+            result = await vault.get_credentials("example-credential")
+
+        assert result["host"] == "db.example.com"
+        assert mock_client.invoke_binding.await_count == 3
+
+    async def test_missing_config_for_the_whole_ladder_reports_attempts(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=_binding_500("error invoking output binding: object not found")
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep(),
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        message = str(exc_info.value)
+        assert "No credential config found for GUID example-credential" in message
+        assert "not-found on 4 attempts over 17s" in message
+        assert isinstance(exc_info.value, CredentialConfigNotFoundError)
+        # Code-keyed consumers must see the same code as before the subtype.
+        assert exc_info.value.code == CredentialVaultError.code
+
+    async def test_empty_config_reply_is_not_reported_as_confirmed_absence(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        """A successful but empty reply is not the store saying "not found"."""
+        from application_sdk.infrastructure._dapr.http import BindingResult
+
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=[
+                _binding_500("error invoking output binding: object not found"),
+                BindingResult(data=b"", metadata={}),
+                _binding_500("error invoking output binding: object not found"),
+                _binding_500("error invoking output binding: object not found"),
+            ]
+        )
+
+        with (
+            patch("application_sdk.constants.DEPLOYMENT_NAME", "production"),
+            _vault_sleep(),
+        ):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert not isinstance(exc_info.value, CredentialConfigNotFoundError)
+        assert "empty reply within 4 attempts" in str(exc_info.value)
+
+    async def test_binding_500_without_not_found_is_still_retried(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=_binding_500(
+                "error invoking output binding: context deadline exceeded"
+            )
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert "No credential config found" not in str(exc_info.value)
+        assert mock_client.invoke_binding.await_count > 1
+
+    async def test_connection_refused_on_config_fetch_is_still_retried(
+        self, deterministic_dapr_cold_start_deadline
+    ) -> None:
+        mock_client = MagicMock()
+        mock_client.invoke_binding = AsyncMock(
+            side_effect=httpx.ConnectError("all connection attempts failed")
+        )
+
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            with pytest.raises(CredentialVaultError) as exc_info:
+                await vault.get_credentials("example-credential")
+
+        assert "No credential config found" not in str(exc_info.value)
+        assert mock_client.invoke_binding.await_count > 1

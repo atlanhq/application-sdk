@@ -1,13 +1,15 @@
 """Unit tests for env-var loaders in :mod:`application_sdk.constants`."""
 
-import importlib
-
 import pytest
 
 import application_sdk.constants as constants
 from application_sdk.constants import (
+    _load_application_version,
+    _load_commit_sha,
     _load_dirty_restart_max_wait_seconds,
     _load_oom_restart_check,
+    _load_storage_lock_wait_progress_seconds,
+    _load_use_server_side_cursor,
     _load_worker_liveness_max_idle_seconds,
 )
 
@@ -48,21 +50,16 @@ class TestUseServerSideCursor:
     """Cover the ``ATLAN_SQL_USE_SERVER_SIDE_CURSOR`` opt-out.
 
     The flag is a module-level constant evaluated at import time, so each case
-    reloads :mod:`application_sdk.constants` under a patched environment.
+    calls its loader under a patched environment. Reloading the module instead
+    would re-create every class and enum in it for the rest of the xdist worker.
     """
 
-    @pytest.fixture(autouse=True)
-    def _restore_constants(self):
-        # Leave the module as the rest of the suite expects to find it.
-        yield
-        importlib.reload(constants)
-
-    def _reload(self) -> bool:
-        return importlib.reload(constants).USE_SERVER_SIDE_CURSOR
+    def _load(self) -> bool:
+        return _load_use_server_side_cursor()
 
     def test_default_enabled_when_unset(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", raising=False)
-        assert self._reload() is True
+        assert self._load() is True
 
     @pytest.mark.parametrize("value", ["false", "False", "FALSE", " false ", "0", "no"])
     def test_opt_out_disables(self, monkeypatch: pytest.MonkeyPatch, value: str):
@@ -70,33 +67,23 @@ class TestUseServerSideCursor:
         # including "false" — truthy, so the documented opt-out could not
         # disable server-side cursors.
         monkeypatch.setenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", value)
-        assert self._reload() is False
+        assert self._load() is False
 
     @pytest.mark.parametrize("value", ["true", "True", "TRUE", " true "])
     def test_explicit_true_enables(self, monkeypatch: pytest.MonkeyPatch, value: str):
         monkeypatch.setenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", value)
-        assert self._reload() is True
+        assert self._load() is True
 
     def test_empty_string_still_disables(self, monkeypatch: pytest.MonkeyPatch):
         # The only opt-out that worked before the fix must keep working.
         monkeypatch.setenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "")
-        assert self._reload() is False
+        assert self._load() is False
 
-    def test_sql_client_default_follows_the_constant(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_sql_client_default_is_the_constant(self):
         """BaseSQLClient binds the constant as its default at import time."""
-        monkeypatch.setenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "false")
-        importlib.reload(constants)
+        from application_sdk.clients.sql import BaseSQLClient
 
-        import application_sdk.clients.sql as sql_client_mod
-
-        try:
-            reloaded = importlib.reload(sql_client_mod)
-            assert reloaded.BaseSQLClient.use_server_side_cursor is False
-        finally:
-            importlib.reload(constants)
-            importlib.reload(sql_client_mod)
+        assert BaseSQLClient.use_server_side_cursor is constants.USE_SERVER_SIDE_CURSOR
 
 
 class TestStorageLockWaitProgressSeconds:
@@ -108,16 +95,11 @@ class TestStorageLockWaitProgressSeconds:
     stall watchdog. The interval must therefore stay under the watchdog budget
     an operator configured — which is why the default is capped at a quarter of
     ``ATLAN_MAX_NO_PROGRESS_SECONDS`` rather than a bare 30. Evaluated at import
-    time, so each case reloads the module under a patched environment.
+    time, so each case calls the loader under a patched environment.
     (CONNECT-1126)
     """
 
-    @pytest.fixture(autouse=True)
-    def _restore_constants(self):
-        yield
-        importlib.reload(constants)
-
-    def _reload(self, monkeypatch: pytest.MonkeyPatch, **env: str | None) -> float:
+    def _load(self, monkeypatch: pytest.MonkeyPatch, **env: str | None) -> float:
         for name in (
             "ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS",
             "ATLAN_MAX_NO_PROGRESS_SECONDS",
@@ -126,18 +108,18 @@ class TestStorageLockWaitProgressSeconds:
         for name, value in env.items():
             if value is not None:
                 monkeypatch.setenv(name, value)
-        return importlib.reload(constants).STORAGE_LOCK_WAIT_PROGRESS_SECONDS
+        return _load_storage_lock_wait_progress_seconds()
 
     def test_default_when_unset(self, monkeypatch: pytest.MonkeyPatch):
         # 30 sits well under a quarter of the 900s default budget, so the cap
         # is inactive and the documented default survives.
-        assert self._reload(monkeypatch) == 30.0
+        assert self._load(monkeypatch) == 30.0
 
     def test_custom_value_under_the_cap_is_honoured(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         assert (
-            self._reload(monkeypatch, ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS="10")
+            self._load(monkeypatch, ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS="10")
             == 10.0
         )
 
@@ -147,13 +129,13 @@ class TestStorageLockWaitProgressSeconds:
         # The invariant this constant exists for: an operator who lowers the
         # budget below the interval would otherwise get the exact failure the
         # marking prevents — a correctly-waiting activity killed as stalled.
-        assert self._reload(monkeypatch, ATLAN_MAX_NO_PROGRESS_SECONDS="20") == 5.0
+        assert self._load(monkeypatch, ATLAN_MAX_NO_PROGRESS_SECONDS="20") == 5.0
 
     def test_explicit_value_above_the_cap_is_clamped(
         self, monkeypatch: pytest.MonkeyPatch
     ):
         assert (
-            self._reload(
+            self._load(
                 monkeypatch,
                 ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS="600",
                 ATLAN_MAX_NO_PROGRESS_SECONDS="120",
@@ -168,7 +150,7 @@ class TestStorageLockWaitProgressSeconds:
         # A zero or negative timeout on the guard's ``asyncio.wait_for`` would
         # turn the queued wait into a busy spin.
         assert (
-            self._reload(monkeypatch, ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS=value)
+            self._load(monkeypatch, ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS=value)
             == 1.0
         )
 
@@ -177,7 +159,7 @@ class TestStorageLockWaitProgressSeconds:
     ):
         # The floor wins over the cap: better a waiter that marks too often
         # than one that spins.
-        assert self._reload(monkeypatch, ATLAN_MAX_NO_PROGRESS_SECONDS="2") == 1.0
+        assert self._load(monkeypatch, ATLAN_MAX_NO_PROGRESS_SECONDS="2") == 1.0
 
     async def test_a_contended_guard_marks_progress_at_the_interval(
         self, monkeypatch: pytest.MonkeyPatch
@@ -306,26 +288,17 @@ class TestLoadBuildInfo:
         p.write_text('{"app_version": "1.4.0", "commit_sha": "abc1234"}')
         monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(p))
         monkeypatch.setenv("ATLAN_APPLICATION_VERSION", "1.3.0")
-        importlib.reload(constants)
-        try:
-            assert constants.APPLICATION_VERSION == "1.4.0"
-            assert constants.COMMIT_SHA == "abc1234"
-        finally:
-            monkeypatch.delenv("ATLAN_BUILD_INFO_PATH")
-            monkeypatch.delenv("ATLAN_APPLICATION_VERSION")
-            importlib.reload(constants)
+        info = constants.load_build_info()
+        assert _load_application_version(info) == "1.4.0"
+        assert _load_commit_sha(info) == "abc1234"
 
     def test_env_fallback_when_no_file(self, tmp_path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("ATLAN_BUILD_INFO_PATH", str(tmp_path / "absent.json"))
         monkeypatch.setenv("ATLAN_APPLICATION_VERSION", "1.3.0")
-        importlib.reload(constants)
-        try:
-            assert constants.APPLICATION_VERSION == "1.3.0"
-            assert constants.COMMIT_SHA == ""
-        finally:
-            monkeypatch.delenv("ATLAN_BUILD_INFO_PATH")
-            monkeypatch.delenv("ATLAN_APPLICATION_VERSION")
-            importlib.reload(constants)
+        monkeypatch.delenv("ATLAN_COMMIT_SHA", raising=False)
+        info = constants.load_build_info()
+        assert _load_application_version(info) == "1.3.0"
+        assert _load_commit_sha(info) == ""
 
 
 class TestLoadOomRestartCheck:

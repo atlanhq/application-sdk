@@ -59,7 +59,9 @@ from __future__ import annotations
 
 import base64
 import re
+import socket
 import ssl
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -101,6 +103,9 @@ _WILDCARD_HOSTS = frozenset({"0.0.0.0", ""})  # noqa: S104 — compared against,
 _METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 _CONNECTION_TIMEOUT_SECONDS = 5.0
 _JOIN_GRACE_SECONDS = 5.0
+# How often the accept loop checks for shutdown(). serve_forever's default of
+# 0.5s is what stop() waited out on every call; nothing else depends on it.
+_SHUTDOWN_POLL_SECONDS = 0.05
 _MAX_BODY_BYTES = 64 * 1024 * 1024
 _MAX_CHUNK_LINE_BYTES = 8192
 _RESERVED_RESPONSE_HEADERS = frozenset(
@@ -316,17 +321,32 @@ class _FakeSourceServer(ThreadingHTTPServer):
     """
 
     daemon_threads = True
+    # On Windows, SO_REUSEADDR (HTTPServer's default) lets a second socket bind
+    # a port that is already listening, and the kernel then splits incoming
+    # connections between the two. A fake on a shared CI box — xdist workers
+    # side by side — could receive another process's connections, or lose its
+    # own: a TLS client handed to a plain-HTTP peer dies in do_handshake with
+    # WinError 10053. server_bind claims the port with SO_EXCLUSIVEADDRUSE
+    # instead, which Windows refuses to combine with SO_REUSEADDR.
+    allow_reuse_address = sys.platform != "win32"
 
     def __init__(
         self,
         *args: Any,
         handshake_timeout: float | None = None,
+        thread_name: str = "fake-source",
         **kwargs: Any,
     ) -> None:
         self._handler_threads: set[threading.Thread] = set()
         self._handler_lock = threading.Lock()
         self.handshake_timeout = handshake_timeout
+        self.thread_name = thread_name
         super().__init__(*args, **kwargs)
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def get_request(self) -> tuple[Any, Any]:
         """Accept one connection, then handshake TLS under ``handshake_timeout``.
@@ -353,6 +373,9 @@ class _FakeSourceServer(ThreadingHTTPServer):
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         current = threading.current_thread()
+        # Named after the source, so a caller can tell this fake's threads from
+        # any other thread in the process.
+        current.name = f"{self.thread_name}-handler"
         with self._handler_lock:
             self._handler_threads.add(current)
         try:
@@ -573,6 +596,7 @@ class HttpFakeSource:
             handshake_timeout=(
                 self.connection_timeout if self.ssl_context is not None else None
             ),
+            thread_name=self.name,
         )
         try:
             if self.ssl_context is not None:
@@ -591,6 +615,7 @@ class HttpFakeSource:
                 )
             thread = threading.Thread(
                 target=server.serve_forever,
+                kwargs={"poll_interval": _SHUTDOWN_POLL_SECONDS},
                 name=f"{self.name}-server",
                 daemon=True,
             )

@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import warnings
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -16,6 +17,7 @@ from hypothesis import strategies as st
 from loguru import logger
 
 from application_sdk.constants import APPLICATION_NAME, DEPLOYMENT_NAME
+from application_sdk.observability.console_sink import flush_console_logs
 from application_sdk.observability.context import (
     ExecutionContext,
     set_execution_context,
@@ -33,12 +35,14 @@ from application_sdk.observability.logger_adaptor import (
     _has_remote_otlp_endpoint,
     _make_log_record_dict,
     _normalize_log_extra_value,
+    _redact_exception_records,
     get_logger,
 )
 from application_sdk.testing.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -79,7 +83,12 @@ def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
         },
     ):
-        yield AtlanLoggerAdapter("test_logger")
+        try:
+            yield AtlanLoggerAdapter("test_logger")
+        finally:
+            # Console lines are written by a background thread. Wait for them
+            # so tests that read capsys after the block see every line.
+            flush_console_logs()
 
 
 @pytest.fixture
@@ -727,6 +736,78 @@ class TestLogSinkFanOut:
 
         messages = [c.args[0]["message"] for c in mock_add_record.call_args_list]
         assert messages == ["from a thread-pool activity"]
+
+
+@contextmanager
+def _store_sink_adapters() -> (
+    Generator[tuple[AtlanLoggerAdapter, AtlanLoggerAdapter], None, None]
+):
+    """Yield ``(sink_owner, other)`` with the real loguru store sink registered.
+
+    ``sink_owner`` is constructed first, so loguru's ``_log_sink`` is bound to
+    it, as ``default_logger`` is in production. ``other`` is any later
+    ``get_logger(name)`` adapter. The periodic flush is stubbed out, so the
+    owner's buffer holds exactly what the sink appended.
+    """
+    with (
+        mock.patch(
+            "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
+            True,
+        ),
+        mock.patch.object(AtlanLoggerAdapter, "_spawn_flush_thread"),
+        mock.patch.object(
+            AtlanLoggerAdapter, "_periodic_flush", new_callable=mock.AsyncMock
+        ),
+        create_logger_adapter() as owner,
+    ):
+        owner.logger_provider = None
+        other = get_logger("app.module")
+        try:
+            yield owner, other
+        finally:
+            logger.remove()
+            AtlanLoggerAdapter._reset_for_testing()
+
+
+class TestOffloadedLogsReachSinkOwner:
+    """Lines logged from offloaded code reach the store buffer, and ``error()``
+    on any adapter flushes it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_run_in_thread_log_lands_in_sink_owner_buffer(self):
+        """A line logged inside ``run_in_thread`` is buffered for upload.
+
+        ``run_in_thread`` targets run on a pool thread with no event loop, the
+        case where loguru skipped the old coroutine sink.
+        """
+        from application_sdk._runtime.offload import run_in_thread
+
+        with _store_sink_adapters() as (owner, other):
+            await run_in_thread(other.warning, "offloaded line")
+
+            messages = [r["message"] for r in owner._buffer]
+
+        assert messages == ["offloaded line"]
+
+    def test_error_on_other_adapter_flushes_sink_owner_buffer(self):
+        """``error()`` drains the buffer records actually land in.
+
+        Called from a thread with no running loop so ``_sync_flush`` runs the
+        flush to completion before returning.
+        """
+        with _store_sink_adapters() as (owner, other):
+            with mock.patch.object(
+                owner, "_flush_records", new_callable=mock.AsyncMock
+            ) as flush:
+                other.info("context line")
+                other.error("failure line")
+
+            flushed = [r["message"] for c in flush.await_args_list for r in c.args[0]]
+            remaining = list(owner._buffer)
+
+        assert flushed == ["context line", "failure line"]
+        assert remaining == []
 
 
 class TestCorrelationContext:
@@ -1491,9 +1572,15 @@ class TestPython314EventLoopCompat:
                 "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
             ):
-                with mock.patch(
-                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
-                    side_effect=RuntimeError("no running event loop"),
+                with (
+                    private_stdlib(
+                        "application_sdk.observability.logger_adaptor", "asyncio"
+                    ) as local_asyncio,
+                    mock.patch.object(
+                        local_asyncio,
+                        "get_running_loop",
+                        side_effect=RuntimeError("no running event loop"),
+                    ),
                 ):
                     with mock.patch.object(
                         AtlanLoggerAdapter, "_spawn_flush_thread"
@@ -1520,9 +1607,15 @@ class TestPython314EventLoopCompat:
                 "application_sdk.observability.logger_adaptor.ENABLE_OBSERVABILITY_STORE_SINK",
                 True,
             ):
-                with mock.patch(
-                    "application_sdk.observability.logger_adaptor.asyncio.get_running_loop",
-                    return_value=mock_loop,
+                with (
+                    private_stdlib(
+                        "application_sdk.observability.logger_adaptor", "asyncio"
+                    ) as local_asyncio,
+                    mock.patch.object(
+                        local_asyncio,
+                        "get_running_loop",
+                        return_value=mock_loop,
+                    ),
                 ):
                     with mock.patch.object(
                         AtlanLoggerAdapter, "_spawn_flush_thread"
@@ -1665,6 +1758,20 @@ class TestExtractExceptionAttributes:
         assert attrs["exception.type"] == "builtins.ValueError"
         assert attrs["exception.message"] == "boom"
         assert "Traceback" in attrs["exception.stacktrace"]
+
+    def test_temporal_error_message_drops_the_type_tag(self):
+        """Temporal's ``str()`` is ``"<type>: <message>"``. ``exception.message``
+        carries the message alone, the same text the Temporal UI shows."""
+        from temporalio.exceptions import ApplicationError
+
+        try:
+            raise ApplicationError(
+                "Preflight failed: bad secret", type="PreflightFailed"
+            )
+        except ApplicationError:
+            t, v, tb = sys.exc_info()
+        attrs = _extract_exception_attributes(mock.Mock(type=t, value=v, traceback=tb))
+        assert attrs["exception.message"] == "Preflight failed: bad secret"
 
 
 class TestFormatExceptionStacktrace:
@@ -3214,8 +3321,68 @@ class TestOtelTraceContextOnLogRecord:
         assert log_record.span_id == 0
 
 
+def _loguru_message(logger_name: str) -> mock.MagicMock:
+    """Minimal loguru message object for driving ``_log_sink`` directly."""
+    level = mock.MagicMock()
+    level.name = "WARNING"
+    message = mock.MagicMock()
+    message.record = {
+        "time": datetime.now(),
+        "level": level,
+        "extra": {"logger_name": logger_name},
+        "message": "exporter self-log",
+        "file": mock.MagicMock(path="exporter.py"),
+        "line": 1,
+        "function": "export",
+    }
+    return message
+
+
 class TestOtlpShutdownFlush:
     """CNCT-107: flush/shutdown the OTLP provider on process exit."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh_otlp_flusher(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A test that abandons a blocked flush thread must not make the next
+        # test's flush wait on it.
+        from application_sdk.observability import logger_adaptor as la
+
+        monkeypatch.setattr(la, "_otlp_flusher", None)
+
+    def test_repeated_flushes_keep_one_thread_against_a_stuck_exporter(self):
+        """Against an unreachable collector each flush is abandoned at its
+        bound while its thread keeps exporting. Repeated flushes (one per
+        unhandled loop exception) must not start a thread each."""
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.flush_storm_test")
+        release = threading.Event()
+        provider = mock.MagicMock()
+        provider.force_flush.side_effect = lambda **_: release.wait()
+        adapter.logger_provider = provider
+        # Count only threads this test starts; an earlier test's abandoned
+        # flush may still be winding down.
+        before = set(threading.enumerate())
+        try:
+            for _ in range(10):
+                la.flush_otlp_logs(timeout_millis=20)
+            flushers = [
+                t
+                for t in threading.enumerate()
+                if t.name == "otlp-log-flush" and t not in before
+            ]
+            assert len(flushers) == 1
+            assert provider.force_flush.call_count == 1
+
+            # Once the stuck flush finishes, the next call flushes again
+            # rather than treating the finished thread as covering it.
+            release.set()
+            flushers[0].join(5)
+            la.flush_otlp_logs(timeout_millis=2000)
+            assert provider.force_flush.call_count == 2
+        finally:
+            release.set()
+            adapter.logger_provider = None
 
     def test_flush_otlp_logs_calls_force_flush_on_providers(self):
         from application_sdk.observability import logger_adaptor as la
@@ -3271,6 +3438,153 @@ class TestOtlpShutdownFlush:
             adapter.logger_provider = None
             la._otlp_shutdown_done.clear()
 
+    def test_flush_returns_within_bound_when_force_flush_blocks(self):
+        """OTel 1.45.1 ``BatchProcessor.force_flush`` ignores ``timeout_millis``
+        (opentelemetry-python#4568), so ``flush_otlp_logs`` must enforce it.
+
+        ``force_flush`` here blocks until the test releases it, and the test
+        releases it only after the flush has returned, so a flush that waited
+        on it could not return at all. The join bound only decides how long
+        that regression takes to fail."""
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.flush_block_test")
+        release = threading.Event()
+        provider = mock.MagicMock()
+        provider.force_flush.side_effect = lambda **_: release.wait()
+        adapter.logger_provider = provider
+        # join() swallows the target's exception, so the target records it.
+        raised: list[BaseException] = []
+
+        def _flush() -> None:
+            try:
+                la.flush_otlp_logs(timeout_millis=200)
+            except BaseException as e:
+                raised.append(e)
+
+        flusher = threading.Thread(target=_flush, daemon=True)
+        try:
+            flusher.start()
+            flusher.join(30)
+            assert not flusher.is_alive(), "flush waited on a blocked force_flush"
+            assert raised == [], f"flush raised instead of returning: {raised!r}"
+            provider.force_flush.assert_called_once_with(timeout_millis=200)
+        finally:
+            release.set()
+            adapter.logger_provider = None
+
+    def test_exporter_self_logs_do_not_feed_back_into_otlp_queue(self):
+        """FND-4228: the exporter's own failure logs must not re-enter the queue.
+
+        Dead collector: every export logs on the gRPC exporter's stdlib logger,
+        which the root InterceptHandler forwards to loguru and the sync
+        ``_log_sink``. Without the guard each line is emitted back into the
+        queue ``force_flush`` is draining, so it never empties.
+        """
+        from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs.export import (
+            BatchLogRecordProcessor,
+            LogExportResult,
+            LogRecordExporter,
+        )
+
+        from application_sdk.observability import logger_adaptor as la
+
+        exporter_logger = logging.getLogger(
+            "opentelemetry.exporter.otlp.proto.grpc.exporter"
+        )
+
+        # Mirrors OTLPLogExporter.export against a dead collector: a retry
+        # warning, then the final error. Alternating the two is what gets them
+        # past the DuplicateFilter OTel attaches to this logger.
+        class _DeadCollectorExporter(LogRecordExporter):
+            def export(self, batch):
+                exporter_logger.warning(
+                    "Transient error %s encountered while exporting %s to %s, retrying in %.2fs.",
+                    "StatusCode.UNAVAILABLE",
+                    "logs",
+                    "collector:4317",
+                    0.0,
+                )
+                exporter_logger.error(
+                    "Failed to export %s to %s, error code: %s",
+                    "logs",
+                    "collector:4317",
+                    "StatusCode.UNAVAILABLE",
+                )
+                return LogExportResult.FAILURE
+
+            def shutdown(self):
+                pass
+
+            def force_flush(self, timeout_millis=30000):
+                return True
+
+        provider = LoggerProvider(shutdown_on_exit=False)
+        processor = BatchLogRecordProcessor(
+            _DeadCollectorExporter(),
+            schedule_delay_millis=60_000,
+            max_export_batch_size=10,
+        )
+        provider.add_log_record_processor(processor)
+
+        adapter = get_logger("app.otlp_feedback_test")
+        adapter.logger_provider = provider
+        handler_id = logger.add(adapter._log_sink, level="DEBUG")
+        # Pin the real stdlib→loguru bridge on the exporter's logger so the
+        # test does not depend on what pytest left on the root logger.
+        saved = (exporter_logger.handlers[:], exporter_logger.propagate)
+        exporter_logger.handlers = [la._intercept_handler]
+        exporter_logger.propagate = False
+
+        sent_names: list[str] = []
+        real_send = adapter._send_to_otel
+
+        def _spy(record):
+            sent_names.append(record.get("logger_name", ""))
+            real_send(record)
+
+        try:
+            with (
+                mock.patch.object(la, "ENABLE_OBSERVABILITY_STORE_SINK", False),
+                mock.patch.object(adapter, "_send_to_otel", side_effect=_spy),
+            ):
+                for i in range(50):
+                    adapter.info("queued record %d", i)
+                la.flush_otlp_logs(timeout_millis=2000)
+
+            assert not [n for n in sent_names if n.startswith("opentelemetry")]
+            assert len(processor._batch_processor._queue) == 0
+        finally:
+            logger.remove(handler_id)
+            exporter_logger.handlers, exporter_logger.propagate = saved
+            adapter.logger_provider = None
+            # Short timeout: on a regression the abandoned flush thread is
+            # still looping, and only shutdown's timeout stops it.
+            processor._batch_processor.shutdown(timeout_millis=500)
+
+    def test_log_sink_keeps_otel_self_logs_on_other_targets(self):
+        """Guarded records skip OTLP only; the object-store sink still gets them."""
+        from application_sdk.observability import logger_adaptor as la
+
+        adapter = get_logger("app.otlp_guard_targets_test")
+        adapter.logger_provider = mock.MagicMock()
+        try:
+            with (
+                mock.patch.object(la, "ENABLE_OBSERVABILITY_STORE_SINK", True),
+                mock.patch.object(adapter, "add_record") as add_record,
+                mock.patch.object(adapter, "_send_to_otel") as send,
+            ):
+                for name in ("opentelemetry", "opentelemetry.sdk._shared_internal"):
+                    adapter._log_sink(_loguru_message(name))
+                send.assert_not_called()
+                assert add_record.call_count == 2
+
+                adapter._log_sink(_loguru_message("opentelemetry_lookalike.app"))
+                send.assert_called_once()
+        finally:
+            adapter.logger_provider = None
+
 
 # loguru annotates each traceback frame with the values of the names on its source
 # line, so the canary has to be passed to the failing call to be rendered at all.
@@ -3287,7 +3601,9 @@ def _explode(payload):
 
 
 def _raise():
-    creds = {"client_secret": CANARY}
+    # Under a non-secret key: ``client_secret`` is masked by redact_secrets
+    # even with diagnose on, which would make the enabled control vacuous.
+    creds = {"client_id": CANARY}
     _explode(creds)
 
 
@@ -3344,6 +3660,7 @@ class TestDiagnoseGating:
             text=True,
             env=env,
             cwd=str(Path(__file__).resolve().parents[3]),
+            timeout=120,
         )
         assert "RuntimeError" in result.stderr, (
             f"probe never logged the exception:\nstdout={result.stdout}\n"
@@ -3405,3 +3722,164 @@ def test_apply_atlan_context_imports_nothing_at_log_time() -> None:
         _correlation_ctx.reset(token)
 
     assert kwargs["correlation_id"] == "corr-123"
+
+
+# --- FND-4149: exceptions leave the adaptor redacted, on every sink ---
+
+
+def _raise_with_url_in_source_and_cause() -> None:
+    """The raise line holds a literal URL, and the cause's message quotes one."""
+    try:
+        raise RuntimeError("transport refused https://h.example.com/q?apikey=FAKEK1")
+    except RuntimeError as inner:
+        raise ValueError(
+            "fetch https://svc:FAKEPW2@h.example.com/p?page=2#token=FAKEF3"
+        ) from inner
+
+
+def _captured_exc_info() -> tuple[Any, Any, Any]:
+    try:
+        _raise_with_url_in_source_and_cause()
+    except ValueError:
+        return sys.exc_info()
+    raise AssertionError("unreachable")
+
+
+_FAKE_SECRETS = ("FAKEK1", "FAKEPW2", "FAKEF3")
+
+
+def test_otel_exception_attributes_are_redacted():
+    """``exception.message`` and ``exception.stacktrace`` (which carries the
+    chained cause and the source lines) are redacted before export."""
+    exc_type, exc_value, exc_tb = _captured_exc_info()
+    attrs = _extract_exception_attributes(
+        mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb)
+    )
+    for secret in _FAKE_SECRETS:
+        assert secret not in attrs["exception.message"]
+        assert secret not in attrs["exception.stacktrace"]
+    assert attrs["exception.message"] == (
+        "fetch https://***@h.example.com/p?page=2#***"
+    )
+    assert "?apikey=***" in attrs["exception.stacktrace"]
+    # Frames are kept: redaction is not a substitute for the traceback.
+    assert "_raise_with_url_in_source_and_cause" in attrs["exception.stacktrace"]
+
+
+@pytest.mark.parametrize("diagnose", [False, True])
+def test_console_sink_renders_exceptions_redacted(diagnose: bool):
+    """loguru renders the traceback itself, so redaction must run on the
+    finished line. With ``diagnose`` on, the annotated values are covered too,
+    for the shapes ``redact_secrets`` knows."""
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="{message}\n{exception}",
+        diagnose=diagnose,
+        backtrace=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error("request failed")
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in _FAKE_SECRETS:
+        assert secret not in line
+    assert "request failed" in line
+    assert "_raise_with_url_in_source_and_cause" in line
+
+
+def test_colorized_console_sink_renders_exceptions_redacted():
+    """``LOG_LEVEL=DEBUG`` colorizes the line: a colour code glued to a URL at
+    the start of the message must not hide it from redaction."""
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="<level>{message}</level>\n{exception}",
+        colorize=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error(
+            "https://h.example.com/p?x_custom=FAKEC4 failed"
+        )
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in (*_FAKE_SECRETS, "FAKEC4"):
+        assert secret not in line
+    assert "x_custom=***" in line
+
+
+def test_console_sink_passes_records_without_an_exception_through():
+    """No exception, no redaction: the per-line cost stays one lookup."""
+    lines: list[Any] = []
+    sink_id = logger.add(_redact_exception_records(lines.append), format="{message}")
+    try:
+        logger.info("see https://h.example.com/p?page=2")
+    finally:
+        logger.remove(sink_id)
+    assert str(lines[0]).strip() == "see https://h.example.com/p?page=2"
+
+
+# --- FND-4153: a transport error quoting request headers leaves masked ---
+
+
+def _raise_with_request_headers() -> None:
+    """A custom retry transport that quotes the request it gave up on."""
+    raise ConnectionError(
+        "gave up after 3 attempts\n"
+        "Authorization: Bearer FAKEJWT.h4.s1g\n"
+        "Cookie: session=FAKESESS; theme=dark\n"
+        "headers={'Authorization': 'Bearer FAKEJWT2', 'Accept': '*/*'}"
+    )
+
+
+def _captured_header_exc_info() -> tuple[Any, Any, Any]:
+    try:
+        _raise_with_request_headers()
+    except ConnectionError:
+        return sys.exc_info()
+    raise AssertionError("unreachable")
+
+
+_FAKE_HEADER_SECRETS = ("FAKEJWT", "FAKESESS", "FAKEJWT2")
+
+
+def test_otel_exception_attributes_mask_request_headers():
+    exc_type, exc_value, exc_tb = _captured_header_exc_info()
+    attrs = _extract_exception_attributes(
+        mock.Mock(type=exc_type, value=exc_value, traceback=exc_tb)
+    )
+    for secret in _FAKE_HEADER_SECRETS:
+        assert secret not in attrs["exception.message"]
+        assert secret not in attrs["exception.stacktrace"]
+    assert attrs["exception.message"] == (
+        "gave up after 3 attempts\n"
+        "Authorization: Bearer ***\n"
+        "Cookie: ***\n"
+        "headers={'Authorization': 'Bearer ***', 'Accept': '*/*'}"
+    )
+    assert "_raise_with_request_headers" in attrs["exception.stacktrace"]
+
+
+@pytest.mark.parametrize("diagnose", [False, True])
+def test_console_sink_masks_request_headers(diagnose: bool):
+    lines: list[str] = []
+    sink_id = logger.add(
+        _redact_exception_records(lines.append),
+        format="{message}\n{exception}",
+        diagnose=diagnose,
+        backtrace=True,
+    )
+    try:
+        exc_type, exc_value, exc_tb = _captured_header_exc_info()
+        logger.opt(exception=(exc_type, exc_value, exc_tb)).error("request failed")
+    finally:
+        logger.remove(sink_id)
+    (line,) = lines
+    for secret in _FAKE_HEADER_SECRETS:
+        assert secret not in line
+    assert "Authorization: Bearer ***" in line
+    assert "_raise_with_request_headers" in line

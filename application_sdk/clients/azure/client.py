@@ -32,7 +32,6 @@ Example:
 """
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from azure.core.credentials import TokenCredential
@@ -51,6 +50,15 @@ from application_sdk.errors import AppError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+#: Upper bound on the credential's synchronous close(). It only tears down the
+#: credential's HTTP session, but it runs in a thread, and an unbounded wait
+#: would let a stuck transport hang ``close()`` and every context-manager exit.
+_CREDENTIAL_CLOSE_TIMEOUT_SECONDS = 10.0
+
+_CLOSED_DURING_LOAD = (
+    "Azure client was closed while loading; instantiate a new AzureClient"
+)
 
 
 class ServiceHealth(BaseModel):
@@ -79,6 +87,30 @@ class HealthStatus(BaseModel):
     overall_health: bool
 
 
+async def _close_credential(credential: object) -> None:
+    """Close *credential*'s transport, bounded, without blocking the loop.
+
+    The sync credential's ``close()`` runs in a thread. On timeout the wait is
+    abandoned (the thread keeps running and is tracked by the offload ledger as
+    stranded) so client teardown always finishes.
+    """
+    close = getattr(credential, "close", None)
+    if not callable(close):
+        return
+    try:
+        async with asyncio.timeout(_CREDENTIAL_CLOSE_TIMEOUT_SECONDS):
+            await run_in_thread(close)
+    except TimeoutError:
+        logger.warning(
+            "Azure credential close did not finish within %.0fs; abandoning the "
+            "wait, so its HTTP transport may stay open until the thread ends",
+            _CREDENTIAL_CLOSE_TIMEOUT_SECONDS,
+            exc_info=True,
+        )
+    except Exception:
+        logger.warning("Error closing Azure credential", exc_info=True)
+
+
 class AzureClient(ClientInterface):
     """
     Main Azure client for the application-sdk framework.
@@ -93,7 +125,7 @@ class AzureClient(ClientInterface):
         credential (DefaultAzureCredential): Azure credential instance
         auth_provider (AzureAuthProvider): Authentication provider instance
         _services (Dict[str, Any]): Cache of service clients
-        _executor (ThreadPoolExecutor): Thread pool for async operations
+        _closed (bool): Whether close() has run; a closed client cannot be reloaded
         _connection_health (bool): Connection health status
     """
 
@@ -109,7 +141,9 @@ class AzureClient(ClientInterface):
         Args:
             credentials (Optional[Dict[str, Any]]): Azure Service Principal credentials.
                 Must include tenant_id, client_id, and client_secret.
-            max_workers (int): Maximum number of worker threads for async operations.
+            max_workers (int): Ignored. The client never used its own thread
+                pool (blocking SDK calls go through ``run_in_thread``); kept so
+                existing callers that pass it keep working.
             **kwargs: Additional keyword arguments passed to service clients.
         """
         self.credentials = credentials or {}
@@ -117,9 +151,11 @@ class AzureClient(ClientInterface):
         self.credential: TokenCredential | None = None
         self.auth_provider = AzureAuthProvider()
         self._services: dict[str, Any] = {}
-        self._executor: ThreadPoolExecutor | None = ThreadPoolExecutor(
-            max_workers=max_workers
-        )
+        self._closed = False
+        # Strong reference to a close() the sync ``__exit__`` scheduled on a
+        # running loop; the loop holds tasks weakly, so an unreferenced one
+        # can be garbage-collected before it runs.
+        self._close_task: asyncio.Task[None] | None = None
         self._connection_health = False
         self._kwargs = kwargs
 
@@ -139,7 +175,7 @@ class AzureClient(ClientInterface):
         if credentials:
             self.credentials = credentials
 
-        if self._executor is None:
+        if self._closed:
             raise AzureClientAuthError(
                 message="Azure client has been closed; instantiate a new AzureClient",
             )
@@ -176,13 +212,23 @@ class AzureClient(ClientInterface):
                 self.resolved_credentials = self.credentials
 
             # Create Azure credential using Service Principal authentication
-            self.credential = await self.auth_provider.create_credential(
+            credential = await self.auth_provider.create_credential(
                 auth_type="service_principal", credentials=self.resolved_credentials
             )
+            # close() may have run while that await was in flight; it found no
+            # credential to close, so this one is ours to close, not publish.
+            if self._closed:
+                await _close_credential(credential)
+                raise AzureClientAuthError(message=_CLOSED_DURING_LOAD)
+            self.credential = credential
 
             # Test the connection
             await self._test_connection()
 
+            # A close() during the test detached and closed the credential
+            # itself; it must not be reported healthy.
+            if self._closed:
+                raise AzureClientAuthError(message=_CLOSED_DURING_LOAD)
             self._connection_health = True
             logger.info("Azure client loaded successfully")
 
@@ -206,6 +252,9 @@ class AzureClient(ClientInterface):
 
     async def close(self) -> None:
         """Close Azure connections and clean up resources."""
+        # First, so a load() in flight sees it and does not publish a
+        # credential after teardown.
+        self._closed = True
         try:
             logger.info("Closing Azure client...")
 
@@ -224,10 +273,11 @@ class AzureClient(ClientInterface):
             # Clear service cache
             self._services.clear()
 
-            # Shutdown executor
-            if self._executor is not None:
-                self._executor.shutdown(wait=True)
-                self._executor = None
+            # Close the credential: it owns an HTTP transport (connection
+            # pool) that otherwise lives until garbage collection. Detached
+            # first, so a concurrent close() does not close it twice.
+            credential, self.credential = self.credential, None
+            await _close_credential(credential)
 
             # Reset connection health
             self._connection_health = False
@@ -329,23 +379,24 @@ class AzureClient(ClientInterface):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
-        # Note: This is a synchronous context manager.
-        # For proper async cleanup, use the async context manager instead.
-        # This method is kept for backward compatibility but doesn't guarantee cleanup.
-        logger.warning(
-            "Using synchronous context manager. For proper async cleanup, "
-            "use 'async with AzureClient() as client:' instead."
-        )
-        # Schedule cleanup but don't wait for it
+        """Context manager exit.
+
+        Prefer ``async with AzureClient() as client:``. Outside an event loop
+        this runs ``close()`` to completion. Inside a running loop a sync exit
+        cannot wait for an async close, so it schedules ``close()`` as a task
+        (held on ``self``, so it is not garbage-collected before it runs) and
+        returns before cleanup finishes.
+        """
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self.close())
         except RuntimeError:
-            # No event loop running, can't schedule async cleanup
-            logger.warning(
-                "No event loop running, async cleanup not possible", exc_info=True
-            )
+            asyncio.run(self.close())
+            return
+        logger.warning(
+            "AzureClient used as a sync context manager inside a running event "
+            "loop; close() is scheduled, not awaited. Use 'async with' instead."
+        )
+        self._close_task = loop.create_task(self.close())
 
     async def __aenter__(self):
         """Async context manager entry."""

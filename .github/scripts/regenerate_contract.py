@@ -73,6 +73,7 @@ from pathlib import Path
 # renovate_pkl_sync.py / check_generated_freshness.py — see that module.
 sys.path.insert(0, str(Path(__file__).parent))
 from pkl_contract_layout import (  # noqa: E402
+    CALLER_NODE_PATHSPEC,
     GENERATED_DIR,
     ROOT_FILES,
     format_generated_python,
@@ -80,10 +81,12 @@ from pkl_contract_layout import (  # noqa: E402
     swap_outputs,
 )
 
-# Everything a contract can emit, relative to the repo root. Mirrors the
-# cleanup/stage list in contract-toolkit/scripts/regenerate-all.sh and
-# renovate_pkl_sync.py.
-OUTPUT_PATHS = [GENERATED_DIR, *ROOT_FILES]
+# Everything a contract can emit, relative to the repo root, as git pathspecs.
+# Mirrors the cleanup/stage list in contract-toolkit/scripts/regenerate-all.sh
+# and renovate_pkl_sync.py.
+# CALLER_NODE_PATHSPEC names a system app's caller nodes only (FND-3563): the
+# rest of contract/generated/ is the app's.
+OUTPUT_PATHS = [GENERATED_DIR, CALLER_NODE_PATHSPEC, *ROOT_FILES]
 
 # Toolkit properties that switch a root file's emission off. Setting one to
 # ``false`` is documented toolkit surface — ``contract-toolkit/src/App.pkl``

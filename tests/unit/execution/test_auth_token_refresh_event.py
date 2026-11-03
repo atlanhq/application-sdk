@@ -24,6 +24,7 @@ from application_sdk.execution._temporal.auth import (
     TemporalAuthManager,
     reconnect_temporal_client,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 # The method imports _publish_event_via_binding locally, so we mock at its
 # source module rather than on the auth module.
@@ -159,12 +160,13 @@ class TestEmitTokenRefreshEvent:
             assert "refresh_timestamp" in data
 
     @pytest.mark.asyncio
-    async def test_deployment_name_falls_back_to_app_name(self) -> None:
+    async def test_deployment_name_falls_back_to_app_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """When ATLAN_DEPLOYMENT_NAME is unset, deployment_name falls back to app_name."""
         manager = _make_manager()
         expires_at = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-
-        import os
+        monkeypatch.delenv("ATLAN_DEPLOYMENT_NAME", raising=False)
 
         with (
             mock.patch(
@@ -173,7 +175,6 @@ class TestEmitTokenRefreshEvent:
             ),
             mock.patch(_PUBLISH_TARGET) as mock_publish,
         ):
-            os.environ.pop("ATLAN_DEPLOYMENT_NAME", None)
             mock_publish.return_value = None
 
             await manager._emit_token_refresh_event(expires_at)
@@ -500,10 +501,10 @@ class TestStartAndShutdown:
 
         with (
             mock.patch.object(manager, "_refresh_loop", side_effect=_hang_loop),
-            mock.patch(
-                "application_sdk.execution._temporal.auth.asyncio.wait_for",
-                side_effect=_instant_timeout,
-            ),
+            private_stdlib(
+                "application_sdk.execution._temporal.auth", "asyncio"
+            ) as local_asyncio,
+            mock.patch.object(local_asyncio, "wait_for", side_effect=_instant_timeout),
         ):
             manager.start_background_refresh(client)
             await manager.shutdown()

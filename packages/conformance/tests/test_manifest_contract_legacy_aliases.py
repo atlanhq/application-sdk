@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 from textwrap import dedent
 
+import pytest
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -431,6 +432,63 @@ def test_k015_matches_an_app_class_with_no_explicit_name(tmp_path: Path) -> None
     """)
     msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
     assert any("LegacyCrawlerWorkflow -> crawler" in m for m in msgs)
+
+
+# ---------------------------------------------------------------------------
+# App on an SDK template base
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_BASES = ["SqlApp", "BaseMetadataExtractor"]
+
+
+def _template_app_source(base: str, aliases: str, module: str) -> str:
+    return dedent(f"""\
+        from application_sdk.app import entrypoint
+        from {module} import {base}
+        class MyApp({base}):
+            name = "myapp"
+            legacy_workflow_types = {aliases}
+            @entrypoint(name="crawler")
+            async def crawler(self, input: Input) -> Output: ...
+    """)
+
+
+@pytest.mark.parametrize("base", _TEMPLATE_BASES)
+def test_k015_fires_on_an_app_on_a_template_base(tmp_path: Path, base: str) -> None:
+    """``SqlApp`` and the extractor templates are ``App`` subclasses.
+
+    They register ``legacy_workflow_types`` the same way, so the scan must read
+    them too; it read only ``App`` subclasses and checked nothing here.
+    """
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    source = _template_app_source(
+        base, '{"LegacyCrawlerWorkflow": "crawler"}', "application_sdk.templates"
+    )
+    msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+    assert len(msgs) == 1
+    assert "LegacyCrawlerWorkflow -> crawler" in msgs[0]
+    assert "the app contract does not" in msgs[0]
+
+
+@pytest.mark.parametrize("base", _TEMPLATE_BASES)
+def test_k015_fires_on_a_non_literal_declaration_on_a_template_base(
+    tmp_path: Path, base: str
+) -> None:
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    source = _template_app_source(base, "dict(ALIASES)", "application_sdk.templates")
+    msgs = _k015(scan_all(_write_py(tmp_path, {"app/connector.py": source}), tmp_path))
+    assert len(msgs) == 1
+    assert "not a literal declaration" in msgs[0]
+
+
+def test_k015_ignores_a_same_named_non_sdk_base(tmp_path: Path) -> None:
+    """A ``SqlApp`` imported from anywhere but ``application_sdk`` is not the SDK's."""
+    _write_manifest(tmp_path / "app" / "generated" / "manifest.json")
+    source = _template_app_source(
+        "SqlApp", '{"LegacyCrawlerWorkflow": "crawler"}', "vendor.templates"
+    )
+    paths = _write_py(tmp_path, {"app/connector.py": source})
+    assert _k015(scan_all(paths, tmp_path)) == []
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -31,6 +32,7 @@ from application_sdk.infrastructure.secrets import (
     SecretNotFoundError,
     SecretStoreUnavailableError,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 
 @pytest.fixture
@@ -429,27 +431,167 @@ class TestRetryConfiguration:
         )
 
 
+class TestSecretRequestRetryStatuses:
+    """FND-4279: Dapr answers an absent secret with 500 ERR_SECRET_GET, so
+    get_secret must not replay that answer. Every other 500 (a throttle, an
+    unrecognised wording) keeps the replay: no layer above retries it
+    in-process, and the legacy single-key bridge (FND-4407) would keep a
+    throttled ref-key as the literal value."""
+
+    @staticmethod
+    def _secret_get_body(key: str, backend_error: str) -> dict[str, str]:
+        return {
+            "errorCode": "ERR_SECRET_GET",
+            "message": f"failed getting secret with key {key} from secret "
+            f"store secretstore: {backend_error}",
+        }
+
+    @staticmethod
+    def _client_answering(*responses: tuple[int, Any]):
+        """A client whose sidecar returns *responses* in turn, repeating the last.
+
+        Each response is ``(status, body)``; a ``bytes`` body is sent raw, any
+        other body as JSON.
+        """
+        attempts = {"n": 0}
+
+        class Answer(httpx.AsyncBaseTransport):
+            async def handle_async_request(self, request):
+                status, body = responses[min(attempts["n"], len(responses) - 1)]
+                attempts["n"] += 1
+                if isinstance(body, bytes):
+                    return httpx.Response(status, content=body, request=request)
+                return httpx.Response(status, json=body, request=request)
+
+        # backoff_factor=0 collapses the ladder; per-request retry policies
+        # come from the client, so swap only the inner transport.
+        client = AsyncDaprClient(base_url="http://localhost:3500", backoff_factor=0)
+        client._client._transport._async_transport = Answer()
+        return client, attempts
+
+    @pytest.mark.parametrize(
+        ("key", "backend_error"),
+        [
+            pytest.param("example-key", "secret example-key not found", id="absent"),
+            pytest.param(
+                "arn:aws:iam::123456789012:role/example",
+                'invalid resource name "arn:aws:iam::123456789012:role/example": '
+                "[may not contain '/']",
+                id="k8s-invalid-name",
+            ),
+        ],
+    )
+    async def test_not_found_answer_is_not_replayed(
+        self, key: str, backend_error: str
+    ) -> None:
+        from application_sdk.infrastructure._dapr.client import (
+            classify_secret_fetch_error,
+        )
+
+        client, attempts = self._client_answering(
+            (500, self._secret_get_body(key, backend_error))
+        )
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.get_secret("secretstore", key)
+        await client.close()
+
+        assert attempts["n"] == 1
+        assert isinstance(
+            classify_secret_fetch_error(key, exc_info.value), SecretNotFoundError
+        )
+
+    async def test_throttled_answer_is_still_replayed(self) -> None:
+        from application_sdk.infrastructure._dapr.client import (
+            classify_secret_fetch_error,
+        )
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+        from application_sdk.infrastructure.secrets import SecretStoreTransientError
+
+        body = self._secret_get_body(
+            "example-key", "couldn't get secret: ThrottlingException: Rate exceeded"
+        )
+        client, attempts = self._client_answering((500, body))
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await client.get_secret("secretstore", "example-key")
+        await client.close()
+
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+        # The last attempt's response reaches the classifier intact.
+        assert isinstance(
+            classify_secret_fetch_error("example-key", exc_info.value),
+            SecretStoreTransientError,
+        )
+
+    async def test_throttle_that_clears_returns_the_secret(self) -> None:
+        body = self._secret_get_body(
+            "example-key", "couldn't get secret: ThrottlingException: Rate exceeded"
+        )
+        client, attempts = self._client_answering(
+            (500, body), (200, {"example-key": "resolved"})
+        )
+        result = await client.get_secret("secretstore", "example-key")
+        await client.close()
+
+        assert result == {"example-key": "resolved"}
+        assert attempts["n"] == 2
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param(b"<html>upstream error</html>", id="non-json"),
+            pytest.param({"errorCode": "ERR_SOMETHING_ELSE"}, id="other-code"),
+        ],
+    )
+    async def test_unrecognised_500_is_still_replayed(self, body: Any) -> None:
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        client, attempts = self._client_answering((500, body))
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_secret("secretstore", "example-key")
+        await client.close()
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+
+    @pytest.mark.parametrize("status", [502, 503, 504])
+    async def test_secret_gateway_errors_still_replayed(self, status: int) -> None:
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        client, attempts = self._client_answering((status, {}))
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_secret("secretstore", "example-key")
+        await client.close()
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+
+    @pytest.mark.parametrize(
+        "call",
+        [
+            pytest.param(lambda c: c.get_state("statestore", "k"), id="state"),
+            pytest.param(lambda c: c.get_bulk_secret("secretstore"), id="bulk-secret"),
+        ],
+    )
+    async def test_other_gets_still_replay_500(self, call) -> None:
+        from application_sdk.infrastructure._dapr.http import _DEFAULT_RETRY_TOTAL
+
+        client, attempts = self._client_answering((500, {}))
+        with pytest.raises(httpx.HTTPStatusError):
+            await call(client)
+        await client.close()
+        assert attempts["n"] == _DEFAULT_RETRY_TOTAL + 1
+
+
 class TestSidecarWaitTimeout:
     """The startup readiness gate must wait long enough for a cold-starting
     sidecar (the old 10s let CI proceed before daprd was up)."""
 
     def test_default_timeout_raised_and_env_configurable(self, monkeypatch):
-        import importlib
-
         import application_sdk.infrastructure._dapr.http as http_mod
 
         # Default is generous enough for a CI cold start.
-        assert http_mod._DEFAULT_SIDECAR_WAIT_TIMEOUT >= 60.0
+        monkeypatch.delenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", raising=False)
+        assert http_mod._load_sidecar_wait_timeout() >= 60.0
 
-        # ...and overridable via env. Reload under the patched env, then restore
-        # so the module globals don't leak into other tests.
+        # ...and overridable via env.
         monkeypatch.setenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", "123")
-        try:
-            reloaded = importlib.reload(http_mod)
-            assert reloaded._DEFAULT_SIDECAR_WAIT_TIMEOUT == 123.0
-        finally:
-            monkeypatch.delenv("ATLAN_DAPR_SIDECAR_WAIT_TIMEOUT", raising=False)
-            importlib.reload(http_mod)
+        assert http_mod._load_sidecar_wait_timeout() == 123.0
 
 
 class TestWaitForDaprSidecar:
@@ -985,8 +1127,11 @@ class TestWarmSidecarReadRetry:
             "application_sdk.infrastructure._dapr.http._dapr_component_confirmed_ready",
             {"warm-component"},
         )
-        with patch(
-            "application_sdk.infrastructure._dapr.http.asyncio.sleep", AsyncMock()
+        with (
+            private_stdlib(
+                "application_sdk.infrastructure._dapr.http", "asyncio"
+            ) as local_asyncio,
+            patch.object(local_asyncio, "sleep", AsyncMock()),
         ):
             yield "warm-component"
 

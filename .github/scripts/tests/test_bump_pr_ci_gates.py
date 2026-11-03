@@ -22,8 +22,10 @@ bootstrap templates against synthetic payloads, so a gate wired one paren out
   label;
 * `/gate-check` implies e2e on a bump PR (apps and SDK `bump-version-main`), but
   never triggers tenant e2e on the conformance / contract-toolkit lanes;
-* the SDK's inline required gates fail closed until opted in, rather than
-  skipping (a skipped required check reads as a pass), and every SDK workflow
+* SDK Gate, an inline required gate, fails closed until opted in rather than
+  skipping (a skipped required check reads as a pass). It is the one red check
+  an un-opted bump PR carries: Connector Tests Gate skips, which is safe only
+  because SDK Gate blocks the merge (FND-4239). Every SDK workflow
   `/gate-check` re-runs reads the opt-in from the commit;
 * legacy app repos still have their label cleared before each bump push.
 """
@@ -459,7 +461,14 @@ def test_sdk_e2e_request_reads_the_head_commit() -> None:
 
 
 @pytest.mark.parametrize(
-    "job", ["sdk-tests", "conformance", "toolkit", "conformance-suite-tests"]
+    "job",
+    [
+        "sdk-tests",
+        "conformance",
+        "toolkit",
+        "conformance-suite-tests",
+        "api-suite-tests",
+    ],
 )
 @pytest.mark.parametrize(("opted_in", "runs"), [("true", True), ("false", False)])
 def test_sdk_gate_areas_wait_for_the_opt_in(
@@ -471,6 +480,7 @@ def test_sdk_gate_areas_wait_for_the_opt_in(
         "toolkit": "true",
         "conformance": "true",
         "conformance_pkg": "true",
+        "api_pkg": "true",
         "container": "false",
         "force_sdk": "true",
         "force_conformance": "true",
@@ -481,24 +491,49 @@ def test_sdk_gate_areas_wait_for_the_opt_in(
 
 
 @pytest.mark.parametrize(
-    ("path", "job", "step"),
+    ("forced", "runs"),
     [
-        (WORKFLOWS / "sdk-gate.yaml", "gate", "Require the bump-PR CI opt-in"),
-        (
-            WORKFLOWS / "pull_request.yaml",
-            "connector-gate",
-            "Require the bump-PR CI opt-in",
-        ),
+        ({"force_sdk": "true"}, True),
+        ({"force_all": "true", "force_sdk": "true"}, True),
+        ({"force_conformance": "true"}, False),
+        ({"force_toolkit": "true"}, False),
+        ({}, False),
     ],
 )
+@pytest.mark.parametrize("job", ["sdk-tests", "api-suite-tests"])
+def test_sdk_gate_force_sdk_runs_the_sdk_and_api_suites(
+    job: str, forced: dict[str, str], runs: bool
+) -> None:
+    """A bump-version-main PR sets force_sdk and skips paths-filter, so the
+    area outputs are empty strings: force_sdk alone must still run both the
+    SDK suite and the api package's suite (the api wheel ships with it)."""
+    outputs = {
+        "opted_in": "true",
+        "sdk": "",
+        "api_pkg": "",
+        "container": "",
+        "force_all": "false",
+        "force_sdk": "false",
+        "force_conformance": "false",
+        "force_toolkit": "false",
+        **forced,
+    }
+    expr = _job_if(WORKFLOWS / "sdk-gate.yaml", job)
+    assert evaluate(expr, {"needs": {"changes": {"outputs": outputs}}}) is runs
+
+
 @pytest.mark.parametrize(
     ("opted_in", "fails"), [("false", True), ("true", False), ("", True)]
 )
-def test_sdk_inline_gates_fail_closed_until_opted_in(
-    path: Path, job: str, step: str, opted_in: str, fails: bool
-) -> None:
-    """Fails rather than skips: a skipped required check reads as a pass."""
-    found = _step(path, job, step)
+def test_sdk_gate_fails_closed_until_opted_in(opted_in: str, fails: bool) -> None:
+    """Fails rather than skips: a skipped required check reads as a pass.
+
+    The only check that keeps an un-opted bump PR out of the merge queue:
+    Connector Tests Gate skips on one (FND-4239), so this must not.
+    """
+    path, job = WORKFLOWS / "sdk-gate.yaml", "gate"
+    assert _strip(_load(path)["jobs"][job]["if"]) == "always()"
+    found = _step(path, job, "Require the bump-PR CI opt-in")
     ctx = {
         "needs": {"changes": {"result": "success", "outputs": {"opted_in": opted_in}}}
     }
@@ -507,6 +542,34 @@ def test_sdk_inline_gates_fail_closed_until_opted_in(
     assert "/gate-check" in found["run"]
     steps = _load(path)["jobs"][job]["steps"]
     assert steps.index(found) == 0, "must fail before anything reads skips as passes"
+
+
+@pytest.mark.parametrize(
+    ("changes", "requested", "runs"),
+    [
+        # Un-opted bump PR: nothing upstream ran, so the gate skips rather
+        # than failing every push red (FND-4239). SDK Gate blocks the merge.
+        ({"result": "success", "outputs": {"opted_in": "false"}}, "false", False),
+        ({"result": "success", "outputs": {"opted_in": "false"}}, None, False),
+        # Opted in, any ordinary PR, and the merge queue (empty head_ref).
+        ({"result": "success", "outputs": {"opted_in": "true"}}, "false", True),
+        ({"result": "success", "outputs": {"opted_in": "true"}}, None, True),
+        # `/e2e` on an un-opted bump PR dispatched e2e: wait on it and report.
+        ({"result": "success", "outputs": {"opted_in": "false"}}, "true", True),
+        # Detection did not succeed: run, and fail on it, never skip.
+        ({"result": "failure", "outputs": {}}, "false", True),
+        ({"result": "cancelled", "outputs": {}}, None, True),
+    ],
+)
+def test_connector_gate_skips_only_an_un_opted_bump_pr(
+    changes: dict[str, Any], requested: str | None, runs: bool
+) -> None:
+    e2e_request = {"outputs": {} if requested is None else {"requested": requested}}
+    ctx = {"needs": {"changes": changes, "e2e-request": e2e_request}}
+    path = WORKFLOWS / "pull_request.yaml"
+    assert evaluate(_job_if(path, "connector-gate"), ctx) is runs
+    names = [s.get("name") for s in _load(path)["jobs"]["connector-gate"]["steps"]]
+    assert "Require the bump-PR CI opt-in" not in names
 
 
 @pytest.mark.parametrize(

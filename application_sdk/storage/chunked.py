@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -42,7 +44,9 @@ import orjson
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
+from application_sdk.common.atomic import ensure_free_space
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._budget import transfer_budget
 from application_sdk.storage._locks import PathLockRegistry
 from application_sdk.storage._telemetry import _log_transfer_progress
 
@@ -67,6 +71,22 @@ logger = get_logger(__name__)
 _TRANSFER_LOCKS = PathLockRegistry("storage.download.lock_wait")
 
 _TRANSFER_STATE_SUFFIX = ".transfer-state"
+
+
+def _monotonic() -> float:
+    """Monotonic clock seam for chunked transfers.
+
+    Every clock read in this module goes through this indirection so tests
+    can drive the progress-heartbeat interval deterministically by patching
+    ``application_sdk.storage.chunked._monotonic`` in isolation. Real clock
+    resolution is too coarse to rely on: Windows' ``time.monotonic`` ticks
+    roughly every 15.6ms, so fast chunks can land with a zero delta.
+
+    Patching ``time.monotonic`` instead would be global (``chunked.time`` is
+    the shared module object) and would also intercept asyncio's event-loop
+    clock. Same seam as ``application_sdk.storage.rolling._monotonic``.
+    """
+    return time.monotonic()
 
 
 def _transfer_state_path(path: Path) -> Path:
@@ -128,13 +148,26 @@ def _load_transfer_state(state_path: Path) -> dict | None:
 
 
 def _save_transfer_state(state_path: Path, state: dict) -> None:
-    """Atomically persist transfer state (write temp + rename, fsync'd).
+    """Atomically persist transfer state (write temp + rename, no fsync).
 
-    fsync on the temp file is enough for the failure mode resume targets:
-    process death (OOMKill / activity retry) preserves the kernel page cache,
-    so data-file writes that precede this checkpoint are visible on retry.
-    Node death loses the local volume entirely — resume is moot there and the
-    etag check makes the resulting fresh download safe.
+    Runs on the event loop after every chunk, so it must not flush: an fsync
+    per chunk held the loop for the disk's flush latency each time (FND-4084).
+    None is needed for the failure mode resume targets: process death
+    (OOMKill / activity retry) preserves the kernel page cache, so both the
+    data-file writes that precede this checkpoint and the checkpoint itself
+    are visible on retry. Node death can tear or empty the checkpoint;
+    :func:`_load_transfer_state` reads that as corrupt and the download starts
+    fresh, which is always correct. ENOSPC on the data file is still reported
+    before publish, by the one fsync of the part file ahead of ``os.replace``.
+
+    Why the FND-318 fsync rule (``common.atomic``) does not apply here: it
+    stops a short write from being *published and trusted* as complete. A
+    short or torn checkpoint is never trusted — it fails validation and the
+    download starts fresh. What the per-chunk fsync did buy, on a filesystem
+    that reports ENOSPC only at flush, was failing a full volume at the first
+    chunk instead of at publish; the free-space check before preallocation in
+    :func:`_download_chunked_locked` does that up front instead (FND-4084,
+    superseding FND-353).
     """
     tmp = state_path.with_suffix(state_path.suffix + ".tmp")
     # O_BINARY: raw os.write on a Windows text-mode fd would rewrite 0x0A as
@@ -146,7 +179,6 @@ def _save_transfer_state(state_path: Path, state: dict) -> None:
     )
     try:
         os.write(fd, orjson.dumps(state))
-        os.fsync(fd)
     finally:
         os.close(fd)
     os.replace(tmp, state_path)
@@ -204,6 +236,9 @@ def _load_and_validate_checkpoint(
         and st.get("etag") == etag
         and path.is_file()
         and path.stat().st_size == size
+        # Every index must name a chunk of this object: an out-of-range one
+        # would skip nothing yet still be counted as on disk.
+        and all(0 <= i < -(-size // chunk_size_bytes) for i in st["done"])
     ):
         return set(st["done"])
     with contextlib.suppress(OSError):
@@ -227,6 +262,107 @@ class _ChunkProgress:
     #: Bytes THIS attempt transferred — what the terminal event/metrics report.
     fetched_bytes: int = 0
     done: set[int] = field(default_factory=set)
+    #: Called after each chunk is written and added to :attr:`done`.
+    on_chunk_done: Callable[[], None] | None = None
+
+
+class _InOrderHasher:
+    """SHA-256 of a chunked download, computed while the chunks are landing.
+
+    Chunks land out of order and SHA-256 cannot combine digests of separate
+    ranges, so the digest is fed strictly in file order: whenever the run of
+    completed chunks from the current cursor grows, those bytes are read back
+    from the part file (still in page cache) and hashed in a worker thread.
+    Reading back, rather than keeping out-of-order chunks in memory, holds
+    memory to one read buffer however late a slow early chunk lands. When the
+    last chunk lands only the tail is left to hash, so the finished file is
+    not read a second time (FND-4081).
+
+    One coroutine owns the hash object, so feeds never overlap. Each feed
+    opens and closes its own handle, so none is open on the part file when
+    it is renamed into place — Windows cannot rename an open file.
+    """
+
+    _READ_SIZE = 1 << 20
+
+    def __init__(
+        self, part: Path, *, size: int, chunk_size_bytes: int, done: set[int]
+    ) -> None:
+        self._part = part
+        self._size = size
+        self._chunk_size = chunk_size_bytes
+        self._chunks = max(1, (size + chunk_size_bytes - 1) // chunk_size_bytes)
+        self._done = done
+        self._hash = hashlib.sha256()
+        self._next = 0
+        self._stop = False
+        self._wake = asyncio.Event()
+        self._task = asyncio.ensure_future(self._run())
+
+    def chunk_done(self) -> None:
+        """Wake the feeder: a chunk has been written."""
+        self._wake.set()
+
+    async def _run(self) -> None:
+        while self._next < self._chunks and not self._stop:
+            end = self._next
+            while end < self._chunks and end in self._done:
+                end += 1
+            if end == self._next:
+                self._wake.clear()
+                if self._next not in self._done:
+                    await self._wake.wait()
+                continue
+            start_off = self._next * self._chunk_size
+            end_off = min(end * self._chunk_size, self._size)
+            await run_in_thread(self._feed, start_off, end_off)
+            self._next = end
+
+    def _feed(self, start: int, end: int) -> None:
+        """Hash bytes ``[start, end)`` of the part file. Runs in a thread."""
+        with open(self._part, "rb") as fh:
+            fh.seek(start)
+            remaining = end - start
+            while remaining > 0 and not self._stop:
+                buf = fh.read(min(self._READ_SIZE, remaining))
+                if not buf:
+                    raise OSError(
+                        f"part file ended at {end - remaining} bytes, "
+                        f"expected {end}"
+                    )
+                self._hash.update(buf)
+                remaining -= len(buf)
+
+    async def finish(self) -> str | None:
+        """Hash whatever is left and return the digest.
+
+        ``None`` if hashing failed; the caller then re-reads the published
+        file, as it did before this existed.
+
+        Shielded: cancelling the caller must not cancel the feeder, whose
+        worker thread would keep reading the part file with nothing left to
+        wait for it. A cancelled caller calls :meth:`abort`, which stops the
+        feeder and waits for its thread.
+        """
+        self._wake.set()
+        try:
+            await asyncio.shield(self._task)
+        # conformance: ignore[E004] the streamed digest is an optimisation; any failure falls back to re-reading the finished file
+        except Exception:
+            logger.debug("In-order download hash failed; re-reading", exc_info=True)
+            return None
+        if self._stop or self._next < self._chunks:
+            return None
+        return self._hash.hexdigest()
+
+    async def abort(self) -> None:
+        """Stop hashing and wait until no thread is reading the part file."""
+        self._stop = True
+        self._wake.set()
+        # Not cancelled: a cancelled await would leave its thread reading the
+        # part file. _feed checks _stop between reads, so this returns quickly.
+        with contextlib.suppress(Exception):
+            await asyncio.shield(self._task)
 
 
 async def _fetch_chunk(
@@ -255,7 +391,10 @@ async def _fetch_chunk(
             plausible-looking file of exactly the right length.
     """
     length = min(chunk_size_bytes, size - offset)
-    async with sem:
+    # *sem* caps this file's range GETs; the shared budget caps the bytes all
+    # transfers in the process hold, which is what the container's memory
+    # limit sees (FND-4082). Held until the range is on disk.
+    async with sem, transfer_budget().reserve(length):
         if etag is not None:
             # Version-pinned range GET: 412 (PreconditionError) if the
             # object was rewritten — never mixes two generations.
@@ -267,11 +406,11 @@ async def _fetch_chunk(
                     "if_match": etag,
                 },
             )
-            raw = bytes(await result.bytes_async())
+            # No bytes() copy: os.write takes the buffer as it is, and a
+            # copy would hold the range in memory twice.
+            raw = await result.bytes_async()
         else:
-            raw = bytes(
-                await obstore.get_range_async(store, key, start=offset, length=length)
-            )
+            raw = await obstore.get_range_async(store, key, start=offset, length=length)
         if len(raw) != length:
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                 StorageError,
@@ -292,6 +431,8 @@ async def _fetch_chunk(
         os.lseek(fd, offset, os.SEEK_SET)
         os.write(fd, raw)
         progress.done.add(idx)
+        if progress.on_chunk_done is not None:
+            progress.on_chunk_done()
         if resume:
             _save_transfer_state(
                 state_path, {**state_base, "done": sorted(progress.done)}
@@ -302,7 +443,7 @@ async def _fetch_chunk(
         # (ADR-0018).
         current_progress_tracker().mark_progress("storage.download_range")
         if progress_interval > 0:
-            now = time.monotonic()
+            now = _monotonic()
             if now - progress.last_progress >= progress_interval:
                 _log_transfer_progress(
                     "download",
@@ -479,10 +620,11 @@ async def download_file_chunked(
             (enabled unless set to ``"false"``).
         verify: Validate the completed file against the digest its producer
             recorded (FND-306).  ``None`` (default) follows
-            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.  Unlike the single-stream path,
-            verifying here costs a re-read of the finished file (chunks land
-            out of order, so they cannot feed one hasher) — the re-read runs in
-            a worker thread so it never blocks the heartbeat loop.
+            ``ATLAN_STORAGE_VERIFY_TRANSFERS``.  Chunks land out of order, so
+            the digest is computed by reading each completed in-order run back
+            from the part file in a worker thread while later chunks are still
+            in flight; it never blocks the heartbeat loop, and the finished
+            file is not re-read.
         expected_sha256: Digest to verify against.  Pass it when the caller
             already holds the producer's digest — the sidecar lookup is then
             skipped, saving a round trip.  ``None`` (default) fetches the
@@ -675,6 +817,31 @@ async def _download_chunked_locked(
         )
         resuming = bool(done)
 
+        # Nothing to resume: any part file left by an earlier attempt is about
+        # to be truncated, so drop it first — its blocks would otherwise count
+        # against the free-space check below. Best-effort, like every discard.
+        if not resuming:
+            _discard_transfer_state(path)
+
+        # Fail a volume that plainly cannot hold the rest of the object now, in
+        # seconds, typed as a full disk. The checkpoint is not fsynced (see
+        # _save_transfer_state), so on a filesystem that reports ENOSPC only at
+        # flush nothing else would say so before the publish fsync, after the
+        # whole download. The part file is sparse, so only the chunks still to
+        # fetch need room. A resume state stays on disk for the next attempt.
+        offsets = list(range(0, size, chunk_size_bytes))
+        remaining = size - sum(min(chunk_size_bytes, size - offsets[i]) for i in done)
+        from application_sdk.errors import DiskFullError  # noqa: PLC0415
+
+        try:
+            ensure_free_space(path, remaining, operation="download")
+        except DiskFullError as exc:
+            from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+                StorageDiskFullError,
+            )
+
+            raise StorageDiskFullError.from_disk_full(exc, key=key) from exc
+
         # Pre-allocate the in-flight ``.part`` file at the target size so lseek
         # can address any offset; the destination path is only written by the
         # os.replace publish on success (CONNECT-1126). On resume, open WITHOUT
@@ -699,7 +866,6 @@ async def _download_chunked_locked(
             os.close(fd)
             raise
 
-        offsets = list(range(0, size, chunk_size_bytes))
         pending = [(i, off) for i, off in enumerate(offsets) if i not in done]
         state_base = {
             "key": key,
@@ -709,7 +875,7 @@ async def _download_chunked_locked(
         }
 
         sem = asyncio.Semaphore(max_concurrent_chunks)
-        started = time.monotonic()
+        started = _monotonic()
         progress = _ChunkProgress(
             started=started,
             last_progress=started,
@@ -727,6 +893,21 @@ async def _download_chunked_locked(
                 outcome="resume",
                 size_bytes=progress.completed_bytes,
             )
+
+        # Hash in file order while the chunks land, so the finished file is
+        # not read back in full. Only when someone needs the digest: the
+        # caller asked for it, or the verify switch may compare it against
+        # the producer's sidecar. Chunks a resumed attempt already has are in
+        # ``done`` from the start, so the hasher reads them first.
+        hasher = (
+            _InOrderHasher(
+                part, size=size, chunk_size_bytes=chunk_size_bytes, done=done
+            )
+            if compute_hash or verifying
+            else None
+        )
+        if hasher is not None:
+            progress.on_chunk_done = hasher.chunk_done
 
         chunk_tasks = [
             asyncio.ensure_future(
@@ -764,13 +945,15 @@ async def _download_chunked_locked(
             for _t in chunk_tasks:
                 _t.cancel()
             await asyncio.gather(*chunk_tasks, return_exceptions=True)
+            if hasher is not None:
+                await hasher.abort()
             os.close(fd)
             _log_storage_event(
                 logging.WARNING,
                 "download",
                 key,
                 outcome="failure",
-                elapsed_ms=(time.monotonic() - started) * 1000.0,
+                elapsed_ms=(_monotonic() - started) * 1000.0,
                 size_bytes=progress.fetched_bytes,
                 error_class=_exc_class_name(exc),
             )
@@ -799,6 +982,8 @@ async def _download_chunked_locked(
             for _t in chunk_tasks:
                 _t.cancel()
             await asyncio.gather(*chunk_tasks, return_exceptions=True)
+            if hasher is not None:
+                await hasher.abort()
             os.close(fd)
             raise
         else:
@@ -814,6 +999,21 @@ async def _download_chunked_locked(
             # failed unlink must not report the download as failed — a
             # checkpoint that outlives its part file is discarded by
             # validation on the next attempt, so removal is best-effort.
+            # Finish the in-order hash before the publish: it reads the part
+            # file, which must not be open when it is renamed.
+            # conformance: ignore[E004] cancellation/failure cleanup; stops the feeder thread and closes the fd, then re-raises with no swallow
+            try:
+                streamed = await hasher.finish() if hasher is not None else None
+            except BaseException:
+                # Cancelled while the tail was hashing. Same cleanup as the
+                # cancellation path above: no thread left reading the part
+                # file, fd closed; part + checkpoint stay for resume.
+                try:
+                    if hasher is not None:
+                        await hasher.abort()
+                finally:
+                    os.close(fd)
+                raise
             # conformance: ignore[E004] publish error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
             try:
                 try:
@@ -827,7 +1027,7 @@ async def _download_chunked_locked(
                     "download",
                     key,
                     outcome="failure",
-                    elapsed_ms=(time.monotonic() - started) * 1000.0,
+                    elapsed_ms=(_monotonic() - started) * 1000.0,
                     size_bytes=progress.fetched_bytes,
                     error_class=_exc_class_name(exc),
                 )
@@ -847,7 +1047,7 @@ async def _download_chunked_locked(
                 "download",
                 key,
                 outcome="success",
-                elapsed_ms=(time.monotonic() - started) * 1000.0,
+                elapsed_ms=(_monotonic() - started) * 1000.0,
                 size_bytes=progress.fetched_bytes,
             )
 
@@ -865,15 +1065,15 @@ async def _download_chunked_locked(
             if not compute_hash and expected_sha256 is None:
                 return None
 
-            # Chunks land out of order, so no single hasher can be fed during
-            # the transfer: both the caller's digest and the integrity check
-            # cost one re-read of the finished file. ``integrity.sha256_file``
-            # runs it through ``run_in_thread`` — inline, a multi-GB re-read
-            # holds the event loop, and with it the enclosing activity's
-            # auto-heartbeat, for the full read+hash, so a transfer that
-            # actually succeeded gets retried (ADR-0010, P031; FND-282 made
-            # this offload here, FND-306 moved the body to the shared helper).
-            digest = await integrity.sha256_file(path)
+            # The in-order hasher above normally has the digest already. Only
+            # if it failed is the finished file re-read — through
+            # ``integrity.sha256_file``, which runs it in a thread: inline, a
+            # multi-GB re-read holds the event loop, and with it the enclosing
+            # activity's auto-heartbeat, so a transfer that actually succeeded
+            # gets retried (ADR-0010, P031; FND-282, FND-306, FND-4081).
+            digest = (
+                streamed if streamed is not None else await integrity.sha256_file(path)
+            )
             if verifying and expected_sha256 is not None:
                 integrity.check_transfer_digest(
                     "download",

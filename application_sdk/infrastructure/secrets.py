@@ -1,12 +1,16 @@
 """Secrets management abstraction."""
 
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
+# Defined in the api distribution's light module so the handler can raise it on
+# the API host; re-exported here, the same class.
+from application_sdk._context_errors import SecretStoreNotConfiguredError  # noqa: F401
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.errors.categories import Audience
-from application_sdk.errors.leaves import (
+from application_sdk.errors.leaves import (  # noqa: F401 — PreconditionError re-exported for existing importers
     ColdStartRaceError,
     DaprSidecarUnreachableError,
     DependencyUnavailableError,
@@ -19,75 +23,178 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-async def get_deployment_secret(key: str) -> Any:
+async def get_deployment_secret(key: str, *, raise_on_error: bool | None = None) -> Any:
     """Get a specific key from deployment configuration in the deployment secret store.
 
-    Checks whether the deployment secret store Dapr component is registered
-    before fetching.  Returns ``None`` when:
+    Looks *key* up in the multi-key deployment bundle
+    (``DEPLOYMENT_SECRET_PATH``) first, then as a secret of its own.
 
-    - Running in a local (non-Dapr) environment.
-    - The component is not registered.
-    - The key is not present in the secret.
-    - Any Dapr error occurs.
+    With ``raise_on_error=True`` the fetch retries a cold Dapr sidecar via
+    :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start` and
+    every failure raises a typed error, so a caller can tell "the key is not
+    there" from "the store did not answer" — a ``None`` for both is how a
+    store outage became a non-retryable "grant access" error or an empty
+    password sent to the source.
+
+    Without it the legacy contract holds: one attempt, no retry, and
+    ``None`` for a local (non-Dapr) environment, a missing key, or any
+    error. Omitting ``raise_on_error`` is deprecated; the default flips to
+    ``True`` in v4.0. Pass ``False`` to keep ``None`` explicitly.
 
     Args:
         key: The key to look up inside the deployment secret.
+        raise_on_error: ``True`` to raise on failure, ``False`` to return
+            ``None``. ``None`` (the default) behaves as ``False`` and emits a
+            ``DeprecationWarning``.
 
     Returns:
-        The value for *key*, or ``None`` if unavailable.
+        The value for *key*. ``None`` on any failure unless
+        ``raise_on_error`` is ``True``.
+
+    Raises:
+        SecretStoreNotConfiguredError: ``raise_on_error`` and the process
+            runs in the local environment, which has no deployment store.
+        SecretNotFoundError: ``raise_on_error`` and *key* is in neither the
+            bundle nor the store.
+        SecretStoreUnreachableError: ``raise_on_error`` and the sidecar
+            stayed unreachable for the whole cold-start budget.
+        SecretStoreError: ``raise_on_error`` and the store failed or
+            rejected the request; ``cause`` carries the underlying error.
     """
+    if raise_on_error is None:
+        warnings.warn(
+            "get_deployment_secret() without raise_on_error is deprecated: it "
+            "returns None for a store failure as well as a missing key. Pass "
+            "raise_on_error=True for a typed SecretStoreError with cold-start "
+            "retry, or raise_on_error=False to keep None — the default flips "
+            "to True in v4.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on secret resolution
         DEPLOYMENT_NAME,
-        DEPLOYMENT_SECRET_PATH,
         DEPLOYMENT_SECRET_STORE_NAME,
         LOCAL_ENVIRONMENT,
     )
 
-    if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
-        return None
+    if not raise_on_error:
+        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+            return None
+        try:
+            return await _fetch_deployment_secret(key)
+        except SecretNotFoundError:
+            # conformance: ignore[E007] legacy contract: a missing key is None
+            return None
+        except Exception:
+            logger.error(
+                "Failed to fetch deployment config key: %s", key, exc_info=True
+            )
+            return None
 
-    try:
-        from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
-            AsyncDaprClient,
+    if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+        raise SecretStoreNotConfiguredError(
+            message="No deployment secret store in the local environment",
+            resource=DEPLOYMENT_SECRET_STORE_NAME,
         )
 
+    from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+        retry_past_dapr_cold_start,
+    )
+
+    try:
+        return await retry_past_dapr_cold_start(
+            lambda: _fetch_deployment_secret(key),
+            description=f"Deployment secret fetch for '{key}'",
+            component=DEPLOYMENT_SECRET_STORE_NAME,
+        )
+    except DaprSidecarUnreachableError as exc:
+        raise SecretStoreUnreachableError(
+            key,
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        ) from None
+
+
+async def _fetch_deployment_secret(key: str) -> Any:
+    """One attempt at *key*: the multi-key bundle, then a single-key lookup.
+
+    An empty value counts as absent at either step: the ``local.env`` store
+    (``components/deployment-secrets.yaml``) answers an unset variable with
+    ``""`` rather than an error, and an empty credential is never usable.
+
+    Raises:
+        SecretNotFoundError: *key* is in neither the bundle nor the store.
+        SecretStoreError: The store failed or was unreachable (the
+            :class:`SecretStoreUnavailableError` subtype for the latter, so
+            the cold-start retry picks it up), or the Dapr client could not
+            be constructed (non-retryable: a configuration fault).
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — cold path: only on secret resolution
+        DEPLOYMENT_SECRET_PATH,
+        DEPLOYMENT_SECRET_STORE_NAME,
+    )
+    from application_sdk.infrastructure._dapr.client import (  # noqa: PLC0415 — circular: _dapr/client.py imports this module
+        classify_secret_fetch_error,
+    )
+    from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — circular: infrastructure/__init__.py loads sibling modules
+        AsyncDaprClient,
+    )
+
+    try:
         client = AsyncDaprClient()
+    # conformance: ignore[E004] re-raised as a typed SecretStoreError; cause chain preserved
+    except Exception as exc:
+        raise SecretStoreError(
+            f"Could not create the Dapr client for the deployment secret store: {exc}",
+            secret_name=key,
+            cause=exc,
+            retryable=False,
+        ) from exc
+    try:
         try:
-            # Try multi-key bundle first.
             result = await client.get_secret(
                 DEPLOYMENT_SECRET_STORE_NAME, DEPLOYMENT_SECRET_PATH
             )
+        # conformance: ignore[E004] classified and re-raised; only a missing bundle falls through to the single-key lookup
+        except Exception as exc:
+            error = classify_secret_fetch_error(DEPLOYMENT_SECRET_PATH, exc)
+            if not isinstance(error, SecretNotFoundError):
+                raise error from exc
+        else:
             secret_data = process_secret_data(result)
-            if isinstance(secret_data, dict) and key in secret_data:
+            if _is_present(secret_data.get(key)):
                 return secret_data[key]
 
-            # Fall back to single-key lookup.
-            logger.debug("Multi-key bundle lookup missed; trying single-key: %s", key)
+        logger.debug("Multi-key bundle lookup missed; trying single-key: %s", key)
+        try:
             result = await client.get_secret(DEPLOYMENT_SECRET_STORE_NAME, key)
-            single_data = process_secret_data(result)
-            if isinstance(single_data, dict):
-                if key in single_data:
-                    return single_data[key]
-                if len(single_data) == 1:
-                    return list(single_data.values())[0]
+        # conformance: ignore[E004] re-raised as the classified SecretStoreError; cause chain preserved
+        except Exception as exc:
+            raise classify_secret_fetch_error(key, exc) from exc
 
-            return None
-        finally:
-            await client.close()
+        single_data = process_secret_data(result)
+        if key in single_data:
+            if _is_present(single_data[key]):
+                return single_data[key]
+            raise SecretNotFoundError(key)
+        # A secret stored under *key* whose one entry has another name (a
+        # Kubernetes secret's sole data key) is still the value of *key*.
+        # Read that from the raw response: process_secret_data unwraps a
+        # single JSON-document entry into its fields, and the sole field of
+        # that document is not the secret named *key*.
+        raw = dict(result)
+        if len(raw) == 1 and _is_present(sole := next(iter(raw.values()))):
+            return sole
+        raise SecretNotFoundError(key)
+    finally:
+        await client.close()
 
-    except Exception:
-        logger.error("Failed to fetch deployment config key: %s", key, exc_info=True)
-        return None
 
-
-@dataclass(kw_only=True)
-class SecretStoreNotConfiguredError(PreconditionError):
-    """Secret store required by get_secret / resolve_credential but not configured."""
-
-    code: ClassVar[str] = "PRECONDITION_SECRET_STORE_NOT_CONFIGURED"
-    message: str = "No secret store configured"
-    resource: str | None = "secret_store"
-    expected_state: str | None = "configured"
+def _is_present(value: Any) -> bool:
+    """Whether a store answered with a usable value (``None`` and ``""`` are absent)."""
+    return value is not None and value != ""
 
 
 @dataclass(kw_only=True)
@@ -136,14 +243,28 @@ class SecretStoreError(DependencyUnavailableError):
         return " | ".join(parts)
 
 
+class SecretStoreTransientError(SecretStoreError):
+    """The secret store answered, but with a temporary failure (throttling or a
+    transient server error), so a later attempt may succeed.
+
+    Distinct from :class:`SecretStoreUnavailableError`, where the store did not
+    answer at all, and from a plain :class:`SecretStoreError`, where the answer
+    was a rejection that retrying won't change. Callers retry it: it never
+    keeps a probed value, and it is never routed to the user as
+    :class:`AgentSecretReadError`. Retryable.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_SECRET_STORE_TRANSIENT"
+
+
 class SecretStoreUnavailableError(SecretStoreError, ColdStartRaceError):
     """The secret store / Dapr sidecar was *unreachable* — a transport failure
     (connection refused, reset mid-handshake, read/write/close error, timeout)
     or the Dapr secrets-API ``ERR_SECRET_STORES_NOT_CONFIGURED`` response (no
     secret store component registered yet) — as opposed to the store
-    answering and rejecting the request (bad auth / binding / path, *or a
-    genuinely-missing key* — Dapr returns the same 500/``ERR_SECRET_GET``
-    shape for both, which is a plain :class:`SecretStoreError`, not this).
+    answering and rejecting or failing the request (bad auth / binding / path,
+    a throttled or access-denied backend — a plain :class:`SecretStoreError` —
+    or a genuinely-missing key — :class:`SecretNotFoundError`).
 
     Classified at the infrastructure layer (``_dapr/client.py``), where the
     httpx exception family and the Dapr error body are visible, so callers
@@ -212,6 +333,44 @@ class SecretStoreUnreachableError(SecretStoreError, DaprSidecarUnreachableError)
         self.component = component
         self.attempts = attempts
         self.elapsed_seconds = elapsed_seconds
+
+
+@dataclass(kw_only=True)
+class AgentSecretReadError(PreconditionError, SecretStoreError):
+    """The store refused to return a *declared* agent secret.
+
+    Raised for a format-2 ``secretKeyRef`` that the store answers with a
+    failure (access denied, an invalid name, throttled) rather than "not
+    found" or an outage. On an SDR the store, its policy and its identity are
+    the customer's, and the field is known to be a ref, so only the customer
+    can fix it.
+
+    ``PreconditionError`` comes first, so the category is PRECONDITION and the
+    audience USER. Conformance E021 forbids a DEPENDENCY_UNAVAILABLE error with
+    a USER audience. It is still a ``SecretStoreError``, so
+    ``except SecretStoreError:`` catches it. ``secret_name`` is the hashed
+    label, never the raw name, which encodes the customer's store layout.
+    ``retryable`` is carried over from the store's answer, so a throttled read
+    is still retried.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_AGENT_SECRET_READ"
+
+    def __init__(
+        self, label: str, *, fields: str, retryable: bool | None = None
+    ) -> None:
+        SecretStoreError.__init__(
+            self,
+            f"Secret store refused the secret declared for agent_json field "
+            f"'{fields}'.",
+            secret_name=label,
+            retryable=retryable,
+        )
+        self.resource = "agent_json_secret"
+        self.suggested_action = (
+            "Check that the secret named by this field's secretKeyRef exists and "
+            "that the SDR's secret-store identity is allowed to read it."
+        )
 
 
 @dataclass(kw_only=True)

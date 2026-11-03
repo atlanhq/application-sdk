@@ -111,10 +111,10 @@ logger = get_logger(__name__)
 Direct use of `logging.getLogger()`, `structlog.get_logger()`, or `from loguru import
 logger` bypasses the adapter that:
 
-* injects Temporal context fields (`workflow_id`, `run_id`,   `activity_type`,
-`task_queue`, `attempt`) as top-level indexed   columns in ClickHouse/Grafana; * routes
-log records through OTel so they appear in the observability   store; * enforces the
-project's five-level model   (DEBUG/INFO/WARNING/ERROR/CRITICAL).
+* injects Temporal context fields (`workflow_id`, `run_id`, `activity_type`,
+  `task_queue`, `attempt`) as top-level indexed columns in ClickHouse/Grafana;
+* routes log records through OTel so they appear in the observability store;
+* enforces the project's five-level model (DEBUG/INFO/WARNING/ERROR/CRITICAL).
 
 Adapter definition files are exempt — the file that defines `AtlanLoggerAdapter` or
 `get_logger` itself is skipped.  Dev harnesses are exempt too: files under `scripts/`
@@ -122,6 +122,10 @@ and `run_dev*.py` never run inside a workflow, so the provenance argument does n
 (test files are already excluded by discovery).  Block-tier since CNCT-108 (parent
 CNCT-93): a rolled-own logger loses correlation IDs and source provenance, making its
 records unfindable on the tenant UI.
+
+The finding is file-level and reported on line 1, or on the first line after a shebang
+and/or PEP 263 coding line (a coding line 2 also skips a plain comment or blank line 1),
+so a `# conformance: ignore[L002] reason` directive on that line suppresses it.
 
 ---
 
@@ -173,7 +177,13 @@ data — so the incident stays open for days instead of being read off the trace
   at a credential catch trips it. Narrow the except to what the try raises (E004). A
   catch that genuinely must stay broad is left as it is and reported for a person to
   decide: never suppress BLE001, and never add exc_info=True to satisfy it, which would
-  leak the credentials this exemption protects.
+  leak the credentials this exemption protects. L009 and E005 at a pre-raise log: a
+  warning/error within the three statements before a raise in the same block is also an
+  L009 site (and usually E005). Enriching it clears L004 and E005 but not L009, whose
+  fix then deletes the line. Apply L009's resolution instead: delete the line when the
+  exception has an upstream record (which may leave a bare raise), otherwise downgrade
+  it to a sanitized DEBUG through locals. Never reduce the handler to a bare raise
+  without an upstream record. That one edit clears L004, E005 and L009 together.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to `logger.warning()` /
@@ -183,38 +193,38 @@ after this same handler logged its caught exception's sanitized traceback.
 `.exception()` is exempt.
 
 Exempt: calls whose arguments flow through a recognised redaction helper
-(redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
-no-traceback boundary where exc_info=True would serialize the raw exception past the
-sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies). A
-later status-only warning/error call that does not expose the raw exception also needs
-no duplicate trace after a prior straight-line call at the same level or higher (an
-ERROR is not covered by a WARNING, which a `LOG_LEVEL=ERROR` filter drops) has logged
-that same exception's sanitized traceback — inline, as `safe_traceback(e)`, or through a
-local assigned from it earlier in the handler. A cause-only sanitizer, a trace for a
-different exception, or a trace inside a different handler does not satisfy this
-condition.
+(redact*/sanitiz*/safe_traceback/safe_exception*/scrub_secret*/mask_secret*) — these
+mark a deliberate no-traceback boundary where exc_info=True would serialize the raw
+exception past the sanitizer and can leak credentials (JDBC URLs, Authorization headers,
+OAuth bodies). A later status-only warning/error call that does not expose the raw
+exception also needs no duplicate trace after a prior straight-line call at the same
+level or higher (an ERROR is not covered by a WARNING, which a `LOG_LEVEL=ERROR` filter
+drops) has logged that same exception's sanitized traceback — inline, as
+`safe_traceback(e)`, or through a local assigned from it earlier in the handler. A
+cause-only sanitizer, a trace for a different exception, or a trace inside a different
+handler does not satisfy this condition.
 
 **Fixing it well**
 
 * At a catch around credential resolution, auth or a JDBC/driver call, raw
-`exc_info=True` can print a connection string or password held in the exception: log the
-sanitized traceback instead, as the reference apps do — `logger.error("... failed: %s",
-safe_traceback(e))`, with `sanitize_cause_repr(e)` for the message.
+  `exc_info=True` can print a connection string or password held in the exception: log
+  the sanitized traceback instead, as the reference apps do — `logger.error("... failed:
+  %s", safe_traceback(e))`, with `sanitize_cause_repr(e)` for the message.
 
 * The sanitized form carries no `exc_info`, so ruff BLE001 (in ruff's default rule set)
-flags it when the catch is a broad `except Exception`. Narrow the catch to what the
-`try` actually raises, as E004 prescribes, and the sanitized log stands as it is. Where
-the catch genuinely must stay broad, leave the site as it is and report it for a person
-to decide; do not suppress BLE001. Never add `exc_info=True` here to quiet BLE001, and
-never re-raise `from e` for the same reason: the chained cause carries the raw exception
-to whichever log prints it next. An app that selects `TRY` or `ALL` also gets TRY400 on
-the sanitized call, narrowed or not: report that site the same way.
+  flags it when the catch is a broad `except Exception`. Narrow the catch to what the
+  `try` actually raises, as E004 prescribes, and the sanitized log stands as it is.
+  Where the catch genuinely must stay broad, leave the site as it is and report it for a
+  person to decide; do not suppress BLE001. Never add `exc_info=True` here to quiet
+  BLE001, and never re-raise `from e` for the same reason: the chained cause carries the
+  raw exception to whichever log prints it next. An app that selects `TRY` or `ALL` also
+  gets TRY400 on the sanitized call, narrowed or not: report that site the same way.
 
 * Everywhere else, `exc_info=True` on the existing log call is the fix.
 
 * A site that already logs a sanitized traceback
-(`redact_secrets("".join(traceback.format_exception(exc)))` passed to the logger)
-delivers the rationale: leave it.
+  (`redact_secrets("".join(traceback.format_exception(exc)))` passed to the logger)
+  delivers the rationale: leave it.
 
 ---
 
@@ -266,7 +276,19 @@ per-item progress belongs at DEBUG.
 Per-item INFO logging in a large loop drowns meaningful signals and degrades
 performance.  INFO is for lifecycle milestones, not per-item events.  Use DEBUG per-item
 and INFO for the loop summary.  The checker should inspect whether the loop is clearly
-bounded (≤10 items) before flagging.
+bounded (≤10 items) before flagging.  A throttled progress log is a milestone and is not
+flagged: the body of an `if` inside the innermost loop whose test is a modulo counter
+(`n % N == 0`) or an elapsed-time threshold (`time.monotonic() - last >= S`).  Under
+`or`, every other disjunct must be a throttle or a one-shot `==` comparison such as
+`done == total` — not one against a string/`None`/`bool` literal or a field of the loop
+item, which can hold on every iteration.  A time difference read from the loop item
+itself is a per-item filter, not a throttle. A completion summary in the `else` suite of
+the outermost active loop also runs only once on natural exhaustion and is skipped after
+`break`; an inner-loop `else` repeated by an outer loop is still per-item. A terminal
+summary followed by a `return` that exits the function is not flagged either.
+Expressions, assignments, and `if`/`with` blocks containing no `break`, `continue`,
+`return`, `raise`, `try`, nested loop or nested scope may sit between the log and that
+`return`.
 
 ---
 
@@ -348,10 +370,25 @@ without dedup logic.
   and `_build_client` raises MetabaseCredentialInputError, with no log line before
   either. The raise is the record; whichever handler catches it logs it once.
 - **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
+- **Interacts with:** L004 and E005 at a pre-raise log: inside an except, the same warning/error line is
+  usually also reported by L004 (block) and E005, whose fix is to enrich it with
+  exc_info=True or safe_traceback(exc). Do not enrich an L009 site; resolve it here in
+  one edit, which clears all three: delete the line when the exception has an upstream
+  record (exc_info=True or the safe_traceback form; for anything raised out of an @task
+  on a v3 SDK worker, the SDK's activity.ended ERROR record), otherwise downgrade it to
+  a sanitized DEBUG through locals. Deleting may leave a bare raise; never reduce the
+  handler to one without an upstream record. v2 apps and non-activity paths (handlers,
+  preflight) have no SDK record: confirm the caller logs it, or keep the sanitized
+  DEBUG.
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
-available to the caller.  Otherwise: just re-raise.
+available to the caller.  Otherwise: just re-raise. The checker exempts the provable
+form of that context: outside any `except` handler, a log whose non-constant value
+arguments share no name or attribute with the arguments of the `raise Err(...)` it
+precedes.  A bare `raise`, constant-only arguments, or any log inside a handler (an
+L004/E005 site) still fires. A `raise HTTPException(...)` (fastapi/starlette) is exempt
+anywhere: the framework never logs it, so the preceding log is the only record.
 
 ---
 
@@ -698,10 +735,11 @@ rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equival
 The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
 rules (or their category prefixes, or `ALL`):
 
-* `G001` — `logging.warn()` deprecated (overlaps L020) * `G003` — string concatenation
-in log message (overlaps L011) * `G004` — f-string in log message (overlaps L001) *
-`T201` — `print()` statement (overlaps L005) * `LOG009` — `logging.warn()` deprecated
-(overlaps L020)
+* `G001` — `logging.warn()` deprecated (overlaps L020)
+* `G003` — string concatenation in log message (overlaps L011)
+* `G004` — f-string in log message (overlaps L001)
+* `T201` — `print()` statement (overlaps L005)
+* `LOG009` — `logging.warn()` deprecated (overlaps L020)
 
 A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed rules),
 or `ALL` appears in `select` or `extend-select` and is not in `ignore` /

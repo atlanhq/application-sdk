@@ -76,6 +76,8 @@ POST /workflows/v1/manifest          {"entrypoint": "<name>", "fe_inputs": {...}
 GET  /workflows/v1/manifest?entrypoint=<name>&fe_inputs=<url-encoded-json>          # size-capped
 ```
 
+The `core.py` hook runs on the worker only: the consolidated API host serves the handler, not `core.py`, and `gen_app_api.py check` refuses an app that has one. An app served by the host computes the manifest in its handler instead, with [`Handler.compute_manifest`](handlers.md#manifestinput-and-compute_manifest), which both the worker and the host call (a `core.py` hook for the same entry point wins on the worker).
+
 The hook must be **`async def`** and return a `dict` — a sync `def` is not discovered and the route serves the static manifest unchanged. If the hook does CPU/IO-bound work (SQL generation, full DAG rewrite) it owns offloading that off the event loop via the SDK's `run_in_thread()` (never the shared default executor — see conformance rule P031). Exceptions are logged internally and surface as a generic `500` (no internals leaked). See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the module-naming convention.
 
 > **Use `POST` when you send `fe_inputs`.** On `GET`, `fe_inputs` rides in the query string and is bounded by the request line. The SDK rejects a decoded `fe_inputs` larger than **8 KB** with `413 Payload Too Large`, *before* the hook runs, so oversize surfaces as a clear error instead of an opaque truncation. That cap is not conservative padding: past **~64 KB of request line** the URL is silently mangled by the HTTP parser — the app receives a fragment and answers `200` on a corrupt value — which is strictly worse than a rejection. A near-"select-all" asset-export-advanced submission decodes to ~11 KB and hit exactly this (CSA-539). `POST` puts the payload in the body, where neither limit applies. `GET` remains supported and uncapped for requests that send no `fe_inputs` at all — static manifest fetches, the app playground, and AE/marketplace registration probes.
@@ -129,6 +131,8 @@ The SDK provides pre-built `App` subclasses for common patterns. Override only t
 
 ### SqlMetadataExtractor
 
+Deprecated (removal in v4.0.0): subclass `SqlApp` instead (reference: atlan-mysql-app). The example below is the legacy API, kept for apps that still use it; new and migrating apps do not copy it.
+
 Extracts metadata (databases, schemas, tables, columns, procedures) from SQL sources:
 
 ```python
@@ -174,6 +178,8 @@ class MyQueryExtractor(SqlQueryExtractor):
 
 ### IncrementalSqlMetadataExtractor
 
+Deprecated (removal in v4.0.0): subclass `SqlApp` and override `run()` with the incremental phases as `@task` methods. The phases and example below are the legacy API, kept for apps that still use it; new and migrating apps do not copy them.
+
 Runs a 5-phase incremental extraction:
 
 1. **Prerequisites** — fetch the prior run marker and the previous state snapshot.
@@ -198,7 +204,7 @@ class MyIncrementalExtractor(IncrementalSqlMetadataExtractor):
 
 ### BaseMetadataExtractor
 
-Base class for all metadata-extraction Apps. Provides upload, cleanup, and lifecycle plumbing without committing to a SQL-specific task layout. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
+Deprecated (removal in v4.0.0): subclass `App` for a non-SQL source, or `SqlApp` for a SQL source. It is `App` plus the deprecated `upload_to_atlan` task. `SqlMetadataExtractor` extends this with SQL-specific defaults and task structure.
 
 ## Offloading Blocking Work (`run_in_thread` and auto-holds)
 
@@ -528,7 +534,7 @@ always the attributed failure. HTTP `/check` and SDR attribute the same failure.
 | Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `CANCELLED`; `RATE_LIMITED` left it in FND-3774), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
-| Credential provably absent | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
+| Credential provably absent (the secret store answers not-found, or the object store still has no credential config after its re-read ladder) | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
 | No worker ever ran the attempt (`SCHEDULE_TO_START`) | `gate_broken` | fail open | fail open |
@@ -630,6 +636,15 @@ anything. Both read the block's `details[0]`, so the searchable text and the str
 cannot say different things. One gap remains by design: a **soft**-mode gate does not raise, so a
 `would_block` row has no lifecycle record to carry the sentence and is reachable through
 `failure.message` only.
+
+A `blocked` row from a verdict or an unidentifiable connection also carries the block error as its
+own exception, so its `exception.message` is the raised message (`Preflight failed: …`), with no
+stack frames. The run log panel opens a failed step at ERROR and shows a record's
+`exception.message` next to its `Body`. The row's `Body` is the pinned event name, so this is how
+the reason reaches that default view. A verdict `would_block` row stays INFO and carries no
+exception. An unverifiable source carries the handler's own exception in both modes, because that
+cause is the diagnostic. For any Temporal error, `exception.message` is the error's own message,
+without the `<type>: ` tag that Temporal's `str()` puts in front of it.
 
 `frame_lost` is its own value because the failure chain cannot separate a probe that stalled
 the event loop past the gate's cancel from a worker that died under it. It is a `TIMEOUT`, so
@@ -894,6 +909,31 @@ OTLP.
 > fault in the decode path is contained and downgraded to a best-effort skip rather than killing the
 > worker. Set `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false` to disable per-deployment.
 
+#### Opt-in creation rules
+
+By default the check runs exactly what pyatlan_v9's `.validate(for_creation=True)` checks. pyatlan
+11.5.0 derives SQL parents from the qualifiedName in its `creator()` helpers, so it stopped
+reporting SQL-family assets that lack their parents: a `Schema` without `database` /
+`database_name` / `database_qualified_name`, a `Table` without `atlan_schema`, and `Table`, `View`,
+`Column`, `Procedure` and the other SQL-family types without their `schema_*` / `database_*`
+names. A transform that writes NDJSON by hand can still emit those assets, and publish needs those
+fields. An app opts back in to the checks by naming a rule set:
+
+```python
+from application_sdk.validation import AssetCreationRules
+
+
+class MyApp(App):
+    asset_validation_rules = frozenset({AssetCreationRules.SQL_PARENTS})
+```
+
+`App.asset_validation_rules` applies to both `upload()` and `upload_refs()`. The check stays
+warn-only. Rule messages use pyatlan's `"<field> is required for creation"` wording, so they land in
+`asset_validation_summary` under the same `required_for_creation:<field>` keys. Integration tests
+declare the same set on `BaseIntegrationTest.asset_validation_rules`, with a per-`Scenario`
+override. `validate_asset`, `validate_transformed_dir` and `validate_assets_as_artifact` take it
+as `creation_rules=`. The default is an empty set, which keeps the SDK aligned with pyatlan.
+
 ### Declaring artifact schemas
 
 Data crosses app boundaries as **files**, and at every hand-off the producer's idea of the
@@ -999,6 +1039,7 @@ toolkit output actually writes:
 |---|---|
 | One `manifest.json` at the root | `app/generated/artifact_schemas.json` |
 | A `manifest.json` per entry-point subdirectory (a bundle) | `app/generated/{entry-point}/artifact_schemas.json`, one per entry point |
+| A UI-less system entry point in a bundle (no manifest of its own) | `app/generated/{entry_point_snake}/artifact_schemas.json`, the snake_case dir its `_input.py` imports from |
 
 A **route/card-split** app — one marketplace card plus extra `@entrypoint`s the DAG invokes by
 `workflow_type` — has a flat tree, so all of its entry points share the one flat file. That is why
@@ -1273,6 +1314,8 @@ class MyConnector(App):
 policy = RetryPolicy().with_max_attempts(5).with_non_retryable(ValueError)
 ```
 
+A non-retryable error raised in a task (an `AppError` whose `retryable` resolves to `False`) is non-retryable for the whole run. The task is not retried, and a workflow-level `RetryPolicy` does not re-run the workflow either: the generated workflow re-raises the failure as a top-level non-retryable `ApplicationError` that keeps the task's `type` and `details`. A retryable error that uses up the task's attempts still fails the workflow retryably, so a workflow-level retry applies.
+
 ---
 
 ## Catching Client-Side Workflow Failures
@@ -1285,6 +1328,7 @@ no need to import `temporalio` yourself:
 ```python
 from application_sdk.execution import (
     TemporalActivityError,
+    TemporalApplicationError,
     TemporalCancelledError,
     TemporalWorkflowFailureError,
 )
@@ -1297,20 +1341,29 @@ except TemporalWorkflowFailureError as e:
             ...  # an @task raised
         case TemporalCancelledError():
             ...  # the workflow was cancelled
+        case TemporalApplicationError():
+            ...  # run()/@entrypoint itself raised directly
         case _:
-            ...  # e.g. temporalio.exceptions.ApplicationError when run()/@entrypoint
-            # itself raised directly — still log/handle it, don't ignore silently
+            ...  # any other cause — still log/handle it, don't ignore silently
 ```
 
 `TemporalWorkflowFailureError` wraps the terminal-state cause on `.cause` — commonly
-one of `TemporalActivityError`, `TemporalCancelledError`, `TemporalChildWorkflowError`,
-`TemporalTerminatedError`, or `TemporalTimeoutError`, but not limited to those (e.g. a
-direct raise from `run()`/`@entrypoint` surfaces as the unexported
-`temporalio.exceptions.ApplicationError` — always include a catch-all case). These
-five are re-exported (not wrapped) with a `Temporal` prefix so they don't collide with
-unrelated SDK types of the same short name, e.g.
-`application_sdk.common.error_codes.ActivityError` and
-`application_sdk.errors.leaves.CancelledError`.
+one of `TemporalActivityError`, `TemporalApplicationError`, `TemporalCancelledError`,
+`TemporalChildWorkflowError`, `TemporalTerminatedError`, or `TemporalTimeoutError`, but
+not limited to those — always include a catch-all case. Which level holds the error
+depends on where it was raised:
+
+- An `@task` raised: `e.cause` is `TemporalActivityError`, and the task's own error is
+  one level down, at `e.cause.cause` (a `TemporalApplicationError`).
+- `run()`/`@entrypoint` raised: the SDK wraps any non-Temporal exception in an
+  `ApplicationError`, so `e.cause` is a `TemporalApplicationError` directly.
+
+These six are re-exported (not wrapped) with a `Temporal` prefix so they don't collide
+with SDK types of the same short name, e.g.
+`application_sdk.common.error_codes.ActivityError`,
+`application_sdk.errors.leaves.CancelledError` and
+`application_sdk.execution.ApplicationError` (a subclass for raising; a failure read
+back from Temporal is never an instance of it, so match on `TemporalApplicationError`).
 
 This is distinct from error handling *inside* `run()`/`@task` code: there, raise
 and catch `application_sdk.errors.AppError` leaves (`CancelledError`,

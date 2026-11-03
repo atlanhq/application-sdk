@@ -1,0 +1,172 @@
+// FND-3563: a system app with several entrypoints (a system bundle) whose
+// UI-less system sub-contracts declare `inputs`. Each entrypoint's caller node
+// lands under `contract/generated/<ep>/`, its Python under an importable
+// snake_case `app/generated/<ep_snake>/`, and its e2e base extends
+// SystemAppE2ETest without a manifest or extract/publish DAG it does not have.
+// Every other bundle entrypoint renders exactly as before.
+
+amends "pkl:test"
+
+import "../examples/bundle/app.pkl" as bundleApp
+import "../examples/bundle/miner.pkl" as Miner
+import "../examples/system-app/app.pkl" as systemApp
+import "../examples/system-bundle/app.pkl" as systemBundle
+import "../examples/system-bundle/digest.pkl" as Digest
+import "../src/App.pkl" as App
+
+local files = systemBundle.output.files
+local usageBase: String = files["app/generated/usage_analysis/_e2e_base.py"].text
+local digestBase: String = files["app/generated/digest/_e2e_base.py"].text
+
+// A non-system bundle root carrying one system sub-contract next to a
+// non-system one: only the system entrypoint changes layout.
+local mixedBundle = (bundleApp) {
+  entrypoints = new Listing {
+    new App.Entrypoint { name = "miner"; contract = Miner }
+    new App.Entrypoint { name = "digest-step"; contract = Digest }
+  }
+}
+
+// A system sub-contract WITH a setup form, under a non-system root. It has a
+// manifest and form the SDK reads under the kebab wire name, so its directory
+// keeps that name. It is still a system contract, so its e2e base is a system one.
+local setupForm = new App.UIConfig {
+  tasks { ["Settings"] { inputs { ["target"] = new App.TextInput { title = "Target" } } } }
+}
+local DigestWithUi = (Digest) { uiConfig = setupForm }
+local function withEntrypoint(c) = (bundleApp) {
+  entrypoints = new Listing {
+    new App.Entrypoint { name = "miner"; contract = Miner }
+    new App.Entrypoint { name = "digest-ui"; contract = c }
+  }
+}
+local systemUiBundle = withEntrypoint(DigestWithUi)
+local systemUiBase: String = systemUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text
+local connectorUiBundle = withEntrypoint((DigestWithUi) { type = "connector"; inputs = new Mapping {}; hasCredentialConfig = false })
+
+local minerOnlyBundle = (bundleApp) {
+  entrypoints = new Listing {
+    new App.Entrypoint { name = "miner"; contract = Miner }
+  }
+}
+
+facts {
+  ["System bundle renders one caller node per entrypoint under contract/generated/<ep>/"] {
+    files.keys == Set(
+      "atlan.yaml", "app.yaml",
+      "app/generated/usage_analysis/_input.py",
+      "app/generated/usage_analysis/__init__.py",
+      "app/generated/usage_analysis/_e2e_base.py",
+      "contract/generated/usage-analysis/input.pkl",
+      "app/generated/digest/_input.py",
+      "app/generated/digest/__init__.py",
+      "app/generated/digest/_e2e_base.py",
+      "contract/generated/digest/input.pkl")
+    !files.keys.any((k) -> k.contains("app/generated/") && k.contains("contract/generated"))
+  }
+
+  ["Each caller node is the entrypoint contract's own"] {
+    files["contract/generated/usage-analysis/input.pkl"].text.contains("open class UsageAnalysisNode extends App.DAGNode {")
+    files["contract/generated/usage-analysis/input.pkl"].text.contains("  workflowType = \"UsageAnalysisWorkflow\"\n")
+    files["contract/generated/digest/input.pkl"].text.contains("open class DigestNode extends App.DAGNode {")
+  }
+
+  ["Caller nodes route to the bundle's app and task queue, with their own workflowType"] {
+    // One App class, one worker and one queue serve every entrypoint.
+    for (ep in List("usage-analysis", "digest")) {
+      files["contract/generated/\(ep)/input.pkl"].text.contains("  appName = \"system-bundle\"\n")
+      files["contract/generated/\(ep)/input.pkl"].text
+        .contains("  taskQueue = \"atlan-system-bundle-{deployment_name}\"\n")
+    }
+    files["contract/generated/digest/input.pkl"].text.contains("  workflowType = \"DigestWorkflow\"\n")
+    // The sync identity stays the sub-contract's own.
+    files["contract/generated/digest/input.pkl"].text.contains("as `system/digest.pkl`")
+    // A sub-contract's legacy workflow type passes through verbatim.
+    withEntrypoint((DigestWithUi) { workflowType = "KeifuWorkflow" })
+      .output.files["contract/generated/digest-ui/input.pkl"].text
+      .contains("  workflowType = \"KeifuWorkflow\"\n  appName = \"bundle\"\n  taskQueue = \"atlan-bundle-{deployment_name}\"\n")
+  }
+
+  ["A single-entrypoint system app's caller node keeps its own app and queue"] {
+    systemApp.output.files["contract/generated/input.pkl"].text.contains("  appName = \"system-app\"\n")
+    systemApp.output.files["contract/generated/input.pkl"].text
+      .contains("  taskQueue = \"atlan-system-app-{deployment_name}\"\n")
+  }
+
+  ["Caller nodes resolve the toolkit import from their new location"] {
+    import("../examples/system-bundle/contract/generated/usage-analysis/input.pkl").output.text != null
+    import("../examples/system-bundle/contract/generated/digest/input.pkl").output.text != null
+  }
+
+  ["A hyphenated system entrypoint's Python package dir is snake_case"] {
+    files["app/generated/usage_analysis/_input.py"].text
+      .contains("\nclass UsageAnalysisAppInputContract(Input):\n")
+    files["app/generated/usage_analysis/_input.py"].text
+      .contains("\nAppInputContract = UsageAnalysisAppInputContract\n")
+    !files.keys.any((k) -> k.startsWith("app/generated/usage-analysis/"))
+  }
+
+  ["System entrypoint e2e base extends SystemAppE2ETest with no manifest or crawler DAG"] {
+    usageBase.contains("\nclass UsageAnalysisGeneratedE2EBase(SystemAppE2ETest):\n")
+    usageBase.contains("    connector_short_name = \"system-bundle\"\n")
+    usageBase.contains("    entrypoint = \"usage-analysis\"\n")
+    usageBase.contains("Set manifest_path in the suite")
+    !usageBase.contains("manifest_path =")
+    !usageBase.contains("required_dag_nodes =")
+    !usageBase.contains("connector_config_name")
+    !usageBase.contains("argo_package_name")
+    !usageBase.contains("app_service_url")
+    digestBase.contains("\nclass DigestGeneratedE2EBase(SystemAppE2ETest):\n")
+  }
+
+  ["A system sub-contract under a non-system root is handled the same way"] {
+    mixedBundle.output.files.containsKey("app/generated/digest_step/_input.py")
+    mixedBundle.output.files.containsKey("contract/generated/digest-step/input.pkl")
+    mixedBundle.output.files["app/generated/digest_step/_e2e_base.py"].text.contains("(SystemAppE2ETest):")
+    // The non-system entrypoint keeps its kebab dir, manifest wiring and base class.
+    mixedBundle.output.files["app/generated/miner/_e2e_base.py"].text
+      == minerOnlyBundle.output.files["app/generated/miner/_e2e_base.py"].text
+    mixedBundle.output.files["app/generated/miner/manifest.json"].text
+      == minerOnlyBundle.output.files["app/generated/miner/manifest.json"].text
+  }
+
+  ["A system sub-contract with a uiConfig keeps its kebab dir and manifest, and is still a system entrypoint"] {
+    // `type` picks the base class; the uiConfig only means a manifest exists.
+    systemUiBase.contains("(SystemAppE2ETest):")
+    systemUiBase.contains("    manifest_path = \"app/generated/digest-ui/manifest.json\"\n")
+    systemUiBase.contains("    entrypoint = \"digest-ui\"\n")
+    !systemUiBase.contains("connector_config_name")
+    !systemUiBase.contains("argo_package_name")
+    !systemUiBase.contains("app_service_url")
+    connectorUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text.contains("(BaseE2ETest):")
+    connectorUiBundle.output.files["app/generated/digest-ui/_e2e_base.py"].text.contains("connector_config_name")
+    systemUiBundle.output.files.containsKey("app/generated/digest-ui/manifest.json")
+    systemUiBundle.output.files.containsKey("contract/generated/digest-ui/input.pkl")
+    !systemUiBundle.output.files.keys.any((k) -> k.startsWith("app/generated/digest_ui/"))
+    !systemUiBundle.output.files.keys.any((k) -> k.contains("app/generated/") && k.contains("contract/generated"))
+  }
+
+  ["Non-system bundle output is unchanged"] {
+    bundleApp.output.files.keys == Set(
+      "atlan.yaml", "app.yaml",
+      "app/generated/atlan-connectors-bundle.json",
+      "app/generated/crawler/crawler.json",
+      "app/generated/crawler/manifest.json",
+      "app/generated/crawler/_input.py",
+      "app/generated/crawler/__init__.py",
+      "app/generated/crawler/_e2e_base.py",
+      "app/generated/crawler/_e2e_credential.py",
+      "app/generated/miner/miner.json",
+      "app/generated/miner/manifest.json",
+      "app/generated/miner/_input.py",
+      "app/generated/miner/__init__.py",
+      "app/generated/miner/_e2e_base.py",
+      "app/generated/miner/_e2e_substitutions.py")
+    bundleApp.output.files["app/generated/crawler/_e2e_base.py"].text
+      .contains("    manifest_path = \"app/generated/crawler/manifest.json\"\n")
+  }
+
+  ["Single-entrypoint system app keeps contract/generated/input.pkl"] {
+    systemApp.output.files.containsKey("contract/generated/input.pkl")
+  }
+}

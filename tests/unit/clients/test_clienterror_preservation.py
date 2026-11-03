@@ -9,7 +9,6 @@ lock the contract documented in PR #1602 and prevent re-introduction of the bugs
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,17 +18,18 @@ from application_sdk.clients.redis_errors import (
     RedisConnectionError,
     RedisProtocolError,
 )
-from application_sdk.clients.sql_errors import SqlClientAuthFailedError
+from application_sdk.clients.sql_errors import SqlClientConnectUnclassifiedError
 
 # ---------------------------------------------------------------------------
-# BLDX-1180 — async SQL load() raises SqlClientAuthFailedError, not ValueError
+# BLDX-1180 — async SQL load() raises a typed AppError, not ValueError
 # ---------------------------------------------------------------------------
 
 
 class TestAsyncSqlLoadErrorContract:
-    """``AsyncBaseSQLClient.load()`` must raise ``SqlClientAuthFailedError`` on
-    auth / connection failure, mirroring sync ``BaseSQLClient.load()``. Before
-    BLDX-1180 it raised generic ``ValueError(str(e))``.
+    """``AsyncBaseSQLClient.load()`` must raise a typed ``AppError`` on a
+    connection failure, mirroring sync ``BaseSQLClient.load()``. Before
+    BLDX-1180 it raised generic ``ValueError(str(e))``. Since FND-3889 an
+    unrecognised failure is typed as pending classification, not as auth.
     """
 
     @pytest.mark.asyncio
@@ -55,11 +55,12 @@ class TestAsyncSqlLoadErrorContract:
                 "sqlalchemy.ext.asyncio.create_async_engine",
                 side_effect=RuntimeError("boom"),
             ),
-            pytest.raises(SqlClientAuthFailedError) as exc_info,
+            pytest.raises(SqlClientConnectUnclassifiedError) as exc_info,
         ):
             await client.load({"username": "u", "password": "p"})
 
-        assert exc_info.value.code == "AUTH_SQL_CLIENT_FAILED"
+        assert not isinstance(exc_info.value, ValueError)
+        assert exc_info.value.code == "INTERNAL_SQL_CLIENT_CONNECT"
 
 
 # ---------------------------------------------------------------------------
@@ -104,19 +105,13 @@ class TestAzureClientErrorContract:
         from application_sdk.clients.azure.client import AzureClient
 
         client = AzureClient()
-
-        # Simulate: client was closed (executor shut down + nulled).
-        # Close should be idempotent and set _executor = None.
-        if isinstance(client._executor, ThreadPoolExecutor):
-            client._executor.shutdown(wait=False)
-        client._executor = None
+        await client.close()
 
         with pytest.raises(AzureClientAuthError) as exc_info:
             await client.load({"auth_type": "service_principal"})
 
-        # Pre-fix this would silently submit work to a dead executor and
-        # surface a confusing error far from the cause. After the fix the
-        # client raises AzureClientAuthError with an actionable message.
+        # A closed client must refuse to reload with an actionable message
+        # rather than fail somewhere far from the cause.
         assert "instantiate a new" in str(exc_info.value).lower()
 
 

@@ -49,8 +49,10 @@ from application_sdk.testing.e2e.client import (
 from application_sdk.testing.e2e.credential import CredentialBody
 from application_sdk.testing.e2e.payload import AgentSpec, DatabaseSpec, RunMode
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.harness import identity as identity_mod
 from application_sdk.testing.harness._poll import fake_clock
 from application_sdk.testing.harness.temporal import PollerInfo, TaskQueueType
+from tests.unit.private_stdlib import private_stdlib
 
 
 @asynccontextmanager
@@ -954,18 +956,19 @@ class TestConnectionQnUniqueness:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         self._bootstrap_env(monkeypatch)
+
         # Freeze the clock so both instances share an epoch — the exact
         # same-second race two parallel matrix legs can hit. The random suffix
         # must still make them distinct.
-        monkeypatch.setattr("time.time", lambda: 1783979480.0)
-
         class _T(_ConcreteE2ETest):
             connection_admin_roles = ("test-admin-role-guid",)  # skip net lookup
 
-        a = _T()
-        a.setup_method()
-        b = _T()
-        b.setup_method()
+        with private_stdlib(identity_mod, "time") as local_time:
+            monkeypatch.setattr(local_time, "time", lambda: 1783979480.0)
+            a = _T()
+            a.setup_method()
+            b = _T()
+            b.setup_method()
 
         assert a.connection_qualified_name != b.connection_qualified_name
         for qn in (a.connection_qualified_name, b.connection_qualified_name):

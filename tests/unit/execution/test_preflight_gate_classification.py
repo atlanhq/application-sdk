@@ -61,6 +61,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     PreflightClassification,
     PreflightGateInput,
     PreflightRowOutcome,
+    _is_definitive_credential_absence,
     build_preflight_gate_activity,
     coerce_gate_mode,
     gate_attempts,
@@ -79,6 +80,8 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
 )
+from application_sdk.infrastructure._dapr.credential_vault import DaprCredentialVault
+from application_sdk.infrastructure.credential_vault import CredentialVaultError
 from application_sdk.observability.logger_adaptor import (
     _KNOWN_EXTRA_KEYS,
     GATE_ATTEMPTS_KEY,
@@ -89,6 +92,7 @@ from application_sdk.observability.logger_adaptor import (
     PREFLIGHT_SURFACE_KEY,
 )
 from application_sdk.testing.preflight import outcome_rows, single_outcome
+from tests.unit.infrastructure._credential_vault_fakes import binding_500, vault_sleep
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
 
@@ -127,7 +131,9 @@ class _RecordingHandler(DefaultHandler):
         return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
 
-def _gate(handler, *, mode: PreflightGateMode, budget: float = 0.3):
+def _gate(handler, *, mode: PreflightGateMode, budget: float = 5):
+    # A fast handler must never have to beat the budget on a loaded runner;
+    # only the overrun tests pass a short one, because the overrun is the subject.
     return build_preflight_gate_activity(
         handler, app_name="myapp", mode=mode, budget_seconds=budget
     )
@@ -288,7 +294,7 @@ class TestSourceUnverifiableAppliesMode:
 
     async def test_budget_overrun_is_reported_not_blocked_in_hard_mode(self) -> None:
         handler = _SlowHandler()
-        gate = _gate(handler, mode=PreflightGateMode.HARD)
+        gate = _gate(handler, mode=PreflightGateMode.HARD, budget=0.3)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
 
@@ -315,7 +321,7 @@ class TestSourceUnverifiableAppliesMode:
 
     async def test_budget_overrun_reports_and_proceeds_in_soft_mode(self) -> None:
         handler = _SlowHandler()
-        gate = _gate(handler, mode=PreflightGateMode.SOFT)
+        gate = _gate(handler, mode=PreflightGateMode.SOFT, budget=0.3)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
 
@@ -391,6 +397,7 @@ class _CancellationSwallowingHandler(DefaultHandler):
 
     def __init__(self, *, then_return: bool) -> None:
         self._then_return = then_return
+        self.finished = False
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         try:
@@ -400,6 +407,7 @@ class _CancellationSwallowingHandler(DefaultHandler):
                 # wait_for would hand this straight back as a real verdict.
                 return PreflightOutput(status=PreflightStatus.READY, checks=[])
             await asyncio.sleep(5)  # ignores the cancel and keeps working
+        self.finished = True
         return PreflightOutput(status=PreflightStatus.READY, checks=[])
 
 
@@ -434,19 +442,16 @@ class TestUncooperativeHandlerCannotDefeatTheBudget:
     async def test_ignoring_the_cancel_does_not_hold_the_activity_open(self) -> None:
         # The gate must classify at the deadline, not wait for the handler to
         # unwind — otherwise it blows start_to_close and loses the verdict.
-        gate = _gate(
-            _CancellationSwallowingHandler(then_return=False),
-            mode=PreflightGateMode.HARD,
-            budget=0.3,
-        )
-        loop = asyncio.get_running_loop()
-        started = loop.time()
+        handler = _CancellationSwallowingHandler(then_return=False)
+        gate = _gate(handler, mode=PreflightGateMode.HARD, budget=0.3)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
-        elapsed = loop.time() - started
         assert result.status is PreflightStatus.NOT_READY
         assert _outcome(mock_logger)["reason"] == "TIMEOUT"
-        assert elapsed < 2.0, f"gate waited {elapsed:.1f}s for an uncooperative handler"
+        # The handler is still working off the cancel it swallowed: the gate
+        # returned without waiting for it. Asserted on the handler, not on
+        # elapsed time, which measured the runner (FND-4233).
+        assert not handler.finished, "gate waited for an uncooperative handler"
 
 
 class TestCollapsedPlumbingIsNotACredentialProblem:
@@ -487,6 +492,73 @@ class TestCollapsedPlumbingIsNotACredentialProblem:
             _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
             == PreflightClassification.SOURCE_UNVERIFIABLE
         )
+
+    @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
+    async def test_exhausted_missing_config_ladder_applies_mode(
+        self, mode: PreflightGateMode, capture_preflight_outcomes
+    ) -> None:
+        # The object store answers "not found" for the credential config on
+        # every re-read: that is an absence the run can be blamed for, so it
+        # takes the mode — not a vault outage that fails open. Drives the real
+        # vault and resolver, so the typed leaf must survive both layers.
+        client = mock.MagicMock()
+        client.close = mock.AsyncMock()
+        client.invoke_binding = mock.AsyncMock(
+            side_effect=binding_500("error invoking output binding: BlobNotFound")
+        )
+        vault = DaprCredentialVault(
+            client,
+            upstream_binding_name="upstream-objectstore",
+            secret_store_name="secretstore",
+        )
+        handler = _RecordingHandler()
+        gate = _gate(handler, mode=mode)
+        envelope = PreflightGateInput(
+            extraction_method="direct", credential_guid="example-guid"
+        )
+        with (
+            vault_sleep() as sleep,
+            mock.patch(
+                "application_sdk.infrastructure.DaprCredentialVault",
+                return_value=vault,
+            ),
+            mock.patch(
+                "application_sdk.infrastructure.AsyncDaprClient", return_value=client
+            ),
+            mock.patch(f"{_GATE}._require_secret_store", return_value=mock.MagicMock()),
+        ):
+            if mode is PreflightGateMode.HARD:
+                with pytest.raises(ApplicationError) as excinfo:
+                    await gate(envelope)
+                assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+                assert excinfo.value.non_retryable is True
+                primary = _primary_details(excinfo.value)
+                assert primary.category is FailureCategory.NOT_FOUND
+                assert primary.code == "NOT_FOUND_CREDENTIAL"
+            else:
+                result = await gate(envelope)
+                assert result.status is PreflightStatus.NOT_READY
+
+        assert client.invoke_binding.await_count == 4
+        assert [call.args[0] for call in sleep.await_args_list] == [2.0, 5.0, 10.0]
+        client.close.assert_awaited_once()
+        assert handler.preflight_input is None, "handler ran without a credential"
+        row = capture_preflight_outcomes.one
+        assert row["outcome"] == (
+            "blocked" if mode is PreflightGateMode.HARD else "would_block"
+        )
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
+
+    def test_vault_outage_is_not_a_definitive_absence(self) -> None:
+        # The umbrella vault error still means "could not tell", so a not-found
+        # collapsed from it stays plumbing; only the typed leaf is a config fact.
+        collapsed = CredentialNotFoundError("example-guid")
+        collapsed.__cause__ = CredentialVaultError(
+            "store unavailable", cause=ConnectionResetError()
+        )
+        assert _is_definitive_credential_absence(collapsed) is False
 
 
 class TestHandlerRaisedBlockPassesThrough:
@@ -754,7 +826,7 @@ class TestVerdictOnAnyAttempt:
     ) -> None:
         # Still a verdict on attempt 1 (no retry marker), but TIMEOUT is one a
         # hard gate reports rather than blocks on (FND-3040).
-        gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD)
+        gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD, budget=0.3)
         with _non_final_attempt(), mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
@@ -1076,12 +1148,11 @@ class TestResolutionRunsUnderTheBudget:
             _patched_resolution(sleep=60),
             mock.patch(f"{_GATE}.logger") as mock_logger,
         ):
-            started = asyncio.get_running_loop().time()
             with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-            elapsed = asyncio.get_running_loop().time() - started
+                # Resolution hangs for 60s; a gate that waited on it past its
+                # own budget could not finish inside this bound.
+                await asyncio.wait_for(gate(PreflightGateInput()), 30)
 
-        assert elapsed < 2.0, "the gate waited on resolution past its own budget"
         assert excinfo.value.type == "DependencyUnavailableError"
         details = _primary_details(excinfo.value)
         assert details.category is FailureCategory.DEPENDENCY_UNAVAILABLE
@@ -1281,12 +1352,11 @@ class TestHandlerIsCancelledAtTheAdvertisedBudget:
             verify_storage=True,
         )
         with mock.patch(f"{_GATE}.logger") as mock_logger:
-            started = asyncio.get_running_loop().time()
             result = await gate(PreflightGateInput())
-            elapsed = asyncio.get_running_loop().time() - started
         assert result.status is PreflightStatus.NOT_READY
+        # Cancelled before its 3s of work completed, so at the advertised 2s,
+        # not at the 5s budget the reserve was carved from.
         assert handler.completed is False
-        assert elapsed < 2.9
         row = _outcome(mock_logger)
         assert row["outcome"] == "would_block"
         assert "2s budget" in result.checks[0].resolved_message

@@ -1,0 +1,208 @@
+{
+  "config": {
+    "properties": {
+      "name": {
+        "type": "string",
+        "required": false
+      },
+      "connector": {
+        "type": "string",
+        "required": false
+      },
+      "connectorType": {
+        "type": "string",
+        "required": false
+      },
+      "extra": {
+        "type": "object",
+        "ui": {
+          "widget": "nested"
+        },
+        "properties": {
+          "connect_type": {
+            "type": "string",
+            "required": true,
+            "enum": [
+              "public",
+              "private"
+            ],
+            "default": "public",
+            "ui": {
+              "widget": "radio"
+            }
+          }
+        }
+      },
+      "host": {
+        "type": "conditional",
+        "required": false,
+        "default": "https://bigquery.googleapis.com",
+        "conditions": [
+          {
+            "property": "extra.connect_type",
+            "value": "private",
+            "required": true,
+            "ui": {
+              "widget": ""
+            }
+          }
+        ],
+        "ui": {
+          "widget": "input"
+        }
+      },
+      "port": {
+        "type": "conditional",
+        "required": false,
+        "default": 443,
+        "conditions": [
+          {
+            "property": "extra.connect_type",
+            "value": "private",
+            "required": false,
+            "ui": {
+              "widget": ""
+            }
+          }
+        ],
+        "ui": {
+          "widget": "inputNumber"
+        }
+      },
+      "auth-type": {
+        "type": "string",
+        "enum": [
+          "basic",
+          "gcp-wif"
+        ],
+        "default": "basic",
+        "required": true,
+        "ui": {
+          "widget": "radio"
+        }
+      },
+      "basic": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "nestedValue": false
+        },
+        "properties": {
+          "username": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "input"
+            }
+          },
+          "password": {
+            "type": "string",
+            "required": true,
+            "ui": {
+              "widget": "password"
+            }
+          },
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested"
+            },
+            "properties": {
+              "project_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input"
+                }
+              }
+            }
+          }
+        }
+      },
+      "gcp-wif": {
+        "type": "object",
+        "ui": {
+          "widget": "nested",
+          "nestedValue": false
+        },
+        "properties": {
+          "extra": {
+            "type": "object",
+            "ui": {
+              "widget": "nested"
+            },
+            "properties": {
+              "project_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input"
+                }
+              },
+              "service_account_email": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input"
+                }
+              },
+              "wif_pool_provider_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input"
+                }
+              },
+              "atlan_oauth_id": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "input"
+                }
+              },
+              "atlan_oauth_secret": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                  "widget": "password"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "anyOf": [
+      {
+        "properties": {
+          "auth-type": {
+            "const": "basic"
+          }
+        },
+        "required": [
+          "basic"
+        ]
+      },
+      {
+        "properties": {
+          "auth-type": {
+            "const": "gcp-wif"
+          }
+        },
+        "required": [
+          "gcp-wif"
+        ]
+      },
+      {
+        "properties": {
+          "extra.connect_type": {
+            "const": "private"
+          }
+        },
+        "required": [
+          "host"
+        ]
+      }
+    ]
+  }
+}

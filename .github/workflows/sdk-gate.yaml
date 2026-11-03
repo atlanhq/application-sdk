@@ -56,11 +56,15 @@ jobs:
   changes:
     name: Detect Changes (SDK Gate)
     runs-on: ubuntu-latest
+    # Seconds of work; without a cap a hung step holds the gate for the
+    # 360-minute default.
+    timeout-minutes: 10
     outputs:
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
       toolkit: ${{ steps.filter.outputs.toolkit }}
       conformance: ${{ steps.filter.outputs.conformance }}
       conformance_pkg: ${{ steps.filter.outputs.conformance_pkg }}
+      api_pkg: ${{ steps.filter.outputs.api_pkg }}
       container: ${{ steps.filter.outputs.container }}
       force_all: ${{ steps.final-force.outputs.force_all }}
       force_sdk: ${{ steps.final-force.outputs.force_sdk }}
@@ -149,6 +153,9 @@ jobs:
             # other area.
             sdk:
               - 'application_sdk/**'
+              # The SDK re-exports the api package (same objects) and pins it at its
+              # own version, so an api change must run the full SDK suite too.
+              - 'packages/api/**'
               - 'tests/**'
               - 'pyproject.toml'
               - 'uv.lock'
@@ -204,6 +211,15 @@ jobs:
               # Self-test the suite-test harness: editing the reusable that runs
               # the package's pytest must re-run it (same reasoning as `sdk`).
               - '.github/workflows/conformance-suite-tests-reusable.yaml'
+            # The api DISTRIBUTION (packages/api: its file list, build hook and
+            # pyproject.toml) and its checks. A change to a listed application_sdk/
+            # file also runs them: api-suite-tests triggers on `sdk` too.
+            api_pkg:
+              - 'packages/api/**'
+              - '.github/workflows/api-suite-tests-reusable.yaml'
+              - '.github/scripts/check_api_surface.py'
+              - '.github/scripts/gen_api_files.py'
+              - '.github/scripts/probe_api_wheels.py'
             # A container change (base image / daprd / system deps / entrypoint)
             # can alter SDK runtime behaviour, so it runs ALL gate areas — in
             # addition to the orthogonal Trivy container scan + connector e2e
@@ -268,17 +284,38 @@ jobs:
           echo "force_toolkit=$force_toolkit" >> "$GITHUB_OUTPUT"
           echo "Final force flags: force_all=$force_all (force_sdk=$force_sdk force_conformance=$force_conformance force_toolkit=$force_toolkit)"
 
+      # Fail ONE job, not fifteen, on a lock that cannot resolve (FND-4240). A
+      # dependency bump whose pyproject.toml no longer resolves used to pass
+      # detection and fan out to every area, where each matrix leg's
+      # `setup-deps` re-ran the resolver and died on the same
+      # `No solution found when resolving dependencies` — ~15 red jobs per
+      # Renovate rebase. Failing here skips every area and the gate fails
+      # closed on `changes`, with uv's resolver output in this step's log.
+      # The script re-checks only when uv.lock or a pyproject.toml differ from
+      # the base, so a stale lock on main cannot redden unrelated PRs.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+
+      - name: Check that uv.lock resolves
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 .github/scripts/check_uv_lock.py
+
   sdk-tests:
     name: SDK Tests
     needs: changes
     if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true')
     uses: ./.github/workflows/sdk-tests-reusable.yaml
     # packages: read lets the Storage Emulator job pull the private MinIO
-    # mirror (ghcr.io/atlanhq/ci-mirror/minio). A called workflow cannot hold
-    # more than its caller grants, so it has to be granted here.
+    # mirror (ghcr.io/atlanhq/ci-mirror/minio); statuses: read lets
+    # "Decide integration request" read the /e2e and /gate-check markers. A
+    # called workflow cannot hold more than its caller grants, so both are
+    # granted here.
     permissions:
       contents: read
       packages: read
+      statuses: read
     secrets: inherit
 
   conformance:
@@ -342,6 +379,19 @@ jobs:
     uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
     secrets: inherit
 
+  # The api package's own suites. force_sdk is included for the same reason
+  # as sdk-tests: a bump-version-main PR publishes this wheel alongside the
+  # SDK, and when a force flag is set the dorny/paths-filter step is skipped
+  # entirely, so `api_pkg`/`sdk` are the empty string rather than 'false'.
+  # force_all fans out to force_sdk, but is kept explicit so a release/* or v*
+  # run cannot silently skip these tests while the gate reads green. Gated on
+  # the bump-PR opt-in like every other area.
+  api-suite-tests:
+    name: API Suite Tests
+    needs: changes
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.api_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_sdk == 'true' || needs.changes.outputs.force_all == 'true')
+    uses: ./.github/workflows/api-suite-tests-reusable.yaml
+
   # ── The single required check ───────────────────────────────────────────────
   # Always runs and always concludes, so branch protection can require exactly
   # this one context for all three areas.  A reusable-workflow call that was
@@ -354,9 +404,14 @@ jobs:
     # ANDed with success(needs.changes), so if detection fails every area
     # skips — and skipped→pass would make this gate falsely green while
     # NOTHING ran. Fail closed on a non-success `changes` result.
-    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests]
+    needs: [changes, sdk-tests, conformance, toolkit, conformance-suite-tests, api-suite-tests]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # flag_job_timeouts.py lists this run's jobs.
+      actions: read
     steps:
       # An un-opted bump PR skipped every area; without this the gate would
       # read success|skipped as a pass and the PR could merge with nothing run.
@@ -373,12 +428,13 @@ jobs:
           CONFORMANCE_RESULT: ${{ needs.conformance.result }}
           TOOLKIT_RESULT: ${{ needs.toolkit.result }}
           CONFORMANCE_PKG_RESULT: ${{ needs.conformance-suite-tests.result }}
+          API_PKG_RESULT: ${{ needs.api-suite-tests.result }}
         run: |
           set -euo pipefail
           # Detection has no `if:`, so it always runs — anything other than
           # success means we cannot trust which areas ran. Fail closed.
           if [[ "$CHANGES_RESULT" != "success" ]]; then
-            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed."
+            echo "::error::Detect Changes did not succeed ($CHANGES_RESULT) — failing the gate closed. If its 'Check that uv.lock resolves' step failed, the lock cannot resolve: the resolver error is in that step's log."
             exit 1
           fi
           ok=true
@@ -395,8 +451,34 @@ jobs:
           check "Conformance"           "$CONFORMANCE_RESULT"
           check "Contract Toolkit"      "$TOOLKIT_RESULT"
           check "Conformance Suite Tests" "$CONFORMANCE_PKG_RESULT"
+          check "API Suite Tests"         "$API_PKG_RESULT"
           if [[ "$ok" != "true" ]]; then
             echo "::error::SDK gate FAILED — one or more areas did not pass."
             exit 1
           fi
           echo "SDK gate passed."
+
+      # Only the timeout flag below reads the checkout, so it is advisory too.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: always()
+        continue-on-error: true
+        with:
+          sparse-checkout: .github
+          persist-credentials: false
+
+      # A job killed by its timeout-minutes concludes `cancelled`, the same as
+      # one superseded by a newer push, so timeouts vanish into CI noise. This
+      # annotates any job that ran to within 30s of its cap. Advisory: it runs
+      # after the verdict steps (always(), so even when they failed) and never
+      # decides the gate, hence continue-on-error.
+      - name: Flag jobs that hit their timeout
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/flag_job_timeouts.py
+          --repo "${{ github.repository }}"
+          --run-id "${{ github.run_id }}"
+          --run-attempt "${{ github.run_attempt }}"
+          --workflow .github/workflows/sdk-gate.yaml

@@ -26,6 +26,9 @@ from application_sdk.errors.base import AppError, redact_and_cap, redact_secrets
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import PreconditionError
 from application_sdk.errors.wire import FailureDetails
+from application_sdk.handler._warmup import (  # noqa: F401 — re-exported; lives in the api distribution
+    rows_outside_tiers,
+)
 from application_sdk.handler.contracts import (
     CheckTier,
     PreflightCheck,
@@ -105,8 +108,9 @@ FAILURE_AUDIENCE_KEY = "failure.audience"
 # FAILURE_AUDIENCE_KEY and unlike GATE_OUTCOME_ROW_KEYS: a row with nothing
 # failed carries neither. ``reason`` is a code so dashboards can separate fault
 # classes, and ``check_matrix`` deliberately holds no messages, so without these
-# the sentence lived only on the adjacent "Completing activity as failed" record
-# under ``exception.message`` — one record away, under a key nobody searches.
+# a query on the row could not find the sentence: it lived only on the adjacent
+# "Completing activity as failed" record. A blocked row also carries it as its
+# own ``exception.message``, the field the run log panel shows.
 # They use the ``failure.`` prefix the logger already passes through, so neither
 # needs an entry in ``_KNOWN_EXTRA_KEYS``.
 FAILURE_CHECK_KEY = "failure.check"
@@ -598,18 +602,3 @@ def emit_preflight_crash_outcome(
         },
         **extra,
     )
-
-
-def rows_outside_tiers(
-    result: PreflightOutput, tiers: frozenset[CheckTier]
-) -> list[str]:
-    """Names of the checks *result* returned outside the requested *tiers*.
-
-    The post-call tier check ``/check`` and the gate share. Handlers do not
-    reliably filter (none of the canonical apps reads ``checks_to_run``), so the
-    SDK checks what came back instead of trusting it. A non-empty answer means
-    the handler ran a check it was told not to (a ``WARMUP`` probe against
-    compute that is not ready), so its verdict cannot be read as one about the
-    requested tiers: the caller treats it as no verdict, never as a silent drop.
-    """
-    return [check.name for check in result.checks if check.tier not in tiers]

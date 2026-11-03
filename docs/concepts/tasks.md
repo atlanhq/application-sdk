@@ -314,6 +314,11 @@ class MyConnector(App):
             )
 ```
 
+`self.heartbeat()` / `self.task_context.heartbeat()` is safe to call from
+blocking code you offloaded with `run_in_thread`, including a plain-function
+`RollingFileWriter` `on_chunk_complete`: the SDK hands the beat back to the
+event loop.
+
 The details survive a worker eviction too: when a pod is shut down mid-task
 (KEDA scale-down, spot reclaim, rolling deploy) the SDK re-dispatches the task
 as a new activity execution, and the last details the evicted attempt sent are

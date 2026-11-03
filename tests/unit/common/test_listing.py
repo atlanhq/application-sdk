@@ -10,16 +10,29 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
 import pytest
 
+from application_sdk.common import _listing
 from application_sdk.common._listing import (
     _DARWIN_F_FULLFSYNC,
     _flush_directory_metadata,
     safe_list_directory,
 )
+from tests.unit.private_stdlib import private_stdlib
+
+
+@pytest.fixture
+def local_os() -> Iterator[ModuleType]:
+    """The listing module's private ``os``: a patched ``fsync``/``open``/
+    ``scandir`` on it reaches no other thread on the worker."""
+    with private_stdlib(_listing, "os") as local:
+        yield local
+
 
 # =============================================================================
 # safe_list_directory — happy paths
@@ -167,9 +180,10 @@ class TestSafeListDirectoryErrorSurfacing:
 class TestFlushDirectoryMetadataDarwin:
     def test_calls_f_fullfsync_on_darwin(self, tmp_path: Path) -> None:
         """Darwin path uses ``fcntl(F_FULLFSYNC=51)``, not plain ``fsync``."""
-        import fcntl
-
-        with patch.object(fcntl, "fcntl", return_value=0) as mock_fcntl:
+        with (
+            private_stdlib(_listing, "fcntl") as local_fcntl,
+            patch.object(local_fcntl, "fcntl", return_value=0) as mock_fcntl,
+        ):
             _flush_directory_metadata(tmp_path)
 
         assert mock_fcntl.called
@@ -177,14 +191,15 @@ class TestFlushDirectoryMetadataDarwin:
         op_arg = mock_fcntl.call_args[0][1]
         assert op_arg == _DARWIN_F_FULLFSYNC == 51
 
-    def test_falls_back_to_fsync_when_f_fullfsync_fails(self, tmp_path: Path) -> None:
+    def test_falls_back_to_fsync_when_f_fullfsync_fails(
+        self, tmp_path: Path, local_os: ModuleType
+    ) -> None:
         """If F_FULLFSYNC raises OSError (some devices don't honor it),
         the primitive falls through to portable ``os.fsync``."""
-        import fcntl
-
         with (
-            patch.object(fcntl, "fcntl", side_effect=OSError("unsupported")),
-            patch.object(os, "fsync") as mock_fsync,
+            private_stdlib(_listing, "fcntl") as local_fcntl,
+            patch.object(local_fcntl, "fcntl", side_effect=OSError("unsupported")),
+            patch.object(local_os, "fsync") as mock_fsync,
         ):
             _flush_directory_metadata(tmp_path)
 
@@ -193,29 +208,33 @@ class TestFlushDirectoryMetadataDarwin:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only")
 class TestFlushDirectoryMetadataSwallow:
-    def test_swallows_oserror_from_fsync(self, tmp_path: Path) -> None:
+    def test_swallows_oserror_from_fsync(
+        self, tmp_path: Path, local_os: ModuleType
+    ) -> None:
         """Best-effort barrier: an OSError from os.fsync must not
         propagate — the os.scandir recursion is the actual correctness
         layer below."""
-        with patch.object(os, "fsync", side_effect=OSError("ro fs")):
+        with patch.object(local_os, "fsync", side_effect=OSError("ro fs")):
             # Must not raise
             _flush_directory_metadata(tmp_path)
 
-    def test_swallows_oserror_from_open(self, tmp_path: Path) -> None:
+    def test_swallows_oserror_from_open(
+        self, tmp_path: Path, local_os: ModuleType
+    ) -> None:
         """If we cannot even open the directory FD, the function
         returns silently — the subsequent scandir call will produce
         a more informative error in the caller."""
-        with patch.object(os, "open", side_effect=OSError("eacces")):
+        with patch.object(local_os, "open", side_effect=OSError("eacces")):
             # Must not raise
             _flush_directory_metadata(tmp_path)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="windows-specific")
 class TestFlushDirectoryMetadataWindows:
-    def test_is_noop_on_windows(self, tmp_path: Path) -> None:
+    def test_is_noop_on_windows(self, tmp_path: Path, local_os: ModuleType) -> None:
         """Windows path is a no-op (no POSIX dir FD, NTFS not
         affected). The primitive returns without opening anything."""
-        with patch.object(os, "open") as mock_open:
+        with patch.object(local_os, "open") as mock_open:
             _flush_directory_metadata(tmp_path)
         assert not mock_open.called
 
@@ -250,7 +269,9 @@ class TestSafeListDirectoryIterativeInvariants:
         assert len(result) == 1
         assert result[0].name == "deep.txt"
 
-    def test_holds_at_most_one_scandir_context_at_a_time(self, tmp_path: Path) -> None:
+    def test_holds_at_most_one_scandir_context_at_a_time(
+        self, tmp_path: Path, local_os: ModuleType
+    ) -> None:
         """Peak concurrent ``os.scandir`` contexts must be 1. A
         regression to recursive ``yield from`` would push peak to the
         tree depth (each enclosing context stays open while inner
@@ -297,7 +318,7 @@ class TestSafeListDirectoryIterativeInvariants:
         def _wrapped_scandir(p):
             return _Tracking(real_scandir(p))
 
-        with patch.object(os, "scandir", side_effect=_wrapped_scandir):
+        with patch.object(local_os, "scandir", side_effect=_wrapped_scandir):
             result = safe_list_directory(tmp_path)
 
         # Sanity: the walk actually found everything.

@@ -16,12 +16,9 @@ from __future__ import annotations
 import ast
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
-from conformance.suite.checks.orchestration._temporal_common import (
-    collect_import_bindings,
-)
 from conformance.suite.schema.findings import Finding
 
-from ._p023_blocking_async import is_data_scale_io
+from ._p023_blocking_async import is_client_factory, is_data_scale_io, module_bindings
 from ._workflow_methods import resolve_call_target, workflow_method_nodes
 
 RULE_ID = "P021"
@@ -105,6 +102,13 @@ def _is_io_target(target: str) -> bool:
     return (
         target in _IO_EXACT
         or any(target.startswith(p) for p in _IO_PREFIXES)
+        # The clients P023 tracks outside workflow context (boto3, duckdb,
+        # sqlalchemy engines, archives, gzip/io handles). Their sends are found
+        # through bindings P021 does not follow, so the factory is flagged
+        # instead — in workflow code the construction is already the defect.
+        # Exact factories, not package roots: `sqlalchemy.text(...)` or
+        # `botocore.config.Config(...)` build values in memory and do no I/O.
+        or is_client_factory(target)
         or (
             not _is_own_method(target)
             and (target.endswith(_IO_SUFFIXES) or is_data_scale_io(target))
@@ -127,7 +131,9 @@ def check_p021(
     methods = workflow_method_nodes(tree)
     if not methods:
         return []
-    bindings = collect_import_bindings(tree)
+    # `import a.b` binds `a` to the package, as Python does — so
+    # `botocore.session.get_session()` resolves to that, not `…session.session…`.
+    bindings = module_bindings(tree)
     findings: list[Finding] = []
     for method in methods:
         for node in ast.walk(method):

@@ -121,9 +121,7 @@ class TestSdrTimeoutsAndRetries:
         assert sdr._PREFLIGHT_START_TO_CLOSE <= sdr._PREFLIGHT_SCHEDULE_TO_CLOSE
         assert sdr._METADATA_START_TO_CLOSE <= sdr._METADATA_SCHEDULE_TO_CLOSE
 
-    def test_inverted_timeout_pair_warns_at_module_load(self, monkeypatch) -> None:
-        import importlib
-
+    def test_inverted_timeout_pair_warns(self, monkeypatch) -> None:
         from application_sdk.execution._temporal import sdr
 
         # Invert the auth pair: start_to_close >= schedule_to_close leaves no room
@@ -131,21 +129,14 @@ class TestSdrTimeoutsAndRetries:
         monkeypatch.setenv("ATLAN_SDR_AUTH_SCHEDULE_TO_CLOSE_SECONDS", "30")
         monkeypatch.setenv("ATLAN_SDR_AUTH_START_TO_CLOSE_SECONDS", "60")
         fake_logger = mock.MagicMock()
-        try:
-            with mock.patch(
-                "application_sdk.observability.logger_adaptor.get_logger",
-                return_value=fake_logger,
-            ):
-                importlib.reload(sdr)
-            assert fake_logger.warning.called
-            warned = " ".join(str(c) for c in fake_logger.warning.call_args_list)
-            assert "AUTH" in warned and "test_auth" in warned
-        finally:
-            monkeypatch.undo()
-            importlib.reload(sdr)
+        monkeypatch.setattr(sdr, "logger", fake_logger)
+        sdr._load_timeout_pair("test_auth", "AUTH")
+        assert fake_logger.warning.called
+        warned = " ".join(str(c) for c in fake_logger.warning.call_args_list)
+        assert "AUTH" in warned and "test_auth" in warned
 
     def test_timeouts_are_env_overridable(self, monkeypatch) -> None:
-        import importlib
+        from datetime import timedelta
 
         from application_sdk.execution._temporal import sdr
 
@@ -157,20 +148,16 @@ class TestSdrTimeoutsAndRetries:
         # rejected by Temporal at schedule time.
         monkeypatch.setenv("ATLAN_SDR_METADATA_SCHEDULE_TO_CLOSE_SECONDS", "0")
         monkeypatch.setenv("ATLAN_SDR_METADATA_START_TO_CLOSE_SECONDS", "-5")
-        reloaded = importlib.reload(sdr)
-        try:
-            from datetime import timedelta
-
-            assert reloaded._PREFLIGHT_SCHEDULE_TO_CLOSE == timedelta(seconds=200)
-            assert reloaded._PREFLIGHT_START_TO_CLOSE == timedelta(seconds=190)
-            # bad/non-positive overrides fall back to the flat 300s default
-            assert reloaded._AUTH_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
-            assert reloaded._METADATA_SCHEDULE_TO_CLOSE == timedelta(seconds=300)
-            assert reloaded._METADATA_START_TO_CLOSE == timedelta(seconds=300)
-        finally:
-            # Restore module-level defaults for the rest of the suite.
-            monkeypatch.undo()
-            importlib.reload(sdr)
+        assert sdr._load_timeout_pair("preflight_check", "PREFLIGHT") == (
+            timedelta(seconds=190),
+            timedelta(seconds=200),
+        )
+        # bad/non-positive overrides fall back to the flat 300s default
+        assert sdr._load_timeout_pair("test_auth", "AUTH")[1] == timedelta(seconds=300)
+        assert sdr._load_timeout_pair("fetch_metadata", "METADATA") == (
+            timedelta(seconds=300),
+            timedelta(seconds=300),
+        )
 
     def test_auth_retry_is_fail_fast(self) -> None:
         from application_sdk.execution._temporal import sdr

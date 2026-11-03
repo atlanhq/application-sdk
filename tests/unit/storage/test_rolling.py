@@ -7,6 +7,8 @@ Exercises:
 - Time-based rollover (mocked clock and real sleep)
 - Sync vs async flush_fn dispatch
 - on_chunk_complete callback fires per chunk and survives exceptions
+- Default size estimator: recursive + sampled for row lists, row-sampled for
+  DataFrames
 - file_reference property returns ephemeral FileReference scoped to subdir
 - Validation: empty base_path, missing-leading-dot extension, non-positive interval
 """
@@ -15,6 +17,8 @@ from __future__ import annotations
 
 import os
 import time
+import tracemalloc
+import types
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,6 +27,9 @@ import pytest
 
 from application_sdk.contracts.types import FileReference
 from application_sdk.storage.rolling import (
+    _SIZE_MAX_NODES,
+    _SIZE_SAMPLE_ITEMS,
+    _SIZE_SAMPLE_ROWS,
     AnyOfPolicy,
     BufferState,
     CountPolicy,
@@ -638,6 +645,114 @@ class TestDefaultSizeEstimator:
     def test_unknown_type_falls_back_to_sys_getsizeof(self) -> None:
         size = _default_size_estimator(42)
         assert size == sys_getsizeof(42)
+
+    def test_list_of_dict_rows_counts_the_row_values(self) -> None:
+        """The SQL-client batch shape: a list of row dicts.
+
+        A one-level walk sized only the row dicts' hash tables, ~15% of the
+        real footprint, so the 50 MB ceiling fired at ~330 MB.
+        """
+        rows, cols = 5_000, 20
+        tracemalloc.start()
+        try:
+            batch = [
+                {f"col_{c}": f"value-{r}-{c}-" + "x" * 30 for c in range(cols)}
+                for r in range(rows)
+            ]
+            actual, _ = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        assert 0.8 <= _default_size_estimator(batch) / actual <= 1.6
+
+    def test_nested_values_are_counted(self) -> None:
+        payload = "x" * 1_000
+        batch = [{"attrs": {"tags": [payload, payload]}} for _ in range(100)]
+        assert _default_size_estimator(batch) > 100 * 2 * sys_getsizeof(payload)
+
+    def test_large_list_is_sampled_not_walked(self) -> None:
+        """Cost is bounded: only ``_SIZE_SAMPLE_ITEMS`` rows are walked."""
+        visited: list[object] = []
+
+        class _Row(dict):  # noqa: FURB189 — need a dict subclass to observe access
+            def items(self):  # type: ignore[override]
+                visited.append(self)
+                return super().items()
+
+        batch = [_Row(a=i) for i in range(10_000)]
+        size = _default_size_estimator(batch)
+
+        assert len(visited) == _SIZE_SAMPLE_ITEMS
+        assert size > 10_000 * sys_getsizeof(batch[0])
+
+    def test_nested_walk_stops_at_the_node_budget(self) -> None:
+        """Per-container sampling alone still allows 64**depth visits."""
+        inner = [list(range(64))] * 64
+        batch = [{i: inner for i in range(64)}] * 64
+        calls = 0
+
+        def _counting_getsizeof(obj: object) -> int:
+            nonlocal calls
+            calls += 1
+            return sys_getsizeof(obj)
+
+        with patch(
+            "application_sdk.storage.rolling.sys",
+            types.SimpleNamespace(getsizeof=_counting_getsizeof),
+        ):
+            assert _default_size_estimator(batch) > 0
+
+        # +1: a dict pair sizes its value even when its key spent the last node.
+        assert calls <= _SIZE_MAX_NODES + 1
+
+    @pytest.mark.parametrize("shape", ["frame", "series"])
+    def test_categorical_pool_is_not_scaled_by_row_count(self, shape: str) -> None:
+        """A row sample keeps the whole category pool, a fixed cost.
+
+        Scaling it by ``rows / len(sample)`` over-counted a 100k-row,
+        20k-category column ~250x, so ``SizePolicy`` rolled every append.
+        """
+        pd = pytest.importorskip("pandas")
+        rows = 100_000
+        cats = [f"category-value-{i:06d}" for i in range(20_000)]
+        df = pd.DataFrame(
+            {
+                "id": range(rows),
+                "c": pd.Categorical([cats[i % len(cats)] for i in range(rows)]),
+            }
+        )
+        batch = df if shape == "frame" else df["c"]
+        full = int(pd.Series(batch.memory_usage(deep=True)).sum())
+
+        assert abs(_default_size_estimator(batch) - full) / full < 0.05
+
+    def test_dataframe_estimate_samples_rows(self) -> None:
+        """``memory_usage(deep=True)`` walks every object cell — sample it.
+
+        Full-frame deep sizing cost ~150 ms per 100k x 20 append, on the
+        event loop. The estimate must touch a bounded number of rows and
+        stay close to the full-frame figure.
+        """
+        pd = pytest.importorskip("pandas")
+        df = pd.DataFrame(
+            {
+                f"c{j}": [f"v{i}-{j}-" + "x" * (i % 50) for i in range(50_000)]
+                for j in range(5)
+            }
+        )
+        sized_rows: list[int] = []
+        real = pd.DataFrame.memory_usage
+
+        def _spy(self, *args, **kwargs):
+            sized_rows.append(len(self))
+            return real(self, *args, **kwargs)
+
+        with patch.object(pd.DataFrame, "memory_usage", _spy):
+            estimate = _default_size_estimator(df)
+
+        assert sized_rows and max(sized_rows) < 2 * _SIZE_SAMPLE_ROWS
+        full = int(df.memory_usage(deep=True).sum())
+        assert abs(estimate - full) / full < 0.05
 
 
 def sys_getsizeof(obj: object) -> int:

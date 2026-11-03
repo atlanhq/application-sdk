@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import os
 import stat
+import urllib.request
+from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,6 +22,7 @@ from application_sdk.dev._pkl_errors import (
     UnsupportedPklPlatformError,
 )
 from application_sdk.pkl_version import PKL_VERSION
+from tests.unit.private_stdlib import private_stdlib
 
 
 class TestPlatformKey:
@@ -137,6 +141,23 @@ class TestEnsurePkl:
 
 
 class TestDownload:
+    @pytest.fixture(autouse=True)
+    def _private_urllib_request(self) -> Iterator[None]:
+        """Give ``pkl`` its own ``urllib.request``, so the fake download answers
+        only ``_download`` and not a dapr fetch another test left running."""
+        with (
+            private_stdlib(pkl_mod, "urllib") as local_urllib,
+            private_stdlib(local_urllib, "request"),
+        ):
+            yield
+
+    @staticmethod
+    def _request() -> ModuleType:
+        """The private ``urllib.request`` the autouse fixture bound into ``pkl``."""
+        request = pkl_mod.urllib.request
+        assert request is not urllib.request, "the private-copy fixture is not active"
+        return request
+
     def test_renames_into_place_leaving_no_partial(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -145,7 +166,7 @@ class TestDownload:
         def fake_urlretrieve(url: str, filename: str) -> None:
             Path(filename).write_text("binary", encoding="utf-8")
 
-        monkeypatch.setattr(pkl_mod.urllib.request, "urlretrieve", fake_urlretrieve)
+        monkeypatch.setattr(self._request(), "urlretrieve", fake_urlretrieve)
         pkl_mod._download("https://example.invalid/pkl", target)
         assert target.read_text(encoding="utf-8") == "binary"
         # No .part left behind: a truncated fetch must not survive as a
@@ -167,7 +188,7 @@ class TestDownload:
     ) -> None:
         target = tmp_path / "cache" / "pkl"
         monkeypatch.setattr(
-            pkl_mod.urllib.request,
+            self._request(),
             "urlretrieve",
             lambda url, filename: Path(filename).write_text("binary", encoding="utf-8"),
         )
@@ -177,7 +198,6 @@ class TestDownload:
     def test_retries_then_succeeds(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(pkl_mod.time, "sleep", lambda *_a: None)
         attempts = {"n": 0}
 
         def flaky(url: str, filename: str) -> None:
@@ -186,20 +206,25 @@ class TestDownload:
                 raise OSError("503 from the release CDN")
             Path(filename).write_text("binary", encoding="utf-8")
 
-        monkeypatch.setattr(pkl_mod.urllib.request, "urlretrieve", flaky)
-        pkl_mod._download("https://example.invalid/pkl", tmp_path / "pkl")
+        monkeypatch.setattr(self._request(), "urlretrieve", flaky)
+        with private_stdlib(pkl_mod, "time") as local_time:
+            monkeypatch.setattr(local_time, "sleep", lambda *_a: None)
+            pkl_mod._download("https://example.invalid/pkl", tmp_path / "pkl")
         assert attempts["n"] == 3
 
     def test_raises_typed_error_when_retries_exhaust(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(pkl_mod.time, "sleep", lambda *_a: None)
         monkeypatch.setattr(
-            pkl_mod.urllib.request,
+            self._request(),
             "urlretrieve",
             MagicMock(side_effect=OSError("503")),
         )
-        with pytest.raises(PklDownloadError) as exc:
+        with (
+            private_stdlib(pkl_mod, "time") as local_time,
+            pytest.raises(PklDownloadError) as exc,
+        ):
+            monkeypatch.setattr(local_time, "sleep", lambda *_a: None)
             pkl_mod._download("https://example.invalid/pkl", tmp_path / "pkl")
         assert exc.value.attempts == pkl_mod._DOWNLOAD_MAX_ATTEMPTS
         assert not (tmp_path / "pkl").exists()

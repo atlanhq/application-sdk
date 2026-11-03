@@ -97,6 +97,7 @@ from application_sdk.validation.artifacts import (
     artifact_validation_matrix_json,
     artifact_validation_mode,
 )
+from application_sdk.validation.asset_rules import AssetCreationRules
 from application_sdk.validation.assets import (
     AssetArtifactReport,
     AssetBatchScope,
@@ -198,6 +199,7 @@ __all__ = [
     # Asset validation (BLDX-1555) — the NDJSON x ModelSource cell (FND-690)
     "AssetArtifactReport",
     "AssetBatchScope",
+    "AssetCreationRules",
     "AssetValidationFailure",
     "AssetValidationReport",
     "ReferentialFailure",

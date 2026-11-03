@@ -1,8 +1,17 @@
-"""Concurrency utilities — CPU detection and thread pool sizing."""
+"""Concurrency utilities — CPU detection, thread pool sizing, and offloading.
+
+``run_in_thread`` is re-exported here for handler code, which the consolidated
+API host serves without the worker SDK: its usual app-facing path,
+``application_sdk.execution.heartbeat``, loads the Temporal execution layer.
+Both paths are the same function.
+"""
 
 import os
 
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk._logging import get_logger
+from application_sdk._runtime.offload import (  # noqa: F401 — re-exported for handler code
+    run_in_thread,
+)
 
 logger = get_logger(__name__)
 

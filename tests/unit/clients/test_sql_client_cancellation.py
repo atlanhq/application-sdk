@@ -9,7 +9,11 @@ heartbeats and the liveness probe.
 Each test blocks a real worker thread on an event with a release deadline. The
 deadline only exists so a regression fails instead of hanging the suite: code
 that joins the thread on cancel takes ``_RELEASE_AFTER`` to return, well past
-``_PROMPT``.
+``_PROMPT``. Every other wait (the thread reaching the call, the connection
+being invalidated or released) is bounded by ``_RELEASE_AFTER`` too: a passing
+test must never have to beat a short bound on a loaded runner. Whether the loop
+stayed free is proven structurally instead — the blocked call has not finished
+when the loop observes it.
 """
 
 import asyncio
@@ -23,10 +27,11 @@ import pytest
 from application_sdk.clients.sql import BaseSQLClient
 
 #: How long a blocked "query" waits before releasing itself.
-_RELEASE_AFTER = 5.0
+_RELEASE_AFTER = 10.0
 
-#: How quickly a cancelled read must give control back to the loop.
-_PROMPT = 1.0
+#: How quickly a cancelled read must give control back to the loop: generous
+#: for a loaded runner, but well short of ``_RELEASE_AFTER``.
+_PROMPT = 3.0
 
 
 class _BlockingQuery:
@@ -147,6 +152,7 @@ async def test_cancelling_run_query_returns_promptly_and_defers_close(
         elapsed = await _cancel_and_time(task)
 
         assert elapsed < _PROMPT, f"loop blocked {elapsed:.2f}s on cancel"
+        assert not execute.finished.is_set()
         # Closing now would race the driver call still running on the connection.
         connection.close.assert_not_called()
     finally:
@@ -174,10 +180,10 @@ async def test_cancelling_run_query_during_connect_returns_promptly_and_closes(
 
     task = asyncio.ensure_future(consume())
     try:
-        start = time.monotonic()
         await _wait_for_thread(connect.started, task)
-        reached = time.monotonic() - start
-        assert reached < _PROMPT, f"loop blocked {reached:.2f}s while connecting"
+        # A connect on the loop thread would have run to its end before the
+        # loop could observe it starting.
+        assert not connect.finished.is_set(), "loop blocked while connecting"
 
         elapsed = await _cancel_and_time(task)
 
@@ -214,10 +220,10 @@ async def test_run_query_closes_off_the_loop_after_a_full_read(
 
     task = asyncio.ensure_future(consume())
     try:
-        start = time.monotonic()
         await _wait_for_thread(close.started, task)
-        reached = time.monotonic() - start
-        assert reached < _PROMPT, f"loop blocked {reached:.2f}s while closing"
+        # A close on the loop thread would have run to its end before the loop
+        # could observe it starting.
+        assert not close.finished.is_set(), "loop blocked while closing"
     finally:
         close.release.set()
     await task
@@ -299,14 +305,17 @@ def interrupting_client(slow_sqlite: _SlowSqlite) -> _InterruptingClient:
 async def _assert_cancelled_at_the_driver(
     client: _InterruptingClient, db: _SlowSqlite
 ) -> None:
-    # The driver stopped well inside the time the scan would otherwise take,
-    # and the connection it ran on was dropped rather than pooled.
-    assert db.invalidated.wait(_PROMPT), "cancelled connection was not invalidated"
+    # The driver stopped well inside the time the scan would otherwise take
+    # (a million ``slow()`` calls), and the connection it ran on was dropped
+    # rather than pooled.
+    assert db.invalidated.wait(
+        _RELEASE_AFTER
+    ), "cancelled connection was not invalidated"
     assert not db.release.is_set()
     assert len(client.cancel_threads) == 1
     assert client.cancel_threads[0].startswith("sdk-cancel-")
     # ...and the worker thread let go of it, so its pool slot is free again.
-    deadline = time.monotonic() + _PROMPT
+    deadline = time.monotonic() + _RELEASE_AFTER
     while db.engine.pool.checkedout():  # type: ignore[attr-defined]
         assert time.monotonic() < deadline, "connection never released"
         await asyncio.sleep(0.01)

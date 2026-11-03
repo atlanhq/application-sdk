@@ -90,6 +90,10 @@ The Storage Emulator Tests pull MinIO only from our own private GHCR package, `g
 
 If Chainguard withdraws the image, CI keeps working from the mirror. Only refreshes stop.
 
+The other three emulator images (Azurite, storage-testbench, and the nginx proxy in front of it) are public. They are pinned as `tag@digest` in `AZURITE_IMAGE`, `GCS_TESTBENCH_IMAGE` and `NGINX_IMAGE`, so a re-pushed tag cannot change what CI runs. To move one, update the tag and the digest together (`crane digest <image>:<tag>`). Each pull is wrapped as `with-retry.sh timeout 120 docker pull …`, so a stalled pull is retried instead of hanging until the job timeout.
+
+`.github/scripts/wait_for_emulators.py` waits for all three emulators and creates the buckets. The step fails if an emulator never answers or a bucket cannot be created. The test step sets `STORAGE_EMULATOR_REQUIRED=1`, so an unreachable emulator fails its tests instead of skipping them. Without the variable, as in a local run with no sidecar, they still skip.
+
 ## Consuming Dapr components in an app repo
 
 App repos should **not** curl these files from `raw.githubusercontent.com` or the GitHub contents API pinned to a hardcoded SDK tag (that pattern hits GitHub's unauthenticated rate limit under CI concurrency and silently drifts from the app's actual `atlan-application-sdk` version). Instead, copy them out of the installed package, e.g. as the app's `download-components` poe task:

@@ -1,6 +1,7 @@
 """Unit tests for FastAPI utility functions."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -421,20 +422,18 @@ class TestUploadFileToObjectStore:
         mock_file.content_type = content_type
         mock_file.read = AsyncMock(return_value=file_content)
 
-        result = await upload_file_to_object_store(
-            file=mock_file,
-            prefix="workflow_file_upload",
-        )
+        # The module's wall clock is frozen, so the stamp is an exact value
+        # rather than "within the last minute" of a second reading.
+        frozen = SimpleNamespace(time=lambda: 1_700_000_000.1234)
+        with patch("application_sdk.server.fastapi.utils.time", frozen):
+            result = await upload_file_to_object_store(
+                file=mock_file,
+                prefix="workflow_file_upload",
+            )
 
-        # Timestamps should be in milliseconds
-        assert result.createdAt > 0
-        assert result.updatedAt > 0
-        assert result.createdAt == result.updatedAt
-        # Should be recent (within last minute)
-        import time
-
-        current_ms = int(time.time() * 1000)
-        assert abs(result.createdAt - current_ms) < 60000
+        # Timestamps are the clock's reading in whole milliseconds
+        assert result.createdAt == 1_700_000_000_123
+        assert result.updatedAt == result.createdAt
 
         # uploadedAt should be ISO format with Z
         assert result.uploadedAt.endswith("Z")

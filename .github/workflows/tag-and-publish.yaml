@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # PyPI trusted publishing (OIDC) for atlan-application-sdk-api; see the
+      # api publish step below.
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -22,14 +25,14 @@ jobs:
           fetch-depth: 0  # Need full history for release notes
 
       - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.14'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.6"
 
       - name: Install dependencies
         shell: bash
@@ -44,6 +47,48 @@ jobs:
       - name: Extract changelog for this version
         run: |
           python .github/scripts/extract_release_notes.py "${{ env.VERSION }}" > .github/release_notes.md
+
+      # TODO: Uncomment in case we need to publish to TestPyPI
+      # Available at: https://test.pypi.org/project/atlan-application-sdk/
+      # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
+      # testpypi config available (commented out) under pyproject.toml
+      # - name: Build and publish to TestPyPI
+      #   env:
+      #     UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      #   run: |
+      #     uv build
+      #     uv publish --index testpypi
+
+      # Both packages are published BEFORE the tag and the GitHub Release, so a
+      # failed publish never leaves a v<version> tag or Release with nothing on
+      # PyPI behind it. --check-url makes a rerun idempotent: files already on
+      # PyPI with identical content are skipped instead of rejected, so a run
+      # that published the api package and then failed on the SDK can simply be
+      # re-run.
+      #
+      # Lockstep release: atlan-application-sdk pins atlan-application-sdk-api at
+      # its own version, so the api package (packages/api) is published first,
+      # from this same commit. If it fails, the SDK is not published.
+      # Available at: https://pypi.org/project/atlan-application-sdk-api/
+      #
+      # Published with PyPI trusted publishing (OIDC, id-token: write above), no
+      # token. The PyPI trusted publisher for atlan-application-sdk-api is bound
+      # to repository atlanhq/application-sdk, THIS workflow's filename
+      # (tag-and-publish.yaml), with any environment allowed. Renaming this
+      # file breaks api publishing until the publisher entry on PyPI is
+      # updated to match.
+      - name: Build and publish the api package to PyPI
+        run: |
+          uv build packages/api --out-dir dist-api
+          uv publish --trusted-publishing always --check-url https://pypi.org/simple/ dist-api/*
+
+      # Available at: https://pypi.org/project/atlan-application-sdk/
+      - name: Build and publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          uv build
+          uv publish --check-url https://pypi.org/simple/
 
       - name: Create Git tag
         run: |
@@ -86,36 +131,52 @@ jobs:
           prerelease: ${{ contains(env.VERSION, 'rc') }}
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
-      # TODO: Uncomment in case we need to publish to TestPyPI
-      # Available at: https://test.pypi.org/project/atlan-application-sdk/
-      # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
-      # testpypi config available (commented out) under pyproject.toml
-      # - name: Build and publish to TestPyPI
-      #   env:
-      #     UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
-      #   run: |
-      #     uv build
-      #     uv publish --index testpypi
-
-      # Available at: https://pypi.org/project/atlan-application-sdk/
-      - name: Build and publish to PyPI
-        env:
-          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          uv build
-          uv publish
-
   fan-out:
     # After an SDK release, trigger the self-hosted Renovate runner so consumers
     # pick up the new atlan-application-sdk version within minutes rather than
-    # waiting for the next scheduled run. Skipped automatically when `release` is
-    # skipped (non-release PR) or fails.
+    # waiting for the next scheduled run, then re-dispatch the fleet repos that
+    # sweep missed. Skipped automatically when `release` is skipped (non-release
+    # PR) or fails.
+    #
+    # KEEP IN STEP with conformance-publish.yml's fan-out (FND-4330): both jobs
+    # share the concurrency group below and wait for EVERY first-party version
+    # on main, not just their own. The SDK and conformance bump PRs routinely
+    # merge seconds apart; the later fan-out cancels the earlier one while it is
+    # still waiting, and the survivor dispatches once, after both are on PyPI.
+    # A cancelled fan-out shows this run as cancelled even though the release
+    # job succeeded.
     name: Fan out Renovate to consumers
     needs: [release]
     runs-on: ubuntu-latest
+    # Visibility wait (<=15 min) + full sweep + up to two scoped re-runs.
+    timeout-minutes: 120
+    concurrency:
+      group: renovate-release-fanout
+      cancel-in-progress: true
     permissions:
       contents: read
     steps:
+      # main, not the bump commit: main is where a sibling release that merged
+      # moments later already shows its version.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Wait for the release to be visible on PyPI
+        id: pypi
+        # Soft-fail: a timeout already warns and exits 0, and anything else
+        # going wrong here must not cost the fleet its sweep.
+        continue-on-error: true
+        run: |
+          python3 .github/scripts/wait_for_pypi_release.py \
+            --pyproject pyproject.toml \
+            --pyproject packages/api/pyproject.toml \
+            --pyproject packages/conformance/pyproject.toml
+
+      # Minted after the wait so the one-hour token covers the follow-up.
+      # Owner-scoped (no `repositories:`): the follow-up reads fleet repos'
+      # uv.lock and rules as well as dispatching here.
       - name: Mint fleet App token
         id: app-token
         continue-on-error: true
@@ -124,16 +185,15 @@ jobs:
           app-id: ${{ secrets.FLEET_APP_ID }}
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
-          repositories: application-sdk
-      - name: Trigger the self-hosted Renovate runner
-        # No dry_run/repos overrides: inherits renovate.yaml's live defaults (full
-        # discovery, dry_run=null). Soft-fail so a fan-out hiccup never fails the
-        # release — the 4-hourly schedule is the backstop.
+
+      - name: Trigger Renovate and re-dispatch repos it missed
+        # The full sweep inherits renovate.yaml's live defaults. Soft-fail
+        # throughout (the script warns and exits 0) so a fan-out hiccup never
+        # fails the release — the 4-hourly schedule is the backstop.
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
-        run: |
-          gh workflow run renovate.yaml --repo atlanhq/application-sdk \
-          || echo "::warning::Could not trigger renovate.yaml — consumers will update on the next scheduled run."
+          PACKAGES: ${{ steps.pypi.outputs.packages }}
+        run: python3 .github/scripts/renovate_release_followup.py --packages "$PACKAGES"
 
   linear-release:
     # Record what shipped in this version as a Linear release, so the
@@ -197,7 +257,7 @@ jobs:
         # each successful sync, which is what makes a failed sync self-healing
         # (see the soft-fail note above). Leaving base_ref pinned here would
         # defeat that and re-attach the same issues to every later release.
-        uses: linear/linear-release-action@30f9ae77461ec29f07fffe0c52edd1909bfbb6f5 # v0.18.1
+        uses: linear/linear-release-action@dd4fc407f860b9460d2cf0b3fb1edd8985cf443f # v0.18.2
         with:
           access_key: ${{ secrets.LINEAR_ACCESS_KEY }}
           version: ${{ steps.meta.outputs.version }}

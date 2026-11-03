@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 import pytest
 
@@ -282,25 +281,17 @@ class TestServiceVersionDefault:
 
     def test_defaults_to_sdk_version(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv("OTEL_SERVICE_VERSION", raising=False)
-        # Re-import to pick up the default
-        import importlib
-
-        import application_sdk.constants as c
-
-        importlib.reload(c)
+        from application_sdk.constants import _load_service_version
         from application_sdk.version import __version__
 
-        assert c.SERVICE_VERSION == __version__
-        assert c.SERVICE_VERSION != "0.1.0"
+        assert _load_service_version() == __version__
+        assert _load_service_version() != "0.1.0"
 
     def test_env_override_respected(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("OTEL_SERVICE_VERSION", "custom-1.2.3")
-        import importlib
+        from application_sdk.constants import _load_service_version
 
-        import application_sdk.constants as c
-
-        importlib.reload(c)
-        assert c.SERVICE_VERSION == "custom-1.2.3"
+        assert _load_service_version() == "custom-1.2.3"
 
 
 class TestRealWorldDevScenarios:
@@ -398,40 +389,6 @@ class TestRealWorldDevScenarios:
             _minimal_args(temporal_host="temporal.cli:7233")
         )
         assert config.temporal_host == "temporal.cli:7233"
-
-
-class TestRunDevCombinedDaprDefaults:
-    """run_dev_combined() defaults DAPR_HTTP_PORT/DAPR_GRPC_PORT for local dev."""
-
-    def test_defaults_dapr_http_port_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """No DAPR_HTTP_PORT in env → run_dev_combined sets 3500."""
-        monkeypatch.delenv("DAPR_HTTP_PORT", raising=False)
-        os.environ.setdefault("DAPR_HTTP_PORT", "3500")
-        assert os.environ["DAPR_HTTP_PORT"] == "3500"
-
-    def test_defaults_dapr_grpc_port_when_unset(self, monkeypatch: pytest.MonkeyPatch):
-        """No DAPR_GRPC_PORT in env → run_dev_combined sets 50001."""
-        monkeypatch.delenv("DAPR_GRPC_PORT", raising=False)
-        os.environ.setdefault("DAPR_GRPC_PORT", "50001")
-        assert os.environ["DAPR_GRPC_PORT"] == "50001"
-
-    def test_respects_dev_override_http_port(self, monkeypatch: pytest.MonkeyPatch):
-        """Dev exports DAPR_HTTP_PORT=4000 → setdefault does not overwrite."""
-        monkeypatch.setenv("DAPR_HTTP_PORT", "4000")
-        os.environ.setdefault("DAPR_HTTP_PORT", "3500")
-        assert os.environ["DAPR_HTTP_PORT"] == "4000"
-
-    def test_respects_dev_override_grpc_port(self, monkeypatch: pytest.MonkeyPatch):
-        """Dev exports DAPR_GRPC_PORT=60001 → setdefault does not overwrite."""
-        monkeypatch.setenv("DAPR_GRPC_PORT", "60001")
-        os.environ.setdefault("DAPR_GRPC_PORT", "50001")
-        assert os.environ["DAPR_GRPC_PORT"] == "60001"
-
-    def test_dotenv_loaded_port_not_overwritten(self, monkeypatch: pytest.MonkeyPatch):
-        """If .env already loaded DAPR_HTTP_PORT → setdefault is a no-op."""
-        monkeypatch.setenv("DAPR_HTTP_PORT", "3500")  # simulates dotenv
-        os.environ.setdefault("DAPR_HTTP_PORT", "9999")
-        assert os.environ["DAPR_HTTP_PORT"] == "3500"
 
 
 # app_module used across _build_dev_config tests; "MyApp" → service "my-app" → queue "my-app-queue"

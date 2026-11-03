@@ -41,13 +41,9 @@ consumable by any SQL, REST, NoSQL, or cloud-storage client whose
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import re
 import traceback
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 import orjson
 
@@ -57,7 +53,9 @@ from application_sdk.credentials.errors import (
     CredentialNotFoundError,
     CredentialParseError,
 )
+from application_sdk.credentials.spec import VALUE_SOURCES_KEY
 from application_sdk.errors import (
+    AppError,
     ColdStartRaceError,
     DaprSidecarUnreachableError,
     redact_secrets,
@@ -67,8 +65,16 @@ from application_sdk.infrastructure import (
     DAPR_SECRET_STORE_COMPONENT,
     retry_past_dapr_cold_start,
 )
+from application_sdk.infrastructure._single_key_probe import (
+    hash_label,
+    probe_single_keys,
+    scrubbed_traceback,
+)
 from application_sdk.infrastructure.secrets import (
+    AgentSecretReadError,
     SecretNotFoundError,
+    SecretStoreError,
+    SecretStoreTransientError,
     SecretStoreUnavailableError,
     SecretStoreUnreachableError,
 )
@@ -100,20 +106,24 @@ _LITERAL_KEYS: frozenset[str] = frozenset(
     }
 )
 
-#: Bounded fan-out for the single-key probe sweep (BLDX-1594). A probe holds its
-#: slot for its whole retry ladder, so the sweep costs
-#: ``ceil(candidates / this)`` ladders — set above realistic payload field
-#: counts so the common case is one wave. Bounded because ``extra.*`` is
-#: unbounded (``AgentCredentialSpec`` is ``extra="allow"``) and a wide burst
-#: invites vault throttling, which Dapr reports as the same ambiguous 500 it
-#: uses for a missing key.
-_MAX_CONCURRENT_SINGLE_KEY_PROBES = 8
+#: Connection settings under ``extra`` whose values are literals, never
+#: ref-keys: single-key probing skips them wherever the ``extra`` sits
+#: (``extra.database``, ``basic.extra.database``, a nested ``extra`` dict).
+#: A store that rejects such a value as a secret name (a URL's ``/``)
+#: answers with a failure, not "not found", and that failure stops the whole
+#: resolution. Probing only: a multi-key bundle may still substitute them.
+_CONNECTION_LITERAL_EXTRA_FIELDS: frozenset[str] = frozenset(
+    {"compiled_url", "database"}
+)
 
-#: :func:`_probe_one` outcomes. Both non-fatal; distinguished only so the
-#: summary log doesn't duplicate a per-probe WARNING that already fired.
-_PROBE_RESOLVED = "resolved"
-_PROBE_ABSENT = "absent"
-_PROBE_STORE_ERROR = "store_error"
+
+def _is_connection_literal(key: str) -> bool:
+    *parents, field = key.split(".")
+    return (
+        bool(parents)
+        and parents[-1] == "extra"
+        and field in _CONNECTION_LITERAL_EXTRA_FIELDS
+    )
 
 
 async def resolve_agent_credential(
@@ -138,7 +148,10 @@ async def resolve_agent_credential(
         CredentialParseError: If the fetched bundle isn't valid JSON.
         CredentialNotFoundError: If the secret store does not have
             a bundle at ``secret_path``.
-        CredentialError: For any other secret-store failure.
+        SecretStoreError: For any other secret-store failure, in either
+            mode — a dependency failure, not a credential one. The
+            :class:`SecretStoreUnavailableError` /
+            :class:`SecretStoreUnreachableError` subtypes mark an outage.
 
     Note:
         Resolution mode is selected by the spec:
@@ -163,16 +176,189 @@ async def resolve_agent_credential(
     """
     raw = spec.to_raw_dict()
 
-    if spec.key_type == "single-key":
+    if spec.value_sources is not None:
+        resolved_flat, _ = await _resolve_declared(
+            secret_store, raw, spec.value_sources
+        )
+    elif spec.key_type == "single-key":
+        _warn_undeclared_sources()
         bundle = await _fetch_per_key_bundle(secret_store, raw)
         resolved_flat, _ = _substitute(raw, bundle)
     elif spec.secret_path:
+        _warn_undeclared_sources()
         bundle = await _fetch_bundle(secret_store, spec.secret_path)
         resolved_flat, _ = _substitute(raw, bundle)
     else:
         resolved_flat = raw
 
     return transform_agent_credentials(resolved_flat)
+
+
+def _warn_undeclared_sources() -> None:
+    """Deprecation notice for a legacy payload that reaches the secret store.
+
+    Without declared sources the SDK can't tell a secret name from a plain
+    value: single-key looks every field up and guesses from the store's
+    answer, multi-key substitutes any value that matches a bundle key.
+    Support for the format is removed in SDK v4.0.0.
+    """
+    logger.warning(  # conformance: ignore[L009] deprecation notice, no exception context
+        "DEPRECATED agent_json format: this workflow's credential fields don't "
+        "declare their source (a key-type/secret-path payload), so the SDK has "
+        "to guess which values are secret names. Support for this format, "
+        "including the single-key fallback that keeps a value the secret store "
+        "rejects, will be removed in SDK v4.0.0. The declared-source format is "
+        'the way forward: migrate the workflow to "format": 2, where each field '
+        'is {"value": ...} or {"valueFrom": {"secretKeyRef": {"name": ..., '
+        '"key": ...}}} (FND-4361).'
+    )
+
+
+async def _resolve_declared(
+    secret_store: SecretStore | None,
+    raw: dict[str, Any],
+    sources: dict[str, dict[str, str]],
+) -> tuple[dict[str, Any], int]:
+    """Substitute the declared ``secretKeyRef`` fields of a format-2 payload.
+
+    Only those fields reach the store; every other field is a literal (or a
+    file reference) and is never looked up or replaced. Returns the flat dict
+    without the ``value-sources`` marker, and the number of fields resolved.
+    A payload declaring no refs needs no store.
+
+    Raises:
+        DependencyUnavailableError: Refs are declared but no secret store is
+            available to resolve them.
+    """
+    flat = {k: v for k, v in raw.items() if k != VALUE_SOURCES_KEY}
+    if not sources:
+        return flat, 0
+    if secret_store is None:
+        raise DependencyUnavailableError(
+            message="No secret store available to resolve declared agent secrets",
+            service="secret_store",
+        )
+    values = await _fetch_declared_refs(secret_store, sources)
+    flat.update(values)
+    return flat, len(values)
+
+
+async def _fetch_declared_refs(
+    secret_store: SecretStore, sources: dict[str, dict[str, str]]
+) -> dict[str, Any]:
+    """Fetch each declared secret once and read each field's ``key`` from it.
+
+    A declared ref is known to be a ref, so every failure is final: there is
+    no literal to fall back to (FND-4077). Not-found (the secret, or the key
+    inside it) is the user's config; anything else is the store's, keeping its
+    outage subtype and ``retryable`` hint. Secret names are hash-labelled in
+    every message and log, as on the probing path.
+
+    Raises:
+        CredentialNotFoundError: A declared secret, or the key inside it, is
+            absent. Names the field and the hashed secret name.
+        SecretStoreError: The store failed to answer (the subtypes
+            :class:`SecretStoreUnavailableError` /
+            :class:`SecretStoreUnreachableError` for an outage).
+    """
+    by_name: dict[str, list[tuple[str, str]]] = {}
+    for field, ref in sources.items():
+        by_name.setdefault(ref["name"], []).append((field, ref["key"]))
+
+    resolved: dict[str, Any] = {}
+    for name, wanted in by_name.items():
+        label = hash_label(name)
+        fields = ", ".join(field for field, _ in wanted)
+        try:
+            secret = await retry_past_dapr_cold_start(
+                lambda name=name: secret_store.get(name),
+                description=f"declared secret lookup for {label}",
+                component=DAPR_SECRET_STORE_COMPONENT,
+            )
+        except SecretNotFoundError:
+            raise CredentialNotFoundError(
+                f"secret {label} declared for field '{fields}'"
+            ) from None
+        except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here; a hash-labelled, cause-free SecretStoreError is raised
+            logger.warning(  # conformance: ignore[L009,L004] the raise below drops the raw exception (`from None`), so this scrubbed dump is the only record of the cause; exc_info would re-log it unscrubbed
+                "declared secret lookup for %s (field '%s') failed — secret "
+                "store error:\n%s",
+                label,
+                fields,
+                scrubbed_traceback(exc, name, label),
+            )
+            raise _declared_store_error(label, fields, exc) from None
+        for field, key in wanted:
+            resolved[field] = _pick_key(secret, name, key, field)
+    return resolved
+
+
+def _pick_key(secret: Any, name: str, key: str, field: str) -> Any:
+    """Read *key* from a fetched secret.
+
+    A bundle (Kubernetes, Vault, an AWS JSON secret) is a JSON object, and
+    ``key`` picks the field. A single-value secret (Azure Key Vault, GCP, a
+    plain AWS string) has ``key`` equal to ``name``, as Dapr documents, and
+    the whole value is the secret.
+    """
+    bundle: Any = secret
+    if isinstance(secret, str):
+        try:
+            bundle = orjson.loads(secret)
+        except (
+            orjson.JSONDecodeError
+        ):  # conformance: ignore[E002] not JSON: a single-value secret, handled below
+            bundle = None
+    if isinstance(bundle, dict) and key in bundle:
+        return bundle[key]
+    if key == name and isinstance(secret, str):
+        return secret
+    raise CredentialNotFoundError(
+        f"key {hash_label(key)} in secret {hash_label(name)} declared for "
+        f"field '{field}'"
+    )
+
+
+def _declared_store_error(label: str, fields: str, exc: Exception) -> SecretStoreError:
+    """Clean, cause-free store error for a failed declared lookup.
+
+    Outages are matched first, so they never reach the user-refusal branch
+    below: the store never answered, so there is no grant for the user to fix.
+    """
+    # The store's own outage subtypes are named explicitly, although they also
+    # subclass the Dapr leaves, so this ordering can't silently depend on the
+    # class hierarchy.
+    if isinstance(exc, (SecretStoreUnreachableError, DaprSidecarUnreachableError)):
+        return SecretStoreUnreachableError(
+            label,
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        )
+    if isinstance(exc, (SecretStoreUnavailableError, ColdStartRaceError)):
+        return SecretStoreUnavailableError(label)
+    if isinstance(exc, SecretStoreTransientError):
+        # Throttled or a transient server error: the store said "try again",
+        # so retry it; nobody has a grant to fix.
+        return SecretStoreTransientError(
+            f"Secret store was temporarily unable to return the secret declared "
+            f"for field '{fields}'.",
+            secret_name=label,
+            retryable=True,
+        )
+    if isinstance(exc, SecretStoreError):
+        # The store answered and refused a field known to be a ref: the
+        # customer's store or grants must change, so it goes to the user.
+        return AgentSecretReadError(
+            label, fields=fields, retryable=exc.effective_retryable
+        )
+    # Not a store answer (a bug in the fetch path): the platform's to fix.
+    return SecretStoreError(
+        f"Secret store lookup for the secret declared for field '{fields}' "
+        f"failed ({type(exc).__name__}).",
+        secret_name=label,
+        retryable=exc.effective_retryable if isinstance(exc, AppError) else None,
+    )
 
 
 # Keep backward-compatible alias for existing callers and tests
@@ -219,24 +405,20 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
         )
     except SecretNotFoundError as exc:
         raise CredentialNotFoundError(secret_path) from exc
-    except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here at the boundary; a clean-message CredentialError is raised for the caller/UI
-        # The secret store returned an error or is unreachable (distinct from a
-        # missing bundle, handled above). Log the scrubbed underlying cause for
-        # diagnosis, then raise a clean-message CredentialError WITHOUT chaining
-        # the raw exception: Temporal surfaces the *innermost* ApplicationError to
-        # the UI, so a chained httpx error would leak a raw
+    except Exception as exc:  # conformance: ignore[E004] scrubbed traceback logged here at the boundary; a clean-message SecretStoreError is raised for the caller/UI
+        # The secret store failed or is unreachable (distinct from a missing
+        # bundle, handled above). Log the scrubbed underlying cause for
+        # diagnosis, then raise a clean-message error WITHOUT chaining the raw
+        # exception: Temporal surfaces the *innermost* ApplicationError to the
+        # UI, so a chained httpx error would leak a raw
         # "HTTPStatusError: 500 ... http://localhost:3500/v1.0/secrets/..." string
         # (exactly the unfriendly message seen in preflight). ``from None`` keeps
         # the customer-facing message clean while the log preserves the detail.
         logger.warning(  # conformance: ignore[L009,L004] the raise below drops the raw exception (`from None`), so this scrubbed redact_secrets() dump is the only record of the underlying cause — context the caller does not have; exc_info=True would re-log the unscrubbed traceback
-            "Agent secret-bundle fetch failed — secret store unreachable:\n%s",
+            "Agent secret-bundle fetch failed — secret store error:\n%s",
             redact_secrets("".join(traceback.format_exception(exc))),
         )
-        raise CredentialError(
-            "Secret store is not reachable. Check that your secret store is "
-            "running and reachable, and that the configured secret-path exists.",
-            credential_name=secret_path,
-        ) from None
+        raise _bundle_store_error(secret_path, exc) from None
 
     if isinstance(raw, dict):
         # Some SecretStore backends may return a dict directly; accept it.
@@ -258,6 +440,33 @@ async def _fetch_bundle(secret_store: SecretStore, secret_path: str) -> dict[str
     return bundle
 
 
+def _bundle_store_error(secret_path: str, exc: Exception) -> SecretStoreError:
+    """Clean, cause-free secret-store error for a failed bundle fetch.
+
+    A store failure is a dependency failure, not a credential one: raising
+    ``CredentialError`` (an ``AuthError``) here counted every throttled or
+    unreachable vault as an AUTH failure blamed on the user (FND-4077). Keeps
+    the outage subtype (terminal vs transient) and the ``retryable`` hint, so a
+    throttled vault is retried rather than failing the run.
+    """
+    if isinstance(exc, DaprSidecarUnreachableError):
+        return SecretStoreUnreachableError(
+            secret_path,
+            component=exc.component,
+            attempts=exc.attempts,
+            elapsed_seconds=exc.elapsed_seconds,
+        )
+    if isinstance(exc, ColdStartRaceError):
+        return SecretStoreUnavailableError(secret_path)
+    return SecretStoreError(
+        "Secret store failed to return the secret bundle at the configured "
+        "secret-path. Check that your secret store is healthy and that this "
+        "app is allowed to read the secret-path.",
+        secret_name=secret_path,
+        retryable=exc.effective_retryable if isinstance(exc, AppError) else None,
+    )
+
+
 async def _fetch_per_key_bundle(
     secret_store: SecretStore, raw: dict[str, Any]
 ) -> dict[str, Any]:
@@ -268,97 +477,112 @@ async def _fetch_per_key_bundle(
     each successfully fetched ref-key to its real value, so that the
     existing :func:`_substitute` step can finish substitution unchanged.
 
-    Missing keys are silently skipped — single-key mode probes every
-    non-literal field value, so a non-secret field (like ``host`` carrying
-    a hostname) won't fail the resolution. Unmatched ref-keys then take
-    the v2-parity fallthrough in :func:`_substitute` (left as-is, surfaced
-    by downstream connect errors).
+    Keys the store definitively doesn't have are skipped — single-key mode
+    probes every non-literal field value, so a non-secret field (like ``host``
+    carrying a hostname) won't fail the resolution. Unmatched values then take
+    the v2-parity fallthrough in :func:`_substitute` (left as-is).
 
-    Probes run **concurrently**, bounded by
-    :data:`_MAX_CONCURRENT_SINGLE_KEY_PROBES`. They were serial until
-    BLDX-1594: a missing-key probe pays a full Dapr retry ladder, so serial
-    probing cost *ladder × number of literal-valued fields* and exhausted the
-    fixed ``prime_sql_auth`` activity budget before the source was contacted.
-    Overlapping them costs ``ceil(candidates / cap)`` ladders — not
-    unconditionally one, since a probe holds its slot for its whole ladder.
-    This bounds the symptom, not the cause; the durable fix is tracked in
-    https://github.com/atlanhq/application-sdk/issues/2995.
-
-    A transient cold-start outage on a probe is retried via
+    A store *outage* (unreachable, cold start, unavailable) fails the
+    resolution. Any other store answer (invalid name, access denied,
+    throttled) keeps the value as entered, with a deprecation WARNING. This is
+    the time-boxed FND-4407 bridge: a legacy payload can't say which fields
+    are ref-keys, and stores that reject plain values failed unchanged
+    configs. A throttled or denied *real* ref-key is therefore sent as the
+    value, as on SDK <= 3.49. Declared (format-2) payloads never come here.
+    Probing, classification and redaction are shared with the GUID-path vault
+    (which stays strict) via
+    :func:`~application_sdk.infrastructure._single_key_probe.probe_single_keys`;
+    each probe retries a cold-start race via
     :func:`~application_sdk.infrastructure.retry_past_dapr_cold_start`
-    (shared with :func:`_fetch_bundle` — both race the same sidecar). Only
-    a genuine, non-transient store error falls through to the silent-skip
-    path; an outage that exhausts the retry budget is raised instead,
-    mirroring every other :func:`retry_past_dapr_cold_start` call site.
-
-    Resolving *nothing* is not an error, at any count of store errors: some
-    deployments carry literal credentials in the workflow config rather than
-    ref-keys, so no key is ever expected back. Recorded at INFO, not raised.
+    (shared with :func:`_fetch_bundle` — both race the same sidecar).
 
     Raises:
-        SecretStoreUnavailableError: If any probe found the store
-            unreachable (cold-start outage past the retry budget).
+        SecretStoreError: If a probe hit a store outage (the subtypes
+            :class:`SecretStoreUnavailableError` /
+            :class:`SecretStoreUnreachableError`). Hash-labelled.
     """
-    candidates = _probe_candidates(raw)
-    if not candidates:
-        return {}
 
-    sem = asyncio.Semaphore(_MAX_CONCURRENT_SINGLE_KEY_PROBES)
+    async def _fetch(value: str, label: str) -> str | None:
+        return await retry_past_dapr_cold_start(
+            lambda: secret_store.get_optional(value),
+            description=f"single-key probe for {label}",
+            component=DAPR_SECRET_STORE_COMPONENT,
+        )
 
-    async def _probe(value: str) -> tuple[str, str, Any]:
-        async with sem:
-            return await _probe_one(secret_store, value)
+    outcomes: dict[str, str] = {}
+    try:
+        resolved = await probe_single_keys(
+            _probe_candidates(raw),
+            _fetch,
+            keep_value_on_store_answer=True,
+            outcomes=outcomes,
+        )
+    finally:
+        # In a finally: a sweep that raises still reports what each field was.
+        _log_probe_outcomes(raw, outcomes)
+    return dict(resolved)
 
-    # return_exceptions=True: letting gather cancel siblings on the first raise
-    # unwinds them mid-backoff and buries the real failure under CancelledError.
-    results = await asyncio.gather(
-        *(_probe(value) for value in candidates), return_exceptions=True
+
+#: Outcomes counted in the legacy probe telemetry, in a fixed order.
+_PROBE_OUTCOMES = (
+    "resolved",
+    "absent",
+    "refused",
+    "refused_kept",
+    "transient",
+    "transient_kept",
+    "outage",
+    "error",
+)
+
+
+def _log_probe_outcomes(raw: dict[str, Any], outcomes: dict[str, str]) -> None:
+    """One WARNING per legacy single-key resolution: each probed field's outcome.
+
+    This is evidence for moving a published workflow to declared sources
+    (FND-4407), not a verdict on its own. A ``resolved`` field is a real ref
+    (``secretKeyRef``). ``absent`` and ``refused`` are inconclusive: a missing
+    or denied lookup can also be a ref whose secret was never created, or one
+    the SDR identity may not read. Before calling such a field a plain value,
+    corroborate it (e.g. the workflow succeeded with it as a plain value). The
+    record also tracks how many runs still use the legacy format. It is a
+    WARNING because the format is deprecated.
+
+    Keyed by *field name* only. ``outcomes`` is keyed by raw value, which may be
+    a credential or a ref name, so it is never logged. The extras are scalar
+    and ``atlan.``-prefixed, so they survive the object-store export an SDR
+    uploads to Atlan.
+    """
+    if not outcomes:
+        return
+    by_field: dict[str, str] = {}
+    for key, value in raw.items():
+        if isinstance(value, str) and value in outcomes:
+            by_field[key] = outcomes[value]
+    extra_dict = raw.get("extra")
+    if isinstance(extra_dict, dict):
+        for field, value in extra_dict.items():
+            if isinstance(value, str) and value in outcomes:
+                by_field[f"extra.{field}"] = outcomes[value]
+    counts = {name: 0 for name in _PROBE_OUTCOMES}
+    for outcome in by_field.values():
+        counts[outcome] = counts.get(outcome, 0) + 1
+    logger.warning(  # conformance: ignore[L009] deprecation telemetry, no exception context
+        "agent_json legacy single-key probe outcomes (deprecated format; "
+        "per-field evidence for migrating to declared sources): %s",
+        ",".join(f"{field}={outcome}" for field, outcome in sorted(by_field.items())),
+        extra={
+            "atlan.agent_json.format": "legacy-single-key",
+            "atlan.agent_json.secret_manager": str(raw.get("secret-manager") or ""),
+            "atlan.agent_json.probe.outcomes": ",".join(
+                f"{field}={outcome}" for field, outcome in sorted(by_field.items())
+            ),
+            **{
+                f"atlan.agent_json.probe.{name}": count
+                for name, count in counts.items()
+            },
+        },
     )
-
-    bundle: dict[str, Any] = {}
-    store_errors = 0
-    cold_start_exc: BaseException | None = None
-
-    for result in results:
-        if isinstance(result, BaseException):
-            # Only _probe_one's ColdStartRaceError branch raises; anything else
-            # is a bug, not "this field isn't a secret".
-            if isinstance(result, ColdStartRaceError):
-                cold_start_exc = cold_start_exc or result
-                continue
-            raise result
-        outcome, value, secret = result
-        if outcome == _PROBE_RESOLVED:
-            bundle[value] = secret
-        elif outcome == _PROBE_STORE_ERROR:
-            store_errors += 1
-
-    if cold_start_exc is not None:
-        # The store never answered at all — don't proceed on a partial resolve.
-        raise cold_start_exc
-
-    # Positive-resolution record: counts only, since ref-keys encode
-    # secret-store topology. Its absence is why this went unattributed.
-    if bundle:
-        logger.info(
-            "single-key credential resolution: resolved %d of %d probed fields",
-            len(bundle),
-            len(candidates),
-        )
-    elif store_errors == 0:
-        # INFO, not WARNING: for an inline-literal config this is the expected
-        # steady state every run. It is also indistinguishable from a throttled
-        # vault (Dapr reports both as 500/ERR_SECRET_GET), so it states the fact
-        # without asserting which. Skipped when store_errors > 0 — those probes
-        # already logged their own WARNING.
-        logger.info(
-            "single-key credential resolution resolved 0 of %d probed fields; "
-            "all values used as-is (expected when the config carries literal "
-            "credentials rather than ref-keys)",
-            len(candidates),
-        )
-
-    return bundle
 
 
 def _probe_candidates(raw: dict[str, Any]) -> list[str]:
@@ -376,120 +600,17 @@ def _probe_candidates(raw: dict[str, Any]) -> list[str]:
             candidates.append(value)
 
     for key, value in raw.items():
-        if key in _LITERAL_KEYS:
+        if key in _LITERAL_KEYS or _is_connection_literal(key):
             continue
         _add(value)
 
     extra = raw.get("extra")
     if isinstance(extra, dict):
-        for value in extra.values():
-            _add(value)
+        for field, value in extra.items():
+            if field not in _CONNECTION_LITERAL_EXTRA_FIELDS:
+                _add(value)
 
     return candidates
-
-
-async def _probe_one(secret_store: SecretStore, value: str) -> tuple[str, str, Any]:
-    """Probe one candidate ref-key. Returns ``(outcome, value, secret)``.
-
-    Raises:
-        SecretStoreUnreachableError: If the store never answered across the
-            whole cold-start budget (the terminal case).
-        SecretStoreUnavailableError: If the store failed *without* the budget
-            being spent — only reachable once this component has already
-            answered once, so ``retry_past_dapr_cold_start`` skips the
-            cold-start wait and a blip that outlasts its short warm retry
-            surfaces raw (the transient case).
-    """
-    value_hash = hashlib.sha256(value.encode()).hexdigest()[:8]
-    try:
-        secret = await retry_past_dapr_cold_start(
-            lambda: secret_store.get_optional(value),
-            description=f"single-key probe for sha256:{value_hash}",
-            component=DAPR_SECRET_STORE_COMPONENT,
-        )
-    except DaprSidecarUnreachableError as exc:
-        # Terminal: the budget was exhausted without one usable answer, so this
-        # is not a race that a later attempt warms — keep the terminal type so a
-        # persistent outage stays distinguishable from a still-cold one. Same
-        # redaction as the transient branch below (hash label, no cause); the
-        # secret-free component/attempts/elapsed diagnostics are carried through.
-        raise SecretStoreUnreachableError(
-            f"sha256:{value_hash}",
-            component=exc.component,
-            attempts=exc.attempts,
-            elapsed_seconds=exc.elapsed_seconds,
-        ) from None
-    except ColdStartRaceError:
-        # A *steady-state* blip, not an exhausted budget: budget exhaustion
-        # always raises DaprSidecarUnreachableError and is caught above, so the
-        # only way a bare ColdStartRaceError reaches here is
-        # retry_past_dapr_cold_start skipping its cold-start wait — this
-        # component has already answered once, so the error propagates from
-        # `call()` after only the short warm retry. Either way the store did not answer, which is not
-        # "this field isn't a secret" (that case is already collapsed to None by
-        # get_optional without raising). Propagate so the caller sees
-        # a typed outage instead of silently proceeding with a
-        # corrupt credential, mirroring the vault sibling
-        # (credential_vault.py's _fetch_single_key_secrets).
-        #
-        # Not a bare `raise` and not `from exc`: SecretStoreUnavailableError
-        # (the only ColdStartRaceError subtype this path raises) carries
-        # the raw ref-key in both `.secret_name` and `__str__()`, and its
-        # `cause` (the underlying httpx exception) can re-embed the same
-        # ref-key via a percent-encoded request URL — the exact leak the
-        # `except Exception` branch below scrubs at length. Re-raise a
-        # hash-labelled, cause-free equivalent instead of the original.
-        raise SecretStoreUnavailableError(f"sha256:{value_hash}") from None
-    # conformance: ignore[E004] logger.warning with redacted traceback is emitted below; exc_info omitted intentionally to prevent secret ref-key leaking through stdlib traceback formatting
-    except Exception as exc:
-        # Genuine, non-transient store error — distinct from "key not
-        # in store" (silent below). A real secret field hitting this would
-        # otherwise auth-fail with the ref-key as the literal username,
-        # so surface at WARNING with the stack trace.
-        # Log a hash, not the ref-key itself: ref-key names encode secret
-        # store topology (purpose, environment) and enable enumeration if
-        # logs leak.
-        # NOT exc_info=True: SecretStoreError.__str__ renders `secret=<ref-key>`
-        # and its message embeds the backend cause, which can echo the raw
-        # ref-key — that would undo the hashing above in the same log record.
-        # Format the traceback ourselves, redact known secret patterns, and
-        # additionally scrub the literal ref-key (which redact_secrets can't
-        # know) so the topology stays hidden while diagnosis survives.
-        # Bound the ref-key match to standalone tokens: a literal replace of
-        # a short key like "DB" would corrupt "DB_CONNECTION"; the
-        # lookarounds treat word chars and hyphens as identifier-continuation
-        # so only whole-token occurrences are scrubbed.
-        #
-        # Also scrub the percent-encoded form: the chained httpx exception's
-        # str() can embed the request URL, which encodes the ref-key via
-        # quote(key, safe="") (see infrastructure/_dapr/http.py's
-        # AsyncDaprClient.get_secret) — a ref-key with URL-unsafe characters
-        # (space, "/", "=") would otherwise survive un-scrubbed in that form.
-        safe_traceback = redact_secrets("".join(traceback.format_exception(exc)))
-        for candidate in {value, quote(value, safe="")}:
-            safe_traceback = re.sub(
-                rf"(?<![\w-]){re.escape(candidate)}(?![\w-])",
-                f"sha256:{value_hash}",
-                safe_traceback,
-            )
-        logger.warning(  # conformance: ignore[E005,L004] exc_info would bypass the secret-redacted traceback built above; safe_traceback included inline
-            "single-key probe failed for ref-key sha256:%s — store error, "
-            "treating as non-secret. If this was a real credential "
-            "key, the auth attempt will fail with the ref-key as the "
-            "literal value.\n%s",
-            value_hash,
-            safe_traceback,
-        )
-        return (_PROBE_STORE_ERROR, value, None)
-    if secret in (None, ""):
-        # Key not in store — expected for non-secret fields probed
-        # in single-key mode (host, port, region literals).
-        logger.debug(
-            "single-key probe: sha256:%s not found in store (non-secret field)",
-            value_hash,
-        )
-        return (_PROBE_ABSENT, value, None)
-    return (_PROBE_RESOLVED, value, secret)
 
 
 def _substitute(
@@ -588,8 +709,8 @@ class SecretStoreCheckResult:
 
 
 async def check_secret_store_access(
-    spec: "AgentCredentialSpec",
-    secret_store: "SecretStore | None",
+    spec: AgentCredentialSpec,
+    secret_store: SecretStore | None,
 ) -> SecretStoreCheckResult:
     """Probe the customer secret store for the SDR interactive preflight.
 
@@ -616,6 +737,13 @@ async def check_secret_store_access(
     On any non-fatal outcome ``resolved`` carries the substituted credential dict
     so the caller can build credentials without a second store fetch.
     """
+    if spec.value_sources is not None and (
+        secret_store is not None or not spec.value_sources
+    ):
+        # A format-2 payload declaring no secret refs needs no store at all,
+        # so a missing store is not a gap for it.
+        return await _check_declared_sources(spec, secret_store)
+
     if secret_store is None:
         # No secret store configured is a permanent deployment config gap, not a
         # transient outage — the store doesn't exist, it isn't "down". So this is
@@ -646,6 +774,7 @@ async def check_secret_store_access(
             suggested_action="Set secret-path on the connection's credentials.",
         )
 
+    _warn_undeclared_sources()
     try:
         if spec.key_type == "single-key":
             bundle = await _fetch_per_key_bundle(secret_store, raw)
@@ -706,5 +835,78 @@ async def check_secret_store_access(
             f"Configured secret store is accessible - {substituted} secret(s) "
             "retrieved."
         ),
+        resolved=resolved,
+    )
+
+
+async def _check_declared_sources(
+    spec: AgentCredentialSpec, secret_store: SecretStore | None
+) -> SecretStoreCheckResult:
+    """The secret-store preflight row for a format-2 payload.
+
+    Only declared refs are looked up, so a failure is never ambiguous. A
+    missing secret, or one the store refuses (access denied), is the user's
+    config: fatal, not ``store_down``, rendered as a PRECONDITION row. An
+    outage is the store's: fatal and ``store_down``. A payload declaring no
+    refs passes without touching the store.
+    """
+    sources = spec.value_sources or {}
+    try:
+        resolved_flat, substituted = await _resolve_declared(
+            secret_store, spec.to_raw_dict(), sources
+        )
+    except CredentialNotFoundError as exc:
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=True,
+            substituted=0,
+            message=(
+                "Configured secret store is accessible, but a declared secret "
+                f"reference was not found: {exc.credential_name}."
+            ),
+            suggested_action=(
+                "Check that each field's secretKeyRef names a secret, and a key "
+                "inside it, that exist in the secret store."
+            ),
+        )
+    except AgentSecretReadError as exc:
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=False,
+            fatal=True,
+            substituted=0,
+            message=(
+                "Configured secret store is reachable, but it refused a declared "
+                f"secret reference: {exc.message}"
+            ),
+            suggested_action=exc.suggested_action,
+        )
+    except (DependencyUnavailableError, CredentialError):
+        return SecretStoreCheckResult(
+            passed=False,
+            store_down=True,
+            fatal=True,
+            substituted=0,
+            message="Configured secret store is not accessible.",
+            suggested_action=(
+                "Check that the secret store is running and that the SDR's "
+                "secret-store identity can read the declared secrets."
+            ),
+        )
+    resolved = transform_agent_credentials(resolved_flat)
+    if not sources:
+        message = "No secret references declared - all values are used as entered."
+    else:
+        message = (
+            f"Configured secret store is accessible - {substituted} secret(s) "
+            "retrieved."
+        )
+    return SecretStoreCheckResult(
+        passed=True,
+        store_down=False,
+        fatal=False,
+        substituted=substituted,
+        message=message,
         resolved=resolved,
     )

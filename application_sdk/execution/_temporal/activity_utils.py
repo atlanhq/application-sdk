@@ -33,16 +33,46 @@
 """
 
 import os
+import warnings
 from collections.abc import Callable
 from typing import Any, TypeVar
 
 from temporalio import activity
 
+from application_sdk import constants
 from application_sdk.app.registry import AppRegistry
-from application_sdk.constants import TEMPORARY_PATH, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+#: name -> (replacement, why). These names stopped being used here and were importable
+#: from here only by accident; they are served once more so imports of them
+#: keep working, with a warning pointing at their home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "TEMPORARY_PATH": (
+        "application_sdk.constants.TEMPORARY_PATH",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module_name, _, attr = replacement.rpartition(".")
+    from importlib import import_module  # noqa: PLC0415 — resolved on access only
+
+    return getattr(import_module(module_name), attr)
 
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -145,13 +175,49 @@ def build_output_path() -> str:
     )
 
 
+def run_temp_dir() -> str:
+    """SDK-internal: the local scratch directory of the current run.
+
+    ``{TEMPORARY_PATH}/{build_output_path()}``, e.g.
+    ``./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456``. It is the
+    directory ``cleanup_files`` removes by default, so anything the SDK writes
+    under it on the run's behalf goes with the run. ``TEMPORARY_PATH`` is read
+    at call time so a redirect of the constant is honoured.
+
+    The workflow ID is caller-chosen (``/workflows/v1/start`` accepts it
+    verbatim), so the result is checked to resolve strictly *inside*
+    ``TEMPORARY_PATH``: not outside it via ``..`` segments, and not the root
+    itself, whose removal would take every other run's scratch with it.
+
+    Raises:
+        WorkflowIdError: Outside an activity context.
+        WorkflowRunIdError: Outside a workflow-backed activity.
+        RunTempDirEscapeError: If the directory would not be strictly inside
+            ``TEMPORARY_PATH``.
+    """
+    from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+        RunTempDirEscapeError,
+    )
+
+    path = os.path.join(constants.TEMPORARY_PATH, build_output_path())
+    root = os.path.realpath(constants.TEMPORARY_PATH)
+    resolved = os.path.realpath(path)
+    try:
+        contained = resolved != root and os.path.commonpath([root, resolved]) == root
+    except ValueError:  # different drives on Windows: not contained
+        contained = False
+    if not contained:
+        raise RunTempDirEscapeError()
+    return path
+
+
 def get_object_store_prefix(path: str) -> str:
     """Convert a local-path or object-store-path into an object-store prefix.
 
-    Handles two input shapes:
-
-    1. Paths under ``TEMPORARY_PATH`` — converted to relative object-store keys.
-    2. User-provided paths — returned as-is (already relative object-store keys).
+    A delegate to :func:`application_sdk.storage.ops.normalize_key`, the SDK's
+    single local-path → store-key normaliser. Kept as a public name so existing
+    callers keep working; the two used to diverge (the staging root mapped to
+    ``'.'`` here, and backslashes survived on POSIX).
 
     .. note::
         This is a path-shape utility, not a "where am I in the workflow"
@@ -175,48 +241,8 @@ def get_object_store_prefix(path: str) -> str:
         >>> get_object_store_prefix("datasets/sales/2024/")
         "datasets/sales/2024"
     """
-    # Normalize paths for comparison
-    abs_path = os.path.abspath(path)
-    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — activity frame only; keep obstore out of the workflow-sandbox import set
+        normalize_key,
+    )
 
-    def _to_relative_object_store_key(p: str) -> str:
-        """Strip drive letter / leading anchor + normalize separators.
-
-        Object-store keys are forward-slash, **relative** strings (no
-        drive letter, no leading slash). On Windows, an absolute local
-        path like ``C:\\Users\\...\\file`` would otherwise become a
-        bogus key the obstore LocalFileSystem backend can't append to
-        its store root (it'd try to walk
-        ``<store_root>\\C:\\Users\\...`` which Windows rejects as
-        invalid syntax). ``os.path.splitdrive`` peels the drive on
-        Windows (no-op on POSIX), then we strip the leading
-        separator and convert remaining backslashes.
-        """
-        _drive, rest = os.path.splitdrive(p)
-        return rest.replace(os.path.sep, "/").strip("/")
-
-    # Check if path is under TEMPORARY_PATH
-    try:
-        # Use os.path.commonpath to properly check if path is under temp directory
-        # This prevents false positives like '/tmp/local123' matching '/tmp/local'
-        common_path = os.path.commonpath([abs_path, abs_temp_path])
-        if common_path == abs_temp_path:
-            # Path is under temp directory, convert to relative object store path
-            relative_path = os.path.relpath(abs_path, abs_temp_path)
-            # Normalize path separators to forward slashes for object store
-            return relative_path.replace(os.path.sep, "/")
-        else:
-            # Path is outside TEMPORARY_PATH (user-provided base, unit
-            # tests using ``tmp_path``, etc.). Strip drive letter and
-            # leading separator so the result is still a relative
-            # object-store key, not an absolute filesystem path.
-            return _to_relative_object_store_key(path)
-    except ValueError:
-        # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
-        # In this case, treat as user-provided path, normalize the same way.
-        logger.warning(
-            "os.path.commonpath/relpath raised ValueError for path %r; falling back to direct normalization",
-            path,
-            exc_info=True,
-        )
-        return _to_relative_object_store_key(path)
+    return normalize_key(path)

@@ -11,6 +11,7 @@ from application_sdk.observability.pushgateway import (
     PushGatewayClient,
     TemporalCoreCollector,
 )
+from tests.unit.private_stdlib import private_stdlib
 
 _PUSH_TARGET = "application_sdk.observability.pushgateway.push_to_gateway"
 _DELETE_TARGET = "application_sdk.observability.pushgateway.delete_from_gateway"
@@ -261,8 +262,12 @@ class TestPushGatewayClientStop:
             patch(
                 _DELETE_TARGET, side_effect=lambda *a, **kw: events.append(("delete",))
             ),
-            patch(
-                "application_sdk.observability.pushgateway.asyncio.sleep",
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "asyncio"
+            ) as local_asyncio,
+            patch.object(
+                local_asyncio,
+                "sleep",
                 side_effect=fake_sleep,
             ),
         ):
@@ -288,8 +293,12 @@ class TestPushGatewayClientStop:
         with (
             patch(_PUSH_TARGET),
             patch(_DELETE_TARGET),
-            patch(
-                "application_sdk.observability.pushgateway.asyncio.sleep",
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "asyncio"
+            ) as local_asyncio,
+            patch.object(
+                local_asyncio,
+                "sleep",
                 side_effect=fake_sleep,
             ),
         ):
@@ -386,7 +395,10 @@ class TestPushGatewayClientSweep:
                 return_value=self._mock_httpx(text),
             ),
             patch(_DELETE_TARGET) as mock_del,
-            patch("time.time", return_value=10_000_000_000),
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "time"
+            ) as local_time,
+            patch.object(local_time, "time", return_value=10_000_000_000),
         ):
             c._sweep_stale_predecessors_blocking()
         # Exactly one DELETE — the dead-pred only.
@@ -407,7 +419,10 @@ class TestPushGatewayClientSweep:
                 return_value=self._mock_httpx(text),
             ),
             patch(_DELETE_TARGET) as mock_del,
-            patch("time.time", return_value=10_000_000_000),
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "time"
+            ) as local_time,
+            patch.object(local_time, "time", return_value=10_000_000_000),
         ):
             c._sweep_stale_predecessors_blocking()
         mock_del.assert_not_called()
@@ -421,7 +436,10 @@ class TestPushGatewayClientSweep:
                 return_value=self._mock_httpx(text),
             ),
             patch(_DELETE_TARGET) as mock_del,
-            patch("time.time", return_value=10_000_000_000),
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "time"
+            ) as local_time,
+            patch.object(local_time, "time", return_value=10_000_000_000),
         ):
             c._sweep_stale_predecessors_blocking()
         mock_del.assert_not_called()
@@ -436,7 +454,10 @@ class TestPushGatewayClientSweep:
                 return_value=self._mock_httpx(text),
             ),
             patch(_DELETE_TARGET) as mock_del,
-            patch("time.time", return_value=10_000_000_000),
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "time"
+            ) as local_time,
+            patch.object(local_time, "time", return_value=10_000_000_000),
         ):
             c._sweep_stale_predecessors_blocking()
         mock_del.assert_not_called()
@@ -489,7 +510,10 @@ class TestPushGatewayClientSweep:
                 return_value=self._mock_httpx(text),
             ),
             patch(_DELETE_TARGET, side_effect=fake_delete),
-            patch("time.time", return_value=10_000_000_000),
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "time"
+            ) as local_time,
+            patch.object(local_time, "time", return_value=10_000_000_000),
         ):
             c._sweep_stale_predecessors_blocking()
         # Both attempts made; one failure didn't stop the next.
@@ -515,7 +539,10 @@ class TestPushGatewayClientSweep:
                 return_value=self._mock_httpx(text),
             ) as mock_httpx,
             patch(_DELETE_TARGET) as mock_del,
-            patch("time.time", return_value=10_000_000_000),
+            private_stdlib(
+                "application_sdk.observability.pushgateway", "time"
+            ) as local_time,
+            patch.object(local_time, "time", return_value=10_000_000_000),
         ):
             c._sweep_stale_predecessors_blocking()
         # GET timeout

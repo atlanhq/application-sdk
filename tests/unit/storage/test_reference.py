@@ -11,6 +11,7 @@ import pytest
 
 from application_sdk.contracts.types import FileReference, StorageTier
 from application_sdk.storage import ops
+from application_sdk.storage._local_marker import read_local_marker
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put, get_file_meta
@@ -33,6 +34,12 @@ def _hash_bytes(data: bytes) -> str:
     return h.hexdigest()
 
 
+def _marker_digest(local: Path) -> str | None:
+    """The digest the local ``.sha256`` marker beside *local* records."""
+    marker = read_local_marker(str(local))
+    return marker.sha256 if marker is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -48,14 +55,23 @@ class TestWriteLocalSidecar:
     def test_writes_sidecar(self, tmp_path) -> None:
         local = tmp_path / "f.txt"
         local.write_bytes(b"x")
-        _write_local_sidecar(str(local), "deadbeef")
-        assert (tmp_path / "f.txt.sha256").read_text() == "deadbeef"
+        digest = "d" * 64
+        # The digest plus the stat of the hashed bytes, as the caller took it —
+        # not a fresh stat, which could bless a later write.
+        _write_local_sidecar(str(local), digest, (1, 2, 3))
+        assert (tmp_path / "f.txt.sha256").read_text() == f"{digest} 1 2 3"
+
+    def test_no_fingerprint_writes_a_digest_only_marker(self, tmp_path) -> None:
+        local = tmp_path / "f.txt"
+        local.write_bytes(b"x")
+        _write_local_sidecar(str(local), "d" * 64, None)
+        assert (tmp_path / "f.txt.sha256").read_text() == "d" * 64
 
     def test_failure_swallowed(self, tmp_path) -> None:
         # Pointing at a directory that doesn't exist → write fails → swallowed
         bogus = str(tmp_path / "no_such_dir" / "x.txt")
         # Should NOT raise
-        _write_local_sidecar(bogus, "abc")
+        _write_local_sidecar(bogus, "abc", None)
 
 
 class TestConcurrentMaterialize:
@@ -139,7 +155,7 @@ class TestPersistFileReference:
         assert sidecar is not None
         assert sidecar.decode().strip() == _hash_bytes(b"payload")
         # Local sidecar created
-        assert (tmp_path / "data.bin.sha256").read_text() == _hash_bytes(b"payload")
+        assert _marker_digest(tmp_path / "data.bin") == _hash_bytes(b"payload")
 
     async def test_single_file_generates_storage_path_when_no_key(
         self, store, tmp_path
@@ -275,8 +291,7 @@ class TestDirectoryLocalSidecars:
         await persist_file_reference(store, ref)
 
         for rel, data in self._FILES.items():
-            sidecar = tmp_path / (rel + ".sha256")
-            assert sidecar.read_text() == _hash_bytes(data), rel
+            assert _marker_digest(tmp_path / rel) == _hash_bytes(data), rel
 
     async def test_same_pod_materialize_after_persist_downloads_nothing(
         self, store, tmp_path
@@ -311,7 +326,7 @@ class TestDirectoryLocalSidecars:
         assert await self._materialize_counting(store, cross_pod) == len(self._FILES)
         for rel, data in self._FILES.items():
             assert (consumer / rel).read_bytes() == data
-            assert (consumer / (rel + ".sha256")).read_text() == _hash_bytes(data)
+            assert _marker_digest(consumer / rel) == _hash_bytes(data)
 
     async def test_repersist_does_not_upload_local_sidecars(
         self, store, tmp_path
@@ -639,9 +654,12 @@ class TestMaterializeFileReference:
         real_get_file_meta = ops.get_file_meta
         calls: list[str] = []
 
-        async def _counting_get_file_meta(key, *args, **kwargs):
-            calls.append(key)
-            return await real_get_file_meta(key, *args, **kwargs)
+        async def _counting_get_file_meta(key, store_=None, *args, **kwargs):
+            # The patch is process-wide: a transfer an earlier test on this
+            # worker left running HEADs through it too. Count this store only.
+            if store_ is store:
+                calls.append(key)
+            return await real_get_file_meta(key, store_, *args, **kwargs)
 
         with patch.object(ops, "get_file_meta", _counting_get_file_meta):
             result = await materialize_file_reference(store, ref)
@@ -670,7 +688,7 @@ class TestMaterializeFileReference:
         result = await materialize_file_reference(store, ref)
         # Returned the same ref; local sidecar written.
         assert result is ref
-        assert (tmp_path / "data.bin.sha256").read_text() == _hash_bytes(b"payload")
+        assert _marker_digest(tmp_path / "data.bin") == _hash_bytes(b"payload")
 
     async def test_single_file_hash_mismatch_redownloads(self, store, tmp_path) -> None:
         """Local file present, remote sidecar exists but mismatches → re-download."""
@@ -718,8 +736,18 @@ class TestMaterializeFileReference:
         assert Path(result.local_path).read_bytes() == b"hello"
         assert result.local_path.endswith(".bin")
 
-    async def test_single_file_no_local_path_no_local_dir(self, store) -> None:
-        """Without local_path or local_dir, uses system tmp."""
+    async def test_single_file_no_local_path_no_local_dir(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without local_path or local_dir, and no run: under TEMPORARY_PATH.
+
+        FND-4282: this used to be the system temp directory, which no cleanup
+        root covers.
+        """
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        sdk_tmp = tmp_path / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
         await _put("k/x.txt", b"sys-temp", store, normalize=False)
         await _put(
             "k/x.txt.sha256",
@@ -731,9 +759,85 @@ class TestMaterializeFileReference:
         result = await materialize_file_reference(store, ref)
         assert result.local_path is not None
         assert Path(result.local_path).read_bytes() == b"sys-temp"
-        # Cleanup
-        Path(result.local_path).unlink(missing_ok=True)
+        unscoped = (sdk_tmp / "file-refs").resolve()
+        assert Path(result.local_path).resolve().parent == unscoped
+        Path(result.local_path).unlink()
         Path(result.local_path + ".sha256").unlink(missing_ok=True)
+
+    async def test_a_climbing_workflow_id_writes_nothing_outside_temporary_path(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A caller-chosen workflow ID with ``..`` must not move the download root."""
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal._activity_errors import (
+            RunTempDirEscapeError,
+        )
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        sdk_tmp = tmp_path / "a" / "b" / "c" / "sdk-tmp"
+        _redirect_temporary_path(monkeypatch, str(sdk_tmp))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(
+                workflow_id="../../../../../../../../outside",
+                workflow_run_id="run-1",
+            ),
+        )
+        await _put("k/one.bin", b"one", store, normalize=False)
+        await _put("d/a.txt", b"a", store, normalize=False)
+
+        with pytest.raises(RunTempDirEscapeError):
+            await materialize_file_reference(
+                store, FileReference(is_durable=True, storage_path="k/one.bin")
+            )
+        with pytest.raises(RunTempDirEscapeError):
+            await materialize_file_reference(
+                store, FileReference(is_durable=True, storage_path="d/")
+            )
+        assert not (tmp_path / "a" / "outside").exists()
+        assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+
+    async def test_path_less_refs_land_in_the_run_scratch_dir(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-4282: inside a run, both shapes land where cleanup_files sweeps."""
+        from types import SimpleNamespace
+
+        from temporalio import activity
+
+        from application_sdk.execution._temporal.activity_utils import run_temp_dir
+        from application_sdk.testing.fixtures import _redirect_temporary_path
+
+        _redirect_temporary_path(monkeypatch, str(tmp_path / "sdk-tmp"))
+        monkeypatch.setattr(
+            activity,
+            "info",
+            lambda: SimpleNamespace(workflow_id="wf-1", workflow_run_id="run-1"),
+        )
+        await _put("k/one.bin", b"one", store, normalize=False)
+        await _put("d/a.txt", b"a", store, normalize=False)
+        await _put("d/b.txt", b"b", store, normalize=False)
+
+        file_out = await materialize_file_reference(
+            store, FileReference(is_durable=True, storage_path="k/one.bin")
+        )
+        dir_out = await materialize_file_reference(
+            store,
+            FileReference(is_durable=True, storage_path="d/", file_count=2),
+        )
+
+        run_dir = Path(run_temp_dir()).resolve()
+        assert run_dir.is_relative_to((tmp_path / "sdk-tmp").resolve())
+        assert run_dir.parts[-2:] == ("wf-1", "run-1")
+        assert file_out.local_path is not None and dir_out.local_path is not None
+        assert Path(file_out.local_path).resolve().parent == run_dir
+        assert Path(dir_out.local_path).resolve().parent == run_dir
+        assert Path(file_out.local_path).read_bytes() == b"one"
+        assert (Path(dir_out.local_path) / "a.txt").read_bytes() == b"a"
 
     async def test_single_file_not_found_raises(self, store, tmp_path) -> None:
         """Storage path absent → StorageNotFoundError.

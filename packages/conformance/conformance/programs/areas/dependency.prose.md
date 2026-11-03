@@ -18,7 +18,7 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode —
-D002/D003/D004/D006/D007/D008/D012/D013/D014/D015 are WARN-tier, so they are
+D002/D003/D004/D006/D007/D008/D012/D013/D014/D015/D016 are WARN-tier, so they are
 processed in strict mode; D001, D005, D009, D010 and D011 are BLOCK-tier and
 processed in both modes.
 
@@ -131,11 +131,13 @@ fix.  The re-detection gate is authoritative for this area — see
   empty array rather than removing the table.
 
 - **D004 RedeclaredSdkManagedDependencyInGroups** — same as D002 but the
-  redeclaration is in a `[dependency-groups.*]` table.  Delete the entire
-  redeclaring line; if the SDK-managed package was dev/test tooling the app
-  genuinely needs, prefer pulling it in via `atlan-application-sdk[tests]`
-  instead (note that as a follow-up in the edit description).  Remove only that
-  one entry.
+  redeclaration is in a `[dependency-groups.*]` table. First check whether
+  app-owned test source directly imports the package: if it does, keep the
+  entry because it is a direct test dependency, not redundant SDK tooling. A
+  production-only import does not qualify. For any other D004 finding, delete
+  the entire redeclaring line; if the SDK-managed package is SDK test tooling
+  the app genuinely needs, prefer pulling it in via
+  `atlan-application-sdk[tests]` instead. Remove only that one entry.
 
 - **D011 ConformanceDependencyContract** (`classification = "mechanical"` for
   branches 1, 2 and 3) — BLOCK-tier, no suppress path in default mode, same as
@@ -187,6 +189,24 @@ fix.  The re-detection gate is authoritative for this area — see
   with the SDK floor named in the finding message (`>=3.11`), preserving any
   upper bound: `requires-python = ">=3.10,<4.0"` → `">=3.11,<4.0"`;
   `requires-python = ">=3.10"` → `">=3.11"`.
+
+- **D016 RequiresPythonExcludesRuntimePython** — the app's
+  `[project].requires-python` shuts out Python 3.13, the version
+  `app-runtime-base:3` ships.  Replace only the upper-bound clause so the
+  runtime version named in the finding message is admitted, preserving the
+  lower bound: `">=3.11,<3.13"` → `">=3.11,<3.14"`; `">=3.11,<=3.12"` →
+  `">=3.11,<3.14"`.  Never lower the floor and never pin `==3.13.*`.  For an
+  exact-pin spelling (`==3.12.*`, `~=3.12.0`) the intent is not mechanical:
+  propose `">=3.11,<3.14"` and route to residue for human confirmation.  The
+  runtime's patch floats with the image, so the range must admit every 3.13.x:
+  for an explicit exclusion that shuts out any of 3.13 (`!=3.13.*`,
+  `!=3.13.4`) or a micro-version pin or bound (`==3.13.0`, `<3.13.5`,
+  `>=3.13.2`), do not raise an unrelated upper bound — route to residue for
+  human confirmation, proposing removal of that clause.
+  State in the edit description that `uv lock` must be re-run (the lock's
+  `requires-python` and cp313 wheels must follow) and that the app's tests
+  should be run on Python 3.13; a dependency that has no 3.13 build surfaces
+  only there, and is the one legitimate reason to suppress instead.
 
 - **D007 NonStandardBuildBackend** — set `build-backend` to `"hatchling.build"`
   in `[build-system]` and ensure `requires = ["hatchling"]`.  Build-affecting:
@@ -319,19 +339,26 @@ for human confirmation):
      optional backend, server process), propose a `# conformance: ignore[D003]
      <reason>` comment on the entry line and explain the load mechanism.
 
-  **A `[tool.uv] constraint-dependencies` entry in an app is also D003.**  An
-  app does not carry security floors on transitive packages — neither as a
-  direct dependency nor as a constraint.  **Remove the entry**; do not move a
-  floor from `[project.dependencies]` into `constraint-dependencies` to clear
-  the first form of this finding, which only relocates it.  A needed CVE fix
-  belongs in `atlan-application-sdk`'s dependency ranges and reaches the app
-  through an SDK upgrade.  State in the edit description that the lock's
-  resolved version is at or above the removed floor (prove it: removing a
-  constraint must not change any resolved version), and note that uv does not
-  propagate the SDK's own `[tool.uv]` constraints to dependents, so the lock
-  and CI's vulnerability scan are what hold the line afterwards.  None of the
-  reference apps (`atlan-mysql-app`, `atlan-metabase-app`, `atlan-openapi-app`)
-  declares `constraint-dependencies`.  The SDK's own pyproject is exempt.
+  4. **Retain a documented app-specific minimum**: if a core dependency
+     intentionally enforces a documented app-specific minimum version for an
+     SDK-managed transitive package, compare it with the SDK's declared range.
+     If the SDK's declared range does not guarantee the required minimum, retain
+     the app-local requirement with a reasoned D003 exception.  Name the exact
+     app requirement and the SDK range gap in the reason.  This exception also
+     applies to a `[tool.uv] constraint-dependencies` entry.  Do not use it for
+     a generic transitive floor.  A currently resolved lockfile version alone
+     is not a future guarantee; remove the app-local requirement and exception
+     only after the SDK range guarantees the floor.
+
+  **A `[tool.uv] constraint-dependencies` entry in an app is also D003.**
+  Every entry is surfaced for review.  Generic transitive floors belong in
+  `atlan-application-sdk`'s dependency ranges, not in an app's direct
+  dependencies or constraints; remove a generic app-local floor and move any
+  generally required floor upstream.  Do not move a floor from
+  `[project.dependencies]` into `constraint-dependencies` merely to clear
+  D003, since that only relocates it.  Keep only the narrow, documented
+  app-specific exception in item 4 when the SDK's declared range does not
+  guarantee that minimum.  The SDK's own pyproject is exempt.
 
   Never auto-delete without reading the codebase context — dynamic imports,
   `__import__`, `importlib.import_module`, entry-point declarations in
@@ -468,7 +495,7 @@ When `mode == "strict"` and `finding.disposition == "warning"`, the model may
 propose an inline suppression instead of a fix if the deviation is a deliberate,
 justified exception for this app.  Applicable rules and notes:
 
-- **D002 / D004 / D005 / D006 / D007 / D008 / D010** — standard inline
+- **D002 / D004 / D005 / D006 / D007 / D008 / D010 / D016** — standard inline
   suppression.
   TOML uses `#` for comments, so the directive trails the entry or sits on the
   line above it:

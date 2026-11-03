@@ -315,6 +315,48 @@ def test_exc_info_prescriptions_carry_the_credential_contraindication(
     ), f"{area}'s credential-safe form drops the traceback; name safe_traceback"
 
 
+def test_e020_and_e007_prose_separate_a_per_object_skip_from_a_raise() -> None:
+    """Raising is not the default fix for a per-object skip inside a batch.
+
+    A lane fix followed E020's "raise a typed error" literally at a per-object
+    detail fetcher: one object the source permanently rejected (404) then
+    failed the whole extraction.  Both the prose entries and the catalog text
+    must state the distinction, and the E020 prose must show the exempt skip
+    shape the checker accepts (pinned by
+    ``test_e020_no_finding_on_logged_permanent_4xx_per_object_skip``).
+    """
+    from conformance.suite.rules import load_catalog
+
+    text = " ".join(_read("areas/error-handling.prose.md").split())
+    e020 = text.split("**E020 HttpFailureToEmptyReturn**", 1)[1].split("- **E021", 1)[0]
+    e007 = text.split("**E007 ErrorToReturnValue**", 1)[1].split("- **E0", 1)[0]
+
+    assert "Raise versus skip" in e020
+    assert "transient outcomes" in e020
+    assert "never the response body" in e020
+    assert "behaviour change" in e020
+    assert "never the default fix" in e020
+    assert "must keep passing unchanged" in e020
+    assert "response.status_code in (400, 404)" in e020
+    assert "Per-object skips" in e007
+    assert "behaviour change" in e007
+    assert "never the default fix" in e007
+    assert "must keep passing unchanged" in e007
+    assert "ignore[E007] <per-item skip contract>" in e007
+
+    rules = {r.id: r for r in load_catalog()}
+    e020_rule, e007_rule = rules["E020"], rules["E007"]
+    full = " ".join(e020_rule.full_description.split())
+    assert "Raise versus skip" in full
+    assert "never the default fix" in full
+    assert "E007" in (e020_rule.rule_interactions or "")
+    assert "E020" in (e007_rule.rule_interactions or "")
+    assert "never the default fix" in " ".join(e007_rule.full_description.split())
+    assert "per-item skip contract" in " ".join(
+        (e007_rule.terminal_state or "").split()
+    )
+
+
 def test_e004_prose_states_the_sanitizer_level_and_the_inline_row() -> None:
     """The prose must not promise more than `_check_p004` accepts.
 
@@ -347,11 +389,15 @@ def test_o001_prose_names_the_three_dropped_tolerances() -> None:
     assert "64 bits" in text
 
 
-def test_d003_prose_removes_constraint_floors_rather_than_relocating() -> None:
-    """Moving a floor into constraint-dependencies only relocates D003."""
+def test_d003_prose_distinguishes_generic_and_app_specific_floors() -> None:
+    """Generic floors move upstream; documented app-specific floors may remain."""
     text = " ".join(_read("areas/dependency.prose.md").split())
     assert "constraint-dependencies` entry in an app is also D003" in text
-    assert "do not move a floor" in text
+    assert "do not move a floor" in text.lower()
+    assert "documented app-specific minimum" in text
+    assert "the SDK's declared range does not guarantee the required minimum" in text
+    assert "reasoned D003 exception" in text
+    assert "lockfile version alone is not a future guarantee" in text
 
 
 def test_p001_prose_says_the_opt_out_does_not_govern_unknown_keys() -> None:
@@ -849,3 +895,61 @@ def test_a_suggest_only_guide_rule_still_gets_its_area_proposal() -> None:
         files("conformance").joinpath("bootstrap/templates/remediate.md").read_text()
     )
     assert "finding's own area" in template and "migration_brief" in template
+
+
+def test_pre_raise_log_takes_l009s_resolution_not_enrichment() -> None:
+    """L004/E005 must not enrich a log that L009 will then delete.
+
+    A warning/error within three statements of a raise is reported by L004,
+    E005 and L009.  The lane runs block before warn, so an L004 prescription
+    that enriches the line is undone by the later L009 fix.  Both areas must
+    carry the carve-out, in L009's order, and L009 must name the SDK's
+    activity.ended record as the upstream log for @task code.  The checker
+    side of the claim is pinned in test_logging.py
+    (test_l009_resolution_clears_l004_e005_and_l009_together).
+    """
+    logging_text = " ".join(_read("areas/logging.prose.md").split())
+    l004 = logging_text.split("**L004 ExceptBlockMissingExcInfoLog**", 1)[1].split(
+        "- **L007", 1
+    )[0]
+    l009 = logging_text.split("**L009 WarnThenRaiseDuplication**", 1)[1].split(
+        "- **L010", 1
+    )[0]
+    e005 = (
+        " ".join(_read("areas/error-handling.prose.md").split())
+        .split("**E005 ExceptBlockMissingExcInfo**", 1)[1]
+        .split("- **E0", 1)[0]
+    )
+
+    assert "Pre-raise carve-out" in logging_text
+    for name, section in (("L004", l004), ("E005", e005)):
+        assert "Carve-out — pre-raise logs" in section, name
+        delete = section.index("delete the line")
+        debug = section.index("sanitized DEBUG")
+        assert delete < debug, f"{name} lists L009's resolution out of order"
+        # A bare raise is only what deleting leaves behind, never a standalone
+        # option: without an upstream record it drops the only record (lens
+        # F-ac9c73 / F-9598d7 on #4492).
+        assert "or reduce the handler to a bare" not in section, name
+        assert "never reduce the handler to one without that record" in section, name
+        assert "L009" in section and "together" in section, name
+
+    assert "`safe_traceback(exc)`" in l009
+    assert "activity.ended" in l009
+    assert "On a v3 SDK, anything raised out of an `@task`" in l009
+    assert "interceptors/log.py" in l009
+    assert "preflight" in l009
+
+
+def test_pre_raise_rules_cross_reference_each_other() -> None:
+    from conformance.suite.rules import get_rule
+
+    assert "L009" in get_rule("L004").rule_interactions
+    assert "L009" in get_rule("E005").rule_interactions
+    l009 = get_rule("L009").rule_interactions
+    assert "L004" in l009 and "E005" in l009
+    # L009 is scope=BOTH, so the activity.ended shortcut must not reach v2 apps.
+    assert "v3 SDK worker" in l009 and "v2 apps" in l009
+    for rule_id in ("L004", "E005", "L009"):
+        text = get_rule(rule_id).rule_interactions
+        assert "without an upstream record" in text, rule_id

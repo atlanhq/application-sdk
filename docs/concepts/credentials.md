@@ -157,6 +157,33 @@ Inline credentials always come out in one shape: a flat dict with dotted keys, l
 
 ---
 
+## Required Fields at Submission
+
+`application_sdk.credentials.requirements` reads which credential fields an app
+requires from its generated forms, and `POST /workflows/v1/validate` uses it to
+reject a workflow or credential that leaves one out, before anything runs (see
+[Validating a workflow configuration](server.md#validating-a-workflow-configuration)).
+The requirement comes from the contract itself: `required = true` on a
+`FieldSpec` in `credentials.pkl` is generated into the credential form
+`<credential-type>.json` and the workflow form's agent schema. An app doesn't
+declare anything extra.
+
+```python
+from application_sdk.credentials.requirements import (
+    credential_form,
+    credential_from_pairs,
+    missing_required_fields,
+)
+
+form = credential_form(generated_dir, "atlan-connectors-bigquery")
+missing_required_fields(form, credential_from_pairs(pairs))
+# ["extra.atlan_oauth_id"]  -- field paths only, never values
+```
+
+`canonical_credential` nests a flat credential (`extra.*`, `<authType>.*`,
+`<authType>.extra.*`) the way `transform_agent_credentials` does at runtime. A
+parity test pins the two together.
+
 ## Custom Credential Types
 
 Register custom credential types via `register_credential_type`:
@@ -282,6 +309,71 @@ Two things stay outside the normaliser:
 
 A malformed body reaching a handler endpoint is answered with **422** naming the
 offending field, not a plain-text 500.
+
+### Declared sources (format 2)
+
+A legacy `agent_json` is a flat key → string map: nothing says whether
+`basic.username` holds a username or the name of a secret holding it. So
+`key-type: single-key` looks every value up as a secret name and guesses from
+the store's answer, and multi-key substitutes any value that happens to match a
+bundle key. That guessing is deprecated (FND-4361).
+
+In `"format": 2` every field declares its source, modelled on Kubernetes
+`value` / `valueFrom` (Dapr components use the same `secretKeyRef` shape):
+
+```json
+{
+  "format": 2,
+  "agent-name": "my-agent",
+  "secret-manager": "awssecretmanager",
+  "aws-region": "us-east-1",
+  "auth-type": "basic",
+  "host": {"value": "db.example.com"},
+  "port": {"value": 3306},
+  "basic.username": {"value": "svc_reader"},
+  "basic.password": {"valueFrom": {"secretKeyRef": {"name": "prod/mysql", "key": "password"}}},
+  "extra.ca_cert": {"valueFrom": {"fileRef": {"path": "objectstore://certs/ca.pem"}}}
+}
+```
+
+- **Envelope keys** (`agent-name`, `secret-manager`, `aws-region`,
+  `aws-auth-method`, `azure-auth-method`, `auth-type`, `agent-type`,
+  `connectBy`) stay plain values. `key-type` and `secret-path` are rejected:
+  per-field sources replace both.
+- **Every other key** holds exactly one of `{"value": X}` or
+  `{"valueFrom": {...}}`, and `valueFrom` holds exactly one of
+  `secretKeyRef {name, key}` or `fileRef {path}`. Anything else fails parsing
+  with a `CredentialParseError` naming the field (never its value).
+- **`value`** is used as entered, in its own type (`port` stays an int). It
+  never reaches the secret store.
+- **`secretKeyRef`** is looked up strictly. Each `name` is fetched once; `key`
+  picks the field from a bundle secret (Kubernetes, Vault, an AWS JSON secret).
+  For a single-value secret (Azure Key Vault, GCP, a plain AWS string), set
+  `key` equal to `name`. There is no fallback, because the field is known to
+  be a secret. Each failure goes to whoever can fix it:
+
+  | Store answer | Error | Audience |
+  |---|---|---|
+  | Secret, or the key inside it, absent | `CredentialNotFoundError` | USER |
+  | Refused: access denied, invalid name, Dapr 403 scoping | `AgentSecretReadError` (PRECONDITION, `suggested_action`, `retryable` from the store) | USER |
+  | Throttled or a transient server error | `SecretStoreTransientError` (retryable) | PLATFORM |
+  | Outage: unreachable, cold start | `SecretStoreUnreachableError` / `SecretStoreUnavailableError` | PLATFORM |
+
+  On an SDR the store and its identity are the customer's, so a refused
+  declared ref is theirs to fix. The preflight row reports it as a config gap,
+  not a store outage.
+- **`fileRef`** is handed to `resolve_credential_file` like any
+  `objectstore://` value.
+
+**Apps don't change.** `AgentCredentialSpec` normalizes a format-2 payload at
+ingress into the flat shape apps already read, plus a reserved `value-sources`
+map of the declared `secretKeyRef`s. Typed subclasses (`port: int`,
+`extra="forbid"`) validate unchanged. `is_populated()` is true. The map survives
+`to_raw_dict()` → `model_validate()` and serialized workflow inputs, so a later
+activity or child workflow still resolves strictly. It is removed before
+credentials reach the handler. A legacy payload's serialized form gains no key.
+The wire contract is recorded in
+[cross-repo contracts](../standards/cross-repo-contracts.md#the-declared-source-agent_json-format-2).
 
 ---
 

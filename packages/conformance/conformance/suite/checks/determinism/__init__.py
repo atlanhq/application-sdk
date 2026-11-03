@@ -72,8 +72,14 @@ SERIES = "P"
 __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
 
-def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan a single Python source *text* for all determinism findings (P020–P024, P031, P036, P054)."""
+def scan_text(
+    text: str, file: str, *, path: Path | None = None, root: Path | None = None
+) -> list[Finding]:
+    """Scan a single Python source *text* for all determinism findings (P020–P024, P031, P036, P054).
+
+    *path* and *root* let P023 follow a sync helper imported from the scanned
+    repo and see a deprecation marker on an enclosing package.
+    """
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -83,7 +89,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
         *check_p020(tree, file, directives),
         *check_p021(tree, file, directives),
         *check_p022(tree, file, directives),
-        *check_p023(tree, file, directives),
+        *check_p023(tree, file, directives, path=path, root=root),
         *check_p024(tree, file, directives),
         *check_p031(tree, file, directives),
         *check_p036(tree, file, directives),
@@ -101,7 +107,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         rel = path.relative_to(root)
     except ValueError:
         rel = path
-    return scan_text(text, str(rel))
+    return scan_text(text, str(rel), path=path, root=root)
 
 
 main = make_cli_main(

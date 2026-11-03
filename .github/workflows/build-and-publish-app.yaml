@@ -112,11 +112,21 @@ on:
         required: false
         type: boolean
         default: false
+      unit_test_shards:
+        description: "Opt-in: split the certify gate's `tests/unit` across this many parallel runners (2-10). Default 1 = no split: `certify` runs the tests itself in one job, exactly as before, and no extra jobs start. Any value outside 1-10 fails the run. When set, pytest-split balances the runners from the app's committed `.test_durations` if it has one, else splits evenly by count. See docs/standards/app-certification.md."
+        required: false
+        type: number
+        default: 1
       use_ghcr_base:
         description: "Resolve the SDK base image from GHCR directly during the image build, instead of through the registry gateway at registry.atlan.com that serves the same GHCR package. Default TRUE. The preflight pins the GHCR digest for `FROM registry.atlan.com/public/app-runtime-base:3`; a Dockerfile it cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from the Dockerfile's reference as written. Pass false to skip the preflight and build from the Dockerfile's reference as written (a `FROM ghcr.io/atlanhq/app-runtime-base` still pulls from GHCR). See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the registry layout."
         required: false
         type: boolean
         default: true
+      docker_build_args:
+        description: "Extra Docker build args for the arch image build, one KEY=VALUE per line (default none). For non-secret build switches only: build args are recorded in the image config and readable via `docker history` by anyone who can pull it, so a credential must never go here (FND-697; private git access uses the git_token BuildKit secret). Example: common-app-server's test builds pass ATLAN_API_APPS_ALLOW_OVERRIDES=1 to stage unreleased apps."
+        required: false
+        type: string
+        default: ""
     secrets:
       ORG_PAT_GITHUB:
         required: true
@@ -475,9 +485,138 @@ jobs:
   # A main push that builds no image (non-SDR, publish off — see
   # build-decision) has nothing to certify, so it skips here too; the release
   # that ships the image certifies it.
+  #
+  # Sharding is opt-in (`unit_test_shards`, default 1). By default `certify`
+  # runs the unit tests itself and `certify-unit` skips, so an app that does
+  # not opt in pays for no extra jobs. An app that opts in (2-10) runs its
+  # tests in `certify-unit`, one leg per shard, and `certify` folds their
+  # results into the verdict. Publish waits on `certify` while the image build
+  # does not, so on a single 2-vCPU runner a large suite set the whole run's
+  # wall time — and neared the 30-minute cap.
+  # `certify_unit_shards.py` holds the per-shard / fan-in logic.
+  #
+  # One leg per shard. A failing test does NOT fail the leg (continue-on-error
+  # on the run step): `certify` must still run to render every layer in one
+  # verdict, and `!failure()` on it would skip it if a leg went red. The leg's
+  # result file carries the outcome instead, and `certify` enforces it. A leg
+  # that crashes or times out leaves no result, which `certify` reads as failed
+  # — or, if the whole job fails, `!failure()` skips certify and publish.
+  certify-unit:
+    name: Certify unit tests (${{ matrix.shard }}/${{ inputs.unit_test_shards }})
+    needs: build-decision
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' && inputs.unit_test_shards != 1 }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The legs run app code (pytest), so the job token is read-only and no
+    # checkout leaves it in .git/config for that code to find. Artifact upload
+    # uses the runner's own token, not this one.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Expressions cannot build a range, so the shard list is looked up
+        # rather than computed by a planning job (one fewer billed job).
+        # A count outside 1-10 has no entry, so no leg runs. `certify` still
+        # runs, and its verdict step rejects the count (certify_unit_shards.py
+        # `verdict`), so the gate fails closed rather than reading "no
+        # results" as "nothing to test".
+        shard: ${{ fromJSON('{"1":[1],"2":[1,2],"3":[1,2,3],"4":[1,2,3,4],"5":[1,2,3,4,5],"6":[1,2,3,4,5,6],"7":[1,2,3,4,5,6,7],"8":[1,2,3,4,5,6,7,8],"9":[1,2,3,4,5,6,7,8,9],"10":[1,2,3,4,5,6,7,8,9,10]}')[format('{0}', inputs.unit_test_shards)] }}
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Mint fleet App token
+        # Same as certify's: authenticates the app's private atlanhq deps.
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: sdk
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+
+      - name: Configure git auth for private dependencies
+        if: ${{ inputs.private_git_auth }}
+        env:
+          GIT_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      - name: Install app dependencies
+        id: app_install
+        continue-on-error: true
+        working-directory: app
+        run: uv sync --all-extras --frozen
+
+      # --all-groups (inside the script) so the app's test dependency group
+      # (pytest plugins like pytest-asyncio) is installed: `uv run` otherwise
+      # re-syncs to the default groups only and silently breaks such suites.
+      - name: "Unit tests (shard)"
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        working-directory: app
+        env:
+          SHARD: ${{ matrix.shard }}
+          TOTAL: ${{ inputs.unit_test_shards }}
+          COVERAGE_SOURCE: ${{ inputs.coverage_source }}
+          INSTALL_OUTCOME: ${{ steps.app_install.outcome }}
+        run: python3 ../sdk/.github/scripts/certify_unit_shards.py run --shard "${SHARD}" --total "${TOTAL}" --coverage-source "${COVERAGE_SOURCE}" --install-outcome "${INSTALL_OUTCOME}" --results-dir ../certify-shard
+
+      - name: Upload shard result
+        id: upload-shard
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: certify-shard-${{ matrix.shard }}
+          path: certify-shard/
+          retention-days: 1
+          # Overwrite on the first attempt too: a re-run attempt must not 409
+          # and leave two live artifacts for `certify`'s glob to merge.
+          overwrite: true
+
+      # A finalize 403 comes from an intermediary having a moment; wait it out
+      # so the two attempts fail independently (docs/standards/ci.md).
+      - name: Wait before the upload retry
+        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
+        run: sleep 20
+
+      - name: Upload shard result (retry)
+        if: ${{ !cancelled() && steps.upload-shard.outcome == 'failure' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          # A DISTINCT name: a failed finalize holds the first name for the
+          # run. `certify` downloads by `certify-shard-*` glob, so either lands.
+          name: certify-shard-${{ matrix.shard }}-retry
+          path: certify-shard/
+          retention-days: 1
+          overwrite: true
+
   certify:
     name: Certify app
-    needs: build-decision
+    needs: [build-decision, certify-unit]
     if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -520,9 +659,9 @@ jobs:
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
 
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.1"
+          version: "0.13.6"
 
       # ── 1. v3 shape ─────────────────────────────────────────────────────────
       - name: Install SDK (migration tooling)
@@ -595,8 +734,8 @@ jobs:
 
       # ── 3. Contract drift (enforced) ─────────────────────────────────────────
       # Failure here exits non-zero and (via the standard step-fail cascade)
-      # also fails the job. Unit tests + coverage below use `always() &&` so
-      # they still run and report — the user sees every signal in one pass —
+      # also fails the job. The unit-test fan-in + coverage below use `always()`
+      # so they still run and report — the user sees every signal in one pass —
       # even though the job's final status is already failed.
       - name: "Contract drift — poe generate must be a no-op"
         id: contract_drift
@@ -619,36 +758,64 @@ jobs:
           fi
 
       # ── 4. Unit tests (enforced) + coverage threshold (warn-only) ───────────────
+      # Default (`unit_test_shards` 1): run the tests here as one shard — the
+      # same pytest command as before sharding — and write the result file the
+      # verdict below reads. --all-groups (inside the script) so the app's test
+      # dependency group (pytest plugins like pytest-asyncio) is installed.
+      - name: "Unit tests (in this job)"
+        if: always() && inputs.unit_test_shards == 1
+        continue-on-error: true
+        working-directory: app
+        env:
+          COVERAGE_SOURCE: ${{ inputs.coverage_source }}
+          INSTALL_OUTCOME: ${{ steps.app_install.outcome }}
+        run: python3 ../sdk/.github/scripts/certify_unit_shards.py run --shard 1 --total 1 --coverage-source "${COVERAGE_SOURCE}" --install-outcome "${INSTALL_OUTCOME}" --results-dir ../certify-shards
+
+      # Opted in: the tests ran in the `certify-unit` legs; fold their result
+      # files here. Glob, not exact names: a leg's retried upload lands as
+      # `-retry`. With `pattern:` an empty match is a success, so a missing leg
+      # surfaces in the verdict script (absent result = failed), not here.
+      - name: Download unit-test shard results
+        id: download-shards
+        if: always() && inputs.unit_test_shards != 1
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: certify-shard-*
+          merge-multiple: true
+          path: certify-shards
+
+      - name: Wait before the download retry
+        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download unit-test shard results (retry)
+        if: always() && inputs.unit_test_shards != 1 && steps.download-shards.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: certify-shard-*
+          merge-multiple: true
+          path: certify-shards
+
       - name: "Unit tests"
         id: unit
-        if: always() && steps.app_install.outcome == 'success'
-        continue-on-error: true
-        working-directory: app
-        run: |
-          set -euo pipefail
-          if [ ! -d tests/unit ]; then
-            echo "No tests/unit/ — skipping."
-            exit 0
-          fi
-          # --all-groups so the app's test dependency group (pytest plugins like
-          # pytest-asyncio, etc.) is installed. `uv run` otherwise re-syncs to only
-          # the default groups, pruning any test deps an app keeps in a non-default
-          # group — which silently breaks async/plugin-dependent suites and trips
-          # this gate on a packaging gap rather than a real failure.
-          uv run --all-groups --with pytest-cov pytest tests/unit --cov=${{ inputs.coverage_source }} --cov-report=term
+        if: always()
+        env:
+          TOTAL: ${{ inputs.unit_test_shards }}
+        run: python3 sdk/.github/scripts/certify_unit_shards.py verdict --results-dir certify-shards --total "${TOTAL}"
 
+      # Each shard measured its own slice (one shard when not opted in);
+      # combine them before the threshold.
       - name: "Coverage threshold (>=85%)"
         id: coverage_threshold
-        if: always() && steps.unit.outcome == 'success'
+        if: always() && steps.unit.outputs.outcome == 'success'
         continue-on-error: true
         working-directory: app
         run: |
           set -euo pipefail
-          if [ ! -f .coverage ]; then
-            echo "No .coverage data (unit tests skipped) — skipping threshold check."
-            exit 0
-          fi
-          uv run coverage report --data-file=.coverage --fail-under=85
+          uv run --all-groups --with coverage coverage combine --data-file=.coverage ../certify-shards/coverage.shard-*
+          uv run --all-groups --with coverage coverage report --data-file=.coverage --fail-under=85
 
       # ── Verdict ───────────────────────────────────────────────────────────────
       # Unit test pass/fail (UT) and contract drift (CD) ENFORCE: a ❌ exits
@@ -662,7 +829,7 @@ jobs:
         env:
           CM: ${{ steps.check_migration.outcome }}
           CD: ${{ steps.contract_drift.outcome }}
-          UT: ${{ steps.unit.outcome }}
+          UT: ${{ steps.unit.outputs.outcome }}
           COV: ${{ steps.coverage_threshold.outcome }}
           SDK_INSTALL: ${{ steps.sdk_install.outcome }}
           APP_INSTALL: ${{ steps.app_install.outcome }}
@@ -1041,6 +1208,7 @@ jobs:
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
+      app_sync_body:    ${{ steps.manifest.outputs.app_sync_body }}
       app_configs:      ${{ steps.app_configs.outputs.app_configs }}
       # `steps.candidate` runs only in candidate mode and renames the build to
       # `candidate-<tree>`; otherwise these are the tag step's values.
@@ -1335,7 +1503,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1413,6 +1581,8 @@ jobs:
           # preflight's log is: it prints the resolved base references and the
           # pinned digest, or a warning saying why it did not pin one.
           build-contexts: ${{ needs.prepare.outputs.base_build_contexts }}
+          # Non-secret build switches from the caller (docker_build_args).
+          build-args: ${{ inputs.docker_build_args }}
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           # `ignore-error=true`: see build-and-scan.yaml — a cache-service hiccup must not fail a build.
@@ -1472,7 +1642,7 @@ jobs:
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -1480,7 +1650,7 @@ jobs:
 
       - name: Log in to Docker Hub
         if: needs.prepare.outputs.enable_sdr == 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
         with:
           registry: docker.io
           username: atlanhq
@@ -1930,3 +2100,15 @@ jobs:
           echo "Published \`${APP_NAME}\` version \`${IMAGE_TAG}\` to \`${CHANNEL_USED}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY
+
+      # The publish route creates a version and has no `tags` field, so app-level
+      # tags (marketplace search keywords) are synced with the app update that
+      # `atlan app register` uses. Runs only when atlan.yaml sets `tags`;
+      # warn-only — see .sdk-entrypoint/.github/scripts/sync_marketplace_tags.py.
+      - name: Sync marketplace tags
+        if: ${{ needs.prepare.outputs.app_sync_body != '' }}
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+          APP_PUBLISH_TOKEN: ${{ secrets.APP_PUBLISH_TOKEN }}
+          APP_SYNC_BODY: ${{ needs.prepare.outputs.app_sync_body }}
+        run: python3 .sdk-entrypoint/.github/scripts/sync_marketplace_tags.py

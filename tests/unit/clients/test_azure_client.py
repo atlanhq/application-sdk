@@ -1,5 +1,6 @@
 """Unit tests for Azure client."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -244,3 +245,113 @@ class TestAzureClient:
         result = await azure_client.health_check()
 
         assert result.overall_health is True
+
+
+class TestAzureClientTeardown:
+    """``close()`` releases everything the client owns (FND-4285)."""
+
+    async def test_close_closes_the_credential(self):
+        client = AzureClient()
+        credential = MagicMock()
+        client.credential = credential
+
+        await client.close()
+
+        credential.close.assert_called_once_with()
+        assert client.credential is None
+
+    async def test_close_survives_a_failing_credential_close(self):
+        client = AzureClient()
+        services = MagicMock()
+        services.close = AsyncMock()
+        client._services = {"svc": services}
+        credential = MagicMock()
+        credential.close.side_effect = RuntimeError("transport already gone")
+        client.credential = credential
+        client._connection_health = True
+
+        await client.close()
+
+        services.close.assert_awaited_once()
+        assert client._connection_health is False
+
+    async def test_load_after_close_is_refused(self):
+        from application_sdk.clients.azure.azure_errors import AzureClientAuthError
+
+        client = AzureClient()
+        await client.close()
+
+        with pytest.raises(AzureClientAuthError):
+            await client.load({"tenant_id": "t", "client_id": "c"})
+
+    def test_client_owns_no_thread_pool(self):
+        """No idle ThreadPoolExecutor per client: blocking calls use run_in_thread."""
+        client = AzureClient(max_workers=4)
+        assert not hasattr(client, "_executor")
+
+    def test_sync_exit_outside_a_loop_closes_the_credential(self):
+        credential = MagicMock()
+        with AzureClient() as client:
+            client.credential = credential
+
+        credential.close.assert_called_once_with()
+
+    async def test_close_does_not_hang_on_a_stuck_credential_close(self, monkeypatch):
+        """A credential close that never returns is abandoned at the bound."""
+        import threading
+
+        from application_sdk.clients.azure import client as client_mod
+
+        monkeypatch.setattr(client_mod, "_CREDENTIAL_CLOSE_TIMEOUT_SECONDS", 0.05)
+        release = threading.Event()
+        credential = MagicMock()
+        credential.close.side_effect = lambda: release.wait(5)
+        client = AzureClient()
+        client.credential = credential
+        client._connection_health = True
+
+        try:
+            await asyncio.wait_for(client.close(), timeout=2)
+        finally:
+            release.set()
+
+        assert client.credential is None
+        assert client._connection_health is False
+
+    async def test_close_during_credential_creation_closes_the_new_credential(self):
+        """A load() in flight when close() runs must not publish its credential."""
+        client = AzureClient()
+        credential = MagicMock()
+
+        async def _create(**_kwargs):
+            await client.close()  # close() lands while creation is awaited
+            return credential
+
+        client.auth_provider.create_credential = _create
+
+        from application_sdk.clients.azure.azure_errors import AzureClientAuthError
+
+        with pytest.raises(AzureClientAuthError):
+            await client.load({"tenant_id": "t", "client_id": "c"})
+
+        credential.close.assert_called_once_with()
+        assert client.credential is None
+        assert client._connection_health is False
+
+    async def test_close_during_connection_test_leaves_client_unhealthy(self):
+        client = AzureClient()
+        credential = MagicMock()
+        client.auth_provider.create_credential = AsyncMock(return_value=credential)
+
+        async def _test_then_close():
+            await client.close()
+
+        client._test_connection = _test_then_close
+
+        from application_sdk.clients.azure.azure_errors import AzureClientAuthError
+
+        with pytest.raises(AzureClientAuthError):
+            await client.load({"tenant_id": "t", "client_id": "c"})
+
+        credential.close.assert_called_once_with()
+        assert client._connection_health is False

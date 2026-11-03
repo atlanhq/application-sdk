@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
 from temporalio.client import WorkflowUpdateFailedError
@@ -102,19 +103,19 @@ _PAUSE_RESUME_WF = generate_workflow_class(
 )
 
 
-async def test_cookbook_pause_resume_cycle(temporal_client) -> None:
+async def test_cookbook_pause_resume_cycle(temporal_client, task_queue) -> None:
     """Customer pauses mid-extract, then resumes; run completes with full progress."""
     async with Worker(
         temporal_client,
-        task_queue="cookbook-pause-resume",
+        task_queue=task_queue,
         workflows=[_PAUSE_RESUME_WF],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _PAUSE_RESUME_WF.run,
             _ExtractInput(total_batches=3),
-            id="cookbook-pause-resume",
-            task_queue="cookbook-pause-resume",
+            id=f"cookbook-pause-resume-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
@@ -129,20 +130,22 @@ async def test_cookbook_pause_resume_cycle(temporal_client) -> None:
     assert result.rows_extracted == 300  # 3 batches × 100 rows
 
 
-async def test_cookbook_graceful_cancel_short_circuits_run(temporal_client) -> None:
+async def test_cookbook_graceful_cancel_short_circuits_run(
+    temporal_client, task_queue
+) -> None:
     """graceful_cancel flips state; run() exits its loop without processing
     remaining batches, but with partial progress preserved."""
     async with Worker(
         temporal_client,
-        task_queue="cookbook-graceful-cancel",
+        task_queue=task_queue,
         workflows=[_PAUSE_RESUME_WF],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _PAUSE_RESUME_WF.run,
             _ExtractInput(total_batches=100),
-            id="cookbook-graceful-cancel",
-            task_queue="cookbook-graceful-cancel",
+            id=f"cookbook-graceful-cancel-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
@@ -193,19 +196,21 @@ class _MetricsApp(App):
 _METRICS_WF = generate_workflow_class(_MetricsApp, _ep(_ExtractInput, _ExtractOutput))
 
 
-async def test_cookbook_progress_query_returns_live_state(temporal_client) -> None:
+async def test_cookbook_progress_query_returns_live_state(
+    temporal_client, task_queue
+) -> None:
     """Operator queries get_progress mid-run; query reads live App state."""
     async with Worker(
         temporal_client,
-        task_queue="cookbook-progress",
+        task_queue=task_queue,
         workflows=[_METRICS_WF],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _METRICS_WF.run,
             _ExtractInput(total_batches=7),
-            id="cookbook-progress",
-            task_queue="cookbook-progress",
+            id=f"cookbook-progress-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
@@ -259,21 +264,21 @@ _RATE_LIMITED_WF = generate_workflow_class(
 
 
 async def test_cookbook_rate_limit_validator_rejects_out_of_range(
-    temporal_client,
+    temporal_client, task_queue
 ) -> None:
     """Out-of-range rate limit is rejected by the validator before the
     interaction body runs; in-range update succeeds and mutates state."""
     async with Worker(
         temporal_client,
-        task_queue="cookbook-rate-limit",
+        task_queue=task_queue,
         workflows=[_RATE_LIMITED_WF],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _RATE_LIMITED_WF.run,
             _ExtractInput(),
-            id="cookbook-rate-limit",
-            task_queue="cookbook-rate-limit",
+            id=f"cookbook-rate-limit-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
@@ -327,19 +332,21 @@ _INCREMENTAL_WF = generate_workflow_class(
 )
 
 
-async def test_cookbook_external_update_advances_watermark(temporal_client) -> None:
+async def test_cookbook_external_update_advances_watermark(
+    temporal_client, task_queue
+) -> None:
     """An external service sends a watermark update; run() observes it on the same instance."""
     async with Worker(
         temporal_client,
-        task_queue="cookbook-watermark",
+        task_queue=task_queue,
         workflows=[_INCREMENTAL_WF],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _INCREMENTAL_WF.run,
             _ExtractInput(),
-            id="cookbook-watermark",
-            task_queue="cookbook-watermark",
+            id=f"cookbook-watermark-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)
@@ -386,19 +393,21 @@ _CHECKPOINTED_WF = generate_workflow_class(
 )
 
 
-async def test_cookbook_checkpoint_query_returns_position(temporal_client) -> None:
+async def test_cookbook_checkpoint_query_returns_position(
+    temporal_client, task_queue
+) -> None:
     """Oncall queries the live checkpoint without restarting the run."""
     async with Worker(
         temporal_client,
-        task_queue="cookbook-checkpoint",
+        task_queue=task_queue,
         workflows=[_CHECKPOINTED_WF],
         workflow_runner=_SANDBOX_RUNNER,
     ):
         handle = await temporal_client.start_workflow(
             _CHECKPOINTED_WF.run,
             _ExtractInput(),
-            id="cookbook-checkpoint",
-            task_queue="cookbook-checkpoint",
+            id=f"cookbook-checkpoint-{uuid4().hex[:8]}",
+            task_queue=task_queue,
             result_type=_ExtractOutput,
         )
         await asyncio.sleep(0.2)

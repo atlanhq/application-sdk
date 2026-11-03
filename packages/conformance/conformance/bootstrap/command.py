@@ -111,7 +111,7 @@ def _retire_file(dest: pathlib.Path) -> str:
     if not dest.exists():
         return "absent"
     dest.unlink()
-    print(f"removed: {dest}  (retired managed file)")
+    print(f"removed: {dest}  (retired file)")
     return "removed"
 
 
