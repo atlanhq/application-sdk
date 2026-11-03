@@ -960,12 +960,17 @@ drafting.
     worse than none.
   - *subprocess* — prefer `asyncio.create_subprocess_exec` and `await` it;
     offload only when the sync API is unavoidable.
-  - *client / handle work, query, fsync* — offload the whole block that owns
-    the client in one hop: `await run_in_thread(_read_rows, path)` around the
-    `with open(...)` / `with engine.connect()` / `s3.get_object(...)` it
-    contains.  Offloading the send alone while the connect or open stays on
-    the loop moves half the cost.  An `fsync` goes with the write it makes
-    durable.
+  - *client / handle work, query, fsync* — for wholly synchronous operations,
+    offload the whole block that owns the client in one hop:
+    `await run_in_thread(_read_rows, path)` around the `with open(...)` /
+    `with engine.connect()` / `s3.get_object(...)` it contains.  Offloading the
+    send alone while the connect or open stays on the loop moves half the cost.
+    An `fsync` goes with the write it makes durable.  When a synchronous sink
+    consumes an async producer (for example, `async for chunk in
+    response.aiter_bytes()`), preserve streaming by keeping the producer awaited
+    and offloading each sink call sequentially at the boundary:
+    `await run_in_thread(handle.write, chunk)`.  Do not move the async producer
+    into a sync worker or buffer the full response.
   - *wait* — `threading.Event` → `asyncio.Event`; a `Future` from
     `executor.submit` → `await asyncio.wrap_future(future)`; otherwise offload
     the wait.
