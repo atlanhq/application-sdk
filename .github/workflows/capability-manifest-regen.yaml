@@ -208,6 +208,10 @@ jobs:
     if: needs.regen.outputs.changed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Checkout and push use the App token, and the artifact comes from this same
+    # run, so the job's GITHUB_TOKEN needs no write grant.
+    permissions:
+      contents: read
     steps:
       - name: Mint fleet App token
         id: app-token
@@ -217,6 +221,8 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
           repositories: application-sdk
+          # Only the branch push, not the installation's full grant.
+          permission-contents: write
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
