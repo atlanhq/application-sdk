@@ -898,6 +898,10 @@ def test_p001_marks_an_opt_out_guarding_nothing_as_a_safe_swap(tmp_path: Path) -
         "def broken(:\n",
         "from m import TaskInput as Base\nclass Child(Base):\n    blob: Any = None\n",
         "from m import TaskInput\nLegacy: TypeAlias = TaskInput\n",
+        "import m\nclass Child(getattr(m, 'TaskInput')):\n    blob: Any = None\n",
+        "from m import TaskInput\nChild = type('Child', (TaskInput,), {})\n",
+        "from m import TaskInput\nbases = (TaskInput,)\nclass Child(*bases):\n    pass\n",
+        "from m import TaskInput\nA, B = TaskInput, int\n",
     ],
     ids=[
         "subclass",
@@ -907,6 +911,10 @@ def test_p001_marks_an_opt_out_guarding_nothing_as_a_safe_swap(tmp_path: Path) -
         "unparsable-file",
         "renamed-import",
         "annotated-alias",
+        "getattr-base",
+        "type-call",
+        "starred-bases",
+        "tuple-unpacking",
     ],
 )
 def test_p001_no_safe_swap_when_another_class_can_inherit_the_opt_out(
@@ -922,6 +930,8 @@ def test_p001_no_safe_swap_when_another_class_can_inherit_the_opt_out(
     [
         _NOOP_OPTOUT.replace("Input, allow", "PublishInputMixin, Input, allow"),
         _NOOP_OPTOUT.replace("from application_sdk.contracts.base", "from app.base"),
+        _NOOP_OPTOUT.replace("from application_sdk.contracts.base", "from pydantic"),
+        _NOOP_OPTOUT.replace("from application_sdk.contracts.base", "from .base"),
         _NOOP_OPTOUT.replace(
             "import Input, Output\n",
             "import Output\nfrom application_sdk.contracts.base import Output as Input\n",
@@ -944,6 +954,8 @@ def test_p001_no_safe_swap_when_another_class_can_inherit_the_opt_out(
     ids=[
         "other-base",
         "app-local-input",
+        "trusted-non-sdk-input",
+        "relative-input",
         "renamed-import",
         "input-rebound",
         "unsafe-field",

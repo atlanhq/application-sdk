@@ -593,6 +593,19 @@ def _all_python_files(root: Path) -> list[Path]:
     ]
 
 
+def _names_in(node: ast.expr) -> set[str]:
+    """Every name, attribute and string in *node*: what a base built at run time may resolve to."""
+    out: set[str] = set()
+    for n in ast.walk(node):
+        if isinstance(n, ast.Name):
+            out.add(n.id)
+        elif isinstance(n, ast.Attribute):
+            out.add(n.attr)
+        elif isinstance(n, ast.Constant) and isinstance(n.value, str):
+            out.add(n.value)
+    return out
+
+
 def reused_class_names(root: Path) -> frozenset[str]:
     """Names any class in the repo could inherit through, tests included.
 
@@ -603,9 +616,12 @@ def reused_class_names(root: Path) -> frozenset[str]:
     opt-out to a class this file cannot see, so its opt-out is not a safe swap.
     Every ``.py`` file outside the virtualenv and VCS folders is read, so a scan
     of a few files gives the same answer as a full one; a file that cannot be
-    read or parsed makes every opt-out unsafe.  Known limit: a subclass built at
-    run time (``type("C", (A,), {})``, a factory taking the base, ``getattr`` on
-    a module, tuple unpacking) is not seen; it fails at import, never silently.
+    read or parsed makes every opt-out unsafe.  A base that is not a plain name
+    (``class C(getattr(m, "A"))``, ``class C(*bases)``), the bases of a
+    three-argument ``type(...)`` and the items of a tuple or list assignment
+    (``bases = (A,)``, ``X, Y = A, B``) give every name and string in them.
+    Known limit: a factory that takes the base (``make(A)``) is not seen; it
+    fails at import, never silently.
     """
     names: set[str] = set()
     for path in _all_python_files(root):
@@ -615,11 +631,23 @@ def reused_class_names(root: Path) -> frozenset[str]:
             return frozenset({"*"})
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
-                names.update(n for b in node.bases if (n := _simple_name(b)))
+                for b in node.bases:
+                    n = _simple_name(b)
+                    names.update([n] if n else _names_in(b))
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
+                node.value, (ast.Tuple, ast.List)
+            ):
+                names.update(_names_in(node.value))
             elif isinstance(node, (ast.Assign, ast.AnnAssign)) and _simple_name(
                 node.value
             ):
                 names.add(_simple_name(node.value))  # type: ignore[arg-type]
+            elif (
+                isinstance(node, ast.Call)
+                and _simple_name(node.func) == "type"
+                and len(node.args) == 3
+            ):
+                names.update(_names_in(node.args[1]))
             elif isinstance(node, ast.ImportFrom):
                 names.update(
                     a.name for a in node.names if a.asname not in (None, a.name)
@@ -638,11 +666,18 @@ def reused_class_names(root: Path) -> frozenset[str]:
 
 
 def _imported_contract_bases(node: ast.Module) -> frozenset[str]:
-    """``Input`` / ``Output`` bound by a from-import; untrusted ones are removed by the caller."""
+    """``Input`` / ``Output`` bound by an absolute from-import out of ``application_sdk``.
+
+    Any other origin (a relative import, ``app.base``, even a trusted third-party
+    module) may give ``allow_unbounded_fields`` its own meaning, so it is no proof.
+    Renamed and rebound names are removed by the caller.
+    """
     return frozenset(
         a.name
         for stmt in node.body
         if isinstance(stmt, ast.ImportFrom)
+        and stmt.level == 0
+        and (stmt.module or "").split(".")[0] == "application_sdk"
         for a in stmt.names
         if a.name in _CONTRACT_BASES
     )
