@@ -2,8 +2,10 @@
 
 PRs to `main` are reviewed on request by **lens**, an AI reviewer that runs
 in `.github/workflows/lens.yml`. Comment `/lens` on a PR to start a review;
-a push never triggers one. Only repo OWNER, MEMBER, or COLLABORATOR can
-trigger it, and bots are refused.
+a push never triggers one. Only OWNER, MEMBER, or COLLABORATOR comments
+can trigger it, and bot comments are refused. Maintainers can also start a
+review with `workflow_dispatch` from the Actions tab; that path has no bot
+check of its own, only the repo's Actions write permission.
 
 Each run continues from the previous one on the same PR. lens posts a sticky
 summary comment and, when every finding is fixed or dismissed, an `atlan-ci`
@@ -11,7 +13,8 @@ code-owner approval. `/lens force` bypasses the unchanged-head and round-cap
 rules; the per-PR cost cap still applies.
 
 The old `@sdk-review` / `@sdk-resolve` (mothership) triggers are retired. A
-human comment starting with either is answered with a pointer to `/lens`.
+comment starting with either from a human OWNER, MEMBER, or COLLABORATOR is
+answered with a pointer to `/lens`; other comments get no reply.
 
 ## Where lens is configured
 
