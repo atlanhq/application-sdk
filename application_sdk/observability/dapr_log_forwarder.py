@@ -88,11 +88,11 @@ _METHOD_LEVELNO = {
 }
 
 
-# ``entrypoint.sh`` resolves ``DAPR_LOG_LEVEL`` as ``${DAPR_LOG_LEVEL:-warn}``
+# ``entrypoint.sh`` resolves ``DAPR_LOG_LEVEL`` as ``${DAPR_LOG_LEVEL:-info}``
 # before handing it to ``daprd --log-level``; keep the two fallbacks identical so
 # one variable cannot mean two levels. (In the shipped image neither fires: the
-# Dockerfile sets ``ENV DAPR_LOG_LEVEL=info``.)
-_ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK = "warn"
+# Dockerfile sets ``ENV DAPR_LOG_LEVEL=info``, which both mirror.)
+_ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK = "info"
 
 
 def _app_log_level_name() -> str:
@@ -109,7 +109,7 @@ def _forwarder_log_level() -> str | None:
 
     ``DAPR_LOG_LEVEL`` is what the entrypoint hands to ``daprd --log-level``; the
     base image sets it to ``info`` (``ENV`` in the SDK ``Dockerfile``). The
-    fallback below mirrors ``entrypoint.sh``'s own ``${DAPR_LOG_LEVEL:-warn}``,
+    fallback below mirrors ``entrypoint.sh``'s own ``${DAPR_LOG_LEVEL:-info}``,
     so the variable resolves to the same level here as the one daprd was
     actually gated at — the entrypoint exports it before launching this module,
     so the fallback only applies to direct invocation outside the image.

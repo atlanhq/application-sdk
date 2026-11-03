@@ -12,14 +12,18 @@
 #   all daprd flags.
 #
 # Environment variables (all optional, with sensible defaults):
-#   DAPR_APP_ID          - DAPR application ID (default: $ATLAN_SERVICE_NAME or "app")
+#   The base image's Dockerfile ENV owns the defaults for every DAPR_* variable
+#   it sets, so inside the image the fallbacks below never fire. They repeat the
+#   Dockerfile values only so the script behaves the same when run outside the
+#   image; tests/unit/test_entrypoint_sh.py fails if the two drift apart.
+#   DAPR_APP_ID          - DAPR application ID (default: app)
 #   DAPR_APP_PORT        - Application port DAPR connects to (default: 8000)
 #   DAPR_HTTP_PORT       - DAPR HTTP API port (default: 3500)
 #   DAPR_GRPC_PORT       - DAPR gRPC API port (default: 50001)
 #   DAPR_INTERNAL_GRPC_PORT - DAPR internal gRPC API port (default: DAPR_GRPC_PORT + 1,
 #                             i.e. 50002). Must differ from the other daprd ports.
 #   DAPR_COMPONENTS_PATH - Path to DAPR component YAML files (default: /app/components)
-#   DAPR_LOG_LEVEL                  - DAPR log level (base image ENV sets info; warn only if unset)
+#   DAPR_LOG_LEVEL                  - DAPR log level (default: info)
 #   DAPR_METRICS_PORT               - Port for daprd Prometheus metrics (default: 3100)
 #   DAPR_MAX_BODY_SIZE              - Max request body size passed to daprd as
 #                                     --max-request-body-size (default: 1024Mi)
@@ -35,7 +39,7 @@ set -eu
 # ---------------------------------------------------------------------------
 # Configuration with defaults — exported so Python child process can read them
 # ---------------------------------------------------------------------------
-export DAPR_APP_ID="${DAPR_APP_ID:-${ATLAN_SERVICE_NAME:-app}}"
+export DAPR_APP_ID="${DAPR_APP_ID:-app}"
 export DAPR_APP_PORT="${DAPR_APP_PORT:-8000}"
 export DAPR_HTTP_PORT="${DAPR_HTTP_PORT:-3500}"
 export DAPR_GRPC_PORT="${DAPR_GRPC_PORT:-50001}"
@@ -46,7 +50,7 @@ export DAPR_GRPC_PORT="${DAPR_GRPC_PORT:-50001}"
 # sidecar pair), so overriding only DAPR_GRPC_PORT cannot make them collide.
 export DAPR_INTERNAL_GRPC_PORT="${DAPR_INTERNAL_GRPC_PORT:-$((DAPR_GRPC_PORT + 1))}"
 export DAPR_COMPONENTS_PATH="${DAPR_COMPONENTS_PATH:-/app/components}"
-export DAPR_LOG_LEVEL="${DAPR_LOG_LEVEL:-warn}"
+export DAPR_LOG_LEVEL="${DAPR_LOG_LEVEL:-info}"
 export DAPR_METRICS_PORT="${DAPR_METRICS_PORT:-3100}"
 export DAPR_MAX_BODY_SIZE="${DAPR_MAX_BODY_SIZE:-1024Mi}"
 export DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
