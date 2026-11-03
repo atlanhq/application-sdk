@@ -695,6 +695,90 @@ def _get_execution_id_from_task() -> str:
     return wid
 
 
+#: Credential file directories this worker process wrote, by the run that
+#: wrote them: ``(workflow_id, run_id) -> paths``. Process-wide, not in
+#: ``_app_state``, because the files sit on this worker's disk while the run's
+#: ``cleanup_files`` may run on another worker and its state slot is pruned on
+#: whichever worker ran the workflow. Whatever the run's own cleanup does not
+#: reach, the worker's sweeper removes once Temporal reports the run closed
+#: (``execution._temporal.credential_sweep``), and the rest at worker shutdown.
+_credential_dirs_by_run: dict[tuple[str, str], set[str]] = {}
+_credential_dirs_lock = threading.Lock()
+
+
+def _current_run_key() -> tuple[str, str]:
+    """``(workflow_id, run_id)`` of the run the current task belongs to.
+
+    Raises:
+        AppContextError: If called outside a task.
+    """
+    workflow_id = _get_execution_id_from_task()
+    run_id = activity.info().workflow_run_id
+    if not run_id:
+        raise AppContextError("activity workflow_run_id is empty")
+    return workflow_id, run_id
+
+
+def _track_credential_dir(path: str) -> None:
+    """SDK-internal: register a credential file directory with the current run.
+
+    Called by ``credentials.utils`` from inside a task for each private
+    directory it makes. The run's ``cleanup_files`` removes it when it runs
+    on this worker, whatever ``extra_paths`` or ``CLEANUP_BASE_PATHS`` say;
+    otherwise this worker's sweeper does once the run has closed, so a keytab
+    or private key does not outlive the run on a long-lived worker.
+
+    Raises:
+        AppContextError: If called outside a task.
+    """
+    run = _current_run_key()
+    with _credential_dirs_lock:
+        _credential_dirs_by_run.setdefault(run, set()).add(path)
+
+
+def _runs_with_credential_dirs() -> list[tuple[str, str]]:
+    """The runs that still have credential directories on this worker."""
+    with _credential_dirs_lock:
+        return list(_credential_dirs_by_run)
+
+
+async def _remove_run_credential_dirs(run: tuple[str, str]) -> dict[str, bool]:
+    """Remove *run*'s credential directories on this worker.
+
+    Returns each directory's outcome. A removed one is untracked and dropped
+    from ``credentials.utils``' issued set; one that could not be removed is
+    logged and stays tracked, so a later cleanup or sweep retries it.
+    """
+    with _credential_dirs_lock:
+        dirs = sorted(_credential_dirs_by_run.get(run, ()))
+    results: dict[str, bool] = {}
+    for path in dirs:
+        try:
+            if os.path.lexists(path):
+                await run_in_thread(shutil.rmtree, path)
+            results[path] = True
+        except OSError:
+            _task_logger.warning(
+                "Failed to delete credential file directory", exc_info=True
+            )
+            results[path] = False
+    removed = [path for path, ok in results.items() if ok]
+    with _credential_dirs_lock:
+        remaining = _credential_dirs_by_run.get(run)
+        if remaining is not None:
+            remaining.difference_update(removed)
+            if not remaining:
+                del _credential_dirs_by_run[run]
+    if removed:
+        from application_sdk.credentials.utils import (  # noqa: PLC0415 — lazy: only needed once a run made a credential directory; keeps credentials.utils off app.base's import path
+            _forget_credential_dir,
+        )
+
+        for path in removed:
+            _forget_credential_dir(path)
+    return results
+
+
 class TaskStateAccessor:
     """Accessor for app state from within a task (not a @task method on an App).
 
@@ -2258,11 +2342,15 @@ class App(ABC):
     async def cleanup_files(self, input: CleanupInput) -> CleanupOutput:
         """Framework task: clean up local files after a workflow run.
 
-        Removes two categories of local files:
+        Removes three categories of local files:
 
         1. ``FileReference`` local paths tracked during the run (auto-materialised
            or persisted files, including their ``.sha256`` sidecars).
-        2. Convention-based temp directories: ``input.extra_paths`` if provided,
+        2. The private directories ``resolve_credential_file`` and
+           ``credential_dir`` made for the run on this worker. Always removed,
+           whatever ``input.extra_paths`` says. Those on another worker are
+           removed by that worker's sweeper once the run has closed.
+        3. Convention-based temp directories: ``input.extra_paths`` if provided,
            otherwise ``CLEANUP_BASE_PATHS`` / ``TEMPORARY_PATH + build_output_path()``
            — which is also where path-less ``FileReference`` objects materialise.
 
@@ -2315,7 +2403,14 @@ class App(ABC):
                             )
                             path_results[p] = False
 
-        # 2. Delete convention-based temp directories.
+        # 2. Delete this run's credential file directories on this worker.
+        #    Tracked separately because they hold secrets and live outside
+        #    the run scratch dir, so no convention-based sweep below reaches
+        #    them. Ones written on another worker are removed there, by its
+        #    sweeper, once the run has closed.
+        path_results.update(await _remove_run_credential_dirs(_current_run_key()))
+
+        # 3. Delete convention-based temp directories.
         if input.extra_paths:
             dir_paths: list[str] = input.extra_paths
         elif CLEANUP_BASE_PATHS:

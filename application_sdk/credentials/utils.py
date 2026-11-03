@@ -2,14 +2,18 @@
 
 import base64
 import os
+import shutil
+import tempfile
+import threading
 import warnings
 from typing import Literal, overload
 
 import orjson
 
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
-from application_sdk._install import worker_only_missing
+from application_sdk._install import api_only_install, worker_only_missing
 from application_sdk._logging import get_logger
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME, TEMPORARY_PATH
 from application_sdk.credentials.extra import (  # noqa: F401 — re-exported; ships in the api distribution
@@ -28,11 +32,94 @@ OBJECT_STORE_PREFIX = "objectstore://"
 _DEFAULT_CREDENTIAL_FILE_DIR = os.path.join(TEMPORARY_PATH, "credential_files")
 
 
+#: Only :func:`credential_dir` holds this, so only it can make a CredentialDir.
+_ISSUED = object()
+
+#: Paths :func:`credential_dir` made in this process and nothing has removed
+#: yet. A CredentialDir is honoured only if its path is here, so a forged one
+#: (``str.__new__``) around any other path — a shared directory, a symlink —
+#: is refused without relying on platform permission bits.
+_issued_dirs: set[str] = set()
+_issued_dirs_lock = threading.Lock()
+
+
+def _forget_credential_dir(path: str) -> None:
+    """Drop *path* from the issued set once its directory has been removed.
+
+    Called by every scope that removes a credential directory, so a later
+    directory recreated at the same path is never mistaken for the SDK's.
+    """
+    with _issued_dirs_lock:
+        _issued_dirs.discard(path)
+
+
+class CredentialDir(str):
+    """A private directory for credential files, made by :func:`credential_dir`.
+
+    A ``str`` (its path), so it works anywhere a path does: ``os.path.join``,
+    a client's config. The type
+    is what tells :func:`resolve_credential_file` the directory is the SDK's
+    own owner-only directory, so files go straight into it.
+
+    Not constructible directly: ``CredentialDir("/tmp/shared")`` raises
+    ``TypeError``. Use :func:`credential_dir`.
+    """
+
+    __slots__ = ()
+
+    def __new__(cls, path: str, *, _issued_by: object = None) -> "CredentialDir":
+        if _issued_by is not _ISSUED:
+            # conformance: ignore[E012] constructing the type directly is a programming error, which TypeError signals for any constructor misuse; no run or source is involved
+            raise TypeError(
+                "CredentialDir is made by credential_dir(), not constructed directly"
+            )
+        return super().__new__(cls, path)
+
+
+def credential_dir(base_dir: str | None = None) -> CredentialDir:
+    """Create a private directory for credential files and return it.
+
+    The directory is new, owner-only (0700), and unique to this call, so no
+    other connection's files can land in it and other OS users can't read
+    it. It is not hidden from code running as the same OS user (another
+    connection in the same worker process can open it); that needs OS-level
+    isolation. It is removed for you: inside a
+    handler call, when the handler returns; inside a task, by
+    ``cleanup_files`` when the run completes. Anywhere else (a script) the
+    caller removes it.
+
+    Pass it as ``dest_dir`` to :func:`resolve_credential_file` to put several
+    files side by side — for example a client PSE and its ``cred_v2`` file,
+    which SAP CommonCryptoLib reads from one ``SECUDIR``. Hand the directory
+    to the library per connection; a process-wide setting such as an
+    environment variable is shared by every overlapping connection, so it
+    needs a lock held until the library has read the files::
+
+        secudir = credential_dir()
+        await resolve_credential_file(pse, "SAPSNCS.pse", secudir, raise_on_error=True)
+        await resolve_credential_file(cred, "cred_v2", secudir, raise_on_error=True)
+
+    Args:
+        base_dir: Where to create the directory. Defaults to
+            ``<TEMPORARY_PATH>/credential_files``.
+
+    Returns:
+        The new directory's path, as a :class:`CredentialDir`.
+    """
+    base = base_dir if base_dir is not None else _DEFAULT_CREDENTIAL_FILE_DIR
+    os.makedirs(base, exist_ok=True)
+    path = tempfile.mkdtemp(prefix="cred-", dir=base)
+    with _issued_dirs_lock:
+        _issued_dirs.add(path)
+    _track_call_dir(path)
+    return CredentialDir(path, _issued_by=_ISSUED)
+
+
 @overload
 async def resolve_credential_file(
     value: str | None,
     filename: str,
-    dest_dir: str = ...,
+    dest_dir: CredentialDir | str | None = ...,
     *,
     raise_on_error: Literal[True],
 ) -> str: ...
@@ -42,7 +129,7 @@ async def resolve_credential_file(
 async def resolve_credential_file(
     value: str | None,
     filename: str,
-    dest_dir: str = ...,
+    dest_dir: CredentialDir | str | None = ...,
     *,
     raise_on_error: bool | None = ...,
 ) -> str | None: ...
@@ -51,7 +138,7 @@ async def resolve_credential_file(
 async def resolve_credential_file(
     value: str | None,
     filename: str,
-    dest_dir: str = _DEFAULT_CREDENTIAL_FILE_DIR,
+    dest_dir: CredentialDir | str | None = None,
     *,
     raise_on_error: bool | None = None,
 ) -> str | None:
@@ -115,8 +202,20 @@ async def resolve_credential_file(
                   branches (e.g. ``"keytab.keytab"``, ``"krb5.conf"``,
                   ``"ca_cert.pem"``). Ignored for the Atlan upload branch —
                   the filename there is derived from the upload key.
-        dest_dir: Directory to write or download the file into. Defaults to
-                  ``<TEMPORARY_PATH>/credential_files``.
+        dest_dir: Where the file goes. Every file lands in a private,
+                  owner-only (0700) directory, so two connections resolving
+                  the same ``filename`` never share a path:
+
+                  * ``None`` (default): a new directory from
+                    :func:`credential_dir`, holding just this file.
+                  * A :class:`CredentialDir`: the file goes straight into it,
+                    so several files can sit side by side. A second file of
+                    the same name in it raises ``FileExistsError``, also when
+                    two resolutions of the name run concurrently. The name is
+                    reserved (an empty 0600 file) while its content arrives.
+                  * A plain ``str`` (deprecated): a new private directory is
+                    created *inside* it, as ``credential_dir(dest_dir)``
+                    would. Emits a ``DeprecationWarning``; removed in v4.0.
 
         raise_on_error: ``True`` to raise on failure, ``False`` to return
                   ``None``. ``None`` (the default) behaves as ``False`` and
@@ -127,14 +226,28 @@ async def resolve_credential_file(
                   truststore.
 
     Returns:
-        Absolute path to the resolved file on disk. ``None`` if ``value`` is
-        empty or resolution fails, unless ``raise_on_error`` is ``True``.
+        Path to the resolved file on disk, ``<private dir>/<filename>``, for
+        the ``objectstore://`` and base64 branches. Without a
+        :class:`CredentialDir`, it is a different path on every call. The
+        file is owner-only (0600) and appears at that path complete, never
+        half-written. Inside a handler call the directory is removed when the
+        handler returns; inside a task, ``cleanup_files`` removes it when the
+        run completes; anywhere else, the caller owns it. ``None`` if
+        ``value`` is empty or resolution fails, unless ``raise_on_error`` is
+        ``True``.
 
     Raises:
         CredentialNotFoundError: ``raise_on_error`` and ``value`` is empty or
             whitespace only.
         CredentialParseError: ``raise_on_error`` and ``value`` is an invalid
-            ``objectstore://`` key or not valid base64.
+            ``objectstore://`` key or not valid base64, or ``filename`` is not
+            a bare file name (it has a path separator, or is ``.``/``..``).
+        FileExistsError: ``raise_on_error`` and ``dest_dir`` is a
+            :class:`CredentialDir` that already holds ``filename``.
+        PermissionError: ``raise_on_error`` and ``dest_dir`` is a
+            :class:`CredentialDir` that :func:`credential_dir` did not make
+            in this process, or whose directory has already been removed
+            (for example one forged around a shared path).
         Exception: Failures downloading an Atlan upload reference propagate
             in either mode, as they always have; with ``raise_on_error``,
             failures downloading from the customer object store or writing
@@ -147,6 +260,16 @@ async def resolve_credential_file(
             "value. Pass raise_on_error=True for a typed error, or "
             "raise_on_error=False to keep None — the default flips to True "
             "in v4.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    if dest_dir is not None and not isinstance(dest_dir, CredentialDir):
+        warnings.warn(
+            "resolve_credential_file() with a plain-string dest_dir is "
+            "deprecated: the file goes into a new private directory inside "
+            "it, not into dest_dir itself. Omit dest_dir, or pass a "
+            "credential_dir() to put several files in one directory — "
+            "plain strings are rejected in v4.0.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -188,17 +311,27 @@ def _is_upload_reference(value: str) -> bool:
 
 
 async def _resolve_credential_file_content(
-    stripped: str, filename: str, dest_dir: str
+    stripped: str, filename: str, dest_dir: CredentialDir | str | None
 ) -> str:
     """Resolve an ``objectstore://`` key or base64 content to a local path.
 
     Raises:
-        CredentialParseError: An invalid ``objectstore://`` key, or content
-            that is not valid base64.
+        CredentialParseError: An invalid ``objectstore://`` key, a
+            ``filename`` that is not a bare file name, or content that is not
+            valid base64.
     """
     from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
         CredentialParseError,
     )
+
+    # The file must land inside this call's own directory: a separator or a
+    # dot segment would write it beside, or above, where cleanup looks.
+    if not _is_bare_filename(filename):
+        raise CredentialParseError(
+            "Invalid credential file name (empty, '.', '..', or contains a "
+            "path separator)",
+            credential_name=filename,
+        )
 
     # 2. Customer's DEPLOYMENT object store — explicit objectstore:// prefix.
     #    Intended for non-secret companion files (krb5.conf, public CA certs)
@@ -212,23 +345,40 @@ async def _resolve_credential_file_content(
                 "absolute, or contains '..')",
                 credential_name=filename,
             )
-        os.makedirs(dest_dir, exist_ok=True)
-        file_path = os.path.join(dest_dir, filename)
         try:
+            from application_sdk.infrastructure.context import (  # noqa: PLC0415 — lazy: worker-only module; this module ships in the api distribution
+                get_infrastructure,
+            )
             from application_sdk.storage.binding import (  # noqa: PLC0415 — lazy: storage imports obstore (heavy Rust ext) at module load, and this module sits on the workflow-sandbox import chain (credentials package init); pinned by the preflight gate's import-hygiene test
                 create_store_from_binding,
             )
             from application_sdk.storage.ops import (  # noqa: PLC0415 — lazy: same reason as the binding import above
                 download_file,
             )
+        # conformance: ignore[E008] api-only install fallback: re-raised as a typed ObjectStoreNotConfiguredError, never hidden
         except ModuleNotFoundError as exc:
             if not worker_only_missing(exc):
                 raise
             # api-only install (the API host): no object store to resolve from.
             raise ObjectStoreNotConfiguredError() from exc
 
-        store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
-        await download_file(key, file_path, store=store)
+        # Reuse the deployment store startup built from the same binding
+        # (with its fetched secrets); build one only outside a started app.
+        infra = get_infrastructure()
+        if infra is not None and infra.storage is not None:
+            store = infra.storage
+        else:
+            store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
+        call_dir, owned = _call_dir_for(dest_dir)
+        file_path = _reserve_file_path(call_dir, filename)
+        try:
+            # download_file stages into an mkstemp (0600) file and publishes
+            # it over the reservation with os.replace, so the file is
+            # owner-only and never partial.
+            await download_file(key, file_path, store=store)
+        except BaseException:
+            await run_in_thread(_discard, call_dir, file_path, owned)
+            raise
         logger.info(
             "Resolved credential file from customer object store: key=%s path=%s",
             key,
@@ -245,13 +395,136 @@ async def _resolve_credential_file_content(
             credential_name=filename,
             cause=exc,
         ) from exc
-    os.makedirs(dest_dir, exist_ok=True)
-    file_path = os.path.join(dest_dir, filename)
-    with open(file_path, "wb") as f:
-        f.write(decoded_bytes)
+    call_dir, owned = _call_dir_for(dest_dir)
+    file_path = _reserve_file_path(call_dir, filename)
+    try:
+        _write_owner_only(call_dir, file_path, decoded_bytes)
+    except BaseException:
+        await run_in_thread(_discard, call_dir, file_path, owned)
+        raise
     logger.info(
         "Resolved credential file from base64 content: path=%s filename=%s",
         file_path,
         filename,
     )
     return file_path
+
+
+def _is_bare_filename(filename: str) -> bool:
+    """Whether *filename* names a file, not a path: no separator, no dot segment."""
+    if filename in ("", ".", ".."):
+        return False
+    separators = {"/", os.sep} | ({os.altsep} if os.altsep else set())
+    return not any(sep in filename for sep in separators)
+
+
+def _call_dir_for(dest_dir: CredentialDir | str | None) -> tuple[str, bool]:
+    """The private directory this call writes into, and whether it made it.
+
+    A :class:`CredentialDir` is used as is, provided :func:`credential_dir`
+    issued it in this process and it has not been removed (its scope removes
+    it). Otherwise a new one is made — under the default base, or inside a
+    legacy plain-string ``dest_dir`` — and this call removes it again if the
+    write fails.
+
+    Raises:
+        PermissionError: A CredentialDir that was not issued here, or whose
+            directory has already been removed.
+    """
+    if isinstance(dest_dir, CredentialDir):
+        with _issued_dirs_lock:
+            issued = str(dest_dir) in _issued_dirs
+        if not issued:
+            raise PermissionError(
+                "Credential directory was not made by credential_dir() in this "
+                "process, or has already been removed"
+            )
+        return dest_dir, False
+    return credential_dir(dest_dir), True
+
+
+def _reserve_file_path(call_dir: str, filename: str) -> str:
+    """Claim ``call_dir/filename`` atomically, as an empty 0600 file.
+
+    ``O_CREAT | O_EXCL`` makes the claim and the existence check one step, so
+    of two concurrent resolutions of one name into a shared
+    :class:`CredentialDir`, exactly one gets the path and the other gets
+    ``FileExistsError``. Silently replacing the first file is how one
+    connection ends up reading another's.
+    """
+    file_path = os.path.join(call_dir, filename)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(file_path, flags, 0o600)
+    except FileExistsError as exc:
+        raise FileExistsError(
+            f"Credential directory already holds a file named {filename!r}"
+        ) from exc
+    os.close(fd)
+    return file_path
+
+
+def _discard(call_dir: str, file_path: str, owned: bool) -> None:
+    """Undo a failed resolution: its whole directory if this call made it,
+    else just the name it reserved in the caller's directory."""
+    if owned:
+        shutil.rmtree(call_dir, ignore_errors=True)
+        if not os.path.lexists(call_dir):
+            _forget_credential_dir(call_dir)
+    elif os.path.lexists(file_path):
+        os.remove(file_path)
+
+
+def _write_owner_only(call_dir: str, file_path: str, data: bytes) -> None:
+    """Write *data* to *file_path* in *call_dir* as an owner-only (0600) file.
+
+    The bytes go to a ``mkstemp`` temp file (``O_EXCL``, 0600) first and are
+    published over the reservation with ``os.replace``, so *file_path* never
+    holds a partial file. The temp file is removed if the write fails.
+    """
+    fd, tmp_path = tempfile.mkstemp(dir=call_dir, prefix=".", suffix=".partial")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, file_path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
+
+
+def _track_call_dir(call_dir: str) -> None:
+    """Register *call_dir* with whatever scope will remove it.
+
+    The narrowest scope wins. Inside a handler call (HTTP, SDR, the preflight
+    gate) the handler context removes it when the handler returns. Otherwise,
+    inside a task, the run does, via ``cleanup_files``: ``app.base`` owns both
+    the run state and the task-context probe, so this module never touches
+    the execution runtime itself. Elsewhere (scripts) the caller owns it.
+    """
+    from application_sdk._context_errors import (  # noqa: PLC0415 — lazy: keeps the module-level import list unchanged for the api distribution
+        AppContextError,
+    )
+    from application_sdk.handler.context import (  # noqa: PLC0415 — lazy: the handler package is not needed to import this module
+        get_handler_context,
+    )
+
+    handler_ctx = get_handler_context()
+    if handler_ctx is not None:
+        handler_ctx._track_credential_dir(call_dir, _forget_credential_dir)
+        return
+
+    try:
+        from application_sdk.app.base import (  # noqa: PLC0415 — lazy: worker-only module, and circular (app.base imports the credentials package)
+            _track_credential_dir,
+        )
+    # conformance: ignore[E008] api-only install (the API host): it has no tasks, so there is no run to track the directory for
+    except ModuleNotFoundError:
+        if not api_only_install():
+            raise
+        return
+    try:
+        _track_credential_dir(call_dir)
+    # conformance: ignore[E002] not inside a task: the caller owns the directory, as documented on resolve_credential_file
+    except AppContextError:
+        return

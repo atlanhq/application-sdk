@@ -8,6 +8,7 @@ named activities.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 from datetime import timedelta
 from typing import TYPE_CHECKING, Callable
@@ -299,6 +300,40 @@ class AppWorker:
         self._task_queue = task_queue
         self._shutdown_drain_delay_seconds = shutdown_drain_delay_seconds
         self._pusher: PushGatewayClient | None = None
+        self._credential_sweeper: asyncio.Task[None] | None = None
+
+    def _start_credential_sweeper(self) -> None:
+        """Start removing this worker's credential directories of closed runs."""
+        from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: worker startup only
+            run_sweeper,
+        )
+
+        self._credential_sweeper = asyncio.create_task(
+            run_sweeper(self._worker.client), name="credential-dir-sweeper"
+        )
+
+    async def _stop_credential_sweeper(self) -> None:
+        """Stop the sweeper and remove every credential directory still tracked.
+
+        Runs after the Temporal worker has stopped, so no task on this worker
+        can still need one. Best-effort: shutdown must not fail on it.
+        """
+        from application_sdk.execution._temporal.credential_sweep import (  # noqa: PLC0415 — cold path: shutdown only
+            remove_all_credential_dirs,
+        )
+
+        sweeper, self._credential_sweeper = self._credential_sweeper, None
+        if sweeper is not None:
+            sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await sweeper
+        try:
+            await remove_all_credential_dirs()
+        # conformance: ignore[E004] shutdown path; a failed removal is logged and must not block shutdown
+        except Exception:
+            logger.warning(
+                "Removing credential directories at shutdown failed", exc_info=True
+            )
 
     async def _start_metrics_push(self) -> None:
         if not self._enable_pushgateway:
@@ -392,7 +427,9 @@ class AppWorker:
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
-        return await self._worker.__aenter__()
+        entered = await self._worker.__aenter__()
+        self._start_credential_sweeper()
+        return entered
 
     async def __aexit__(
         self, exc_type: type[BaseException] | None, *args: object
@@ -406,6 +443,7 @@ class AppWorker:
             await asyncio.sleep(self._shutdown_drain_delay_seconds)
             await self._worker.__aexit__(exc_type, *args)
         finally:
+            await self._stop_credential_sweeper()
             await self._drain_sizing()
             await self._stop_metrics_push()
 
@@ -420,9 +458,11 @@ class AppWorker:
                 "Pushgateway pusher start failed — worker will run without metrics",
                 exc_info=True,
             )
+        self._start_credential_sweeper()
         try:
             await self._worker.run()
         finally:
+            await self._stop_credential_sweeper()
             await self._drain_sizing()
             await self._stop_metrics_push()
 
