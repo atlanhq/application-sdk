@@ -10,7 +10,7 @@ from typing import Literal, overload
 import orjson
 
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
-from application_sdk._install import worker_only_missing
+from application_sdk._install import api_only_install, worker_only_missing
 from application_sdk._logging import get_logger
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.utils import download_file_from_upload_response
@@ -145,7 +145,8 @@ async def resolve_credential_file(
         CredentialNotFoundError: ``raise_on_error`` and ``value`` is empty or
             whitespace only.
         CredentialParseError: ``raise_on_error`` and ``value`` is an invalid
-            ``objectstore://`` key or not valid base64.
+            ``objectstore://`` key or not valid base64, or ``filename`` is not
+            a bare file name (it has a path separator, or is ``.``/``..``).
         Exception: Failures downloading an Atlan upload reference propagate
             in either mode, as they always have; with ``raise_on_error``,
             failures downloading from the customer object store or writing
@@ -204,12 +205,22 @@ async def _resolve_credential_file_content(
     """Resolve an ``objectstore://`` key or base64 content to a local path.
 
     Raises:
-        CredentialParseError: An invalid ``objectstore://`` key, or content
-            that is not valid base64.
+        CredentialParseError: An invalid ``objectstore://`` key, a
+            ``filename`` that is not a bare file name, or content that is not
+            valid base64.
     """
     from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__.py loads sibling modules
         CredentialParseError,
     )
+
+    # The file must land inside this call's own directory: a separator or a
+    # dot segment would write it beside, or above, where cleanup looks.
+    if not _is_bare_filename(filename):
+        raise CredentialParseError(
+            "Invalid credential file name (empty, '.', '..', or contains a "
+            "path separator)",
+            credential_name=filename,
+        )
 
     # 2. Customer's DEPLOYMENT object store — explicit objectstore:// prefix.
     #    Intended for non-secret companion files (krb5.conf, public CA certs)
@@ -287,6 +298,14 @@ async def _resolve_credential_file_content(
     return file_path
 
 
+def _is_bare_filename(filename: str) -> bool:
+    """Whether *filename* names a file, not a path: no separator, no dot segment."""
+    if filename in ("", ".", ".."):
+        return False
+    separators = {"/", os.sep} | ({os.altsep} if os.altsep else set())
+    return not any(sep in filename for sep in separators)
+
+
 def _make_call_dir(dest_dir: str) -> str:
     """Create this call's own 0700 directory under *dest_dir* and track it.
 
@@ -320,23 +339,26 @@ def _write_owner_only(call_dir: str, filename: str, data: bytes) -> str:
 def _track_call_dir(call_dir: str) -> None:
     """Register *call_dir* with the current run for ``cleanup_files``.
 
-    Only inside a Temporal activity: that is the only place a run exists to
-    clean up after. Elsewhere (the API host, scripts) the caller owns the
-    directory.
+    Only inside a task: that is the only place a run exists to clean up
+    after. ``app.base`` owns both the run state and the task-context probe,
+    so this module never touches the execution runtime itself. Elsewhere
+    (the API host, scripts) the caller owns the directory.
     """
-    try:
-        from temporalio import (  # noqa: PLC0415 — lazy: worker-only dependency; this module ships in the api distribution
-            activity,
-        )
+    from application_sdk._context_errors import (  # noqa: PLC0415 — lazy: keeps the module-level import list unchanged for the api distribution
+        AppContextError,
+    )
 
-        if not activity.in_activity():
-            return
+    try:
         from application_sdk.app.base import (  # noqa: PLC0415 — lazy: worker-only module, and circular (app.base imports the credentials package)
             _track_credential_dir,
         )
-    # conformance: ignore[E008] api-only install: no temporalio means no task, so there is no run to track the directory for
-    except ModuleNotFoundError as exc:
-        if not worker_only_missing(exc):
+    # conformance: ignore[E008] api-only install (the API host): it has no tasks, so there is no run to track the directory for
+    except ModuleNotFoundError:
+        if not api_only_install():
             raise
         return
-    _track_credential_dir(call_dir)
+    try:
+        _track_credential_dir(call_dir)
+    # conformance: ignore[E002] not inside a task: the caller owns the directory, as documented on resolve_credential_file
+    except AppContextError:
+        return

@@ -382,11 +382,8 @@ class TestCleanupCredentialFiles:
         from application_sdk.credentials.utils import resolve_credential_file
 
         keytab_a, keytab_b = b"connection-a-keytab", b"connection-b-keytab"
-        with (
-            mock.patch("temporalio.activity.in_activity", return_value=True),
-            mock.patch.object(
-                app_base, "_get_execution_id_from_task", return_value="wf-1"
-            ),
+        with mock.patch.object(
+            app_base, "_get_execution_id_from_task", return_value="wf-1"
         ):
             path_a = await resolve_credential_file(
                 base64.b64encode(keytab_a).decode(),

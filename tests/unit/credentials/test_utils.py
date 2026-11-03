@@ -575,11 +575,48 @@ class TestResolveCredentialFilePerCallPaths:
         assert os.listdir(tmp_path) == []
 
     async def test_outside_a_task_nothing_is_tracked(self, tmp_path):
-        with patch("application_sdk.app.base._track_credential_dir") as track:
+        from application_sdk.app.base import _app_state, _app_state_lock
+
+        with _app_state_lock:
+            before = dict(_app_state)
+        result = await resolve_credential_file(
+            base64.b64encode(b"cert").decode(),
+            "ca_cert.pem",
+            str(tmp_path),
+            raise_on_error=True,
+        )
+        assert open(result, "rb").read() == b"cert"
+        with _app_state_lock:
+            assert dict(_app_state) == before
+
+    @pytest.mark.parametrize(
+        "filename",
+        ["", ".", "..", "./../outside.key", "../outside.key", "sub/keytab", "/abs.key"],
+    )
+    @pytest.mark.parametrize(
+        "value",
+        [base64.b64encode(b"secret").decode(), "objectstore://kerberos/k.keytab"],
+        ids=["base64", "objectstore"],
+    )
+    async def test_a_filename_that_is_a_path_is_rejected(
+        self, filename, value, tmp_path
+    ):
+        with pytest.raises(CredentialParseError):
             await resolve_credential_file(
-                base64.b64encode(b"cert").decode(),
-                "ca_cert.pem",
+                value, filename, str(tmp_path), raise_on_error=True
+            )
+        # Nothing written: not in a call dir, and not beside dest_dir.
+        assert os.listdir(tmp_path) == []
+        assert not os.path.exists(tmp_path.parent / "outside.key")
+
+    @pytest.mark.skipif(
+        os.name != "nt", reason="backslash is a separator only on Windows"
+    )
+    async def test_a_backslash_filename_is_rejected_on_windows(self, tmp_path):
+        with pytest.raises(CredentialParseError):
+            await resolve_credential_file(
+                base64.b64encode(b"secret").decode(),
+                "..\\outside.key",
                 str(tmp_path),
                 raise_on_error=True,
             )
-        track.assert_not_called()
