@@ -1070,6 +1070,17 @@ def run_rerun(
                 f"{wait_seconds}s, so it could not be re-run. Re-run it by hand; it "
                 "reads the marker."
             )
+        # The wait can be long, and a push in the meantime supersedes this
+        # SHA. PR Checks, CodeQL and SDK Gate cancel superseded runs through a
+        # PR-ref concurrency group, so re-running the old run would re-enter
+        # that group and cancel the NEW head's run (and its required checks).
+        head = github.pull(request.pr).head_sha
+        if head != pr.head_sha:
+            raise GitHubError(
+                f"the PR head moved from {pr.head_sha[:7]} to {head[:7]} while "
+                f"waiting, so {pr.head_sha[:7]}'s runs were not re-run. Comment "
+                f"`{request.command}` again for the new head."
+            )
         if target.job_id:
             github.rerun_job(target.job_id)
         else:

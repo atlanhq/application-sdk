@@ -1252,6 +1252,31 @@ class TestRunRerun:
         assert clock.sleeps == [20, 20]
         assert api.writes[-1][0] == f"repos/{REPO}/actions/runs/9/rerun"
 
+    def test_a_push_during_the_wait_reruns_nothing(self) -> None:
+        """Re-running the superseded SHA's run would re-enter the PR-ref
+        concurrency group and cancel the new head's run (FND-4248)."""
+        api = self._api(ptc.GATE_CHECK)
+        polls = _completing_after(2)
+
+        def rows() -> list[dict[str, Any]]:
+            got = polls()
+            if got[0]["status"] == "completed":
+                api.pull = {**api.pull, "head": {**api.pull["head"], "sha": "b" * 40}}
+            return got
+
+        api.runs = {"sdk-gate.yaml": rows}
+        clock = FakeClock()
+        with pytest.raises(ptc.GitHubError, match="PR head moved"):
+            ptc.run_rerun(
+                ptc.GitHub(REPO, api),
+                _request(ptc.GATE_CHECK),
+                RUN_URL,
+                600,
+                sleep=clock.sleep,
+                clock=clock.clock,
+            )
+        assert not any(p.endswith("/rerun") for p, _ in api.writes)
+
     def test_past_the_deadline_raises_without_rerunning(self) -> None:
         api = self._api(
             ptc.GATE_CHECK, runs={"sdk-gate.yaml": _completing_after(10**6)}

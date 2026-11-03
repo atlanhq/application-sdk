@@ -1,6 +1,6 @@
 # This workflow is used to run CodeQL analysis on the repository.
 # It is triggered on push or pull request to the main branch.
-# It is also triggered daily at 12:45 UTC.
+# It is also triggered weekly, Sundays at 12:45 UTC.
 # Note: Github Advanced Security CodeQL Analysis requires this to be in a separate workflow file.
 name: "CodeQL Advanced"
 
@@ -14,6 +14,15 @@ on:
   merge_group:
   schedule:
     - cron: '45 12 * * 0'
+
+# Every PR-triggered workflow cancels superseded runs (docs/standards/ci.md):
+# a new push to a PR cancels the previous commit's run. Off the PR path (merge
+# queue, pushes to main, the weekly schedule) each run gets its own group and
+# is never cancelled; a shared ref-keyed group there would hold one pending
+# slot and evict runs (FND-218).
+concurrency:
+  group: codeql-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
 jobs:
   # Bump-version PR CI is opt-in (FND-3748). The `/gate-check` comment posts a

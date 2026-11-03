@@ -15,6 +15,19 @@ permissions:
   issues: write
   security-events: write
 
+# Every PR-triggered workflow cancels superseded runs (docs/standards/ci.md):
+# a new push to a PR cancels the previous commit's run. Off the PR path (merge
+# queue) each run gets its own group and is never cancelled; a shared
+# ref-keyed group there would hold one pending slot and evict runs (FND-218).
+# Cancelling holds no tenant: a connector e2e run already dispatched lives in
+# its own repo, is not cancelled with this run, and releases its own (app,
+# cloud) lease (see e2e-apps/action.yaml). The worst leftover is a callback
+# check that never completes on the superseded commit, which is no longer the
+# PR head, so no required check reads it.
+concurrency:
+  group: pr-checks-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
 jobs:
   # Detect which files changed
   changes:
