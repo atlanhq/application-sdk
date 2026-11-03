@@ -2,6 +2,25 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.54.0] - 2026-11-03
+
+### Features
+
+- FND-4503 P001 no-op opt-out safe swap; P001, P015 and P053 lane after-shapes and decided defaults (#4705) ([84e9007](https://github.com/atlanhq/application-sdk/commit/84e9007))
+- migrate-orchestration safe swaps and decided defaults for P004, P005 [FND-4517] (#4708) ([a8e5c7c](https://github.com/atlanhq/application-sdk/commit/a8e5c7c))
+- D016 requires-python must admit the runtime image's Python (#4684) ([a752ff2](https://github.com/atlanhq/application-sdk/commit/a752ff2))
+- FND-4417 migrate-deprecated-symbols safe-swap marks, decided defaults and owner blocks (#4621) ([8510e49](https://github.com/atlanhq/application-sdk/commit/8510e49))
+
+### Bug fixes
+
+- remove the auto-fix-vulnerabilities reusable workflow (#4717) ([84438ef](https://github.com/atlanhq/application-sdk/commit/84438ef))
+- one jittered retry helper, resettable Dapr readiness gates, gateway-404 retry at the store seam (#4716) ([c7ecde8](https://github.com/atlanhq/application-sdk/commit/c7ecde8))
+- correct P023's fix guidance (1 repo) (#4711) ([a17fa9a](https://github.com/atlanhq/application-sdk/commit/a17fa9a))
+- L006 false positive on compliant code (1 repo) (#4712) ([32207d4](https://github.com/atlanhq/application-sdk/commit/32207d4))
+- FND-4520 migrate-storage incremental marker default and SDK seams in the cross-run state block (#4706) ([da81921](https://github.com/atlanhq/application-sdk/commit/da81921))
+- FND-4521 migrate-deprecated-symbols decided defaults for deprecated error classes (#4707) ([59674c5](https://github.com/atlanhq/application-sdk/commit/59674c5))
+- one path normaliser, AzureClient teardown, idempotent lock acquire, late heartbeat [FND-4285] (#4693) ([8223361](https://github.com/atlanhq/application-sdk/commit/8223361))
+
 ## [0.53.1] - 2026-11-01
 
 ### Bug fixes
