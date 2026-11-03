@@ -207,6 +207,36 @@ def test_offloaded_helper_is_silent() -> None:
     assert _p023(src) == []
 
 
+_STREAM_TASK = (
+    "import httpx\nfrom application_sdk.app import App, task\n"
+    "from application_sdk.execution.heartbeat import run_in_thread\n"
+    "class A(App):\n"
+    "    @task\n"
+    "    async def download(self, input):\n"
+    "        async with httpx.AsyncClient() as client:\n"
+    "            async with client.stream('GET', input.url) as response:\n"
+    "                with open(input.path, 'wb') as fh:\n"
+    "                    async for chunk in response.aiter_bytes():\n"
+    "                        {sink}\n"
+)
+
+
+def test_streaming_sink_write_on_the_loop_is_caught() -> None:
+    (finding,) = _p023(_STREAM_TASK.format(sink="fh.write(chunk)"))
+    assert "'fh.write()'" in finding.message
+
+
+def test_streaming_sink_offloaded_per_chunk_is_silent() -> None:
+    """The prescription's streaming exception must clear the finding it fixes.
+
+    P023 tells an async producer feeding a sync sink to keep awaiting the
+    producer and offload each sink call; if the detector stopped accepting that
+    shape, the guidance would steer the fix to a form that is still flagged.
+    """
+    src = _STREAM_TASK.format(sink="await run_in_thread(fh.write, chunk)")
+    assert _p023(src) == []
+
+
 def test_helper_without_blocking_work_is_silent() -> None:
     src = (
         _TASK_HEADER + "def _name(path):\n"
