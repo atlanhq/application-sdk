@@ -43,6 +43,7 @@ SDK_DEPENDENCY_UNAVAILABLE_CLASSES: frozenset[str] = frozenset(
         "DaprNotDetectedError",
         "DaprSidecarUnreachableError",
         "DependencyUnavailableError",
+        "EventDeliveryUncertainError",
         "EventPublishError",
         "LockAcquisitionError",
         "MarkerUploadError",
