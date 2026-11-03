@@ -1,8 +1,20 @@
 repos:
+  # Ruff is the only linter, formatter AND import sorter (isort was dropped in
+  # FND-4247: the hook and the dev group pinned different isort versions, so
+  # `uv run isort` rewrote files CI accepted). The rev must equal the
+  # `ruff==` pin in pyproject.toml's dev group and in
+  # packages/conformance/pyproject.toml, so `uv run ruff` sorts and formats
+  # exactly like this hook. Renovate bumps all three in one PR (the `ruff`
+  # group in renovate.json); .github/scripts/tests/test_lint_guards.py fails
+  # if they ever disagree.
+  #
+  # `--fix` keeps the auto-fix isort used to give: an unsorted import block
+  # is rewritten in place (and the hook still fails, so CI stays a check).
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.4
+    rev: v0.17.3
     hooks:
-      - id: ruff
+      - id: ruff-check
+        args: ["--fix"]
       - id: ruff-format
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
@@ -42,15 +54,6 @@ repos:
       - id: actionlint
         args: ['-shellcheck=']
         files: ^\.github/(workflows|workflow-templates)/.*\.ya?ml$
-  - repo: https://github.com/pycqa/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        name: isort (python)
-        entry: isort
-        types: [python]
-        args: ["--profile", "black"]
-        exclude: ^contract-toolkit/examples/.*/_input\.py$
   - repo: https://github.com/compilerla/conventional-pre-commit
     rev: v4.0.0
     hooks:

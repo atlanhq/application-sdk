@@ -21,9 +21,10 @@ uv run pre-commit install
 ```
 
 ### What pre-commit checks:
-- **ruff**: Linting (E722 bare except, F541 useless f-strings, etc.)
+- **ruff**: Linting (E722 bare except, F541 useless f-strings, etc.) and import sorting (`I` rules; the hook runs with `--fix`)
 - **ruff-format**: Code formatting (line length, spacing, etc.)
-- **isort**: Import sorting (profile: black)
+
+The dev group pins `ruff` to the hook's exact version, so `uv run ruff check --fix` and `uv run ruff format` give the same result as CI.
 - **pyright**: Type checking
 - **conventional-pre-commit**: Commit message format (on commit-msg stage)
 - **pre-commit-hooks**: Merge conflicts, debug statements, trailing whitespace, BOM

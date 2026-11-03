@@ -22,6 +22,10 @@
       "/^\\.github/workflow-templates/.+\\.ya?ml$/"
     ]
   },
+  "pre-commit": {
+    "description": "Enable Renovate's pre-commit manager (FND-4247). It is off by default upstream, so every hook rev in .pre-commit-config.yaml only moved when someone bumped it by hand, and the hooks froze: ruff sat at v0.6.4 and isort at 5.13.2 while the dev group locked isort 9.0.2. The manager reads `rev:` against each hook repo's tags (datasource github-tags). Repo-local because only this repo's .pre-commit-config.yaml is in scope; the fleet's connector repos run their own hooks and are untouched. The packageRules below give it a release-age hold, keep ruff's three pins in one PR, and exclude the renovate validator hook, whose rev is tied to the runner's CLI pin.",
+    "enabled": true
+  },
   "customManagers": [
     {
       "description": "Pkl toolchain pin: track PKL_VERSION in application_sdk/pkl_version.py, the single place the version is declared (FND-1864). Repo-local rather than in the fleet preset because the file is SDK-only — connector repos consume the pin through the SDK package and the reusable workflows, and have nothing of their own to bump. github-tags rather than github-releases: apple/pkl tags each release as a bare version (`0.32.1`, no `v`), which `semver` versioning reads directly, and the tags datasource is the one the fleet's release-age handling is exercised against (see the app-contract-toolkit manager in the preset).",
@@ -143,6 +147,38 @@
       ],
       "automerge": false,
       "platformAutomerge": false
+    },
+    {
+      "description": "Release-age hold for pre-commit hook bumps (FND-4247): the fleet's 3-day cooldown, the same window as the preset's third-party PyPI rule and the pkl rule above. The preset's cooldown matches only the pypi datasource, so without this a hook tag would be proposed the hour it is pushed. github-tags gives each tag a releaseTimestamp (tagger date, or commit date for a lightweight tag), so the default timestamp-required behaviour delays rather than suppresses. Positive matchUpdateTypes, the same shape as the preset rule, so no timestamp-less update type is caught. Not auto-merged: a hook bump changes what CI enforces, and a linter release can fail files that passed yesterday, so a human reads the PR.",
+      "matchManagers": [
+        "pre-commit"
+      ],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
+      "minimumReleaseAge": "3 days"
+    },
+    {
+      "description": "One PR for every ruff pin (FND-4247): the ruff-pre-commit hook rev (pre-commit manager, depName astral-sh/ruff-pre-commit) and the `ruff==` dev pins in pyproject.toml and packages/conformance/pyproject.toml (pypi). They are separate datasources, so without a shared group Renovate would bump them in separate PRs, and local `uv run ruff` would lint and sort differently from CI until the others caught up. .github/scripts/tests/test_lint_guards.py fails any PR that moves one without the others. groupName also takes the pypi pins out of the preset's 'non-critical python dependencies' group. Never auto-merged, for the same reason as the hook rule above: ruff 0.17 widened its default rule set, and a minor can reformat files.",
+      "matchPackageNames": [
+        "ruff",
+        "astral-sh/ruff-pre-commit"
+      ],
+      "groupName": "ruff",
+      "automerge": false,
+      "platformAutomerge": false
+    },
+    {
+      "description": "Leave the renovatebot/pre-commit-hooks rev to a human (FND-4247). Its hook installs renovate@<rev>, which must equal the CLI pin in .github/workflows/renovate.yaml (test_renovate_validator_pin.py), and nothing tracks that npm pin. A bump of the hook alone would fail that parity test on every PR Renovate opens, so the two stay hand-bumped together, as before the pre-commit manager was enabled.",
+      "matchManagers": [
+        "pre-commit"
+      ],
+      "matchPackageNames": [
+        "renovatebot/pre-commit-hooks"
+      ],
+      "enabled": false
     }
   ],
   "ignorePaths": [

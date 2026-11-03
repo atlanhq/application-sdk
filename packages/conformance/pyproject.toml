@@ -72,12 +72,22 @@ testpaths = ["tests"]
 # scaffolds bootstrap force-writes into consumer repos (FND-445), which
 # have to stay lint-clean under configs stricter than this repo's.
 # Pinned exactly — an unpinned linter makes that guard's verdict a
-# function of cache age rather than of the files it checks.
+# function of cache age rather than of the files it checks. Must equal the
+# root dev group's pin and the ruff-pre-commit rev (FND-4247, enforced by
+# .github/scripts/tests/test_lint_guards.py).
 [dependency-groups]
 dev = ["ruff==0.17.3"]
 
+[tool.ruff.lint]
+# This file is the nearest ruff config for packages/conformance/, so the root
+# pyproject's [tool.ruff.lint] never applies here. Spelled out for the same
+# reasons as the root: pin the rule set across ruff bumps, and sort imports
+# with ruff (`I`), which replaced isort repo-wide in FND-4247.
+select = ["E4", "E7", "E9", "F", "I"]
+
 [tool.ruff.format]
-exclude = ["conformance/bootstrap/templates/renovate.json"]
+# *.md: same reason as the root pyproject (ruff 0.17 formats Markdown code blocks).
+exclude = ["conformance/bootstrap/templates/renovate.json", "*.md"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["G004", "PLC0415", "F841", "T201"]

@@ -24,6 +24,10 @@ concurrency:
   group: codeql-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 
+# Every job declares its own permissions; a job added without a block gets no
+# token scopes rather than the repository default (FND-4247).
+permissions: {}
+
 jobs:
   # Bump-version PR CI is opt-in (FND-3748). The `/gate-check` comment posts a
   # `gate-check` status and re-runs this run, so the opt-in is read live from
@@ -199,7 +203,16 @@ jobs:
       always() &&
       (!startsWith(github.head_ref, 'bump-version') || needs.opt-in.outputs.opted_in == 'true')
     runs-on: ubuntu-latest
+    # Least privilege (FND-4247): pre-commit only reads the tree. Without this
+    # block the job ran with the repository's default token. The job stays in
+    # this workflow on purpose: `Pre-commit Checks` is a required context, and
+    # renovate-auto-approve.yml, vuln-auto-merge.yml and /gate-check
+    # (pr_test_command.py) all key on this workflow by name.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: "./.github/actions/setup-deps"
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
