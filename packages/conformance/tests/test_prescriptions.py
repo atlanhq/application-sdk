@@ -978,11 +978,14 @@ def test_p001_no_safe_swap_when_a_repo_file_cannot_be_read(tmp_path: Path) -> No
     assert _optout_swap(tmp_path, {"m.py": _NOOP_OPTOUT}) is None
 
 
-def test_p001_no_safe_swap_in_a_generated_contract(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "path", ["app/generated/contracts.py", "app/contracts/_input.py"]
+)
+def test_p001_no_safe_swap_in_a_generated_or_input_contract_file(
+    tmp_path: Path, path: str
+) -> None:
     p001 = [
-        f
-        for f in _scan_files(tmp_path, {"app/generated/_input.py": _NOOP_OPTOUT})
-        if f.rule_id == "P001"
+        f for f in _scan_files(tmp_path, {path: _NOOP_OPTOUT}) if f.rule_id == "P001"
     ]
     assert len(p001) == 1 and not p001[0].properties
 

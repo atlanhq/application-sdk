@@ -603,7 +603,9 @@ def reused_class_names(root: Path) -> frozenset[str]:
     opt-out to a class this file cannot see, so its opt-out is not a safe swap.
     Every ``.py`` file outside the virtualenv and VCS folders is read, so a scan
     of a few files gives the same answer as a full one; a file that cannot be
-    read or parsed makes every opt-out unsafe.
+    read or parsed makes every opt-out unsafe.  Known limit: a subclass built at
+    run time (``type("C", (A,), {})``, a factory taking the base, ``getattr`` on
+    a module, tuple unpacking) is not seen; it fails at import, never silently.
     """
     names: set[str] = set()
     for path in _all_python_files(root):
@@ -838,8 +840,11 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             return None
         if any(kw.arg != "allow_unbounded_fields" for kw in node.keywords):
             return None
-        if "generated" in Path(self._filename).parts or any(
-            isinstance(stmt, _BLOCK_STATEMENTS) for stmt in node.body
+        path = Path(self._filename)
+        if (
+            "generated" in path.parts
+            or path.name == "_input.py"
+            or any(isinstance(stmt, _BLOCK_STATEMENTS) for stmt in node.body)
         ):
             return None
         if self._lines[node.lineno - 1].count(_OPTOUT_FIND) != 1:
