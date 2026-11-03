@@ -226,6 +226,11 @@ CLEANUP_BASE_PATHS = [
 # Key used to store tracked FileReference objects in _app_state during a workflow run
 TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
 
+# Key in per-run app state for the per-call directories
+# ``credentials.utils.resolve_credential_file`` wrote secrets into; removed by
+# ``cleanup_files``.
+TRACKED_CREDENTIAL_DIRS_KEY = "_tracked_credential_dirs"
+
 # Object-store prefixes that must never be deleted by cleanup_storage.
 # These store cross-run persistent state (connection configs, incremental markers, etc.)
 # and platform-owned objects an app may read but never owns (the connection cache).

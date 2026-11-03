@@ -377,6 +377,27 @@ The wire contract is recorded in
 
 ---
 
+## Utility: resolve_credential_file
+
+`resolve_credential_file(value, filename, dest_dir=..., raise_on_error=True)` turns a credential field that carries a file (a keytab, a CA certificate, a `krb5.conf`) into a local path. It accepts three formats: an Atlan upload reference, an `objectstore://<key>` in the deployment object store, or base64 content from the secret store.
+
+```python
+from application_sdk.credentials.utils import resolve_credential_file
+
+keytab_path = await resolve_credential_file(
+    credentials.get("keytab"), "keytab.keytab", raise_on_error=True
+)
+```
+
+For the `objectstore://` and base64 formats, the file is written so that one connection can never read or overwrite another's:
+
+- **A new path on every call.** Each call writes into its own owner-only (0700) directory under `dest_dir` (default `<TEMPORARY_PATH>/credential_files`), so the result is `<dest_dir>/<per-call dir>/<filename>`. Don't build the path yourself or cache it across runs. Use the returned value.
+- **Owner-only and never half-written.** The file is 0600. It is written to a temp file and renamed into place, so a reader never sees a partial keytab.
+- **Removed with the run.** Inside a task, the per-call directory is registered with the run, and `cleanup_files` (called by the default `on_complete()`) deletes it, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say. Outside a task (a handler, a script) nothing tracks it, and the caller deletes it when done.
+- **One store.** `objectstore://` downloads use the deployment store the app built at startup. A new store is built from the `DEPLOYMENT_OBJECT_STORE_NAME` binding only when no app context exists.
+
+---
+
 ## Utility: parse_credentials_extra
 
 For connectors that receive credentials as a flat dict (e.g. from Heracles), use `parse_credentials_extra` to extract nested fields:

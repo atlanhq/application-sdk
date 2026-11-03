@@ -15,6 +15,7 @@ from application_sdk.app import base as app_base
 from application_sdk.app.base import App, _app_state, _app_state_lock
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata
+from application_sdk.constants import TRACKED_CREDENTIAL_DIRS_KEY, TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.types import FileReference
@@ -29,6 +30,15 @@ class _CFInput(Input, allow_unbounded_fields=True):
 @dataclass
 class _CFOutput(Output, allow_unbounded_fields=True):
     result: str = ""
+
+
+def _tracked_refs_only(refs: Any) -> Any:
+    """A ``TaskStateAccessor.get`` stand-in that holds only tracked file refs."""
+
+    def _get(key: str) -> Any:
+        return refs if key == TRACKED_FILE_REFS_KEY else None
+
+    return _get
 
 
 class _CleanupApp(App):
@@ -61,7 +71,7 @@ class TestCleanupFiles:
         app = _CleanupApp()
         with mock.patch(
             "application_sdk.app.base.TaskStateAccessor.get",
-            return_value={ref},
+            side_effect=_tracked_refs_only({ref}),
         ):
             # extra_paths avoids calling build_output_path (no activity context)
             result = await app.cleanup_files(
@@ -81,7 +91,7 @@ class TestCleanupFiles:
         app = _CleanupApp()
         with mock.patch(
             "application_sdk.app.base.TaskStateAccessor.get",
-            return_value={ref},
+            side_effect=_tracked_refs_only({ref}),
         ):
             result = await app.cleanup_files(
                 CleanupInput(extra_paths=["nonexistent-dir"])
@@ -253,7 +263,7 @@ class TestCleanupFiles:
         app = _CleanupApp()
         with mock.patch(
             "application_sdk.app.base.TaskStateAccessor.get",
-            return_value={ref},
+            side_effect=_tracked_refs_only({ref}),
         ):
             with (
                 private_stdlib("application_sdk.app.base", "os") as local_os,
@@ -328,7 +338,7 @@ class TestCleanupFiles:
         app = _CleanupApp()
         with mock.patch(
             "application_sdk.app.base.TaskStateAccessor.get",
-            return_value=tracked_refs,
+            side_effect=_tracked_refs_only(tracked_refs),
         ):
             with mock.patch.object(app_base, "run_in_thread", recording_run_in_thread):
                 result = await app.cleanup_files(CleanupInput(extra_paths=extra_paths))
@@ -340,3 +350,105 @@ class TestCleanupFiles:
         # … and it did not execute on the event loop's thread.
         loop_thread = threading.get_ident()
         assert all(ident != loop_thread for _, ident in calls)
+
+
+class TestCleanupCredentialFiles:
+    """FND-4275: credential files resolved during a run go with the run.
+
+    ``resolve_credential_file`` gives every call its own 0700 directory and
+    registers it with the run; ``cleanup_files`` removes those directories
+    whatever ``extra_paths`` says, so a keytab or private key does not
+    outlive the run on a long-lived worker.
+    """
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        with _app_state_lock:
+            _app_state.clear()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        with _app_state_lock:
+            _app_state.clear()
+
+    @pytest.mark.asyncio
+    async def test_same_named_files_for_two_connections_are_private_and_cleaned_up(
+        self, tmp_path: Any
+    ) -> None:
+        import base64
+
+        from application_sdk.credentials.utils import resolve_credential_file
+
+        keytab_a, keytab_b = b"connection-a-keytab", b"connection-b-keytab"
+        with (
+            mock.patch("temporalio.activity.in_activity", return_value=True),
+            mock.patch.object(
+                app_base, "_get_execution_id_from_task", return_value="wf-1"
+            ),
+        ):
+            path_a = await resolve_credential_file(
+                base64.b64encode(keytab_a).decode(),
+                "keytab.keytab",
+                str(tmp_path),
+                raise_on_error=True,
+            )
+            path_b = await resolve_credential_file(
+                base64.b64encode(keytab_b).decode(),
+                "keytab.keytab",
+                str(tmp_path),
+                raise_on_error=True,
+            )
+
+            assert path_a != path_b
+            with open(path_a, "rb") as f:
+                assert f.read() == keytab_a
+            with open(path_b, "rb") as f:
+                assert f.read() == keytab_b
+            if os.name == "posix":
+                for path in (path_a, path_b):
+                    assert os.stat(path).st_mode & 0o777 == 0o600
+                    assert os.stat(os.path.dirname(path)).st_mode & 0o777 == 0o700
+
+            # extra_paths would skip every convention-based sweep; the
+            # credential directories are removed regardless.
+            result = await _CleanupApp().cleanup_files(
+                CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
+            )
+
+        for path in (path_a, path_b):
+            call_dir = os.path.dirname(path)
+            assert not os.path.exists(call_dir)
+            assert result.path_results[call_dir] is True
+        with _app_state_lock:
+            assert not _app_state["wf-1"][TRACKED_CREDENTIAL_DIRS_KEY]
+
+    @pytest.mark.asyncio
+    async def test_failed_removal_stays_tracked(self, tmp_path: Any) -> None:
+        cred_dir = tmp_path / "cred-x"
+        cred_dir.mkdir()
+        (cred_dir / "keytab.keytab").write_bytes(b"secret")
+        with _app_state_lock:
+            _app_state["wf-1"] = {TRACKED_CREDENTIAL_DIRS_KEY: {str(cred_dir)}}
+
+        with (
+            mock.patch.object(
+                app_base, "_get_execution_id_from_task", return_value="wf-1"
+            ),
+            mock.patch("shutil.rmtree", side_effect=PermissionError("denied")),
+        ):
+            result = await _CleanupApp().cleanup_files(
+                CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
+            )
+
+        assert result.path_results[str(cred_dir)] is False
+        with _app_state_lock:
+            assert _app_state["wf-1"][TRACKED_CREDENTIAL_DIRS_KEY] == {str(cred_dir)}
+
+    def test_tracking_outside_a_task_raises(self) -> None:
+        from application_sdk._context_errors import AppContextError
+        from application_sdk.app.base import _track_credential_dir
+
+        with pytest.raises(AppContextError):
+            _track_credential_dir("/somewhere")

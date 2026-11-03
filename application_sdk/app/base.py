@@ -695,6 +695,31 @@ def _get_execution_id_from_task() -> str:
     return wid
 
 
+def _track_credential_dir(path: str) -> None:
+    """SDK-internal: register a credential file directory with the current run.
+
+    Called by ``credentials.utils.resolve_credential_file`` from inside a task
+    for each per-call directory it writes a secret into. ``cleanup_files``
+    removes every tracked directory, whatever ``extra_paths`` or
+    ``CLEANUP_BASE_PATHS`` say, so a keytab or private key does not outlive
+    the run on a long-lived worker.
+
+    Thread-safe: the read-modify-write holds ``_app_state_lock``.
+
+    Raises:
+        AppContextError: If called outside a task.
+    """
+    from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
+        TRACKED_CREDENTIAL_DIRS_KEY,
+    )
+
+    workflow_id = _get_execution_id_from_task()
+    with _app_state_lock:
+        state = _app_state.setdefault(workflow_id, {})
+        tracked: set[str] = state.setdefault(TRACKED_CREDENTIAL_DIRS_KEY, set())
+        tracked.add(path)
+
+
 class TaskStateAccessor:
     """Accessor for app state from within a task (not a @task method on an App).
 
@@ -2258,11 +2283,14 @@ class App(ABC):
     async def cleanup_files(self, input: CleanupInput) -> CleanupOutput:
         """Framework task: clean up local files after a workflow run.
 
-        Removes two categories of local files:
+        Removes three categories of local files:
 
         1. ``FileReference`` local paths tracked during the run (auto-materialised
            or persisted files, including their ``.sha256`` sidecars).
-        2. Convention-based temp directories: ``input.extra_paths`` if provided,
+        2. The per-call directories ``resolve_credential_file`` wrote credential
+           files into during the run. Always removed, whatever
+           ``input.extra_paths`` says.
+        3. Convention-based temp directories: ``input.extra_paths`` if provided,
            otherwise ``CLEANUP_BASE_PATHS`` / ``TEMPORARY_PATH + build_output_path()``
            — which is also where path-less ``FileReference`` objects materialise.
 
@@ -2275,6 +2303,7 @@ class App(ABC):
 
         from application_sdk.constants import (  # noqa: PLC0415 — patched at module path in tests; lifting would break mock.patch sites
             CLEANUP_BASE_PATHS,
+            TRACKED_CREDENTIAL_DIRS_KEY,
             TRACKED_FILE_REFS_KEY,
         )
         from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415 — circular: execution/__init__.py loads _temporal which imports app.base
@@ -2315,7 +2344,31 @@ class App(ABC):
                             )
                             path_results[p] = False
 
-        # 2. Delete convention-based temp directories.
+        # 2. Delete the per-call credential file directories. Tracked
+        #    separately because they hold secrets and live outside the run
+        #    scratch dir, so no convention-based sweep below reaches them.
+        tracked_dirs: set[str] = (
+            TaskStateAccessor().get(TRACKED_CREDENTIAL_DIRS_KEY) or set()
+        )
+        with _app_state_lock:
+            credential_dirs = sorted(tracked_dirs)
+        for cred_dir in credential_dirs:
+            try:
+                if os.path.exists(cred_dir):
+                    await _remove_path(cred_dir)
+                path_results[cred_dir] = True
+            except Exception:
+                _task_logger.warning(
+                    "Failed to delete credential file directory during cleanup",
+                    exc_info=True,
+                )
+                path_results[cred_dir] = False
+        with _app_state_lock:
+            tracked_dirs.difference_update(
+                d for d in credential_dirs if path_results.get(d)
+            )
+
+        # 3. Delete convention-based temp directories.
         if input.extra_paths:
             dir_paths: list[str] = input.extra_paths
         elif CLEANUP_BASE_PATHS:

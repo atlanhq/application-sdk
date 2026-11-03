@@ -1,6 +1,7 @@
 import base64
 import os
 import warnings
+from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -148,6 +149,22 @@ class TestParseCredentialsExtra:
         mock_logger.warning.assert_not_called()
 
 
+def _assert_in_call_dir(
+    result: str | None, dest_dir: Any, filename: str, *, exists: bool = True
+) -> None:
+    """*result* is ``<dest_dir>/<per-call 0700 dir>/<filename>``."""
+    assert result is not None
+    call_dir = os.path.dirname(result)
+    assert os.path.basename(result) == filename
+    assert os.path.dirname(call_dir) == str(dest_dir)
+    assert os.path.isdir(call_dir)
+    if os.name == "posix":
+        assert os.stat(call_dir).st_mode & 0o777 == 0o700
+    assert os.path.exists(result) is exists
+    if exists and os.name == "posix":
+        assert os.stat(result).st_mode & 0o777 == 0o600
+
+
 class TestResolveCredentialFile:
     """Tests for resolve_credential_file() — handles both object-store refs and base64 content."""
 
@@ -202,8 +219,7 @@ class TestResolveCredentialFile:
             b64_value, "keytab.keytab", str(tmp_path), raise_on_error=False
         )
 
-        assert result == str(tmp_path / "keytab.keytab")
-        assert os.path.exists(result)
+        _assert_in_call_dir(result, tmp_path, "keytab.keytab")
         assert open(result, "rb").read() == original_bytes
 
     async def test_base64_text_file_written_correctly(self, tmp_path):
@@ -215,7 +231,7 @@ class TestResolveCredentialFile:
             b64_value, "krb5.conf", str(tmp_path), raise_on_error=False
         )
 
-        assert result == str(tmp_path / "krb5.conf")
+        _assert_in_call_dir(result, tmp_path, "krb5.conf")
         assert open(result, "rb").read() == krb5_content
 
     async def test_base64_with_leading_trailing_whitespace(self, tmp_path):
@@ -274,7 +290,7 @@ class TestResolveCredentialFile:
     async def test_objectstore_prefix_downloads_via_deployment_binding(
         self, mock_create_store, mock_download, tmp_path
     ):
-        """objectstore:// prefix routes to download_file with DEPLOYMENT binding."""
+        """Without an infrastructure context, the DEPLOYMENT binding is built."""
         fake_store = object()
         mock_create_store.return_value = fake_store
 
@@ -290,11 +306,41 @@ class TestResolveCredentialFile:
 
         mock_create_store.assert_called_once_with(DEPLOYMENT_OBJECT_STORE_NAME)
         mock_download.assert_awaited_once_with(
-            "kerberos/hiveadmin.keytab",
-            os.path.join(str(tmp_path), "keytab.keytab"),
-            store=fake_store,
+            "kerberos/hiveadmin.keytab", result, store=fake_store
         )
-        assert result == os.path.join(str(tmp_path), "keytab.keytab")
+        _assert_in_call_dir(result, tmp_path, "keytab.keytab", exists=False)
+
+    @patch(
+        "application_sdk.storage.ops.download_file",
+        new_callable=AsyncMock,
+    )
+    @patch("application_sdk.storage.binding.create_store_from_binding")
+    async def test_objectstore_prefix_reuses_the_infrastructure_store(
+        self, mock_create_store, mock_download, tmp_path
+    ):
+        """A started app's deployment store is reused, not rebuilt per call."""
+        from application_sdk.infrastructure.context import (
+            InfrastructureContext,
+            clear_infrastructure,
+            set_infrastructure,
+        )
+
+        deployment_store = object()
+        set_infrastructure(InfrastructureContext(storage=deployment_store))  # type: ignore[arg-type]
+        try:
+            result = await resolve_credential_file(
+                "objectstore://kerberos/krb5.conf",
+                "krb5.conf",
+                str(tmp_path),
+                raise_on_error=True,
+            )
+        finally:
+            clear_infrastructure()
+
+        mock_create_store.assert_not_called()
+        mock_download.assert_awaited_once_with(
+            "kerberos/krb5.conf", result, store=deployment_store
+        )
 
     @patch(
         "application_sdk.storage.ops.download_file",
@@ -317,7 +363,7 @@ class TestResolveCredentialFile:
         mock_download.assert_awaited_once()
         called_key = mock_download.await_args.args[0]
         assert called_key == "foo/bar.keytab"
-        assert result == os.path.join(str(tmp_path), "keytab.keytab")
+        _assert_in_call_dir(result, tmp_path, "keytab.keytab", exists=False)
 
     async def test_objectstore_prefix_rejects_empty_key(self, tmp_path):
         """objectstore:// with no key after the prefix returns None."""
@@ -365,6 +411,8 @@ class TestResolveCredentialFile:
             raise_on_error=False,
         )
         assert result is None
+        # The per-call directory goes with the failure.
+        assert os.listdir(tmp_path) == []
 
     # ------------------------------------------------------------------
     # Empty / None inputs
@@ -478,3 +526,57 @@ class TestResolveCredentialFileWhitespaceValue:
             "", "ca_cert.pem", str(tmp_path), raise_on_error=strict
         )
         assert result is None
+
+
+class TestResolveCredentialFilePerCallPaths:
+    """FND-4275: one connection's credential file never lands on another's."""
+
+    async def test_same_filename_gets_a_distinct_private_path_per_call(self, tmp_path):
+        a = await resolve_credential_file(
+            base64.b64encode(b"keytab-a").decode(),
+            "keytab.keytab",
+            str(tmp_path),
+            raise_on_error=True,
+        )
+        b = await resolve_credential_file(
+            base64.b64encode(b"keytab-b").decode(),
+            "keytab.keytab",
+            str(tmp_path),
+            raise_on_error=True,
+        )
+
+        assert a != b
+        _assert_in_call_dir(a, tmp_path, "keytab.keytab")
+        _assert_in_call_dir(b, tmp_path, "keytab.keytab")
+        assert open(a, "rb").read() == b"keytab-a"
+        assert open(b, "rb").read() == b"keytab-b"
+
+    async def test_no_partial_file_is_left_behind(self, tmp_path):
+        result = await resolve_credential_file(
+            base64.b64encode(b"cert").decode(),
+            "ca_cert.pem",
+            str(tmp_path),
+            raise_on_error=True,
+        )
+        assert os.listdir(os.path.dirname(result)) == ["ca_cert.pem"]
+
+    async def test_a_failed_write_removes_the_call_dir(self, tmp_path):
+        with patch("os.replace", side_effect=OSError("disk full")):
+            with pytest.raises(OSError, match="disk full"):
+                await resolve_credential_file(
+                    base64.b64encode(b"cert").decode(),
+                    "ca_cert.pem",
+                    str(tmp_path),
+                    raise_on_error=True,
+                )
+        assert os.listdir(tmp_path) == []
+
+    async def test_outside_a_task_nothing_is_tracked(self, tmp_path):
+        with patch("application_sdk.app.base._track_credential_dir") as track:
+            await resolve_credential_file(
+                base64.b64encode(b"cert").decode(),
+                "ca_cert.pem",
+                str(tmp_path),
+                raise_on_error=True,
+            )
+        track.assert_not_called()

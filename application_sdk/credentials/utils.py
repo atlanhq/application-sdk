@@ -2,8 +2,10 @@
 
 import base64
 import os
+import shutil
+import tempfile
 import warnings
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 import orjson
 
@@ -15,6 +17,9 @@ from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME, TEMPORARY_PA
 from application_sdk.credentials.extra import (  # noqa: F401 — re-exported; ships in the api distribution
     parse_credentials_extra,
 )
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
 
 logger = get_logger(__name__)
 
@@ -115,7 +120,10 @@ async def resolve_credential_file(
                   branches (e.g. ``"keytab.keytab"``, ``"krb5.conf"``,
                   ``"ca_cert.pem"``). Ignored for the Atlan upload branch —
                   the filename there is derived from the upload key.
-        dest_dir: Directory to write or download the file into. Defaults to
+        dest_dir: Parent directory for the file. Each call writes into its
+                  own fresh owner-only (0700) subdirectory of ``dest_dir``,
+                  so two connections resolving the same ``filename`` never
+                  share a path. Defaults to
                   ``<TEMPORARY_PATH>/credential_files``.
 
         raise_on_error: ``True`` to raise on failure, ``False`` to return
@@ -127,8 +135,13 @@ async def resolve_credential_file(
                   truststore.
 
     Returns:
-        Absolute path to the resolved file on disk. ``None`` if ``value`` is
-        empty or resolution fails, unless ``raise_on_error`` is ``True``.
+        Path to the resolved file on disk: ``<dest_dir>/<per-call dir>/<filename>``
+        for the ``objectstore://`` and base64 branches, a different path on
+        every call. The file is owner-only (0600) and appears at that path
+        complete, never half-written. Inside a task, the per-call directory
+        is removed by ``cleanup_files`` when the run completes; outside one,
+        the caller owns it. ``None`` if ``value`` is empty or resolution
+        fails, unless ``raise_on_error`` is ``True``.
 
     Raises:
         CredentialNotFoundError: ``raise_on_error`` and ``value`` is empty or
@@ -212,13 +225,8 @@ async def _resolve_credential_file_content(
                 "absolute, or contains '..')",
                 credential_name=filename,
             )
-        os.makedirs(dest_dir, exist_ok=True)
-        file_path = os.path.join(dest_dir, filename)
         try:
-            from application_sdk.storage.binding import (  # noqa: PLC0415 — lazy: storage imports obstore (heavy Rust ext) at module load, and this module sits on the workflow-sandbox import chain (credentials package init); pinned by the preflight gate's import-hygiene test
-                create_store_from_binding,
-            )
-            from application_sdk.storage.ops import (  # noqa: PLC0415 — lazy: same reason as the binding import above
+            from application_sdk.storage.ops import (  # noqa: PLC0415 — lazy: storage imports obstore (heavy Rust ext) at module load, and this module sits on the workflow-sandbox import chain (credentials package init); pinned by the preflight gate's import-hygiene test
                 download_file,
             )
         except ModuleNotFoundError as exc:
@@ -227,8 +235,16 @@ async def _resolve_credential_file_content(
             # api-only install (the API host): no object store to resolve from.
             raise ObjectStoreNotConfiguredError() from exc
 
-        store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
-        await download_file(key, file_path, store=store)
+        store = _deployment_store()
+        call_dir = _make_call_dir(dest_dir)
+        file_path = os.path.join(call_dir, filename)
+        try:
+            # download_file stages into an mkstemp (0600) file and publishes
+            # it with os.replace, so the file is owner-only and never partial.
+            await download_file(key, file_path, store=store)
+        except BaseException:
+            shutil.rmtree(call_dir, ignore_errors=True)
+            raise
         logger.info(
             "Resolved credential file from customer object store: key=%s path=%s",
             key,
@@ -245,13 +261,98 @@ async def _resolve_credential_file_content(
             credential_name=filename,
             cause=exc,
         ) from exc
-    os.makedirs(dest_dir, exist_ok=True)
-    file_path = os.path.join(dest_dir, filename)
-    with open(file_path, "wb") as f:
-        f.write(decoded_bytes)
+    call_dir = _make_call_dir(dest_dir)
+    try:
+        file_path = _write_owner_only(call_dir, filename, decoded_bytes)
+    except BaseException:
+        shutil.rmtree(call_dir, ignore_errors=True)
+        raise
     logger.info(
         "Resolved credential file from base64 content: path=%s filename=%s",
         file_path,
         filename,
     )
     return file_path
+
+
+def _make_call_dir(dest_dir: str) -> str:
+    """Create this call's own 0700 directory under *dest_dir* and track it.
+
+    ``mkdtemp`` picks an unused name and creates it owner-only, so no other
+    call — for this connection or another — can write into or read from it.
+    Inside a task the directory is registered with the run so
+    ``cleanup_files`` removes it; see :func:`_track_call_dir`.
+    """
+    os.makedirs(dest_dir, exist_ok=True)
+    call_dir = tempfile.mkdtemp(prefix="cred-", dir=dest_dir)
+    _track_call_dir(call_dir)
+    return call_dir
+
+
+def _write_owner_only(call_dir: str, filename: str, data: bytes) -> str:
+    """Write *data* to ``call_dir/filename`` as an owner-only (0600) file.
+
+    The bytes go to an ``O_EXCL`` temp file first and are published with
+    ``os.replace``, so the final path never holds a partial file.
+    """
+    file_path = os.path.join(call_dir, filename)
+    tmp_path = os.path.join(call_dir, f".{filename}.partial")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, file_path)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
+    return file_path
+
+
+def _track_call_dir(call_dir: str) -> None:
+    """Register *call_dir* with the current run for ``cleanup_files``.
+
+    Only inside a Temporal activity: that is the only place a run exists to
+    clean up after. Elsewhere (the API host, scripts) the caller owns the
+    directory.
+    """
+    try:
+        from temporalio import (  # noqa: PLC0415 — lazy: worker-only dependency; this module ships in the api distribution
+            activity,
+        )
+    except ModuleNotFoundError as exc:
+        if not worker_only_missing(exc):
+            raise
+        return
+    if not activity.in_activity():
+        return
+    from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports the credentials package
+        _track_credential_dir,
+    )
+
+    _track_credential_dir(call_dir)
+
+
+def _deployment_store() -> "ObjectStore":
+    """The DEPLOYMENT object store: the one startup built, else a fresh one.
+
+    ``main.py`` builds ``InfrastructureContext.storage`` from the
+    ``DEPLOYMENT_OBJECT_STORE_NAME`` binding (with its fetched secrets), so
+    reusing it avoids re-reading the component YAML on every call. Outside a
+    started app (scripts, tests) there is no context, and the store is built
+    from the binding as before.
+    """
+    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — lazy: worker-only module; this module ships in the api distribution
+        get_infrastructure,
+    )
+
+    infra = get_infrastructure()
+    if infra is not None and infra.storage is not None:
+        return infra.storage
+    from application_sdk.storage.binding import (  # noqa: PLC0415 — lazy: storage imports obstore (heavy Rust ext) at module load
+        create_store_from_binding,
+    )
+
+    return create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
