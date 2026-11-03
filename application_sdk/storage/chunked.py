@@ -390,6 +390,10 @@ async def _fetch_chunk(
             otherwise leave a hole of NUL bytes that reads back as a
             plausible-looking file of exactly the right length.
     """
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: ops re-exports download_file_chunked from this module
+        _past_gateway_no_route,
+    )
+
     length = min(chunk_size_bytes, size - offset)
     # *sem* caps this file's range GETs; the shared budget caps the bytes all
     # transfers in the process hold, which is what the container's memory
@@ -398,19 +402,29 @@ async def _fetch_chunk(
         if etag is not None:
             # Version-pinned range GET: 412 (PreconditionError) if the
             # object was rewritten — never mixes two generations.
-            result = await obstore.get_async(
-                store,
+            result = await _past_gateway_no_route(
+                "download",
                 key,
-                options={
-                    "range": (offset, offset + length),
-                    "if_match": etag,
-                },
+                lambda: obstore.get_async(
+                    store,
+                    key,
+                    options={
+                        "range": (offset, offset + length),
+                        "if_match": etag,
+                    },
+                ),
             )
             # No bytes() copy: os.write takes the buffer as it is, and a
             # copy would hold the range in memory twice.
             raw = await result.bytes_async()
         else:
-            raw = await obstore.get_range_async(store, key, start=offset, length=length)
+            raw = await _past_gateway_no_route(
+                "download",
+                key,
+                lambda: obstore.get_range_async(
+                    store, key, start=offset, length=length
+                ),
+            )
         if len(raw) != length:
             from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
                 StorageError,
@@ -700,6 +714,7 @@ async def _download_chunked_locked(
         _exc_class_name,
         _is_not_found,
         _log_storage_event,
+        _past_gateway_no_route,
         download_file,
     )
 
@@ -727,7 +742,9 @@ async def _download_chunked_locked(
         # a prefix download whose listing carried per-object sizes (+ etags).
         if file_size is None:
             try:
-                meta = await obstore.head_async(resolved, key)
+                meta = await _past_gateway_no_route(
+                    "head", key, lambda: obstore.head_async(resolved, key)
+                )
                 file_size = int(meta["size"])
                 if etag is None:
                     etag = meta.get("e_tag")

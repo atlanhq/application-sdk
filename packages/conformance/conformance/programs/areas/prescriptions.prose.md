@@ -1419,6 +1419,33 @@ path component, and this rule governs that package's sources too).
   bite.  The one dangerous test-side shape — a test reading *repo sources* — is
   a much smaller population and is not graded by this rule.
 
+**Retry-ladder rule (P060)** — suggest-only, scope=sdk,
+`classification = "judgment"`; backed by `suite.checks.retry_ladder`.
+
+- **P060 HandRolledRetryLadder** (WARN) — a `sleep` call (`asyncio.sleep`,
+  `time.sleep`, `anyio.sleep`, or a bare `sleep` imported from one of them) in
+  a `for` / `while` / `async for` loop whose body also holds a `try` with an
+  `except` handler.  The finding sits on the sleep's line.  `sleep(0)`,
+  `workflow.sleep`, loops with no `try`/`except`, code inside a nested `def`,
+  and `application_sdk/common/backoff.py` itself are not flagged.
+
+  **Read the loop before drafting.**  A genuine retry ladder — attempt, catch,
+  wait, attempt again — migrates onto
+  `application_sdk.common.backoff.retry_async(call, backoff=Backoff(...),
+  retry_if=..., on_retry=..., on_giveup=...)`: state the ladder's shape as a
+  `Backoff` (geometric `base`/`factor`/`cap`, or explicit `steps`) and let the
+  helper own the loop.  Preserve the old ladder's attempt count and budget, and
+  choose jitter deliberately: `Jitter.FULL` (the default), `Jitter.SPREAD` where
+  the floor matters, `Jitter.NONE` only on the workflow path.  A loop with its
+  own control flow — a supervisor that resets its streak, a loop racing a
+  shutdown event — keeps its loop and takes the number from
+  `Backoff.delay(retry)`.
+
+  **Not every match is a ladder.**  A poller whose `try` only guards a log call
+  or a best-effort side task, with the sleep as its fixed cadence, is not a
+  retry.  Propose `# conformance: ignore[P060] <reason>` naming the cadence,
+  not a migration.
+
 - **P048 AppDerivedPersistentArtifactPrefix** (WARN) — app code assembles the
   connection-scoped layout `persistent-artifacts/apps/<app>/connection/…`
   itself instead of asking the SDK where a connection's persistent state lives.

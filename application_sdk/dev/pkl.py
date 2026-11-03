@@ -178,6 +178,7 @@ def _download(url: str, target: Path) -> None:
                     f"{_DOWNLOAD_MAX_ATTEMPTS}): {exc} — retrying in "
                     f"{_DOWNLOAD_RETRY_SLEEP_S:.0f}s"
                 )
+                # conformance: ignore[P060] synchronous single-process dev tooling (pkl download) — one caller per machine, so no fleet retry storm; retry_async is async-only
                 time.sleep(_DOWNLOAD_RETRY_SLEEP_S)
         else:  # pragma: no cover — the loop either breaks or raises
             raise PklDownloadError(

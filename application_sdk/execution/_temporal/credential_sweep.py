@@ -77,6 +77,7 @@ async def run_sweeper(
 ) -> None:
     """Sweep every *interval_seconds* until cancelled."""
     while True:
+        # conformance: ignore[P060] fixed-cadence sweeper interval, not a retry ladder
         await asyncio.sleep(interval_seconds)
         try:
             await sweep_closed_runs(client)

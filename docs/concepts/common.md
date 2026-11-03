@@ -143,9 +143,11 @@ The leaf matches on the 404 **and** the gateway's own text, so a plain 404 (a re
 or container) still falls through. It is retryable, and its `suggested_action` says to wait and
 retry rather than to look for a missing key.
 
-`upload_file` retries this answer itself, with jittered backoff, and raises the typed error only
-once those retries are spent. The read path (`download_file`, `exists`, `get_file_meta`,
-`_get_bytes`, `delete`) does not treat this 404 as a missing key: it raises the typed error, which is
+Every store request retries this answer itself (5, 10 and 20s, each scaled by a jitter factor in
+0.5–1.5), at one seam in `storage/ops.py`. That covers the upload, its post-upload readback HEAD,
+the `{key}.sha256` sidecar PUT, `download_file` and the chunked range GETs, `exists`,
+`get_file_meta`, `_get_bytes`, `delete` and listings. The typed error is raised only once those
+retries are spent. No path treats this 404 as a missing key: it raises the typed error, which is
 retryable, instead of returning "absent" or raising the non-retryable `StorageNotFoundError`.
 
 ### ColdStartRaceError — the cross-domain transient marker
@@ -189,6 +191,26 @@ budget-exhausted outage stays distinguishable from a still-cold race end-to-end 
 `except SecretStoreError:` catches either) and `ColdStartRaceError` (so the probe aggregators route
 either); only a store that has already answered once (steady state, not first contact) surfaces the
 transient type on a later blip.
+
+**The readiness gates reset.** Once a component has answered (or `/healthz` returned 204), a
+later transient failure gets only a short warm ladder (two retries), so a real outage is not
+masked on every call. When that warm ladder also runs out, the sidecar the process trusted is gone
+(a daprd restart, an evicted sidecar), so both that component's gate and the holistic healthz gate
+are cleared, and the next call waits out a cold start again. Gates are keyed by the Dapr component
+actually called: the credential vault's `component_name` override has its own gate rather than
+sharing the default secret store's.
+
+### Retry backoff — `application_sdk.common.backoff`
+
+Every in-process retry ladder in the SDK states its shape as a `Backoff` (geometric
+`base`/`factor`/`cap`, or explicit `steps`, plus `max_attempts` and/or `budget_seconds`) and walks it
+with `retry_async(call, backoff=..., retry_if=...)`. A supervisor loop with its own control flow
+(worker restart, token refresh) keeps its loop and takes only `Backoff.delay(n)`. Jitter is part of
+the shape: `Jitter.FULL` (`U(0, d)`, the default) for anything that many workers retry at once,
+`Jitter.SPREAD` (`d × U(0.5, 1.5)`) where the floor matters, and `Jitter.NONE` only for loops that must
+be reproducible, such as the preflight warmup poll on the workflow path. Retries owned by a library
+(httpcore connect retries, the `httpx-retries` Dapr transport, botocore, object_store's Rust client,
+Temporal `RetryPolicy`) are listed in the module docstring rather than wrapped.
 
 ### TaskStalledError — raised by the SDK, never by an app
 

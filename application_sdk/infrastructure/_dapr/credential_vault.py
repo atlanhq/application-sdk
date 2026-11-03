@@ -7,6 +7,7 @@ references via the Dapr secret store.
 import asyncio
 import copy
 import re
+import warnings
 from enum import Enum
 from typing import Any
 
@@ -22,7 +23,6 @@ from application_sdk.infrastructure._dapr.client import (
     is_dapr_transport_unavailable,
 )
 from application_sdk.infrastructure._dapr.http import (
-    DAPR_SECRET_STORE_COMPONENT,
     DAPR_UPSTREAM_BINDING_COMPONENT,
     AsyncDaprClient,
     retry_past_dapr_cold_start,
@@ -420,7 +420,12 @@ class DaprCredentialVault:
                 description=(
                     f"Credential-vault secret fetch for '{log_label or secret_key}'"
                 ),
-                component=DAPR_SECRET_STORE_COMPONENT,
+                # Gate by the Dapr component actually called: a component_name
+                # override is a different store, whose answer says nothing
+                # about the default one (and vice versa). The default name,
+                # "secretstore", is DAPR_SECRET_STORE_COMPONENT, so the default
+                # path still shares the gate with the agent and resolver paths.
+                component=store,
             )
         except SecretNotFoundError:
             # DEBUG, label only, no exc_info (FND-4279): an absent key is an
@@ -566,3 +571,32 @@ def create_dapr_credential_vault(
         upstream_binding_name=upstream_binding_name,
         secret_store_name=secret_store_name,
     )
+
+
+#: name -> (replacement, why). The shared sentence and the removal version live
+#: in __getattr__ below.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "DAPR_SECRET_STORE_COMPONENT": (
+        "application_sdk.infrastructure.DAPR_SECRET_STORE_COMPONENT",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-export once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    from application_sdk.infrastructure._dapr.http import (  # noqa: PLC0415 — resolved on access only
+        DAPR_SECRET_STORE_COMPONENT,
+    )
+
+    return DAPR_SECRET_STORE_COMPONENT

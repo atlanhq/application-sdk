@@ -42,13 +42,12 @@ import hashlib
 import logging
 import math
 import os
-import random
 import re
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, TypedDict, TypeVar
 
 import obstore
 import orjson
@@ -78,6 +77,7 @@ from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
 from application_sdk.common.atomic import disk_full_guard, ensure_free_space
+from application_sdk.common.backoff import Backoff, Jitter, retry_async
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -100,6 +100,8 @@ from application_sdk.storage.chunked import (  # noqa: F401 — re-export
 )
 
 logger = get_logger(__name__)
+
+_T = TypeVar("_T")
 
 
 class BoundStore:
@@ -691,23 +693,51 @@ def _storage_error_for(
 # A Kong gateway instance that joins the load balancer before its route table
 # has synced answers every request with ``404 {"message":"no Route matched with
 # those values"}`` for a few seconds. object_store's Rust client retries only
-# 5xx/429/408, so without this the first such answer fails the whole upload even
+# 5xx/429/408, so without this the first such answer fails the request even
 # though the next gateway instance would have accepted it. Matched on the 404
-# *and* the gateway's own text so a real missing bucket or container still fails
-# on the first attempt. This is a status the Rust layer never retries, so the
-# loop adds a retry where there was none rather than multiplying an existing one.
+# *and* the gateway's own text so a real missing bucket, container or key
+# still fails (or reads as absent) on the first attempt. This is a status the
+# Rust layer never retries, so the retry adds one where there was none rather
+# than multiplying an existing one.
 _GATEWAY_NO_ROUTE_TEXT = "no route matched"
 # Worst case total sleep is 1.5 x (5 + 10 + 20) = 52.5s: each delay is scaled by
-# a jitter factor in [0.5, 1.5] so a burst of uploads that all hit a scaling-up
-# gateway does not retry in lockstep.
+# a jitter factor in [0.5, 1.5] (Jitter.SPREAD) so a burst of requests that all
+# hit a scaling-up gateway does not retry in lockstep.
 _GATEWAY_NO_ROUTE_RETRY_DELAYS: tuple[float, ...] = (5.0, 10.0, 20.0)
-# Indirections so tests can record the backoff without sleeping through it.
+# Indirection so tests can record the backoff without sleeping through it.
 _retry_sleep = asyncio.sleep
 
 
-def _retry_jitter() -> float:
-    """Multiplier applied to each retry delay."""
-    return random.uniform(0.5, 1.5)
+async def _past_gateway_no_route(
+    op: str, key: str, call: Callable[[], Awaitable[_T]]
+) -> _T:
+    """Run one store request, retrying the gateway's "no Route matched" 404.
+
+    The store seam: every request this module sends goes through here (the
+    upload attempt, HEAD, GET, PUT, DELETE and listing), so the post-upload
+    readback, the integrity sidecar write, downloads and listings all ride
+    out a gateway instance that has not synced its routes, not only the
+    upload. Wrap the *request*, not a stream consumer: a retried ``call``
+    must start over cleanly. Every other failure propagates on the first
+    attempt, unchanged.
+    """
+
+    def _log_retry(_attempt: int, _exc: Exception, delay: float) -> None:
+        logger.warning(
+            "Gateway answered 'no Route matched' on %s of key '%s'; "
+            "retrying in %.1fs",
+            op,
+            key,
+            delay,
+        )
+
+    return await retry_async(
+        call,
+        backoff=Backoff(steps=_GATEWAY_NO_ROUTE_RETRY_DELAYS, jitter=Jitter.SPREAD),
+        retry_if=_is_gateway_no_route,
+        on_retry=_log_retry,
+        sleep=_retry_sleep,
+    )
 
 
 def _is_gateway_no_route(exc: BaseException) -> bool:
@@ -817,10 +847,19 @@ async def _list_items(
         ``None`` on stores that don't provide one).  Directory markers are
         excluded unless *include_markers* is ``True``.
     """
-    all_items: list[tuple[str, int, str | None]] = []
-    async for batch in obstore.list(store, prefix=prefix):  # native async ListStream
-        for item in batch:
-            all_items.append((str(item["path"]), int(item["size"]), item.get("e_tag")))
+
+    async def _collect() -> list[tuple[str, int, str | None]]:
+        # A retry restarts the listing from the first page, so a partial
+        # result never leaks into the next attempt.
+        items: list[tuple[str, int, str | None]] = []
+        async for batch in obstore.list(
+            store, prefix=prefix
+        ):  # native async ListStream
+            for item in batch:
+                items.append((str(item["path"]), int(item["size"]), item.get("e_tag")))
+        return items
+
+    all_items = await _past_gateway_no_route("list", prefix or "", _collect)
 
     if include_markers:
         return all_items
@@ -887,11 +926,19 @@ async def _childless_marker_paths(
 async def _head_not_found(store: ObjectStore, path: str) -> bool:
     """True only when a HEAD of *path* fails with a not-found error class."""
     try:
-        await obstore.head_async(store, path)
-    except FileNotFoundError:
-        return True
+        # Through the seam: obstore raises its not-found class for the
+        # gateway's no-route 404 too, which would read a real key as absent.
+        await _past_gateway_no_route(
+            "head", path, lambda: obstore.head_async(store, path)
+        )
+    except FileNotFoundError as exc:
+        # An exhausted gateway retry re-raises the no-route 404, which obstore
+        # also types as not-found: that is the gateway, not the key.
+        return not _is_gateway_no_route(exc)
     # conformance: ignore[E004] probe only; any other error keeps the key and the download reports it
     except Exception as exc:
+        if _is_gateway_no_route(exc):
+            return False
         return _ObstoreNotFoundError is not None and isinstance(
             exc, _ObstoreNotFoundError
         )
@@ -904,14 +951,20 @@ async def _lists_under_itself(store: ObjectStore, path: str) -> bool:
     obstore lists *path* as the prefix ``path/``, which holds an S3
     ``path/`` marker (listed as *path*) but never a plain key named *path*.
     """
-    try:
+
+    async def _probe() -> bool:
         async for batch in obstore.list(store, prefix=path, chunk_size=1):
             if batch:
                 return True
+        return False
+
+    try:
+        # Through the seam, like the HEAD probe: a stale gateway instance here
+        # would otherwise leave an S3 ``path/`` marker in the listing.
+        return await _past_gateway_no_route("list", path, _probe)
     # conformance: ignore[E004] probe only; any error keeps the key and the download reports it
     except Exception:
         return False
-    return False
 
 
 def _zero_byte_paths(
@@ -1125,11 +1178,12 @@ async def upload_file(
     A single pass over the file simultaneously feeds each chunk to the
     SHA-256 hasher and the store writer.
 
-    The only in-function retry covers uploads, and only the blobstorage
+    The only in-function retry is the store seam's: the blobstorage
     gateway's transient ``404 "no Route matched"`` (a gateway instance serving
-    traffic before its routes synced), with jittered backoff. object_store's
+    traffic before its routes synced), with jittered backoff, on the upload
+    and on every request after it (readback HEAD, sidecar PUT). object_store's
     Rust retry layer never retries a 404, and Temporal's task retries can land
-    back on the same gateway instance within a second or two, so the upload
+    back on the same gateway instance within a second or two, so the request
     retries on its own schedule. Every other failure raises on the first attempt.
 
     **Integrity (FND-306).** This is the single upstream convergence point for
@@ -1238,65 +1292,52 @@ async def upload_file(
         )
 
     # Each attempt re-reads the file from the start, so the hash, byte count and
-    # clock restart with it; only the gateway's transient no-route 404 loops.
-    retry_delays = iter(_GATEWAY_NO_ROUTE_RETRY_DELAYS)
-    while True:
+    # clock restart with it; only the gateway's transient no-route 404 retries.
+    started = time.monotonic()
+
+    async def _attempt() -> tuple[hashlib._Hash | None, int]:
+        nonlocal started
         started = time.monotonic()
-        delay: float | None = None
-        try:
-            h, bytes_sent = await _upload_once(
-                resolved,
-                key,
-                path,
-                effective_chunk=effective_chunk,
-                put_attributes=put_attributes,
-                compute_hash=compute_hash,
-                started=started,
-                file_size=file_size,
-            )
-            break
-        # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
-        except BaseException as exc:
-            # BaseException is the umbrella for Exception and its siblings
-            # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
-            # ensures cancellation mid-writer-close is logged rather than silently
-            # discarding the buffer and leaving no object in the store.
-            delay = (
-                next(retry_delays, None)
-                if isinstance(exc, Exception) and _is_gateway_no_route(exc)
-                else None
-            )
-            if delay is None:
-                elapsed_ms = (time.monotonic() - started) * 1000.0
-                from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
-                    redact_secrets,
-                )
-
-                _log_storage_event(
-                    logging.WARNING,
-                    "upload",
-                    key,
-                    outcome="failure",
-                    elapsed_ms=elapsed_ms,
-                    size_bytes=file_size,
-                    error_class=_exc_class_name(exc),
-                    error_message=redact_secrets(str(exc)),
-                )
-                if isinstance(exc, Exception):
-                    raise _storage_error_for(
-                        exc, key, f"Failed to upload file to key '{key}'", resolved
-                    ) from exc
-                raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
-
-        # Only a retried attempt reaches here. Its failure is not logged as a
-        # storage failure event: the upload has not failed yet.
-        delay *= _retry_jitter()
-        logger.warning(
-            "Gateway answered 'no Route matched' uploading key '%s'; retrying in %.1fs",
+        return await _upload_once(
+            resolved,
             key,
-            delay,
+            path,
+            effective_chunk=effective_chunk,
+            put_attributes=put_attributes,
+            compute_hash=compute_hash,
+            started=started,
+            file_size=file_size,
         )
-        await _retry_sleep(delay)
+
+    try:
+        h, bytes_sent = await _past_gateway_no_route("upload", key, _attempt)
+    # conformance: ignore[E004] upload error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+    except BaseException as exc:
+        # BaseException is the umbrella for Exception and its siblings
+        # (CancelledError, KeyboardInterrupt, SystemExit). Catching it here
+        # ensures cancellation mid-writer-close is logged rather than silently
+        # discarding the buffer and leaving no object in the store. A retried
+        # gateway 404 never reaches here: the upload has not failed yet.
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        from application_sdk.errors.base import (  # noqa: PLC0415 — lazy: avoid import-time cycle errors<->storage
+            redact_secrets,
+        )
+
+        _log_storage_event(
+            logging.WARNING,
+            "upload",
+            key,
+            outcome="failure",
+            elapsed_ms=elapsed_ms,
+            size_bytes=file_size,
+            error_class=_exc_class_name(exc),
+            error_message=redact_secrets(str(exc)),
+        )
+        if isinstance(exc, Exception):
+            raise _storage_error_for(
+                exc, key, f"Failed to upload file to key '{key}'", resolved
+            ) from exc
+        raise  # re-raise CancelledError / KeyboardInterrupt bare after logging
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     _log_storage_event(
@@ -1432,7 +1473,9 @@ async def download_file(
     started = time.monotonic()
 
     try:
-        result = await obstore.get_async(resolved, key)
+        result = await _past_gateway_no_route(
+            "download", key, lambda: obstore.get_async(resolved, key)
+        )
     # conformance: ignore[E004] download error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
     except Exception as exc:
         elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -1665,7 +1708,9 @@ async def get_file_meta(
     if normalize:
         key = normalize_key(key)
     try:
-        meta = await obstore.head_async(resolved, key)
+        meta = await _past_gateway_no_route(
+            "head", key, lambda: obstore.head_async(resolved, key)
+        )
         return int(meta["size"]), meta.get("e_tag")
     # conformance: ignore[E004] not-found returns None as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
@@ -1708,7 +1753,9 @@ async def _get_bytes(
     if normalize:
         key = normalize_key(key)
     try:
-        result = await obstore.get_async(resolved, key)
+        result = await _past_gateway_no_route(
+            "get", key, lambda: obstore.get_async(resolved, key)
+        )
         # GetResult.bytes() is the sync accessor; bytes(result) iterates
         # over Rust Bytes chunks and yields bytes objects, not ints.
         raw = result.bytes()
@@ -1754,7 +1801,11 @@ async def _put(
     if normalize:
         key = normalize_key(key)
     try:
-        await obstore.put_async(resolved, key, data, attributes=put_attributes)
+        await _past_gateway_no_route(
+            "put",
+            key,
+            lambda: obstore.put_async(resolved, key, data, attributes=put_attributes),
+        )
     # conformance: ignore[E004] put error handler; all exceptions re-raised via StorageConfigError or StorageError chain
     except Exception as exc:
         raise _storage_error_for(
@@ -1818,7 +1869,9 @@ async def delete(
     if normalize:
         key = normalize_key(key)
     try:
-        await obstore.delete_async(resolved, key)
+        await _past_gateway_no_route(
+            "delete", key, lambda: obstore.delete_async(resolved, key)
+        )
         return True
     # conformance: ignore[E004] not-found returns False as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:
@@ -1860,7 +1913,9 @@ async def exists(
     if normalize:
         key = normalize_key(key)
     try:
-        await obstore.head_async(resolved, key)
+        await _past_gateway_no_route(
+            "exists", key, lambda: obstore.head_async(resolved, key)
+        )
         return True
     # conformance: ignore[E004] not-found returns False as documented API contract; other exceptions re-raised via StorageError chain
     except Exception as exc:

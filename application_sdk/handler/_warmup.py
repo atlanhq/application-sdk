@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable
 
+from application_sdk.common.backoff import Backoff, Jitter
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import SourceUnavailableError
 from application_sdk.handler.contracts import (
@@ -112,12 +113,13 @@ def warmup_poll_delay(
     if hint_seconds is not None:
         delay = float(max(WARMUP_POLL_HINT_FLOOR_SECONDS, hint_seconds))
     else:
-        delay = float(
-            min(
-                WARMUP_POLL_MAX_BACKOFF_SECONDS,
-                WARMUP_POLL_FIRST_SECONDS * 2 ** min(unhinted_polls, 8),
-            )
-        )
+        # Jitter.NONE: this runs on the workflow path under workflow.sleep,
+        # and a random draw there would break replay.
+        delay = Backoff(
+            base=float(WARMUP_POLL_FIRST_SECONDS),
+            cap=float(WARMUP_POLL_MAX_BACKOFF_SECONDS),
+            jitter=Jitter.NONE,
+        ).delay(unhinted_polls + 1)
     return max(0.0, min(delay, remaining_seconds))
 
 
