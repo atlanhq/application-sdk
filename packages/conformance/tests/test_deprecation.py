@@ -15,7 +15,10 @@ from pathlib import Path
 
 import pytest
 from conformance.suite.checks._ast_common import _parse_directives
-from conformance.suite.checks._ast_common._safe_swap import PUBLIC_REEXPORTS
+from conformance.suite.checks._ast_common._safe_swap import (
+    PUBLIC_REEXPORTS,
+    source_lines,
+)
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
 from conformance.suite.checks.deprecation._consumer import (
@@ -1371,7 +1374,9 @@ _OWN = frozenset({"app", "tests", "local", "scripts"})
 
 def _b008(src: str, own: frozenset[str] = _OWN) -> list:
     tree, directives = _tree_and_directives(src)
-    return scan_private_imports(tree, "tests/test_x.py", directives, own)
+    return scan_private_imports(
+        tree, "tests/test_x.py", directives, own, lines=source_lines(src)
+    )
 
 
 def test_b008_fires_on_the_fnd_2388_import() -> None:

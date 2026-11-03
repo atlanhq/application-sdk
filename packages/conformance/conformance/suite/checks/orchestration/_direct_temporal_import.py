@@ -13,6 +13,7 @@ name the module binds, so nothing else in the file changes.
 from __future__ import annotations
 
 import ast
+from collections.abc import Sequence
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.checks._ast_common._safe_swap import alias_swap, top_level_ids
@@ -22,13 +23,17 @@ from ._temporal_common import iter_temporal_imports, temporal_import_hint
 
 
 def check_p004(
-    tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
+    tree: ast.AST,
+    filename: str,
+    directives: dict[int, _IgnoreDirective],
+    *,
+    lines: Sequence[str],
 ) -> list[Finding]:
     """Emit a P004 finding for every direct ``temporalio`` import."""
     findings: list[Finding] = []
     top_level = top_level_ids(tree)
     for node in iter_temporal_imports(tree):
-        swap = alias_swap(node, top_level)
+        swap = alias_swap(node, top_level, lines)
         findings.append(
             make_finding(
                 filename=filename,

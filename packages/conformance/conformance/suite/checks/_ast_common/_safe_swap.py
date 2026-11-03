@@ -1,12 +1,16 @@
 """Shared ``atlan/safeSwap`` builders for import findings (B008, P004, P005).
 
-A swap is marked only for a module-level import, and only when the
-replacement is the same object, so applying it cannot change behaviour.
+A swap is marked only for a module-level import, only when the
+replacement is the same object, so applying it cannot change behaviour, and
+only when ``find`` occurs exactly once on the finding's source line, so the
+swap can be applied as written.
 """
 
 from __future__ import annotations
 
 import ast
+import re
+from collections.abc import Sequence
 
 from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
 
@@ -48,8 +52,28 @@ def top_level_ids(tree: ast.AST) -> set[int]:
     return {id(n) for n in getattr(tree, "body", [])}
 
 
+_NEWLINE = re.compile(r"\r\n|\r|\n")
+
+
+def source_lines(text: str) -> list[str]:
+    """*text* split at the line breaks Python's tokenizer counts, so index ``lineno - 1`` is the node's line."""
+    return _NEWLINE.split(text)
+
+
+def _on_line(swap: SafeSwap, node: ast.stmt, lines: Sequence[str]) -> SafeSwap | None:
+    """*swap* when its ``find`` occurs exactly once on *node*'s line, else ``None``.
+
+    The same test an applier makes before replacing, so no marked swap is one
+    the applier would have to refuse.
+    """
+    index = node.lineno - 1
+    if 0 <= index < len(lines) and lines[index].count(swap.find) == 1:
+        return swap
+    return None
+
+
 def reexport_swap(
-    node: ast.ImportFrom, module: str, top_level: set[int]
+    node: ast.ImportFrom, module: str, top_level: set[int], lines: Sequence[str]
 ) -> SafeSwap | None:
     entry = PUBLIC_REEXPORTS.get(module)
     if (
@@ -59,20 +83,22 @@ def reexport_swap(
     ):
         return None
     public, since, _ = entry
-    return SafeSwap(
+    swap = SafeSwap(
         id="public-reexport",
         find=module,
         replace=public,
         requires=SafeSwapRequires(package=SDK_PACKAGE, min=since),
     )
+    return _on_line(swap, node, lines)
 
 
-def alias_swap(node: ast.stmt, top_level: set[int]) -> SafeSwap | None:
+def alias_swap(
+    node: ast.stmt, top_level: set[int], lines: Sequence[str]
+) -> SafeSwap | None:
     """A one-line, single-name import of a class with a public ``Temporal*`` alias.
 
-    Marked only when the line is written in the plain form
-    ``from <module> import <Name>`` (one space each, no parentheses), checked
-    from the name's column, so ``find`` is on the line exactly as written.
+    Marked only when ``<module> import <Name>`` is on the line exactly as
+    written (one space each side of ``import``, no parentheses or tabs).
     """
     if (
         id(node) not in top_level
@@ -86,14 +112,12 @@ def alias_swap(node: ast.stmt, top_level: set[int]) -> SafeSwap | None:
     entry = PUBLIC_ALIASES.get((module, alias.name))
     if entry is None:
         return None
-    prefix = f"from {module} import "
-    if getattr(alias, "col_offset", None) != node.col_offset + len(prefix):
-        return None
     public, since = entry
     bound = "" if alias.asname else f" as {alias.name}"
-    return SafeSwap(
+    swap = SafeSwap(
         id="public-alias",
         find=f"{module} import {alias.name}",
         replace=f"{PUBLIC_ALIAS_MODULE} import {public}{bound}",
         requires=SafeSwapRequires(package=SDK_PACKAGE, min=since),
     )
+    return _on_line(swap, node, lines)

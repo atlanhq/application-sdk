@@ -10,6 +10,7 @@ app to internals that can change without notice (BLDX-1417).
 from __future__ import annotations
 
 import ast
+from collections.abc import Sequence
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.checks._ast_common._safe_swap import reexport_swap, top_level_ids
@@ -19,7 +20,11 @@ from ._temporal_common import private_sdk_import_name, private_sdk_target
 
 
 def check_p005(
-    tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
+    tree: ast.AST,
+    filename: str,
+    directives: dict[int, _IgnoreDirective],
+    *,
+    lines: Sequence[str],
 ) -> list[Finding]:
     """Emit a P005 finding for every import that reaches SDK-private internals."""
     findings: list[Finding] = []
@@ -30,7 +35,7 @@ def check_p005(
         if isinstance(node, ast.ImportFrom):
             target = private_sdk_target(node)
             if target is not None:
-                swap = reexport_swap(node, target, top_level)
+                swap = reexport_swap(node, target, top_level, lines)
         elif isinstance(node, ast.Import):
             target = next(
                 (a.name for a in node.names if private_sdk_import_name(a.name)),

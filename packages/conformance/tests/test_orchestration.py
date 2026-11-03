@@ -9,6 +9,7 @@ wires Temporal directly is caught.
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.metadata
 import json
@@ -18,6 +19,7 @@ from pathlib import Path
 from conformance.suite.checks._ast_common._safe_swap import (
     PUBLIC_ALIAS_MODULE,
     PUBLIC_ALIASES,
+    source_lines,
 )
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
@@ -225,12 +227,33 @@ def test_p004_leaves_other_temporal_imports_unmarked() -> None:
         "from temporalio.exceptions import (\n    ApplicationError,\n)\n",
         "from temporalio.exceptions import (ApplicationError)\n",
         "from temporalio.exceptions import  ApplicationError\n",
-        "from  temporalio.exceptions import ApplicationError\n",
+        "from temporalio.exceptions import\tApplicationError\n",
+        "from temporalio.exceptions\timport ApplicationError\n",
+        "from temporalio.exceptions import ApplicationError; x = 'temporalio.exceptions import ApplicationError'\n",
         "import temporalio.exceptions\n",
         "def f():\n    from temporalio.exceptions import ApplicationError\n    return ApplicationError\n",
     ):
         (finding,) = _rule(src, "P004")
         assert _swap(finding) is None, src
+
+
+def test_p004_marks_an_import_with_odd_spacing_outside_find() -> None:
+    src = "from  temporalio.exceptions import ApplicationError\n"
+    (finding,) = _rule(src, "P004")
+    assert _rule(_apply(src, finding), "P004") == []
+
+
+def test_p005_leaves_a_module_path_not_written_as_find_unmarked() -> None:
+    src = "from application_sdk.execution._temporal .activity_utils import build_output_path\n"
+    (finding,) = _rule(src, "P005")
+    assert _swap(finding) is None
+
+
+def test_source_lines_index_matches_ast_lineno_for_every_line_ending() -> None:
+    for eol in ("\n", "\r\n", "\r"):
+        src = eol.join(["x = 1", "y = '\x0c\x0b'", "z = 3", ""])
+        nodes = ast.parse(src).body
+        assert [source_lines(src)[n.lineno - 1][:1] for n in nodes] == ["x", "y", "z"]
 
 
 def test_floor_compare_treats_a_pre_release_as_its_release() -> None:

@@ -74,6 +74,7 @@ tier is worth revisiting once the count is near zero.
 from __future__ import annotations
 
 import ast
+from collections.abc import Sequence
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
@@ -200,6 +201,8 @@ def scan_private_imports(
     file: str,
     directives: dict[int, _IgnoreDirective],
     own_roots: frozenset[str] = frozenset(),
+    *,
+    lines: Sequence[str],
 ) -> list[Finding]:
     """Return B008 findings for every foreign-private reach in *tree*."""
     findings: list[Finding] = []
@@ -249,7 +252,7 @@ def scan_private_imports(
                 continue
             component = _private_component(module)
             if component:
-                swap = reexport_swap(node, module, top_level)
+                swap = reexport_swap(node, module, top_level, lines)
                 emit(node, module, component, swap)
                 continue
             # Public module, private member:
