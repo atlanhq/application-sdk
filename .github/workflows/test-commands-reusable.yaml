@@ -23,9 +23,12 @@ name: Test commands (reusable)
 #     not in shell: Write, Maintain or Admin role on the repo only (read
 #     live from the permissions API), no bots, no forks. One exception
 #     (FND-4037): a plain `/gate-check` on a `bump-version*` PR posted by the
-#     fleet App itself, matched on the comment's `performed_via_github_app.id`
-#     against FLEET_APP_ID (passed as `--trusted-app-id` through env, never
-#     inlined). Unset id = no exception.
+#     release train's own App, `atlan-connectivity-release-train`, matched on
+#     the comment's `performed_via_github_app.id` against TRUSTED_APP_ID. That
+#     is its public numeric App id, pinned below: an App id is not a secret,
+#     and pinning it trusts this one single-purpose App rather than whatever
+#     a shared secret holds. Passed as `--trusted-app-id` through env, never
+#     inlined. Empty id = no exception.
 #   * The work is a `workflow_dispatch` on the PR branch, which runs that
 #     branch's own workflow with exactly the trust a same-repo `pull_request`
 #     run already has. Nothing here passes a secret to it.
@@ -107,7 +110,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TRUSTED_APP_ID: ${{ secrets.FLEET_APP_ID }}
+          TRUSTED_APP_ID: "5580005"  # atlan-connectivity-release-train
         run: >-
           python3 .github/scripts/pr_test_command.py
           --repo "$REPO"
@@ -137,7 +140,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_PATH: ${{ github.event_path }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          TRUSTED_APP_ID: ${{ secrets.FLEET_APP_ID }}
+          TRUSTED_APP_ID: "5580005"  # atlan-connectivity-release-train
         run: >-
           python3 .github/scripts/pr_test_command.py
           --repo "$REPO"

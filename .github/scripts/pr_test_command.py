@@ -64,7 +64,8 @@ member, even one with only Read). Bots are refused (no comment loops), and fork
 PRs are refused (a fork's branch is not in this repository to dispatch on).
 
 One bot is honoured, for one command (FND-4037): the release train posts a
-plain `/gate-check` on a `bump-version*` PR as the fleet GitHub App. That
+plain `/gate-check` on a `bump-version*` PR as its own GitHub App,
+`atlan-connectivity-release-train`. That
 comment is accepted only when it is a Bot comment whose
 `performed_via_github_app.id` equals ``--trusted-app-id`` — an id GitHub sets
 from the token that posted the comment, which no commenter can forge — and the
@@ -113,7 +114,7 @@ ADMIN_REFUSAL = (
 )
 
 TRUSTED_APP_REFUSAL = (
-    "the fleet App may only request `/gate-check` on a `bump-version*` PR"
+    "the release-train App may only request `/gate-check` on a `bump-version*` PR"
 )
 BOT_REFUSAL = "bots cannot request test runs"
 
@@ -188,7 +189,7 @@ class Request:
     comment_id: int = 0
     actor: str = ""
     reason: str = ""
-    #: Posted by the trusted fleet App (FND-4037). Its identity is proven by
+    #: Posted by the trusted release-train App (FND-4037). Its identity is proven by
     #: ``performed_via_github_app.id``, so no collaborator role is read for it,
     #: but the PR must still be a bump PR (:func:`_role_allows`).
     via_trusted_app: bool = False
