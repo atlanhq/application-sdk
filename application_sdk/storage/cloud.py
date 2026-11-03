@@ -57,6 +57,7 @@ from obstore.store import ObjectStore
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common._listing import prune_internal_dirs
+from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.errors import (
     StorageAuthError,
     StorageConfigError,
@@ -309,7 +310,11 @@ class CloudStore:
             List of local file paths that were downloaded.
 
         Raises:
-            StorageError: If no files found under the prefix.
+            StorageError: If no files found under the prefix, or the first
+                download that failed. In prefix mode the downloads still in
+                flight are cancelled and have unwound before this raises, so
+                nothing is written into *output_dir* afterwards; files already
+                downloaded stay.
         """
         if key and prefix:
             raise StorageConfigError("Provide either 'key' or 'prefix', not both.")
@@ -368,44 +373,47 @@ class CloudStore:
                 + (f" (filter: {suffix_filter})" if suffix_filter else "")
             )
 
-        sem = asyncio.Semaphore(max_concurrency)
-
         async def _dl(obj_key: str, size: int, etag: str | None) -> Path:
-            async with sem:
-                # No `list_prefix and` guard here: when list_prefix == "" (a
-                # whole-bucket download), startswith("") is always True, so the
-                # full key is kept instead of falling through to the basename-only
-                # branch below, which would clobber same-named files from
-                # different subdirectories onto one path.
-                rel = (
-                    obj_key[len(list_prefix) :]
-                    if obj_key.startswith(list_prefix)
-                    else Path(obj_key).name
+            # No `list_prefix and` guard here: when list_prefix == "" (a
+            # whole-bucket download), startswith("") is always True, so the
+            # full key is kept instead of falling through to the basename-only
+            # branch below, which would clobber same-named files from
+            # different subdirectories onto one path.
+            rel = (
+                obj_key[len(list_prefix) :]
+                if obj_key.startswith(list_prefix)
+                else Path(obj_key).name
+            )
+            # Reject keys whose resolved path escapes output (e.g. via ".." segments).
+            local_path = _safe_join_under(output, rel)
+            # Pass the listing's size + etag so large objects chunk (with
+            # version-pinned range GETs) and small ones stream — no per-file
+            # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
+            try:
+                await download_file_chunked(
+                    obj_key,
+                    local_path,
+                    store=self._store,
+                    normalize=False,
+                    file_size=size,
+                    etag=etag,
+                    # External bucket: the SDK never wrote sidecars here, so
+                    # skip the per-file probe that could only ever miss.
+                    sidecar_present=False,
                 )
-                # Reject keys whose resolved path escapes output (e.g. via ".." segments).
-                local_path = _safe_join_under(output, rel)
-                # Pass the listing's size + etag so large objects chunk (with
-                # version-pinned range GETs) and small ones stream — no per-file
-                # HEAD (metadata already known). (BLDX-1513 / BLDX-1523)
-                try:
-                    await download_file_chunked(
-                        obj_key,
-                        local_path,
-                        store=self._store,
-                        normalize=False,
-                        file_size=size,
-                        etag=etag,
-                        # External bucket: the SDK never wrote sidecars here, so
-                        # skip the per-file probe that could only ever miss.
-                        sidecar_present=False,
-                    )
-                except StorageError as exc:
-                    self._raise_if_denied(exc, "reading", obj_key)
-                    raise
-                return local_path
+            except StorageError as exc:
+                self._raise_if_denied(exc, "reading", obj_key)
+                raise
+            return local_path
 
-        results = await asyncio.gather(*[_dl(k, s, e) for k, s, e in items])
-        downloaded = list(results)
+        # The first failure cancels the remaining downloads and drains them
+        # before it propagates: with asyncio.gather they kept writing into
+        # *output* after the caller had seen the error and moved on.
+        downloaded = await _run_bounded(
+            (_dl(k, s, e) for k, s, e in items),
+            max_concurrency,
+            unwrap_lone_failure=True,
+        )
         _log().info("Downloaded %d files from prefix=%s", len(downloaded), list_prefix)
         return downloaded
 
@@ -641,6 +649,13 @@ class CloudStore:
 
         Returns:
             List of uploaded object keys.
+
+        Raises:
+            StorageError: The first upload that failed. The uploads still in
+                flight are cancelled and have unwound before this raises, so
+                no object lands in the bucket afterwards; those already
+                finished stay. The set written is partial: retry the whole
+                directory.
         """
         await self._ensure_region()
         local = Path(local_dir)
@@ -666,15 +681,17 @@ class CloudStore:
         # auto-heartbeat — for the entire traversal (ADR-0010).
         files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
-        sem = asyncio.Semaphore(max_concurrency)
-
         async def _up(key: str, path: Path) -> str:
-            async with sem:
-                await self.upload(path, key)
-                return key
+            await self.upload(path, key)
+            return key
 
-        results = await asyncio.gather(*[_up(k, p) for k, p in files])
-        return list(results)
+        # The first failure cancels and drains the remaining uploads before it
+        # propagates, so none lands in the bucket after the caller saw it fail.
+        return await _run_bounded(
+            (_up(k, p) for k, p in files),
+            max_concurrency,
+            unwrap_lone_failure=True,
+        )
 
 
 # ---------------------------------------------------------------------------
