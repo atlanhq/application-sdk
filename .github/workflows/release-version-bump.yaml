@@ -247,42 +247,49 @@ jobs:
             --base "${TARGET_BRANCH}" \
             --head "bump-version-${TARGET_BRANCH}"
 
-      - name: Commit and push bump branch
+      - name: Commit bump branch
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
         env:
           TARGET_BRANCH: ${{ inputs.target_branch }}
           NEW_VERSION: ${{ steps.bump.outputs.new }}
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
         run: |
           set -euo pipefail
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
 
-          BRANCH="bump-version-${TARGET_BRANCH}"
-          git checkout -b "$BRANCH"
+          git checkout -b "bump-version-${TARGET_BRANCH}"
           git add pyproject.toml uv.lock CHANGELOG.md
           git commit -m "chore: bump version to ${NEW_VERSION}"
 
-          # The org's signed-commits ruleset blocks a PR carrying an unsigned
-          # commit, and this runner-made commit is unsigned whatever token pushes
-          # it. signed_commit.py publishes the same change through
-          # createCommitOnBranch, which GitHub signs. The bump branch is rebuilt
-          # from the target branch on every run: the helper commits on a scratch
-          # branch at that base, then moves the bump branch onto the commit under
-          # a lease. It fails if another CI run moved the branch since this
-          # checkout, which is the correct behaviour.
-          SIGNED_COMMIT=.sdk-scripts/.github/scripts/signed_commit.py
-          if [ -f "$SIGNED_COMMIT" ]; then
-            LEASE=$(git rev-parse --verify -q "refs/remotes/origin/${BRANCH}" || echo absent)
-            python3 "$SIGNED_COMMIT" push \
-              --repo "$GITHUB_REPOSITORY" \
-              --branch "$BRANCH" \
-              --reset-to "$(git rev-parse HEAD~1)" \
-              --lease "$LEASE"
-          else
-            # An sdk_scripts_ref that predates the helper: the old, unsigned push.
-            git push origin "$BRANCH" --force-with-lease
-          fi
+      # The org's signed-commits ruleset blocks a PR carrying an unsigned commit,
+      # and the runner-made commit above is unsigned whatever token pushes it.
+      # signed_commit.py publishes the same change through createCommitOnBranch,
+      # which GitHub signs. The bump branch is rebuilt from the target branch on
+      # every run: the helper commits on a scratch branch at that base, then moves
+      # the bump branch onto the commit under the lease `--force-with-lease` took
+      # (`tracking`: this checkout's remote-tracking ref), applied atomically. It
+      # fails if another CI run moved the branch since this checkout, which is
+      # the correct behaviour.
+      - name: Publish bump branch as a signed commit
+        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && hashFiles('.sdk-scripts/.github/scripts/signed_commit.py') != ''
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+        run: |
+          set -euo pipefail
+          python3 .sdk-scripts/.github/scripts/signed_commit.py push \
+            --repo "$GITHUB_REPOSITORY" \
+            --branch "bump-version-${TARGET_BRANCH}" \
+            --reset-to "$(git rev-parse HEAD~1)" \
+            --lease tracking
+
+      # An sdk_scripts_ref that predates the helper: the old, unsigned push.
+      - name: Push bump branch (unsigned, pre-helper sdk_scripts_ref)
+        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && hashFiles('.sdk-scripts/.github/scripts/signed_commit.py') == ''
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+        run: git push origin "bump-version-${TARGET_BRANCH}" --force-with-lease
 
       # Runs whether or not the branch was pushed: it re-attaches the release
       # label and creates the PR if a human closed it, and is a no-op when the

@@ -4,8 +4,9 @@ The org's signed-commits ruleset blocks a PR carrying an unsigned commit, and a
 bot's ``git commit`` + ``git push`` is unsigned. These pin that the helper sends
 the local commit's exact tree change through ``createCommitOnBranch`` (the path
 GitHub signs), keeps each caller's overwrite guarantee, never leaves a branch
-pointing at its bare base, refuses a change the API would silently lose a mode
-from, waits out rate limits within a budget, and publishes nothing when nothing
+pointing at its bare base, moves the branch under an atomic lease (the
+``updateRefs`` ``beforeOid``), fails closed when the branch cannot be read,
+refuses a change the API would silently lose a mode from, waits out rate limits within a budget, and publishes nothing when nothing
 changed.
 """
 
@@ -29,6 +30,8 @@ from _gh_refs import Response  # noqa: E402
 REPO = "atlanhq/atlan-example-app"
 BRANCH = "bump-version-main"
 OID = "f00d"
+REPO_ID = "R_kgDOexample"
+ZERO = "0" * 40
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -92,17 +95,52 @@ class FakeApi:
                 return Response(404, {}, {"message": "Not Found"})
             return Response(200, {}, {"object": {"sha": self.branch_head}})
         if path == "graphql":
+            query = payload["query"]
+            if "repository(" in query:
+                return Response(200, {}, {"data": {"repository": {"id": REPO_ID}}})
+            if "updateRefs" in query:
+                return self._update_refs(payload["variables"]["input"])
             return self.commit_response
         if method == "DELETE":
             return Response(204, {}, None)
         return Response(200 if method == "PATCH" else 201, {}, {})
+
+    def _update_refs(self, update_input: dict) -> Response:
+        # GitHub's compare-and-swap: the move applies only if beforeOid holds.
+        (update,) = update_input["refUpdates"]
+        assert update["name"] == f"refs/heads/{BRANCH}"
+        before = update.get("beforeOid")
+        current = self.branch_head or ZERO
+        if before is not None and before != current:
+            return Response(
+                200,
+                {},
+                {
+                    "data": {"updateRefs": None},
+                    "errors": [{"message": "A ref was not at the expected oid"}],
+                },
+            )
+        self.branch_head = update["afterOid"]
+        return Response(200, {}, {"data": {"updateRefs": {"clientMutationId": None}}})
+
+    def ref_updates(self) -> list[dict]:
+        return [
+            update
+            for _, path, payload, _ in self.calls
+            if path == "graphql" and "updateRefs" in payload["query"]
+            for update in payload["variables"]["input"]["refUpdates"]
+        ]
 
     def writes(self) -> list[tuple[str, str, dict | None]]:
         return [(m, p, b) for m, p, b, _ in self.calls if m != "GET"]
 
 
 def _graphql_input(api: FakeApi) -> dict:
-    (call,) = [c for c in api.calls if c[1] == "graphql"]
+    (call,) = [
+        c
+        for c in api.calls
+        if c[1] == "graphql" and "createCommitOnBranch" in c[2]["query"]
+    ]
     return call[2]["variables"]["input"]
 
 
@@ -266,17 +304,27 @@ def test_reset_rebuilds_an_existing_branch_from_its_base_when_the_lease_holds(
     assert [(c[0], c[1]) for c in api.calls] == [
         ("GET", f"repos/{REPO}/git/ref/heads/{BRANCH}"),
         ("POST", f"repos/{REPO}/git/refs"),
-        ("POST", "graphql"),
-        ("GET", f"repos/{REPO}/git/ref/heads/{BRANCH}"),
-        ("PATCH", f"repos/{REPO}/git/refs/heads/{BRANCH}"),
+        ("POST", "graphql"),  # createCommitOnBranch on the scratch branch
+        ("POST", "graphql"),  # repository id
+        ("POST", "graphql"),  # updateRefs
         ("DELETE", f"repos/{REPO}/git/refs/heads/{scratch}"),
     ]
     assert api.calls[1][2] == {"ref": f"refs/heads/{scratch}", "sha": base}
     payload = _graphql_input(api)
     assert payload["branch"]["branchName"] == scratch
     assert payload["expectedHeadOid"] == base
-    # The real branch moves straight onto the signed commit.
-    assert api.calls[4][2] == {"sha": OID, "force": True}
+    # The real branch moves straight onto the signed commit, conditioned on the
+    # lease in the same write: no REST PATCH, which has no expected-old-sha.
+    assert "PATCH" not in [c[0] for c in api.calls]
+    assert api.calls[4][2]["variables"]["input"]["repositoryId"] == REPO_ID
+    assert api.ref_updates() == [
+        {
+            "name": f"refs/heads/{BRANCH}",
+            "afterOid": OID,
+            "beforeOid": "stale1",
+            "force": True,
+        }
+    ]
 
 
 def test_a_rebuild_never_points_the_real_branch_at_its_bare_base(repo, monkeypatch):
@@ -285,13 +333,14 @@ def test_a_rebuild_never_points_the_real_branch_at_its_bare_base(repo, monkeypat
     api = FakeApi(branch_head="stale1")
     monkeypatch.setattr(signed_commit, "gh_request", api)
     _push(repo, "--reset-to", base, "--lease", "stale1")
-    real = [
+    rest = [
         body
         for method, path, body in api.writes()
         if path.endswith(f"/heads/{BRANCH}")
         or (body or {}).get("ref") == f"refs/heads/{BRANCH}"
     ]
-    assert real == [{"sha": OID, "force": True}]
+    assert rest == []
+    assert [u["afterOid"] for u in api.ref_updates()] == [OID]
 
 
 def test_reset_creates_the_branch_when_the_lease_says_it_is_absent(repo, monkeypatch):
@@ -299,11 +348,16 @@ def test_reset_creates_the_branch_when_the_lease_says_it_is_absent(repo, monkeyp
     api = FakeApi(branch_head=None)
     monkeypatch.setattr(signed_commit, "gh_request", api)
     _push(repo, "--reset-to", base, "--lease", "absent")
-    assert api.calls[4][:3] == (
-        "POST",
-        f"repos/{REPO}/git/refs",
-        {"ref": f"refs/heads/{BRANCH}", "sha": OID},
-    )
+    # Created only if still absent, in the same write.
+    assert api.ref_updates() == [
+        {
+            "name": f"refs/heads/{BRANCH}",
+            "afterOid": OID,
+            "beforeOid": ZERO,
+            "force": True,
+        }
+    ]
+    assert api.branch_head == OID
 
 
 def test_reset_refuses_when_another_run_moved_the_branch(repo, monkeypatch):
@@ -324,16 +378,57 @@ def test_a_branch_moved_during_the_commit_is_not_overwritten_and_scratch_is_remo
     original = api.__call__
 
     def moving(method, path, payload=None, **kw):
-        if path == "graphql":
+        if path == "graphql" and "createCommitOnBranch" in payload["query"]:
             api.branch_head = "pushed-meanwhile"
         return original(method, path, payload, **kw)
 
     monkeypatch.setattr(signed_commit, "gh_request", moving)
     with pytest.raises(SystemExit, match="moved"):
         _push(repo, "--reset-to", base, "--lease", "stale1")
-    methods = [c[0] for c in api.calls]
-    assert "PATCH" not in methods
-    assert methods[-1] == "DELETE"
+    assert api.branch_head == "pushed-meanwhile"
+    assert [c[0] for c in api.calls][-1] == "DELETE"
+
+
+def test_a_push_landing_just_before_the_move_is_not_overwritten(repo, monkeypatch):
+    # The race a read-then-PATCH loses: the push lands after every read this
+    # run makes. The lease travels with the move, so GitHub refuses it.
+    base, _ = _commit_change(repo)
+    api = FakeApi(branch_head="stale1")
+    original = api.__call__
+
+    def racing(method, path, payload=None, **kw):
+        if path == "graphql" and "updateRefs" in payload["query"]:
+            api.branch_head = "pushed-in-the-gap"
+        return original(method, path, payload, **kw)
+
+    monkeypatch.setattr(signed_commit, "gh_request", racing)
+    with pytest.raises(SystemExit, match="had to be at stale1"):
+        _push(repo, "--reset-to", base, "--lease", "stale1")
+    assert api.branch_head == "pushed-in-the-gap"
+    assert [c[0] for c in api.calls][-1] == "DELETE"
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        Response(403, {}, {"message": "Resource not accessible by integration"}),
+        Response(500, {}, {"message": "Server Error"}),
+        Response(200, {}, {"object": {}}),
+        Response(200, {}, "not json"),
+    ],
+    ids=["denied", "server-error", "no-sha", "not-an-object"],
+)
+def test_an_unreadable_branch_fails_closed_before_any_write(
+    repo, monkeypatch, response
+):
+    # Only a 404 means "absent". Anything else is not evidence either way, so
+    # nothing is written: no scratch branch, no commit, no ref move.
+    base, _ = _commit_change(repo)
+    api = FakeApi(branch_head="stale1", script=[response])
+    monkeypatch.setattr(signed_commit, "gh_request", api)
+    with pytest.raises(SystemExit, match="could not read refs/heads/"):
+        _push(repo, "--reset-to", base, "--lease", "stale1")
+    assert [c[0] for c in api.calls] == ["GET"]
 
 
 def test_lease_any_overwrites_whatever_the_branch_holds(repo, monkeypatch):
@@ -342,8 +437,8 @@ def test_lease_any_overwrites_whatever_the_branch_holds(repo, monkeypatch):
     api = FakeApi(branch_head="anything")
     monkeypatch.setattr(signed_commit, "gh_request", api)
     _push(repo, "--reset-to", base, "--lease", "any")
-    assert ("PATCH", f"repos/{REPO}/git/refs/heads/{BRANCH}") in [
-        (c[0], c[1]) for c in api.calls
+    assert api.ref_updates() == [
+        {"name": f"refs/heads/{BRANCH}", "afterOid": OID, "force": True}
     ]
 
 
@@ -352,11 +447,26 @@ def test_lease_any_creates_a_missing_branch(repo, monkeypatch):
     api = FakeApi(branch_head=None)
     monkeypatch.setattr(signed_commit, "gh_request", api)
     _push(repo, "--reset-to", base, "--lease", "any")
-    assert (
-        "POST",
-        f"repos/{REPO}/git/refs",
-        {"ref": f"refs/heads/{BRANCH}", "sha": OID},
-    ) in api.writes()
+    assert [u.get("beforeOid") for u in api.ref_updates()] == [ZERO]
+    assert api.branch_head == OID
+
+
+def test_lease_tracking_uses_the_checkouts_remote_tracking_ref(repo, monkeypatch):
+    base, _ = _commit_change(repo)
+    _git(repo, "update-ref", f"refs/remotes/origin/{BRANCH}", base)
+    api = FakeApi(branch_head=base)
+    monkeypatch.setattr(signed_commit, "gh_request", api)
+    _push(repo, "--reset-to", base, "--lease", "tracking")
+    assert [u["beforeOid"] for u in api.ref_updates()] == [base]
+
+
+def test_lease_tracking_without_a_remote_tracking_ref_means_absent(repo, monkeypatch):
+    base, _ = _commit_change(repo)
+    api = FakeApi(branch_head="created-by-someone-else")
+    monkeypatch.setattr(signed_commit, "gh_request", api)
+    with pytest.raises(SystemExit, match="expected absent"):
+        _push(repo, "--reset-to", base, "--lease", "tracking")
+    assert [c[0] for c in api.calls] == ["GET"]
 
 
 def test_reset_without_a_lease_is_rejected(repo):

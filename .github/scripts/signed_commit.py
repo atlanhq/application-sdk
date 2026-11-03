@@ -17,12 +17,19 @@ command line), which sends the same tree change as one signed commit:
   commit, the ``git push --force`` shape of a bot-owned branch regenerated on
   every run. ``lease`` is the sha the branch must still be at
   (``--force-with-lease``), ``absent`` for a branch that must not exist yet (a
-  plain push of a new branch), or ``any`` for an unconditional ``--force``.
+  plain push of a new branch), ``tracking`` for whatever the checkout's
+  ``refs/remotes/origin/<branch>`` holds (``absent`` when it has none: the
+  plain ``--force-with-lease``), or ``any`` for an unconditional ``--force``.
 
 A rebuild never points the real branch at the bare base, even for a moment: a
 pull request whose head equals its base has no commits, and GitHub closes it.
 The signed commit is made on a short-lived scratch branch at the base, the real
 branch is moved straight onto it, and the scratch branch is deleted.
+
+The move is one GraphQL ``updateRefs`` call whose ``beforeOid`` is the lease, so
+GitHub applies it only if the branch is still where the lease says, atomically,
+as ``--force-with-lease`` does. (The REST refs API has no such condition: a
+read-then-PATCH would overwrite a push landing between the two.)
 
 The tree change is read from git (``BASE..HEAD``), so the published commit holds
 exactly what the local one does, deletions included. Nothing is published when
@@ -58,6 +65,10 @@ from _gh_refs import (  # noqa: E402
 
 ABSENT = "absent"
 ANY = "any"
+TRACKING = "tracking"
+
+# updateRefs' spelling of "this ref does not exist".
+_ZERO_OID = "0" * 40
 
 # The only mode createCommitOnBranch can write.
 _PLAIN_FILE = "100644"
@@ -76,6 +87,14 @@ _CREATE_COMMIT = """
 mutation($input: CreateCommitOnBranchInput!) {
   createCommitOnBranch(input: $input) { commit { oid url } }
 }
+"""
+
+_REPOSITORY_ID = """
+query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }
+"""
+
+_UPDATE_REFS = """
+mutation($input: UpdateRefsInput!) { updateRefs(input: $input) { clientMutationId } }
 """
 
 
@@ -196,8 +215,9 @@ def read_branch_head(api: Api, repo: str, branch: str) -> str | None:
 def check_lease(api: Api, repo: str, branch: str, lease: str) -> str | None:
     """The branch's current sha, refusing if it is not where ``lease`` says.
 
-    The REST refs API has no compare-and-swap, so this is a read just before the
-    write: a push landing between the two is not caught. ``any`` never refuses.
+    An early refusal, before anything is written. It is not what makes the lease
+    hold: the final move carries the lease as ``beforeOid``, which GitHub checks
+    atomically. ``any`` never refuses.
     """
     current = read_branch_head(api, repo, branch)
     if lease == ANY:
@@ -230,18 +250,76 @@ def create_commit(
             }
         },
     }
-    response = api.request("POST", "graphql", payload, body_via_file=True)
-    body_json = response.body if isinstance(response.body, dict) else {}
-    commit = ((body_json.get("data") or {}).get("createCommitOnBranch") or {}).get(
-        "commit"
+    data = _graphql(
+        api, payload, f"createCommitOnBranch on {branch}", body_via_file=True
     )
-    if response.status != 200 or body_json.get("errors") or not commit:
-        errors = "; ".join(str(e.get("message")) for e in body_json.get("errors") or [])
+    commit = (data.get("createCommitOnBranch") or {}).get("commit")
+    if not isinstance(commit, dict) or not commit.get("oid"):
         raise SystemExit(
-            f"::error::createCommitOnBranch on {branch} failed: "
-            f"HTTP {response.status} {errors or response.message!r}"
+            f"::error::createCommitOnBranch on {branch} returned no commit."
         )
     return str(commit["oid"])
+
+
+def _graphql(api: Api, payload: dict, label: str, *, body_via_file=False) -> dict:
+    """``data`` of a GraphQL call, failing on an HTTP or GraphQL error."""
+    response = api.request("POST", "graphql", payload, body_via_file=body_via_file)
+    body = response.body if isinstance(response.body, dict) else {}
+    data = body.get("data")
+    if response.status != 200 or body.get("errors") or not isinstance(data, dict):
+        errors = "; ".join(str(e.get("message")) for e in body.get("errors") or [])
+        raise SystemExit(
+            f"::error::{label} failed: "
+            f"HTTP {response.status} {errors or response.message!r}"
+        )
+    return data
+
+
+def _repository_id(api: Api, repo: str) -> str:
+    owner, _, name = repo.partition("/")
+    data = _graphql(
+        api,
+        {"query": _REPOSITORY_ID, "variables": {"owner": owner, "name": name}},
+        f"reading the id of {repo}",
+    )
+    repository = data.get("repository")
+    if not isinstance(repository, dict) or not repository.get("id"):
+        raise SystemExit(f"::error::could not read the id of {repo}.")
+    return str(repository["id"])
+
+
+def move_branch(api: Api, repo: str, branch: str, oid: str, before: str | None) -> None:
+    """Point ``branch`` at ``oid``, only if it still points at ``before``.
+
+    ``before`` is a sha, ``_ZERO_OID`` for a branch that must not exist, or None
+    for no condition (``--force``). GitHub evaluates the condition and the write
+    as one step, so a push landing in between makes this fail, not get lost.
+    """
+    update: dict = {"name": f"refs/heads/{branch}", "afterOid": oid, "force": True}
+    if before is not None:
+        update["beforeOid"] = before
+    payload = {
+        "query": _UPDATE_REFS,
+        "variables": {
+            "input": {
+                "repositoryId": _repository_id(api, repo),
+                "refUpdates": [update],
+            }
+        },
+    }
+    try:
+        _graphql(api, payload, f"updateRefs on refs/heads/{branch}")
+    except SystemExit as exc:
+        expected = "absent" if before == _ZERO_OID else before
+        guard = (
+            f" It had to be at {expected}: if it moved, another run updated it; "
+            "not overwriting."
+            if before is not None
+            else ""
+        )
+        raise SystemExit(
+            f"{exc} refs/heads/{branch} was not moved onto {oid}.{guard}"
+        ) from None
 
 
 def _create_ref(api: Api, repo: str, branch: str, sha: str) -> None:
@@ -265,26 +343,20 @@ def rebuild_branch(
     changes: dict,
 ) -> str:
     """Point ``branch`` at ``base`` plus one signed commit; return that commit."""
-    check_lease(api, repo, branch, lease)
+    current = check_lease(api, repo, branch, lease)
+    if current is None:
+        # Created only if still absent, whatever the lease: an unconditional
+        # update of a ref that does not exist is not one updateRefs documents.
+        before: str | None = _ZERO_OID
+    elif lease == ANY:
+        before = None
+    else:
+        before = current
     scratch = f"{SCRATCH_PREFIX}/{secrets.token_hex(8)}"
     _create_ref(api, repo, scratch, base)
     try:
         oid = create_commit(api, repo, scratch, base, message, changes)
-        current = check_lease(api, repo, branch, lease)
-        if current is None:
-            # A create is atomic: a branch another run made since fails with 422.
-            _create_ref(api, repo, branch, oid)
-        else:
-            response = api.request(
-                "PATCH",
-                f"repos/{repo}/git/refs/heads/{branch}",
-                {"sha": oid, "force": True},
-            )
-            if response.status != 200:
-                raise SystemExit(
-                    f"::error::could not point refs/heads/{branch} at {oid}: "
-                    f"HTTP {response.status} {response.message!r}"
-                )
+        move_branch(api, repo, branch, oid, before)
     finally:
         response = api.request("DELETE", f"repos/{repo}/git/refs/heads/{scratch}")
         if response.status not in (200, 204):
@@ -293,6 +365,21 @@ def rebuild_branch(
                 f"(HTTP {response.status}); delete it by hand."
             )
     return oid
+
+
+def tracking_lease(branch: str, cwd: Path) -> str:
+    """What the checkout last saw ``branch`` at: the plain ``--force-with-lease``.
+
+    The remote-tracking ref's sha, or ``absent`` when the checkout has none (the
+    branch did not exist when it fetched).
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "-q", f"refs/remotes/origin/{branch}"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ABSENT
 
 
 def publish(
@@ -318,6 +405,8 @@ def publish(
     if reset_to is not None and not lease:
         raise ValueError("reset_to needs a lease")
     cwd = Path(cwd)
+    if lease == TRACKING:
+        lease = tracking_lease(branch, cwd)
     head = git("rev-parse", "--verify", "HEAD^{commit}", cwd=cwd).strip()
     base_rev = expect_head if expect_head is not None else reset_to
     base = git("rev-parse", "--verify", f"{base_rev}^{{commit}}", cwd=cwd).strip()
@@ -372,7 +461,9 @@ def main(argv: list[str] | None = None) -> int:
         "--lease",
         help=(
             f"With --reset-to: the sha the branch must be at, '{ABSENT}' if it "
-            f"must not exist, or '{ANY}' to overwrite it unconditionally."
+            f"must not exist, '{TRACKING}' for the checkout's "
+            f"refs/remotes/origin/<branch> (or '{ABSENT}' without one), or "
+            f"'{ANY}' to overwrite it unconditionally."
         ),
     )
     p.add_argument("--cwd", default=".", help="The local repository.")
