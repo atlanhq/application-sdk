@@ -1305,7 +1305,11 @@ so deleting a reusable without cleaning up its callers and examples is red.
 Superseded reusables are deleted, not kept "for compatibility", once a clone
 of the org's active repos shows no caller (code search misses repos). FND-4249
 removed `build-apps-image.yaml` and `publish-app.yaml` (replaced by
-`build-and-publish-app.yaml`) and the `ae-stack-up` composite on that basis.
+`build-and-publish-app.yaml`), `e2e-full-reusable.yaml` (folded into
+`tests-reusable.yaml`), and the `ae-stack-up` composite on that basis. It also
+removed the `ae-workflow` composite and its `ae-workflow-register.yaml`
+wrapper, whose single consumer had pinned them to a commit and not run them in
+five months.
 
 ## `concurrency:` is not a lock, and not a queue
 

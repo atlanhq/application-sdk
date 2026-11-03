@@ -58,7 +58,8 @@ inputs:
     description: |
       "true" emits only the cloud dimension, with no file dimension, for
       callers that pass a whole directory to pytest rather than fanning out
-      per suite (e2e-full-reusable.yaml). `test-dir` is unused in that mode.
+      per suite (tests-reusable.yaml's cloud-only fan-out for prepare-tenant).
+      `test-dir` is unused in that mode.
     required: false
     default: "false"
   source-available:

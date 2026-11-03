@@ -31,7 +31,6 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW = _REPO_ROOT / ".github/workflows/tests-reusable.yaml"
-_FULL_WORKFLOW = _REPO_ROOT / ".github/workflows/e2e-full-reusable.yaml"
 _SDR_ACTION = _REPO_ROOT / ".github/actions/sdr-e2e/action.yaml"
 _SHELL = _REPO_ROOT / ".github/actions/sdr-e2e/verify_setup_routes.py"
 
@@ -176,18 +175,16 @@ def test_the_token_never_reaches_argv(steps: list[dict]) -> None:  # type: ignor
     assert "--api-key" not in step["run"]
 
 
-# ── Both callers get it ──────────────────────────────────────────────────────
+# ── The e2e caller gets it ───────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("workflow", [_WORKFLOW, _FULL_WORKFLOW])
-def test_both_callers_reach_this_action(workflow: Path) -> None:
-    """One insertion has to cover every e2e caller, or it covers one repo.
+def test_the_e2e_caller_reaches_this_action() -> None:
+    """The check lives in this composite, so it only runs if the caller uses it.
 
-    The check lives in this composite rather than in a job step precisely
-    because both reusable e2e workflows call it. If a caller stopped using the
-    action, its route coverage would vanish with no failing check to say so.
+    If tests-reusable.yaml stopped using the action, its route coverage would
+    vanish with no failing check to say so.
     """
-    assert "actions/sdr-e2e" in workflow.read_text(encoding="utf-8")
+    assert "actions/sdr-e2e" in _WORKFLOW.read_text(encoding="utf-8")
 
 
 # ── No second copy of the shared rules ───────────────────────────────────────

@@ -218,7 +218,7 @@ inputs:
       composite hard-fails if `atlan-objectstore.yaml` isn't present; and
       ENABLE_ATLAN_UPLOAD=true / ATLAN_DEPLOYMENT_ARTIFACT_DUAL_WRITE=required
       are set on the worker via docker-compose.two-store.yml. Set by
-      e2e-full-reusable.yaml's `two-store` input; the pure-SDR pipeline
+      tests-reusable.yaml's `two-store` input; the pure-SDR pipeline
       never sets this.
     required: false
     default: "false"

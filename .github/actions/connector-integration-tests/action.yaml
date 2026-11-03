@@ -192,7 +192,7 @@ inputs:
 
       This action checks out the caller's repo via setup-deps, so
       services-script paths resolve against the caller's tree — identical to
-      how e2e-full-reusable.yaml forwards secrets-script and compose-overlay
+      how tests-reusable.yaml forwards secrets-script and compose-overlay
       to the sdr-e2e composite.  Never use ``uses: ./…`` references from
       inside a reusable/composite workflow: they resolve against the
       reusable's repo, not the caller's.

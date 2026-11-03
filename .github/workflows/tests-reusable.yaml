@@ -1412,8 +1412,7 @@ jobs:
       # clouds". The matrix string cannot carry that distinction: `{"include":[]}`
       # is a perfectly non-empty string, so a `matrix || fallback` expression
       # never takes the fallback and the job expands to zero legs instead of one.
-      # e2e-full-reusable.yaml's plan-clouds has always guarded on the count for
-      # exactly this reason.
+      # Guarding on the count is what avoids that.
       cloud-count: ${{ steps.discover-clouds.outputs.count }}
       # The same cloud dimension as a flat list, for lease-tenant — which is ONE
       # job that takes every cloud's lease in order rather than a matrix leg per
@@ -2293,8 +2292,7 @@ jobs:
       # caught it ("discovery succeeded but the matrix was skipped"), nothing else
       # would have.
       #
-      # Same expression e2e-full-reusable.yaml's e2e-full has always used. The
-      # single fallback leg spells out `cloud: ""` rather than `{}` so
+      # The single fallback leg spells out `cloud: ""` rather than `{}` so
       # `matrix.cloud` is a defined-but-empty string, which is what makes the
       # tenant resolver take its single-tenant path.
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
@@ -2891,7 +2889,7 @@ jobs:
           expected-app-version: ${{ needs.merge-e2e-image.outputs.version }}
           # One suite per leg (the matrix file), not the whole e2e directory.
           test-path: ${{ matrix.file }}
-          # Full-DAG defaults carried over from e2e-full-reusable.yaml. The
+          # Full-DAG defaults (formerly in the deleted e2e-full-reusable.yaml). The
           # full-DAG pipeline lives alongside the SDR (testcontainer) pipeline
           # in connector repos, so these must be explicit — otherwise the action
           # falls back to the SDR component/compose set (wrong stack).

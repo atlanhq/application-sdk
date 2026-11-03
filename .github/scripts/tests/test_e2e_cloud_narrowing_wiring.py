@@ -1,4 +1,4 @@
-"""Guards for the FND-354 cloud-narrowing wiring in both e2e reusables.
+"""Guards for the FND-354 cloud-narrowing wiring in the e2e reusable.
 
 The behaviour being protected is that *editing `E2E_TENANT_MATRIX_JSON` is the
 fleet-wide cloud-rotation lever*: removing a cloud narrows the fan-out on the
@@ -25,13 +25,12 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-#: The two reusables that fan an e2e run out over clouds, and the job in each
-#: that decides the fan-out. Both must narrow, or the lever works in one
-#: workflow and not the other — which is worse than not working at all, because
-#: the operator cannot tell which they are looking at.
+#: The reusable that fans an e2e run out over clouds, and the job that decides
+#: the fan-out. A mapping so a second fan-out added later is checked by listing
+#: it here. (e2e-full-reusable.yaml was the other one until FND-4249 deleted it
+#: for having no callers.)
 _WORKFLOWS = {
     ".github/workflows/tests-reusable.yaml": "discover-e2e",
-    ".github/workflows/e2e-full-reusable.yaml": "plan-clouds",
 }
 
 _DISCOVER_ACTION = "atlanhq/application-sdk/.github/actions/discover-e2e-suites@main"

@@ -295,8 +295,9 @@ def test_clouds_only_emits_cloud_dimension_without_files(
 
 
 def test_clouds_only_with_none_is_empty(capsys, tmp_path: Path) -> None:
-    # count=0 is what tells e2e-full-reusable.yaml to fall back to its
-    # single-leg `{"include":[{}]}` matrix rather than running nothing.
+    # count=0 is what tells tests-reusable.yaml's prepare-tenant to fall back
+    # to its single-leg `{"include":[{"cloud":""}]}` matrix rather than running
+    # nothing.
     rc = main(["--test-dir", str(tmp_path), "--clouds", "none", "--clouds-only"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -706,7 +707,7 @@ def test_clouds_only_still_works_with_the_defaulted_per_suite_options(
     capsys,
 ) -> None:
     # The composite passes --source-available on every call, so the cloud-only
-    # caller (e2e-full-reusable's plan-clouds) must be unaffected by it.
+    # caller (tests-reusable's discover-clouds step) must be unaffected by it.
     rc = main(["--clouds", "aws,gcp", "--clouds-only", "--source-available", "true"])
     out = capsys.readouterr().out
     assert rc == 0
