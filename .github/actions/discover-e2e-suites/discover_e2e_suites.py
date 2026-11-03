@@ -72,8 +72,8 @@ widen the fleet's fan-out behind ``DEFAULT_CLOUDS``'s back. Widening stays a
 deliberate edit here.
 
 ``--clouds-only`` emits the cloud dimension *without* the file dimension, for
-callers that target a whole directory rather than fanning out per file
-(``e2e-full-reusable.yaml``).
+callers that need one leg per cloud rather than one per file
+(``tests-reusable.yaml``'s cloud-only fan-out for ``prepare-tenant``).
 
 Per-suite dimensions (FND-1865)
 -------------------------------

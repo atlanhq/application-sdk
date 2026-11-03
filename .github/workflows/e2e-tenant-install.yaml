@@ -17,7 +17,7 @@
 # tenant is a deployment. The manual trigger IS the human authorisation, and the
 # `confirm` input makes firing it at the wrong tenant a deliberate act rather
 # than a default. The automatic path (once per run per cloud, ahead of the e2e
-# matrix) lands separately in e2e-full-reusable.yaml.
+# matrix) is tests-reusable.yaml's prepare-tenant job.
 #
 # Credentials never leave CI. `resolve_e2e_tenant.py` writes the leg's tenant and
 # credentials into $GITHUB_ENV behind the two-pass mask protocol, and
@@ -171,7 +171,7 @@ jobs:
       # Two invocations: the mask pass must reach the log BEFORE the write pass
       # redirects stdout into $GITHUB_ENV, because registering the matrix blob as
       # a secret does not redact the values inside it. Same protocol as
-      # tests-reusable.yaml and e2e-full-reusable.yaml — see
+      # tests-reusable.yaml — see
       # .github/scripts/export_extra_env.py for why the two passes are separate.
       - name: Resolve the target tenant
         run: |

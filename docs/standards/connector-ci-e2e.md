@@ -12,9 +12,8 @@ This doc covers what the SDK ships — the composite action, the reusable workfl
 
 | Component | Location | Purpose |
 |---|---|---|
-| `sdr-e2e` composite action | `.github/actions/sdr-e2e/action.yaml` | Build PR image, configurator + Dapr + Temporal stack-up, pytest, PR sticky comment, teardown. Used by both pipelines. |
+| `sdr-e2e` composite action | `.github/actions/sdr-e2e/action.yaml` | Build PR image, configurator + Dapr + Temporal stack-up, pytest, PR sticky comment, teardown. Called from `tests-reusable.yaml`'s `e2e` job. |
 | `build-app-image` composite action | `.github/actions/build-app-image/action.yaml` | SDK-ref repin → manifest regeneration → buildx build/push → platform assert → interpreter assert. Extracted from `sdr-e2e` so the image can be built **once per run** ahead of the e2e matrix, and optionally multi-arch (see [Building the image once](#building-the-image-once)). |
-| `e2e-full-reusable.yaml` reusable workflow | `.github/workflows/e2e-full-reusable.yaml` | Boilerplate (120-min timeout, concurrency group, env wiring, agent-name resolution) for the full-DAG pipeline. Connector repos `uses:` it as a 5-line wrapper. |
 | `e2e-apps` cross-repo dispatcher | `.github/actions/e2e-apps/action.yaml` | Fires `workflow_dispatch` on the connector repo with the apps-sdk PR's head SHA. Polls for completion, surfaces a sticky status comment on the SDK PR. |
 | ~~`BaseSDRIntegrationTest`~~ | `application_sdk/testing/sdr/` | pytest base for the SDR pipeline. Connector test class declares `Scenario(...)` instances. **Deprecated since 3.23.0, removed in v4.0** — it emits a `DeprecationWarning` on subclass and conformance B001 flags consumers fleet-wide. There is no single replacement because SDR is a deployment mode, not a test tier: see [The SDR base class](#the-sdr-base-class). |
 | `BaseE2ETest` / `SQLAppE2ETest` | `application_sdk/testing/e2e/` | pytest base for the full-DAG pipeline. `BaseE2ETest` is connector-agnostic and is what the codegen'd `app/generated/_e2e_base.py` subclasses; SQL connectors use `SQLAppE2ETest` on top of it, subclassing with `include_filter`, `expected_min_asset_counts`, `database_spec()`, etc. |
@@ -141,7 +140,7 @@ The canonical apps (`atlan-openapi-app`, `atlan-mysql-app`, `atlan-metabase-app`
 Two corollaries worth stating, because the intuition tends to run the other way:
 
 - **Credentials are already first-class in `tests/e2e/`.** `application_sdk/testing/e2e/credential.py` generates a typed per-connector `CredentialBody` from `contract/app.pkl` — a stronger contract than a hand-written `agent_spec_template` dict, and the reason connectors needing real credentials (mysql, metabase) run e2e at all.
-- **The compose stack is not SDR-specific.** `e2e-full-reusable.yaml` uses the same `.github/actions/sdr-e2e` composite action, so both pipelines bring up the same atlan-configurator + Dapr + Temporal stack. Running "in the SDR stack" distinguishes nothing.
+- **The compose stack is not SDR-specific.** Every e2e leg goes through the same `.github/actions/sdr-e2e` composite action, so every pipeline brings up the same atlan-configurator + Dapr + Temporal stack. Running "in the SDR stack" distinguishes nothing.
 
 So: write no new SDR suites, and do not look for an SDR replacement. Place each concern per the table above.
 
@@ -431,33 +430,12 @@ app_port: 8000
 
 The action runs `envsubst < app.yaml > app-resolved.yaml` and feeds it to `atlan-configurator --app`.
 
-## Full-DAG reusable workflow inputs
+## E2E secrets
 
-```yaml
-jobs:
-  e2e-full:
-    uses: atlanhq/application-sdk/.github/workflows/e2e-full-reusable.yaml@main
-    with:
-      app-name:                 # REQUIRED.
-      app-image-name:           # REQUIRED.
-      test-path:                # OPTIONAL. Default tests/full_dag/ — the deprecated
-                                # layout, kept only so existing callers don't break.
-                                # New suites live in tests/e2e/, so set this
-                                # explicitly rather than taking the default.
-      secrets-script:           # OPTIONAL. Default .github/e2e/make-secrets-e2e-full.py.
-      components-dir:           # OPTIONAL. Default .github/e2e/e2e-full-components.
-      compose-overlay:          # OPTIONAL. Default .github/e2e/e2e-full-docker-compose.yaml.
-      timeout-minutes:          # OPTIONAL. Default 120. Must be > ae_poll_timeout_seconds
-                                # + atlas_poll_timeout_seconds + ~10 min build/setup overhead.
-      agent-name-override:      # OPTIONAL. Default ci-<run_id>.
-      application-sdk-ref:      # OPTIONAL. Cross-repo dispatch SDK pin.
-      distinct-id:              # OPTIONAL. codex-/return-dispatch correlation id.
-      clouds:                   # OPTIONAL. Default "" = the SDK's cloud list.
-                                # See Cross-CSP matrix below; "none" disables it.
-    secrets: inherit
-```
+Full-DAG e2e runs through `tests-reusable.yaml`'s `e2e` job. The standalone
+`e2e-full-reusable.yaml` wrapper had no callers left and was deleted (FND-4249).
 
-Threaded secrets the reusable workflow expects on the caller side:
+Threaded secrets `tests-reusable.yaml` expects on the caller side (`secrets: inherit`):
 
 | Secret | Required | Used by |
 |---|---|---|
@@ -630,8 +608,7 @@ the `artifact-suffix` — and `artifact-suffix` is what `derive_deployment_name.
 folds into `ATLAN_DEPLOYMENT_NAME`. So queues, artifacts, concurrency and job
 names all pick up the cloud with no new machinery.
 
-**Selecting clouds.** `e2e-clouds` on `tests-reusable.yaml` (`clouds` on
-`e2e-full-reusable.yaml`), surfaced as the `e2e_clouds` `workflow_dispatch` input
+**Selecting clouds.** `e2e-clouds` on `tests-reusable.yaml`, surfaced as the `e2e_clouds` `workflow_dispatch` input
 on each app's `tests.yaml`:
 
 | Value | Meaning |
@@ -1412,7 +1389,7 @@ The shared [`regenerate-contract`](../../.github/actions/regenerate-contract/act
 | Where it runs | Placement | Drift gate |
 |---|---|---|
 | `connector-integration-tests` (always-on host harness) | after the SDK-ref repin, before the app server boots | **Warn-only** — annotates a stale committed `app/generated/`, never fails |
-| `build-app-image` (image-based; reached from `sdr-e2e`, incl. the full-DAG path via `e2e-full-reusable`) | **before the image build** (bakes the fresh manifest into the connector image) | Off (`check-drift: "false"` — uv/ruff aren't installed yet; the integration job owns the gate) |
+| `build-app-image` (image-based; reached from `sdr-e2e`) | **before the image build** (bakes the fresh manifest into the connector image) | Off (`check-drift: "false"` — uv/ruff aren't installed yet; the integration job owns the gate) |
 
 - **App-level** (default): regenerate from the app's pinned `@app-contract-toolkit` version, so a `contract/app.pkl` change is exercised even when the committed manifest was not regenerated.
 - **SDK-level** (cross-repo dispatch, `application-sdk-ref` set): the `@app-contract-toolkit` dependency is overridden to the SDK PR's `contract-toolkit/src`, so a toolkit change in the SDK PR is generated against the *real* connector contract end-to-end. Drift is expected, so the gate is skipped and a `pkl eval` failure is fatal.
@@ -1473,7 +1450,7 @@ The check is `application_sdk/testing/setup_routes.py`; the CI shell around it i
 - It therefore needs the SDK importable, which rules out `prepare-tenant`: that job runs a bare `python3` with no `uv sync`. By this point in `sdr-e2e` the app's environment is synced.
 - The `e2e` job that invokes this composite has `prepare-tenant` in its `needs:`, so every step here is strictly after the install.
 
-One insertion covers both e2e callers (`tests-reusable`'s `e2e` and `e2e-full-reusable`'s `e2e-full`), and no app repo carries any of it. `.github/scripts/tests/test_setup_routes_wiring.py` pins the placement, gate and injection discipline; `tests/unit/testing/test_setup_routes.py` proves the check bites, including a round-trip against the live configmap endpoint.
+One insertion covers the e2e caller (`tests-reusable`'s `e2e`), and no app repo carries any of it. `.github/scripts/tests/test_setup_routes_wiring.py` pins the placement, gate and injection discipline; `tests/unit/testing/test_setup_routes.py` proves the check bites, including a round-trip against the live configmap endpoint.
 
 ### Known limitation
 
@@ -1600,11 +1577,6 @@ With the per-leg value, the sourceless leg keeps the tier it should have: the
 worker-up-only check (assert the worker deploys and serves `/server/health`,
 skip extraction/publish/Atlas), and `setup_method` returns before the AE/tenant
 wiring it does not need.
-
-`e2e-full-reusable.yaml` still takes a single `compose-overlay` and a single
-`source-available`: it targets a whole directory rather than fanning out per
-suite (`--clouds-only` discovery), so there is no suite dimension to key either
-off.
 
 ### Seeding state a dependent entrypoint consumes
 
@@ -2056,7 +2028,6 @@ pass/fail already blocks publish while the 85% threshold only annotates.
 
 - [Reference adopter walkthrough (mysql-app)](https://github.com/atlanhq/atlan-mysql-app/blob/main/docs/CI-E2E.md)
 - SDR composite action: [`.github/actions/sdr-e2e/action.yaml`](../../.github/actions/sdr-e2e/action.yaml)
-- Full-DAG reusable workflow: [`.github/workflows/e2e-full-reusable.yaml`](../../.github/workflows/e2e-full-reusable.yaml)
 - Cross-repo dispatcher action: [`.github/actions/e2e-apps/action.yaml`](../../.github/actions/e2e-apps/action.yaml)
 - Test harness: [`application_sdk/testing/e2e/`](../../application_sdk/testing/e2e/) (the deprecated predecessor, [`application_sdk/testing/full_dag/`](../../application_sdk/testing/full_dag/), is removed in v4.0)
 - Series of merged PRs that built this:

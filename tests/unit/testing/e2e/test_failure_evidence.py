@@ -8,7 +8,7 @@ description.
 
 **There is no cluster to collect from on this path.** The connector e2e leg runs
 a Docker-compose container on the runner against a remote tenant; nothing in
-``e2e-full-reusable.yaml`` or the shared ``sdr-e2e`` composite establishes a
+``tests-reusable.yaml`` or the shared ``sdr-e2e`` composite establishes a
 ``kubectl`` route into the tenant vcluster. That is the same constraint that
 makes the AE submit the only tenant-facing probe of the installed app pod. So
 the pod half of an evidence bundle is not collectable here, and what a failed

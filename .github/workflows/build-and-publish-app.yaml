@@ -1,7 +1,9 @@
 # Unified build-and-publish entrypoint for Atlan first-party app repos.
 #
-# Combines image build (build-apps-image.yaml) and marketplace publish (publish-app.yaml)
-# into a single entrypoint to eliminate double builds on push to main.
+# Image build and marketplace publish in a single entrypoint, so a push to main
+# builds once. It replaced the separate build-apps-image.yaml and
+# publish-app.yaml reusables, which were deleted once they had no callers
+# (FND-4249).
 #
 # Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}

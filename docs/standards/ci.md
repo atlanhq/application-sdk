@@ -1261,6 +1261,56 @@ logged `ref:` rather than concluding from a green tick.** A step that fetched th
 wrong ref still passes; it is the next step that fails, and only if what it
 wanted happens to be absent from the fallback.
 
+## Self-references are `@main`
+
+**Rule:** every `uses:` of this repo's own actions and reusable workflows —
+`atlanhq/application-sdk/.github/actions/<name>@…` or
+`atlanhq/application-sdk/.github/workflows/<file>@…` — names `@main`. That holds
+in workflows, composite actions, workflow templates, the conformance bootstrap
+templates, and the usage examples in comments and READMEs. No release tags, no
+commit SHAs.
+
+**Why `@main` and not the release tag:** the fleet already calls us at `@main`
+(1421 references across 605 active org repos when FND-4249 measured it; the
+bootstrap templates scaffold `@main`). A mixed policy is the worst of both: a
+consumer pinning `tests-reusable.yaml@vX` still got composites from `main`, while
+`sdr-e2e` called `setup-deps` at a release tag, so one job ran two revisions of
+this repo. Rewriting every self-reference to the tag on each release would only
+help consumers who pin tags, and none of the fleet does.
+
+**How it fits SHA pinning:** third-party actions are still SHA-pinned, and
+conformance rule C001 still enforces that. C001 has always exempted `atlanhq/`
+refs whatever the ref, because they are meant to track `@main`
+(`packages/conformance/conformance/suite/rules/ci.py`; the exemption is pinned
+by `packages/conformance/tests/test_actions_pinning.py`). This rule tightens
+that exemption for this repo's own refs: C001 accepts any ref, and this rule
+accepts only `@main`.
+
+**Why it stays put:** Renovate's github-actions manager tracks `@vX.Y.Z` and
+SHA refs but leaves a branch ref alone. A tag-pinned self-reference gets bumped
+on every release (that is how `sdr-e2e` drifted); `@main` never does.
+
+**What it costs:** an action change reaches every consumer's next run, and an
+input added on a feature branch is ignored until it merges (callers resolve
+`@main`). Two consequences are already written down elsewhere: an action must
+not assume the consumer's pinned SDK has a module that only a newer release
+ships, and logic that has to be testable before merge belongs in a
+`.github/scripts/` driver checked out at `job.workflow_sha`, not in a new
+composite.
+
+`.github/scripts/tests/test_self_reference_pinning.py` enforces the rule and
+also fails on a self-reference to an action or workflow that no longer exists,
+so deleting a reusable without cleaning up its callers and examples is red.
+
+Superseded reusables are deleted, not kept "for compatibility", once a clone
+of the org's active repos shows no caller (code search misses repos). FND-4249
+removed `build-apps-image.yaml` and `publish-app.yaml` (replaced by
+`build-and-publish-app.yaml`), `e2e-full-reusable.yaml` (folded into
+`tests-reusable.yaml`), and the `ae-stack-up` composite on that basis. It also
+removed the `ae-workflow` composite and its `ae-workflow-register.yaml`
+wrapper, whose single consumer had pinned them to a commit and not run them in
+five months.
+
 ## `concurrency:` is not a lock, and not a queue
 
 **Rule:** never use a `concurrency:` group to protect a shared external resource

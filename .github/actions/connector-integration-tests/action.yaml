@@ -49,7 +49,7 @@ description: |
   steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.53.2
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@main
       with:
         app-name: mssql
   ```
@@ -192,7 +192,7 @@ inputs:
 
       This action checks out the caller's repo via setup-deps, so
       services-script paths resolve against the caller's tree — identical to
-      how e2e-full-reusable.yaml forwards secrets-script and compose-overlay
+      how tests-reusable.yaml forwards secrets-script and compose-overlay
       to the sdr-e2e composite.  Never use ``uses: ./…`` references from
       inside a reusable/composite workflow: they resolve against the
       reusable's repo, not the caller's.

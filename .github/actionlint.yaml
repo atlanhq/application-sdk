@@ -73,9 +73,6 @@ paths:
   .github/workflows/tests-reusable.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'
-  .github/workflows/e2e-full-reusable.yaml:
-    ignore:
-      - 'property "workflow_sha" is not defined'
   .github/workflows/build-and-scan.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'
