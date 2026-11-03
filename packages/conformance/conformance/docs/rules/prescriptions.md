@@ -1238,14 +1238,18 @@ The same tracking covers the other clients connector code holds: a sync `httpx.C
 `generate_presigned_url` / `get_paginator` / `get_waiter` / `can_paginate` / `close` and
 capitalised sub-resource constructors such as `s3.Bucket(...)`); a handle from `open()`
 / `io.open` / `gzip.open` / `bz2.open` / `lzma.open` / `SafeFileOps.open` (`read` /
-`readlines` / `write` / `writelines`); a `zipfile.ZipFile` / `tarfile.open` archive
-(`extractall` / `write` / `read` / …); `threading.Event` / `Condition` / `Barrier`
-`wait`; `threading.Thread` `join`; the `Future` from `executor.submit(...)` or
-`asyncio.run_coroutine_threadsafe(...)` (`result` / `exception`); a sqlalchemy engine's
-or connection's `execute` (a connection from `engine.connect()` / `begin()` is tracked,
-and the connect itself is not reported separately); and a `duckdb.connect()` connection
-(`execute` / `sql` / `fetch*` / …).  `Path(p).iterdir()` and the other pathlib suffixes
-match on an inline `Path(...)` too.
+`readlines` / `write` / `writelines`).  When an async producer streams chunks into a
+synchronous sink, keep awaiting the producer and offload each sink call sequentially at
+the boundary (`await run_in_thread(handle.write, chunk)`), and offload the sink's open
+and close the same way rather than holding a `with open(...)` on the loop; do not move
+the producer into sync code or buffer the whole stream.  A `zipfile.ZipFile` /
+`tarfile.open` archive (`extractall` / `write` / `read` / …); `threading.Event` /
+`Condition` / `Barrier` `wait`; `threading.Thread` `join`; the `Future` from
+`executor.submit(...)` or `asyncio.run_coroutine_threadsafe(...)` (`result` /
+`exception`); a sqlalchemy engine's or connection's `execute` (a connection from
+`engine.connect()` / `begin()` is tracked, and the connect itself is not reported
+separately); and a `duckdb.connect()` connection (`execute` / `sql` / `fetch*` / …).
+`Path(p).iterdir()` and the other pathlib suffixes match on an inline `Path(...)` too.
 
 One hop into a sync helper: a call from an `async def` to a sync function the repo
 defines — a top-level function of the same module, a sync method of the same class

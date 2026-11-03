@@ -966,12 +966,29 @@ drafting.
     worse than none.
   - *subprocess* — prefer `asyncio.create_subprocess_exec` and `await` it;
     offload only when the sync API is unavoidable.
-  - *client / handle work, query, fsync* — offload the whole block that owns
-    the client in one hop: `await run_in_thread(_read_rows, path)` around the
-    `with open(...)` / `with engine.connect()` / `s3.get_object(...)` it
-    contains.  Offloading the send alone while the connect or open stays on
-    the loop moves half the cost.  An `fsync` goes with the write it makes
-    durable.
+  - *client / handle work, query, fsync* — for wholly synchronous operations,
+    offload the whole block that owns the client in one hop:
+    `await run_in_thread(_read_rows, path)` around the `with open(...)` /
+    `with engine.connect()` / `s3.get_object(...)` it contains.  Offloading the
+    send alone while the connect or open stays on the loop moves half the cost.
+    An `fsync` goes with the write it makes durable.  When a synchronous sink
+    consumes an async producer (for example, `async for chunk in
+    response.aiter_bytes()`), preserve streaming by keeping the producer awaited
+    and offloading each sink call sequentially at the boundary:
+    `await run_in_thread(handle.write, chunk)`.  The one-hop rule above still
+    holds for the sink's own lifecycle: offload its open and close too
+    (`fh = await run_in_thread(open, path, "wb")`, then
+    `await run_in_thread(fh.close)` in a `finally`, with any `fsync` before it)
+    rather than leaving a `with open(...)` on the loop around the chunk loop.
+    Do not move the async producer into a sync worker or buffer the full
+    response.  File `open` / `write` / `close` take no timeout, so the offload
+    alone cannot bound a sink that stalls (a hung network mount): the worker
+    thread cannot be reclaimed, and `run_in_thread`'s own hold is unbounded.
+    Bound the task instead — wrap the open-through-close span in
+    `async with self.task_context.holding_progress("<call site>", timeout=...)`,
+    sized to the longest you would let the transfer run — so a wedged sink
+    fails the task at that bound rather than at the duration backstop.  Say in
+    the draft that the stuck thread itself is not recovered.
   - *wait* — `threading.Event` → `asyncio.Event`; a `Future` from
     `executor.submit` → `await asyncio.wrap_future(future)`; otherwise offload
     the wait.
