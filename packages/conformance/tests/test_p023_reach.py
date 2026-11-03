@@ -230,10 +230,25 @@ def test_streaming_sink_offloaded_per_chunk_is_silent() -> None:
     """The prescription's streaming exception must clear the finding it fixes.
 
     P023 tells an async producer feeding a sync sink to keep awaiting the
-    producer and offload each sink call; if the detector stopped accepting that
-    shape, the guidance would steer the fix to a form that is still flagged.
+    producer and offload each sink call, the sink's open and close included; if
+    the detector stopped accepting that shape, the guidance would steer the fix
+    to a form that is still flagged.
     """
-    src = _STREAM_TASK.format(sink="await run_in_thread(fh.write, chunk)")
+    src = (
+        "import httpx\nfrom application_sdk.app import App, task\n"
+        "from application_sdk.execution.heartbeat import run_in_thread\n"
+        "class A(App):\n"
+        "    @task\n"
+        "    async def download(self, input):\n"
+        "        async with httpx.AsyncClient() as client:\n"
+        "            async with client.stream('GET', input.url) as response:\n"
+        "                fh = await run_in_thread(open, input.path, 'wb')\n"
+        "                try:\n"
+        "                    async for chunk in response.aiter_bytes():\n"
+        "                        await run_in_thread(fh.write, chunk)\n"
+        "                finally:\n"
+        "                    await run_in_thread(fh.close)\n"
+    )
     assert _p023(src) == []
 
 

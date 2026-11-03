@@ -969,8 +969,13 @@ drafting.
     consumes an async producer (for example, `async for chunk in
     response.aiter_bytes()`), preserve streaming by keeping the producer awaited
     and offloading each sink call sequentially at the boundary:
-    `await run_in_thread(handle.write, chunk)`.  Do not move the async producer
-    into a sync worker or buffer the full response.
+    `await run_in_thread(handle.write, chunk)`.  The one-hop rule above still
+    holds for the sink's own lifecycle: offload its open and close too
+    (`fh = await run_in_thread(open, path, "wb")`, then
+    `await run_in_thread(fh.close)` in a `finally`, with any `fsync` before it)
+    rather than leaving a `with open(...)` on the loop around the chunk loop.
+    Do not move the async producer into a sync worker or buffer the full
+    response.
   - *wait* — `threading.Event` → `asyncio.Event`; a `Future` from
     `executor.submit` → `await asyncio.wrap_future(future)`; otherwise offload
     the wait.
