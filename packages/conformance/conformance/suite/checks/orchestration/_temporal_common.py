@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import ast
 
+from conformance.suite.checks._ast_common._safe_swap import PUBLIC_ALIASES
+
 TEMPORAL_ROOT = "temporalio"
 SDK_TOP = "application_sdk"
 
@@ -52,7 +54,11 @@ def iter_temporal_imports(tree: ast.AST) -> list[ast.stmt]:
 
 
 def temporal_import_hint(node: ast.stmt) -> str:
-    """Best-effort 'use this instead' hint for a flagged ``temporalio`` import."""
+    """Best-effort 'use this instead' hint for a flagged ``temporalio`` import.
+
+    One hint per kind of imported name, joined, so a mixed import such as
+    ``from temporalio.client import Client, WorkflowFailureError`` keeps both.
+    """
     names: set[str] = set()
     module = ""
     if isinstance(node, ast.ImportFrom):
@@ -72,35 +78,52 @@ def temporal_import_hint(node: ast.stmt) -> str:
         "workflow",
         "activity",
     }
-    if module == "temporalio.exceptions" or names & {"WorkflowFailureError"}:
-        return (
+    hints: list[str] = []
+    aliased = sorted(
+        PUBLIC_ALIASES[(module, n)][0] for n in names if (module, n) in PUBLIC_ALIASES
+    )
+    if aliased:
+        hints.append(
             "Import the same class from 'application_sdk.execution' under its "
-            "Temporal* alias (TemporalApplicationError, TemporalTimeoutError, "
-            "TemporalWorkflowFailureError, ...)."
+            f"alias ({', '.join(aliased)}), bound to the old name."
         )
-    if module.startswith("temporalio.testing") or names & {"WorkflowEnvironment"}:
-        return (
+    if module == "temporalio.exceptions" and names - {
+        n for m, n in PUBLIC_ALIASES if m == module
+    }:
+        hints.append(
+            "Some of these temporalio names have no public SDK equivalent; see "
+            "the migrate-orchestration skill's no-public-equivalent list."
+        )
+    if module.startswith("temporalio.testing") or "WorkflowEnvironment" in names:
+        hints.append(
             "In tests, run the app on the integration fixture kit "
             "('application_sdk.testing.integration.fixtures'), which owns the "
             "Temporal server, worker and client."
         )
-    if module.startswith("temporalio.client") or "Client" in names:
-        return (
-            "Annotate with 'TemporalClient' from 'application_sdk.execution'; in "
-            "tests the integration fixture kit owns the client, and a "
-            "create_temporal_client call fires P017 outside tests/integration/."
+    if "Client" in names or module == "temporalio.client" and not names:
+        hints.append(
+            "Annotate with 'TemporalClient' from 'application_sdk.execution'. An "
+            "app does not connect its own client in production (the SDK boots it "
+            "with 'application-sdk --mode worker|handler|combined'); under "
+            "tests/integration/ use the fixture kit or "
+            "'application_sdk.execution.create_temporal_client', whose call "
+            "fires P017 anywhere else."
         )
-    if module.startswith("temporalio.worker") or names & {"Worker"}:
-        return (
-            "Boot through 'application_sdk.main.run_dev_combined'; in tests the "
-            "integration fixture kit owns the worker, and a create_worker call "
-            "fires P017 outside tests/integration/."
+    if module.startswith("temporalio.worker") or "Worker" in names:
+        hints.append(
+            "Production boots the worker with 'application-sdk --mode "
+            "worker|handler|combined' and local dev with "
+            "'application_sdk.main.run_dev_combined'; in tests the integration "
+            "fixture kit owns the worker, and a create_worker call fires P017 "
+            "outside tests/integration/."
         )
     if names & primitives or module in {"temporalio.workflow", "temporalio.activity"}:
-        return (
+        hints.append(
             "Use the re-exports from 'application_sdk.app' "
             "(task, signal, query, update, now, sleep, uuid4, wait_condition)."
         )
+    if hints:
+        return " ".join(hints)
     return (
         "Reach orchestration through 'application_sdk.app' / "
         "'application_sdk.execution' instead."

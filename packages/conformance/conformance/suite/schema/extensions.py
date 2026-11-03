@@ -215,6 +215,9 @@ class SafeSwap(BaseModel):
     Apply it as: on the finding's line, ``find`` occurs exactly once; replace
     it with ``replace``.  When ``find`` is not on that line exactly once, or
     the app's lock has *package* below ``requires.min``, do not apply it.
+    After applying, run the app's own import sorter and formatter on the file
+    (for ruff: ``ruff check --fix --select I`` then ``ruff format``): the new
+    module path can move the import within its group or past the line length.
     """
 
     id: str

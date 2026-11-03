@@ -13,11 +13,11 @@ import importlib
 import importlib.metadata
 from pathlib import Path
 
-from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
-from conformance.suite.checks.orchestration._direct_temporal_import import (
+from conformance.suite.checks._ast_common._safe_swap import (
     PUBLIC_ALIAS_MODULE,
     PUBLIC_ALIASES,
 )
+from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
 from conformance.suite.schema.extensions import SafeSwap
 from packaging.version import Version
 
@@ -219,6 +219,9 @@ def test_p004_leaves_other_temporal_imports_unmarked() -> None:
         "from temporalio.exceptions import TimeoutType\n",
         "from temporalio.exceptions import ApplicationError, TimeoutError\n",
         "from temporalio.exceptions import (\n    ApplicationError,\n)\n",
+        "from temporalio.exceptions import (ApplicationError)\n",
+        "from temporalio.exceptions import  ApplicationError\n",
+        "from  temporalio.exceptions import ApplicationError\n",
         "import temporalio.exceptions\n",
         "def f():\n    from temporalio.exceptions import ApplicationError\n    return ApplicationError\n",
     ):
@@ -226,11 +229,20 @@ def test_p004_leaves_other_temporal_imports_unmarked() -> None:
         assert _swap(finding) is None, src
 
 
+def _at_or_above(installed: str, since: str) -> bool:
+    return Version(installed).release >= Version(since).release
+
+
+def test_floor_compare_treats_a_pre_release_as_its_release() -> None:
+    assert _at_or_above("3.50.0.dev0", "3.50.0")
+    assert not _at_or_above("3.49.2", "3.50.0")
+
+
 def test_p004_public_aliases_are_the_same_objects_from_their_floor() -> None:
-    installed = Version(importlib.metadata.version("atlan-application-sdk"))
+    installed = importlib.metadata.version("atlan-application-sdk")
     seam = importlib.import_module(PUBLIC_ALIAS_MODULE)
     for (module, name), (public, since) in PUBLIC_ALIASES.items():
-        if installed < Version(since):
+        if not _at_or_above(installed, since):
             assert not hasattr(seam, public), (public, since, installed)
             continue
         assert getattr(seam, public) is getattr(importlib.import_module(module), name)
@@ -250,6 +262,28 @@ def test_p004_hints_never_suggest_a_call_that_fires_p017() -> None:
 def test_p004_hint_names_the_failure_alias() -> None:
     (finding,) = _rule("from temporalio.exceptions import ApplicationError\n", "P004")
     assert "TemporalApplicationError" in finding.message
+
+
+def test_p004_hint_names_no_alias_for_a_name_without_one() -> None:
+    (finding,) = _rule("from temporalio.exceptions import TimeoutType\n", "P004")
+    assert "alias (" not in finding.message
+    assert "no public SDK equivalent" in finding.message
+
+
+def test_p004_hint_keeps_every_kind_of_name_in_a_mixed_import() -> None:
+    src = "from temporalio.client import Client, WorkflowFailureError\n"
+    (finding,) = _rule(src, "P004")
+    assert "TemporalWorkflowFailureError" in finding.message
+    assert "TemporalClient" in finding.message
+
+
+def test_p004_client_and_worker_hints_name_the_production_launcher() -> None:
+    for src in (
+        "from temporalio.client import Client\n",
+        "from temporalio.worker import Worker\n",
+    ):
+        (finding,) = _rule(src, "P004")
+        assert "application-sdk --mode worker|handler|combined" in finding.message
 
 
 # ── P006 TemporalImportOutsideAdapter (sdk) ─────────────────────────────────

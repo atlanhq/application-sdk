@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from conformance.suite.checks._ast_common import _parse_directives
+from conformance.suite.checks._ast_common._safe_swap import PUBLIC_REEXPORTS
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.deprecation._authoring import scan_authoring
 from conformance.suite.checks.deprecation._consumer import (
@@ -32,7 +33,6 @@ from conformance.suite.checks.deprecation._manifest import (
     load_manifest,
 )
 from conformance.suite.checks.deprecation._private_imports import (
-    PUBLIC_REEXPORTS,
     own_import_roots,
     scan_private_imports,
 )

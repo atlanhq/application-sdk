@@ -92,7 +92,13 @@ skill's fix clears both.
 temporalio failure class (`public-alias`, which keeps the bound name:
 `from application_sdk.execution import TemporalApplicationError as ApplicationError`).
 Apply one only when `find` occurs once on the line and `uv.lock` pins the
-SDK at or above `requires.min`.
+SDK at or above `requires.min`. Then run the app's own import sorter and formatter on the
+file (for ruff: `ruff check --fix --select I`, then `ruff format`): the new
+module path can move the import within its group or past the line length.
+An import line that also names something with no public equivalent (for
+example `from temporalio.exceptions import ApplicationError, TimeoutType`)
+is held by that name's block: the whole line waits, and the alias default
+does not apply to it.
 
 ## After-shape APIs
 

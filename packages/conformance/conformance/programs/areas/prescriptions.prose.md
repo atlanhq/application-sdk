@@ -530,7 +530,8 @@ is always `"judgment"`:
     interaction decorators `signal`/`query`/`update` (and `task` in place of
     `activity`) → `from application_sdk.app import …`;
   - `temporalio.client.Client` / `Client.connect(...)` and
-    `temporalio.worker.Worker` → dev boot through
+    `temporalio.worker.Worker` → production boot through the SDK launcher
+    (`application-sdk --mode worker|handler|combined`), local dev through
     `application_sdk.main.run_dev_combined`, and in tests the integration
     fixture kit (`application_sdk.testing.integration.fixtures`), which owns
     the client and the worker. A `create_temporal_client` / `create_worker`
