@@ -1247,6 +1247,26 @@ class TestWarmSidecarReadRetry:
 
         assert http_mod._dapr_component_confirmed_ready == {"other-component"}
 
+    async def test_a_warm_success_re_arms_a_gate_cleared_while_in_flight(
+        self, armed_component
+    ) -> None:
+        """Two warm calls in flight: one exhausts its retries and clears the
+        gate, the other then succeeds. The newer success must re-arm it."""
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        async def call() -> str:
+            # A concurrent warm call clears the gate while this one runs.
+            http_mod._dapr_component_confirmed_ready.discard(armed_component)
+            return "ok"
+
+        assert (
+            await retry_past_dapr_cold_start(
+                call, description="test read", component=armed_component
+            )
+            == "ok"
+        )
+        assert armed_component in http_mod._dapr_component_confirmed_ready
+
     async def test_a_definitive_warm_answer_keeps_the_gate_armed(
         self, armed_component
     ) -> None:

@@ -931,10 +931,14 @@ async def _head_not_found(store: ObjectStore, path: str) -> bool:
         await _past_gateway_no_route(
             "head", path, lambda: obstore.head_async(store, path)
         )
-    except FileNotFoundError:
-        return True
+    except FileNotFoundError as exc:
+        # An exhausted gateway retry re-raises the no-route 404, which obstore
+        # also types as not-found: that is the gateway, not the key.
+        return not _is_gateway_no_route(exc)
     # conformance: ignore[E004] probe only; any other error keeps the key and the download reports it
     except Exception as exc:
+        if _is_gateway_no_route(exc):
+            return False
         return _ObstoreNotFoundError is not None and isinstance(
             exc, _ObstoreNotFoundError
         )
@@ -947,14 +951,19 @@ async def _lists_under_itself(store: ObjectStore, path: str) -> bool:
     obstore lists *path* as the prefix ``path/``, which holds an S3
     ``path/`` marker (listed as *path*) but never a plain key named *path*.
     """
-    try:
+    async def _probe() -> bool:
         async for batch in obstore.list(store, prefix=path, chunk_size=1):
             if batch:
                 return True
+        return False
+
+    try:
+        # Through the seam, like the HEAD probe: a stale gateway instance here
+        # would otherwise leave an S3 ``path/`` marker in the listing.
+        return await _past_gateway_no_route("list", path, _probe)
     # conformance: ignore[E004] probe only; any error keeps the key and the download reports it
     except Exception:
         return False
-    return False
 
 
 def _zero_byte_paths(

@@ -307,3 +307,34 @@ async def test_listing_restarts_after_gateway_no_route(sleeps) -> None:
     assert [i[0] for i in items] == ["a", "b"]
     assert calls["n"] == 2
     assert sleeps == [5.0]
+
+
+async def test_marker_head_probe_does_not_read_exhausted_gateway_404_as_absent(
+    sleeps,
+) -> None:
+    """A gateway 404 that outlasts the retries is the gateway, not the key, even
+    when obstore types it as not-found."""
+    head = AsyncMock(side_effect=FileNotFoundError(_GATEWAY_NO_ROUTE))
+    with patch("application_sdk.storage.ops.obstore.head_async", head):
+        assert await ops._head_not_found(MagicMock(), "p") is False
+
+    assert head.await_count == len(ops._GATEWAY_NO_ROUTE_RETRY_DELAYS) + 1
+
+
+async def test_marker_list_probe_rides_out_gateway_no_route(sleeps) -> None:
+    calls = {"n": 0}
+
+    async def _pages():
+        if calls["n"] == 1:
+            raise RuntimeError(_GATEWAY_NO_ROUTE)
+        yield [{"path": "p/child", "size": 1}]
+
+    def _list(*_a, **_kw):
+        calls["n"] += 1
+        return _pages()
+
+    with patch("application_sdk.storage.ops.obstore.list", _list):
+        assert await ops._lists_under_itself(MagicMock(), "p") is True
+
+    assert calls["n"] == 2
+    assert sleeps == [5.0]

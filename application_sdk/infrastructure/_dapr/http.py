@@ -405,7 +405,7 @@ async def retry_past_dapr_cold_start(
 
     if _dapr_sidecar_confirmed_ready or component in _dapr_component_confirmed_ready:
         try:
-            return await retry_async(
+            result = await retry_async(
                 call,
                 backoff=Backoff(steps=DAPR_WARM_RETRY_DELAYS_SECONDS),
                 retry_if=_is_cold_start_race,
@@ -434,6 +434,15 @@ async def retry_past_dapr_cold_start(
                 description,
             )
             raise
+        # conformance: ignore[E004] proof the component answered (definitively) — re-arms its gate and re-raises unchanged
+        except Exception:
+            _dapr_component_confirmed_ready.add(component)
+            raise
+        # Re-arm on every definitive answer, not only the first: a concurrent
+        # warm call may have exhausted its retries and cleared the gate while
+        # this one was in flight, and this newer answer outranks that.
+        _dapr_component_confirmed_ready.add(component)
+        return result
 
     def _giveup(exhausted: RetryExhausted) -> Exception:
         # Gave up waiting, but the dependency never actually answered — do

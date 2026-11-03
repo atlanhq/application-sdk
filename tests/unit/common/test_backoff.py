@@ -74,7 +74,13 @@ class TestBackoffShape:
 
     @pytest.mark.parametrize(
         "kwargs",
-        [{"max_attempts": 0}, {"base": -1.0}, {"steps": (1.0, -1.0)}, {"cap": -1.0}],
+        [
+            {"max_attempts": 0},
+            {"base": -1.0},
+            {"factor": -1.0},
+            {"steps": (1.0, -1.0)},
+            {"cap": -1.0},
+        ],
     )
     def test_invalid_shapes_are_rejected(self, kwargs) -> None:
         with pytest.raises(ValueError):

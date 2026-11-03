@@ -92,8 +92,12 @@ class Backoff:
         jitter: How each nominal delay is randomised.
         max_attempts: Total calls :func:`retry_async` makes, the first one
             included. ``None`` means no count limit.
-        budget_seconds: Wall-clock budget for :func:`retry_async`. A delay is
-            clamped to what remains, and no retry starts once it is spent.
+        budget_seconds: Wall-clock budget for :func:`retry_async`, measured
+            when an attempt fails. A delay is clamped to what remains, so the
+            last retry can start right at the deadline: that final attempt is
+            deliberate (a dependency that comes back at the deadline still
+            gets one try), which makes the budget a bound on *waiting*, not on
+            total runtime. No retry is scheduled once a failure lands past it.
             ``None`` means no time limit.
     """
 
@@ -108,8 +112,8 @@ class Backoff:
     def __post_init__(self) -> None:
         if self.max_attempts is not None and self.max_attempts < 1:
             raise ValueError(f"max_attempts must be >= 1, got {self.max_attempts}")
-        if self.base < 0 or any(s < 0 for s in self.steps):
-            raise ValueError("backoff delays must be non-negative")
+        if self.base < 0 or self.factor < 0 or any(s < 0 for s in self.steps):
+            raise ValueError("backoff delays and factor must be non-negative")
         if self.cap is not None and self.cap < 0:
             raise ValueError(f"cap must be non-negative, got {self.cap}")
 
