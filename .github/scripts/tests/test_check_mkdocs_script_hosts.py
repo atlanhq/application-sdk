@@ -16,7 +16,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The shape mkdocs.yml had before FND-4243, including the `!!python/name:` tag
 # a plain safe_load refuses.
-PRE_FIX_CONFIG = """\
+POLYFILL = "https://polyfill.io/v3/polyfill.min.js?features=es6"
+MATHJAX = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"
+
+PRE_FIX_CONFIG = f"""\
 markdown_extensions:
   - pymdownx.superfences:
       custom_fences:
@@ -25,9 +28,17 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
 extra_javascript:
   - static/javascripts/mathjax.js
-  - https://polyfill.io/v3/polyfill.min.js?features=es6
-  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+  - {POLYFILL}
+  - {MATHJAX}
 """
+
+
+def _rejected(path: str) -> str:
+    return (
+        f"extra_javascript entry {path!r} is neither a plain local path nor an "
+        "https URL on a host in ALLOWED_HOSTS; vendor it under "
+        "docs/static/javascripts/"
+    )
 
 
 def test_repo_mkdocs_config_passes() -> None:
@@ -36,10 +47,10 @@ def test_repo_mkdocs_config_passes() -> None:
 
 
 def test_pre_fix_config_is_rejected() -> None:
-    violations = check.find_violations(PRE_FIX_CONFIG)
-    assert len(violations) == 2
-    assert "polyfill.io" in violations[0]
-    assert "cdn.jsdelivr.net" in violations[1]
+    assert check.find_violations(PRE_FIX_CONFIG) == [
+        _rejected(POLYFILL),
+        _rejected(MATHJAX),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -107,7 +118,10 @@ def test_main_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     bad = tmp_path / "mkdocs.yml"
     bad.write_text(PRE_FIX_CONFIG, encoding="utf-8")
     assert check.main([str(bad)]) == 1
-    assert "polyfill.io" in capsys.readouterr().out
+    assert capsys.readouterr().out.splitlines() == [
+        f"{bad}: {_rejected(POLYFILL)}",
+        f"{bad}: {_rejected(MATHJAX)}",
+    ]
 
     good = tmp_path / "ok.yml"
     good.write_text("extra_javascript:\n  - a.js\n", encoding="utf-8")
