@@ -14,7 +14,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import vuln_triage.__main__ as cli  # noqa: E402
-from vuln_triage import allowlist, bump, classify, report, scan, selftest  # noqa: E402
+from vuln_triage import (  # noqa: E402
+    allowlist,
+    bump,
+    classify,
+    effects,
+    report,
+    scan,
+    selftest,
+)
 from vuln_triage.effects import newest_successful_run, parse_open_pr  # noqa: E402
 from vuln_triage.run import Context, Deps, _listing, _slug, _uv_cause, run  # noqa: E402
 
@@ -474,6 +482,22 @@ class FakeRunner:
         return [c for c in self.calls if c[: len(prefix)] == list(prefix)]
 
 
+@pytest.fixture(autouse=True)
+def published(monkeypatch):
+    """Every branch the run publishes, in place of the GitHub API.
+
+    Publishing goes through signed_commit (a commit GitHub signs), never `git push`;
+    this records what it was asked to publish."""
+    calls: list[dict] = []
+
+    def fake_publish(repo, branch, **kw):
+        calls.append({"repo": repo, "branch": branch, **kw})
+        return "signedsha"
+
+    monkeypatch.setattr(effects.signed_commit, "publish", fake_publish)
+    return calls
+
+
 @pytest.fixture
 def repo(tmp_path):
     root = tmp_path / "repo"
@@ -550,6 +574,27 @@ def test_run_opens_allowlist_and_bump_prs_as_the_two_gate_shapes(repo):
     assert r.calls[-1][:3] == ["git", "checkout", "--force"]  # back on base
 
 
+def test_run_publishes_each_pr_branch_as_a_signed_commit_with_the_app_token(
+    repo, published, monkeypatch
+):
+    # The org's signed-commits ruleset blocks a PR carrying an unsigned commit, so
+    # the branch is published through signed_commit, never `git push`, and with the
+    # fleet App token the checkout pushed with (GH_TOKEN is the read-only job token).
+    monkeypatch.setenv("PR_AUTHOR_TOKEN", "fleet-app-token")
+    monkeypatch.setenv("GH_TOKEN", "read-only-job-token")
+    r = FakeRunner(repo)
+    _run(repo, r)
+    heads = [c[c.index("--head") + 1] for c in r.cmds("gh", "pr", "create")]
+    assert [p["branch"] for p in published] == heads
+    for p in published:
+        assert p["repo"] == "o/r" and p["cwd"] == repo
+        assert p["reset_to"] == "HEAD~1" and p["lease"] == "absent"
+        assert p["token"] == "fleet-app-token"
+    assert not r.cmds("git", "push")
+    # The local commit is still made first: it is what gets published.
+    assert len(r.cmds("git", "commit")) == len(published)
+
+
 def test_run_is_idempotent_on_an_open_pr(repo):
     r = FakeRunner(repo, open_prs={"chore/allowlist-cve-1-cve-2"})
     out, _ = _run(repo, r)
@@ -557,23 +602,24 @@ def test_run_is_idempotent_on_an_open_pr(repo):
     assert all(".security/base-allowlist.json" not in c for c in r.cmds("git", "add"))
 
 
-def test_run_suffixes_a_leftover_branch_instead_of_force_pushing(repo):
+def test_run_suffixes_a_leftover_branch_instead_of_force_pushing(repo, published):
     r = FakeRunner(repo, remote={"chore/allowlist-cve-1-cve-2"})
     _run(repo, r)
-    pushes = [c[-1] for c in r.cmds("git", "push")]
-    assert "HEAD:refs/heads/chore/allowlist-cve-1-cve-2-r42" in pushes
-    assert not any("--force" in c for c in r.cmds("git", "push"))
+    pushes = [p["branch"] for p in published]
+    assert "chore/allowlist-cve-1-cve-2-r42" in pushes
+    # Never an overwrite: each branch is published only if it does not exist yet.
+    assert published and all(p["lease"] == "absent" for p in published)
 
 
-def test_run_skips_a_suffix_branch_that_is_also_taken(repo):
+def test_run_skips_a_suffix_branch_that_is_also_taken(repo, published):
     # A re-run of the same job (same run id) after its first attempt pushed the
     # suffixed branch and then failed: the next free candidate is used, not the
     # occupied one (which would be a rejected non-fast-forward push).
     base = "chore/allowlist-cve-1-cve-2"
     r = FakeRunner(repo, remote={base, f"{base}-r42"})
     _run(repo, r)
-    pushes = [c[-1] for c in r.cmds("git", "push")]
-    assert f"HEAD:refs/heads/{base}-r42-2" in pushes
+    pushes = [p["branch"] for p in published]
+    assert f"{base}-r42-2" in pushes
 
 
 def test_run_reuses_the_open_pr_on_a_suffixed_branch(repo):
@@ -614,12 +660,10 @@ def test_run_failed_lock_opens_no_bump_pr_and_says_why(repo):
     assert "Needs a human" in comments[0][1]
 
 
-def test_run_dry_run_pushes_and_comments_nothing(repo, capsys):
+def test_run_dry_run_pushes_and_comments_nothing(repo, capsys, published):
     r = FakeRunner(repo)
     out, comments = _run(repo, r, dry=True)
-    assert (
-        not r.cmds("git", "push") and not r.cmds("gh", "pr", "create") and not comments
-    )
+    assert not published and not r.cmds("gh", "pr", "create") and not comments
     assert set(out.allowlist_entries) == {"CVE-1", "CVE-2"}
     assert "dry run" in capsys.readouterr().out
     # ...but every local step still ran: the validator, the real lock regen, and the
@@ -734,10 +778,10 @@ def test_selftest_fails_the_run_when_a_pr_cannot_be_closed(repo):
     assert len(r.cmds("gh", "pr", "close")) == 2  # tried every one
 
 
-def test_selftest_dry_run_opens_nothing(repo):
+def test_selftest_dry_run_opens_nothing(repo, published):
     r = FakeRunner(repo)
     out, _ = _run_selftest(repo, r, dry=True)
-    assert not r.cmds("git", "push") and not r.cmds("gh", "pr", "create")
+    assert not published and not r.cmds("gh", "pr", "create")
     assert out.allowlist_entries and r.cmds("uv", "lock", "--upgrade-package")
 
 

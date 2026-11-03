@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import conformance_resync as lane  # noqa: E402
@@ -509,6 +511,13 @@ def _process(monkeypatch, *, keep: dict | None, staged: list[str]) -> FakeRunner
     )
     manifest = json.dumps({"touched": staged})
     monkeypatch.setattr(lane, "run_bootstrap", lambda *a: (0, manifest + "\n", ""))
+    published: list[dict] = []
+
+    def fake_publish(repo, branch, **kw):
+        published.append({"repo": repo, "branch": branch, **kw})
+        return "signedsha"
+
+    monkeypatch.setattr(lane.signed_commit, "publish", fake_publish)
     runner = (
         _lane_runner(keep)
         if keep
@@ -527,6 +536,7 @@ def _process(monkeypatch, *, keep: dict | None, staged: list[str]) -> FakeRunner
     runner.answers[("git", "diff", "--cached", "--name-only")] = (
         subprocess.CompletedProcess([], 0, stdout="\n".join(staged))
     )
+    runner.published = published
     return runner
 
 
@@ -548,6 +558,7 @@ def test_in_sync_main_closes_the_existing_lane_pr(monkeypatch):
     assert result["action"] == "in_sync" and result["closed"] == 7
     assert ["gh", "pr", "close", "7", "--repo", REPO] in runner.calls
     assert not any(c[:2] == ["git", "push"] for c in runner.calls)
+    assert runner.published == []
 
 
 def test_paths_under_a_symlinked_dir_are_reported(monkeypatch):
@@ -577,9 +588,52 @@ def test_a_fresh_render_is_pushed_and_opened_as_the_lane_pr(monkeypatch):
 
     result = _drive(opened)
     assert result["action"] == "pr_opened" and result["pr"] == "u"
-    pushes = [c for c in runner.calls if c[:2] == ["git", "push"]]
-    assert pushes and pushes[0][-1] == f"HEAD:refs/heads/{gate.RESYNC_BRANCH}"
+    # Published as a commit GitHub signs, never `git push`: app repos' signed-commits
+    # ruleset blocks a PR carrying an unsigned commit. No lane branch on the remote
+    # (ls-remote answered nothing), so the lease is that it is still absent.
+    assert not any(c[:2] == ["git", "push"] for c in runner.calls)
+    (pub,) = runner.published
+    assert pub["repo"] == REPO and pub["branch"] == gate.RESYNC_BRANCH
+    assert pub["lease"] == "absent"
+    assert "reset_to" in pub and "expect_head" not in pub
     assert any(c[:3] == ["git", "add", "-A"] and "a.yaml" in c for c in runner.calls)
+
+
+def test_a_re_render_is_published_under_the_lease_on_the_existing_branch(
+    monkeypatch,
+):
+    # The force-with-lease shape: rebuilt from main, refused if the branch moved
+    # off the sha ls-remote saw.
+    keep = _pr(7, gate.RESYNC_BRANCH)
+    keep["html_url"] = "u"
+    runner = _process(monkeypatch, keep=keep, staged=["a.yaml"])
+    runner.answers[("git", "rev-parse", "HEAD")] = subprocess.CompletedProcess(
+        [], 0, stdout="b" * 40 + "\n"
+    )
+    runner.answers[
+        ("git", "ls-remote", "origin", f"refs/heads/{gate.RESYNC_BRANCH}")
+    ] = subprocess.CompletedProcess(
+        [], 0, stdout=f"{'r' * 40}\trefs/heads/{gate.RESYNC_BRANCH}\n"
+    )
+    runner.answers[("gh", "api", f"repos/{REPO}/pulls/7")] = (
+        subprocess.CompletedProcess([], 0, stdout=json.dumps(keep))
+    )
+    _drive(runner)
+    (pub,) = runner.published
+    assert pub["reset_to"] == "b" * 40 and pub["lease"] == "r" * 40
+
+
+def test_a_failed_publish_is_this_repos_error_not_the_fleet_runs(monkeypatch):
+    # signed_commit fails with SystemExit, which the fleet loop's
+    # `except Exception` would not catch: one repo would end the whole run.
+    runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
+
+    def refuse(*a, **kw):
+        raise SystemExit("::error::refs/heads/bot/conformance-resync moved")
+
+    monkeypatch.setattr(lane.signed_commit, "publish", refuse)
+    with pytest.raises(lane.LaneError, match="moved"):
+        _drive(runner)
 
 
 # ── the lane never labels its PR (FND-3832) ──────────────────────────────

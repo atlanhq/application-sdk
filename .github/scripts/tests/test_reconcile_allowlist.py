@@ -244,8 +244,17 @@ def _run_open_removal_pr(monkeypatch, tmp_path, **env):
         calls.append((cmd, env))
         return None
 
+    def publish(repo, branch, **kw):
+        calls.append((["signed_commit.publish", repo, branch], kw))
+        return "signedsha"
+
+    monkeypatch.setattr(rec.signed_commit, "publish", publish)
     rec.open_removal_pr("o/r", ["CVE-1"], "2026-07-16", 1, runner)
     return calls
+
+
+def _publish_call(calls):
+    return next(c for c in calls if c[0][0] == "signed_commit.publish")
 
 
 def _pr_create_call(calls):
@@ -262,15 +271,49 @@ def test_open_removal_pr_creates_pr_as_fleet_app(monkeypatch, tmp_path):
     assert "GITHUB_TOKEN" not in env
 
 
-def test_open_removal_pr_leaves_git_push_on_the_ci_pat(monkeypatch, tmp_path):
-    # Only `gh pr create` gets the App token; everything else inherits the
-    # process environment (env=None), keeping actions: read on the atlan-ci PAT.
+def test_open_removal_pr_leaves_git_on_the_process_environment(monkeypatch, tmp_path):
+    # Only `gh pr create` gets the App token among the subprocesses; everything
+    # else inherits the process environment (env=None), keeping actions: read on
+    # the atlan-ci PAT.
     calls = _run_open_removal_pr(
         monkeypatch, tmp_path, GH_TOKEN="ci-pat", PR_AUTHOR_TOKEN="fleet-token"
     )
     for cmd, env in calls:
+        if cmd[0] == "signed_commit.publish":
+            continue
         if cmd[:3] != ["gh", "pr", "create"]:
             assert env is None, f"{cmd} should not be re-scoped to the App token"
+
+
+def test_open_removal_pr_publishes_a_new_signed_branch_as_the_fleet_app(
+    monkeypatch, tmp_path
+):
+    # The org's signed-commits ruleset blocks a PR carrying an unsigned commit, so
+    # the branch goes out through signed_commit, never `git push`. It is written by
+    # the fleet App (the identity the CI checkout pushed with), never the atlan-ci
+    # PAT, whose approval is what merges it; and it must be a new branch.
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.delenv("RECONCILE_PASS", raising=False)
+    calls = _run_open_removal_pr(
+        monkeypatch, tmp_path, GH_TOKEN="ci-pat", PR_AUTHOR_TOKEN="fleet-token"
+    )
+    assert not any(c[0][:2] == ["git", "push"] for c in calls)
+    (_, repo, branch), kw = _publish_call(calls)
+    assert (repo, branch) == ("o/r", "chore/allowlist-remove-999")
+    assert kw == {"reset_to": "HEAD~1", "lease": "absent", "token": "fleet-token"}
+    order = [c[0][0] if c[0][0] == "signed_commit.publish" else c[0][1] for c in calls]
+    # Committed locally first, published, then the PR opened against it.
+    assert order.index("commit") < order.index("signed_commit.publish")
+    assert order.index("signed_commit.publish") < order.index("pr")
+
+
+def test_open_removal_pr_publishes_with_gh_token_when_no_author_token(
+    monkeypatch, tmp_path
+):
+    calls = _run_open_removal_pr(monkeypatch, tmp_path, GH_TOKEN="ci-pat")
+    _, kw = _publish_call(calls)
+    # None: signed_commit falls back to GH_TOKEN, as `gh pr create` does here.
+    assert kw["token"] is None
 
 
 def test_open_removal_pr_falls_back_to_gh_token_when_unset(monkeypatch, tmp_path):

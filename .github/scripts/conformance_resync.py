@@ -52,6 +52,7 @@ sys.path.insert(0, str(_HERE))
 
 import discover_org_consumers as discover  # noqa: E402
 import resync_approval_conditions as gate  # noqa: E402
+import signed_commit  # noqa: E402
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -442,6 +443,29 @@ def unchanged_pr_current(
     return True, ""
 
 
+def publish_lane_commit(repo: str, work: str, base_sha: str, remote_sha: str) -> None:
+    """Rebuild the lane branch as ``base_sha`` plus the local lane commit.
+
+    Published as a commit GitHub signs (signed_commit.py), not with ``git push``:
+    app repos' signed-commits ruleset blocks a PR carrying an unsigned commit, and
+    a runner-made commit is unsigned whatever token pushes it. The lease is the
+    one the force-push took: the branch must still be at ``remote_sha`` (or still
+    absent). Written with the App token in ``GH_TOKEN``, so the commit's author is
+    the App's bot user, the identity ``check_commits`` requires. Any failure is
+    this repo's error, never one that ends the fleet run.
+    """
+    try:
+        signed_commit.publish(
+            repo,
+            gate.RESYNC_BRANCH,
+            cwd=work,
+            reset_to=base_sha,
+            lease=remote_sha or signed_commit.ABSENT,
+        )
+    except SystemExit as exc:
+        raise LaneError(f"publishing the lane commit failed: {exc}") from None
+
+
 # ── One repo ─────────────────────────────────────────────────────────────
 
 
@@ -700,18 +724,7 @@ def process_repo(
             return result
 
         if not (same_content and keep):
-            lease = f"--force-with-lease=refs/heads/{gate.RESYNC_BRANCH}:{remote_sha}"
-            git(
-                [
-                    "push",
-                    "-q",
-                    lease,
-                    "origin",
-                    f"HEAD:refs/heads/{gate.RESYNC_BRANCH}",
-                ],
-                work,
-                runner,
-            )
+            publish_lane_commit(repo, work, base_sha, remote_sha)
             pushed_this_run = True
             step("Force-pushed the fresh render onto the lane branch.")
         else:

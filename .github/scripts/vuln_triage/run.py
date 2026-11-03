@@ -139,7 +139,7 @@ def _publish(
             "without the auto-merge label on a branch the gate ignores, and closed by the "
             "same run.\n\n" + body
         )
-    effects.commit_and_push(branch, files, title, deps.runner)
+    effects.commit_and_push(ctx.repo, ctx.root, branch, files, title, deps.runner)
     url = effects.create_pr(
         ctx.repo, branch, title, body, labels, deps.runner, draft=ctx.selftest
     )

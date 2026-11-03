@@ -20,6 +20,7 @@ from typing import Any
 # The Linear client the scan and the reconcile already use; .github/scripts is on
 # sys.path both under `python -m vuln_triage` (run from there) and in the tests.
 import security_scan_create_linear as ssl
+import signed_commit
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -234,12 +235,28 @@ def reset_to(base: str, runner: Runner) -> None:
 
 
 def commit_and_push(
-    branch: str, files: list[str], message: str, runner: Runner
+    repo: str, root: Path, branch: str, files: list[str], message: str, runner: Runner
 ) -> None:
+    """Commit the change on the base and publish it as a new branch.
+
+    Published as a commit GitHub signs (signed_commit.py), not with `git push`: the
+    org's signed-commits ruleset blocks a PR carrying an unsigned commit, and a
+    runner-made commit is unsigned whatever token pushes it. The branch must not
+    exist yet, the guarantee the plain `git push` of a fresh branch gave: a leftover
+    branch is never overwritten. Written with the fleet App token (PR_AUTHOR_TOKEN),
+    the identity the checkout pushed with, so the branch still triggers CI.
+    """
     # Only the files the PR shape allows are staged; never `git add -A`.
     runner(["git", "add", "--", *files], check=True)
     runner(["git", "commit", "-m", message], check=True)
-    runner(["git", "push", "origin", f"HEAD:refs/heads/{branch}"], check=True)
+    signed_commit.publish(
+        repo,
+        branch,
+        cwd=root,
+        reset_to="HEAD~1",
+        lease=signed_commit.ABSENT,
+        token=os.environ.get("PR_AUTHOR_TOKEN") or None,
+    )
 
 
 def create_pr(
