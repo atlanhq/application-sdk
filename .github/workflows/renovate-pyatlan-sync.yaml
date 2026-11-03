@@ -72,7 +72,7 @@ jobs:
       # lock format.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.6"
+          version: "0.13.7"
 
       # `--with packaging`, pinned: the up-only comparison needs PEP 440
       # parsing. `--no-project` keeps this off the repo's own environment.
