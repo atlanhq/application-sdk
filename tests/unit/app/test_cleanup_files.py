@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import threading
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 from unittest import mock
@@ -15,7 +17,7 @@ from application_sdk.app import base as app_base
 from application_sdk.app.base import App, _app_state, _app_state_lock
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import get_task_metadata
-from application_sdk.constants import TRACKED_CREDENTIAL_DIRS_KEY, TRACKED_FILE_REFS_KEY
+from application_sdk.constants import TRACKED_FILE_REFS_KEY
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.cleanup import CleanupInput, CleanupOutput
 from application_sdk.contracts.types import FileReference
@@ -47,6 +49,12 @@ class _CleanupApp(App):
 
 
 class TestCleanupFiles:
+    @pytest.fixture(autouse=True)
+    def _in_a_run(self) -> Iterator[None]:
+        # cleanup_files is a task: it reads the run it belongs to.
+        with mock.patch.object(app_base, "_current_run_key", return_value=_RUN):
+            yield
+
     def setup_method(self) -> None:
         AppRegistry.reset()
         TaskRegistry.reset()
@@ -352,6 +360,19 @@ class TestCleanupFiles:
         assert all(ident != loop_thread for _, ident in calls)
 
 
+_RUN = ("wf-1", "run-1")
+
+
+@contextlib.contextmanager
+def _in_run(run: tuple[str, str] = _RUN) -> Iterator[None]:
+    """Act as a task of *run*: both the run key and the state accessor's id."""
+    with (
+        mock.patch.object(app_base, "_current_run_key", return_value=run),
+        mock.patch.object(app_base, "_get_execution_id_from_task", return_value=run[0]),
+    ):
+        yield
+
+
 class TestCleanupCredentialFiles:
     """FND-4275: credential files resolved during a run go with the run.
 
@@ -366,12 +387,16 @@ class TestCleanupCredentialFiles:
         TaskRegistry.reset()
         with _app_state_lock:
             _app_state.clear()
+        with app_base._credential_dirs_lock:
+            app_base._credential_dirs_by_run.clear()
 
     def teardown_method(self) -> None:
         AppRegistry.reset()
         TaskRegistry.reset()
         with _app_state_lock:
             _app_state.clear()
+        with app_base._credential_dirs_lock:
+            app_base._credential_dirs_by_run.clear()
 
     @pytest.mark.asyncio
     async def test_same_named_files_for_two_connections_are_private_and_cleaned_up(
@@ -386,9 +411,7 @@ class TestCleanupCredentialFiles:
         monkeypatch.setattr(
             credential_utils, "_DEFAULT_CREDENTIAL_FILE_DIR", str(tmp_path)
         )
-        with mock.patch.object(
-            app_base, "_get_execution_id_from_task", return_value="wf-1"
-        ):
+        with _in_run():
             path_a = await resolve_credential_file(
                 base64.b64encode(keytab_a).decode(),
                 "keytab.keytab",
@@ -420,31 +443,24 @@ class TestCleanupCredentialFiles:
             call_dir = os.path.dirname(path)
             assert not os.path.exists(call_dir)
             assert result.path_results[call_dir] is True
-        with _app_state_lock:
-            assert not _app_state["wf-1"][TRACKED_CREDENTIAL_DIRS_KEY]
+        assert _RUN not in app_base._credential_dirs_by_run
 
     @pytest.mark.asyncio
     async def test_failed_removal_stays_tracked(self, tmp_path: Any) -> None:
         cred_dir = tmp_path / "cred-x"
         cred_dir.mkdir()
         (cred_dir / "keytab.keytab").write_bytes(b"secret")
-        with _app_state_lock:
-            _app_state["wf-1"] = {TRACKED_CREDENTIAL_DIRS_KEY: {str(cred_dir)}}
+        with app_base._credential_dirs_lock:
+            app_base._credential_dirs_by_run[_RUN] = {str(cred_dir)}
 
-        with (
-            mock.patch.object(
-                app_base, "_get_execution_id_from_task", return_value="wf-1"
-            ),
-            private_stdlib(app_base, "shutil") as local_shutil,
-        ):
+        with _in_run(), private_stdlib(app_base, "shutil") as local_shutil:
             local_shutil.rmtree = mock.Mock(side_effect=PermissionError("denied"))
             result = await _CleanupApp().cleanup_files(
                 CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
             )
 
         assert result.path_results[str(cred_dir)] is False
-        with _app_state_lock:
-            assert _app_state["wf-1"][TRACKED_CREDENTIAL_DIRS_KEY] == {str(cred_dir)}
+        assert app_base._credential_dirs_by_run[_RUN] == {str(cred_dir)}
 
     def test_tracking_outside_a_task_raises(self) -> None:
         from application_sdk._context_errors import AppContextError
@@ -459,9 +475,7 @@ class TestCleanupCredentialFiles:
     ) -> None:
         from application_sdk.credentials.utils import credential_dir
 
-        with mock.patch.object(
-            app_base, "_get_execution_id_from_task", return_value="wf-1"
-        ):
+        with _in_run():
             d = credential_dir(str(tmp_path))
             (tmp_path / os.path.basename(d) / "cred_v2").write_bytes(b"secret")
             result = await _CleanupApp().cleanup_files(
@@ -474,3 +488,20 @@ class TestCleanupCredentialFiles:
         from application_sdk.credentials import utils as credential_utils
 
         assert str(d) not in credential_utils._issued_dirs
+
+    @pytest.mark.asyncio
+    async def test_cleanup_on_another_worker_leaves_this_workers_dirs_for_the_sweeper(
+        self, tmp_path: Any
+    ) -> None:
+        # cleanup_files of the same run, but this worker never wrote anything
+        # for it: nothing of another run is touched.
+        from application_sdk.credentials.utils import credential_dir
+
+        with _in_run(("wf-other", "run-other")):
+            other = credential_dir(str(tmp_path))
+        with _in_run():
+            await _CleanupApp().cleanup_files(
+                CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
+            )
+        assert os.path.isdir(other)
+        assert app_base._credential_dirs_by_run[("wf-other", "run-other")] == {other}

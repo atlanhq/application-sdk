@@ -416,7 +416,7 @@ For the `objectstore://` and base64 formats, every file lands in its own **priva
 - **Owner-only and never half-written.** Each file is 0600. It is written to a temp file and renamed into place, so a reader never sees a partial keytab.
 - **Removed with its scope.** Every private directory is registered with the narrowest scope that will remove it:
   - **A handler call** (`test_auth`, `preflight_check`, `fetch_metadata`, over HTTP, SDR or the preflight gate): deleted when the handler returns, so a long-lived server doesn't accumulate a directory of secrets per request. Don't keep a resolved path past the handler call.
-  - **A task:** registered with the run, and `cleanup_files` (called by the default `on_complete()`) deletes it, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say.
+  - **A task:** registered with the run on the worker that wrote it. The run's `cleanup_files` (called by the default `on_complete()`) deletes it when it runs on that worker, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say. Temporal can schedule `cleanup_files` on another worker, so every worker also checks, once a minute, whether the runs it holds directories for have closed, and deletes those directories. It deletes all of them when it shuts down.
   - **Anywhere else** (a script): nothing tracks it, and the caller deletes it when done.
 - **One store.** `objectstore://` downloads use the deployment store the app built at startup. A new store is built from the `DEPLOYMENT_OBJECT_STORE_NAME` binding only when no app context exists.
 

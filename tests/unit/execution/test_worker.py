@@ -108,6 +108,7 @@ def _WorkerWrapperForDrain(*, shutdown_drain_delay_seconds: float = 0.0):
 
     w._worker = _NullWorker()
     w._pusher = None
+    w._credential_sweeper = None
     w._start_event_params = {}
     w._shutdown_drain_delay_seconds = shutdown_drain_delay_seconds
     return w
