@@ -44,8 +44,11 @@ jobs:
   open-release-pr:
     name: Open or update conformance release PR
     runs-on: ubuntu-latest
+    # A manual run releases only from main: release_guard fails open on a
+    # dispatch, and this job loads the commit-signing key after running the
+    # checked-out ref's release scripts, `uv` and build tooling.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (
         github.event.pull_request.merged == true &&
         !startsWith(github.event.pull_request.head.ref, 'bump-version-conformance')
