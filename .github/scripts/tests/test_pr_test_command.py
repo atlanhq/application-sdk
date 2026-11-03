@@ -1928,8 +1928,8 @@ class TestContracts:
         assert users == ["Run the command"]
 
     def test_the_trusted_app_id_reaches_both_command_steps_via_env(self) -> None:
-        """FND-4037: the id is the release-train App's public numeric id,
-        pinned in the workflow env (atlan-connectivity-release-train; never inlined
+        """FND-4037: the id comes from the org variable RELEASE_TRAIN_APP_ID
+        (the atlan-connectivity-release-train App) through env (never inlined
         into the shell), and both the preflight and the command get it, so
         the token-minting decision and the command agree."""
         steps = yaml.safe_load(
@@ -1938,7 +1938,7 @@ class TestContracts:
         runners = [s for s in steps if "pr_test_command.py" in s.get("run", "")]
         assert len(runners) == 2
         for step in runners:
-            assert step["env"]["TRUSTED_APP_ID"] == "5580005"
+            assert step["env"]["TRUSTED_APP_ID"] == "${{ vars.RELEASE_TRAIN_APP_ID }}"
             assert '--trusted-app-id "$TRUSTED_APP_ID"' in step["run"]
             assert "secrets." not in step["run"]
 
