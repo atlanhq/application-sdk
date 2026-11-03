@@ -310,7 +310,11 @@ class CloudStore:
             List of local file paths that were downloaded.
 
         Raises:
-            StorageError: If no files found under the prefix.
+            StorageError: If no files found under the prefix, or the first
+                download that failed. In prefix mode the downloads still in
+                flight are cancelled and have unwound before this raises, so
+                nothing is written into *output_dir* afterwards; files already
+                downloaded stay.
         """
         if key and prefix:
             raise StorageConfigError("Provide either 'key' or 'prefix', not both.")
@@ -645,6 +649,13 @@ class CloudStore:
 
         Returns:
             List of uploaded object keys.
+
+        Raises:
+            StorageError: The first upload that failed. The uploads still in
+                flight are cancelled and have unwound before this raises, so
+                no object lands in the bucket afterwards; those already
+                finished stay. The set written is partial: retry the whole
+                directory.
         """
         await self._ensure_region()
         local = Path(local_dir)

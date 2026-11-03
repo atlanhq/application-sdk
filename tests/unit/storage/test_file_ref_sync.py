@@ -910,3 +910,49 @@ class TestFirstFailureStopsSiblings:
             await materialize_file_refs(create_memory_store(), inp)
 
         await probe.assert_no_sibling_outlived_the_raise()
+
+    async def test_check_failure_leaves_no_shared_rehash_running(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        """Two refs naming one UNVERIFIED local copy share a single rehash
+        task, which the fan-out does not own. A third ref's check failing
+        must not leave that rehash running after the raise."""
+        from application_sdk.storage import file_ref_sync as _sync_mod
+
+        shared = tmp_path / "shared.bin"
+        shared.write_bytes(b"x")
+        rehash_started = threading.Event()
+        rehash_tasks: list[asyncio.Task[object]] = []
+
+        def _local_copy(ref):
+            if ref.storage_path == "p/bad":
+                if not rehash_started.wait(5.0):
+                    raise AssertionError("shared rehash did not start")
+                raise OSError("unreadable local copy")
+            return _sync_mod._LocalCopy.UNVERIFIED
+
+        async def _rehash(local_path):
+            task = asyncio.current_task()
+            assert task is not None
+            rehash_tasks.append(task)
+            rehash_started.set()
+            await asyncio.sleep(30)  # only cancellation ends it
+            return True
+
+        monkeypatch.setattr(_sync_mod, "_local_copy", _local_copy)
+        monkeypatch.setattr(_sync_mod, "_rehash_matches_marker", _rehash)
+        inp = _MultiRefInput(
+            ref_a=FileReference(
+                is_durable=True, storage_path="p/r0", local_path=str(shared)
+            ),
+            ref_b=FileReference(is_durable=True, storage_path="p/bad"),
+            ref_c=FileReference(
+                is_durable=True, storage_path="p/r1", local_path=str(shared)
+            ),
+        )
+
+        with pytest.raises(OSError, match="unreadable local copy"):
+            await materialize_file_refs(create_memory_store(), inp)
+
+        assert len(rehash_tasks) == 1, "refs naming one path share one rehash"
+        assert rehash_tasks[0].done(), "shared rehash still running after raise"
