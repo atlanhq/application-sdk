@@ -313,10 +313,36 @@ def _function_scope_nodes(
 def _function_store_counts(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> dict[str, int]:
+    """Count every binding of each name in *function*'s own scope.
+
+    Plain ``ast.Name`` stores are not the only way to rebind a local: match
+    captures, ``except ... as``, imports and nested ``def``/``class`` names all
+    bind a name without an ``ast.Name`` store node. Missing any of them lets a
+    later rebind replace a proven-small iterable unnoticed, so over-counting is
+    the safe direction.
+    """
     counts: dict[str, int] = {}
-    for node in _function_scope_nodes(function):
+
+    def bind(name: str | None) -> None:
+        if name is not None:
+            counts[name] = counts.get(name, 0) + 1
+
+    # *function* itself is included so defs written directly in its body,
+    # which _function_scope_nodes skips as nested scopes, still count.
+    for node in [function, *_function_scope_nodes(function)]:
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            counts[node.id] = counts.get(node.id, 0) + 1
+            bind(node.id)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            bind(node.name)
+        elif isinstance(node, ast.MatchMapping):
+            bind(node.rest)
+        elif isinstance(node, ast.ExceptHandler):
+            bind(node.name)
+        elif isinstance(node, ast.alias):
+            bind((node.asname or node.name).split(".")[0])
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                bind(child.name)
     return counts
 
 

@@ -885,6 +885,51 @@ def process_inputs(kind, extra_inputs):
     assert "L006" in _ids(src)
 
 
+@pytest.mark.parametrize(
+    "rebind",
+    [
+        "match rows:\n            case required:\n                pass",
+        "match rows:\n            case [*required]:\n                pass",
+        "match rows:\n            case {**required}:\n                pass",
+        "match rows:\n            case [_, required]:\n                pass",
+        "try:\n            pass\n        except Exception as required:\n            pass",
+        "from os import environ as required",
+        "def required():\n            pass",
+        "_ = [(required := row) for row in rows]",
+    ],
+    ids=[
+        "match-as",
+        "match-star",
+        "match-mapping-rest",
+        "match-sequence-capture",
+        "except-as",
+        "import-as",
+        "nested-def",
+        "comprehension-walrus",
+    ],
+)
+@pytest.mark.parametrize("rebound", ["required", "input_sets"])
+def test_l006_fires_when_non_name_binding_rebinds_mapping_get(
+    rebind: str, rebound: str
+) -> None:
+    rebind = rebind.replace("required", rebound)
+    src = f"""
+from loguru import logger
+
+def process_inputs(kind, rows):
+    try:
+        input_sets = {{"tables": ["alpha"]}}
+        {rebind if rebound == "input_sets" else "pass"}
+        required = input_sets.get(kind, [])
+        {rebind if rebound == "required" else "pass"}
+        for item in required:
+            logger.info("processing %s", item)
+    except Exception:
+        raise
+"""
+    assert "L006" in _ids(src)
+
+
 def test_l006_fires_for_mapping_with_more_than_ten_items() -> None:
     entries = ",\n        ".join(
         f'"ENTITY_{index}": "processed/{index}"' for index in range(11)
