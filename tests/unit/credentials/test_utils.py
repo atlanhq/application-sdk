@@ -823,14 +823,25 @@ class TestHandlerScopedCleanup:
                 )
         assert [e for e in os.listdir(tmp_path) if e.startswith("cred-")] == []
 
-    async def test_a_directory_that_cannot_be_removed_stays_listed(self, tmp_path):
-        ctx = HandlerContext(app_name="example-app")
+    async def test_a_directory_that_cannot_be_removed_is_retried_on_a_later_exit(
+        self, tmp_path
+    ):
         from application_sdk.handler import context as handler_context
 
         with private_stdlib(handler_context, "shutil") as local_shutil:
-            local_shutil.rmtree = Mock()
-            with bind_handler_context(ctx):
+            local_shutil.rmtree = Mock()  # removal fails silently
+            with bind_handler_context(HandlerContext(app_name="example-app")):
                 path = await resolve_credential_file(
                     base64.b64encode(b"ca").decode(), "ca.pem", raise_on_error=True
                 )
-        assert list(ctx._credential_dirs) == [os.path.dirname(path)]
+        stuck = os.path.dirname(path)
+        assert os.path.isdir(stuck)
+        assert stuck in handler_context._pending_credential_dirs
+        assert stuck in credential_utils._issued_dirs
+
+        # A later, unrelated handler invocation's exit removes it.
+        with bind_handler_context(HandlerContext(app_name="example-app")):
+            pass
+        assert not os.path.lexists(stuck)
+        assert stuck not in handler_context._pending_credential_dirs
+        assert stuck not in credential_utils._issued_dirs

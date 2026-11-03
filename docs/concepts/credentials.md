@@ -389,10 +389,13 @@ keytab_path = await resolve_credential_file(
 )
 ```
 
-For the `objectstore://` and base64 formats, every file lands in a **private directory**: new, owner-only (0700), and used by nothing else. One connection can never read or overwrite another's file.
+For the `objectstore://` and base64 formats, every file lands in its own **private directory**: new, owner-only (0700), with the file itself 0600.
+
+- **What it protects against:** other OS users on the host reading the file, and two connections that resolve the same `filename` overwriting each other's file.
+- **What it doesn't:** code running as the same OS user, such as another connection handled by the same worker process, can still list the directory and open the file. Separating connections from each other at that level needs OS-level isolation (separate users or containers), which this utility doesn't provide.
 
 - **One file:** omit `dest_dir`. Each call gets its own directory, so the returned path is different every time. Use the returned value; don't build the path yourself.
-- **Several files in one directory:** create the directory with `credential_dir()` and pass it as `dest_dir`. Files go straight into it. Do this when a library reads a fixed directory, such as SAP CommonCryptoLib's `SECUDIR`:
+- **Several files in one directory:** create the directory with `credential_dir()` and pass it as `dest_dir`. Files go straight into it. Do this when a library reads several files from one directory, such as SAP CommonCryptoLib's `SECUDIR`:
 
   ```python
   from application_sdk.credentials.utils import credential_dir, resolve_credential_file
@@ -400,8 +403,10 @@ For the `objectstore://` and base64 formats, every file lands in a **private dir
   secudir = credential_dir()
   await resolve_credential_file(pse_ref, "SAPSNCS.pse", secudir, raise_on_error=True)
   await resolve_credential_file(cred_ref, "cred_v2", secudir, raise_on_error=True)
-  os.environ["SECUDIR"] = secudir
+  # Hand `secudir` to the library through per-connection configuration.
   ```
+
+  Avoid passing the directory through a process-wide setting, such as an environment variable, if connections can overlap in one process. One connection can replace the setting after another sets it, but before the library reads its files, so a connection ends up using the other's credentials. If the library only reads a process-wide setting, serialize every connection that depends on it: hold one lock from setting the value until the library has read the files.
 
   Resolving a second file of the same name into one `credential_dir()` raises `FileExistsError` instead of replacing the first, including when two resolutions of the name run at once: the name is reserved atomically (as an empty 0600 file) before its content arrives.
 

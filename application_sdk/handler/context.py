@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -41,6 +42,36 @@ class SecretStore(Protocol):
     async def get(self, name: str) -> str: ...
 
     async def get_optional(self, name: str) -> str | None: ...
+
+
+#: Credential directories a handler invocation failed to remove, with their
+#: on-removed callbacks. Process-wide, because the invocation's context is
+#: discarded on exit: every later invocation's exit retries them, so a
+#: transient failure does not leave secrets behind for the process lifetime.
+_pending_credential_dirs: dict[str, Callable[[str], None]] = {}
+_pending_credential_dirs_lock = threading.Lock()
+
+
+def _remove_credential_dirs(dirs: dict[str, Callable[[str], None]]) -> None:
+    """Remove each directory in *dirs*, then call its ``on_removed`` callback.
+
+    A directory that is still there afterwards goes to the process-wide
+    retry queue (logged, path only); one that is gone leaves the queue.
+    """
+    for path, on_removed in dirs.items():
+        shutil.rmtree(path, ignore_errors=True)
+        if os.path.lexists(path):
+            get_logger(__name__).warning(
+                "Could not remove credential directory %s; retrying on the next "
+                "handler exit",
+                path,
+            )
+            with _pending_credential_dirs_lock:
+                _pending_credential_dirs[path] = on_removed
+        else:
+            with _pending_credential_dirs_lock:
+                _pending_credential_dirs.pop(path, None)
+            on_removed(path)
 
 
 def _utc_now() -> datetime:
@@ -166,18 +197,12 @@ class HandlerContext:
         self._credential_dirs.setdefault(path, on_removed)
 
     def _remove_credential_dirs(self) -> None:
-        """Remove the credential directories this invocation made.
-
-        A directory that cannot be removed is logged (path only) and kept on
-        the list, so nothing reports it gone while its files remain.
-        """
-        for path, on_removed in list(self._credential_dirs.items()):
-            shutil.rmtree(path, ignore_errors=True)
-            if os.path.lexists(path):
-                self.log.warning("Could not remove credential directory %s", path)
-            else:
-                del self._credential_dirs[path]
-                on_removed(path)
+        """Remove the credential directories this invocation made, and retry
+        any earlier invocation failed to remove."""
+        with _pending_credential_dirs_lock:
+            dirs = {**_pending_credential_dirs, **self._credential_dirs}
+        self._credential_dirs.clear()
+        _remove_credential_dirs(dirs)
 
     def elapsed_ms(self) -> float:
         """Elapsed time since request started in milliseconds."""

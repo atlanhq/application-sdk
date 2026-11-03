@@ -57,7 +57,7 @@ class CredentialDir(str):
     """A private directory for credential files, made by :func:`credential_dir`.
 
     A ``str`` (its path), so it works anywhere a path does: ``os.path.join``,
-    an environment variable such as ``SECUDIR``, a client's config. The type
+    a client's config. The type
     is what tells :func:`resolve_credential_file` the directory is the SDK's
     own owner-only directory, so files go straight into it.
 
@@ -80,14 +80,20 @@ def credential_dir(base_dir: str | None = None) -> CredentialDir:
     """Create a private directory for credential files and return it.
 
     The directory is new, owner-only (0700), and unique to this call, so no
-    other connection's files can land in it. It is removed for you: inside a
+    other connection's files can land in it and other OS users can't read
+    it. It is not hidden from code running as the same OS user (another
+    connection in the same worker process can open it); that needs OS-level
+    isolation. It is removed for you: inside a
     handler call, when the handler returns; inside a task, by
     ``cleanup_files`` when the run completes. Anywhere else (a script) the
     caller removes it.
 
     Pass it as ``dest_dir`` to :func:`resolve_credential_file` to put several
     files side by side — for example a client PSE and its ``cred_v2`` file,
-    which SAP CommonCryptoLib reads from one ``SECUDIR``::
+    which SAP CommonCryptoLib reads from one ``SECUDIR``. Hand the directory
+    to the library per connection; a process-wide setting such as an
+    environment variable is shared by every overlapping connection, so it
+    needs a lock held until the library has read the files::
 
         secudir = credential_dir()
         await resolve_credential_file(pse, "SAPSNCS.pse", secudir, raise_on_error=True)
