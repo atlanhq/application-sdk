@@ -27,6 +27,12 @@ Postcondition (suggest-only — the loop proposes but does not apply):
 > `suite.runner --series P` exit code is therefore unchanged by this area —
 > only humans clear P-series findings.
 
+This suggest-only rule governs the `/remediate` loop in this file only.  The
+agent-sdk migration lane is different: it follows **Contract fields (P001 +
+P015)**, the P053 **For the migration lane** paragraph and the
+`decided-defaults` blocks, and it applies its fixes to the working tree.  Its
+pull request is the proposal a person reviews.
+
 **Why suggest-only, not auto-applied (not an oversight):** P001 is a
 migration. Removing an opt-out changes what a contract accepts on the wire, so
 each site needs the app owner's decision on the payload shape. It has real
@@ -119,7 +125,9 @@ the fix replaces an app's own credential router with
 credential a given input resolves to (the local copy may have skipped agent
 routing, resolved leniently, or flattened inline pairs differently), so whether
 the app's tests still describe the intended behaviour is the developer's call.
-It drafts a proposal for human review and never auto-applies.  (This rule is
+It drafts a proposal for human review and never auto-applies.  That is the
+`/remediate` loop; the migration lane edits the code (see **For the migration
+lane** under P053 below).  (This rule is
 backed by a separate `suite.checks.credential_seam` check, which is silent
 unless the app's `uv.lock` resolves `atlan-application-sdk` >= 3.40.0 — see its
 module docs.)
@@ -248,7 +256,9 @@ _Read by `remediate-finding` when `finding.area == "prescriptions"`._
 
 Drafts a **proposed** fix for human review.  This area is suggest-only: the
 proposal is recorded in residue and **never applied** — see **Why suggest-only**
-above.  `classification` is always `"judgment"` for all P-series rules.
+above.  `classification` is always `"judgment"` for all P-series rules.  This
+applies to the `/remediate` loop only: the migration lane edits the working
+tree, and its pull request is the proposal a person reviews.
 
 - **P001 UnboundedContractFields** — two shapes, same rule.  Read the
   contract's fields around `finding.line` first, then decide.
@@ -665,8 +675,10 @@ around `finding.line` before drafting any proposal.
 
 **Typed-boundary / contract-modeling rules (P013–P015, P059)** — migration rules
 (`autofixable = false`), scope=app; `classification` is always `"judgment"`.
-The lane applies nothing: return `not_remediable = true` with a
-`migration_brief`.  Backed by `suite.checks.prescriptions`.
+For P013, P014 and P059 the lane applies nothing: return
+`not_remediable = true` with a `migration_brief`.  P015 is fixed in the same
+edit as P001 on the same field: see **Contract fields (P001 + P015)** below.
+Backed by `suite.checks.prescriptions`.
 
 - **P013 UntypedEntrypointBoundary** (BLOCK) — an `@entrypoint` method, or an
   `async def run()` on an `App` subclass (the implicit entrypoint), has an
@@ -713,10 +725,11 @@ The lane applies nothing: return `not_remediable = true` with a
   `OpenAPIConnectorOutput.api_spec_count: int = 0` and
   `api_path_count: int = 0` (the SDK `ExtractionOutput` does the same with
   `tables_extracted`, `columns_extracted`, …).  **Open keys with a structured
-  value**: a bounded dict of a model, from `atlan-metabase-app`
-  `app/contracts.py`:
-  `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
-  where `CollectionSelection` is a `BaseModel`; keep the `MaxItems` bound:
+  value**: a bounded dict of a model with declared fields, from
+  `atlan-metabase-app` `app/contracts.py`:
+  `residual_files: Annotated[dict[str, FileReference], MaxItems(16)]`
+  (a model with no fields and `extra="allow"` bounds nothing: see P001 "Not
+  fixes"; a tree-widget selection is `TreeSelection`); keep the `MaxItems` bound:
   payload safety still requires it on the container.  The brief names the
   fields and lists every reader and writer of the old field.  On a ledgered
   contract (P001 above, "Classify the class first"), add the typed fields
@@ -742,6 +755,87 @@ The lane applies nothing: return `not_remediable = true` with a
   contract ledger, add the typed field under a new name and retire the old one.
   Propose `# conformance: ignore[P059] <reason>` only when a system outside the
   app needs the value as JSON text.
+
+**Contract fields (P001 + P015)** — how the migration lane fixes both rules.
+The lane edits the files: change the code, do not only describe a change.  The
+suggest-only rule above is for the `/remediate` loop, not for the lane.
+P015 on a field and P001 on its class are one edit: type each field the P001
+finding lists, then remove the opt-out last, once the class's fields are all
+payload-safe.  A P001 finding marked `atlan/safeSwap` with id
+`remove-noop-optout` is that last step with nothing else to check: delete
+`find` from the class line.
+
+1. **Read each field's writers and readers first** (P001 "Narrowing a value
+   type is a DATA change"): the producers, the generated `manifest.json` args,
+   and every read.  Then pick the after-shape by what the field carries:
+
+   | Field carries | After-shape |
+   |---|---|
+   | a re-declaration of an SDK base field (`connection`, `include_filter`, `exclude_filter`) | delete the override; the base type stays |
+   | filters on a contract the app declares | `FilterMap \| str` when readers go two levels deep at most; `TreeSelection \| str` when they read deeper; an `ExtractionInput` subclass read deeper extends `TreeSelectionExtractionInput`; on a generated contract, `treeSelection = true` on both filter widgets |
+   | a connection | `ConnectionRef` (from `atlan-metabase-app` `app/contracts.py`: `connection: ConnectionRef = Field(default_factory=ConnectionRef)`) |
+   | credentials | `credential_guid` or `CredentialRef`, resolved inside the task; `agent_json` is `AgentCredentialSpec`.  The P053 fix on the same code moves with it |
+   | wizard form state (`metadata`) | a `BaseMetadataConfig` subclass declaring the keys the app reads |
+   | a whole-payload dict passed between tasks (workflow args, `config`, `extra`) | one typed field per key the task reads, with the current default; a key nothing reads is not carried |
+   | a dict whose writers use a literal key set | one typed field per key (per-type counts: `<type>_extracted: int = 0`, like the SDK `ExtractionOutput`) |
+   | a list of records | a `BaseModel` record with the keys the readers use, in `Annotated[list[Record], MaxItems(N)]` where `N` is the producer's own cap (a fetch limit or batch size constant in the app, cited by name); with no cap in the code, a `FileReference` (P001 step 5) |
+   | a list of `FileReference` | `Annotated[list[FileReference], MaxItems(N)]` (from `atlan-openapi-app` `app/contracts.py`: `spec_files: Annotated[list[FileReference], MaxItems(1000)]`), or one `FileReference` to the directory that holds them |
+   | open keys with plain values (keys come from the source system, not from the app) | keep the type; `# conformance: ignore[P015] open key set from the source system: <what the keys are>` |
+   | nothing: no producer sends it and nothing constructs it | retire it (P001 step 6) |
+
+2. **Where the class lives decides how it changes.**  A task contract changes
+   in place.  A ledgered contract (P001 "Classify the class first") also
+   changes in place when B005 accepts the retype: a widening, or `Any`
+   replaced by a concrete type in the same outer shape
+   (`dict[str, Any]` → `dict[str, str]`).  Any other retype on a ledgered
+   contract (`dict` → a model, one dict → several fields) keeps the old field:
+   add the typed fields under new names with defaults, move every writer and
+   reader onto them, and mark the old field `deprecated=True` in the same
+   change (retirement step 1).  A generated contract changes at its
+   `contract/*.pkl` source only.
+3. **Never drop a payload shape a producer sends today.**  When the diff of
+   accept/reject (P001 "Narrowing a value type is a DATA change") shows one,
+   widen the type (a union of bounded safe types) or add a
+   `@field_validator(..., mode="before")` that maps the old shape onto the
+   new type, until every live shape passes.
+4. **Remove the opt-out last**, only when the class's own P001 finding would
+   list no field, and import the module afterwards.  A class that inherits
+   the opt-out (its P001 message says so) is fixed with the class that sets it.
+
+Each default keeps what the app does today, or names the one change it makes
+in `pr_note`.  A row with `block` is an owner decision: such a site waits for
+the person the `brief` asks.
+
+```decided-defaults
+{"rule": "P001", "fix_shape": "remove-noop-optout", "decision": "Delete the allow_unbounded_fields=True keyword (or the _allow_unbounded_fields attribute) from a class whose P001 finding says every field it declares is already payload-safe; import the module afterwards. A base or mixin outside the file that still has an unsafe field is fixed first.", "why": "The opt-out is read only when the class is defined (validate_payload_safety); with every field safe the class is the same, and Input drops undeclared keys with or without it.", "interface": false}
+{"rule": "P001", "fix_shape": "delete-dead-class", "decision": "Delete a contract class that nothing constructs, annotates or subclasses (tests included), with tests that only cover it.", "why": "Code no path runs changes no behaviour; keeping it keeps an opt-out nobody needs.", "interface": false}
+{"rule": "P001", "fix_shape": "drop-sdk-override", "decision": "Delete the app's re-declaration of a field its SDK base already types (connection: ConnectionRef; include_filter / exclude_filter: FilterMap | str, or TreeSelection | str on a TreeSelectionExtractionInput). Readers keep working when they read at most the depth the base type keeps; otherwise use filter-tree-extraction-input.", "why": "The base type accepts the same wire payload the override did and is compatible with the contract ledger by construction."}
+{"rule": "P015", "fix_shape": "drop-sdk-override", "decision": "Delete the app's re-declaration of a field its SDK base already types (connection: ConnectionRef; include_filter / exclude_filter: FilterMap | str, or TreeSelection | str on a TreeSelectionExtractionInput). Readers keep working when they read at most the depth the base type keeps; otherwise use filter-tree-extraction-input.", "why": "The base type accepts the same wire payload the override did and is compatible with the contract ledger by construction."}
+{"rule": "P001", "fix_shape": "filter-tree-selection", "decision": "Filters on a contract the app declares that readers walk below the second level: type them TreeSelection | str. Filters read at most two levels deep take FilterMap | str.", "why": "TreeSelection keeps every level of the tree the widget sends and bounds each level; FilterMap keeps two levels."}
+{"rule": "P001", "fix_shape": "filter-tree-extraction-input", "decision": "Filters of an extraction contract that readers walk below the second level: on a generated contract set treeSelection = true on both filter widgets in contract/app.pkl and regenerate (the class then extends TreeSelectionExtractionInput); on a hand-written ExtractionInput subclass, extend TreeSelectionExtractionInput instead. Delete the app's filter override either way.", "why": "TreeSelectionExtractionInput types include_filter / exclude_filter as TreeSelection | str, which keeps the whole tree the widget sends."}
+{"rule": "P015", "fix_shape": "filter-tree-selection", "decision": "Filters on a contract the app declares that readers walk below the second level: type them TreeSelection | str. Filters read at most two levels deep take FilterMap | str.", "why": "TreeSelection keeps every level of the tree the widget sends and bounds each level; FilterMap keeps two levels."}
+{"rule": "P015", "fix_shape": "filter-tree-extraction-input", "decision": "Filters of an extraction contract that readers walk below the second level: on a generated contract set treeSelection = true on both filter widgets in contract/app.pkl and regenerate (the class then extends TreeSelectionExtractionInput); on a hand-written ExtractionInput subclass, extend TreeSelectionExtractionInput instead. Delete the app's filter override either way.", "why": "TreeSelectionExtractionInput types include_filter / exclude_filter as TreeSelection | str, which keeps the whole tree the widget sends."}
+{"rule": "P015", "fix_shape": "fixed-keys-to-fields", "decision": "A dict whose writers use a literal key set, on a task contract: one typed field per key with the value's current type and an empty default, set by every writer and read by every reader; delete the helper that built the dict. Keys nothing reads are not carried. On a ledgered contract, follow step 2 (in place only when B005 accepts the retype; otherwise a new field and retirement step 1 for the old one).", "why": "The same values cross the task boundary under declared names; no key the app reads is lost."}
+{"rule": "P015", "fix_shape": "counts-to-fields", "decision": "Per-type counts with a fixed key set: one int field per key, default 0, named <type>_extracted or the name the readers already use. On a ledgered Output also keep the old dict, filled as today and marked deprecated=True (retirement step 1); on a task Output replace it.", "why": "Readers get the same numbers; the ledgered field retires one status per merge as B005 requires."}
+{"rule": "P001", "fix_shape": "retire-dead-field", "decision": "A field no producer sends (absent from manifest.json args) and nothing constructs: on a task contract delete it; on a ledgered contract mark it Field(..., deprecated=True) and regenerate the ledger (retirement step 1), all such fields of the contract in the same change.", "why": "Nothing fills the field today, so retiring it changes no value any reader sees."}
+{"rule": "P015", "fix_shape": "retire-dead-field", "decision": "A field no producer sends (absent from manifest.json args) and nothing constructs: on a task contract delete it; on a ledgered contract mark it Field(..., deprecated=True) and regenerate the ledger (retirement step 1), all such fields of the contract in the same change.", "why": "Nothing fills the field today, so retiring it changes no value any reader sees."}
+{"rule": "P001", "fix_shape": "credentials-by-reference", "decision": "A task input that carries resolved credentials inline takes credential_guid or a CredentialRef instead, and the task resolves it itself (await self.context.resolve_credential_raw_or_inline or the app's existing resolver). The inline field is retired (retire-dead-field) once no caller sets it.", "why": "The task gets the same credential values; secrets stop crossing Temporal history."}
+{"rule": "P015", "fix_shape": "credentials-by-reference", "decision": "A task input that carries resolved credentials inline takes credential_guid or a CredentialRef instead, and the task resolves it itself (await self.context.resolve_credential_raw_or_inline or the app's existing resolver). The inline field is retired (retire-dead-field) once no caller sets it.", "why": "The task gets the same credential values; secrets stop crossing Temporal history."}
+{"rule": "P001", "fix_shape": "connection-ref", "decision": "A connection carried as a dict becomes connection: ConnectionRef = Field(default_factory=ConnectionRef) (inherit it when the SDK base declares it). Move every reader from dict access (connection[\"attributes\"][\"qualifiedName\"], .get(...)) to attributes (connection.attributes.qualified_name); where the dict is passed on, pass connection.model_dump(by_alias=True). If a producer can send qualifiedName as null, the site is narrow-drops-shape. On a ledgered contract, follow step 2 (in place only when B005 accepts the retype; otherwise a new field and retirement step 1 for the old one).", "why": "ConnectionRef mirrors the AE connection payload and keeps unknown fields (extra=\"allow\"), so every payload the app accepts today still validates and readers get the same values."}
+{"rule": "P015", "fix_shape": "connection-ref", "decision": "A connection carried as a dict becomes connection: ConnectionRef = Field(default_factory=ConnectionRef) (inherit it when the SDK base declares it). Move every reader from dict access (connection[\"attributes\"][\"qualifiedName\"], .get(...)) to attributes (connection.attributes.qualified_name); where the dict is passed on, pass connection.model_dump(by_alias=True). If a producer can send qualifiedName as null, the site is narrow-drops-shape. On a ledgered contract, follow step 2 (in place only when B005 accepts the retype; otherwise a new field and retirement step 1 for the old one).", "why": "ConnectionRef mirrors the AE connection payload and keeps unknown fields (extra=\"allow\"), so every payload the app accepts today still validates and readers get the same values."}
+{"rule": "P001", "fix_shape": "metadata-config", "decision": "Wizard form state carried as a dict becomes a BaseMetadataConfig subclass that declares, with the current types and empty defaults, every key the app reads; readers move from dict access to attributes. A metadata dict nothing reads is retire-dead-field. On a ledgered contract, follow step 2 (in place only when B005 accepts the retype; otherwise a new field and retirement step 1 for the old one).", "why": "BaseMetadataConfig keeps undeclared keys (dict-like base), so the payload the app accepts today still validates; the keys the app reads get a declared type."}
+{"rule": "P015", "fix_shape": "metadata-config", "decision": "Wizard form state carried as a dict becomes a BaseMetadataConfig subclass that declares, with the current types and empty defaults, every key the app reads; readers move from dict access to attributes. A metadata dict nothing reads is retire-dead-field. On a ledgered contract, follow step 2 (in place only when B005 accepts the retype; otherwise a new field and retirement step 1 for the old one).", "why": "BaseMetadataConfig keeps undeclared keys (dict-like base), so the payload the app accepts today still validates; the keys the app reads get a declared type."}
+{"rule": "P001", "fix_shape": "record-list", "decision": "A list of records passed between tasks becomes Annotated[list[Record], MaxItems(N)], where Record is a BaseModel with the keys the readers use (current types, defaults where a key can be missing) and N is the producer's own cap (a fetch limit or batch-size constant in the app, cited by name in the PR). With no cap in the code, write the records to the object store and pass a FileReference. On a ledgered contract, follow step 2 (in place only when B005 accepts the retype; otherwise a new field and retirement step 1 for the old one).", "why": "The same records cross the boundary, now with declared keys; the bound is a limit the producer already enforces, not a guess."}
+{"rule": "P015", "fix_shape": "record-list", "decision": "A list of records passed between tasks becomes Annotated[list[Record], MaxItems(N)], where Record is a BaseModel with the keys the readers use (current types, defaults where a key can be missing) and N is the producer's own cap (a fetch limit or batch-size constant in the app, cited by name in the PR). With no cap in the code, write the records to the object store and pass a FileReference. On a ledgered contract, follow step 2 (in place only when B005 accepts the retype; otherwise a new field and retirement step 1 for the old one).", "why": "The same records cross the boundary, now with declared keys; the bound is a limit the producer already enforces, not a guess."}
+{"rule": "P001", "fix_shape": "^filter-tree-selection$", "block": "TreeSelection needs atlan-application-sdk 3.44.0 or later, and the app locks an older one.", "brief": "Raise this app's atlan-application-sdk lock to 3.44.0 or later; the filter fix follows.", "requires": {"package": "atlan-application-sdk", "min": "3.44.0"}}
+{"rule": "P001", "fix_shape": "^filter-tree-extraction-input$", "block": "TreeSelectionExtractionInput (and treeSelection = true on a generated extraction contract) needs atlan-application-sdk 3.48.0 or later, and the app locks an older one.", "brief": "Raise this app's atlan-application-sdk lock to 3.48.0 or later; the filter fix follows.", "requires": {"package": "atlan-application-sdk", "min": "3.48.0"}}
+{"rule": "P015", "fix_shape": "^filter-tree-selection$", "block": "TreeSelection needs atlan-application-sdk 3.44.0 or later, and the app locks an older one.", "brief": "Raise this app's atlan-application-sdk lock to 3.44.0 or later; the filter fix follows.", "requires": {"package": "atlan-application-sdk", "min": "3.44.0"}}
+{"rule": "P015", "fix_shape": "^filter-tree-extraction-input$", "block": "TreeSelectionExtractionInput (and treeSelection = true on a generated extraction contract) needs atlan-application-sdk 3.48.0 or later, and the app locks an older one.", "brief": "Raise this app's atlan-application-sdk lock to 3.48.0 or later; the filter fix follows.", "requires": {"package": "atlan-application-sdk", "min": "3.48.0"}}
+{"rule": "P001", "fix_shape": "^keep-opt-out$", "block": "Every wire-preserving fix was tried and refused (P001 step 8); keeping the opt-out is the owner's last resort.", "brief": "Keep allow_unbounded_fields with '# conformance: ignore[P001] <reason>' naming what was tried, or accept the payload change?"}
+{"rule": "P015", "fix_shape": "open-keys-ignore", "suppress": true, "reason": "open key set from the source system", "decision": "A dict whose keys come from the source system (per catalog, per partition, per entity name) and whose values are plain: keep the type and add '# conformance: ignore[P015] open key set from the source system: <what the keys are>' on the field line. Only when no writer uses a literal key set.", "why": "The guide's end state when the key set is genuinely open and the values are plain; a typed field per key cannot exist."}
+{"rule": "P001", "fix_shape": "widen-to-live-shapes", "decision": "When the accept/reject diff shows a payload shape a producer sends today that the new type would reject, widen the type (a union of bounded safe types) or add a @field_validator(..., mode=\"before\") that maps the old shape onto the new type, until every live shape passes.", "why": "A shape that goes from working to rejected is a blocker in the guide; widening keeps every payload the app accepts today."}
+{"rule": "P015", "fix_shape": "widen-to-live-shapes", "decision": "When the accept/reject diff shows a payload shape a producer sends today that the new type would reject, widen the type (a union of bounded safe types) or add a @field_validator(..., mode=\"before\") that maps the old shape onto the new type, until every live shape passes.", "why": "A shape that goes from working to rejected is a blocker in the guide; widening keeps every payload the app accepts today."}
+```
 
 **Typed-boundary read rule (P026)** — suggest-only, scope=app, WARN-tier;
 `classification` is always `"judgment"`.  Backed by
@@ -1606,3 +1700,22 @@ path component, and this rule governs that package's sources too).
   `# conformance: ignore[P053] <reason>` naming what is resolved, and return
   `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
   the tier is already WARN for that.
+
+  **For the migration lane.**  The lane edits the files: change the code, do
+  not only describe a change.  An app override of `resolve_credential_ref`
+  (or the deprecated `_resolve_credential_ref`) is a local router like any
+  other: `SqlApp`'s own method is `CredentialRef.resolve_or_none(input)`, so on
+  a `SqlApp` subclass an override whose body is only that call is deleted, and
+  any other override returns `route_credentials(input)[0]`.  `normalize_inline_credentials` differs from
+  most local flatteners: it raises `CredentialParseError` on a repeated key or
+  a non-scalar value, gives `""` for a missing `value`, and keeps `extra.*`
+  keys flat and dotted; move every reader of a nested `extra` dict onto the
+  dotted keys in the same edit.  A fix never logs, prints or copies a
+  credential value.
+
+```decided-defaults
+{"rule": "P053", "fix_shape": "route-credentials", "decision": "Replace CredentialRef.resolve(input) or CredentialRef.resolve_or_none(input) on the entry-point input, and any try/except CredentialRoutingError that falls back to inline credentials around it, with ref, inline = route_credentials(input) from application_sdk.credentials; pass inline on where the code used the inline credentials, and delete the local router. Where the old code raised when no credential was given, keep that: raise CredentialRoutingError() when ref is None and inline is empty. A misrouted input (agent mode with an empty spec) now raises CredentialRoutingError instead of falling back to a GUID or to inline credentials; the PR names that change. Inside the app's own resolve_credential_ref / _resolve_credential_ref override: when the class extends SqlApp (whose method is only CredentialRef.resolve_or_none(input)) and the override's body is only that call, delete the override; otherwise the override returns route_credentials(input)[0].", "why": "route_credentials is the routing the preflight gate uses, so the gate and the tasks resolve the same credential; every input that routes today resolves to the same ref.", "pr_note": "A misrouted credential input now fails at routing with CredentialRoutingError instead of falling back to a GUID or inline credentials."}
+{"rule": "P053", "fix_shape": "guid-ref-route", "decision": "CredentialRef(credential_guid=input.credential_guid) built from the entry-point input becomes ref, inline = route_credentials(input), with the same raise kept where the old code raised on no credential. Only the input's own credential_guid channel: a second, per-source GUID field is not changed.", "why": "The guide's after-shape: route_credentials is the routing the preflight gate uses; a GUID input resolves to the same credential as before.", "pr_note": "Agent-mode inputs (extraction_method=agent with agent_json) now resolve through the agent instead of the GUID; a misrouted input fails at routing with CredentialRoutingError."}
+{"rule": "P053", "fix_shape": "inline-normalize", "decision": "An inline [{key, value}] flattening becomes normalize_inline_credentials(raw) from application_sdk.credentials (on a typed input, the inline half of route_credentials). Move every reader of a nested extra dict onto the dotted extra.* keys in the same edit; keep whatever the old code did when there were no credentials.", "why": "The guide's after-shape: one normaliser, so the same pairs give the same keys in every app.", "pr_note": "Malformed inline credentials now fail with CredentialParseError instead of being kept or overwritten: a repeated key, a non-scalar value, an extra given as a string that is not a JSON object, or a key that is the dotted parent of another key. A pair with no value gives \"\"."}
+{"rule": "P053", "fix_shape": "not-entry-input-ignore", "suppress": true, "reason": "resolves a credential that is not the entry-point input", "decision": "CredentialRef.resolve over an object that is not the entry-point input (a per-source or per-connection object): keep the call and add '# conformance: ignore[P053] resolves a credential that is not the entry-point input: <what it resolves>' on the call line.", "why": "The guide's end state for this shape: the seam routes only the entry-point input's own channels."}
+```
