@@ -32,7 +32,7 @@ on:
   workflow_run:
     # The workflows that produce this repo's required status checks (kept in
     # sync with renovate-auto-approve.yml). We re-evaluate when any completes.
-    workflows: [SDK Gate, PR Checks, Conformance, Capability Manifest Check, CodeQL Advanced]
+    workflows: [SDK Gate, PR Checks, Capability Manifest Check, CodeQL Advanced]
     types: [completed]
     # Only the rover's branch prefixes — avoids spending a runner on every
     # workflow completion across the repo. Branch naming that drifts simply

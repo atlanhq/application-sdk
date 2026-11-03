@@ -36,7 +36,7 @@ Open a PR against `atlanhq/application-sdk` adding the CVE to `.security/base-al
 
 ## Gate behaviour
 
-The Trivy gate in `.github/workflows/trivy-container.yaml` (and inline in `build-apps-image.yaml`) sparse-checks out `.security/` from `atlanhq/application-sdk@main` at runtime, so all connector repos always use the latest centralized allowlist without any local changes required.
+The Trivy gate in `.github/workflows/trivy-container.yaml` sparse-checks out `.security/` from `atlanhq/application-sdk@main` at runtime, so all connector repos always use the latest centralized allowlist without any local changes required.
 
 | Finding state | Gate outcome |
 |---|---|

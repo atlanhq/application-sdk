@@ -105,12 +105,11 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
 
-      # Pinned to the composite action's commit SHA (#1891 squash) per the
-      # actions-pinning rule. Bump to a release tag once application-sdk
-      # cuts one that includes the action.
+      # @main, like every application-sdk self-reference: see "Self-references
+      # are @main" in docs/standards/ci.md.
       - name: Register AE workflow
         id: ae
-        uses: atlanhq/application-sdk/.github/actions/ae-workflow@38d38ec37741abe811c760c2345500297361b35a
+        uses: atlanhq/application-sdk/.github/actions/ae-workflow@main
         with:
           ae-url:                          "https://${{ inputs.tenant }}/automation"
           token:                           ${{ secrets.atlan-api-key }}

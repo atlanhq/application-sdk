@@ -15,7 +15,7 @@ In a connector app's deploy workflow, after checkout + `atlan app deploy`:
 ```yaml
 - name: Register AE workflow
   id: ae
-  uses: atlanhq/application-sdk/.github/actions/ae-workflow@<ref>
+  uses: atlanhq/application-sdk/.github/actions/ae-workflow@main
   with:
     ae-url:          "https://${{ steps.cfg.outputs.tenant }}/automation"
     token:           ${{ secrets.ATLAN_API_KEY }}
