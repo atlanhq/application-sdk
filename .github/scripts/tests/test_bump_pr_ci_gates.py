@@ -681,29 +681,13 @@ def test_script_tests_never_run_on_bump_prs(head_ref: str, runs: bool) -> None:
 
 
 def test_release_bump_clears_the_opt_in_before_pushing() -> None:
-    # The clear runs in `bump-version`; the push runs in `publish`, a separate job
-    # (it holds the signing key, so it runs none of the bump's third-party code)
-    # that needs `bump-version`, so the clear always lands first.
-    jobs = _load(WORKFLOWS / "release-version-bump.yaml")["jobs"]
-    bump, publish = jobs["bump-version"], jobs["publish"]
-    reset = next(
-        s for s in bump["steps"] if s.get("name") == "Reset the bump PR's CI opt-in"
-    )
-    push = next(
-        s for s in publish["steps"] if s.get("name") == "Commit and push bump branch"
-    )
-    assert "bump_pr_opt_in.py clear" in reset["run"]
-    assert "bump-version" in (
-        publish["needs"] if isinstance(publish["needs"], list) else [publish["needs"]]
-    )
-    # Runs exactly when the push does: publish pushes on the bump job's `push`
-    # output, which is the reset step's own condition.
-    assert push["if"] == "needs.bump-version.outputs.push == 'true'"
-    assert (
-        bump["outputs"]["push"]
-        == "${{ steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' }}"
-    )
-    assert (
-        "steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'"
-        in reset["if"]
-    )
+    steps = _load(WORKFLOWS / "release-version-bump.yaml")["jobs"]["bump-version"][
+        "steps"
+    ]
+    names = [s.get("name") for s in steps]
+    reset = names.index("Reset the bump PR's CI opt-in")
+    push = names.index("Commit and push bump branch")
+    assert reset < push
+    assert "bump_pr_opt_in.py clear" in steps[reset]["run"]
+    # Runs exactly when the push does.
+    assert steps[push]["if"] in steps[reset]["if"]
