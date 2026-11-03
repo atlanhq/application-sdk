@@ -1,5 +1,7 @@
+import asyncio
 import base64
 import os
+import sys
 import warnings
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -15,6 +17,7 @@ from application_sdk.credentials.utils import (
     parse_credentials_extra,
     resolve_credential_file,
 )
+from application_sdk.handler.context import HandlerContext, bind_handler_context
 from tests.unit.private_stdlib import private_stdlib
 
 
@@ -157,10 +160,11 @@ class TestParseCredentialsExtra:
         mock_logger.warning.assert_not_called()
 
 
-def _assert_in_call_dir(
-    result: str | None, dest_dir: Any, filename: str, *, exists: bool = True
-) -> None:
-    """*result* is ``<dest_dir>/<per-call 0700 dir>/<filename>``."""
+def _assert_in_call_dir(result: str | None, dest_dir: Any, filename: str) -> None:
+    """*result* is a 0600 file at ``<dest_dir>/<per-call 0700 dir>/<filename>``.
+
+    With a mocked download it is the empty name reservation.
+    """
     assert result is not None
     call_dir = os.path.dirname(result)
     assert os.path.basename(result) == filename
@@ -168,8 +172,8 @@ def _assert_in_call_dir(
     assert os.path.isdir(call_dir)
     if os.name == "posix":
         assert os.stat(call_dir).st_mode & 0o777 == 0o700
-    assert os.path.exists(result) is exists
-    if exists and os.name == "posix":
+    assert os.path.isfile(result)
+    if os.name == "posix":
         assert os.stat(result).st_mode & 0o777 == 0o600
 
 
@@ -312,7 +316,7 @@ class TestResolveCredentialFile:
         mock_download.assert_awaited_once_with(
             "kerberos/hiveadmin.keytab", result, store=fake_store
         )
-        _assert_in_call_dir(result, tmp_path, "keytab.keytab", exists=False)
+        _assert_in_call_dir(result, tmp_path, "keytab.keytab")
 
     @patch(
         "application_sdk.storage.ops.download_file",
@@ -365,7 +369,7 @@ class TestResolveCredentialFile:
         mock_download.assert_awaited_once()
         called_key = mock_download.await_args.args[0]
         assert called_key == "foo/bar.keytab"
-        _assert_in_call_dir(result, tmp_path, "keytab.keytab", exists=False)
+        _assert_in_call_dir(result, tmp_path, "keytab.keytab")
 
     async def test_objectstore_prefix_rejects_empty_key(self, tmp_path):
         """objectstore:// with no key after the prefix returns None."""
@@ -678,3 +682,131 @@ class TestCredentialDir:
                 )
         # The caller's directory and its first file survive; no temp file left.
         assert os.listdir(d) == ["SAPSNCS.pse"]
+
+    async def test_cannot_be_constructed_directly(self, tmp_path):
+        with pytest.raises(TypeError, match="credential_dir"):
+            credential_utils.CredentialDir(str(tmp_path))
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
+    async def test_a_forged_credential_dir_around_a_shared_path_is_refused(
+        self, tmp_path
+    ):
+        shared = tmp_path / "shared"
+        shared.mkdir(mode=0o777)
+        os.chmod(shared, 0o777)
+        forged = str.__new__(credential_utils.CredentialDir, str(shared))
+        with pytest.raises(PermissionError, match="credential_dir"):
+            await resolve_credential_file(
+                base64.b64encode(b"secret").decode(),
+                "keytab",
+                forged,
+                raise_on_error=True,
+            )
+        assert os.listdir(shared) == []
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+    async def test_a_forged_credential_dir_through_a_symlink_is_refused(self, tmp_path):
+        target = credential_utils.credential_dir()
+        link = tmp_path / "link"
+        link.symlink_to(target)
+        forged = str.__new__(credential_utils.CredentialDir, str(link))
+        with pytest.raises(PermissionError):
+            await resolve_credential_file(
+                base64.b64encode(b"secret").decode(),
+                "keytab",
+                forged,
+                raise_on_error=True,
+            )
+        assert os.listdir(target) == []
+
+    @patch("application_sdk.storage.binding.create_store_from_binding")
+    async def test_concurrent_resolutions_of_one_name_cannot_both_win(
+        self, mock_create_store, tmp_path
+    ):
+        mock_create_store.return_value = object()
+        d = credential_utils.credential_dir()
+        release = asyncio.Event()
+        published: list[bytes] = []
+
+        async def slow_download(key: str, local_path: str, *, store: object) -> None:
+            await release.wait()
+            data = key.encode()
+            with open(local_path, "wb") as f:
+                f.write(data)
+            published.append(data)
+
+        with patch("application_sdk.storage.ops.download_file", new=slow_download):
+            first = asyncio.ensure_future(
+                resolve_credential_file(
+                    "objectstore://a/krb5.conf", "krb5.conf", d, raise_on_error=True
+                )
+            )
+            second = asyncio.ensure_future(
+                resolve_credential_file(
+                    "objectstore://b/krb5.conf", "krb5.conf", d, raise_on_error=True
+                )
+            )
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            release.set()
+            results = await asyncio.gather(first, second, return_exceptions=True)
+
+        paths = [r for r in results if isinstance(r, str)]
+        errors = [r for r in results if isinstance(r, BaseException)]
+        assert len(paths) == 1 and len(errors) == 1
+        assert isinstance(errors[0], FileExistsError)
+        # Only the winner downloaded, so the file is the winner's content.
+        assert len(published) == 1
+        assert open(paths[0], "rb").read() == published[0]
+
+    async def test_a_failed_write_releases_its_reserved_name(self, tmp_path):
+        d = credential_utils.credential_dir()
+        with private_stdlib(credential_utils, "os") as local_os:
+            local_os.replace = Mock(side_effect=OSError("disk full"))
+            with pytest.raises(OSError, match="disk full"):
+                await resolve_credential_file(
+                    base64.b64encode(b"x").decode(), "keytab", d, raise_on_error=True
+                )
+        # The name is free again for a retry.
+        await resolve_credential_file(
+            base64.b64encode(b"y").decode(), "keytab", d, raise_on_error=True
+        )
+        assert open(os.path.join(d, "keytab"), "rb").read() == b"y"
+
+
+class TestHandlerScopedCleanup:
+    """Outside a task, a handler invocation is the scope of its credential files."""
+
+    async def test_files_made_in_a_handler_call_are_removed_when_it_returns(
+        self, tmp_path
+    ):
+        ctx = HandlerContext(app_name="example-app")
+        with bind_handler_context(ctx):
+            path = await resolve_credential_file(
+                base64.b64encode(b"ca").decode(), "ca.pem", raise_on_error=True
+            )
+            shared = credential_utils.credential_dir()
+            assert os.path.isfile(path) and os.path.isdir(shared)
+        assert not os.path.lexists(os.path.dirname(path))
+        assert not os.path.lexists(shared)
+        assert ctx._credential_dirs == []
+
+    async def test_repeated_handler_calls_do_not_accumulate_directories(self, tmp_path):
+        for _ in range(3):
+            with bind_handler_context(HandlerContext(app_name="example-app")):
+                await resolve_credential_file(
+                    base64.b64encode(b"ca").decode(), "ca.pem", raise_on_error=True
+                )
+        assert [e for e in os.listdir(tmp_path) if e.startswith("cred-")] == []
+
+    async def test_a_directory_that_cannot_be_removed_stays_listed(self, tmp_path):
+        ctx = HandlerContext(app_name="example-app")
+        from application_sdk.handler import context as handler_context
+
+        with private_stdlib(handler_context, "shutil") as local_shutil:
+            local_shutil.rmtree = Mock()
+            with bind_handler_context(ctx):
+                path = await resolve_credential_file(
+                    base64.b64encode(b"ca").decode(), "ca.pem", raise_on_error=True
+                )
+        assert ctx._credential_dirs == [os.path.dirname(path)]

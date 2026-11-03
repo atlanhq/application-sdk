@@ -403,11 +403,16 @@ For the `objectstore://` and base64 formats, every file lands in a **private dir
   os.environ["SECUDIR"] = secudir
   ```
 
-  Resolving a second file of the same name into one `credential_dir()` raises `FileExistsError` instead of replacing the first.
+  Resolving a second file of the same name into one `credential_dir()` raises `FileExistsError` instead of replacing the first, including when two resolutions of the name run at once: the name is reserved atomically (as an empty 0600 file) before its content arrives.
+
+  Only `credential_dir()` makes a `CredentialDir`. Constructing one directly raises `TypeError`, and `resolve_credential_file` refuses one that isn't a real, owner-only directory of the current user (`PermissionError`), so a shared path can't pass as private.
 - **A plain-string `dest_dir` is deprecated.** It still works, but the file goes into a new private directory *inside* it, not into `dest_dir` itself, and a `DeprecationWarning` is emitted. Plain strings are rejected in v4.0. Apps that need a fixed, shared directory switch to `credential_dir()`.
 - **`filename` is a bare name.** A name that is empty, `.`, `..`, or contains a path separator raises `CredentialParseError`.
 - **Owner-only and never half-written.** Each file is 0600. It is written to a temp file and renamed into place, so a reader never sees a partial keytab.
-- **Removed with the run.** Inside a task, every private directory is registered with the run, and `cleanup_files` (called by the default `on_complete()`) deletes it, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say. Outside a task (a handler, a script) nothing tracks it, and the caller deletes it when done.
+- **Removed with its scope.** Every private directory is registered with the narrowest scope that will remove it:
+  - **A handler call** (`test_auth`, `preflight_check`, `fetch_metadata`, over HTTP, SDR or the preflight gate): deleted when the handler returns, so a long-lived server doesn't accumulate a directory of secrets per request. Don't keep a resolved path past the handler call.
+  - **A task:** registered with the run, and `cleanup_files` (called by the default `on_complete()`) deletes it, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say.
+  - **Anywhere else** (a script): nothing tracks it, and the caller deletes it when done.
 - **One store.** `objectstore://` downloads use the deployment store the app built at startup. A new store is built from the `DEPLOYMENT_OBJECT_STORE_NAME` binding only when no app context exists.
 
 ---

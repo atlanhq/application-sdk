@@ -7,6 +7,8 @@ concerns), HandlerContext is focused on HTTP request handling.
 
 from __future__ import annotations
 
+import os
+import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -75,6 +77,10 @@ class HandlerContext:
 
     _logger: Any = field(default=None, repr=False)
     """Cached bound logger instance."""
+
+    _credential_dirs: list[str] = field(default_factory=list, repr=False)
+    """Private credential directories made during this invocation; removed
+    when :func:`bind_handler_context` exits."""
 
     @property
     def request_id_str(self) -> str:
@@ -145,6 +151,24 @@ class HandlerContext:
     def log_error(self, message: str, **kwargs: Any) -> None:
         self.log.error(message, **kwargs)
 
+    def _track_credential_dir(self, path: str) -> None:
+        """Remove *path* (a private credential directory) when this invocation ends."""
+        if path not in self._credential_dirs:
+            self._credential_dirs.append(path)
+
+    def _remove_credential_dirs(self) -> None:
+        """Remove the credential directories this invocation made.
+
+        A directory that cannot be removed is logged (path only) and kept on
+        the list, so nothing reports it gone while its files remain.
+        """
+        for path in list(self._credential_dirs):
+            shutil.rmtree(path, ignore_errors=True)
+            if os.path.lexists(path):
+                self.log.warning("Could not remove credential directory %s", path)
+            else:
+                self._credential_dirs.remove(path)
+
     def elapsed_ms(self) -> float:
         """Elapsed time since request started in milliseconds."""
         delta = datetime.now(UTC) - self.started_at
@@ -177,6 +201,11 @@ def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
     Blocking calls offloaded inside the block are charged to ``ctx.app_name``
     (FND-2973), so on a pod serving several apps each app's share of the
     blocking pool is counted and capped separately.
+
+    Credential directories made inside the block (``resolve_credential_file``,
+    ``credential_dir``) are removed when it exits: a handler call is their
+    scope, as a run is inside a task, so a long-lived server does not
+    accumulate one private directory of secrets per request.
     """
     token = _current_handler_context.set(ctx)
     try:
@@ -184,6 +213,7 @@ def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
             yield ctx
     finally:
         _current_handler_context.reset(token)
+        ctx._remove_credential_dirs()
 
 
 @contextmanager
