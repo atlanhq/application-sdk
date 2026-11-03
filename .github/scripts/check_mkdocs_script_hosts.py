@@ -33,6 +33,11 @@ ALLOWED_HOSTS: frozenset[str] = frozenset()
 DEFAULT_CONFIG = Path("mkdocs.yml")
 
 _LOCAL_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/-]*")
+# Messages name a host only when it is a plain DNS name, so nothing else from
+# the entry (userinfo, query tokens, odd bytes) reaches CI logs.
+_PRINTABLE_HOST = re.compile(
+    r"[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*"
+)
 
 
 class _MkdocsLoader(yaml.SafeLoader):
@@ -73,21 +78,35 @@ def find_violations(config_text: str) -> list[str]:
         return ["extra_javascript must be a list"]
 
     violations: list[str] = []
-    for entry in entries:
+    for index, entry in enumerate(entries):
         path = _entry_path(entry)
         if path is None:
-            violations.append(f"unrecognised extra_javascript entry: {entry!r}")
+            violations.append(
+                f"extra_javascript[{index}] is not a string or a {{path: ...}} mapping"
+            )
             continue
         if _LOCAL_PATH.fullmatch(path) and "//" not in path:
             continue
-        parts = urlsplit(path)
-        host = (parts.hostname or "").lower()
-        if path.startswith("https://") and host in ALLOWED_HOSTS and "\\" not in path:
+        try:
+            parts = urlsplit(path)
+            host = (parts.hostname or "").lower()
+            has_userinfo = parts.username is not None or parts.password is not None
+        except ValueError:
+            host, has_userinfo = "", True
+        if (
+            path.startswith("https://")
+            and host in ALLOWED_HOSTS
+            and not has_userinfo
+            and "\\" not in path
+        ):
             continue
+        # Report the position and a validated host only, never the entry
+        # itself: a rejected URL may carry a token in its query or userinfo.
+        shown = host if _PRINTABLE_HOST.fullmatch(host) else "<none>"
         violations.append(
-            f"extra_javascript entry {path!r} is neither a plain local path nor an "
-            "https URL on a host in ALLOWED_HOSTS; vendor it under "
-            "docs/static/javascripts/"
+            f"extra_javascript[{index}] (host {shown}) is neither a plain local "
+            "path nor a credential-free https URL on a host in ALLOWED_HOSTS; "
+            "vendor it under docs/static/javascripts/"
         )
     return violations
 

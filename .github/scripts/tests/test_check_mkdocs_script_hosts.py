@@ -33,11 +33,11 @@ extra_javascript:
 """
 
 
-def _rejected(path: str) -> str:
+def _rejected(index: int, host: str) -> str:
     return (
-        f"extra_javascript entry {path!r} is neither a plain local path nor an "
-        "https URL on a host in ALLOWED_HOSTS; vendor it under "
-        "docs/static/javascripts/"
+        f"extra_javascript[{index}] (host {host}) is neither a plain local "
+        "path nor a credential-free https URL on a host in ALLOWED_HOSTS; "
+        "vendor it under docs/static/javascripts/"
     )
 
 
@@ -48,8 +48,8 @@ def test_repo_mkdocs_config_passes() -> None:
 
 def test_pre_fix_config_is_rejected() -> None:
     assert check.find_violations(PRE_FIX_CONFIG) == [
-        _rejected(POLYFILL),
-        _rejected(MATHJAX),
+        _rejected(1, "polyfill.io"),
+        _rejected(2, "cdn.jsdelivr.net"),
     ]
 
 
@@ -94,6 +94,26 @@ def test_allowlisted_host_passes_only_over_https(
     assert check.find_violations(ok) == []
     assert len(check.find_violations(plain)) == 1
     assert len(check.find_violations(other)) == 1
+    for userinfo in ("user:pw@", "user@", ":pw@"):
+        with_creds = f"extra_javascript:\n  - https://{userinfo}cdn.example.com/a.js\n"
+        assert len(check.find_violations(with_creds)) == 1
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "https://example.com/a.js?token=SENTINEL",
+        "https://user:SENTINEL@example.com/a.js",
+        "https://example.com/SENTINEL.js#SENTINEL",
+        "'\\tSENTINEL'",
+        "https://[SENTINEL/a.js",
+        "{SENTINEL: x}",
+    ],
+)
+def test_messages_never_echo_the_entry(entry: str) -> None:
+    violations = check.find_violations(f"extra_javascript:\n  - {entry}\n")
+    assert len(violations) == 1
+    assert "SENTINEL".lower() not in violations[0].lower()
 
 
 @pytest.mark.parametrize("config", ["", "# truncated\n", "- a\n", "just text\n"])
@@ -119,8 +139,8 @@ def test_main_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> 
     bad.write_text(PRE_FIX_CONFIG, encoding="utf-8")
     assert check.main([str(bad)]) == 1
     assert capsys.readouterr().out.splitlines() == [
-        f"{bad}: {_rejected(POLYFILL)}",
-        f"{bad}: {_rejected(MATHJAX)}",
+        f"{bad}: {_rejected(1, 'polyfill.io')}",
+        f"{bad}: {_rejected(2, 'cdn.jsdelivr.net')}",
     ]
 
     good = tmp_path / "ok.yml"
