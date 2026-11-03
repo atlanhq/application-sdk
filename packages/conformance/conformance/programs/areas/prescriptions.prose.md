@@ -27,6 +27,12 @@ Postcondition (suggest-only — the loop proposes but does not apply):
 > `suite.runner --series P` exit code is therefore unchanged by this area —
 > only humans clear P-series findings.
 
+This suggest-only rule governs the `/remediate` loop in this file only.  The
+agent-sdk migration lane is different: it follows **Contract fields (P001 +
+P015)**, the P053 **For the migration lane** paragraph and the
+`decided-defaults` blocks, and it applies its fixes to the working tree.  Its
+pull request is the proposal a person reviews.
+
 **Why suggest-only, not auto-applied (not an oversight):** P001 is a
 migration. Removing an opt-out changes what a contract accepts on the wire, so
 each site needs the app owner's decision on the payload shape. It has real
@@ -119,7 +125,9 @@ the fix replaces an app's own credential router with
 credential a given input resolves to (the local copy may have skipped agent
 routing, resolved leniently, or flattened inline pairs differently), so whether
 the app's tests still describe the intended behaviour is the developer's call.
-It drafts a proposal for human review and never auto-applies.  (This rule is
+It drafts a proposal for human review and never auto-applies.  That is the
+`/remediate` loop; the migration lane edits the code (see **For the migration
+lane** under P053 below).  (This rule is
 backed by a separate `suite.checks.credential_seam` check, which is silent
 unless the app's `uv.lock` resolves `atlan-application-sdk` >= 3.40.0 — see its
 module docs.)
@@ -248,7 +256,9 @@ _Read by `remediate-finding` when `finding.area == "prescriptions"`._
 
 Drafts a **proposed** fix for human review.  This area is suggest-only: the
 proposal is recorded in residue and **never applied** — see **Why suggest-only**
-above.  `classification` is always `"judgment"` for all P-series rules.
+above.  `classification` is always `"judgment"` for all P-series rules.  This
+applies to the `/remediate` loop only: the migration lane edits the working
+tree, and its pull request is the proposal a person reviews.
 
 - **P001 UnboundedContractFields** — two shapes, same rule.  Read the
   contract's fields around `finding.line` first, then decide.
@@ -741,6 +751,8 @@ Backed by `suite.checks.prescriptions`.
   app needs the value as JSON text.
 
 **Contract fields (P001 + P015)** — how the migration lane fixes both rules.
+The lane edits the files: change the code, do not only describe a change.  The
+suggest-only rule above is for the `/remediate` loop, not for the lane.
 P015 on a field and P001 on its class are one edit: type each field the P001
 finding lists, then remove the opt-out last, once the class's fields are all
 payload-safe.  A P001 finding marked `atlan/safeSwap` with id
@@ -1639,7 +1651,8 @@ path component, and this rule governs that package's sources too).
   `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
   the tier is already WARN for that.
 
-  **For the migration lane.**  An app override of `resolve_credential_ref`
+  **For the migration lane.**  The lane edits the files: change the code, do
+  not only describe a change.  An app override of `resolve_credential_ref`
   (or the deprecated `_resolve_credential_ref`) is a local router like any
   other: `SqlApp`'s own method is `CredentialRef.resolve_or_none(input)`, so on
   a `SqlApp` subclass an override whose body is only that call is deleted, and
