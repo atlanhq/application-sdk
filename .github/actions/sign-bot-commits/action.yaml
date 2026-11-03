@@ -1,0 +1,81 @@
+name: Sign bot commits
+description: |
+  Configure git on the runner so every commit the job makes afterwards is
+  SSH-signed with the CI machine user's key, and so shows as Verified on GitHub.
+
+  The org ruleset `signed-commits` blocks any PR whose head commits are
+  unsigned, and ruleset bypass actors are not honoured by auto-merge or the
+  merge queue, so a bot PR with an unsigned commit can never merge on its own.
+  A GitHub App cannot hold a signing key, so the signature belongs to a machine
+  user (`atlan-ci`) whose account has this key registered as a Signing Key.
+
+  GitHub verifies a signature against the commit's COMMITTER, not its author.
+  This action therefore sets only the committer, through GIT_COMMITTER_NAME /
+  GIT_COMMITTER_EMAIL in GITHUB_ENV, which git ranks above any
+  `git config user.*` or `-c user.*` a later step sets. Every bot keeps its
+  existing author (`atlan-app-fleet[bot]`, `github-actions[bot]`, ...), so
+  gates that recognise a bot's own commits by `author.login` keep working.
+  Whoever pushes does not matter either: the App token or the PAT still pushes
+  and opens the PR exactly as before.
+
+  Signing is local. It adds no API calls, so unlike committing through the API
+  it costs nothing against GitHub's secondary write limits (80 per minute,
+  500 per hour), which fleet-wide jobs would otherwise run into.
+
+  Never call it in a job that has run code a PR controls (a PR's own tasks,
+  `uv lock`/`pip install` of PR-declared packages). That code can leave a git
+  hook, git config or a background process behind that reads the key once it is
+  on disk, and any collaborator can write it. Generate the change in one job,
+  hand over only its files, and sign and commit in a fresh job.
+
+  A job that runs only the default branch's own code and locked dependencies may
+  sign in place: it already holds the fleet App token or the atlan-ci PAT, which
+  that code could take just as easily as the key.
+
+  Call it before the job's first `git commit`. A tool that builds its own
+  environment for git, rather than inheriting the job's, must pass
+  GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL through itself.
+
+  With no key (the secret not yet available to a repo) it only warns and
+  changes nothing, which is today's behaviour, so callers can adopt it before
+  the secret is rolled out everywhere.
+
+  Reusable workflows must reference this as
+  `atlanhq/application-sdk/.github/actions/sign-bot-commits@main`, not `./…` —
+  a relative path resolves against the CALLER's workspace.
+
+inputs:
+  signing-key:
+    required: false
+    default: ""
+    description: |
+      OpenSSH private key registered as a Signing Key on the machine user's
+      account. Pass the org secret, e.g. `secrets.BOT_SIGNING_KEY`.
+  committer-name:
+    required: false
+    default: "atlan-ci"
+    description: "Committer name on every later commit."
+  committer-email:
+    required: false
+    default: "it@atlan.com"
+    description: |
+      Committer email on every later commit. Must be a verified email on the
+      account that holds the key, or GitHub shows the commit as Unverified.
+
+outputs:
+  signing:
+    description: "'true' when commits will be signed, 'false' when no key was given."
+    value: ${{ steps.configure.outputs.signing }}
+
+runs:
+  using: composite
+  steps:
+    # The logic, and its tests, live in sign_bot_commits.py (stdlib only, so it
+    # runs on ubuntu-slim's system Python).
+    - id: configure
+      shell: bash
+      env:
+        SIGNING_KEY: ${{ inputs.signing-key }}
+        COMMITTER_NAME: ${{ inputs.committer-name }}
+        COMMITTER_EMAIL: ${{ inputs.committer-email }}
+      run: python3 "${{ github.action_path }}/sign_bot_commits.py"

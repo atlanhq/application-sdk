@@ -66,12 +66,14 @@ SLIM_ACTIONS = frozenset(
         "softprops/action-gh-release",
         "atlanhq/application-sdk/.github/actions/discover-e2e-suites",
         "atlanhq/application-sdk/.github/actions/e2e-dispatch-recheck",
+        "atlanhq/application-sdk/.github/actions/sign-bot-commits",
         "atlanhq/application-sdk/.github/actions/verify-test-gate",
     }
 )
 
 #: Local composites on the allowlist, by directory: their Python must be
-#: stdlib-only too. Sorted: a frozenset's order differs per xdist worker.
+#: stdlib-only too, and their shell steps may not need root. Sorted: a
+#: frozenset's order differs per xdist worker.
 SLIM_LOCAL_ACTION_DIRS = tuple(
     REPO_ROOT / ".github" / "actions" / a.rsplit("/", 1)[-1]
     for a in sorted(SLIM_ACTIONS)
@@ -193,10 +195,23 @@ def test_system_python_is_stdlib_only(
 
 @pytest.mark.parametrize("action_dir", SLIM_LOCAL_ACTION_DIRS, ids=lambda p: p.name)
 def test_allowlisted_local_actions_are_stdlib_only(action_dir: Path) -> None:
-    scripts = sorted(action_dir.glob("*.py"))
-    assert scripts, action_dir
-    for script in scripts:
+    # A shell-only composite has no Python to check; its manifest must still exist,
+    # so an allowlist entry that names no action fails here rather than passing empty.
+    assert (action_dir / "action.yaml").is_file() or (
+        action_dir / "action.yml"
+    ).is_file(), action_dir
+    for script in sorted(action_dir.glob("*.py")):
         assert not _third_party_imports(script, set()), script
+
+
+@pytest.mark.parametrize("action_dir", SLIM_LOCAL_ACTION_DIRS, ids=lambda p: p.name)
+def test_allowlisted_local_actions_need_no_root(action_dir: Path) -> None:
+    manifest = next(action_dir.glob("action.y*ml"))
+    runs = yaml.safe_load(manifest.read_text(encoding="utf-8")).get("runs", {})
+    for step in runs.get("steps", []):
+        assert not _PRIVILEGED.search(
+            str(step.get("run", ""))
+        ), f"{action_dir.name}: {step.get('name') or step.get('id')}"
 
 
 def test_full_image_python_dependency_is_caught() -> None:

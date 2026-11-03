@@ -61,6 +61,9 @@ on:
       FLEET_APP_PRIVATE_KEY:
         required: false
         description: "atlan-app-fleet App private key (org secret). Same availability as FLEET_APP_ID above."
+      BOT_SIGNING_KEY:
+        required: false
+        description: "SSH signing key of the atlan-ci machine user (org secret), so the bump commit is Verified. Auto-available via 'secrets: inherit'; without it the commit is unsigned."
 
 permissions:
   contents: write
@@ -82,6 +85,13 @@ jobs:
     concurrency:
       group: release-version-bump-${{ github.repository }}-${{ inputs.target_branch }}
       cancel-in-progress: false
+    outputs:
+      skip: ${{ steps.bump.outputs.skip }}
+      push: ${{ steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' }}
+      current: ${{ steps.versions.outputs.current }}
+      new: ${{ steps.bump.outputs.new }}
+      base_sha: ${{ steps.base.outputs.sha }}
+      lease: ${{ steps.base.outputs.lease }}
 
     env:
       # Referenced from step-level `if:` guards below, which cannot read
@@ -111,6 +121,17 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+
+      # Recorded before anything else runs: the publish job rebuilds the bump on
+      # exactly this commit, and leases its push on the bump branch's tip as
+      # seen here (empty when the branch does not exist yet).
+      - name: Record the base and the bump branch tip
+        id: base
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "lease=$(git rev-parse --verify --quiet "refs/remotes/origin/bump-version-${TARGET_BRANCH}" || true)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout SDK helper scripts
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -247,11 +268,120 @@ jobs:
             --base "${TARGET_BRANCH}" \
             --head "bump-version-${TARGET_BRANCH}"
 
-      - name: Commit and push bump branch
+      - name: Hand over the bump
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bump"
+          cp pyproject.toml uv.lock CHANGELOG.md "$RUNNER_TEMP/bump/"
+
+      - name: Upload the bump
+        id: upload-bump
+        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bump-commit-files
+          path: |
+            ${{ runner.temp }}/bump/pyproject.toml
+            ${{ runner.temp }}/bump/uv.lock
+            ${{ runner.temp }}/bump/CHANGELOG.md
+          overwrite: true
+          retention-days: 1
+
+      - name: Wait before the the bump retry
+        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && steps.upload-bump.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload the bump (retry)
+        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && steps.upload-bump.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bump-commit-files-retry
+          path: |
+            ${{ runner.temp }}/bump/pyproject.toml
+            ${{ runner.temp }}/bump/uv.lock
+            ${{ runner.temp }}/bump/CHANGELOG.md
+          overwrite: true
+          retention-days: 1
+
+  # The job above runs third-party code (`uvx toml-cli`, pip, and `uv lock` over
+  # the app's dependencies), any of which could leave a git hook, git config or
+  # process behind. This job runs none of it: a fresh checkout of the same base,
+  # the three files the bump produced, then signing, the commit and the push.
+  publish:
+    name: Publish version bump
+    needs: bump-version
+    if: needs.bump-version.outputs.skip != 'true'
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    concurrency:
+      group: release-version-bump-${{ github.repository }}-${{ inputs.target_branch }}
+      cancel-in-progress: false
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout the base the bump was built on
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.bump-version.outputs.base_sha }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ inputs.sdk_scripts_ref }}
+          path: .sdk-scripts
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      # Glob, not the bare name: the upload's retry lands under `bump-commit-files-retry`.
+      # Both upload attempts overwrite, so the glob resolves to one artifact.
+      - name: Download the bump
+        id: download-bump
+        if: needs.bump-version.outputs.push == 'true'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: bump-commit-files*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bump
+
+      - name: Wait before the the bump download retry
+        if: needs.bump-version.outputs.push == 'true' && steps.download-bump.outcome == 'failure'
+        run: sleep 20
+
+      - name: Download the bump (retry)
+        if: needs.bump-version.outputs.push == 'true' && steps.download-bump.outcome == 'failure'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: bump-commit-files*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bump
+
+      # Signs the bump commit so the PR isn't blocked by the signed-commits
+      # ruleset; the push below still uses the same token.
+      - name: Sign bot commits
+        if: needs.bump-version.outputs.push == 'true'
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
+      - name: Commit and push bump branch
+        if: needs.bump-version.outputs.push == 'true'
         env:
           TARGET_BRANCH: ${{ inputs.target_branch }}
-          NEW_VERSION: ${{ steps.bump.outputs.new }}
+          NEW_VERSION: ${{ needs.bump-version.outputs.new }}
+          LEASE: ${{ needs.bump-version.outputs.lease }}
         run: |
           set -euo pipefail
           git config --global user.name 'atlan-ci'
@@ -259,24 +389,25 @@ jobs:
 
           BRANCH="bump-version-${TARGET_BRANCH}"
           git checkout -b "$BRANCH"
+          cp "$RUNNER_TEMP/bump/pyproject.toml" "$RUNNER_TEMP/bump/uv.lock" "$RUNNER_TEMP/bump/CHANGELOG.md" .
           git add pyproject.toml uv.lock CHANGELOG.md
           git commit -m "chore: bump version to ${NEW_VERSION}"
-          # --force-with-lease: safer than --force — fails if another CI run pushed
-          # to this bot-owned bump branch concurrently, which is the correct behavior.
-          git push origin "$BRANCH" --force-with-lease
+          # Leased on the tip the bump job saw (empty: the branch must not exist),
+          # so a concurrent run that already moved this bot-owned branch fails
+          # this push rather than being overwritten.
+          git push origin "HEAD:refs/heads/${BRANCH}" --force-with-lease="refs/heads/${BRANCH}:${LEASE}"
 
       # Runs whether or not the branch was pushed: it re-attaches the release
       # label and creates the PR if a human closed it, and is a no-op when the
       # title/body/label already match — which they do on a debounced run,
       # because the version they are built from is the one the branch carries.
       - name: Open or sync bump PR
-        if: steps.bump.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
           RELEASE_LABEL: ${{ inputs.release_label }}
-          CURRENT_VERSION: ${{ steps.versions.outputs.current }}
-          NEW_VERSION: ${{ steps.bump.outputs.new }}
+          CURRENT_VERSION: ${{ needs.bump-version.outputs.current }}
+          NEW_VERSION: ${{ needs.bump-version.outputs.new }}
         run: |
           set -euo pipefail
           BRANCH="bump-version-${TARGET_BRANCH}"
