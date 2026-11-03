@@ -21,22 +21,26 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Where self-references live: workflows, composite actions, workflow
-# templates, scripts that render workflow text, the bootstrap templates the
-# conformance package scaffolds into connector repos, and the docs that show
-# consumers how to call us.
+# templates, scripts that render workflow text, the whole conformance package
+# (bootstrap templates it scaffolds into connector repos, rule help text,
+# README), and the docs that show consumers how to call us.
 SCAN_ROOTS = (
     ".github",
-    "packages/conformance/conformance/bootstrap",
+    "packages/conformance",
     "docs",
 )
 SCAN_SUFFIXES = {".yaml", ".yml", ".md", ".py", ".sh", ".pkl", ".json"}
-# Test fixtures deliberately contain off-policy refs (e.g. the conformance
-# pinning rule's own cases); they are inputs, not references.
-EXCLUDED_DIRS = (".github/scripts/tests",)
+# Test fixtures deliberately contain off-policy refs (e.g. C001's own cases,
+# which check that a tag-pinned atlanhq/ ref is exempt); they are inputs, not
+# references.
+EXCLUDED_DIRS = (".github/scripts/tests", "packages/conformance/tests")
 
 SELF_REF = re.compile(
     r"atlanhq/application-sdk/\.github/(?P<kind>actions|workflows)/"
-    r"(?P<name>[A-Za-z0-9_.\-/]+?)@(?P<ref>[^\s\"'`#)\]]+)"
+    # The ref stops at anything that can follow it in YAML, Markdown or a
+    # Python string literal: whitespace, quotes, backticks, comments,
+    # brackets, commas and the backslash of an escaped "\\n".
+    r"(?P<name>[A-Za-z0-9_.\-/]+?)@(?P<ref>[^\s\"'`#)\],\\]+)"
 )
 
 ALLOWED_REF = "main"
@@ -128,6 +132,11 @@ def test_every_self_reference_targets_an_existing_file() -> None:
             "abc123",
         ),
         ("`atlanhq/application-sdk/.github/actions/sdr-e2e@main`)", "main"),
+        (
+            '"  uses: atlanhq/application-sdk/.github/actions/setup-deps@main\\n"',
+            "main",
+        ),
+        ("[atlanhq/application-sdk/.github/actions/setup-deps@main, other]", "main"),
     ],
 )
 def test_pattern_extracts_ref(line: str, ref: str) -> None:

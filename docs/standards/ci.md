@@ -1278,6 +1278,14 @@ consumer pinning `tests-reusable.yaml@vX` still got composites from `main`, whil
 this repo. Rewriting every self-reference to the tag on each release would only
 help consumers who pin tags, and none of the fleet does.
 
+**How it fits SHA pinning:** third-party actions are still SHA-pinned, and
+conformance rule C001 still enforces that. C001 has always exempted `atlanhq/`
+refs whatever the ref, because they are meant to track `@main`
+(`packages/conformance/conformance/suite/rules/ci.py`; the exemption is pinned
+by `packages/conformance/tests/test_actions_pinning.py`). This rule tightens
+that exemption for this repo's own refs: C001 accepts any ref, and this rule
+accepts only `@main`.
+
 **Why it stays put:** Renovate's github-actions manager tracks `@vX.Y.Z` and
 SHA refs but leaves a branch ref alone. A tag-pinned self-reference gets bumped
 on every release (that is how `sdr-e2e` drifted); `@main` never does.
