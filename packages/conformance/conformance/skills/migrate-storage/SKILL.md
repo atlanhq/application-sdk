@@ -16,7 +16,8 @@ description: >
   are the same multiset. Decided defaults cover scratch directories, tiers,
   internal key layout, delivery and entrypoint-field retirement; a change to
   a key read outside the run, the delivered file set, file formats,
-  cross-run state or an entrypoint key name stops for an owner decision.
+  an in-run resume checkpoint or an entrypoint key name stops for an owner
+  decision.
 runs_before: [migrate-orchestration, migrate-deprecated-symbols]
 routes_to: [migrate-deprecated-symbols]
 also_clears: [ParquetFileReader, ParquetFileWriter, JsonFileReader, JsonFileWriter, upload_to_atlan, _download_files, _resolve_store]
@@ -329,10 +330,13 @@ each use to the inventory.
   caller (hand-off, outbound, inbound), migrate the callers, then delete the
   helper. A helper with many callers across tasks is one design change;
   plan it as such or stop with that reason.
-- **cross-run state** — a prefix synced so the next run can read it
-  (current-state snapshots, incremental markers, resume checkpoints). No
-  contract boundary carries it, so neither a FileReference nor `upload_refs`
-  applies as is. Owner decision 7.
+- **cross-run state** — a whole prefix synced so a later run can read it
+  back (a current-state snapshot, an incremental marker). No contract
+  boundary carries it, so neither a FileReference nor `upload_refs` applies
+  as is. Decided default: the reasoned ignore P044's own text names (owner
+  decision 7).
+- **resume checkpoint** — a prefix an earlier attempt of the same run saved
+  so a retry can resume, deleted when the run ends. Owner decision 7.
 - **move** — a transfer call inside a `@task`: `self.upload` /
   `self.download` / `self.upload_refs` (P008) and the `application_sdk.storage`
   helpers `upload_file` / `upload_file_from_bytes`, which P008 does not see.
@@ -447,10 +451,12 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    **state** site). The reference apps keep no state of their own: they
    hand a `current_state_prefix` to the publish node, which owns the state
    (`atlan-mysql-app` `app/mysql.py`). An app that diffs or carries state
-   forward itself has a design difference, not a storage fix: leave the
-   site open and record it. P044's own text allows
-   `# conformance: ignore[P044] state synced across runs` for a state
-   directory synced wholesale; do not add it without the owner's answer.
+   forward itself has a design difference, not a storage fix. P044's own
+   text names a state directory synced wholesale as a legitimate prefix
+   transfer, so the default keeps the call and adds
+   `# conformance: ignore[P044] state synced across runs`; moving the state
+   to publish is a separate design change. A **resume checkpoint** inside
+   one run is not that case: it waits for the owner's answer.
 8. **Entrypoint key.** A **key** field that the generated manifest or
    another app reads keeps its name with a reasoned
    `# conformance: ignore[P012] object-store key, not a local path, read by <reader>`
@@ -528,7 +534,8 @@ is delivered at the same key).
 {"rule": "P009", "fix_shape": "auth-only-ignore", "decision": "# conformance: ignore[P009] boto3 for authentication only, not object storage (<the one in use: STS, IAM or RDS token>), on the import line, after checking that every boto3 client in the file is STS, IAM or an RDS token; any other service client is the Step 1 store-class stop.", "why": "Step 1 store class: authentication is not storage.", "suppress": true, "reason": "authentication only, not object storage"}
 {"rule": "P012", "fix_shape": "entry-key-ignore", "decision": "# conformance: ignore[P012] object-store key, not a local path, read by <the manifest node or app that reads it>, on the field line, for a str field on an @entrypoint Output whose value is an object-store key or prefix read outside this run, or an @entrypoint Input field that receives one (its read becomes inbound-download). Only when no code in the app uses the value as a local path (os.path.join with a local root, open, makedirs). A field used both ways: move the in-run use to a FileReference hand-off between tasks, keep the field and its value for the manifest, then add this ignore. Never retire a field the manifest or another app reads.", "why": "Owner decision 8: P012 matches the field name or its description; the value already survives the move to another node, and a rename changes only the name.", "suppress": true, "reason": "object-store key, not a local path"}
 {"rule": "P012", "fix_shape": "not-path-ignore", "decision": "# conformance: ignore[P012] <what the value is>, not a path, on the field line, for a str field whose value is not a path at all (a format flag, a list of names, a display name).", "why": "P012 is a name heuristic; its rule text names a reasoned ignore for a field that is not a transferable path.", "suppress": true, "reason": "not a path"}
-{"rule": "P044", "fix_shape": "^cross-run-state$", "block": "The site syncs a prefix so that the next run can read it back (a current-state snapshot, an incremental marker). The reference apps keep no state of their own: they hand a current-state prefix to the publish node, which owns the state. Owner decision 7.", "brief": "Should this app keep its own cross-run state with # conformance: ignore[P044] state synced across runs, or hand the state to publish as the reference apps do (a design change outside this skill)?"}
+{"rule": "P044", "fix_shape": "cross-run-state", "decision": "# conformance: ignore[P044] state synced across runs, on the line above the upload_prefix or download_prefix call, for a call that syncs a whole state prefix (a current-state snapshot, an incremental marker) that a later run reads back. Keep the call, its key and its error handling as they are. Only when the prefix is read back by a later run of this app; a prefix another task, app or node reads is task-hand-off, inbound-download or outbound-upload-refs.", "why": "Owner decision 7: P044's rule text names a state directory synced wholesale as a legitimate bulk transfer with no contract boundary and asks for a reasoned inline ignore; moving the state to publish, as the reference apps do, is a design change outside this skill.", "suppress": true, "reason": "state synced across runs"}
+{"rule": "P044", "fix_shape": "^resume-checkpoint$", "block": "The site saves or reads a checkpoint so that a retry of the same run can resume, and deletes it when the run ends. It is not state a later run reads, so P044's state-directory exception does not clearly cover it.", "brief": "Should this checkpoint keep its prefix transfer with a reasoned # conformance: ignore[P044], or move to a FileReference the retried task receives?"}
 {"rule": "P009", "fix_shape": "^boto3-source-api$", "block": "boto3 builds a client for an AWS service that is the app's metadata source, not object storage. The SDK has no documented seam for such a client: application_sdk.common.aws_utils is not in the SDK capability manifest and takes no client Config.", "brief": "Should application_sdk.common.aws_utils become the public seam for source clients (with client Config), or should P009 stop firing on AWS clients that are not storage?"}
 {"rule": "P009", "fix_shape": "^dev-script$", "block": "The boto3 import is in a developer script under scripts/ (fixture seeding, replay capture), not in app runtime code.", "brief": "Should conformance scan scripts/ for P009, or should these developer tools take a reasoned ignore?"}
 {"rule": "P009", "fix_shape": "^customer-bucket$", "requires": {"package": "atlan-application-sdk", "min": "3.49.1"}, "block": "CloudStore.from_credentials resolves a blank region as boto3 did only from atlan-application-sdk 3.49.1, and the app's lock resolves an older SDK.", "brief": "Raise the app's atlan-application-sdk lock to 3.49.1 or later through its normal dependency update, then re-run this site."}
