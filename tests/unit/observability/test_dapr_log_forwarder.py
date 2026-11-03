@@ -180,15 +180,15 @@ class TestForwarderLogLevel:
         monkeypatch.setenv("ATLAN_LOG_LEVEL", "DEBUG")
         assert dlf._forwarder_log_level() == "DEBUG"
 
-    def test_unset_dapr_log_level_uses_the_entrypoint_warn_fallback(self, monkeypatch):
-        """With DAPR_LOG_LEVEL unset, entrypoint.sh gates daprd at ``warn``
-        (``${DAPR_LOG_LEVEL:-warn}``), so this process must resolve the same
-        level — not a second, more verbose default of its own."""
+    def test_unset_dapr_log_level_uses_the_entrypoint_info_fallback(self, monkeypatch):
+        """With DAPR_LOG_LEVEL unset, entrypoint.sh gates daprd at ``info``
+        (``${DAPR_LOG_LEVEL:-info}``), so this process must resolve the same
+        level — not a second default of its own."""
         monkeypatch.delenv("DAPR_LOG_LEVEL", raising=False)
         monkeypatch.delenv("ATLAN_LOG_LEVEL", raising=False)
         monkeypatch.setenv("LOG_LEVEL", "ERROR")
-        assert dlf._forwarder_log_level() == "WARNING"
-        monkeypatch.setenv("LOG_LEVEL", "INFO")
+        assert dlf._forwarder_log_level() == "INFO"
+        monkeypatch.setenv("LOG_LEVEL", "WARNING")
         assert dlf._forwarder_log_level() == "INFO"
 
     def test_unknown_level_names_return_none(self, monkeypatch):

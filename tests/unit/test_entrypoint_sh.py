@@ -9,6 +9,7 @@ the busybox sh in the image, accepts the script's ``SIGTERM`` trap names; dash
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -18,7 +19,20 @@ from pathlib import Path
 
 import pytest
 
-ENTRYPOINT = Path(__file__).resolve().parents[2] / "entrypoint.sh"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+ENTRYPOINT = REPO_ROOT / "entrypoint.sh"
+DOCKERFILE = REPO_ROOT / "Dockerfile"
+
+# The daprd flag each Dockerfile-owned DAPR_* variable is handed to.
+_DAPRD_FLAG = {
+    "DAPR_APP_ID": "--app-id",
+    "DAPR_HTTP_PORT": "--dapr-http-port",
+    "DAPR_GRPC_PORT": "--dapr-grpc-port",
+    "DAPR_LOG_LEVEL": "--log-level",
+    "DAPR_METRICS_PORT": "--metrics-port",
+    "DAPR_MAX_BODY_SIZE": "--max-body-size",
+    "DAPR_GRACEFUL_SHUTDOWN_SECONDS": "--dapr-graceful-shutdown-seconds",
+}
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("bash") is None,
@@ -165,3 +179,49 @@ def test_sigterm_path_passes_through_post_drain_exit_code(tmp_path: Path) -> Non
 
 def test_sigterm_path_graceful_stop_exits_zero(tmp_path: Path) -> None:
     assert _run_entrypoint_and_sigterm(tmp_path, app_exit_on_term=0) == 0
+
+
+def _dockerfile_dapr_env() -> dict[str, str]:
+    """``DAPR_*`` values the image's ``ENV`` instructions set."""
+    text = DOCKERFILE.read_text().replace("\\\n", " ")
+    env: dict[str, str] = {}
+    for line in text.splitlines():
+        if line.startswith("ENV "):
+            env.update(re.findall(r"(DAPR_\w+)=(\S+)", line))
+    return env
+
+
+def test_every_dockerfile_dapr_var_maps_to_a_daprd_flag() -> None:
+    """A new ``DAPR_*`` ``ENV`` line must be added to the drift check below."""
+    dockerfile_env = _dockerfile_dapr_env()
+
+    assert "DAPR_APP_ID" in dockerfile_env, "Dockerfile ENV parse found nothing"
+    assert set(dockerfile_env) == set(_DAPRD_FLAG)
+
+
+def test_unset_defaults_match_dockerfile_env(tmp_path: Path) -> None:
+    """The Dockerfile ``ENV`` owns these defaults; the script's own fallbacks
+    must resolve to the same values, or a run outside the image (and any
+    reader of the script) sees a default the image never uses."""
+    args = _daprd_args(tmp_path)
+
+    for var, value in _dockerfile_dapr_env().items():
+        assert _flag_value(args, _DAPRD_FLAG[var]) == value, var
+
+
+def test_app_id_does_not_fall_back_to_service_name(tmp_path: Path) -> None:
+    """Inside the image ``DAPR_APP_ID`` is always set, so the app-id never came
+    from ``ATLAN_SERVICE_NAME``; outside it, it must not either."""
+    args = _daprd_args(tmp_path, {"ATLAN_SERVICE_NAME": "some-service"})
+
+    assert _flag_value(args, "--app-id") == "app"
+
+
+def test_dapr_log_forwarder_fallback_matches_dockerfile_env() -> None:
+    """The forwarder mirrors the entrypoint's ``DAPR_LOG_LEVEL`` fallback."""
+    from application_sdk.observability import dapr_log_forwarder
+
+    assert (
+        dapr_log_forwarder._ENTRYPOINT_DAPR_LOG_LEVEL_FALLBACK
+        == _dockerfile_dapr_env()["DAPR_LOG_LEVEL"]
+    )
