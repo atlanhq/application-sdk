@@ -1169,6 +1169,99 @@ class TestWarmSidecarReadRetry:
 
         assert calls["n"] == 3
 
+    async def test_a_terminal_warm_failure_disarms_the_gates(
+        self, armed_component, monkeypatch
+    ) -> None:
+        """A sidecar that stops answering after it was confirmed ready (a
+        daprd restart) must not leave the process on the short warm budget
+        for the rest of its life."""
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        monkeypatch.setattr(http_mod, "_dapr_sidecar_confirmed_ready", True)
+
+        async def call() -> str:
+            raise ColdStartRaceError(message="store unreachable")
+
+        with pytest.raises(ColdStartRaceError):
+            await retry_past_dapr_cold_start(
+                call, description="test read", component=armed_component
+            )
+
+        assert http_mod._dapr_sidecar_confirmed_ready is False
+        assert armed_component not in http_mod._dapr_component_confirmed_ready
+
+    async def test_a_daprd_restart_recovers_on_the_cold_start_budget(
+        self, armed_component, monkeypatch
+    ) -> None:
+        """End to end: confirmed ready, then daprd restarts. The first call
+        exhausts the warm ladder and disarms the gate; the next call waits out
+        the restart on the cold-start budget and re-arms the gate when daprd
+        answers. Under the old one-way gate the second call also got only
+        the 3-attempt warm ladder and failed."""
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        monkeypatch.setattr(http_mod, "DAPR_COLD_START_MAX_WAIT_SECONDS", 30.0)
+        # daprd is down for the next 6 calls, then back.
+        down_for = {"n": 6}
+        calls = {"n": 0}
+
+        async def call() -> str:
+            calls["n"] += 1
+            if down_for["n"] > 0:
+                down_for["n"] -= 1
+                raise ColdStartRaceError(message="sidecar restarting")
+            return "secret"
+
+        with pytest.raises(ColdStartRaceError):
+            await retry_past_dapr_cold_start(
+                call, description="test read", component=armed_component
+            )
+        assert calls["n"] == 3
+
+        result = await retry_past_dapr_cold_start(
+            call, description="test read", component=armed_component
+        )
+
+        assert result == "secret"
+        assert calls["n"] == 7
+        assert armed_component in http_mod._dapr_component_confirmed_ready
+
+    async def test_a_terminal_warm_failure_leaves_other_components_armed(
+        self, armed_component, monkeypatch
+    ) -> None:
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        monkeypatch.setattr(
+            http_mod,
+            "_dapr_component_confirmed_ready",
+            {armed_component, "other-component"},
+        )
+
+        async def call() -> str:
+            raise ColdStartRaceError(message="store unreachable")
+
+        with pytest.raises(ColdStartRaceError):
+            await retry_past_dapr_cold_start(
+                call, description="test read", component=armed_component
+            )
+
+        assert http_mod._dapr_component_confirmed_ready == {"other-component"}
+
+    async def test_a_definitive_warm_answer_keeps_the_gate_armed(
+        self, armed_component
+    ) -> None:
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        async def call() -> str:
+            raise SecretNotFoundError("p")
+
+        with pytest.raises(SecretNotFoundError):
+            await retry_past_dapr_cold_start(
+                call, description="test read", component=armed_component
+            )
+
+        assert armed_component in http_mod._dapr_component_confirmed_ready
+
     async def test_the_transport_does_not_replay_a_binding_post(self) -> None:
         """Binding writes go straight through ``invoke_binding`` (an HTTP POST),
         which the transport retry never replays; a dropped connection on a

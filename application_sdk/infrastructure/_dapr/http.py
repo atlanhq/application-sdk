@@ -23,6 +23,7 @@ from httpx_retries import Retry, RetryTransport
 from opentelemetry import metrics as _otel_metrics
 from pydantic import BaseModel
 
+from application_sdk.common.backoff import Backoff, Jitter, RetryExhausted, retry_async
 from application_sdk.constants import (
     _HTTP_POOL_LIMITS,
     _HTTP_POOL_TIMEOUT_SECONDS,
@@ -164,8 +165,9 @@ def _dapr_base_url() -> str:
     return f"http://localhost:{port}"
 
 
-#: Set once this worker process has confirmed the Dapr sidecar is reachable
-#: via :func:`wait_for_dapr_sidecar` getting a 204 — Dapr only returns this
+#: Set when this worker process has confirmed the Dapr sidecar is reachable
+#: via :func:`wait_for_dapr_sidecar` getting a 204, and cleared again by
+#: :func:`retry_past_dapr_cold_start` when a warm call runs out of retries — Dapr only returns this
 #: once *every* component has finished initializing, so this is a genuinely
 #: holistic signal that short-circuits :func:`retry_past_dapr_cold_start` for
 #: every component, not just the one it happened to call. A worker whose
@@ -176,7 +178,8 @@ _dapr_sidecar_confirmed_ready: bool = False
 
 #: Per-component readiness, set by :func:`retry_past_dapr_cold_start` once a
 #: wrapped call gets a definitive answer (success or a non-transient
-#: rejection) for that ``component``. Deliberately keyed by component —
+#: rejection) for that ``component``, and cleared for that ``component`` when
+#: a warm call runs out of retries. Deliberately keyed by component —
 #: unlike the holistic :data:`_dapr_sidecar_confirmed_ready` signal above, one
 #: component answering definitively (e.g. the credential-vault's object-store
 #: binding) says nothing about whether a *different* component (e.g. the
@@ -244,51 +247,63 @@ async def wait_for_dapr_sidecar(
     url = f"{_dapr_base_url()}{_HEALTHZ_PATH}"
     loop = asyncio.get_running_loop()
     start = loop.time()
-    deadline = start + timeout
-    last_exc: Exception | None = None
     outcome = "timed_out"
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            while True:
-                try:
-                    r = await client.get(url)
-                # conformance: ignore[E004] sidecar health probe; connection errors are expected while daprd is still cold-booting and are logged at debug
-                except Exception as exc:
-                    last_exc = exc
-                    logger.debug("Dapr sidecar poll failed", exc_info=True)
-                else:
-                    if r.status_code == 204:
-                        _dapr_sidecar_confirmed_ready = True
-                        outcome = "ready"
-                        return
-                    # Reachable but not fully initialized: this is the load-bearing
-                    # "proceed early" decision (the only path that fires whenever
-                    # healthz never reaches 204, e.g. SDR / optional non-init
-                    # components). INFO, not DEBUG, so it survives the prod INFO
-                    # floor and leaves a breadcrumb; not WARNING, since this is an
-                    # expected steady state and per-call cold-start retries cover
-                    # component readiness.
-                    # conformance: ignore[L006] not a per-iteration log — this INFO fires at most once and immediately returns; it is the single "proceeded early" decision, not loop-body volume
-                    logger.info(
-                        "Dapr sidecar HTTP API reachable (healthz=%d) but not fully "
-                        "initialized; proceeding without the full-component wait — "
-                        "per-call cold-start retries cover component readiness",
-                        r.status_code,
-                    )
-                    outcome = "reachable_not_ready"
-                    return
-                if loop.time() >= deadline:
-                    # Only the connection-error path can reach here (any HTTP
-                    # response returns above), so surface the last error — a
-                    # genuinely unreachable/misconfigured sidecar (wrong port, DNS,
-                    # perms) should be diagnosable, not just "timed out".
-                    logger.warning(
-                        "Dapr sidecar not reachable after %.0fs — proceeding anyway",
-                        timeout,
-                        exc_info=last_exc,
-                    )
-                    return
-                await asyncio.sleep(interval)
+
+            def _log_poll_failure(
+                _attempt: int, _exc: Exception, _delay: float
+            ) -> None:
+                logger.debug("Dapr sidecar poll failed", exc_info=True)
+
+            try:
+                # Fixed interval, no jitter: a readiness poll against this
+                # pod's own sidecar, not a retry against a shared dependency.
+                # Only connection errors raise, so only they keep it polling.
+                r = await retry_async(
+                    lambda: client.get(url),
+                    backoff=Backoff(
+                        base=interval,
+                        factor=1.0,
+                        jitter=Jitter.NONE,
+                        budget_seconds=timeout,
+                    ),
+                    retry_if=lambda _exc: True,
+                    on_retry=_log_poll_failure,
+                    sleep=asyncio.sleep,
+                    clock=loop.time,
+                )
+            # conformance: ignore[E004] sidecar health probe; connection errors are expected while daprd is still cold-booting, and the last one is attached to the timeout warning
+            except Exception as last_exc:
+                # Only the connection-error path reaches here (any HTTP
+                # response returns below), so surface the last error — a
+                # genuinely unreachable/misconfigured sidecar (wrong port, DNS,
+                # perms) should be diagnosable, not just "timed out".
+                logger.warning(
+                    "Dapr sidecar not reachable after %.0fs — proceeding anyway",
+                    timeout,
+                    exc_info=last_exc,
+                )
+                return
+            if r.status_code == 204:
+                _dapr_sidecar_confirmed_ready = True
+                outcome = "ready"
+                return
+            # Reachable but not fully initialized: this is the load-bearing
+            # "proceed early" decision (the only path that fires whenever
+            # healthz never reaches 204, e.g. SDR / optional non-init
+            # components). INFO, not DEBUG, so it survives the prod INFO
+            # floor and leaves a breadcrumb; not WARNING, since this is an
+            # expected steady state and per-call cold-start retries cover
+            # component readiness.
+            logger.info(
+                "Dapr sidecar HTTP API reachable (healthz=%d) but not fully "
+                "initialized; proceeding without the full-component wait — "
+                "per-call cold-start retries cover component readiness",
+                r.status_code,
+            )
+            outcome = "reachable_not_ready"
+            return
     finally:
         try:
             _sidecar_wait_duration().record(loop.time() - start, {"outcome": outcome})
@@ -315,7 +330,7 @@ DAPR_COLD_START_BASE_DELAY_SECONDS: float = 2.0
 DAPR_COLD_START_MAX_DELAY_SECONDS: float = 10.0
 
 #: Backoff before each extra attempt a call gets once its component's gate is
-#: armed (so ``len`` extra tries, ~4s total). A warm sidecar can still drop one
+#: armed (so ``len`` extra tries, at most ~4s total under full jitter). A warm sidecar can still drop one
 #: connection; this absorbs that without masking a real outage for the full
 #: cold-start deadline.
 DAPR_WARM_RETRY_DELAYS_SECONDS: tuple[float, ...] = (1.0, 3.0)
@@ -361,6 +376,11 @@ async def retry_past_dapr_cold_start(
     then a steady-state failure: ``call`` gets only the short
     :data:`DAPR_WARM_RETRY_DELAYS_SECONDS` ladder on a transient failure,
     not the full deadline, so a real outage is not masked on every call.
+    When that ladder runs out too, the gates are cleared (this
+    ``component``'s and the holistic one), so after a daprd restart the
+    next call waits out a cold start again instead of the process keeping
+    the short budget for its lifetime. Both ladders use full jitter
+    (:mod:`application_sdk.common.backoff`).
     Every caller wraps a read, so the retry is safe; writes never go through
     here.
 
@@ -384,80 +404,103 @@ async def retry_past_dapr_cold_start(
     global _dapr_sidecar_confirmed_ready
 
     if _dapr_sidecar_confirmed_ready or component in _dapr_component_confirmed_ready:
-        for delay in DAPR_WARM_RETRY_DELAYS_SECONDS:
-            try:
-                return await call()
-            except ColdStartRaceError as exc:
-                # conformance: ignore[L004,E005] type only, same reason as the cold-start retry log below
-                logger.warning(
+        try:
+            return await retry_async(
+                call,
+                backoff=Backoff(steps=DAPR_WARM_RETRY_DELAYS_SECONDS),
+                retry_if=_is_cold_start_race,
+                on_retry=lambda _attempt, exc, delay: logger.warning(
                     "%s failed (%s) on a warm sidecar — retrying in %.1fs",
                     description,
                     type(exc).__name__,
                     delay,
-                )
-                await asyncio.sleep(delay)
-        return await call()
-
-    deadline = time.monotonic() + DAPR_COLD_START_MAX_WAIT_SECONDS
-    attempt = 0
-    while True:
-        attempt += 1
-        try:
-            result = await call()
-        except ColdStartRaceError as exc:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                # Gave up waiting, but the dependency never actually
-                # answered — do NOT arm the gate, a later call should still
-                # wait out the cold start rather than assume steady-state
-                # readiness.
-                #
-                # Re-label rather than re-raise the transient marker: the
-                # ColdStartRaceError means "not reachable yet"; exhausting the
-                # whole budget without one usable answer is the terminal
-                # state. Surfacing it as a race is what makes a persistent
-                # platform fault read as a blip. DaprSidecarUnreachableError
-                # stays a ColdStartRaceError subtype, so every upstream
-                # `except ColdStartRaceError` is unaffected; its fields are
-                # secret-free (component id, attempt count, elapsed) and the
-                # transport cause rides `cause`, never the message.
-                raise DaprSidecarUnreachableError(
-                    message=(
-                        f"Dapr sidecar unreachable: component={component} not "
-                        f"reachable after {attempt} attempts over "
-                        f"{DAPR_COLD_START_MAX_WAIT_SECONDS - remaining:.1f}s"
-                    ),
-                    component=component,
-                    attempts=attempt,
-                    elapsed_seconds=DAPR_COLD_START_MAX_WAIT_SECONDS - remaining,
-                    cause=exc.cause,
-                ) from exc
-            # Cap the backoff to the remaining budget so the total wait can't
-            # overshoot DAPR_COLD_START_MAX_WAIT_SECONDS by a full delay, and
-            # cap the exponent so a very large max-wait override can't
-            # overflow.
-            delay = min(
-                DAPR_COLD_START_MAX_DELAY_SECONDS,
-                DAPR_COLD_START_BASE_DELAY_SECONDS * (2 ** min(attempt - 1, 10)),
-                remaining,
+                ),
+                sleep=asyncio.sleep,
             )
-            # conformance: ignore[L004,E005] exc_info=True would attach str(exc)/traceback, which for a SecretStoreError embeds `secret=<name>` and the backend cause's message — undoing the hashed `description` some callers deliberately pass to keep the raw ref-key out of logs. Logging the exception TYPE only is intentional, not an oversight — see the description arg's docstring above.
+        except ColdStartRaceError:
+            # The short ladder ran out without one answer: the sidecar this
+            # process trusted is gone (a daprd restart, an evicted sidecar).
+            # Disarm both gates so the next call waits out a cold start
+            # again instead of keeping the warm budget for the life of the
+            # process. Only this component's gate is cleared, plus the
+            # holistic healthz one, which can no longer vouch for it.
+            _dapr_sidecar_confirmed_ready = False
+            _dapr_component_confirmed_ready.discard(component)
+            # conformance: ignore[L004,E005] type only, same reason as the cold-start retry log below
             logger.warning(
-                "%s failed (attempt %d, %s); the dependency is not yet "
-                "reachable — retrying in %.1fs",
+                "%s still failing after the warm retries; the Dapr sidecar "
+                "is no longer confirmed ready, so the next call gets the full "
+                "cold-start budget",
                 description,
-                attempt,
-                type(exc).__name__,
-                delay,
             )
-            await asyncio.sleep(delay)
-        # conformance: ignore[E004] proof the component answered (definitively) — arms its cold-start gate and re-raises unchanged
-        except Exception:
-            _dapr_component_confirmed_ready.add(component)
             raise
-        else:
-            _dapr_component_confirmed_ready.add(component)
-            return result
+
+    def _giveup(exhausted: RetryExhausted) -> Exception:
+        # Gave up waiting, but the dependency never actually answered — do
+        # NOT arm the gate, a later call should still wait out the cold
+        # start rather than assume steady-state readiness.
+        #
+        # Re-label rather than re-raise the transient marker: the
+        # ColdStartRaceError means "not reachable yet"; exhausting the whole
+        # budget without one usable answer is the terminal state. Surfacing
+        # it as a race is what makes a persistent platform fault read as a
+        # blip. DaprSidecarUnreachableError stays a ColdStartRaceError
+        # subtype, so every upstream `except ColdStartRaceError` is
+        # unaffected; its fields are secret-free (component id, attempt
+        # count, elapsed) and the transport cause rides `cause`, never the
+        # message.
+        last = exhausted.error
+        return DaprSidecarUnreachableError(
+            message=(
+                f"Dapr sidecar unreachable: component={component} not "
+                f"reachable after {exhausted.attempts} attempts over "
+                f"{exhausted.elapsed_seconds:.1f}s"
+            ),
+            component=component,
+            attempts=exhausted.attempts,
+            elapsed_seconds=exhausted.elapsed_seconds,
+            cause=last.cause if isinstance(last, ColdStartRaceError) else None,
+        )
+
+    def _log_retry(attempt: int, exc: Exception, delay: float) -> None:
+        # conformance: ignore[L004,E005] exc_info=True would attach str(exc)/traceback, which for a SecretStoreError embeds `secret=<name>` and the backend cause's message — undoing the hashed `description` some callers deliberately pass to keep the raw ref-key out of logs. Logging the exception TYPE only is intentional, not an oversight — see the description arg's docstring above.
+        logger.warning(
+            "%s failed (attempt %d, %s); the dependency is not yet "
+            "reachable — retrying in %.1fs",
+            description,
+            attempt,
+            type(exc).__name__,
+            delay,
+        )
+
+    try:
+        result = await retry_async(
+            call,
+            # Read at call time, not import time: the constants are
+            # env-overridable and tests shrink them.
+            backoff=Backoff(
+                base=DAPR_COLD_START_BASE_DELAY_SECONDS,
+                cap=DAPR_COLD_START_MAX_DELAY_SECONDS,
+                budget_seconds=DAPR_COLD_START_MAX_WAIT_SECONDS,
+            ),
+            retry_if=_is_cold_start_race,
+            on_retry=_log_retry,
+            on_giveup=_giveup,
+            sleep=asyncio.sleep,
+            clock=time.monotonic,
+        )
+    except ColdStartRaceError:
+        raise
+    # conformance: ignore[E004] proof the component answered (definitively) — arms its cold-start gate and re-raises unchanged
+    except Exception:
+        _dapr_component_confirmed_ready.add(component)
+        raise
+    _dapr_component_confirmed_ready.add(component)
+    return result
+
+
+def _is_cold_start_race(exc: Exception) -> bool:
+    return isinstance(exc, ColdStartRaceError)
 
 
 # ---------------------------------------------------------------------------

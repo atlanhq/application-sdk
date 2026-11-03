@@ -152,7 +152,8 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/app_name_alignment.py, "
             "conformance/suite/rules/transform_templates.py, "
             "conformance/suite/rules/portability.py, "
-            "conformance/suite/rules/atomic_publish.py"
+            "conformance/suite/rules/atomic_publish.py, "
+            "conformance/suite/rules/retry_ladder.py"
         ),
         output_filename="prescriptions.md",
         checker=(
@@ -168,6 +169,7 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.transform_templates` (P040, scans template YAML), "
             "`suite.checks.text_io_encoding` (P046), "
             "`suite.checks.atomic_publish` (P050), "
+            "`suite.checks.retry_ladder` (P060), "
             "`suite.checks.credential_seam` (P053, gated on the app's locked SDK), "
             "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) "
             "(all AST-based / cross-artifact)"

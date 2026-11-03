@@ -391,6 +391,38 @@ class TestDaprCredentialVaultColdStartRetry:
         assert result == {"password": "secret_pass"}
         assert calls["n"] == 3
 
+    async def test_component_name_override_gets_its_own_gate(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        """A ``component_name`` override is a different Dapr store; its answer
+        must not arm the default secret store's gate, or the default store's
+        own cold start would skip its wait."""
+        import application_sdk.infrastructure._dapr.http as http_mod
+
+        mock_client = _make_mock_dapr_client(
+            config_bytes=b"{}", secret_data={"password": "p"}
+        )
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            await vault._get_secret("my-guid", component_name="other-store")
+
+        assert http_mod._dapr_component_confirmed_ready == {"other-store"}
+
+    async def test_default_store_shares_the_secret_store_gate(
+        self, fast_dapr_cold_start_retry
+    ) -> None:
+        import application_sdk.infrastructure._dapr.http as http_mod
+        from application_sdk.infrastructure import DAPR_SECRET_STORE_COMPONENT
+
+        mock_client = _make_mock_dapr_client(
+            config_bytes=b"{}", secret_data={"password": "p"}
+        )
+        with patch("application_sdk.constants.DEPLOYMENT_NAME", "production"):
+            vault = self._make_vault(mock_client)
+            await vault._get_secret("my-guid")
+
+        assert http_mod._dapr_component_confirmed_ready == {DAPR_SECRET_STORE_COMPONENT}
+
     async def test_secretstore_cold_start_not_masked_by_binding_success(
         self, fast_dapr_cold_start_retry
     ) -> None:

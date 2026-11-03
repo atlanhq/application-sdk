@@ -193,6 +193,7 @@ def _download_daprd(target: Path) -> None:
                     type(exc).__name__,
                     exc_info=True,
                 )
+                # conformance: ignore[P060] synchronous single-process dev tooling (daprd download) — one caller per machine, so no fleet retry storm; retry_async is async-only
                 time.sleep(_DOWNLOAD_BACKOFF_SECONDS * attempt)
         staged.chmod(staged.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         os.replace(staged, target)
@@ -444,6 +445,7 @@ async def _wait_for_dapr_ready(
             # conformance: ignore[E014] Dapr readiness poll; transient connection errors expected
             except Exception:  # noqa: BLE001, S110 — readiness loop
                 pass
+            # conformance: ignore[P060] local-dev readiness poll of this process's own daprd at a fixed 0.25s, not a retry against a shared dependency
             await asyncio.sleep(0.25)
     raise DaprReadinessTimeoutError(timeout_seconds=float(timeout_s))
 

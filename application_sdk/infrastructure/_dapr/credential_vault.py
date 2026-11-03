@@ -22,7 +22,6 @@ from application_sdk.infrastructure._dapr.client import (
     is_dapr_transport_unavailable,
 )
 from application_sdk.infrastructure._dapr.http import (
-    DAPR_SECRET_STORE_COMPONENT,
     DAPR_UPSTREAM_BINDING_COMPONENT,
     AsyncDaprClient,
     retry_past_dapr_cold_start,
@@ -420,7 +419,12 @@ class DaprCredentialVault:
                 description=(
                     f"Credential-vault secret fetch for '{log_label or secret_key}'"
                 ),
-                component=DAPR_SECRET_STORE_COMPONENT,
+                # Gate by the Dapr component actually called: a component_name
+                # override is a different store, whose answer says nothing
+                # about the default one (and vice versa). The default name,
+                # "secretstore", is DAPR_SECRET_STORE_COMPONENT, so the default
+                # path still shares the gate with the agent and resolver paths.
+                component=store,
             )
         except SecretNotFoundError:
             # DEBUG, label only, no exc_info (FND-4279): an absent key is an
