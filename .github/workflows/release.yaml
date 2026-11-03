@@ -38,7 +38,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.6"
+          version: "0.13.7"
 
       - name: Install dependencies
         shell: bash
@@ -131,6 +131,12 @@ jobs:
             --version-file packages/api/pyproject.toml \
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
+
+      - name: Sign bot commits
+        if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
 
       - name: Commit and push bump branch
         if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'

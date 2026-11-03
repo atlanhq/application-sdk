@@ -123,7 +123,7 @@ jobs:
       # here would show up as unexplained lock churn.
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.6"
+          version: "0.13.7"
 
       # For the npm half of the bound. Pinned to the same major as renovate.yaml
       # rather than taking whatever the runner image ships: npm's major decides
@@ -268,6 +268,11 @@ jobs:
 
       # Stdlib only, on the runner's python3: no resolver, no install, nothing
       # from the refreshed dependency set runs beside the App token.
+      - name: Sign bot commits
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
       - name: Commit the bounded locks
         run: python3 .github/scripts/bound_lock_branch.py --apply-from "$RUNNER_TEMP/bounded-locks"
 

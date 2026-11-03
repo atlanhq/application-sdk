@@ -163,6 +163,12 @@ jobs:
             exit 1
           fi
 
+      - name: Sign bot commits
+        if: steps.compare.outputs.match == 'false'
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
       - name: Open PR if drift detected
         id: open-pr
         if: steps.compare.outputs.match == 'false'

@@ -103,6 +103,11 @@ jobs:
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: python3 .github/scripts/assert_app_token_slug.py atlan-conformance-sync
 
+      - name: Sign bot commits
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
       - name: Resync the fleet
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}

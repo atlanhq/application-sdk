@@ -30,8 +30,11 @@ jobs:
   open-release-pr:
     name: Open or update contract toolkit release PR
     runs-on: ubuntu-latest
+    # A manual run releases only from main: release_guard fails open on a
+    # dispatch, and this job loads the commit-signing key after running the
+    # checked-out ref's release scripts, `uv` and build tooling.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (
         github.event.pull_request.merged == true &&
         !startsWith(github.event.pull_request.head.ref, 'bump-version-contract-toolkit')
@@ -65,7 +68,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.6"
+          version: "0.13.7"
 
       - name: Compute version, bump PklProject, update CHANGELOG
         id: versions
@@ -96,6 +99,12 @@ jobs:
       - name: Sanity-build package
         if: steps.versions.outputs.skip != 'true'
         run: pkl project package contract-toolkit/src/ --output-path .out/ --skip-publish-check
+
+      - name: Sign bot commits
+        if: steps.versions.outputs.skip != 'true'
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
 
       - name: Push bump branch and open or update PR
         if: steps.versions.outputs.skip != 'true'
