@@ -24,10 +24,8 @@ So the contract here is deliberately lopsided:
   * The exit code is **always 0**. A missing emoji must never take down the
     load-bearing work that follows it in the job.
 
-That "always 0" is the whole point, and it is why this is separate from
-`sdk_review_approve.py`, which is the mirror image: its label write *is*
-load-bearing, so it reports failure rather than swallowing it (a silently
-skipped label there strands an approval permanently).
+That "always 0" is the whole point: a load-bearing write (a verdict label, an
+approval) must report failure instead, so it does not belong in this helper.
 
 Configuration (all via env, matching the sibling scripts):
 

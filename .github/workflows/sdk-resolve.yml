@@ -3,8 +3,8 @@
 # `@sdk-resolve` no longer starts a run from any trigger: not a human comment, not
 # a bot comment (atlan-ci, mothership-ai[bot]), not workflow_dispatch. PR
 # reviews are asked for with `/lens` (lens.yml). The mothership resolver jobs
-# that used to live here were removed; see git history for them. The helper
-# scripts under .github/scripts/ are left in place.
+# that used to live here, and the .github/scripts/ helpers they ran, were
+# removed; see git history for them.
 #
 # The only job left is `redirect-to-lens`, which answers a human `@sdk-resolve`
 # comment with a 😕 reaction and a pointer to `/lens`.
@@ -22,8 +22,8 @@ permissions:
 jobs:
   # Bots never get the reply: any `Bot` account (mothership-ai[bot] included,
   # also named in case its type ever reads differently) and atlan-ci, which is
-  # a User account. A human tag is answered with a 😕 — the reaction sdk_resolve_push_guard.py
-  # reads as "seen and declined" — and a pointer to `/lens`. Posted with
+  # a User account. A human tag is answered with a 😕 ("seen and declined")
+  # and a pointer to `/lens`. Posted with
   # GITHUB_TOKEN, which starts no workflow. The comment must not start with
   # `@sdk-review`, `@sdk-resolve` or `/lens`, or it would read as a trigger.
   redirect-to-lens:
