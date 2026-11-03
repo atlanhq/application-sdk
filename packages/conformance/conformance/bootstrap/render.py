@@ -87,7 +87,7 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # ``auto-fix.yml``: an ``issue_comment`` shim gated on a ``/fix-vulnerabilities``
 # comment. Every PR comment (mostly Renovate's) queued a run that the job-level
 # ``if`` then skipped — hundreds of skipped runs per repo, no real invocations.
-# Retired as noise; the reusable workflow it called is left in place here.
+# Retired as noise, and its reusable workflow is gone from application-sdk.
 #
 # ``update-dashboard.yml`` (FND-3337): a ``workflow_run`` shim on Vulnerability
 # Scan, Build & Publish and Conformance that pushed this repo's rows to the
