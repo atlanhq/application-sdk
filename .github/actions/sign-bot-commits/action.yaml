@@ -22,6 +22,12 @@ description: |
   it costs nothing against GitHub's secondary write limits (80 per minute,
   500 per hour), which fleet-wide jobs would otherwise run into.
 
+  Only call it in a job that has not run code a PR or a dependency controls
+  (a PR's own tasks, `uv lock`/`pip install` of PR-declared packages, build
+  backends). That code can leave a git hook, git config or a background process
+  behind that reads the key once it is on disk. Generate the change in one job,
+  hand over only its files, and sign and commit in a fresh job.
+
   Call it before the job's first `git commit`. A tool that builds its own
   environment for git, rather than inheriting the job's, must pass
   GIT_COMMITTER_NAME / GIT_COMMITTER_EMAIL through itself.
@@ -60,43 +66,12 @@ outputs:
 runs:
   using: composite
   steps:
+    # The logic, and its tests, live in sign_bot_commits.py (stdlib only, so it
+    # runs on ubuntu-slim's system Python).
     - id: configure
       shell: bash
       env:
         SIGNING_KEY: ${{ inputs.signing-key }}
         COMMITTER_NAME: ${{ inputs.committer-name }}
         COMMITTER_EMAIL: ${{ inputs.committer-email }}
-      run: |
-        set -euo pipefail
-        if [ -z "$SIGNING_KEY" ]; then
-          echo "::warning::No signing key provided; commits from this job will be unsigned and PRs carrying them stay blocked by the signed-commits ruleset."
-          echo "signing=false" >> "$GITHUB_OUTPUT"
-          exit 0
-        fi
-
-        # ubuntu-latest and ubuntu-slim both ship openssh-client, and slim cannot
-        # install packages, so a runner without it fails here, by name.
-        if ! command -v ssh-keygen >/dev/null 2>&1; then
-          echo "::error::ssh-keygen is not on this runner; SSH commit signing needs openssh-client."
-          exit 1
-        fi
-
-        # RUNNER_TEMP is wiped when the job ends, so the key never outlives it.
-        key_file="${RUNNER_TEMP}/bot-signing-key"
-        install -m 600 /dev/null "$key_file"
-        printf '%s\n' "$SIGNING_KEY" > "$key_file"
-        # Fail here, with a clear message, rather than at the first commit.
-        if ! ssh-keygen -y -f "$key_file" >/dev/null 2>&1; then
-          echo "::error::The signing key is not a valid unencrypted OpenSSH private key."
-          exit 1
-        fi
-
-        git config --global gpg.format ssh
-        git config --global user.signingkey "$key_file"
-        git config --global commit.gpgsign true
-        {
-          echo "GIT_COMMITTER_NAME=${COMMITTER_NAME}"
-          echo "GIT_COMMITTER_EMAIL=${COMMITTER_EMAIL}"
-        } >> "$GITHUB_ENV"
-        echo "Signing commits, committed as ${COMMITTER_NAME} <${COMMITTER_EMAIL}>, with key $(ssh-keygen -l -f "$key_file" | awk '{print $2}')"
-        echo "signing=true" >> "$GITHUB_OUTPUT"
+      run: python3 "${{ github.action_path }}/sign_bot_commits.py"

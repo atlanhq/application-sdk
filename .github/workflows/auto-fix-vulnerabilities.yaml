@@ -8,6 +8,11 @@
 #   5. Commits updated pyproject.toml + uv.lock to the PR branch
 #   5. Scan re-runs automatically on the new commit
 #
+# `uv lock` runs the PR's dependency code (a build backend can execute), so the
+# job that resolves never holds the commit-signing key: that code could leave a
+# git hook or config behind that reads it. It hands over only uv.lock and
+# pyproject.toml, and a fresh `commit` job signs, commits and pushes them.
+#
 # Usage in each app repo (.github/workflows/auto-fix.yml):
 #
 #   on:
@@ -50,6 +55,11 @@ jobs:
     name: Auto-fix Vulnerabilities
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      branch: ${{ steps.pr.outputs.branch }}
+      number: ${{ steps.pr.outputs.number }}
+      head_sha: ${{ steps.head.outputs.sha }}
+      changed: ${{ steps.handover.outputs.changed }}
     steps:
       - name: Get PR branch
         id: pr
@@ -104,6 +114,12 @@ jobs:
         with:
           ref: ${{ steps.pr.outputs.branch }}
           token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+
+      # Recorded before any PR or dependency code runs, so the commit job can
+      # refuse a branch that moved.
+      - name: Record the PR head
+        id: head
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Download latest scan artifacts
         env:
@@ -333,28 +349,29 @@ jobs:
           print(f"\nDone: {len(fixed)} fixed, {len(failed)} failed")
           PYEOF
 
-      - name: Sign bot commits
-        if: steps.fix.outputs.fixed_count > 0
-        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
-        with:
-          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
-
-      - name: Commit fixes
+      - name: Hand over the fixed lockfile
+        id: handover
         if: steps.fix.outputs.fixed_count > 0
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add uv.lock pyproject.toml 2>/dev/null || true
-          if ! git diff --staged --quiet; then
-            git commit -m "fix(security): auto-update vulnerable dependencies
-
-          Updated packages with known CRITICAL/HIGH CVEs to their fixed versions.
-          Triggered by /fix-vulnerabilities comment on PR #${{ steps.pr.outputs.number }}."
-            git push
-            echo "Fixes committed and pushed — scan will re-run automatically"
-          else
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- uv.lock pyproject.toml)" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No lockfile changes to commit"
+          else
+            mkdir -p "$RUNNER_TEMP/fix"
+            cp uv.lock pyproject.toml "$RUNNER_TEMP/fix/"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Upload the fixed lockfile
+        if: steps.handover.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: vulnerability-fix
+          path: |
+            ${{ runner.temp }}/fix/uv.lock
+            ${{ runner.temp }}/fix/pyproject.toml
+          retention-days: 1
 
       - name: Comment on PR
         if: always()
@@ -376,3 +393,65 @@ jobs:
               issue_number: context.issue.number,
               body: body,
             });
+
+  # A fresh job: it runs no PR or dependency code, so the signing key is never on
+  # disk beside anything the PR controls. It writes only uv.lock and pyproject.toml.
+  commit:
+    name: Commit vulnerability fixes
+    needs: auto-fix
+    if: needs.auto-fix.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: ${{ github.event.repository.name }}
+
+      - name: Checkout PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.auto-fix.outputs.branch }}
+          token: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+
+      - name: Refuse a branch that moved since the fix was computed
+        env:
+          EXPECTED: ${{ needs.auto-fix.outputs.head_sha }}
+        run: |
+          actual=$(git rev-parse HEAD)
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::The PR branch moved from $EXPECTED to $actual while fixes were computed; comment /fix-vulnerabilities again."
+            exit 1
+          fi
+
+      - name: Download the fixed lockfile
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: vulnerability-fix
+          path: ${{ runner.temp }}/fix
+
+      - name: Sign bot commits
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
+      - name: Commit fixes
+        env:
+          PR_NUMBER: ${{ needs.auto-fix.outputs.number }}
+          BRANCH: ${{ needs.auto-fix.outputs.branch }}
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/fix/uv.lock" "$RUNNER_TEMP/fix/pyproject.toml" .
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add uv.lock pyproject.toml
+          git commit -m "fix(security): auto-update vulnerable dependencies" \
+            -m "Updated packages with known CRITICAL/HIGH CVEs to their fixed versions." \
+            -m "Triggered by /fix-vulnerabilities comment on PR #${PR_NUMBER}."
+          git push origin "HEAD:refs/heads/${BRANCH}"
+          echo "Fixes committed and pushed — scan will re-run automatically"
