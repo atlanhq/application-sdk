@@ -2363,10 +2363,16 @@ class App(ABC):
                     exc_info=True,
                 )
                 path_results[cred_dir] = False
+        removed_dirs = [d for d in credential_dirs if path_results.get(d)]
         with _app_state_lock:
-            tracked_dirs.difference_update(
-                d for d in credential_dirs if path_results.get(d)
+            tracked_dirs.difference_update(removed_dirs)
+        if removed_dirs:
+            from application_sdk.credentials.utils import (  # noqa: PLC0415 — lazy: only needed once a run made a credential directory; keeps credentials.utils off app.base's import path
+                _forget_credential_dir,
             )
+
+            for removed in removed_dirs:
+                _forget_credential_dir(removed)
 
         # 3. Delete convention-based temp directories.
         if input.extra_paths:

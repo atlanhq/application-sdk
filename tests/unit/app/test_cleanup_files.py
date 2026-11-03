@@ -470,3 +470,7 @@ class TestCleanupCredentialFiles:
 
         assert not os.path.exists(d)
         assert result.path_results[str(d)] is True
+        # Removed, so the path no longer passes as a CredentialDir.
+        from application_sdk.credentials import utils as credential_utils
+
+        assert str(d) not in credential_utils._issued_dirs

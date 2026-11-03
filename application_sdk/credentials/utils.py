@@ -3,8 +3,8 @@
 import base64
 import os
 import shutil
-import stat
 import tempfile
+import threading
 import warnings
 from typing import Literal, overload
 
@@ -34,6 +34,23 @@ _DEFAULT_CREDENTIAL_FILE_DIR = os.path.join(TEMPORARY_PATH, "credential_files")
 
 #: Only :func:`credential_dir` holds this, so only it can make a CredentialDir.
 _ISSUED = object()
+
+#: Paths :func:`credential_dir` made in this process and nothing has removed
+#: yet. A CredentialDir is honoured only if its path is here, so a forged one
+#: (``str.__new__``) around any other path — a shared directory, a symlink —
+#: is refused without relying on platform permission bits.
+_issued_dirs: set[str] = set()
+_issued_dirs_lock = threading.Lock()
+
+
+def _forget_credential_dir(path: str) -> None:
+    """Drop *path* from the issued set once its directory has been removed.
+
+    Called by every scope that removes a credential directory, so a later
+    directory recreated at the same path is never mistaken for the SDK's.
+    """
+    with _issued_dirs_lock:
+        _issued_dirs.discard(path)
 
 
 class CredentialDir(str):
@@ -86,6 +103,8 @@ def credential_dir(base_dir: str | None = None) -> CredentialDir:
     base = base_dir if base_dir is not None else _DEFAULT_CREDENTIAL_FILE_DIR
     os.makedirs(base, exist_ok=True)
     path = tempfile.mkdtemp(prefix="cred-", dir=base)
+    with _issued_dirs_lock:
+        _issued_dirs.add(path)
     _track_call_dir(path)
     return CredentialDir(path, _issued_by=_ISSUED)
 
@@ -220,8 +239,9 @@ async def resolve_credential_file(
         FileExistsError: ``raise_on_error`` and ``dest_dir`` is a
             :class:`CredentialDir` that already holds ``filename``.
         PermissionError: ``raise_on_error`` and ``dest_dir`` is a
-            :class:`CredentialDir` that is not a real, owner-only directory
-            of this user (for example one forged around a shared path).
+            :class:`CredentialDir` that :func:`credential_dir` did not make
+            in this process, or whose directory has already been removed
+            (for example one forged around a shared path).
         Exception: Failures downloading an Atlan upload reference propagate
             in either mode, as they always have; with ``raise_on_error``,
             failures downloading from the customer object store or writing
@@ -395,34 +415,26 @@ def _is_bare_filename(filename: str) -> bool:
 def _call_dir_for(dest_dir: CredentialDir | str | None) -> tuple[str, bool]:
     """The private directory this call writes into, and whether it made it.
 
-    A :class:`CredentialDir` is used as is, once it is checked to be a real
-    owner-only directory and registered for cleanup (again: registering is
-    idempotent, and it covers a CredentialDir forged around ``str.__new__``).
-    Otherwise a new one is made — under the default base, or inside a legacy
-    plain-string ``dest_dir`` — and this call removes it again if the write
-    fails.
+    A :class:`CredentialDir` is used as is, provided :func:`credential_dir`
+    issued it in this process and it has not been removed (its scope removes
+    it). Otherwise a new one is made — under the default base, or inside a
+    legacy plain-string ``dest_dir`` — and this call removes it again if the
+    write fails.
+
+    Raises:
+        PermissionError: A CredentialDir that was not issued here, or whose
+            directory has already been removed.
     """
     if isinstance(dest_dir, CredentialDir):
-        _check_private_dir(dest_dir)
-        _track_call_dir(dest_dir)
+        with _issued_dirs_lock:
+            issued = str(dest_dir) in _issued_dirs
+        if not issued:
+            raise PermissionError(
+                "Credential directory was not made by credential_dir() in this "
+                "process, or has already been removed"
+            )
         return dest_dir, False
     return credential_dir(dest_dir), True
-
-
-def _check_private_dir(path: str) -> None:
-    """Raise ``PermissionError`` unless *path* is a private directory of ours.
-
-    A real directory (not a symlink), owned by this user, with no group or
-    other permission bits: what :func:`credential_dir` makes.
-    """
-    st = os.lstat(path)
-    owned = not hasattr(os, "geteuid") or st.st_uid == os.geteuid()
-    private = os.name == "nt" or not st.st_mode & 0o077
-    if not stat.S_ISDIR(st.st_mode) or not owned or not private:
-        raise PermissionError(
-            "Credential directory is not a private, owner-only directory: "
-            "make it with credential_dir()"
-        )
 
 
 def _reserve_file_path(call_dir: str, filename: str) -> str:
@@ -451,6 +463,8 @@ def _discard(call_dir: str, file_path: str, owned: bool) -> None:
     else just the name it reserved in the caller's directory."""
     if owned:
         shutil.rmtree(call_dir, ignore_errors=True)
+        if not os.path.lexists(call_dir):
+            _forget_credential_dir(call_dir)
     elif os.path.lexists(file_path):
         os.remove(file_path)
 
@@ -491,7 +505,7 @@ def _track_call_dir(call_dir: str) -> None:
 
     handler_ctx = get_handler_context()
     if handler_ctx is not None:
-        handler_ctx._track_credential_dir(call_dir)
+        handler_ctx._track_credential_dir(call_dir, _forget_credential_dir)
         return
 
     try:

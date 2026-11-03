@@ -405,7 +405,7 @@ For the `objectstore://` and base64 formats, every file lands in a **private dir
 
   Resolving a second file of the same name into one `credential_dir()` raises `FileExistsError` instead of replacing the first, including when two resolutions of the name run at once: the name is reserved atomically (as an empty 0600 file) before its content arrives.
 
-  Only `credential_dir()` makes a `CredentialDir`. Constructing one directly raises `TypeError`, and `resolve_credential_file` refuses one that isn't a real, owner-only directory of the current user (`PermissionError`), so a shared path can't pass as private.
+  Only `credential_dir()` makes a `CredentialDir`. Constructing one directly raises `TypeError`, and `resolve_credential_file` honours one only if `credential_dir()` made that path in this process and it hasn't been removed yet; anything else raises `PermissionError`. A shared path can't pass as private on any platform.
 - **A plain-string `dest_dir` is deprecated.** It still works, but the file goes into a new private directory *inside* it, not into `dest_dir` itself, and a `DeprecationWarning` is emitted. Plain strings are rejected in v4.0. Apps that need a fixed, shared directory switch to `credential_dir()`.
 - **`filename` is a bare name.** A name that is empty, `.`, `..`, or contains a path separator raises `CredentialParseError`.
 - **Owner-only and never half-written.** Each file is 0600. It is written to a temp file and renamed into place, so a reader never sees a partial keytab.

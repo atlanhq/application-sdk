@@ -1,7 +1,6 @@
 import asyncio
 import base64
 import os
-import sys
 import warnings
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
@@ -687,13 +686,11 @@ class TestCredentialDir:
         with pytest.raises(TypeError, match="credential_dir"):
             credential_utils.CredentialDir(str(tmp_path))
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX permission bits")
     async def test_a_forged_credential_dir_around_a_shared_path_is_refused(
         self, tmp_path
     ):
         shared = tmp_path / "shared"
-        shared.mkdir(mode=0o777)
-        os.chmod(shared, 0o777)
+        shared.mkdir()
         forged = str.__new__(credential_utils.CredentialDir, str(shared))
         with pytest.raises(PermissionError, match="credential_dir"):
             await resolve_credential_file(
@@ -704,20 +701,47 @@ class TestCredentialDir:
             )
         assert os.listdir(shared) == []
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
-    async def test_a_forged_credential_dir_through_a_symlink_is_refused(self, tmp_path):
-        target = credential_utils.credential_dir()
-        link = tmp_path / "link"
-        link.symlink_to(target)
-        forged = str.__new__(credential_utils.CredentialDir, str(link))
-        with pytest.raises(PermissionError):
+    async def test_a_private_directory_not_made_by_credential_dir_is_refused(
+        self, tmp_path
+    ):
+        # Owner-only permission bits are not enough (on Windows they say
+        # nothing at all): only a credential_dir() path passes.
+        mine = tmp_path / "mine"
+        mine.mkdir(mode=0o700)
+        forged = str.__new__(credential_utils.CredentialDir, str(mine))
+        with pytest.raises(PermissionError, match="credential_dir"):
             await resolve_credential_file(
                 base64.b64encode(b"secret").decode(),
                 "keytab",
                 forged,
                 raise_on_error=True,
             )
-        assert os.listdir(target) == []
+        assert os.listdir(mine) == []
+
+    async def test_a_forged_credential_dir_around_an_issued_path_is_honoured(
+        self, tmp_path
+    ):
+        # Same path as a real one: the same private directory, so no bypass.
+        d = credential_utils.credential_dir()
+        same = str.__new__(credential_utils.CredentialDir, str(d))
+        path = await resolve_credential_file(
+            base64.b64encode(b"k").decode(), "keytab", same, raise_on_error=True
+        )
+        assert path == os.path.join(d, "keytab")
+
+    async def test_a_removed_credential_dir_recreated_at_its_path_is_refused(
+        self, tmp_path
+    ):
+        ctx = HandlerContext(app_name="example-app")
+        with bind_handler_context(ctx):
+            d = credential_utils.credential_dir()
+        assert not os.path.lexists(d)
+        os.mkdir(d, 0o700)  # re-created afterwards, private but not the SDK's
+        with pytest.raises(PermissionError):
+            await resolve_credential_file(
+                base64.b64encode(b"secret").decode(), "keytab", d, raise_on_error=True
+            )
+        assert os.listdir(d) == []
 
     @patch("application_sdk.storage.binding.create_store_from_binding")
     async def test_concurrent_resolutions_of_one_name_cannot_both_win(
@@ -789,7 +813,7 @@ class TestHandlerScopedCleanup:
             assert os.path.isfile(path) and os.path.isdir(shared)
         assert not os.path.lexists(os.path.dirname(path))
         assert not os.path.lexists(shared)
-        assert ctx._credential_dirs == []
+        assert ctx._credential_dirs == {}
 
     async def test_repeated_handler_calls_do_not_accumulate_directories(self, tmp_path):
         for _ in range(3):
@@ -809,4 +833,4 @@ class TestHandlerScopedCleanup:
                 path = await resolve_credential_file(
                     base64.b64encode(b"ca").decode(), "ca.pem", raise_on_error=True
                 )
-        assert ctx._credential_dirs == [os.path.dirname(path)]
+        assert list(ctx._credential_dirs) == [os.path.dirname(path)]

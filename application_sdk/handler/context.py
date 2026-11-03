@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -78,9 +78,12 @@ class HandlerContext:
     _logger: Any = field(default=None, repr=False)
     """Cached bound logger instance."""
 
-    _credential_dirs: list[str] = field(default_factory=list, repr=False)
-    """Private credential directories made during this invocation; removed
-    when :func:`bind_handler_context` exits."""
+    _credential_dirs: dict[str, Callable[[str], None]] = field(
+        default_factory=dict, repr=False
+    )
+    """Private credential directories made during this invocation, each with
+    the callback to run once it is removed; removed when
+    :func:`bind_handler_context` exits."""
 
     @property
     def request_id_str(self) -> str:
@@ -151,10 +154,16 @@ class HandlerContext:
     def log_error(self, message: str, **kwargs: Any) -> None:
         self.log.error(message, **kwargs)
 
-    def _track_credential_dir(self, path: str) -> None:
-        """Remove *path* (a private credential directory) when this invocation ends."""
-        if path not in self._credential_dirs:
-            self._credential_dirs.append(path)
+    def _track_credential_dir(
+        self, path: str, on_removed: Callable[[str], None]
+    ) -> None:
+        """Remove *path* (a private credential directory) when this invocation
+        ends, then call ``on_removed(path)``.
+
+        The callback keeps this module free of a credentials import, which
+        would pull the credentials package into every handler install.
+        """
+        self._credential_dirs.setdefault(path, on_removed)
 
     def _remove_credential_dirs(self) -> None:
         """Remove the credential directories this invocation made.
@@ -162,12 +171,13 @@ class HandlerContext:
         A directory that cannot be removed is logged (path only) and kept on
         the list, so nothing reports it gone while its files remain.
         """
-        for path in list(self._credential_dirs):
+        for path, on_removed in list(self._credential_dirs.items()):
             shutil.rmtree(path, ignore_errors=True)
             if os.path.lexists(path):
                 self.log.warning("Could not remove credential directory %s", path)
             else:
-                self._credential_dirs.remove(path)
+                del self._credential_dirs[path]
+                on_removed(path)
 
     def elapsed_ms(self) -> float:
         """Elapsed time since request started in milliseconds."""
