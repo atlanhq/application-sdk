@@ -39,7 +39,6 @@ import ast
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
-from conformance.suite.checks._ast_common._discovery import EXCLUDE_DIRS, discover
 from conformance.suite.schema.extensions import SafeSwap, SafeSwapRequires
 from conformance.suite.schema.findings import Finding
 
@@ -569,29 +568,60 @@ def _is_contract_subclass(node: ast.ClassDef) -> bool:
     return False
 
 
+_NOT_REPO_CODE = frozenset(
+    {".git", ".venv", "venv", "node_modules", "site-packages", "__pycache__"}
+)
+
+#: Class-body statements whose fields this file does not read; a class with one is never a swap.
+_BLOCK_STATEMENTS: tuple[type[ast.stmt], ...] = (
+    ast.If,
+    ast.Try,
+    ast.With,
+    ast.AsyncWith,
+    ast.For,
+    ast.AsyncFor,
+    ast.While,
+    ast.Match,
+) + ((ast.TryStar,) if hasattr(ast, "TryStar") else ())
+
+
+def _all_python_files(root: Path) -> list[Path]:
+    return [
+        p
+        for p in root.rglob("*.py")
+        if not _NOT_REPO_CODE.intersection(p.relative_to(root).parts[:-1])
+    ]
+
+
 def reused_class_names(root: Path) -> frozenset[str]:
     """Names any class in the repo could inherit through, tests included.
 
     A class base (``class B(A)`` gives ``A``), a name bound to another name
-    (``Alias = A``) and a ``__base__=`` keyword (``create_model(..., __base__=A)``).
-    A class named here may pass its opt-out to a class this file cannot see, so
-    its opt-out is not a safe swap.  The whole repo is read, so a scan of a few
-    files gives the same answer as a full one; a file that does not parse makes
-    every opt-out unsafe.
+    (``Alias = A``, ``Alias: TypeAlias = A``), the original name of a renamed
+    import (``from m import A as B``) and a ``__base__=`` keyword
+    (``create_model(..., __base__=A)``).  A class named here may pass its
+    opt-out to a class this file cannot see, so its opt-out is not a safe swap.
+    Every ``.py`` file outside the virtualenv and VCS folders is read, so a scan
+    of a few files gives the same answer as a full one; a file that cannot be
+    read or parsed makes every opt-out unsafe.
     """
     names: set[str] = set()
-    for path in discover(root, exclude_dirs=EXCLUDE_DIRS - {"tests", "test"}):
+    for path in _all_python_files(root):
         try:
             tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError):
-            continue
-        except SyntaxError:
+        except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
             return frozenset({"*"})
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 names.update(n for b in node.bases if (n := _simple_name(b)))
-            elif isinstance(node, ast.Assign) and _simple_name(node.value):
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)) and _simple_name(
+                node.value
+            ):
                 names.add(_simple_name(node.value))  # type: ignore[arg-type]
+            elif isinstance(node, ast.ImportFrom):
+                names.update(
+                    a.name for a in node.names if a.asname not in (None, a.name)
+                )
             elif isinstance(node, ast.keyword) and node.arg == "__base__":
                 names.update(
                     n
@@ -808,13 +838,17 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             return None
         if any(kw.arg != "allow_unbounded_fields" for kw in node.keywords):
             return None
+        if "generated" in Path(self._filename).parts or any(
+            isinstance(stmt, _BLOCK_STATEMENTS) for stmt in node.body
+        ):
+            return None
         if self._lines[node.lineno - 1].count(_OPTOUT_FIND) != 1:
             return None
         return SafeSwap(
             id="remove-noop-optout",
             find=_OPTOUT_FIND,
             replace="",
-            requires=SafeSwapRequires(package="atlan-application-sdk", min="3.0.0"),
+            requires=SafeSwapRequires(package="atlan-application-sdk", min="3.22.1"),
         ).to_properties()
 
     def _check_missing_optout(self, node: ast.ClassDef) -> None:

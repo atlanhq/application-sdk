@@ -882,7 +882,7 @@ def test_p001_marks_an_opt_out_guarding_nothing_as_a_safe_swap(tmp_path: Path) -
         "id": "remove-noop-optout",
         "find": ", allow_unbounded_fields=True",
         "replace": "",
-        "requires": {"package": "atlan-application-sdk", "min": "3.0.0"},
+        "requires": {"package": "atlan-application-sdk", "min": "3.22.1"},
     }
     fixed = _NOOP_OPTOUT.replace(swap["find"], swap["replace"])
     assert [f for f in _scan_one(tmp_path, fixed) if f.rule_id == "P001"] == []
@@ -896,8 +896,18 @@ def test_p001_marks_an_opt_out_guarding_nothing_as_a_safe_swap(tmp_path: Path) -
         "from m import TaskInput\nLegacy = TaskInput\n",
         "from m import TaskInput\nM = create_model('M', __base__=TaskInput)\n",
         "def broken(:\n",
+        "from m import TaskInput as Base\nclass Child(Base):\n    blob: Any = None\n",
+        "from m import TaskInput\nLegacy: TypeAlias = TaskInput\n",
     ],
-    ids=["subclass", "dotted-subclass", "alias", "create-model", "unparsable-file"],
+    ids=[
+        "subclass",
+        "dotted-subclass",
+        "alias",
+        "create-model",
+        "unparsable-file",
+        "renamed-import",
+        "annotated-alias",
+    ],
 )
 def test_p001_no_safe_swap_when_another_class_can_inherit_the_opt_out(
     tmp_path: Path, other: str
@@ -927,6 +937,9 @@ def test_p001_no_safe_swap_when_another_class_can_inherit_the_opt_out(
             "=True):", "=True):  # was (Output, allow_unbounded_fields=True)"
         ),
         _NOOP_OPTOUT + "    _allow_unbounded_fields = True\n",
+        _NOOP_OPTOUT + "    if FLAG:\n        blob: list[str] = []\n",
+        _NOOP_OPTOUT
+        + "    try:\n        blob: list[str] = []\n    except Exception:\n        pass\n",
     ],
     ids=[
         "other-base",
@@ -939,12 +952,39 @@ def test_p001_no_safe_swap_when_another_class_can_inherit_the_opt_out(
         "other-keyword",
         "text-twice-on-the-line",
         "attribute-opt-out-too",
+        "field-under-if",
+        "field-under-try",
     ],
 )
 def test_p001_no_safe_swap_unless_the_opt_out_is_provably_a_no_op(
     tmp_path: Path, src: str
 ) -> None:
     assert _optout_swap(tmp_path, {"m.py": src}) is None
+
+
+@pytest.mark.parametrize("folder", ["docs", "conformance", ".claude"])
+def test_p001_no_safe_swap_when_a_subclass_lives_in_a_skipped_scan_folder(
+    tmp_path: Path, folder: str
+) -> None:
+    other = "from m import TaskInput\nclass Child(TaskInput):\n    blob: Any = None\n"
+    assert (
+        _optout_swap(tmp_path, {"m.py": _NOOP_OPTOUT, f"{folder}/other.py": other})
+        is None
+    )
+
+
+def test_p001_no_safe_swap_when_a_repo_file_cannot_be_read(tmp_path: Path) -> None:
+    (tmp_path / "latin.py").write_bytes(b"x = '\xe9'\n")
+    assert _optout_swap(tmp_path, {"m.py": _NOOP_OPTOUT}) is None
+
+
+def test_p001_no_safe_swap_in_a_generated_contract(tmp_path: Path) -> None:
+    p001 = [
+        f
+        for f in _scan_files(tmp_path, {"app/generated/_input.py": _NOOP_OPTOUT})
+        if f.rule_id == "P001"
+    ]
+    assert len(p001) == 1 and not p001[0].properties
 
 
 def test_p001_no_safe_swap_on_the_class_attribute_opt_out(tmp_path: Path) -> None:
