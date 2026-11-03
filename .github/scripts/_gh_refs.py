@@ -163,6 +163,7 @@ def gh_request(
     *,
     sleep=time.sleep,
     body_via_file: bool = False,
+    token: str | None = None,
 ) -> Response:
     """Call the GitHub API, returning the status rather than raising on 4xx.
 
@@ -173,8 +174,12 @@ def gh_request(
     ``body_via_file`` sends the payload from a temp file instead of argv. Linux
     caps a single argument at 128 KiB, which a payload carrying whole files
     (a commit of ``uv.lock``) exceeds.
+
+    ``token`` overrides ``GH_TOKEN``/``GITHUB_TOKEN`` for a caller whose write
+    identity is not the one in its environment (a job that reads with the
+    workflow token and writes with an App token).
     """
-    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    token = token or os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     if not token:
         raise SystemExit("::error::GH_TOKEN (or GITHUB_TOKEN) must be set")
 
