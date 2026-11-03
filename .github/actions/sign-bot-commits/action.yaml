@@ -1,0 +1,91 @@
+name: Sign bot commits
+description: |
+  Configure git on the runner so every commit the job makes afterwards is
+  SSH-signed as the CI machine user, and so shows as Verified on GitHub.
+
+  The org ruleset `signed-commits` blocks any PR whose head commits are
+  unsigned, and ruleset bypass actors are not honoured by auto-merge or the
+  merge queue, so a bot PR with an unsigned commit can never merge on its own.
+  A GitHub App cannot hold a signing key, so the commits are authored and
+  signed as a machine user (`atlan-ci`) whose account has this key registered
+  as a signing key. Whoever pushes does not matter: the App token or the PAT
+  still pushes and opens the PR exactly as before.
+
+  Signing is local. It adds no API calls, so unlike committing through the API
+  it costs nothing against GitHub's secondary write limits (80 per minute,
+  500 per hour), which fleet-wide jobs would otherwise run into.
+
+  Call it before the job's first `git commit`. Steps that set their own
+  `user.name`/`user.email` afterwards must use the same identity, or GitHub
+  cannot match the signature to an account and shows the commit as Unverified.
+
+  With no key (the secret not yet available to a repo) it only warns and leaves
+  commits unsigned, which is today's behaviour, so callers can adopt it before
+  the secret is rolled out everywhere.
+
+  Reusable workflows must reference this as
+  `atlanhq/application-sdk/.github/actions/sign-bot-commits@main`, not `./…` —
+  a relative path resolves against the CALLER's workspace.
+
+inputs:
+  signing-key:
+    required: false
+    default: ""
+    description: |
+      OpenSSH private key registered as a Signing Key on the machine user's
+      account. Pass the org secret, e.g. `secrets.BOT_SIGNING_KEY`.
+  name:
+    required: false
+    default: "atlan-ci"
+    description: "Commit author and committer name."
+  email:
+    required: false
+    default: "it@atlan.com"
+    description: |
+      Commit author and committer email. Must be a verified email on the
+      account that holds the key.
+
+outputs:
+  signing:
+    description: "'true' when commits will be signed, 'false' when no key was given."
+    value: ${{ steps.configure.outputs.signing }}
+
+runs:
+  using: composite
+  steps:
+    - id: configure
+      shell: bash
+      env:
+        SIGNING_KEY: ${{ inputs.signing-key }}
+        GIT_NAME: ${{ inputs.name }}
+        GIT_EMAIL: ${{ inputs.email }}
+      run: |
+        set -euo pipefail
+        git config --global user.name "$GIT_NAME"
+        git config --global user.email "$GIT_EMAIL"
+
+        if [ -z "$SIGNING_KEY" ]; then
+          echo "::warning::No signing key provided; commits from this job will be unsigned and PRs carrying them stay blocked by the signed-commits ruleset."
+          echo "signing=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if ! command -v ssh-keygen >/dev/null 2>&1; then
+          sudo apt-get update -qq && sudo apt-get install -y -qq openssh-client >/dev/null
+        fi
+
+        # RUNNER_TEMP is wiped when the job ends, so the key never outlives it.
+        key_file="${RUNNER_TEMP}/bot-signing-key"
+        install -m 600 /dev/null "$key_file"
+        printf '%s\n' "$SIGNING_KEY" > "$key_file"
+        # Fail here, with a clear message, rather than at the first commit.
+        if ! ssh-keygen -y -f "$key_file" >/dev/null 2>&1; then
+          echo "::error::The signing key is not a valid unencrypted OpenSSH private key."
+          exit 1
+        fi
+
+        git config --global gpg.format ssh
+        git config --global user.signingkey "$key_file"
+        git config --global commit.gpgsign true
+        echo "Signing commits as ${GIT_NAME} <${GIT_EMAIL}> with key $(ssh-keygen -l -f "$key_file" | awk '{print $2}')"
+        echo "signing=true" >> "$GITHUB_OUTPUT"
