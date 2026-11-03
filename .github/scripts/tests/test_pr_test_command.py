@@ -83,23 +83,24 @@ def _event(
     }
 
 
-#: A synthetic GitHub App id standing in for the release-train App (FND-4037).
-APP_ID = 424242
+#: A synthetic App name standing in for the release-train App (FND-4037).
+APP_SLUG = "example-release-app"
 
 
 def _app_event(
     body: str = "/gate-check",
     *,
-    app_id: Any = APP_ID,
+    app_slug: Any = APP_SLUG,
+    login: str | None = None,
     user_type: str = "Bot",
 ) -> dict[str, Any]:
     """A comment posted through a GitHub App installation token."""
     event = _event(body, association="NONE", user_type=user_type)
-    event["comment"]["user"]["login"] = "example-fleet-app[bot]"
-    if app_id is not None:
+    event["comment"]["user"]["login"] = login or f"{app_slug or APP_SLUG}[bot]"
+    if app_slug is not None:
         event["comment"]["performed_via_github_app"] = {
-            "id": app_id,
-            "slug": "example-fleet-app",
+            "id": 424242,
+            "slug": app_slug,
         }
     return event
 
@@ -192,8 +193,9 @@ class TestDecide:
         assert "bots" in request.reason
 
     def test_trusted_app_plain_gate_check_is_honoured(self) -> None:
-        """FND-4037: the release train's `/gate-check`, matched on the App id."""
-        request = ptc.decide("issue_comment", _app_event(), str(APP_ID))
+        """FND-4037: the release train's `/gate-check`, matched on the App name
+        and its bot author."""
+        request = ptc.decide("issue_comment", _app_event(), APP_SLUG)
         assert request.run is True
         assert request.via_trusted_app is True
         assert (request.command, request.force) == (ptc.GATE_CHECK, False)
@@ -201,24 +203,24 @@ class TestDecide:
     @pytest.mark.parametrize(
         ("event", "trusted"),
         [
-            (_app_event(app_id=APP_ID + 1), str(APP_ID)),
-            (_app_event(app_id=None), str(APP_ID)),
-            (_app_event(app_id=str(APP_ID)), str(APP_ID)),
+            (_app_event(app_slug="another-app"), APP_SLUG),
+            (_app_event(app_slug=None), APP_SLUG),
+            (_app_event(login="another-app[bot]"), APP_SLUG),
             (_app_event(), ""),
             (_app_event(), "   "),
-            (_app_event(), "not-a-number"),
-            (_app_event("/gate-check force"), str(APP_ID)),
-            (_app_event("/gate-check please"), str(APP_ID)),
-            (_app_event("/e2e"), str(APP_ID)),
-            (_app_event("/e2e force"), str(APP_ID)),
+            (_app_event(), "Not A Slug!"),
+            (_app_event("/gate-check force"), APP_SLUG),
+            (_app_event("/gate-check please"), APP_SLUG),
+            (_app_event("/e2e"), APP_SLUG),
+            (_app_event("/e2e force"), APP_SLUG),
         ],
         ids=[
             "wrong-app",
             "other-bot-no-app",
-            "app-id-not-an-int",
-            "trusted-id-unset",
-            "trusted-id-blank",
-            "trusted-id-not-numeric",
+            "author-not-the-apps-bot",
+            "trusted-app-unset",
+            "trusted-app-blank",
+            "trusted-app-malformed",
             "force",
             "extra-words",
             "e2e",
@@ -236,7 +238,7 @@ class TestDecide:
     def test_a_human_via_the_app_takes_the_human_path(self) -> None:
         """A user-to-server token also sets `performed_via_github_app`, but
         the comment is a User's: the role check still applies to them."""
-        request = ptc.decide("issue_comment", _app_event(user_type="User"), str(APP_ID))
+        request = ptc.decide("issue_comment", _app_event(user_type="User"), APP_SLUG)
         assert request.via_trusted_app is False
         assert request.reason == ptc.ROLE_REFUSAL
 
@@ -1444,7 +1446,7 @@ class TestAuthorizeOnly:
         assert outputs == {"gate_check_authorized": "false"}
         assert api.writes == []
 
-    TRUSTED = ("--trusted-app-id", str(APP_ID))
+    TRUSTED = ("--trusted-app", APP_SLUG)
 
     def test_the_trusted_app_on_a_bump_pr_says_yes(self, run_main) -> None:
         api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), role="none")
@@ -1463,7 +1465,7 @@ class TestAuthorizeOnly:
             (_app_event(), _pull_body("feat/x"), TRUSTED),
             (_app_event(), _pull_body(BUMP, head_repo="someone/fork"), TRUSTED),
             (_app_event(), _pull_body(BUMP, state="closed"), TRUSTED),
-            (_app_event(app_id=APP_ID + 1), _pull_body(BUMP), TRUSTED),
+            (_app_event(app_slug="another-app"), _pull_body(BUMP), TRUSTED),
             (_app_event("/gate-check force"), _pull_body(BUMP), TRUSTED),
             (_app_event(), _pull_body(BUMP), ()),
             (
@@ -1595,9 +1597,7 @@ class TestMain:
     def test_trusted_app_gate_check_dispatches_on_a_bump_pr(self, run_main) -> None:
         """FND-4037: the release train's comment runs the release gate."""
         api = FakeApi(pull=_pull_body(BUMP), texts=_texts(), role="none")
-        rc, outputs = run_main(
-            _app_event(), api, extra=("--trusted-app-id", str(APP_ID))
-        )
+        rc, outputs = run_main(_app_event(), api, extra=("--trusted-app", APP_SLUG))
         assert rc == 0
         assert outputs["run"] == "true"
         assert len(api.dispatches()) == len(ptc.GATE_CHECK_WORKFLOWS)
@@ -1606,7 +1606,7 @@ class TestMain:
 
     def test_trusted_app_on_a_non_bump_pr_is_refused(self, run_main) -> None:
         api = FakeApi(pull=_pull_body("feat/x"), texts=_texts(), role="admin")
-        rc, _ = run_main(_app_event(), api, extra=("--trusted-app-id", str(APP_ID)))
+        rc, _ = run_main(_app_event(), api, extra=("--trusted-app", APP_SLUG))
         assert rc == 0
         assert api.dispatches() == []
         assert not [p for p, _ in api.writes if "/statuses/" in p]
@@ -1617,14 +1617,28 @@ class TestMain:
     @pytest.mark.parametrize(
         ("event", "extra"),
         [
-            (_app_event(app_id=APP_ID + 1), ("--trusted-app-id", str(APP_ID))),
-            (_app_event(app_id=None), ("--trusted-app-id", str(APP_ID))),
-            (_app_event("/gate-check force"), ("--trusted-app-id", str(APP_ID))),
-            (_app_event("/e2e"), ("--trusted-app-id", str(APP_ID))),
+            (_app_event(app_slug="another-app"), ("--trusted-app", APP_SLUG)),
+            (_app_event(app_slug=None), ("--trusted-app", APP_SLUG)),
+            (
+                _app_event(login="someone-else[bot]"),
+                ("--trusted-app", APP_SLUG),
+            ),
+            (_app_event("/gate-check force"), ("--trusted-app", APP_SLUG)),
+            (_app_event("/e2e"), ("--trusted-app", APP_SLUG)),
             (_app_event(), ()),
-            (_app_event(), ("--trusted-app-id", "")),
+            (_app_event(), ("--trusted-app", "")),
+            (_app_event(), ("--trusted-app", "Not A Slug!")),
         ],
-        ids=["wrong-app", "other-bot", "force", "e2e", "unset", "empty"],
+        ids=[
+            "wrong-app",
+            "other-bot",
+            "wrong-author",
+            "force",
+            "e2e",
+            "unset",
+            "empty",
+            "malformed",
+        ],
     )
     def test_other_bot_requests_stay_refused(
         self, run_main, event: dict[str, Any], extra: tuple[str, ...]
@@ -1927,9 +1941,9 @@ class TestContracts:
         ]
         assert users == ["Run the command"]
 
-    def test_the_trusted_app_id_reaches_both_command_steps_via_env(self) -> None:
-        """FND-4037: the id comes from the org variable RELEASE_TRAIN_APP_ID
-        (the atlan-connectivity-release-train App) through env (never inlined
+    def test_the_trusted_app_reaches_both_command_steps_via_env(self) -> None:
+        """FND-4037: the trusted App is the release train's own App, named in
+        the workflow env and passed through it (never inlined
         into the shell), and both the preflight and the command get it, so
         the token-minting decision and the command agree."""
         steps = yaml.safe_load(
@@ -1938,8 +1952,8 @@ class TestContracts:
         runners = [s for s in steps if "pr_test_command.py" in s.get("run", "")]
         assert len(runners) == 2
         for step in runners:
-            assert step["env"]["TRUSTED_APP_ID"] == "${{ vars.RELEASE_TRAIN_APP_ID }}"
-            assert '--trusted-app-id "$TRUSTED_APP_ID"' in step["run"]
+            assert step["env"]["TRUSTED_APP"] == "atlan-connectivity-release-train"
+            assert '--trusted-app "$TRUSTED_APP"' in step["run"]
             assert "secrets." not in step["run"]
 
     def test_sdk_e2e_request_job_name(self) -> None:

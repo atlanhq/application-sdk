@@ -111,8 +111,8 @@ jobs, and a skipped inline job files `skipped`, which reads as a pass. So both g
 **fail fast** on an un-opted bump PR, and every job they compose skips. Only the Admin role
 may comment `/gate-check` here (app repos accept Write, Maintain or Admin, plus a plain
 `/gate-check` on a `bump-version*` PR from the release train's own App,
-`atlan-connectivity-release-train` (its id is the org variable `RELEASE_TRAIN_APP_ID`), matched on the comment's
-`performed_via_github_app.id` — FND-4037). It posts a
+`atlan-connectivity-release-train`, matched on the App name GitHub attributes the comment to
+(`performed_via_github_app.slug`) and its `<slug>[bot]` author — FND-4037). It posts a
 `gate-check` status on the head and re-runs SDK Gate, PR Checks and CodeQL there; each reads
 the status live (`bump_pr_opt_in.py check --sha`), since a re-run replays the original event
 payload.
