@@ -18,6 +18,12 @@ from application_sdk.credentials.utils import (
 from tests.unit.private_stdlib import private_stdlib
 
 
+@pytest.fixture(autouse=True)
+def _default_credential_base(tmp_path, monkeypatch):
+    """Point the default credential base directory at the test's tmp_path."""
+    monkeypatch.setattr(credential_utils, "_DEFAULT_CREDENTIAL_FILE_DIR", str(tmp_path))
+
+
 class TestParseCredentialsExtra:
     """The single decoder for the credential ``extra`` field.
 
@@ -184,7 +190,7 @@ class TestResolveCredentialFile:
         value = '{"key": "artifacts/hiveadmin.keytab", "rawName": "hiveadmin.keytab", "extension": ".keytab"}'
 
         result = await resolve_credential_file(
-            value, "keytab.keytab", str(tmp_path), raise_on_error=False
+            value, "keytab.keytab", raise_on_error=False
         )
 
         mock_download.assert_awaited_once_with(value)
@@ -199,9 +205,7 @@ class TestResolveCredentialFile:
         mock_download.return_value = str(tmp_path / "krb5.conf")
         value = '{"fileKey": "artifacts/krb5.conf", "rawName": "krb5.conf"}'
 
-        result = await resolve_credential_file(
-            value, "krb5.conf", str(tmp_path), raise_on_error=False
-        )
+        result = await resolve_credential_file(value, "krb5.conf", raise_on_error=False)
 
         mock_download.assert_awaited_once_with(value)
         assert result == str(tmp_path / "krb5.conf")
@@ -218,7 +222,7 @@ class TestResolveCredentialFile:
         b64_value = base64.b64encode(original_bytes).decode()
 
         result = await resolve_credential_file(
-            b64_value, "keytab.keytab", str(tmp_path), raise_on_error=False
+            b64_value, "keytab.keytab", raise_on_error=False
         )
 
         _assert_in_call_dir(result, tmp_path, "keytab.keytab")
@@ -230,7 +234,7 @@ class TestResolveCredentialFile:
         b64_value = base64.b64encode(krb5_content).decode()
 
         result = await resolve_credential_file(
-            b64_value, "krb5.conf", str(tmp_path), raise_on_error=False
+            b64_value, "krb5.conf", raise_on_error=False
         )
 
         _assert_in_call_dir(result, tmp_path, "krb5.conf")
@@ -242,31 +246,30 @@ class TestResolveCredentialFile:
         b64_value = "  " + base64.b64encode(content).decode() + "\n"
 
         result = await resolve_credential_file(
-            b64_value, "ca_cert.pem", str(tmp_path), raise_on_error=False
+            b64_value, "ca_cert.pem", raise_on_error=False
         )
 
         assert result is not None
         assert open(result, "rb").read() == content
 
     async def test_base64_dest_dir_created_if_missing(self, tmp_path):
-        """dest_dir is created automatically if it does not exist."""
+        """A legacy plain-string dest_dir is created, and the file nests in it."""
         content = b"some-binary"
         b64_value = base64.b64encode(content).decode()
-        new_dir = str(tmp_path / "nested" / "dir")
+        new_dir = tmp_path / "nested" / "dir"
 
-        result = await resolve_credential_file(
-            b64_value, "file.bin", new_dir, raise_on_error=False
-        )
+        with pytest.warns(DeprecationWarning, match="plain-string dest_dir"):
+            result = await resolve_credential_file(
+                b64_value, "file.bin", str(new_dir), raise_on_error=False
+            )
 
-        assert result is not None
-        assert os.path.isdir(new_dir)
+        _assert_in_call_dir(result, new_dir, "file.bin")
 
     async def test_invalid_base64_returns_none(self, tmp_path):
         """A string that is neither JSON nor valid base64 returns None without raising."""
         result = await resolve_credential_file(
             "this is definitely not base64 !!!###",
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=False,
         )
         assert result is None
@@ -276,7 +279,7 @@ class TestResolveCredentialFile:
         # length-correct but contains '!' — only caught with validate=True
         bad_value = "QUJDRA==" + "!!!!QUJD"  # 16 chars, length multiple of 4
         result = await resolve_credential_file(
-            bad_value, "keytab.keytab", str(tmp_path), raise_on_error=False
+            bad_value, "keytab.keytab", raise_on_error=False
         )
         assert result is None
 
@@ -299,7 +302,6 @@ class TestResolveCredentialFile:
         result = await resolve_credential_file(
             "objectstore://kerberos/hiveadmin.keytab",
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=False,
         )
 
@@ -333,7 +335,6 @@ class TestResolveCredentialFile:
             result = await resolve_credential_file(
                 "objectstore://kerberos/krb5.conf",
                 "krb5.conf",
-                str(tmp_path),
                 raise_on_error=True,
             )
         finally:
@@ -358,7 +359,6 @@ class TestResolveCredentialFile:
         result = await resolve_credential_file(
             "  objectstore://foo/bar.keytab  ",
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=False,
         )
 
@@ -370,7 +370,7 @@ class TestResolveCredentialFile:
     async def test_objectstore_prefix_rejects_empty_key(self, tmp_path):
         """objectstore:// with no key after the prefix returns None."""
         result = await resolve_credential_file(
-            "objectstore://", "keytab.keytab", str(tmp_path), raise_on_error=False
+            "objectstore://", "keytab.keytab", raise_on_error=False
         )
         assert result is None
 
@@ -379,7 +379,6 @@ class TestResolveCredentialFile:
         result = await resolve_credential_file(
             "objectstore:///etc/passwd",
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=False,
         )
         assert result is None
@@ -389,7 +388,6 @@ class TestResolveCredentialFile:
         result = await resolve_credential_file(
             "objectstore://kerberos/../secrets/keytab",
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=False,
         )
         assert result is None
@@ -409,7 +407,6 @@ class TestResolveCredentialFile:
         result = await resolve_credential_file(
             "objectstore://kerberos/hiveadmin.keytab",
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=False,
         )
         assert result is None
@@ -423,14 +420,14 @@ class TestResolveCredentialFile:
     async def test_none_input_returns_none(self, tmp_path):
         """None input returns None immediately."""
         result = await resolve_credential_file(
-            None, "keytab.keytab", str(tmp_path), raise_on_error=False
+            None, "keytab.keytab", raise_on_error=False
         )
         assert result is None
 
     async def test_empty_string_returns_none(self, tmp_path):
         """Empty string returns None immediately."""
         result = await resolve_credential_file(
-            "", "keytab.keytab", str(tmp_path), raise_on_error=False
+            "", "keytab.keytab", raise_on_error=False
         )
         assert result is None
 
@@ -440,15 +437,13 @@ class TestResolveCredentialFileRaiseOnError:
 
     async def test_empty_value_raises_not_found(self, tmp_path):
         with pytest.raises(CredentialNotFoundError) as ei:
-            await resolve_credential_file(
-                "", "ca_cert.pem", str(tmp_path), raise_on_error=True
-            )
+            await resolve_credential_file("", "ca_cert.pem", raise_on_error=True)
         assert ei.value.credential_name == "ca_cert.pem"
 
     async def test_invalid_base64_raises_parse_error_with_cause(self, tmp_path):
         with pytest.raises(CredentialParseError) as ei:
             await resolve_credential_file(
-                "not base64 !!!", "keytab.keytab", str(tmp_path), raise_on_error=True
+                "not base64 !!!", "keytab.keytab", raise_on_error=True
             )
         assert ei.value.cause is not None
         assert not os.path.exists(tmp_path / "keytab.keytab")
@@ -459,9 +454,7 @@ class TestResolveCredentialFileRaiseOnError:
     )
     async def test_invalid_objectstore_key_raises_parse_error(self, value, tmp_path):
         with pytest.raises(CredentialParseError):
-            await resolve_credential_file(
-                value, "krb5.conf", str(tmp_path), raise_on_error=True
-            )
+            await resolve_credential_file(value, "krb5.conf", raise_on_error=True)
 
     @patch(
         "application_sdk.storage.ops.download_file",
@@ -477,14 +470,13 @@ class TestResolveCredentialFileRaiseOnError:
             await resolve_credential_file(
                 "objectstore://certs/ca.pem",
                 "ca_cert.pem",
-                str(tmp_path),
                 raise_on_error=True,
             )
 
     async def test_valid_base64_returns_path(self, tmp_path):
         b64_value = base64.b64encode(b"cert").decode()
         result = await resolve_credential_file(
-            b64_value, "ca_cert.pem", str(tmp_path), raise_on_error=True
+            b64_value, "ca_cert.pem", raise_on_error=True
         )
         assert open(result, "rb").read() == b"cert"
 
@@ -492,14 +484,14 @@ class TestResolveCredentialFileRaiseOnError:
 class TestResolveCredentialFileDeprecatedDefault:
     async def test_omitting_raise_on_error_warns(self, tmp_path):
         with pytest.warns(DeprecationWarning, match="v4.0"):
-            result = await resolve_credential_file("", "ca_cert.pem", str(tmp_path))
+            result = await resolve_credential_file("", "ca_cert.pem")
         assert result is None
 
     async def test_explicit_false_does_not_warn(self, tmp_path):
         with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
             result = await resolve_credential_file(
-                "", "ca_cert.pem", str(tmp_path), raise_on_error=False
+                "", "ca_cert.pem", raise_on_error=False
             )
         assert result is None
 
@@ -508,14 +500,12 @@ class TestResolveCredentialFileWhitespaceValue:
     @pytest.mark.parametrize("value", ["   ", "\n\t "])
     async def test_whitespace_only_raises_not_found(self, value, tmp_path):
         with pytest.raises(CredentialNotFoundError):
-            await resolve_credential_file(
-                value, "ca_cert.pem", str(tmp_path), raise_on_error=True
-            )
+            await resolve_credential_file(value, "ca_cert.pem", raise_on_error=True)
         assert not os.path.exists(tmp_path / "ca_cert.pem")
 
     async def test_whitespace_only_is_none_in_legacy_mode(self, tmp_path):
         result = await resolve_credential_file(
-            "   ", "ca_cert.pem", str(tmp_path), raise_on_error=False
+            "   ", "ca_cert.pem", raise_on_error=False
         )
         assert result is None
         assert not os.path.exists(tmp_path / "ca_cert.pem")
@@ -525,7 +515,7 @@ class TestResolveCredentialFileWhitespaceValue:
         # overload side is not checked here: pyright excludes tests/.)
         strict: bool = bool(os.environ.get("_UNSET_FOR_THIS_TEST"))
         result: str | None = await resolve_credential_file(
-            "", "ca_cert.pem", str(tmp_path), raise_on_error=strict
+            "", "ca_cert.pem", raise_on_error=strict
         )
         assert result is None
 
@@ -537,13 +527,11 @@ class TestResolveCredentialFilePerCallPaths:
         a = await resolve_credential_file(
             base64.b64encode(b"keytab-a").decode(),
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=True,
         )
         b = await resolve_credential_file(
             base64.b64encode(b"keytab-b").decode(),
             "keytab.keytab",
-            str(tmp_path),
             raise_on_error=True,
         )
 
@@ -557,7 +545,6 @@ class TestResolveCredentialFilePerCallPaths:
         result = await resolve_credential_file(
             base64.b64encode(b"cert").decode(),
             "ca_cert.pem",
-            str(tmp_path),
             raise_on_error=True,
         )
         assert os.listdir(os.path.dirname(result)) == ["ca_cert.pem"]
@@ -569,7 +556,6 @@ class TestResolveCredentialFilePerCallPaths:
                 await resolve_credential_file(
                     base64.b64encode(b"cert").decode(),
                     "ca_cert.pem",
-                    str(tmp_path),
                     raise_on_error=True,
                 )
         assert os.listdir(tmp_path) == []
@@ -582,7 +568,6 @@ class TestResolveCredentialFilePerCallPaths:
         result = await resolve_credential_file(
             base64.b64encode(b"cert").decode(),
             "ca_cert.pem",
-            str(tmp_path),
             raise_on_error=True,
         )
         assert open(result, "rb").read() == b"cert"
@@ -602,9 +587,7 @@ class TestResolveCredentialFilePerCallPaths:
         self, filename, value, tmp_path
     ):
         with pytest.raises(CredentialParseError):
-            await resolve_credential_file(
-                value, filename, str(tmp_path), raise_on_error=True
-            )
+            await resolve_credential_file(value, filename, raise_on_error=True)
         # Nothing written: not in a call dir, and not beside dest_dir.
         assert os.listdir(tmp_path) == []
         assert not os.path.exists(tmp_path.parent / "outside.key")
@@ -617,6 +600,81 @@ class TestResolveCredentialFilePerCallPaths:
             await resolve_credential_file(
                 base64.b64encode(b"secret").decode(),
                 "..\\outside.key",
-                str(tmp_path),
                 raise_on_error=True,
             )
+
+
+class TestCredentialDir:
+    """One private directory holding several files (e.g. a SECUDIR)."""
+
+    async def test_files_resolved_into_one_credential_dir_sit_side_by_side(
+        self, tmp_path
+    ):
+        d = credential_utils.credential_dir()
+        assert isinstance(d, credential_utils.CredentialDir)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            pse = await resolve_credential_file(
+                base64.b64encode(b"pse").decode(), "SAPSNCS.pse", d, raise_on_error=True
+            )
+            cred = await resolve_credential_file(
+                base64.b64encode(b"cred").decode(), "cred_v2", d, raise_on_error=True
+            )
+
+        assert pse == os.path.join(d, "SAPSNCS.pse")
+        assert cred == os.path.join(d, "cred_v2")
+        assert sorted(os.listdir(d)) == ["SAPSNCS.pse", "cred_v2"]
+        _assert_in_call_dir(pse, tmp_path, "SAPSNCS.pse")
+        _assert_in_call_dir(cred, tmp_path, "cred_v2")
+
+    async def test_each_credential_dir_is_new(self, tmp_path):
+        assert credential_utils.credential_dir() != credential_utils.credential_dir()
+
+    async def test_base_dir_is_honoured(self, tmp_path):
+        base = tmp_path / "elsewhere"
+        d = credential_utils.credential_dir(str(base))
+        assert os.path.dirname(d) == str(base)
+
+    async def test_a_second_file_of_the_same_name_is_refused(self, tmp_path):
+        d = credential_utils.credential_dir()
+        await resolve_credential_file(
+            base64.b64encode(b"first").decode(), "keytab", d, raise_on_error=True
+        )
+        with pytest.raises(FileExistsError):
+            await resolve_credential_file(
+                base64.b64encode(b"second").decode(), "keytab", d, raise_on_error=True
+            )
+        assert open(os.path.join(d, "keytab"), "rb").read() == b"first"
+
+    @patch("application_sdk.storage.ops.download_file", new_callable=AsyncMock)
+    @patch("application_sdk.storage.binding.create_store_from_binding")
+    async def test_objectstore_lands_in_the_credential_dir(
+        self, mock_create_store, mock_download, tmp_path
+    ):
+        mock_create_store.return_value = object()
+        d = credential_utils.credential_dir()
+        result = await resolve_credential_file(
+            "objectstore://kerberos/krb5.conf", "krb5.conf", d, raise_on_error=True
+        )
+        assert result == os.path.join(d, "krb5.conf")
+        mock_download.assert_awaited_once_with(
+            "kerberos/krb5.conf", result, store=mock_create_store.return_value
+        )
+
+    async def test_a_failed_write_keeps_the_callers_dir_and_its_files(self, tmp_path):
+        d = credential_utils.credential_dir()
+        await resolve_credential_file(
+            base64.b64encode(b"pse").decode(), "SAPSNCS.pse", d, raise_on_error=True
+        )
+        with private_stdlib(credential_utils, "os") as local_os:
+            local_os.replace = Mock(side_effect=OSError("disk full"))
+            with pytest.raises(OSError, match="disk full"):
+                await resolve_credential_file(
+                    base64.b64encode(b"cred").decode(),
+                    "cred_v2",
+                    d,
+                    raise_on_error=True,
+                )
+        # The caller's directory and its first file survive; no temp file left.
+        assert os.listdir(d) == ["SAPSNCS.pse"]

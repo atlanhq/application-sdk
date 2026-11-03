@@ -389,11 +389,25 @@ keytab_path = await resolve_credential_file(
 )
 ```
 
-For the `objectstore://` and base64 formats, the file is written so that one connection can never read or overwrite another's:
+For the `objectstore://` and base64 formats, every file lands in a **private directory**: new, owner-only (0700), and used by nothing else. One connection can never read or overwrite another's file.
 
-- **A new path on every call.** Each call writes into its own owner-only (0700) directory under `dest_dir` (default `<TEMPORARY_PATH>/credential_files`), so the result is `<dest_dir>/<per-call dir>/<filename>`. Don't build the path yourself or cache it across runs. Use the returned value.
-- **Owner-only and never half-written.** The file is 0600. It is written to a temp file and renamed into place, so a reader never sees a partial keytab.
-- **Removed with the run.** Inside a task, the per-call directory is registered with the run, and `cleanup_files` (called by the default `on_complete()`) deletes it, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say. Outside a task (a handler, a script) nothing tracks it, and the caller deletes it when done.
+- **One file:** omit `dest_dir`. Each call gets its own directory, so the returned path is different every time. Use the returned value; don't build the path yourself.
+- **Several files in one directory:** create the directory with `credential_dir()` and pass it as `dest_dir`. Files go straight into it. Do this when a library reads a fixed directory, such as SAP CommonCryptoLib's `SECUDIR`:
+
+  ```python
+  from application_sdk.credentials.utils import credential_dir, resolve_credential_file
+
+  secudir = credential_dir()
+  await resolve_credential_file(pse_ref, "SAPSNCS.pse", secudir, raise_on_error=True)
+  await resolve_credential_file(cred_ref, "cred_v2", secudir, raise_on_error=True)
+  os.environ["SECUDIR"] = secudir
+  ```
+
+  Resolving a second file of the same name into one `credential_dir()` raises `FileExistsError` instead of replacing the first.
+- **A plain-string `dest_dir` is deprecated.** It still works, but the file goes into a new private directory *inside* it, not into `dest_dir` itself, and a `DeprecationWarning` is emitted. Plain strings are rejected in v4.0. Apps that need a fixed, shared directory switch to `credential_dir()`.
+- **`filename` is a bare name.** A name that is empty, `.`, `..`, or contains a path separator raises `CredentialParseError`.
+- **Owner-only and never half-written.** Each file is 0600. It is written to a temp file and renamed into place, so a reader never sees a partial keytab.
+- **Removed with the run.** Inside a task, every private directory is registered with the run, and `cleanup_files` (called by the default `on_complete()`) deletes it, whatever `extra_paths` or `ATLAN_CLEANUP_BASE_PATHS` say. Outside a task (a handler, a script) nothing tracks it, and the caller deletes it when done.
 - **One store.** `objectstore://` downloads use the deployment store the app built at startup. A new store is built from the `DEPLOYMENT_OBJECT_STORE_NAME` binding only when no app context exists.
 
 ---

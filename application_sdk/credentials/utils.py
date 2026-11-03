@@ -31,11 +31,53 @@ OBJECT_STORE_PREFIX = "objectstore://"
 _DEFAULT_CREDENTIAL_FILE_DIR = os.path.join(TEMPORARY_PATH, "credential_files")
 
 
+class CredentialDir(str):
+    """A private directory for credential files, made by :func:`credential_dir`.
+
+    A ``str`` (its path), so it works anywhere a path does: ``os.path.join``,
+    an environment variable such as ``SECUDIR``, a client's config. The type
+    is what tells :func:`resolve_credential_file` the directory is the SDK's
+    own owner-only directory, so files go straight into it.
+    """
+
+    __slots__ = ()
+
+
+def credential_dir(base_dir: str | None = None) -> CredentialDir:
+    """Create a private directory for credential files and return it.
+
+    The directory is new, owner-only (0700), and unique to this call, so no
+    other connection's files can land in it. Inside a task it is registered
+    with the run, and ``cleanup_files`` removes it when the run completes;
+    outside one (a handler, a script) the caller removes it.
+
+    Pass it as ``dest_dir`` to :func:`resolve_credential_file` to put several
+    files side by side — for example a client PSE and its ``cred_v2`` file,
+    which SAP CommonCryptoLib reads from one ``SECUDIR``::
+
+        secudir = credential_dir()
+        await resolve_credential_file(pse, "SAPSNCS.pse", secudir, raise_on_error=True)
+        await resolve_credential_file(cred, "cred_v2", secudir, raise_on_error=True)
+
+    Args:
+        base_dir: Where to create the directory. Defaults to
+            ``<TEMPORARY_PATH>/credential_files``.
+
+    Returns:
+        The new directory's path, as a :class:`CredentialDir`.
+    """
+    base = base_dir if base_dir is not None else _DEFAULT_CREDENTIAL_FILE_DIR
+    os.makedirs(base, exist_ok=True)
+    path = tempfile.mkdtemp(prefix="cred-", dir=base)
+    _track_call_dir(path)
+    return CredentialDir(path)
+
+
 @overload
 async def resolve_credential_file(
     value: str | None,
     filename: str,
-    dest_dir: str = ...,
+    dest_dir: CredentialDir | str | None = ...,
     *,
     raise_on_error: Literal[True],
 ) -> str: ...
@@ -45,7 +87,7 @@ async def resolve_credential_file(
 async def resolve_credential_file(
     value: str | None,
     filename: str,
-    dest_dir: str = ...,
+    dest_dir: CredentialDir | str | None = ...,
     *,
     raise_on_error: bool | None = ...,
 ) -> str | None: ...
@@ -54,7 +96,7 @@ async def resolve_credential_file(
 async def resolve_credential_file(
     value: str | None,
     filename: str,
-    dest_dir: str = _DEFAULT_CREDENTIAL_FILE_DIR,
+    dest_dir: CredentialDir | str | None = None,
     *,
     raise_on_error: bool | None = None,
 ) -> str | None:
@@ -118,11 +160,18 @@ async def resolve_credential_file(
                   branches (e.g. ``"keytab.keytab"``, ``"krb5.conf"``,
                   ``"ca_cert.pem"``). Ignored for the Atlan upload branch —
                   the filename there is derived from the upload key.
-        dest_dir: Parent directory for the file. Each call writes into its
-                  own fresh owner-only (0700) subdirectory of ``dest_dir``,
-                  so two connections resolving the same ``filename`` never
-                  share a path. Defaults to
-                  ``<TEMPORARY_PATH>/credential_files``.
+        dest_dir: Where the file goes. Every file lands in a private,
+                  owner-only (0700) directory, so two connections resolving
+                  the same ``filename`` never share a path:
+
+                  * ``None`` (default): a new directory from
+                    :func:`credential_dir`, holding just this file.
+                  * A :class:`CredentialDir`: the file goes straight into it,
+                    so several files can sit side by side. A second file of
+                    the same name in it raises ``FileExistsError``.
+                  * A plain ``str`` (deprecated): a new private directory is
+                    created *inside* it, as ``credential_dir(dest_dir)``
+                    would. Emits a ``DeprecationWarning``; removed in v4.0.
 
         raise_on_error: ``True`` to raise on failure, ``False`` to return
                   ``None``. ``None`` (the default) behaves as ``False`` and
@@ -133,13 +182,14 @@ async def resolve_credential_file(
                   truststore.
 
     Returns:
-        Path to the resolved file on disk: ``<dest_dir>/<per-call dir>/<filename>``
-        for the ``objectstore://`` and base64 branches, a different path on
-        every call. The file is owner-only (0600) and appears at that path
-        complete, never half-written. Inside a task, the per-call directory
-        is removed by ``cleanup_files`` when the run completes; outside one,
-        the caller owns it. ``None`` if ``value`` is empty or resolution
-        fails, unless ``raise_on_error`` is ``True``.
+        Path to the resolved file on disk, ``<private dir>/<filename>``, for
+        the ``objectstore://`` and base64 branches. Without a
+        :class:`CredentialDir`, it is a different path on every call. The
+        file is owner-only (0600) and appears at that path complete, never
+        half-written. Inside a task, ``cleanup_files`` removes the directory
+        when the run completes; outside one, the caller owns it. ``None`` if
+        ``value`` is empty or resolution fails, unless ``raise_on_error`` is
+        ``True``.
 
     Raises:
         CredentialNotFoundError: ``raise_on_error`` and ``value`` is empty or
@@ -147,6 +197,8 @@ async def resolve_credential_file(
         CredentialParseError: ``raise_on_error`` and ``value`` is an invalid
             ``objectstore://`` key or not valid base64, or ``filename`` is not
             a bare file name (it has a path separator, or is ``.``/``..``).
+        FileExistsError: ``raise_on_error`` and ``dest_dir`` is a
+            :class:`CredentialDir` that already holds ``filename``.
         Exception: Failures downloading an Atlan upload reference propagate
             in either mode, as they always have; with ``raise_on_error``,
             failures downloading from the customer object store or writing
@@ -159,6 +211,16 @@ async def resolve_credential_file(
             "value. Pass raise_on_error=True for a typed error, or "
             "raise_on_error=False to keep None — the default flips to True "
             "in v4.0.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    if dest_dir is not None and not isinstance(dest_dir, CredentialDir):
+        warnings.warn(
+            "resolve_credential_file() with a plain-string dest_dir is "
+            "deprecated: the file goes into a new private directory inside "
+            "it, not into dest_dir itself. Omit dest_dir, or pass a "
+            "credential_dir() to put several files in one directory — "
+            "plain strings are rejected in v4.0.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -200,7 +262,7 @@ def _is_upload_reference(value: str) -> bool:
 
 
 async def _resolve_credential_file_content(
-    stripped: str, filename: str, dest_dir: str
+    stripped: str, filename: str, dest_dir: CredentialDir | str | None
 ) -> str:
     """Resolve an ``objectstore://`` key or base64 content to a local path.
 
@@ -258,14 +320,15 @@ async def _resolve_credential_file_content(
             store = infra.storage
         else:
             store = create_store_from_binding(DEPLOYMENT_OBJECT_STORE_NAME)
-        call_dir = _make_call_dir(dest_dir)
-        file_path = os.path.join(call_dir, filename)
+        call_dir, owned = _call_dir_for(dest_dir)
+        file_path = _new_file_path(call_dir, filename)
         try:
             # download_file stages into an mkstemp (0600) file and publishes
             # it with os.replace, so the file is owner-only and never partial.
             await download_file(key, file_path, store=store)
         except BaseException:
-            await run_in_thread(shutil.rmtree, call_dir, ignore_errors=True)
+            if owned:
+                await run_in_thread(shutil.rmtree, call_dir, ignore_errors=True)
             raise
         logger.info(
             "Resolved credential file from customer object store: key=%s path=%s",
@@ -283,12 +346,14 @@ async def _resolve_credential_file_content(
             credential_name=filename,
             cause=exc,
         ) from exc
-    call_dir = _make_call_dir(dest_dir)
+    call_dir, owned = _call_dir_for(dest_dir)
     try:
-        file_path = _write_owner_only(call_dir, filename, decoded_bytes)
+        file_path = _write_owner_only(
+            call_dir, _new_file_path(call_dir, filename), decoded_bytes
+        )
     except BaseException:
-        # Takes the partial temp file with it.
-        await run_in_thread(shutil.rmtree, call_dir, ignore_errors=True)
+        if owned:
+            await run_in_thread(shutil.rmtree, call_dir, ignore_errors=True)
         raise
     logger.info(
         "Resolved credential file from base64 content: path=%s filename=%s",
@@ -306,33 +371,49 @@ def _is_bare_filename(filename: str) -> bool:
     return not any(sep in filename for sep in separators)
 
 
-def _make_call_dir(dest_dir: str) -> str:
-    """Create this call's own 0700 directory under *dest_dir* and track it.
+def _call_dir_for(dest_dir: CredentialDir | str | None) -> tuple[str, bool]:
+    """The private directory this call writes into, and whether it made it.
 
-    ``mkdtemp`` picks an unused name and creates it owner-only, so no other
-    call — for this connection or another — can write into or read from it.
-    Inside a task the directory is registered with the run so
-    ``cleanup_files`` removes it; see :func:`_track_call_dir`.
+    A :class:`CredentialDir` is used as is (its owner removes it). Otherwise a
+    new one is made — under the default base, or inside a legacy plain-string
+    ``dest_dir`` — and this call removes it again if the write fails.
     """
-    os.makedirs(dest_dir, exist_ok=True)
-    call_dir = tempfile.mkdtemp(prefix="cred-", dir=dest_dir)
-    _track_call_dir(call_dir)
-    return call_dir
+    if isinstance(dest_dir, CredentialDir):
+        return dest_dir, False
+    return credential_dir(dest_dir), True
 
 
-def _write_owner_only(call_dir: str, filename: str, data: bytes) -> str:
-    """Write *data* to ``call_dir/filename`` as an owner-only (0600) file.
+def _new_file_path(call_dir: str, filename: str) -> str:
+    """``call_dir/filename``, refusing to replace a file already there.
 
-    The bytes go to an ``O_EXCL`` temp file first and are published with
-    ``os.replace``, so the final path never holds a partial file. On failure
-    the temp file is left for the caller, which removes the whole call dir.
+    Only a shared :class:`CredentialDir` can already hold the name, and
+    there a second resolution of it is a caller bug: silently replacing the
+    first file is how one connection ends up reading another's.
     """
     file_path = os.path.join(call_dir, filename)
-    tmp_path = os.path.join(call_dir, f".{filename}.partial")
-    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        f.write(data)
-    os.replace(tmp_path, file_path)
+    if os.path.lexists(file_path):
+        raise FileExistsError(
+            f"Credential directory already holds a file named {filename!r}"
+        )
+    return file_path
+
+
+def _write_owner_only(call_dir: str, file_path: str, data: bytes) -> str:
+    """Write *data* to *file_path* in *call_dir* as an owner-only (0600) file.
+
+    The bytes go to a ``mkstemp`` temp file (``O_EXCL``, 0600) first and are
+    published with ``os.replace``, so *file_path* never holds a partial
+    file. The temp file is removed if the write fails.
+    """
+    fd, tmp_path = tempfile.mkstemp(dir=call_dir, prefix=".", suffix=".partial")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp_path, file_path)
+    except BaseException:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
     return file_path
 
 

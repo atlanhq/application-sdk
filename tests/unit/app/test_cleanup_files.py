@@ -375,26 +375,28 @@ class TestCleanupCredentialFiles:
 
     @pytest.mark.asyncio
     async def test_same_named_files_for_two_connections_are_private_and_cleaned_up(
-        self, tmp_path: Any
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import base64
 
+        from application_sdk.credentials import utils as credential_utils
         from application_sdk.credentials.utils import resolve_credential_file
 
         keytab_a, keytab_b = b"connection-a-keytab", b"connection-b-keytab"
+        monkeypatch.setattr(
+            credential_utils, "_DEFAULT_CREDENTIAL_FILE_DIR", str(tmp_path)
+        )
         with mock.patch.object(
             app_base, "_get_execution_id_from_task", return_value="wf-1"
         ):
             path_a = await resolve_credential_file(
                 base64.b64encode(keytab_a).decode(),
                 "keytab.keytab",
-                str(tmp_path),
                 raise_on_error=True,
             )
             path_b = await resolve_credential_file(
                 base64.b64encode(keytab_b).decode(),
                 "keytab.keytab",
-                str(tmp_path),
                 raise_on_error=True,
             )
 
@@ -450,3 +452,21 @@ class TestCleanupCredentialFiles:
 
         with pytest.raises(AppContextError):
             _track_credential_dir("/somewhere")
+
+    @pytest.mark.asyncio
+    async def test_a_credential_dir_made_in_a_task_is_cleaned_up(
+        self, tmp_path: Any
+    ) -> None:
+        from application_sdk.credentials.utils import credential_dir
+
+        with mock.patch.object(
+            app_base, "_get_execution_id_from_task", return_value="wf-1"
+        ):
+            d = credential_dir(str(tmp_path))
+            (tmp_path / os.path.basename(d) / "cred_v2").write_bytes(b"secret")
+            result = await _CleanupApp().cleanup_files(
+                CleanupInput(extra_paths=[str(tmp_path / "nonexistent-dir")])
+            )
+
+        assert not os.path.exists(d)
+        assert result.path_results[str(d)] is True
