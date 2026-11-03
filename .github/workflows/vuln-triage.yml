@@ -108,6 +108,11 @@ jobs:
         with:
           version: "0.13.6"
 
+      - name: Sign bot commits
+        uses: atlanhq/application-sdk/.github/actions/sign-bot-commits@main
+        with:
+          signing-key: ${{ secrets.BOT_SIGNING_KEY }}
+
       - name: Configure git identity
         run: |
           git config user.name "atlan-app-fleet[bot]"

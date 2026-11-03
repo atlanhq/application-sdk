@@ -22,11 +22,15 @@ description: |
   it costs nothing against GitHub's secondary write limits (80 per minute,
   500 per hour), which fleet-wide jobs would otherwise run into.
 
-  Only call it in a job that has not run code a PR or a dependency controls
-  (a PR's own tasks, `uv lock`/`pip install` of PR-declared packages, build
-  backends). That code can leave a git hook, git config or a background process
-  behind that reads the key once it is on disk. Generate the change in one job,
+  Never call it in a job that has run code a PR controls (a PR's own tasks,
+  `uv lock`/`pip install` of PR-declared packages). That code can leave a git
+  hook, git config or a background process behind that reads the key once it is
+  on disk, and any collaborator can write it. Generate the change in one job,
   hand over only its files, and sign and commit in a fresh job.
+
+  A job that runs only the default branch's own code and locked dependencies may
+  sign in place: it already holds the fleet App token or the atlan-ci PAT, which
+  that code could take just as easily as the key.
 
   Call it before the job's first `git commit`. A tool that builds its own
   environment for git, rather than inheriting the job's, must pass
