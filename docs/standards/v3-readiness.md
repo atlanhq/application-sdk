@@ -16,13 +16,14 @@ An app is **v3-ready** when every item below is either ✅ (done) or ➖ (not ap
 
 Each item corresponds to a `FAIL`/`WARN` rule in `tools/migrate_v3/check_migration.py`. Run the checker (see §5) and fix every `FAIL` before continuing.
 
-- [ ] **SDK pinned to `>=3.0.0,<4.0.0`** — `pyproject.toml` must constrain to the v3 major (optionally with extras):
+- [ ] **SDK pinned to `>=3.0.0,<4.0.0`** — `pyproject.toml` must constrain to the v3 major (optionally with extras such as `[sql]`):
   ```toml
   [project]
   dependencies = [
-      "atlan-application-sdk[workflows]>=3.0.0,<4.0.0",
+      "atlan-application-sdk[sql]>=3.0.0,<4.0.0",
   ]
   ```
+  Do not use the deprecated extras (`workflows`, `storage`, `iam_auth`, `azure`, `sqlalchemy`, `pandas`, `daft`). They are removed in v4.0.0, and conformance rule D017 warns on each. See [Deprecated extras](../upgrade-guide-v3.md#deprecated-extras-removed-in-v400).
   `[tool.uv.sources]` overrides **are allowed** (e.g. to resolve from a git ref or an internal mirror) — the constraint is on the resolved major version, not the source. Verify with `uv tree | grep atlan-application-sdk` and confirm the resolved version is `3.x`.
 - [ ] **No deprecated imports** — no `application_sdk.{application,worker,workflows,activities,handlers,services,interceptors,test_utils}` or `application_sdk.clients.{atlan,temporal,workflow}` anywhere (including tests). Rewrite with `python -m tools.migrate_v3.rewrite_imports`.
 - [ ] **App subclass** — exactly one class inherits from `App` (or `SqlApp` for a SQL metadata source; the legacy templates are deprecated, B001). Class-level `name: ClassVar[str]` is set.

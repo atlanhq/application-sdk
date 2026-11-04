@@ -10,9 +10,7 @@ locally. `sqlitedict` is unmaintained and has no upstream fix for
 CVE-2024-35515 (pickle-based arbitrary code execution), which made it a
 chronic allowlist entry across our scan pipeline.
 
-Requires the ``storage`` extra (which ``incremental`` also pulls in)::
-
-    pip install atlan-application-sdk[storage]
+``rocksdict`` is a core SDK dependency, so no extra is needed.
 
 Related: ``application_sdk.common.incremental.storage.rocksdb_utils``
 provides a lower-level Rdict factory (``create_states_db`` /

@@ -248,7 +248,7 @@ Configuration env vars: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`. See `docs/
 - `AzureClient` (`azure/client.py`) — base client for Azure service interactions.
 - `AzureAuthProvider` (`azure/auth.py`) — handles Azure Service Principal authentication.
 
-Requires the `[azure]` extra: `uv add 'atlan-application-sdk[azure]'`.
+`azure-identity` is a core SDK dependency, so no extra is needed.
 
 ```python
 from application_sdk.clients import AzureClient, AzureAuthProvider

@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**16 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**17 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -31,6 +31,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | yes | 0.31.0 |
 | [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
 | [D016](#d016) | `RequiresPythonExcludesRuntimePython` | `warn` | `app` | `python-version` | yes | 0.54.0 |
+| [D017](#d017) | `DeprecatedSdkExtra` | `warn` | `app` | `dependency-pinning` | yes | 0.55.0 |
 
 ---
 
@@ -226,9 +227,9 @@ typo is invisible to the resolver that silently dropped it.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app pyproject.toml — `atlan-application-sdk[iam-auth,pandas,sql,workflows]`
-  in [project.dependencies]. All four are extras the SDK publishes; a typo here resolves
-  to nothing and fails at import, not at install.
+- **Compliant example:** atlan-openapi-app pyproject.toml — `atlan-application-sdk[tests]` in its dev dependency
+  group. `tests` is an extra the SDK publishes; a typo here resolves to nothing and
+  fails at import, not at install.
 - **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Every `atlan-application-sdk[extra]` reference must name an extra the SDK actually
@@ -858,5 +859,54 @@ a drift-guarded constant in the checker, kept equal to the golden base tag in th
 Autofixable: raise only the upper-bound clause so 3.13 is admitted, keep the lower
 bound, then re-run `uv lock`.  An exclusion clause (`!=`) or a micro-version pin/bound
 is routed to human review instead. Cite: FND-4505.
+
+---
+
+## D017 — `DeprecatedSdkExtra` {#d017}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.55.0
+
+> Reference to a deprecated atlan-application-sdk shim extra removed in v4.0.0
+
+**Rationale:** Seven SDK extras are shims: [workflows], [storage], [iam_auth] and [azure] list only
+packages that are core, and [daft], [sqlalchemy] and [pandas] are [sql] or a subset of
+it. They install nothing of their own and are removed in SDK v4.0.0. An extra is
+resolved by the installer, not imported, so the SDK has no runtime deprecation warning
+to give: without this rule an app learns of the removal only when the v4 bump drops the
+extra. Dropping an extra changes nothing for the app today. Dropping one that is gone is
+not an error either, because uv ignores an unknown extra: the app silently loses
+whatever it pulled in. For [pandas] and [sqlalchemy] that is a missing package at
+runtime, so the move to [sql] has to happen before v4, not after.
+
+### What correct looks like
+
+- **Compliant example:** atlan-openapi-app pyproject.toml — `atlan-application-sdk>=3.29.0,<4.0.0` in
+  [project.dependencies], with no extras: everything it needs is core. An app that runs
+  SQL names `[sql]`, and nothing else from the deprecated set.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
+
+An `atlan-application-sdk[extra]` reference names a deprecated shim extra.  Each one
+installs nothing that the SDK's core dependencies or `[sql]` do not already provide, and
+each is removed in SDK **v4.0.0**:
+
+* `workflows`, `storage`, `iam_auth`/`iam-auth`, `azure`: the packages are core.  Remove
+  the extra.
+* `daft`, `sqlalchemy`, `pandas`: `[daft]` is an alias for `[sql]` and the other two are
+  subsets of it.  Replace the extra with `sql` (drop it if `sql` is already listed).
+
+::
+
+    "atlan-application-sdk[iam-auth,pandas,sql,workflows]>=3.33,<4"  # flagged x3
+"atlan-application-sdk[sql]>=3.33,<4"                             # passes
+
+Every array that can carry the SDK is checked: `[project] dependencies`,
+`[project.optional-dependencies]` and `[dependency-groups]`.  `[incremental]` is not a
+shim: it is a supported alias for `[sql]` and is not flagged.
+
+Autofixable: rewrite the extras list as above, then re-run `uv lock`.  The lock changes
+only in its metadata block, because every package the shim named is still installed.
+
+The rule carries `superseded_by: sdk>=4.0.0`: once v4 deletes the extras, a leftover
+reference is an unknown extra, which D005 blocks. Cite: FND-4255.
 
 ---

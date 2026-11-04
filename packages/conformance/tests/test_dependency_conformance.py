@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_supp
 from conformance.suite.checks.dependency_conformance import (
     _LOCK_URL_RE,
     _REMOTE_COMPONENT_FETCH_RE,
+    DEPRECATED_SDK_EXTRAS,
     RUNTIME_IMAGE_PYTHON,
     SDK_PYTHON_FLOOR,
     _collect_dialect_drivers,
@@ -518,6 +520,180 @@ def test_d006_sdk_python_floor_matches_sdk_pyproject() -> None:
     assert bound[0] == SDK_PYTHON_FLOOR
 
 
+# ── D017: deprecated shim extras ─────────────────────────────────────────────
+
+
+def _d017(text: str) -> list:
+    findings = scan_text(text, "pyproject.toml", sdk_managed_packages=set())
+    return [f for f in findings if f.rule_id == "D017"]
+
+
+@pytest.mark.parametrize(
+    "extra,replacement",
+    [
+        ("workflows", None),
+        ("storage", None),
+        ("iam_auth", None),
+        ("iam-auth", None),
+        ("azure", None),
+        ("daft", "sql"),
+        ("sqlalchemy", "sql"),
+        ("pandas", "sql"),
+    ],
+)
+def test_d017_fires_on_each_shim_extra(extra: str, replacement: str | None) -> None:
+    text = _write_pyproject(deps=f'    "atlan-application-sdk[{extra}]>=3.33,<4",\n')
+    findings = _d017(text)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.line == 5
+    assert f"[{extra}]" in f.message
+    assert "v4.0.0" in f.message
+    assert "uv lock" in f.message
+    if replacement is None:
+        assert "remove" in f.message
+    else:
+        assert f"with '{replacement}'" in f.message
+
+
+def test_d017_one_finding_per_shim_with_distinct_discriminators() -> None:
+    """The fleet's commonest pin carries three shims on one line."""
+    text = _write_pyproject(
+        deps='    "atlan-application-sdk[iam-auth,pandas,sql,workflows]>=3.33,<4",\n'
+    )
+    findings = _d017(text)
+    assert sorted(f.discriminator for f in findings) == [
+        "iam-auth",
+        "pandas",
+        "workflows",
+    ]
+    assert {f.line for f in findings} == {5}
+
+
+@pytest.mark.parametrize(
+    "extras", ["sql", "incremental", "tests", "mcp", "distributed_lock"]
+)
+def test_d017_silent_on_supported_extras(extras: str) -> None:
+    text = _write_pyproject(deps=f'    "atlan-application-sdk[{extras}]>=3.33,<4",\n')
+    assert _d017(text) == []
+
+
+def test_d017_silent_on_shim_named_extra_of_another_package() -> None:
+    text = _write_pyproject(
+        deps=(
+            '    "atlan-application-sdk>=3.33,<4",\n'
+            '    "some-lib[pandas,storage]>=1,<2",\n'
+        )
+    )
+    assert _d017(text) == []
+
+
+def test_d017_checks_optional_dependencies_and_dependency_groups() -> None:
+    text = (
+        "[project]\n"
+        'name = "demo-app"\n'
+        'version = "0.1.0"\n'
+        "dependencies = [\n"
+        '    "atlan-application-sdk>=3.33,<4",\n'
+        "]\n"
+        "[project.optional-dependencies]\n"
+        'extra = ["atlan-application-sdk[workflows]>=3.33,<4"]\n'
+        "[dependency-groups]\n"
+        'dev = ["atlan-application-sdk[tests,storage]>=3.33,<4"]\n'
+    )
+    findings = _d017(text)
+    assert sorted((f.line, f.discriminator) for f in findings) == [
+        (8, "workflows"),
+        (10, "storage"),
+    ]
+
+
+def test_d017_suppressed_inline_directive() -> None:
+    text = _write_pyproject(
+        deps=(
+            '    "atlan-application-sdk[sql,workflows]>=3.33,<4",'
+            "  # conformance: ignore[D017] dropped with the v4 bump\n"
+        )
+    )
+    findings = _d017(text)
+    assert len(findings) == 1
+    assert findings[0].suppressed is True
+
+
+def test_d017_sdk_pyproject_is_exempt() -> None:
+    text = _write_pyproject(
+        name="atlan-application-sdk",
+        deps='    "atlan-application-sdk[sql]",\n',
+    )
+    assert scan_text(text, "pyproject.toml", sdk_managed_packages=set()) == []
+
+
+def _sdk_extras_closure(
+    extras: Mapping[str, list[str]], name: str, seen: frozenset[str] = frozenset()
+) -> set[str]:
+    """Package names ``atlan-application-sdk[name]`` adds, following self-aliases."""
+    out: set[str] = set()
+    for req in extras.get(name, []):
+        req_name = _normalise_name(re.split(r"[<>=!~;\[ ]", req, maxsplit=1)[0])
+        if req_name == "atlan-application-sdk":
+            m = re.search(r"\[([^\]]*)\]", req)
+            for inner in m.group(1).split(",") if m else []:
+                inner = inner.strip()
+                if inner and inner not in seen:
+                    out |= _sdk_extras_closure(extras, inner, seen | {name})
+        else:
+            out.add(req_name)
+    return out
+
+
+def test_d017_shim_table_matches_sdk_pyproject() -> None:
+    """Drift guard: DEPRECATED_SDK_EXTRAS is exactly the SDK's redundant extras.
+
+    Every extra in the SDK's pyproject either installs a package that neither
+    core nor [sql] provides, is the supported [incremental] alias of [sql], or
+    is listed as a shim -- and every listed shim really is redundant, with the
+    replacement it names.
+    """
+    sdk_pyproject = Path(__file__).parents[3] / "pyproject.toml"
+    if not sdk_pyproject.is_file():
+        pytest.skip("SDK pyproject.toml not locatable from the test tree")
+    project = tomllib.loads(sdk_pyproject.read_text(encoding="utf-8"))["project"]
+    if project.get("name") != "atlan-application-sdk":
+        pytest.skip("repo-root pyproject is not the SDK")
+
+    core = {
+        _normalise_name(re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0])
+        for r in project["dependencies"]
+    }
+    raw_extras: dict[str, list[str]] = project["optional-dependencies"]
+    extras = {_normalise_name(k): v for k, v in raw_extras.items()}
+    sql = _sdk_extras_closure(extras, "sql")
+    supported_aliases = {"incremental": "sql"}
+
+    for name in extras:
+        adds = _sdk_extras_closure(extras, name) - core
+        shim = DEPRECATED_SDK_EXTRAS.get(name)
+        if shim is not None:
+            assert shim.removed_in == "4.0.0", name
+            if shim.replacement is None:
+                assert adds == set(), f"[{name}] installs {adds}; not a core shim"
+            else:
+                assert shim.replacement in extras, name
+                assert adds <= sql, f"[{name}] installs {adds - sql} beyond [sql]"
+        elif name in supported_aliases:
+            assert adds == _sdk_extras_closure(extras, supported_aliases[name]) - core
+        else:
+            assert adds, f"[{name}] installs nothing distinct; list it in D017"
+            if name != "sql":
+                assert not adds <= sql, (
+                    f"[{name}] is a subset of [sql]; list it in D017"
+                )
+
+    assert set(DEPRECATED_SDK_EXTRAS) <= set(extras), (
+        "D017 lists an extra the SDK no longer publishes; D005 owns it now"
+    )
+
+
 # ── D016: requires-python must admit the runtime image's Python ──────────────
 
 
@@ -826,10 +1002,10 @@ def _sdk_extras_pyproject(extras: str, *, path: str = "project.dependencies") ->
 
 def test_d005_unknown_extra_fires() -> None:
     findings = scan_text(
-        _sdk_extras_pyproject("workflows,dapr"),
+        _sdk_extras_pyproject("sql,dapr"),
         "pyproject.toml",
         sdk_managed_packages=set(),
-        sdk_published_extras={"workflows", "sql"},
+        sdk_published_extras={"tests", "sql"},
     )
     assert [f.rule_id for f in findings] == ["D005"]
     assert "dapr" in findings[0].message
@@ -840,18 +1016,19 @@ def test_d005_known_extra_passes() -> None:
         _sdk_extras_pyproject("sql"),
         "pyproject.toml",
         sdk_managed_packages=set(),
-        sdk_published_extras={"sql", "workflows"},
+        sdk_published_extras={"sql", "tests"},
     )
     assert findings == []
 
 
 def test_d005_extra_normalisation_matches_published() -> None:
-    # app writes [iam_auth]; SDK publishes the normalised iam-auth -> no finding.
+    # app writes [distributed_lock]; SDK publishes the normalised
+    # distributed-lock -> no finding.
     findings = scan_text(
-        _sdk_extras_pyproject("iam_auth"),
+        _sdk_extras_pyproject("distributed_lock"),
         "pyproject.toml",
         sdk_managed_packages=set(),
-        sdk_published_extras={"iam-auth"},
+        sdk_published_extras={"distributed-lock"},
     )
     assert findings == []
 
@@ -2740,6 +2917,45 @@ def test_d010_no_lock_incremental_extra_resolves(tmp_path: Path) -> None:
         source=_D010_TRANSFORMER_IMPORT,
     )
     assert findings == []
+
+
+def test_d010_silent_when_incremental_alias_resolves_duckdb_through_sql(
+    tmp_path: Path,
+) -> None:
+    """[incremental] aliases [sql] (FND-4255): the lock records a self-edge.
+
+    The SDK's ``incremental`` group then names ``atlan-application-sdk[sql]``
+    rather than duckdb itself, so the walk has to follow that edge back into
+    the SDK's own ``sql`` group to find duckdb.
+    """
+    lock = _D010_LOCK_SQL_EXTRA.replace(
+        'extra = ["sql"] }', 'extra = ["incremental"] }', 1
+    ).replace(
+        "[package.optional-dependencies]\n",
+        "[package.optional-dependencies]\n"
+        "incremental = [\n"
+        '    { name = "atlan-application-sdk", extra = ["sql"] },\n'
+        "]\n",
+    )
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_EXTRA.replace("[sql]", "[incremental]"),
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=lock,
+    )
+    assert findings == []
+    # Red check: without the self-edge the same lock leaves duckdb unreachable.
+    broken = lock.replace(
+        'incremental = [\n    { name = "atlan-application-sdk", extra = ["sql"] },\n]\n',
+        "incremental = []\n",
+    )
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_SQL_EXTRA.replace("[sql]", "[incremental]"),
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=broken,
+    )
+    assert len(findings) == 1
 
 
 def test_d010_no_lock_direct_duckdb_dep_resolves(tmp_path: Path) -> None:

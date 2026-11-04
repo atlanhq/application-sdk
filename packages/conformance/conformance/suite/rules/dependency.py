@@ -26,6 +26,8 @@ SDK upgrades.  These rules enforce two invariants:
   ``standard``.
 * ``D009`` — no ``[tool.poe.tasks.*]`` entry fetches Dapr component YAMLs
   from GitHub over the network; the installed SDK wheel bundles them.
+* ``D017`` — an ``atlan-application-sdk[extra]`` reference does not name a
+  deprecated shim extra (one removed in SDK v4.0.0).
 * ``D010`` — an app whose code path uses the SDK query transformer
   (``application_sdk.transformers.query`` / ``transform_metadata``) must
   resolve ``duckdb`` — via the SDK's ``[sql]``/``[incremental]`` extra or a
@@ -199,11 +201,9 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="D005",
         canonical_reference=(
-            "atlan-mysql-app pyproject.toml — "
-            "`atlan-application-sdk[iam-auth,pandas,sql,workflows]` in "
-            "[project.dependencies]. All four are extras "
-            "the SDK publishes; a typo here resolves to nothing and fails at import, not "
-            "at install."
+            "atlan-openapi-app pyproject.toml — `atlan-application-sdk[tests]` in its "
+            "dev dependency group. `tests` is an extra the SDK publishes; a typo here "
+            "resolves to nothing and fails at import, not at install."
         ),
         fix_locus=FixLocus.PACKAGING,
         scope=RuleScope.APP,
@@ -1239,6 +1239,77 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d016"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="D017",
+        canonical_reference=(
+            "atlan-openapi-app pyproject.toml — `atlan-application-sdk>=3.29.0,<4.0.0` "
+            "in [project.dependencies], with no extras: everything it needs is core. An "
+            "app that runs SQL names `[sql]`, and nothing else from the deprecated set."
+        ),
+        fix_locus=FixLocus.PACKAGING,
+        scope=RuleScope.APP,
+        name="DeprecatedSdkExtra",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="dependency-pinning",
+        autofixable=True,
+        since="0.55.0",
+        superseded_by="sdk>=4.0.0",
+        rationale=(
+            "Seven SDK extras are shims: [workflows], [storage], [iam_auth] and "
+            "[azure] list only packages that are core, and [daft], [sqlalchemy] and "
+            "[pandas] are [sql] or a subset of it. They install nothing of their own and "
+            "are removed in SDK v4.0.0. An extra is resolved by the installer, not "
+            "imported, so the SDK has no runtime deprecation warning to give: without "
+            "this rule an app learns of the removal only when the v4 bump drops the "
+            "extra. Dropping an extra changes nothing for the app today. Dropping one "
+            "that is gone is not an error either, because uv ignores an unknown extra: "
+            "the app silently loses whatever it pulled in. For [pandas] and "
+            "[sqlalchemy] that is a missing package at runtime, so the move to [sql] "
+            "has to happen before v4, not after."
+        ),
+        short_description=(
+            "Reference to a deprecated atlan-application-sdk shim extra removed in v4.0.0"
+        ),
+        full_description=(
+            "An ``atlan-application-sdk[extra]`` reference names a deprecated\n"
+            "shim extra.  Each one installs nothing that the SDK's core\n"
+            "dependencies or ``[sql]`` do not already provide, and each is\n"
+            "removed in SDK **v4.0.0**:\n"
+            "\n"
+            "* ``workflows``, ``storage``, ``iam_auth``/``iam-auth``, ``azure``:\n"
+            "  the packages are core.  Remove the extra.\n"
+            "* ``daft``, ``sqlalchemy``, ``pandas``: ``[daft]`` is an alias for\n"
+            "  ``[sql]`` and the other two are subsets of it.  Replace the extra\n"
+            "  with ``sql`` (drop it if ``sql`` is already listed).\n"
+            "\n"
+            "::\n"
+            "\n"
+            '    "atlan-application-sdk[iam-auth,pandas,sql,workflows]>=3.33,<4"  # flagged x3\n'
+            '    "atlan-application-sdk[sql]>=3.33,<4"                             # passes\n'
+            "\n"
+            "Every array that can carry the SDK is checked:\n"
+            "``[project] dependencies``, ``[project.optional-dependencies]`` and\n"
+            "``[dependency-groups]``.  ``[incremental]`` is not a shim: it is a\n"
+            "supported alias for ``[sql]`` and is not flagged.\n"
+            "\n"
+            "Autofixable: rewrite the extras list as above, then re-run\n"
+            "``uv lock``.  The lock changes only in its metadata block, because\n"
+            "every package the shim named is still installed.\n"
+            "\n"
+            "The rule carries ``superseded_by: sdk>=4.0.0``: once v4 deletes the\n"
+            "extras, a leftover reference is an unknown extra, which D005 blocks.\n"
+            "Cite: FND-4255."
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d017"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
