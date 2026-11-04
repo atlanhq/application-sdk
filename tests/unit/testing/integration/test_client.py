@@ -310,6 +310,7 @@ class TestHttpTransport:
             (httpx.ConnectError("refused"), "CONNECTION_FAILED"),
             (httpx.ReadTimeout("slow"), "REQUEST_TIMEOUT"),
             (httpx.RemoteProtocolError("garbled"), "REQUEST_FAILED"),
+            (httpx.InvalidURL("Invalid port: 'nope'"), "REQUEST_FAILED"),
         ],
     )
     def test_transport_errors_become_error_results(self, client, method, error, code):

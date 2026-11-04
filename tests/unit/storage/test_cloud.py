@@ -1077,6 +1077,24 @@ class TestS3RegionLookup:
             monkeypatch.setenv(key, value)
         assert cloud._region_lookup_hosts() == hosts
 
+    async def test_lookup_caps_each_head_at_the_total_timeout(self, monkeypatch):
+        """httpx's scalar timeout is per read; a HEAD that never completes is
+        still cut off at the lookup timeout, and the lookup gives up."""
+        import httpx
+
+        from application_sdk.storage import cloud
+
+        monkeypatch.setattr(cloud, "_S3_REGION_LOOKUP_TIMEOUT_SECONDS", 0.05)
+        heads: list[str] = []
+
+        async def _hang(_self, url, **_kwargs):
+            heads.append(url)
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(httpx.AsyncClient, "head", _hang)
+        assert await asyncio.wait_for(_REAL_LOOKUP_BUCKET_REGION("b"), 5) == ""
+        assert len(heads) == 1
+
     async def test_lookup_uses_sdk_ssl_context_and_proxy_env(self, monkeypatch):
         import httpx
 

@@ -184,7 +184,7 @@ def _check_server_health(server_url: str, timeout: int = 5) -> bool:
             exc_info=True,
         )
         return False
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL):
         # Network error (timeout, too many redirects, etc.) — not healthy
         logger.warning(
             "Server health check failed with request error; returning False",

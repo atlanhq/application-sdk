@@ -752,7 +752,12 @@ async def _lookup_bucket_region(bucket: str) -> str:
                 url = _S3_REGION_LOOKUP_URL.format(
                     host=host, bucket=quote(bucket, safe="")
                 )
-                response = await client.head(url, follow_redirects=False)
+                # httpx's scalar timeout bounds each read, not the request; a
+                # peer dripping header bytes could hold it open, so cap the HEAD.
+                response = await asyncio.wait_for(
+                    client.head(url, follow_redirects=False),
+                    timeout=_S3_REGION_LOOKUP_TIMEOUT_SECONDS,
+                )
                 region = response.headers.get("x-amz-bucket-region", "")
                 if region:
                     return region

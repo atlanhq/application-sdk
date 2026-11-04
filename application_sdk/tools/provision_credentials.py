@@ -27,7 +27,12 @@ def main() -> None:
             body = json.load(f)
 
     base_url = f"http://localhost:{args.port}"
-    resp = httpx.post(f"{base_url}/workflows/v1/dev/local-vault", json=body, timeout=10)
+    resp = httpx.post(
+        f"{base_url}/workflows/v1/dev/local-vault",
+        json=body,
+        timeout=10,
+        follow_redirects=True,
+    )
     resp.raise_for_status()
     result = resp.json()
 

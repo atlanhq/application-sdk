@@ -31,21 +31,27 @@ SELF = "atlan-application-sdk"
 
 #: Import name (dotted prefix) -> the distribution that provides it, where the
 #: two differ. Longest prefix wins; anything not listed maps to its top-level
-#: name with ``_`` -> ``-``.
+#: name with ``_`` -> ``-``, or, under a namespace root, to
+#: ``<root>-<second segment>`` (``azure.core`` -> ``azure-core``).
 IMPORT_DIST: dict[str, str] = {
     "yaml": "pyyaml",
     "dotenv": "python-dotenv",
-    "google.auth": "google-auth",
-    "azure.core": "azure-core",
-    "azure.identity": "azure-identity",
     "pyatlan_v9": "pyatlan",
+    # opentelemetry-api's own modules. Only these map to it: other distributions
+    # share the namespace (opentelemetry.proto is opentelemetry-proto), so an
+    # unlisted submodule must not fall back to the api.
     "opentelemetry": "opentelemetry-api",
-    "opentelemetry.sdk": "opentelemetry-sdk",
+    "opentelemetry.trace": "opentelemetry-api",
+    "opentelemetry.metrics": "opentelemetry-api",
+    "opentelemetry._logs": "opentelemetry-api",
     "opentelemetry.exporter.otlp.proto.grpc": "opentelemetry-exporter-otlp-proto-grpc",
     "opentelemetry.exporter.prometheus": "opentelemetry-exporter-prometheus",
     "opentelemetry.instrumentation.fastapi": "opentelemetry-instrumentation-fastapi",
     "psycopg2": "psycopg2-binary",
 }
+
+#: Namespace packages that several distributions install into.
+NAMESPACE_ROOTS = frozenset({"opentelemetry", "google", "azure"})
 
 #: Distributions that are the documented API of a declared one, so importing
 #: them rests on that declaration. Not a place for "it arrives transitively":
@@ -128,10 +134,15 @@ def _dist_for(module: str) -> str | None:
     if top in sys.stdlib_module_names or top in ("application_sdk", "__future__"):
         return None
     parts = module.split(".")
-    for i in range(len(parts), 0, -1):
+    # Under a namespace root, a submodule must match at least two segments; only
+    # the bare root ("from opentelemetry import trace") may match the root key.
+    shortest = 2 if top in NAMESPACE_ROOTS and len(parts) > 1 else 1
+    for i in range(len(parts), shortest - 1, -1):
         prefix = ".".join(parts[:i])
         if prefix in IMPORT_DIST:
             return IMPORT_DIST[prefix]
+    if shortest == 2:
+        return canonicalize_name(f"{top}-{parts[1]}")
     return canonicalize_name(top)
 
 
@@ -223,3 +234,15 @@ def test_module_imports_skip_type_checking_and_relative_imports() -> None:
         "orjson",
         "opentelemetry-sdk",
     ]
+
+
+def test_namespace_submodules_map_to_their_own_distribution() -> None:
+    """An unlisted opentelemetry submodule is not credited to opentelemetry-api."""
+    assert _dist_for("opentelemetry") == "opentelemetry-api"
+    assert _dist_for("opentelemetry.trace.span") == "opentelemetry-api"
+    assert _dist_for("opentelemetry.sdk.trace") == "opentelemetry-sdk"
+    proto = _dist_for("opentelemetry.proto.collector.metrics.v1")
+    assert proto == "opentelemetry-proto"
+    assert proto not in _declared()
+    assert _dist_for("azure.core.exceptions") == "azure-core"
+    assert _dist_for("google.auth.transport") == "google-auth"

@@ -40,6 +40,8 @@ class TestProvisionCredentialsBodyFlag:
         call_kwargs = mock_post.call_args
         assert call_kwargs[1]["json"] == {"host": "localhost", "port": 5432}
         assert "/workflows/v1/dev/local-vault" in call_kwargs[0][0]
+        # requests followed redirects by default; httpx needs it asked for.
+        assert call_kwargs[1]["follow_redirects"] is True
 
     def test_body_flag_with_nested_json(self) -> None:
         """--body with nested extra field works correctly."""

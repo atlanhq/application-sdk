@@ -472,7 +472,7 @@ class IntegrationTestClient:
                     "details": str(e),
                 },
             }
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, httpx.InvalidURL) as e:
             logger.error("GET request failed", exc_info=True)
             return {
                 "success": False,
@@ -530,7 +530,7 @@ class IntegrationTestClient:
                     "details": str(e),
                 },
             }
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, httpx.InvalidURL) as e:
             logger.error("POST request failed", exc_info=True)
             return {
                 "success": False,
