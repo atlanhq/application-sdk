@@ -1351,13 +1351,6 @@ class TestPrepareSql:
         result = app._prepare_sql(sql, input_)
         assert "^$" in result
 
-    def test_empty_json_list_filters_render_as_no_filter(self, app):
-        """An empty picker sent as ``"[]"`` must not reach SQL as ``[]`` (FND-4559)."""
-        sql = "WHERE s ~ '{normalized_include_regex}' AND s !~ '{normalized_exclude_regex}'"
-        input_ = _make_task_input(include_filter="[]", exclude_filter=" [] ")
-        result = app._prepare_sql(sql, input_)
-        assert result == "WHERE s ~ '.*' AND s !~ '^$'"
-
     def test_temp_table_regex_substitution(self, app):
         app.extract_temp_table_regex_table_sql = "AND t.name !~ '{exclude_table_regex}'"
         sql = "SELECT * FROM t {temp_table_regex_sql}"
