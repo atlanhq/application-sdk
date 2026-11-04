@@ -1140,8 +1140,8 @@ If set and points to a directory, all .pem/.crt/.cer/.ca-bundle files
 in that directory are trusted in addition to system CAs.
 """
 
-# Daft analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
-# SCARF_NO_ANALYTICS, DAFT_ANALYTICS_ENABLED). They must NOT be set here at
+# Third-party analytics are disabled via ENV vars in the Dockerfile (DO_NOT_TRACK,
+# SCARF_NO_ANALYTICS). They must NOT be set here at
 # module level — os.environ assignments call os.putenv(), which Temporal's
 # workflow sandbox flags as non-deterministic, causing worker eviction loops.
 # See: https://github.com/atlanhq/application-sdk/pull/1129

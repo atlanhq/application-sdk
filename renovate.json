@@ -179,13 +179,16 @@
         "renovatebot/pre-commit-hooks"
       ],
       "enabled": false
+    },
+    {
+      "description": "Leave the Dockerfile's golden base (cgr.dev/atlan.com/app-framework-golden) untracked. The registry is private and Renovate has no credentials for it, so every lookup fails and logs a warning (application-sdk PR 2049). The tag stays mutable on purpose: Chainguard rebuilds it as package fixes land, and an untracked digest pin would freeze those fixes out. The release build's SLSA provenance records the digest each app-runtime-base release shipped on. The policy is written down next to the FROM line in the Dockerfile and in docs/standards/build-security.md. Disabled by depName here rather than listed in ignoreDeps, so the reason sits with the rule.",
+      "matchDepNames": [
+        "cgr.dev/atlan.com/app-framework-golden"
+      ],
+      "enabled": false
     }
   ],
   "ignorePaths": [
     "contract-toolkit/examples/**"
-  ],
-  "ignoreDeps": [
-    "cgr.dev/atlan.com/app-framework-golden",
-    "daft"
   ]
 }
