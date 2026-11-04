@@ -10,6 +10,7 @@ from pydantic import Field
 
 class AgentE2eMustacheSubstitutions(MustacheSubstitutions):
     extraction_method: Literal["direct", "agent"] = Field(
-        default="direct", alias="{{extraction-method}}"
+        default="direct",
+        alias="{{extraction-method}}",
     )
     agent_json: dict[str, Any] | None = Field(default=None, alias="{{agent-json}}")

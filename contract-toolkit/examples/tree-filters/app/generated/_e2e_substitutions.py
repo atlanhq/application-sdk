@@ -10,8 +10,10 @@ from pydantic import Field
 
 class TreeFiltersMustacheSubstitutions(MustacheSubstitutions):
     include_filter: dict[str, Any] | None = Field(
-        default=None, alias="{{include-filter}}"
+        default=None,
+        alias="{{include-filter}}",
     )
     exclude_filter: dict[str, Any] | None = Field(
-        default=None, alias="{{exclude-filter}}"
+        default=None,
+        alias="{{exclude-filter}}",
     )

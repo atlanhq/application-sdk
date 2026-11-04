@@ -4009,9 +4009,15 @@ local function e2eSubsSkip(): Set<String> =
   if (e2eSubsParent() == "SQLMustacheSubstitutions") e2eSubsSqlSkip
   else e2eSubsBaseSkip
 
-// One substitution Field line, on one line: `PyFormatPkg.format` wraps it.
+// One substitution Field line. Over 88 columns it is laid out one argument
+// per line with a trailing comma, not left to `PyFormatPkg.format` (which would
+// hug the arguments). ruff keeps a layout that ends in a trailing comma, so this
+// one is ruff-stable too, and keeping it leaves every app's committed
+// `_e2e_substitutions.py` unchanged.
 local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String, k: String): String =
-  "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")"
+  let (inline = "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")")
+  if (inline.length <= 88) inline
+  else "    \(pyName): \(typeStr) = Field(\n        \(defaultExpr),\n        alias=\"{{\(k)}}\",\n    )"
 
 // Returns a typed pydantic Field line for a substitution field, or null to skip.
 local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
