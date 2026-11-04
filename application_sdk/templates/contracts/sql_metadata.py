@@ -14,7 +14,6 @@ from pydantic import Field, JsonValue, ValidationInfo, field_validator, model_va
 from application_sdk._logging import get_logger
 from application_sdk.common.sql_filters import (
     SAFE_FILTER_PATTERN,
-    normalize_empty_json_list_filter,
     normalize_legacy_filter_value,
     validate_filter_no_sql_injection,
     validate_filter_regex_syntax,
@@ -92,7 +91,6 @@ def _coerce_filter_value(v: Any) -> Any:
     - ``dict[str, dict]`` → normalize APITree selections to
       ``dict[str, list[str]]``
     - ``list`` → wrap as ``{".*": <list>}``
-    - ``"[]"`` (an empty picker as JSON text) → empty string, no filter
     - ``str`` → normalise the legacy quoted-CSV shape (``'"A","B"'`` →
       ``'A|B'``) so migrated workflow specs from the pre-v3 SaaS-agent
       world still validate; JSON-encoded filter strings and plain
@@ -105,7 +103,7 @@ def _coerce_filter_value(v: Any) -> Any:
     if isinstance(v, list):
         return {".*": v}
     if isinstance(v, str):
-        return normalize_legacy_filter_value(normalize_empty_json_list_filter(v))
+        return normalize_legacy_filter_value(v)
     if isinstance(v, dict):
         # Validate before flattening so deeper APITree descendants that are not
         # represented in FilterMap cannot hide unsafe strings.
@@ -383,7 +381,7 @@ def _coerce_tree_filter_value(v: Any) -> Any:
         return ""
     if not isinstance(v, str):
         return v
-    normalized = normalize_legacy_filter_value(normalize_empty_json_list_filter(v))
+    normalized = normalize_legacy_filter_value(v)
     if not normalized.lstrip().startswith("{"):
         return normalized
     try:
