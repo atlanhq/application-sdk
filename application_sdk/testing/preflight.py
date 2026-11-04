@@ -118,9 +118,9 @@ class PreflightOutcomeCapture:
     def one(self) -> dict[str, Any]:
         """The single outcome row, asserting exactly one was emitted."""
         rows = self.rows
-        assert (
-            len(rows) == 1
-        ), f"expected exactly 1 outcome row, got {len(rows)}: {rows}"
+        assert len(rows) == 1, (
+            f"expected exactly 1 outcome row, got {len(rows)}: {rows}"
+        )
         return rows[0]
 
     @property

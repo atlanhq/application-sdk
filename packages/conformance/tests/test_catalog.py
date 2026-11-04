@@ -6,6 +6,9 @@ import re
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
+import conformance
 from conformance.suite.rules import CATALOG, _combine_rules, get_rule
 from conformance.suite.schema import load_catalog
 from conformance.suite.schema.catalog import RuleDefinition, validate_catalog
@@ -16,9 +19,6 @@ from conformance.suite.schema.disposition import (
     RuleScope,
 )
 from conformance.suite.schema.extensions import AtlanRuleProperties
-from pydantic import ValidationError
-
-import conformance
 
 
 def test_catalog_loads_without_error() -> None:
@@ -31,9 +31,9 @@ def test_catalog_no_duplicate_ids() -> None:
     """Every rule ID in the catalog is unique."""
     rules = load_catalog()
     ids = [r.id for r in rules]
-    assert len(ids) == len(
-        set(ids)
-    ), f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
+    assert len(ids) == len(set(ids)), (
+        f"Duplicate rule IDs: {[x for x in ids if ids.count(x) > 1]}"
+    )
 
 
 def test_catalog_ids_match_pattern() -> None:
@@ -50,12 +50,12 @@ def test_catalog_all_have_required_fields() -> None:
     for rule in rules:
         assert rule.id, f"Rule missing id: {rule}"
         assert rule.name, f"Rule {rule.id} missing name"
-        assert isinstance(
-            rule.tier, EnforcementTier
-        ), f"Rule {rule.id} has invalid tier"
-        assert isinstance(
-            rule.mechanism, RuleMechanism
-        ), f"Rule {rule.id} has invalid mechanism"
+        assert isinstance(rule.tier, EnforcementTier), (
+            f"Rule {rule.id} has invalid tier"
+        )
+        assert isinstance(rule.mechanism, RuleMechanism), (
+            f"Rule {rule.id} has invalid mechanism"
+        )
         assert rule.category, f"Rule {rule.id} missing category"
 
 
@@ -63,9 +63,9 @@ def test_catalog_all_have_rationale() -> None:
     """Every rule in the catalog must have a non-empty rationale."""
     rules = load_catalog()
     missing = [rule.id for rule in rules if not rule.rationale.strip()]
-    assert (
-        not missing
-    ), f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+    assert not missing, (
+        f"Rules missing rationale (add a rationale= to each RuleDefinition): {missing}"
+    )
 
 
 def test_catalog_block_rules_state_customer_impact() -> None:
@@ -205,9 +205,9 @@ def test_autofix_denying_phrases_do_not_over_match() -> None:
     wrapped = re.sub(
         r"\s+", " ", "remediation is a restructure, so findings route\nto residue."
     )
-    assert any(
-        p.search(wrapped) for p in _AUTOFIX_DENYING_PHRASES
-    ), "a newline-split phrase must match after whitespace collapse"
+    assert any(p.search(wrapped) for p in _AUTOFIX_DENYING_PHRASES), (
+        "a newline-split phrase must match after whitespace collapse"
+    )
 
 
 def test_non_autofixable_rules_do_not_claim_to_be_autofixable() -> None:
@@ -1211,12 +1211,12 @@ def test_catalog_until_never_precedes_since() -> None:
         if rule.until is None or rule.since is None:
             continue
         until, since = parse_version(rule.until), parse_version(rule.since)
-        assert (
-            until is not None and since is not None
-        ), f"{rule.id}: since/until must be parseable versions"
-        assert (
-            until >= since
-        ), f"{rule.id}: until {rule.until} precedes since {rule.since}"
+        assert until is not None and since is not None, (
+            f"{rule.id}: since/until must be parseable versions"
+        )
+        assert until >= since, (
+            f"{rule.id}: until {rule.until} precedes since {rule.since}"
+        )
 
 
 def test_catalog_retired_rules_are_removed() -> None:
@@ -1228,9 +1228,8 @@ def test_catalog_retired_rules_are_removed() -> None:
     rule is actually deleted, the same way the deprecation drift gate fails on
     a stale manifest.
     """
-    from conformance.suite.checks._version import parse_version, version_reached
-
     from conformance import __version__
+    from conformance.suite.checks._version import parse_version, version_reached
 
     current = parse_version(__version__)
     assert current is not None, f"unparseable package version {__version__!r}"
@@ -1434,9 +1433,9 @@ def test_declared_loci_are_surprising_ones() -> None:
     of ``scope``.
     """
     declared = {r.id: r.fix_locus for r in load_catalog() if r.fix_locus is not None}
-    assert (
-        declared
-    ), "the informative loci (contract/toolkit/packaging/ci/tests) are gone"
+    assert declared, (
+        "the informative loci (contract/toolkit/packaging/ci/tests) are gone"
+    )
     obvious = {
         r.id
         for r in load_catalog()
@@ -1569,8 +1568,7 @@ def test_canonical_references_name_something_checkable() -> None:
         )
     ]
     assert not vague, (
-        "canonical_reference must name a reference repo AND a concrete path: "
-        f"{vague}"
+        f"canonical_reference must name a reference repo AND a concrete path: {vague}"
     )
 
 
@@ -1638,9 +1636,9 @@ def test_autofixable_app_facing_rules_cite_a_reference_app() -> None:
         or not catalog[rule_id].autofixable
         or _POSITIVE_APP_CITATION.search(catalog[rule_id].canonical_reference)
     ]
-    assert (
-        not stale
-    ), f"_SDK_ONLY_REFERENCE_EXEMPT entries no longer needed — remove them: {stale}"
+    assert not stale, (
+        f"_SDK_ONLY_REFERENCE_EXEMPT entries no longer needed — remove them: {stale}"
+    )
 
 
 #: A count of things inside a reference app ("eleven leaves", "seven such

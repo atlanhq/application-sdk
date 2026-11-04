@@ -404,7 +404,7 @@ def mint_oauth_token(base_url: str, client_id: str, client_secret: str) -> str:
         # Name the keys, never the values — a token response's values are
         # credentials.
         raise TenantApiError(
-            "OAuth token response carried no access_token " f"(keys: {sorted(parsed)})"
+            f"OAuth token response carried no access_token (keys: {sorted(parsed)})"
         )
     return token
 

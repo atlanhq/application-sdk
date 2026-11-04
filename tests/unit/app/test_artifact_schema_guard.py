@@ -395,9 +395,9 @@ class TestTheWarningNamesAnActionablePath:
 
         messages = _boundary_warnings(recorded)
         assert len(messages) == 1, messages
-        assert (
-            "app/generated/extract-metadata/artifact_schemas.json" in messages[0]
-        ), messages[0]
+        assert "app/generated/extract-metadata/artifact_schemas.json" in messages[0], (
+            messages[0]
+        )
 
     def test_a_card_split_app_is_pointed_at_its_flat_file(self, tmp_path: Path) -> None:
         """Several ``@entrypoint``s, one flat generated tree — not a bundle.

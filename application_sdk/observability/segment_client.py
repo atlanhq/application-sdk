@@ -377,8 +377,7 @@ class SegmentClient:
 
     def _warn_dropping(self) -> None:
         logging.warning(
-            "Segment queue full (%d events); dropping new events "
-            "(dropped so far: %d)",
+            "Segment queue full (%d events); dropping new events (dropped so far: %d)",
             self._max_queue_size,
             self._dropped_count,
         )

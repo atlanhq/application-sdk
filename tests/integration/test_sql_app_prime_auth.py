@@ -161,9 +161,9 @@ async def test_prime_completes_before_extracts_start(tmp_path) -> None:
     by_label = {label: (start, end) for label, start, end in log}
 
     # Assertion 1: prime ran first
-    assert (
-        "prime_sql_auth" in by_label
-    ), f"prime_sql_auth connection was never recorded; got {list(by_label)}"
+    assert "prime_sql_auth" in by_label, (
+        f"prime_sql_auth connection was never recorded; got {list(by_label)}"
+    )
 
     prime_start, prime_end = by_label["prime_sql_auth"]
 

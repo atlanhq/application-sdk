@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.scorecard.readers import (
     parse_coverage_json,
     parse_junit,

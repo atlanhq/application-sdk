@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.error_handling import (
     BUILTIN_RAISES,
     LEAF_CLASSES,
@@ -38,9 +39,9 @@ def _single(src: str, rule_id: str) -> None:
 def _none(src: str) -> None:
     """Assert no active (non-suppressed) findings."""
     active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
-    assert (
-        not active
-    ), f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
+    assert not active, (
+        f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
+    )
 
 
 def _suppressed(src: str, rule_id: str) -> None:
@@ -89,9 +90,9 @@ except:  # conformance: ignore[E001]
     pass
 """
     active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
-    assert any(
-        f.rule_id == "E001" for f in active
-    ), "E001 should be active — bare directive without justification must not suppress"
+    assert any(f.rule_id == "E001" for f in active), (
+        "E001 should be active — bare directive without justification must not suppress"
+    )
 
 
 def test_parse_directive_case_insensitive() -> None:
@@ -4398,9 +4399,9 @@ def parse_payload(payload):
         raise MalformedPayloadError(message="Malformed payload") from None
 """
     findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
-    assert (
-        not findings
-    ), f"translated parser sentinels should not raise E012: {findings!r}"
+    assert not findings, (
+        f"translated parser sentinels should not raise E012: {findings!r}"
+    )
 
 
 def test_p012_still_flags_direct_writer_invariant_raise() -> None:
@@ -4424,9 +4425,9 @@ def parse_payload(payload):
         raise RuntimeError("invalid payload")
 """
     findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
-    assert (
-        len(findings) == 2
-    ), f"both untyped raises should remain flagged: {findings!r}"
+    assert len(findings) == 2, (
+        f"both untyped raises should remain flagged: {findings!r}"
+    )
 
 
 def test_p012_still_flags_conditional_or_reraised_sentinels() -> None:
@@ -4453,9 +4454,9 @@ def untyped_reraise(payload):
         raise
 """
     findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
-    assert (
-        len(findings) == 2
-    ), f"conditional and raw re-raises should remain flagged: {findings!r}"
+    assert len(findings) == 2, (
+        f"conditional and raw re-raises should remain flagged: {findings!r}"
+    )
 
 
 def test_p012_does_not_apply_translation_from_try_else_or_nested_function() -> None:
@@ -4476,9 +4477,9 @@ def parse_payload(payload):
         raise TypeError
 """
     findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
-    assert (
-        len(findings) == 2
-    ), f"deferred and try-else raises should remain flagged: {findings!r}"
+    assert len(findings) == 2, (
+        f"deferred and try-else raises should remain flagged: {findings!r}"
+    )
 
 
 def test_p012_inner_except_star_is_not_skipped_for_outer_translation() -> None:
@@ -4498,9 +4499,9 @@ def parse_payload(payload):
         raise MalformedPayloadError(message="Malformed payload")
 """
     findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
-    assert (
-        len(findings) == 1
-    ), f"the inner except* handler swallows the sentinel: {findings!r}"
+    assert len(findings) == 1, (
+        f"the inner except* handler swallows the sentinel: {findings!r}"
+    )
 
 
 def test_p012_shadowed_builtin_handler_is_no_translation_boundary() -> None:
@@ -4522,9 +4523,9 @@ def parse_payload(payload):
         raise MalformedPayloadError(message="Malformed payload")
 """
     findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
-    assert (
-        len(findings) == 1
-    ), f"the shadowed handler does not catch builtins.TypeError: {findings!r}"
+    assert len(findings) == 1, (
+        f"the shadowed handler does not catch builtins.TypeError: {findings!r}"
+    )
 
 
 def test_p012_handler_rebinding_sdk_error_name_is_no_translation_boundary() -> None:
@@ -4538,9 +4539,9 @@ def parse_payload(payload):
         raise InvalidInputError()
 """
     findings = [f for f in scan_text(src, "fake.py") if f.rule_id == "E012"]
-    assert (
-        len(findings) == 1
-    ), f"the handler's as-name is the caught TypeError, not the SDK error: {findings!r}"
+    assert len(findings) == 1, (
+        f"the handler's as-name is the caught TypeError, not the SDK error: {findings!r}"
+    )
 
 
 def test_p012_builtins_qualified_sentinel_translated_to_typed_error() -> None:

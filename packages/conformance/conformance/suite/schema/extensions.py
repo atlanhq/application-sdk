@@ -20,13 +20,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel
+
 from conformance.suite.schema.catalog import RemediationReference
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
     RuleScope,
 )
-from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Rule-level (reportingDescriptor.properties)

@@ -518,7 +518,7 @@ def test_t009_silent_on_env_guarded_skip() -> None:
 def test_t009_silent_on_skip_without_allow_module_level() -> None:
     """A per-test pytest.skip() call (not module-level) is not T009's concern."""
     findings = scan_text(
-        "import pytest\n\n" "def test_foo():\n" "    pytest.skip('flaky')\n",
+        "import pytest\n\ndef test_foo():\n    pytest.skip('flaky')\n",
         "tests/unit/test_foo.py",
     )
     assert not any(f.rule_id == "T009" for f in findings)

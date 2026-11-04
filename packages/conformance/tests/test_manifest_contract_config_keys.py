@@ -35,6 +35,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -853,9 +854,9 @@ def test_k018_dead_generated_contract_does_not_block_resolution(
         tmp_path / "app" / "generated" / "manifest.json",
         {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
     )
-    assert _unsuppressed(
-        scan_all(paths, tmp_path), "K018"
-    ), "the unreferenced generated contract must not create false ambiguity"
+    assert _unsuppressed(scan_all(paths, tmp_path), "K018"), (
+        "the unreferenced generated contract must not create false ambiguity"
+    )
 
 
 def test_k018_silent_when_two_live_contracts_are_ambiguous(tmp_path: Path) -> None:
@@ -1212,11 +1213,7 @@ def test_k018_local_class_named_like_a_template_keeps_the_fallback(
         tmp_path,
         {
             "app/app.py": (
-                "class SqlApp:\n"
-                "    pass\n"
-                "\n"
-                "class MyApp(SqlApp):\n"
-                "    pass\n"
+                "class SqlApp:\n    pass\n\nclass MyApp(SqlApp):\n    pass\n"
             ),
             "app/generated/_input.py": _generated_extraction_input(
                 "    fetch_partitions: bool = False\n"

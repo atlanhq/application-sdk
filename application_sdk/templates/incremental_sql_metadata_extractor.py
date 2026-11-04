@@ -890,8 +890,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             s3_prefix = get_persistent_s3_prefix(conn_qn, app_name)
             store = CurrentStateStore(f"{s3_prefix}/{CURRENT_STATE_SUBPATH}")
             diff_s3_prefix = (
-                f"{s3_prefix}/"
-                f"{INCREMENTAL_DIFF_SUBPATH_TEMPLATE.format(run_id=run_id)}"
+                f"{s3_prefix}/{INCREMENTAL_DIFF_SUBPATH_TEMPLATE.format(run_id=run_id)}"
             )
 
             snapshot = await store.probe(

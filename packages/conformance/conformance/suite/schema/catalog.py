@@ -22,13 +22,14 @@ import re
 from enum import Enum
 from typing import Any, Literal
 
+from pydantic import BaseModel, Field, model_validator
+
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
     RuleMechanism,
     RuleScope,
 )
-from pydantic import BaseModel, Field, model_validator
 
 #: The two accepted spellings of :attr:`RuleDefinition.superseded_by` — a rule ID
 #: (another rule takes the surface over) or an ``sdk>=X.Y.Z`` marker (an SDK fix

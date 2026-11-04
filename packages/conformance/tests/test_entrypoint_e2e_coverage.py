@@ -245,8 +245,7 @@ class TestCoverageResolution:
         _cover(tmp_path, "crawler")
         _write(
             tmp_path / "tests" / "e2e" / "test_m.py",
-            "class TestMiner(BaseE2ETest):\n"
-            '    entrypoint: ClassVar[str] = "miner"\n',
+            'class TestMiner(BaseE2ETest):\n    entrypoint: ClassVar[str] = "miner"\n',
         )
         assert _run(tmp_path) == []
 

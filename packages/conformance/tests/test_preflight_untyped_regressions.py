@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.preflight import _untyped_failure
 from conformance.suite.checks.preflight._common import build_registry
 

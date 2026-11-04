@@ -240,9 +240,9 @@ async def test_app_upload_dual_write_disabled_writes_upstream_only(
         for k in await list_keys("", store=upstream_store)
         if not k.endswith(".sha256")
     ]
-    assert any(
-        storage_path in key or key in storage_path for key in upstream_keys
-    ), f"File not in upstream when dual-write disabled. upstream_keys={upstream_keys}"
+    assert any(storage_path in key or key in storage_path for key in upstream_keys), (
+        f"File not in upstream when dual-write disabled. upstream_keys={upstream_keys}"
+    )
 
     # File must NOT be in deployment store when dual-write is disabled.
     deployment_keys = [
@@ -575,9 +575,9 @@ async def test_app_upload_cross_store_sha256_match_causes_skip(tmp_path):
     # identical (same size, same mtime) after the second call.
     post_stat = upstream_key_path.stat()
     assert post_stat.st_size == pre_stat.st_size, "upstream file size changed on skip"
-    assert (
-        post_stat.st_mtime == pre_stat.st_mtime
-    ), "upstream file mtime changed on skip"
+    assert post_stat.st_mtime == pre_stat.st_mtime, (
+        "upstream file mtime changed on skip"
+    )
 
 
 # ---------------------------------------------------------------------------

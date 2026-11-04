@@ -106,9 +106,9 @@ class TestAtomicWrite:
 
         with atomic_write(artifact, operation="test write") as handle:
             handle.write(b'{"partial')
-            assert (
-                not artifact.exists()
-            ), "the artifact was nameable while it was still being written"
+            assert not artifact.exists(), (
+                "the artifact was nameable while it was still being written"
+            )
 
         assert artifact.read_bytes() == b'{"partial'
 

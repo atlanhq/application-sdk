@@ -69,9 +69,9 @@ def assert_attributes(
             and attr not in expected_data[attr_type]
         ):
             continue
-        assert (
-            transformed_data[attr_type][attr] == expected_data[attr_type][attr]
-        ), f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+        assert transformed_data[attr_type][attr] == expected_data[attr_type][attr], (
+            f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+        )
 
 
 def test_regular_column_transformation(

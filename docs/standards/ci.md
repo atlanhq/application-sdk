@@ -1205,6 +1205,35 @@ python -m application_sdk.dev.pkl check           # has my PATH pkl drifted?
    one, if the textual and imported reads disagree, or if the declaring file
    falls out of that path filter.
 
+### The lint toolchain: three ruff pins that move as one
+
+ruff is the exception to "declared once": it has to be pinned in three files
+that three different readers own. The `ruff-pre-commit` rev in
+`.pre-commit-config.yaml` is what CI's `Pre-commit Checks` runs. The `ruff==`
+dev pin in `pyproject.toml` is what `uv run ruff` runs locally. The one in
+`packages/conformance/pyproject.toml` is what that package's scaffold-lint test
+runs. pre-commit cannot read a version from the lock, so the three literals
+stay, and two things keep them equal:
+
+- Renovate's `pre-commit` manager is enabled in `renovate.json`, and a `ruff`
+  group puts the hook rev and both pypi pins in one PR. The group is never
+  auto-merged, because a ruff release can change what CI enforces.
+- `.github/scripts/tests/test_lint_guards.py` fails if the three disagree, if
+  isort comes back as a second import sorter, or if either ruff config stops
+  selecting `I`.
+
+Before FND-4247, isort was pinned twice (5.13.2 in the hook, 9.0.2 in the
+lock), and `uv run isort` rewrote 16 files that CI accepted. Both `select`
+lists are spelled out for a similar reason: ruff 0.17 widened its default rule
+set, so an inherited default would let a version bump change the rules without
+any config change.
+
+The `Pre-commit Checks` job declares `permissions: contents: read`, under a
+workflow-level `permissions: {}` in `codeql.yaml`. It stays in that workflow
+because the job name is a required context, and `renovate-auto-approve.yml`,
+`vuln-auto-merge.yml` and `/gate-check` (`pr_test_command.py`) all key on
+`CodeQL Advanced` / `codeql.yaml` by name.
+
 ## Reusing scripts from a reusable workflow
 
 A `uses:` reusable workflow does **not** bring its own repo's files into the

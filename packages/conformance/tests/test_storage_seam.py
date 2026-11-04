@@ -25,6 +25,7 @@ import importlib
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.prescriptions import scan_all, scan_text
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -78,9 +79,9 @@ def test_checker_module_docstring_contains_canonical_rule_name(
 ) -> None:
     mod = importlib.import_module(module_path)
     rule = get_rule(rule_id)
-    assert rule.name in (
-        mod.__doc__ or ""
-    ), f"{module_path} docstring missing canonical rule name '{rule.name}'"
+    assert rule.name in (mod.__doc__ or ""), (
+        f"{module_path} docstring missing canonical rule name '{rule.name}'"
+    )
 
 
 # ── P008 FrameworkTransferInsideTask ────────────────────────────────────────

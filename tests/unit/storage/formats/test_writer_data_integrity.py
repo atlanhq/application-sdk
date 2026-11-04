@@ -97,9 +97,9 @@ class TestWriterDataIntegrity:
             expected_ids = set(range(total_records))
             missing_ids = expected_ids - ids_in_store
 
-            assert (
-                not missing_ids
-            ), f"PANDAS data loss: missing IDs {sorted(missing_ids)[:20]}"
+            assert not missing_ids, (
+                f"PANDAS data loss: missing IDs {sorted(missing_ids)[:20]}"
+            )
             assert len(ids_in_store) == total_records
 
     @pytest.mark.asyncio
@@ -150,9 +150,9 @@ class TestWriterDataIntegrity:
             expected_ids = set(range(total_records))
             missing_ids = expected_ids - ids_in_store
 
-            assert (
-                not missing_ids
-            ), f"DAFT shim data loss: missing IDs {sorted(missing_ids)[:20]}"
+            assert not missing_ids, (
+                f"DAFT shim data loss: missing IDs {sorted(missing_ids)[:20]}"
+            )
             assert len(ids_in_store) == total_records
 
     @pytest.mark.asyncio
@@ -361,13 +361,13 @@ class TestParquetWriterDataIntegrity:
     def _assert_no_data_loss(self, r: dict, expected: int) -> None:
         """Assert zero data loss on disk AND in the object store."""
         expected_ids = set(range(expected))
-        assert (
-            r["disk_rows"] == expected
-        ), f"Disk data loss: {r['disk_rows']}/{expected} rows"
+        assert r["disk_rows"] == expected, (
+            f"Disk data loss: {r['disk_rows']}/{expected} rows"
+        )
         assert r["disk_ids"] == expected_ids, "Disk: missing IDs detected"
-        assert (
-            r["store_rows"] == expected
-        ), f"Store data loss: {r['store_rows']}/{expected} rows"
+        assert r["store_rows"] == expected, (
+            f"Store data loss: {r['store_rows']}/{expected} rows"
+        )
         assert r["store_ids"] == expected_ids, "Store: missing IDs detected"
 
     # --- Single write() scenarios ---

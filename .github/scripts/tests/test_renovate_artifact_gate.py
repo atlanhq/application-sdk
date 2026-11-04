@@ -90,9 +90,9 @@ class TestWorkflowWiring:
         # the reason this file no longer has to lift a line out of the YAML.
         run = _approval_step_run()
         for keyword in ("if ", "else", "fi", "for ", "while ", "case ", "continue"):
-            assert (
-                keyword not in run
-            ), f"conditional shell ({keyword!r}) is back in the run: block"
+            assert keyword not in run, (
+                f"conditional shell ({keyword!r}) is back in the run: block"
+            )
 
     def test_script_checkout_ref_is_a_literal_that_cannot_be_empty(self):
         # Regression, found by piloting this gate from a consumer repo before

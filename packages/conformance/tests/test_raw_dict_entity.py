@@ -13,6 +13,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.prescriptions import scan_text as p_scan
 from conformance.suite.rules.prescriptions import RULES
 from conformance.suite.schema.catalog import RuleScope

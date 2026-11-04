@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks._ast_common import discover
 from conformance.suite.checks.client_lifecycle import (
     SERIES,
@@ -346,7 +347,7 @@ def test_p057_fires_when_base_close_is_not_awaited() -> None:
 
 def test_p057_fires_when_base_close_is_only_in_a_nested_helper() -> None:
     src = _METABASE_SHAPED_CLIENT + (
-        "        async def release():\n" "            await BaseClient.close(self)\n"
+        "        async def release():\n            await BaseClient.close(self)\n"
     )
     assert len(_rule(src, "P057")) == 1
 
@@ -392,9 +393,7 @@ def test_p056_fires_through_a_local_alias() -> None:
 )
 def test_p056_follows_the_alias_to_its_close_or_owner(tail: str) -> None:
     assert not _p056(
-        "async def f(self):\n"
-        "    client = SourceClient()\n"
-        "    alias = client\n" + tail
+        "async def f(self):\n    client = SourceClient()\n    alias = client\n" + tail
     )
 
 

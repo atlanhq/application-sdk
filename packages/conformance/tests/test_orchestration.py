@@ -16,6 +16,7 @@ import json
 import re
 from pathlib import Path
 
+import conformance
 from conformance.suite.checks._ast_common._safe_swap import (
     PUBLIC_ALIAS_MODULE,
     PUBLIC_ALIASES,
@@ -24,8 +25,6 @@ from conformance.suite.checks._ast_common._safe_swap import (
 from conformance.suite.checks._version import parse_version, version_reached
 from conformance.suite.checks.orchestration import SERIES, discover, scan_all, scan_text
 from conformance.suite.schema.extensions import SafeSwap
-
-import conformance
 
 
 def _rule(src: str, rule_id: str, file: str = "app/x.py") -> list:

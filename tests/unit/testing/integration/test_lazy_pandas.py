@@ -60,8 +60,7 @@ def _modules_loaded_after_import(import_stmt: str) -> set[str]:
 def test_importing_integration_does_not_load_pandas() -> None:
     """`from application_sdk.testing.integration import *` must not load pandas."""
     loaded = _modules_loaded_after_import(
-        "from application_sdk.testing.integration import "
-        "Scenario, equals, is_not_empty"
+        "from application_sdk.testing.integration import Scenario, equals, is_not_empty"
     )
     pandas_modules = {m for m in loaded if m.startswith("pandas")}
     pandera_modules = {m for m in loaded if m.startswith("pandera")}
@@ -89,9 +88,9 @@ def test_importing_sdr_does_not_load_pandas() -> None:
     pandas_modules = {m for m in loaded if m.startswith("pandas")}
     pandera_modules = {m for m in loaded if m.startswith("pandera")}
     assert not pandas_modules, f"SDR import triggered pandas: {sorted(pandas_modules)}"
-    assert (
-        not pandera_modules
-    ), f"SDR import triggered pandera: {sorted(pandera_modules)}"
+    assert not pandera_modules, (
+        f"SDR import triggered pandera: {sorted(pandera_modules)}"
+    )
 
 
 def test_importing_validation_module_does_not_load_pandas() -> None:

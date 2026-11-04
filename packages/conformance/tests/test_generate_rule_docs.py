@@ -145,6 +145,7 @@ def test_by_id_file_carries_the_same_block_as_the_series_doc(tmp_path) -> None:
 
 def test_check_mode_catches_a_missing_by_id_file(tmp_path) -> None:
     import pytest
+
     from conformance.tools import generate_rule_docs as g
 
     g.main(["--outdir", str(tmp_path)])
@@ -185,6 +186,7 @@ def test_check_mode_catches_an_orphaned_by_id_file(tmp_path) -> None:
     """A by-id file whose rule id has left the catalog is invisible to the
     expected-file loop; only an orphan sweep can fail it."""
     import pytest
+
     from conformance.tools import generate_rule_docs as g
 
     g.main(["--outdir", str(tmp_path)])

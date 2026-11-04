@@ -19,6 +19,7 @@ import types
 
 import pytest
 import yaml
+
 from conformance.bootstrap.render import render
 
 _TEMPLATE = (

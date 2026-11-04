@@ -67,9 +67,9 @@ from application_sdk.storage.preflight import (
 def test_classify_access_error(message: str, expected_class: str) -> None:
     exc = Exception(message)
     error_class, hint = _classify_access_error(exc)
-    assert (
-        error_class == expected_class
-    ), f"For message={message!r}: expected {expected_class!r} but got {error_class!r}"
+    assert error_class == expected_class, (
+        f"For message={message!r}: expected {expected_class!r} but got {error_class!r}"
+    )
     assert isinstance(hint, str) and len(hint) > 0
 
 

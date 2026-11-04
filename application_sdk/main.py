@@ -146,7 +146,7 @@ def _log_process_memory_baseline() -> None:
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Mapping
     from pathlib import Path
 
     from application_sdk.app.base import App

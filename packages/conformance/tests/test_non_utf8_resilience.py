@@ -24,11 +24,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite import runner
-from conformance.suite.checks import dependency_conformance, deprecation
+from conformance.suite.checks import dependency_conformance, deprecation, sdr
 from conformance.suite.checks import e2e_generated_harness as harness
 from conformance.suite.checks import e2e_workflow_shape as workflow
-from conformance.suite.checks import sdr
 from conformance.suite.checks import transform_templates as templates
 from conformance.suite.checks._ast_common import detect_scope
 

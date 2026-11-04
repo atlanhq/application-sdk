@@ -503,9 +503,11 @@ def _process(monkeypatch, *, keep: dict | None, staged: list[str]) -> FakeRunner
     monkeypatch.setattr(
         lane,
         "read_clone_file",
-        lambda work, path: lock
-        if path == "uv.lock"
-        else '{"extends": ["github>atlanhq/application-sdk//renovate/fleet"]}',
+        lambda work, path: (
+            lock
+            if path == "uv.lock"
+            else '{"extends": ["github>atlanhq/application-sdk//renovate/fleet"]}'
+        ),
     )
     manifest = json.dumps({"touched": staged})
     monkeypatch.setattr(lane, "run_bootstrap", lambda *a: (0, manifest + "\n", ""))

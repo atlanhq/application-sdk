@@ -472,7 +472,7 @@ def check_release_freeze(pr: str, mode: str, trains: list[str]) -> tuple[bool, s
     if mode == FREEZE_ON:
         return (
             False,
-            f"PR #{pr}: Renovate is frozen by RENOVATE_RELEASE_FREEZE=on — " "holding.",
+            f"PR #{pr}: Renovate is frozen by RENOVATE_RELEASE_FREEZE=on — holding.",
         )
     if trains:
         return (

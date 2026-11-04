@@ -224,8 +224,7 @@ def decide(
                 return (
                     False,
                     "❌ e2e verdict unreadable",
-                    f"{exc}, and this gate will not pass without it. Re-run this "
-                    "job.",
+                    f"{exc}, and this gate will not pass without it. Re-run this job.",
                 )
             sleep(poll_interval)
             continue

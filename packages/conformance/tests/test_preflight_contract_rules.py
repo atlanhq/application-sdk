@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.preflight._common import build_registry
 from conformance.suite.checks.preflight._contracts import scan
 
@@ -270,9 +271,9 @@ def test_sdk_sibling_catch_does_not_hide_raise(tmp_path, caught):
 
 
 def test_sdk_error_ancestry_matches_runtime_mro():
-    from conformance.suite.checks.preflight._contracts import sdk_error_ancestry
-
     import application_sdk.errors as sdk_errors
+
+    from conformance.suite.checks.preflight._contracts import sdk_error_ancestry
 
     for name in sdk_errors.__all__:
         cls = getattr(sdk_errors, name)
@@ -494,9 +495,9 @@ def test_f007_message_keeps_internals_out(tmp_path):
 
 
 def test_sdk_error_audience_matches_runtime():
-    from conformance.suite.checks.preflight._contracts import sdk_error_audience
-
     import application_sdk.errors as sdk_errors
+
+    from conformance.suite.checks.preflight._contracts import sdk_error_audience
 
     for name in sdk_errors.__all__:
         cls = getattr(sdk_errors, name)
@@ -655,9 +656,9 @@ def test_transient_raise_the_detector_cannot_clear_is_f008(
 
 
 def test_sdk_error_category_matches_runtime():
-    from conformance.suite.checks.preflight._contracts import sdk_error_category
-
     import application_sdk.errors as sdk_errors
+
+    from conformance.suite.checks.preflight._contracts import sdk_error_category
 
     for name in sdk_errors.__all__:
         cls = getattr(sdk_errors, name)

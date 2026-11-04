@@ -26,6 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+
 from conformance.bootstrap.extract import (
     declared_keys,
     unpreserved_tests_yaml_declarations,

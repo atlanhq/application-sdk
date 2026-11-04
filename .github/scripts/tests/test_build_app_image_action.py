@@ -123,9 +123,9 @@ def test_sdr_e2e_build_step_is_gated_on_prebuilt_image() -> None:
         "and the legs share one implementation"
     )
     referenced = step["uses"].split("@")[0].rsplit("/", 1)[-1]
-    assert (
-        _ACTIONS / referenced / "action.yaml"
-    ).is_file(), f"sdr-e2e references the action {referenced!r}, which does not exist"
+    assert (_ACTIONS / referenced / "action.yaml").is_file(), (
+        f"sdr-e2e references the action {referenced!r}, which does not exist"
+    )
 
 
 def test_sdr_e2e_image_output_reads_the_resolver_not_the_build_step() -> None:
@@ -196,9 +196,9 @@ def test_the_platform_flag_is_only_appended_when_requested() -> None:
         "the --platform flag must be appended conditionally, or every "
         "single-arch caller's build breaks on an empty value"
     )
-    assert (
-        build["env"].get("PLATFORMS") == "${{ inputs.platforms }}"
-    ), "the value must reach the shell via env:, not be interpolated into run:"
+    assert build["env"].get("PLATFORMS") == "${{ inputs.platforms }}", (
+        "the value must reach the shell via env:, not be interpolated into run:"
+    )
 
 
 def test_the_multi_platform_assert_is_gated_on_more_than_one_platform() -> None:
@@ -401,9 +401,9 @@ def test_pkl_is_downloaded_for_the_runners_architecture() -> None:
         "the pkl download is hardcoded to amd64 again. build-app-image now runs "
         "this action on ubuntu-24.04-arm for the e2e install path's arm64 leg."
     )
-    assert (
-        "runner.arch" in action and "aarch64" in action
-    ), "the pkl asset must be selected from runner.arch, with aarch64 for ARM"
+    assert "runner.arch" in action and "aarch64" in action, (
+        "the pkl asset must be selected from runner.arch, with aarch64 for ARM"
+    )
 
 
 # ── 3. The buildx cache scope ────────────────────────────────────────────────
@@ -606,9 +606,9 @@ def test_the_scan_step_builds_the_runners_own_architecture() -> None:
         )
     )
     scan = next(s for s in action["runs"]["steps"] if s.get("id") == "build_for_scan")
-    assert (
-        "runner.arch" in scan["with"]["platforms"]
-    ), "the scan platform must follow the runner, not be hardcoded"
+    assert "runner.arch" in scan["with"]["platforms"], (
+        "the scan platform must follow the runner, not be hardcoded"
+    )
 
 
 # ── The drift signal on the path that bakes the image (FND-1777) ─────────────

@@ -163,7 +163,7 @@ def _entry(
     entry = parsed[cloud]
     if not isinstance(entry, dict):
         raise TenantMatrixError(
-            f"{secret}[{cloud!r}] must be an object, got " f"{type(entry).__name__}."
+            f"{secret}[{cloud!r}] must be an object, got {type(entry).__name__}."
         )
 
     missing = [
@@ -171,7 +171,7 @@ def _entry(
     ]
     if missing:
         raise TenantMatrixError(
-            f"{secret}[{cloud!r}] is missing or blank for: " f"{', '.join(missing)}."
+            f"{secret}[{cloud!r}] is missing or blank for: {', '.join(missing)}."
         )
 
     resolved = {env: str(entry[field]) for field, env in _FIELD_TO_ENV.items()}

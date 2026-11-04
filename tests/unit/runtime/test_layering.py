@@ -64,9 +64,9 @@ def _loaded_after_importing(module: str) -> set[str]:
         check=False,
         timeout=120,
     )
-    assert (
-        result.returncode == 0
-    ), f"importing {module} in a fresh interpreter failed:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"importing {module} in a fresh interpreter failed:\n{result.stderr}"
+    )
     return {line for line in result.stdout.splitlines() if line}
 
 

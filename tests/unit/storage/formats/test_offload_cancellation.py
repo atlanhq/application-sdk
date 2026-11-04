@@ -268,15 +268,15 @@ class TestReaderCancellation:
                 await task
         finally:
             gated.may_finish.set()
-        assert await wait_until(
-            lambda: bool(gated.closes)
-        ), "the handle the orphaned worker was left holding was never closed"
+        assert await wait_until(lambda: bool(gated.closes)), (
+            "the handle the orphaned worker was left holding was never closed"
+        )
 
         assert len(gated.closes) == 1, f"closed more than once: {gated.closes}"
         assert gated.closes[0].decoding_in_flight is False
-        assert gated.closes[0].thread_name.startswith(
-            WORKER_THREAD_PREFIX
-        ), "the close must run on a worker thread, never on the event loop"
+        assert gated.closes[0].thread_name.startswith(WORKER_THREAD_PREFIX), (
+            "the close must run on a worker thread, never on the event loop"
+        )
 
     async def test_draining_a_file_closes_it_on_a_worker(self, tmp_path: Path) -> None:
         """The happy path still closes deterministically, and still off-loop."""
@@ -409,9 +409,9 @@ class TestWriterAttemptIsolation:
         retry._start_new_temp_folder()
         await retry._cleanup_temp_folders()
 
-        assert os.path.exists(
-            live_file
-        ), "a retry's cleanup deleted a directory another attempt was writing into"
+        assert os.path.exists(live_file), (
+            "a retry's cleanup deleted a directory another attempt was writing into"
+        )
         assert not os.path.exists(retry._get_temp_base_path())
 
     async def test_an_orphaned_writer_cannot_corrupt_the_retrys_consolidation(
@@ -458,9 +458,9 @@ class TestWriterAttemptIsolation:
         with patch.object(pq, "write_table", side_effect=gated_write_table):
             task = asyncio.create_task(orphan._accumulate_dataframe(orphan_rows))
             try:
-                assert await wait_until(
-                    write_started.is_set
-                ), "orphan never started writing"
+                assert await wait_until(write_started.is_set), (
+                    "orphan never started writing"
+                )
 
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -489,9 +489,9 @@ class TestWriterAttemptIsolation:
 
         written = consolidated_frame(retry)
         assert sorted(written["id"].tolist()) == [0, 1]
-        assert set(written["value"]) == {
-            "retry"
-        }, "the orphaned writer's rows reached the retry's consolidated output"
+        assert set(written["value"]) == {"retry"}, (
+            "the orphaned writer's rows reached the retry's consolidated output"
+        )
 
         # And the orphan's own write landed in its own tree rather than being
         # deleted or redirected.
@@ -572,9 +572,9 @@ class TestWriterOutputIsolation:
         with patch.object(pq, "write_table", side_effect=gated_write_table):
             task = asyncio.create_task(orphan.write(orphan_rows))
             try:
-                assert await wait_until(
-                    write_started.is_set
-                ), "orphan never started writing"
+                assert await wait_until(write_started.is_set), (
+                    "orphan never started writing"
+                )
 
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -605,9 +605,9 @@ class TestWriterOutputIsolation:
 
         published = pd.read_parquet(os.path.join(retry.path, "chunk-0-part0.parquet"))
         assert sorted(published["id"].tolist()) == [0, 1]
-        assert set(published["value"]) == {
-            "retry"
-        }, "the orphaned writer's late write replaced the retry's chunk"
+        assert set(published["value"]) == {"retry"}, (
+            "the orphaned writer's late write replaced the retry's chunk"
+        )
 
         # The FileReference the interceptor persists covers that directory, so
         # its file count is the mode-2 assertion stated directly.
@@ -725,9 +725,9 @@ class TestWriterOutputIsolation:
         keys = [key for key, _ in uploads]
         assert os.path.join(writer.path, "chunk-0-part0.parquet") in keys
         assert os.path.join(writer.path, "statistics", "statistics.json.ignore") in keys
-        assert not any(
-            _STAGING_ROOT_DIRNAME in key for key in keys
-        ), f"a staged path leaked into an object-store key: {keys}"
+        assert not any(_STAGING_ROOT_DIRNAME in key for key in keys), (
+            f"a staged path leaked into an object-store key: {keys}"
+        )
         # ...and every upload still read the file from the staging tree.
         assert all(_STAGING_ROOT_DIRNAME in local for _, local in uploads)
 
@@ -774,9 +774,9 @@ class TestWriterOutputIsolation:
                 orphan.write(pd.DataFrame({"id": [100], "value": ["orphan"]}))
             )
             try:
-                assert await wait_until(
-                    write_started.is_set
-                ), "orphan never started writing"
+                assert await wait_until(write_started.is_set), (
+                    "orphan never started writing"
+                )
 
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
@@ -787,16 +787,16 @@ class TestWriterOutputIsolation:
             finally:
                 may_write.set()
 
-            assert await wait_until(
-                lambda: bool(orphan_writes_done)
-            ), "the orphaned worker never landed its chunk"
+            assert await wait_until(lambda: bool(orphan_writes_done)), (
+                "the orphaned worker never landed its chunk"
+            )
 
         published = pd.read_json(
             os.path.join(retry.path, "chunk-0-part0.json"), lines=True
         )
-        assert published["value"].tolist() == [
-            "retry"
-        ], "the orphaned writer's rows were appended to the retry's chunk"
+        assert published["value"].tolist() == ["retry"], (
+            "the orphaned writer's rows were appended to the retry's chunk"
+        )
 
     async def test_a_cross_filesystem_publish_never_writes_directly_to_the_final_name(
         self, tmp_path: Path

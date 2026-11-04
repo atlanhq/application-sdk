@@ -408,9 +408,9 @@ class TestAutoHeartbeatLoop:
         mem_warnings = [
             c for c in mock_logger.warning.call_args_list if "Memory pressure" in str(c)
         ]
-        assert (
-            len(mem_warnings) == 1
-        ), f"Expected exactly 1 warning, got {len(mem_warnings)}"
+        assert len(mem_warnings) == 1, (
+            f"Expected exactly 1 warning, got {len(mem_warnings)}"
+        )
 
     @pytest.mark.asyncio
     async def test_memory_pressure_rearms_after_drop_below_hysteresis(
@@ -1020,9 +1020,9 @@ class TestStallWatchdogWiring:
                 ticks=3,
             )
 
-            assert any(
-                "non-positive" in str(c) for c in run.stall_warnings
-            ), f"budget={bad_budget} did not trip the guard"
+            assert any("non-positive" in str(c) for c in run.stall_warnings), (
+                f"budget={bad_budget} did not trip the guard"
+            )
             assert not stalls.calls, f"budget={bad_budget} enforced a stall"
             assert not run.stall_infos and not run.recorded
             assert run.beats == 3

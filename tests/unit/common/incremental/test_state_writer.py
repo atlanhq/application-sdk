@@ -498,8 +498,7 @@ class TestCreateCurrentStateSnapshot:
                     return_value=set(scope_qns or []),
                 ),
                 patch(
-                    "application_sdk.common.incremental.state.state_writer."
-                    "close_scope"
+                    "application_sdk.common.incremental.state.state_writer.close_scope"
                 ) as mock_close_scope,
                 patch(
                     "application_sdk.common.incremental.state.state_writer."
@@ -656,9 +655,9 @@ class TestCreateCurrentStateSnapshot:
 
         assert result is not None
         called = [func for func, _ in offloaded]
-        assert (
-            _reset_directory in called
-        ), "current-state directory prep was not offloaded"
+        assert _reset_directory in called, (
+            "current-state directory prep was not offloaded"
+        )
         diff_clears = [
             args
             for func, args in offloaded

@@ -711,8 +711,7 @@ class SqlApp(App):
             except ValidationError as verdict_error:
                 failure = _failure_details_degraded(classified)
                 logger.warning(
-                    "Could not serialise the prime failure verdict (%s) as-is; "
-                    "%s. %s",
+                    "Could not serialise the prime failure verdict (%s) as-is; %s. %s",
                     type(classified).__name__,
                     (
                         "kept the typed verdict with degraded evidence"

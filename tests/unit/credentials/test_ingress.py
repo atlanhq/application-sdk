@@ -270,9 +270,9 @@ class TestLiftAgentJson:
 
     def test_placeholder_widget_is_not_promoted(self) -> None:
         out = lift_agent_json({"metadata": {"agent-json": PLACEHOLDER}})
-        assert (
-            "agent_json" not in out
-        ), "a placeholder spec must not reach the typed agent_json field"
+        assert "agent_json" not in out, (
+            "a placeholder spec must not reach the typed agent_json field"
+        )
 
     def test_placeholder_inside_credentials_is_still_stripped(self) -> None:
         """Not promoted, but still removed — otherwise the v2→v3 credential shim

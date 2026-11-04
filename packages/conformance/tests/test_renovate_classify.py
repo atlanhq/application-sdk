@@ -8,10 +8,10 @@ from conformance.renovate.classify import (
     STALE_AFTER_DAYS,
     bounded_lock_refusal_state,
     classify,
+    parse_window,
 )
 from conformance.renovate.classify import lock_refusal_reason as extract_refusal_reason
 from conformance.renovate.classify import lock_refusal_window as extract_refusal_window
-from conformance.renovate.classify import parse_window
 from conformance.renovate.models import (
     BlockingReason,
     Category,

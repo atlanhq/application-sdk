@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.credential_seam import (
     SERIES,
     discover,
@@ -367,15 +368,14 @@ def test_p053_module_level_call_fires() -> None:
         # An unrelated union alias.
         "ScalarValue = str | int | None\n",
         # Key/value pairs that are not credentials (tags, parameters).
-        "def tags(input):\n"
-        '    return {t["key"]: t.get("value") for t in input.tags}\n',
+        'def tags(input):\n    return {t["key"]: t.get("value") for t in input.tags}\n',
         "def params(rows):\n"
         "    out = {}\n"
         "    for row in rows:\n"
         '        out[row["key"]] = row["value"]\n'
         "    return out\n",
         # A credentials loop that does not read a key/value pair.
-        "def names(input):\n" '    return [c["key"] for c in input.credentials]\n',
+        'def names(input):\n    return [c["key"] for c in input.credentials]\n',
         # A mention in a docstring or a comment is not a call.
         "def helper():\n"
         '    """Routes via CredentialRef.resolve(input), see CredentialRef(credential_guid=g)."""\n'

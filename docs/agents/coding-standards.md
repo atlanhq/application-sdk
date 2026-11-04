@@ -3,14 +3,14 @@
 - Primary coding standards live in `docs/standards/coding.md` (formatting, naming, docstrings for all functions/classes/modules).
 - Logging, exception, and performance guidance are in `docs/standards/logging.md`, `docs/standards/exceptions.md`, and `docs/standards/performance.md`.
 - Metric / Prometheus label cardinality rules are in `docs/standards/metrics.md` — read before adding a `record_metric()` call or a new OTel instrument.
-- Tooling enforcement is defined in `.pre-commit-config.yaml` (ruff, isort, pyright).
+- Tooling enforcement is defined in `.pre-commit-config.yaml` (ruff for lint, format and import sorting; pyright).
 
 ## Key Rules Enforced by Pre-commit
 
 1. **No bare `except:`** - Always use `except Exception:` or a specific exception type
 2. **No useless f-strings** - Don't use `f"string"` if there are no `{placeholders}`
 3. **No Unicode in print statements** - Windows CI fails on emojis (`✓`, `❌`, `⚠️`). Use ASCII: `PASS`, `FAIL`, `WARNING`
-4. **Import sorting** - Imports must be sorted (isort with black profile)
+4. **Import sorting** - Imports must be sorted (ruff `I` rules; `uv run ruff check --fix` sorts them)
 5. **Type hints** - Pyright enforces type checking
 6. **Conventional commits** - Commit messages must follow conventional format (e.g., `fix:`, `feat:`, `chore:`)
 7. **No customer names** - Never reference customer names, tenant names, run IDs, or any customer-identifiable information in code, comments, docstrings, commit messages, or PR descriptions. Use generic language: "a production incident", "a prior RCA".

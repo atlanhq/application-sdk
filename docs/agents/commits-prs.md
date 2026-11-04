@@ -14,7 +14,7 @@ uv run pre-commit run --files <changed-files>
 CI will fail if pre-commit checks fail. Common failures:
 - Linting errors (ruff)
 - Formatting issues (ruff-format)
-- Import order (isort)
+- Import order (ruff `I`)
 - Type errors (pyright)
 
 ## Commit Message Format

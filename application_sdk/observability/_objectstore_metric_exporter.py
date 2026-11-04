@@ -28,14 +28,14 @@ from opentelemetry.sdk.metrics import (
     ObservableUpDownCounter,
     UpDownCounter,
 )
-from opentelemetry.sdk.metrics.export import AggregationTemporality
-from opentelemetry.sdk.metrics.export import Gauge as GaugeData
-from opentelemetry.sdk.metrics.export import Histogram as HistogramData
 from opentelemetry.sdk.metrics.export import (
+    AggregationTemporality,
     MetricExporter,
     MetricExportResult,
     MetricsData,
 )
+from opentelemetry.sdk.metrics.export import Gauge as GaugeData
+from opentelemetry.sdk.metrics.export import Histogram as HistogramData
 from opentelemetry.sdk.metrics.export import Sum as SumData
 
 from application_sdk.constants import (

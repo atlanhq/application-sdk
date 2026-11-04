@@ -199,10 +199,7 @@ def test_s001_still_fires_on_credential_name_shaped_weak_defaults() -> None:
     assert _ids('cfg = {"password": "api_key"}\n') == ["S001"]
     assert _ids('password = "aws_secret_access_key"\n') == ["S001"]
     src = (
-        "cfg = {\n"
-        '    "username": "aws_access_key_id",\n'
-        '    "password": "hunter2",\n'
-        "}\n"
+        'cfg = {\n    "username": "aws_access_key_id",\n    "password": "hunter2",\n}\n'
     )
     assert _ids(src) == ["S001"]
     assert _ids('cfg = {"username": "svc_user", "password": "admin_password"}\n') == [

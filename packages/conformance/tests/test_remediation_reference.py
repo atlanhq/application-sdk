@@ -7,6 +7,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
+import conformance
 from conformance.suite.rules import CATALOG, get_rule
 from conformance.suite.schema.catalog import (
     RemediationKind,
@@ -18,9 +21,6 @@ from conformance.suite.schema.disposition import (
     RuleMechanism,
     RuleScope,
 )
-from pydantic import ValidationError
-
-import conformance
 
 PACKAGE_ROOT = Path(conformance.__file__).parent
 REPO_ROOT = PACKAGE_ROOT.parents[2]
@@ -147,9 +147,9 @@ def test_every_prescription_reference_names_the_rules_bullet() -> None:
         text = path.read_text() if path.is_file() else ""
         if ref.target != expected or not _BULLET_RE(r.id).search(text):
             broken.append(f"{r.id}->{ref.target}")
-    assert (
-        not broken
-    ), f"prescription references that miss the rule's bullet: {sorted(broken)}"
+    assert not broken, (
+        f"prescription references that miss the rule's bullet: {sorted(broken)}"
+    )
 
 
 def test_every_command_reference_names_a_cli_command() -> None:
@@ -171,9 +171,9 @@ def test_every_command_reference_names_a_cli_command() -> None:
             parts = parts[2:]
         if len(parts) < 2 or not package.match(parts[0]) or parts[1] not in _COMMANDS:
             broken.append(f"{r.id}->{ref.target}")
-    assert (
-        not broken
-    ), f"command references that are not a conformance CLI command: {sorted(broken)}"
+    assert not broken, (
+        f"command references that are not a conformance CLI command: {sorted(broken)}"
+    )
 
 
 def test_migration_rule_rejects_a_mechanical_reference_kind() -> None:
@@ -226,9 +226,9 @@ def test_every_guide_reference_resolves_to_a_packaged_file_that_names_the_rule()
         path = PACKAGE_ROOT / ref.target
         if not path.is_file() or not re.search(rf"\b{r.id}\b", path.read_text()):
             broken.append(f"{r.id}->{ref.target}")
-    assert (
-        not broken
-    ), f"guide references that do not ship or do not name the rule: {sorted(broken)}"
+    assert not broken, (
+        f"guide references that do not ship or do not name the rule: {sorted(broken)}"
+    )
 
 
 def test_every_packaged_skill_names_the_rules_that_point_at_it() -> None:
@@ -242,9 +242,9 @@ def test_every_packaged_skill_names_the_rules_that_point_at_it() -> None:
         skill = PACKAGE_ROOT / "skills" / ref.target / "SKILL.md"
         if skill.is_file() and not re.search(rf"\b{r.id}\b", skill.read_text()):
             missing.append(f"{ref.target}:{r.id}")
-    assert (
-        not missing
-    ), f"skills that do not name a rule pointing at them: {sorted(missing)}"
+    assert not missing, (
+        f"skills that do not name a rule pointing at them: {sorted(missing)}"
+    )
 
 
 def test_repo_root_skill_paths_resolve_to_the_packaged_skill() -> None:

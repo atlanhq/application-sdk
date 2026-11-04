@@ -74,7 +74,7 @@ def _lex(source: str) -> list[tuple[str, str]]:
         match = _TOKEN_RE.match(source, position)
         if match is None:
             raise UnsupportedExpression(
-                f"cannot lex {source[position:position + 20]!r} at offset {position}"
+                f"cannot lex {source[position : position + 20]!r} at offset {position}"
             )
         position = match.end()
         kind = match.lastgroup

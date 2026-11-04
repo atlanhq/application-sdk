@@ -722,9 +722,9 @@ def test_wait_for_checks_keeps_the_newest_of_two_same_named_checks(
         ),
     )
 
-    assert (
-        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is True
-    ), "the superseded attempt's failure was reported over the retry that passed"
+    assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is True, (
+        "the superseded attempt's failure was reported over the retry that passed"
+    )
 
 
 @pytest.mark.parametrize(
@@ -746,9 +746,9 @@ def test_wait_for_checks_does_not_let_a_stale_pass_mask_a_fresh_failure(
         ),
     )
 
-    assert (
-        mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False
-    ), "a superseded pass masked the retry's failure"
+    assert mod.wait_for_checks(REPO, SHA, NAMES, sleep=lambda s: None) is False, (
+        "a superseded pass masked the retry's failure"
+    )
 
 
 def test_wait_for_checks_waits_when_the_newest_attempt_is_still_running(monkeypatch):
@@ -811,6 +811,6 @@ def test_remember_newest_is_the_only_way_latest_is_populated():
         "wait_for_checks assigns into `latest` directly again — route it through "
         "remember_newest() so same-named check runs stay newest-wins"
     )
-    assert (
-        poll_body.count("remember_newest(latest, check_run)") == 2
-    ), "both the conditional-GET and the full-pagination branch must dedupe"
+    assert poll_body.count("remember_newest(latest, check_run)") == 2, (
+        "both the conditional-GET and the full-pagination branch must dedupe"
+    )

@@ -40,8 +40,14 @@ from lens.findings import Finding, PRState, merge_new  # noqa: E402
 from lens.github import GitHubError  # noqa: E402
 from lens.holistic import build_input  # noqa: E402
 from lens.index import build_index  # noqa: E402
-from lens.llm import FatalRequestError  # noqa: E402
-from lens.llm import BudgetExhausted, Client, Ledger, LLMError, Price  # noqa: E402
+from lens.llm import (  # noqa: E402
+    BudgetExhausted,
+    Client,
+    FatalRequestError,
+    Ledger,
+    LLMError,
+    Price,
+)
 from lens.lock import BUSY_NOTE, JOB_TIMEOUT, older_active_run, run_name  # noqa: E402
 from lens.review import (  # noqa: E402
     SUMMARY_MARKER,
@@ -3537,13 +3543,13 @@ def test_every_rules_glob_matches_a_tracked_file_and_wins_for_one():
                 winners[glob] += 1
                 break
     matching = {g for g, _ in rules.entries if any(glob_match(f, g) for f in files)}
-    assert not [
-        g for g, _ in rules.entries if g not in matching
-    ], "globs that match no tracked file"
+    assert not [g for g, _ in rules.entries if g not in matching], (
+        "globs that match no tracked file"
+    )
     dead = [g for g, n in winners.items() if n == 0]
-    assert (
-        not dead
-    ), f"globs shadowed by earlier entries (never the first match): {dead}"
+    assert not dead, (
+        f"globs shadowed by earlier entries (never the first match): {dead}"
+    )
     # A directory whose code moved away often keeps a README: that is not a live area.
     readme_only = [
         g
@@ -3791,8 +3797,8 @@ def test_a_non_blocking_preflight_diagnostic_is_not_shown_on_the_pr(repo: Path):
     def factory(ledger):
         c = _factory(_review_script())(ledger)
         c.diagnostics = ["preflight /key/info: HTTP 403 from a Cloudflare page"]
-        c.preflight = (
-            lambda **kw: ""
+        c.preflight = lambda **kw: (
+            ""
         )  # the checks that matter passed; only a diagnostic is left
         return c
 

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.actions_pinning import (
     is_violation,
     iter_uses,

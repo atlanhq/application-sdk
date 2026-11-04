@@ -23,6 +23,7 @@ import re
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks._entrypoint_contract_classes import (
     CodeContractScan,
     scan_file_for_entrypoint_contracts,
@@ -161,9 +162,9 @@ def test_k006_fires_when_referenced_field_missing_from_output(tmp_path: Path) ->
     assert any("publish_state_prefix" in m for m in missing)
     assert any("current_state_prefix" in m for m in missing)
     assert any("transformed_data_prefix" in m for m in missing)
-    assert not any(
-        "connection_qualified_name" in m for m in missing
-    ), "connection_qualified_name is declared — must not be flagged"
+    assert not any("connection_qualified_name" in m for m in missing), (
+        "connection_qualified_name is declared — must not be flagged"
+    )
 
 
 def test_k006_finding_anchored_on_output_class(tmp_path: Path) -> None:

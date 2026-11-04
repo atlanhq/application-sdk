@@ -168,8 +168,7 @@ def landed_on_branch(sha, branch="main", remote="origin"):
     if probe.returncode == 1:
         return False, f"{sha[:12]} is not reachable from {remote}/{branch}"
     return True, (
-        f"git merge-base exited {probe.returncode} for {sha[:12]}; "
-        "ancestry not checked"
+        f"git merge-base exited {probe.returncode} for {sha[:12]}; ancestry not checked"
     )
 
 

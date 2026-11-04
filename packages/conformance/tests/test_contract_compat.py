@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.deprecation._contract_compat import scan_contract_compat
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -264,9 +265,9 @@ def test_b005_union_three_way(tmp_path: Path) -> None:
         ContractField("MyInput", "value", "str | int | None", "active")
     )
     findings = _scan(tmp_path, {"app.py": _EP_UNION_THREE}, ledger)
-    assert "B005" not in _ids(
-        findings
-    ), "Union[str, int, None] should match str | int | None"
+    assert "B005" not in _ids(findings), (
+        "Union[str, int, None] should match str | int | None"
+    )
 
 
 # ── B005: @entrypoint decorator variant ───────────────────────────────────────
@@ -335,9 +336,9 @@ def test_task_contract_excluded(tmp_path: Path) -> None:
     # Remove the field from source — but it's a @task contract, so B005 must NOT fire
     src = _TASK_CONTRACT.replace("    data: str\n", "")
     findings = _scan(tmp_path, {"app.py": src}, ledger)
-    assert "B005" not in _ids(
-        findings
-    ), "@task contract changes must never trigger B005"
+    assert "B005" not in _ids(findings), (
+        "@task contract changes must never trigger B005"
+    )
 
 
 # ── B006: new field not in ledger ─────────────────────────────────────────────
@@ -535,9 +536,9 @@ def test_diamond_inheritance_resolves_via_mro_not_last_visited_path(
     """
     ledger = _make_ledger(ContractField("D", "shared", "int", "active"))
     findings = _scan(tmp_path, _DIAMOND_FILES, ledger)
-    assert "B005" not in _ids(
-        findings
-    ), "D.shared must resolve to C's override (int) via MRO, not A's str"
+    assert "B005" not in _ids(findings), (
+        "D.shared must resolve to C's override (int) via MRO, not A's str"
+    )
 
 
 def test_diamond_inheritance_untouched_field_still_resolves(tmp_path: Path) -> None:
@@ -576,9 +577,9 @@ def test_b005_sdk_mixin_field_resolved_via_static_registry(tmp_path: Path) -> No
         ContractField("MyOutput", "connection_qualified_name", "str", "active")
     )
     findings = _scan(tmp_path, {"app.py": _EP_MIXIN_OUTPUT}, ledger)
-    assert "B005" not in _ids(
-        findings
-    ), "PublishInputMixin.connection_qualified_name must resolve via the SDK registry"
+    assert "B005" not in _ids(findings), (
+        "PublishInputMixin.connection_qualified_name must resolve via the SDK registry"
+    )
 
 
 _SDK_TEMPLATE_OUTPUT = """\

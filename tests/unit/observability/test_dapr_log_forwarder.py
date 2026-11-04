@@ -592,9 +592,9 @@ class TestForwardedLevelsObserved:
         out = result.stdout + result.stderr
         # Control: the info line must always arrive, or a case below could pass
         # for the wrong reason (forwarder never ran, fake daprd never spawned).
-        assert (
-            "CANARY-daprd-info" in out
-        ), f"forwarder produced no daprd lines at all:\n{out}"
+        assert "CANARY-daprd-info" in out, (
+            f"forwarder produced no daprd lines at all:\n{out}"
+        )
         return out
 
     @staticmethod

@@ -220,9 +220,9 @@ async def test_non_retryable_error_from_entrypoint_app(
             break
         cause = getattr(cause, "cause", None) or cause.__cause__
     assert cause is not None, "Expected 'multi-ep non-retryable' in exception chain"
-    assert getattr(
-        cause, "non_retryable", False
-    ), "Expected ApplicationError.non_retryable=True — error would be retried"
+    assert getattr(cause, "non_retryable", False), (
+        "Expected ApplicationError.non_retryable=True — error would be retried"
+    )
 
 
 @pytest.mark.integration
@@ -358,9 +358,9 @@ async def test_alias_run_logs_the_deprecation_signal(
                 task_queue=task_queue,
                 result_type=LegacyAliasOutput,
             )
-            assert not any(
-                "legacy_workflow_type" in e for e in extras
-            ), "canonical run must not log the deprecation signal"
+            assert not any("legacy_workflow_type" in e for e in extras), (
+                "canonical run must not log the deprecation signal"
+            )
     finally:
         loguru_logger.remove(sink_id)
 

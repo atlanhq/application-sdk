@@ -133,8 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         clouds = []
 
     print(
-        f"Tenant matrix carries {len(clouds)} cloud(s): "
-        f"{', '.join(clouds) or 'none'}",
+        f"Tenant matrix carries {len(clouds)} cloud(s): {', '.join(clouds) or 'none'}",
         file=sys.stderr,
     )
     print(f"clouds={','.join(clouds)}")

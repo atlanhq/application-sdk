@@ -120,9 +120,9 @@ def segment_client() -> Iterator[SegmentClient]:
         if client._loop is not None and client._loop.is_running():
             break
         time.sleep(0.01)
-    assert (
-        client._loop is not None and client._loop.is_running()
-    ), "worker loop must be running or flush() short-circuits before the bridge"
+    assert client._loop is not None and client._loop.is_running(), (
+        "worker loop must be running or flush() short-circuits before the bridge"
+    )
 
     _client = client
     try:
@@ -239,8 +239,8 @@ async def test_flush_outside_workflow_still_bridges(segment_client, captured_log
     await segment_client.flush()
     elapsed = time.monotonic() - started
 
-    assert (
-        elapsed < _FAST_SECONDS
-    ), f"non-workflow flush took {elapsed:.1f}s; the bridge should resolve immediately"
+    assert elapsed < _FAST_SECONDS, (
+        f"non-workflow flush took {elapsed:.1f}s; the bridge should resolve immediately"
+    )
     assert _callback_failures(captured_logs) == []
     assert _flush_timeouts(captured_logs) == []

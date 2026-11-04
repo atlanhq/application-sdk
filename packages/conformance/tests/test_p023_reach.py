@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.determinism import scan_path, scan_text
 
 _PROBE_HEADER = """\
@@ -619,9 +620,9 @@ def test_workflow_client_work_is_p021_not_p023(stmt: str) -> None:
         f"        {stmt}\n"
     )
     findings = scan_text(src, "app/wf.py")
-    assert [f.rule_id for f in findings if f.rule_id in ("P021", "P023")] == [
-        "P021"
-    ], stmt
+    assert [f.rule_id for f in findings if f.rule_id in ("P021", "P023")] == ["P021"], (
+        stmt
+    )
 
 
 @pytest.mark.parametrize(

@@ -311,8 +311,7 @@ async def delete_connection(
         # carries a redacted one-liner, which is what a report can carry; the
         # traceback is what an operator needs and only a log can hold.
         logger.warning(
-            "harness teardown: could not publish the connection-delete workflow "
-            "for %s",
+            "harness teardown: could not publish the connection-delete workflow for %s",
             qualified_name,
             exc_info=True,
         )

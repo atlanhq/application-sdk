@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.error_seam._public_error_surface import (
     ALLOWLIST_PATH,
     SDK_ERRORS_INIT_RELPATH,

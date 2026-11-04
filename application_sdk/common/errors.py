@@ -88,8 +88,7 @@ class UnserializableMapperResultError(DataIntegrityError):
 
     code: ClassVar[str] = "DATA_INTEGRITY_UNSERIALIZABLE_MAPPER_RESULT"
     message: str = (
-        "Asset mapper returned a value the SDK cannot serialise to the Atlas "
-        "wire shape"
+        "Asset mapper returned a value the SDK cannot serialise to the Atlas wire shape"
     )
     suggested_action: str | None = (
         "Return a pyatlan asset (one exposing to_nested_bytes(), "

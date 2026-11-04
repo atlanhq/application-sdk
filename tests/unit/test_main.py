@@ -597,9 +597,9 @@ class TestLogDaprComponentsBindingOutcomes:
 
         warning_msgs = self._rendered(mock_log.warning.call_args_list)
         info_msgs = self._rendered(mock_log.info.call_args_list)
-        assert not any(
-            "statestore" in m for m in warning_msgs
-        ), f"statestore disabled-by-config must not warn; got: {warning_msgs}"
+        assert not any("statestore" in m for m in warning_msgs), (
+            f"statestore disabled-by-config must not warn; got: {warning_msgs}"
+        )
         assert any(
             "statestore" in m and "disabled by config" in m for m in info_msgs
         ), f"expected disabled-by-config INFO for statestore; got: {info_msgs}"
@@ -667,12 +667,12 @@ class TestLogDaprComponentsBindingOutcomes:
 
         warning_msgs = self._rendered(mock_log.warning.call_args_list)
         info_msgs = self._rendered(mock_log.info.call_args_list)
-        assert not any(
-            "statestore" in m and "drift" in m for m in warning_msgs
-        ), f"drift case must be INFO not WARNING; got: {warning_msgs}"
-        assert any(
-            "statestore" in m and "drift" in m for m in info_msgs
-        ), f"expected drift INFO for registered+declared-false; got: {info_msgs}"
+        assert not any("statestore" in m and "drift" in m for m in warning_msgs), (
+            f"drift case must be INFO not WARNING; got: {warning_msgs}"
+        )
+        assert any("statestore" in m and "drift" in m for m in info_msgs), (
+            f"expected drift INFO for registered+declared-false; got: {info_msgs}"
+        )
 
     async def test_registered_with_declared_true_logs_accepted_info(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -695,12 +695,12 @@ class TestLogDaprComponentsBindingOutcomes:
 
         warning_msgs = self._rendered(mock_log.warning.call_args_list)
         info_msgs = self._rendered(mock_log.info.call_args_list)
-        assert not any(
-            "statestore" in m for m in warning_msgs
-        ), f"happy path must not warn; got: {warning_msgs}"
-        assert any(
-            "statestore" in m and "accepted" in m for m in info_msgs
-        ), f"expected accepted INFO; got: {info_msgs}"
+        assert not any("statestore" in m for m in warning_msgs), (
+            f"happy path must not warn; got: {warning_msgs}"
+        )
+        assert any("statestore" in m and "accepted" in m for m in info_msgs), (
+            f"expected accepted INFO; got: {info_msgs}"
+        )
 
     async def test_every_expected_binding_emits_at_least_one_log_line(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -739,12 +739,12 @@ class TestLogDaprComponentsBindingOutcomes:
         eventstore_accepted = [
             m for m in info_msgs if "eventstore" in m and "accepted" in m
         ]
-        assert (
-            eventstore_accepted
-        ), f"expected eventstore accepted-INFO for registered+unset; got: {all_msgs}"
-        assert any(
-            "<unset>" in m for m in eventstore_accepted
-        ), f"expected <unset> in eventstore accepted message; got: {eventstore_accepted}"
+        assert eventstore_accepted, (
+            f"expected eventstore accepted-INFO for registered+unset; got: {all_msgs}"
+        )
+        assert any("<unset>" in m for m in eventstore_accepted), (
+            f"expected <unset> in eventstore accepted message; got: {eventstore_accepted}"
+        )
 
 
 class TestCreateInfrastructureEventBinding:

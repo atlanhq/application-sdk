@@ -333,8 +333,7 @@ def run(
         if method in import_failures:
             exc = import_failures[method]
             result.fail(
-                f"{label}: reached a worker-only import "
-                f"({type(exc).__name__}: {exc})"
+                f"{label}: reached a worker-only import ({type(exc).__name__}: {exc})"
             )
     return result
 

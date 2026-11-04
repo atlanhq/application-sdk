@@ -395,8 +395,7 @@ async def _probe_store_structured(
         await obstore.head_async(store, probe_key)
     except Exception as exc:
         logger.warning(
-            "SDR preflight: read/head probe failed for %s store (binding: %s): "
-            "%s\n%s",
+            "SDR preflight: read/head probe failed for %s store (binding: %s): %s\n%s",
             label,
             binding_name,
             sanitize_cause_repr(exc),

@@ -121,9 +121,9 @@ def test_no_volume_means_detection_is_inert(monkeypatch, tmp_path, logs):
     missing = tmp_path / "not-mounted"
     monkeypatch.setattr(rm, "MARKER_DIR", missing)
     assert rm.check_and_update_the_marker() == 0
-    assert (
-        not missing.exists()
-    ), "check_and_update_the_marker() must not create the directory"
+    assert not missing.exists(), (
+        "check_and_update_the_marker() must not create the directory"
+    )
     assert logs.says("debug", str(missing), "emptyDir"), (
         "an absent volume must still be reported, at debug because most of the "
         f"fleet does not mount it: {logs.rows}"
@@ -163,23 +163,23 @@ async def test_only_the_first_restart_in_a_pod_waits(marker_dir, monkeypatch, lo
     rm.check_and_update_the_marker()  # start 1 -> marker says 1 restart
     rm.check_and_update_the_marker()  # start 2 -> marker says 2
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
-    assert logs.says(
-        "warning", "polls instead of waiting again"
-    ), f"a second restart must say why it is not waiting: {logs.rows}"
-    assert not logs.says(
-        "warning", "not polling for up to"
-    ), f"it must not announce a wait it is not doing: {logs.rows}"
+    assert logs.says("warning", "polls instead of waiting again"), (
+        f"a second restart must say why it is not waiting: {logs.rows}"
+    )
+    assert not logs.says("warning", "not polling for up to"), (
+        f"it must not announce a wait it is not doing: {logs.rows}"
+    )
 
 
 async def test_a_restart_does_not_wait_while_waiting_is_switched_off(marker_dir, logs):
     rm.check_and_update_the_marker()
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
-    assert logs.says(
-        "warning", "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS=0"
-    ), f"must say it is switched off rather than announce a 0s wait: {logs.rows}"
-    assert not logs.says(
-        "warning", "not polling for up to"
-    ), f"must not announce a wait it is not doing: {logs.rows}"
+    assert logs.says("warning", "ATLAN_DIRTY_RESTART_IDLE_MAX_SECONDS=0"), (
+        f"must say it is switched off rather than announce a 0s wait: {logs.rows}"
+    )
+    assert not logs.says("warning", "not polling for up to"), (
+        f"must not announce a wait it is not doing: {logs.rows}"
+    )
 
 
 async def test_a_restart_waits_out_the_budget_then_proceeds(
@@ -331,9 +331,9 @@ async def test_nothing_coming_means_the_worker_polls_now(
 
     await asyncio.wait_for(rm.wait_if_pod_restarted(asyncio.Event()), timeout=_HANG)
     assert idle == [], "a worker nothing is coming for must not wait"
-    assert logs.says(
-        "warning", "not-vpa-managed"
-    ), f"the operator has to be told why it did not wait: {logs.rows}"
+    assert logs.says("warning", "not-vpa-managed"), (
+        f"the operator has to be told why it did not wait: {logs.rows}"
+    )
 
 
 async def test_an_unreachable_endpoint_polls_rather_than_waiting(
@@ -457,9 +457,9 @@ async def test_a_park_that_buys_nothing_is_counted_separately(
     assert [p["labels"]["outcome"] for p in parks] == [rm.PARK_SPENT, rm.PARK_SPENT]
     seconds = next(p for p in parks if p["name"] == rm.PARK_SECONDS_METRIC)
     assert seconds["value"] > 0, "the elapsed wall-clock is the value, not a label"
-    assert (
-        "seconds" not in seconds["labels"]
-    ), "a duration label mints a series per value"
+    assert "seconds" not in seconds["labels"], (
+        "a duration label mints a series per value"
+    )
 
 
 async def test_a_broken_metrics_backend_does_not_stop_the_worker(

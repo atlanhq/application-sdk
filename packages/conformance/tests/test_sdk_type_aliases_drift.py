@@ -17,6 +17,7 @@ import ast
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.deprecation._sdk_type_aliases import (
     DATA_PATH,
     SDK_PACKAGE,

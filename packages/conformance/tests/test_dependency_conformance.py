@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
 from conformance.suite.checks import dependency_conformance
 from conformance.suite.checks._ast_common import _is_suppressed, parse_toml_suppressions
 from conformance.suite.checks.dependency_conformance import (
@@ -1350,9 +1351,9 @@ def test_d003_dialect_driver_match_is_selective(tmp_path: Path) -> None:
     )
     messages = [f.message for f in findings]
     assert any("requests" in m for m in messages), "requests must still be flagged"
-    assert not any(
-        "aiomysql" in m for m in messages
-    ), "aiomysql is suppressed by the driver match"
+    assert not any("aiomysql" in m for m in messages), (
+        "aiomysql is suppressed by the driver match"
+    )
 
 
 def test_d003_collects_dialect_driver_from_source_string(tmp_path: Path) -> None:
@@ -1531,9 +1532,7 @@ def test_d003_scheme_literal_is_matching_biased_only_for_registrants(
     src = tmp_path / "app" / "clients.py"
     src.parent.mkdir(parents=True)
     src.write_text(
-        "import sqlalchemy\n"
-        'dialect = "crate://reassigned"\n'
-        'dialect = "sqlite://"\n',
+        'import sqlalchemy\ndialect = "crate://reassigned"\ndialect = "sqlite://"\n',
         encoding="utf-8",
     )
     findings = scan_all(
@@ -1860,17 +1859,15 @@ def test_d003_sdk_sql_client_use_loads_sqlalchemy(tmp_path: Path, source: str) -
             id="public-reexport-non-client-name",
         ),
         pytest.param(
-            "import application_sdk.clients.sqlite\n"
-            'URL = "crate://{host}:{port}/"\n',
+            'import application_sdk.clients.sqlite\nURL = "crate://{host}:{port}/"\n',
             id="lookalike-module-prefix",
         ),
         pytest.param(
-            "import application_sdk.clients.sql\n" 'URL = "crate://{host}:{port}/"\n',
+            'import application_sdk.clients.sql\nURL = "crate://{host}:{port}/"\n',
             id="bare-sql-module-import",
         ),
         pytest.param(
-            "from application_sdk.clients import sql\n"
-            'URL = "crate://{host}:{port}/"\n',
+            'from application_sdk.clients import sql\nURL = "crate://{host}:{port}/"\n',
             id="bare-from-clients-import-sql",
         ),
         pytest.param(
@@ -3874,9 +3871,7 @@ def test_d015_clean_when_include_is_scoped(tmp_path: Path) -> None:
     fleet repos rely on this; a rule that ignored ``include`` would report
     every one of them.
     """
-    block = (
-        "\n[tool.pyright]\n" 'include = ["app", "tests"]\n' 'exclude = [".github/**"]\n'
-    )
+    block = '\n[tool.pyright]\ninclude = ["app", "tests"]\nexclude = [".github/**"]\n'
     assert _pyright_scan(tmp_path, block) == []
 
 
@@ -3886,7 +3881,7 @@ def test_d015_does_not_accept_ignore_as_protection(tmp_path: Path) -> None:
     It does nothing about the walk cost that is the entire problem, so it must
     not clear the rule — the red half of the ``include`` pair above.
     """
-    block = "\n[tool.pyright]\n" 'ignore = [".venv/**"]\n' 'exclude = [".github/**"]\n'
+    block = '\n[tool.pyright]\nignore = [".venv/**"]\nexclude = [".github/**"]\n'
     assert len(_pyright_scan(tmp_path, block)) == 1
 
 

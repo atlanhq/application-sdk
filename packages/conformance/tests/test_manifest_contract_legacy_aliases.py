@@ -19,6 +19,7 @@ from pathlib import Path
 from textwrap import dedent
 
 import pytest
+
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope

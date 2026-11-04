@@ -369,9 +369,9 @@ class TestTheHoldIsAlwaysReleased:
         assert await asyncio.to_thread(slow_running.wait, 5), "slow never started"
 
         assert await run_in_thread(_fast) == "fast"
-        assert (
-            tracker.held() is True
-        ), "the fast offload's release must not take the slow one's hold with it"
+        assert tracker.held() is True, (
+            "the fast offload's release must not take the slow one's hold with it"
+        )
 
         release_slow.set()
         assert await slow == "slow"
@@ -506,9 +506,9 @@ class TestADeclaredAllowanceGoverns:
         await declared
 
         labels = [hold.label for hold in tracker.holds]
-        assert (
-            f"{THREAD_PREFIX}_echo" in labels
-        ), "an offload outside the declared block must still be vouched for"
+        assert f"{THREAD_PREFIX}_echo" in labels, (
+            "an offload outside the declared block must still be vouched for"
+        )
         assert "declared" in labels
 
     @pytest.mark.asyncio
@@ -557,9 +557,9 @@ class TestADeclaredAllowanceGoverns:
         block_exited.set()
         await child
 
-        assert vouched_during_offload == [
-            True
-        ], "an offload outliving the declared block must get its own auto-hold"
+        assert vouched_during_offload == [True], (
+            "an offload outliving the declared block must get its own auto-hold"
+        )
         assert [hold.label for hold in tracker.holds] == [
             "full table scan",
             f"{THREAD_PREFIX}<lambda>",

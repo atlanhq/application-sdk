@@ -128,10 +128,12 @@ class TestEnsurePkl:
             pkl_mod,
             "_download",
             lambda url, target: (
-                target.parent.mkdir(parents=True, exist_ok=True),
-                target.write_text("x", encoding="utf-8"),
-            )
-            and None,
+                (
+                    target.parent.mkdir(parents=True, exist_ok=True),
+                    target.write_text("x", encoding="utf-8"),
+                )
+                and None
+            ),
         )
         a = pkl_mod.ensure_pkl("0.27.2")
         b = pkl_mod.ensure_pkl("0.32.1")

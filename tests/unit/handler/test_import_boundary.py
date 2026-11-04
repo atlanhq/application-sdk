@@ -70,9 +70,9 @@ def _loaded_after_importing(*modules: str) -> frozenset[str]:
         check=False,
         timeout=120,
     )
-    assert (
-        result.returncode == 0
-    ), f"importing {modules} in a fresh interpreter failed:\n{result.stderr}"
+    assert result.returncode == 0, (
+        f"importing {modules} in a fresh interpreter failed:\n{result.stderr}"
+    )
     return frozenset(line for line in result.stdout.splitlines() if line)
 
 
@@ -216,9 +216,8 @@ def test_moved_names_resolve_to_the_same_objects_at_their_old_paths() -> None:
     base_errors = importlib.import_module("application_sdk.app.base_errors")
     build_identity = importlib.import_module("application_sdk.app.build_identity")
     entrypoint = importlib.import_module("application_sdk.app.entrypoint")
-    from application_sdk.common import _generated_tree
+    from application_sdk.common import _generated_tree, dispatch
     from application_sdk.common import build_identity as new_build_identity
-    from application_sdk.common import dispatch
     from application_sdk.execution._temporal import preflight_gate
     from application_sdk.handler import _preflight_outcome
     from application_sdk.infrastructure import secrets

@@ -69,9 +69,9 @@ def test_gated_jobs_skip_only_on_the_skip_answer(name: str, answer: str) -> None
             }
         }
         runs = evaluate(without_bump_skip(job["if"]), contexts)
-        assert runs is (
-            answer != skip_value
-        ), f"{name}:{job_id} with {output}={answer!r}: runs={runs}"
+        assert runs is (answer != skip_value), (
+            f"{name}:{job_id} with {output}={answer!r}: runs={runs}"
+        )
 
 
 @pytest.mark.parametrize("name", sorted(GATED))

@@ -214,8 +214,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "(FND-3778)."
         ),
         short_description=(
-            "`close()` override on a BaseClient subclass never awaits "
-            "`super().close()`"
+            "`close()` override on a BaseClient subclass never awaits `super().close()`"
         ),
         full_description=(
             "A ``BaseClient`` subclass defines ``close()`` and its own body never\n"

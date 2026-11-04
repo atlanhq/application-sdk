@@ -49,48 +49,48 @@ def assert_preflight_result(
         assert isinstance(check.error, FailureDetails), "Failed check lacks typed error"
         assert check.error.code.strip(), "Failure code must be nonblank"
         assert check.error.message.strip(), "Failure message must be nonblank"
-        assert (
-            check.error.suggested_action or ""
-        ).strip(), "Failure needs a next action"
-    assert all(
-        check.error is None for check in result.checks if check.passed
-    ), "Passed check carries failure"
+        assert (check.error.suggested_action or "").strip(), (
+            "Failure needs a next action"
+        )
+    assert all(check.error is None for check in result.checks if check.passed), (
+        "Passed check carries failure"
+    )
     required_failed = [check for check in failed if check.name in required_checks]
     if not required_failed:
         assert required_checks <= set(checks), "Required probe evidence is missing"
     if mandatory_order and required_failed:
         failed_index = mandatory_order.index(required_failed[0].name)
-        assert set(mandatory_order[:failed_index]) <= set(
-            checks
-        ), "Earlier mandatory probes are missing"
-        assert not set(mandatory_order[failed_index + 1 :]) & set(
-            checks
-        ), "Mandatory probes did not short-circuit"
+        assert set(mandatory_order[:failed_index]) <= set(checks), (
+            "Earlier mandatory probes are missing"
+        )
+        assert not set(mandatory_order[failed_index + 1 :]) & set(checks), (
+            "Mandatory probes did not short-circuit"
+        )
     allowed = {"not_ready"} if required_failed else {"ready", "partial"}
-    assert (
-        result.status.value == expected_status
-    ), "Verdict differs from the scenario's expected status"
+    assert result.status.value == expected_status, (
+        "Verdict differs from the scenario's expected status"
+    )
     assert expected_status in allowed, "Verdict contradicts scenario roles"
     if result.status.value == "partial":
         assert failed, "PARTIAL verdict with no failed check"
     if result.error is not None:
-        assert any(
-            check.error == result.error for check in required_failed
-        ), "Aggregate error does not match a blocker"
+        assert any(check.error == result.error for check in required_failed), (
+            "Aggregate error does not match a blocker"
+        )
     wire = result.model_dump_json() + captured_logs
-    assert all(
-        secret not in wire for secret in synthetic_secrets if secret
-    ), "Synthetic secret exposed"
+    assert all(secret not in wire for secret in synthetic_secrets if secret), (
+        "Synthetic secret exposed"
+    )
     for name, fields in (expected_errors or {}).items():
-        assert (
-            name in checks and checks[name].error is not None
-        ), "Expected typed failure is missing"
+        assert name in checks and checks[name].error is not None, (
+            "Expected typed failure is missing"
+        )
         details = checks[name].error
         assert details is not None
         error = details.model_dump(mode="json")
-        assert all(
-            error.get(key) == value for key, value in fields.items()
-        ), "Failure attribution differs from the source scenario"
+        assert all(error.get(key) == value for key, value in fields.items()), (
+            "Failure attribution differs from the source scenario"
+        )
 
 
 def assert_probe_lifetime(

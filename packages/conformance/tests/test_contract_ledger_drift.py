@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks._sdk_contract_mixins import SDK_CONTRACT_BASE_FIELDS
 from conformance.suite.checks.deprecation import _ledger_schema
 from conformance.suite.checks.deprecation._ledger_schema import (

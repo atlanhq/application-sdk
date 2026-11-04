@@ -31,9 +31,8 @@ from uuid import UUID
 
 from pydantic import BaseModel
 from temporalio import activity, workflow
-from temporalio.exceptions import ActivityError
+from temporalio.exceptions import ActivityError, FailureError
 from temporalio.exceptions import ApplicationError as _TemporalApplicationError
-from temporalio.exceptions import FailureError
 
 from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
     AppContextError,

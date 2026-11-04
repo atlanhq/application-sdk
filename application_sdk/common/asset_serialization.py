@@ -417,8 +417,7 @@ def _dumps(payload: Any, asset: object, entity_type: str | None) -> bytes:
         # unsanitised payload text). ``from exc`` keeps it on the traceback.
         raise UnserializableMapperResultError(
             message=(
-                f"Asset mapper result{_where(entity_type)} could not be "
-                f"encoded as JSON"
+                f"Asset mapper result{_where(entity_type)} could not be encoded as JSON"
             ),
             observed=type(asset).__name__,
             location=entity_type,

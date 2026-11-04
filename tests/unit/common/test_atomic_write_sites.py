@@ -109,9 +109,9 @@ class TestCarryForwardCopy:
                 copy_directory_parallel(source, destination)
 
         assert caught.value.operation == "carry-forward copy"
-        assert (
-            _artifacts(destination) == []
-        ), "a truncated file was left where a carried-forward artifact goes"
+        assert _artifacts(destination) == [], (
+            "a truncated file was left where a carried-forward artifact goes"
+        )
 
     def test_a_plainly_undersized_volume_fails_before_any_byte_moves(
         self, tmp_path: Path

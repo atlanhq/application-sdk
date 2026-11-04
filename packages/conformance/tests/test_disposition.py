@@ -6,6 +6,7 @@ gate exit-code derivation.
 """
 
 import pytest
+
 from conformance.suite.schema.disposition import Disposition, derive_disposition
 from conformance.suite.schema.sarif import (
     ArtifactLocation,

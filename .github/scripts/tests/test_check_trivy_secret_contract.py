@@ -157,9 +157,9 @@ class TestWorkflowContract:
         # be passed, so the step would red unconditionally.
         declared = set(self._workflow()[True]["workflow_call"]["secrets"])
         enforced = set(guard.ALWAYS_REQUIRED) | {guard.REQUIRED_WITHOUT_APP_TOKEN}
-        assert (
-            enforced <= declared
-        ), f"not declared by the workflow: {enforced - declared}"
+        assert enforced <= declared, (
+            f"not declared by the workflow: {enforced - declared}"
+        )
 
     def test_workflow_invokes_this_script_at_a_real_path(self):
         steps = self._workflow()["jobs"]["build"]["steps"]

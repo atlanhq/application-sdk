@@ -14,6 +14,7 @@ import inspect
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks._ast_common import _parse_directives
 from conformance.suite.checks._ast_common._safe_swap import (
     PUBLIC_REEXPORTS,
@@ -206,10 +207,7 @@ def test_b001_enum_member_matches_through_a_parent_package_reexport() -> None:
 
 
 def test_b001_enum_member_matches_module_qualified_access() -> None:
-    src = (
-        "import application_sdk.common.types as types\n"
-        "t = types.DataframeType.daft\n"
-    )
+    src = "import application_sdk.common.types as types\nt = types.DataframeType.daft\n"
     assert [f.rule_id for f in _b001(src)] == ["B001"]
 
 

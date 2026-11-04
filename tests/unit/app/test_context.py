@@ -541,7 +541,7 @@ class TestWorkflowSafeLoggerBraces:
         self, reset_execution_context, correlation_set, loguru_messages
     ) -> None:
         log = _WorkflowSafeLogger("n", "app", "run", "")
-        log.info(f"done {({'a': 1})}", records=3)
+        log.info(f"done { ({'a': 1}) }", records=3)
         assert loguru_messages[-1] == "done {'a': 1}"
 
     def test_keyword_arguments_are_context_not_placeholders(

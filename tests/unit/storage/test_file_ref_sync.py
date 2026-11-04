@@ -808,9 +808,9 @@ class _SiblingProbe:
         raise exc
 
     async def assert_no_sibling_outlived_the_raise(self) -> None:
-        assert all(
-            e.is_set() for e in self.finished
-        ), "a sibling's thread was still running when the failure propagated"
+        assert all(e.is_set() for e in self.finished), (
+            "a sibling's thread was still running when the failure propagated"
+        )
         # Give an orphaned coroutine every chance to resume and finish.
         await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
         assert self.completed == [], "a sibling completed after the raise"

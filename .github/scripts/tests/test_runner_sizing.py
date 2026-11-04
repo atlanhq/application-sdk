@@ -209,9 +209,9 @@ def test_allowlisted_local_actions_need_no_root(action_dir: Path) -> None:
     manifest = next(action_dir.glob("action.y*ml"))
     runs = yaml.safe_load(manifest.read_text(encoding="utf-8")).get("runs", {})
     for step in runs.get("steps", []):
-        assert not _PRIVILEGED.search(
-            str(step.get("run", ""))
-        ), f"{action_dir.name}: {step.get('name') or step.get('id')}"
+        assert not _PRIVILEGED.search(str(step.get("run", ""))), (
+            f"{action_dir.name}: {step.get('name') or step.get('id')}"
+        )
 
 
 def test_full_image_python_dependency_is_caught() -> None:

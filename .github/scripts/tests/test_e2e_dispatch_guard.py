@@ -489,9 +489,9 @@ def test_the_guard_and_the_gate_order_check_runs_identically() -> None:
     assert [check_run_age_key(e) for e in table] == [
         gate.check_run_age_key(e) for e in table
     ]
-    assert _PASSING_CONCLUSIONS == set(
-        gate.PASSING_CONCLUSIONS
-    ), "the guard must not call retryable a conclusion the gate calls a pass"
+    assert _PASSING_CONCLUSIONS == set(gate.PASSING_CONCLUSIONS), (
+        "the guard must not call retryable a conclusion the gate calls a pass"
+    )
 
 
 def test_this_runs_own_claim_permits_a_re_dispatch(http: FakeHTTP) -> None:

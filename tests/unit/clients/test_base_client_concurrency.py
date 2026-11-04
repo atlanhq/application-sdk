@@ -202,9 +202,9 @@ async def test_shared_transport_is_entered_once_and_exited_by_close() -> None:
     await asyncio.gather(
         *(client.execute_http_get_request(f"http://example.test{p}") for p in _PATHS)
     )
-    assert (
-        pool.enter_calls == 1
-    ), "concurrent first requests entered the transport twice"
+    assert pool.enter_calls == 1, (
+        "concurrent first requests entered the transport twice"
+    )
     assert pool.close_calls == 0
 
     await client.close()

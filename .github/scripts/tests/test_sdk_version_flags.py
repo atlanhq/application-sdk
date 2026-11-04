@@ -217,9 +217,9 @@ class TestInjectSdkVersionFlags:
             result = inject_sdk_version_flags("replicaCount: 1", version)
             parsed = yaml.safe_load(result)
             assert "metrics" not in parsed, f"version {version} should NOT get metrics"
-            assert parsed["temporalMetrics"] == {
-                "enabled": True
-            }, f"version {version} should still get temporalMetrics"
+            assert parsed["temporalMetrics"] == {"enabled": True}, (
+                f"version {version} should still get temporalMetrics"
+            )
 
     # ---- App owner overrides preserved ----
 
@@ -361,9 +361,9 @@ class TestInjectSdkVersionFlags:
             "          name: segment-write-key\n"
         )
         result = inject_sdk_version_flags(original, "2.8.0")
-        assert result.startswith(
-            original
-        ), "original YAML must be preserved verbatim as a prefix"
+        assert result.startswith(original), (
+            "original YAML must be preserved verbatim as a prefix"
+        )
         parsed = yaml.safe_load(result)
         assert parsed["env"]["ATLAN_HEARTBEAT_TIMEOUT_SECONDS"] == "120"
         assert parsed["splitDeploymentEnabled"] is True

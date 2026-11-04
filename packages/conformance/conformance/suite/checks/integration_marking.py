@@ -63,10 +63,13 @@ import tomllib
 from collections.abc import Iterable
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _parse_directives
+from conformance.suite.checks._ast_common import (
+    _parse_directives,
+    make_cli_main,
+    make_finding,
+)
 from conformance.suite.checks._ast_common import is_test_class as _is_test_class
 from conformance.suite.checks._ast_common import is_test_function as _is_test_function
-from conformance.suite.checks._ast_common import make_cli_main, make_finding
 from conformance.suite.schema.findings import Finding
 
 SERIES = "T"

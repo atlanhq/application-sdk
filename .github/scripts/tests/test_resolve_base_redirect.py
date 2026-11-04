@@ -102,7 +102,7 @@ def test_platform_flag_and_stage_alias_are_ignored():
 
 
 def test_comments_and_continuations_are_handled():
-    text = "# leading comment\n" f"FROM \\\n    {PUBLIC}:3 \\\n    AS base\n"
+    text = f"# leading comment\nFROM \\\n    {PUBLIC}:3 \\\n    AS base\n"
     (ref,) = rbr.parse_base_refs(text)
     assert ref.resolved == f"{PUBLIC}:3"
 

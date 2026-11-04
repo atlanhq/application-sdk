@@ -542,9 +542,9 @@ class TestMain:
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
         assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 0
         assert len(calls) == 1, "a bare dep is not a floor, so no P0D retry"
-        assert not any(
-            "orjson=P0D" in part for command in calls for part in command
-        ), "orjson must never be exempted inside the window"
+        assert not any("orjson=P0D" in part for command in calls for part in command), (
+            "orjson must never be exempted inside the window"
+        )
 
     def test_ceilings_come_from_head_not_the_working_tree(self, monkeypatch, tmp_path):
         """The single most important property in this file.

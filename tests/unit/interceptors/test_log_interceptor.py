@@ -1374,9 +1374,9 @@ class TestLogActivityInboundInterceptor:
             for c in mock_logger.error.call_args_list
             if c[0][0].startswith("activity.ended")
         ]
-        assert (
-            warn
-        ), "cause-wrapped preflight block should log activity.ended at warning"
+        assert warn, (
+            "cause-wrapped preflight block should log activity.ended at warning"
+        )
         assert not err
         assert "exc_info" not in warn[0][1]
 
@@ -1722,9 +1722,9 @@ class TestReplayPredicateInjection:
             mock_wf.memo.return_value = {}
             await interceptor.execute_workflow(MockExecuteWorkflowInput())
 
-        assert (
-            "predicate_set" in injection_order
-        ), "set_replay_predicate was never called"
+        assert "predicate_set" in injection_order, (
+            "set_replay_predicate was never called"
+        )
         pred_idx = injection_order.index("predicate_set")
         gate_idx = injection_order.index("is_replaying_checked")
         assert pred_idx < gate_idx, (

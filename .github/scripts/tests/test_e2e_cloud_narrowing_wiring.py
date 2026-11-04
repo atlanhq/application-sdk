@@ -74,9 +74,9 @@ def test_the_key_list_is_read_from_the_secret(steps: list[dict[str, Any]]) -> No
     assert step["env"]["E2E_TENANT_MATRIX_JSON"] == (
         "${{ secrets.E2E_TENANT_MATRIX_JSON }}"
     )
-    assert (
-        '>> "$GITHUB_OUTPUT"' in step["run"]
-    ), "the key list has to reach the discovery step as a step output"
+    assert '>> "$GITHUB_OUTPUT"' in step["run"], (
+        "the key list has to reach the discovery step as a step output"
+    )
 
 
 def test_the_key_step_is_skipped_without_the_secret(

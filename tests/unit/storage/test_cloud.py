@@ -638,12 +638,12 @@ class TestCloudStoreLogMessageFormat:
         with patch("application_sdk.storage.cloud._log") as spy:
             await store.download(prefix="dir", output_dir=out)
         formats = self._info_calls(spy)
-        assert any(
-            "Listing objects under prefix=%s" in fmt for fmt in formats
-        ), f"Listing line did not use %-style prefix, got: {formats}"
-        assert any(
-            "Downloaded %d files from prefix=%s" in fmt for fmt in formats
-        ), f"Downloaded-N line did not use %-style, got: {formats}"
+        assert any("Listing objects under prefix=%s" in fmt for fmt in formats), (
+            f"Listing line did not use %-style prefix, got: {formats}"
+        )
+        assert any("Downloaded %d files from prefix=%s" in fmt for fmt in formats), (
+            f"Downloaded-N line did not use %-style, got: {formats}"
+        )
 
     async def test_large_file_upload_streaming(self, tmp_path):
         """upload() streams a multi-chunk local file without reading it all into memory."""
@@ -1405,9 +1405,9 @@ class _SiblingProbe:
         raise exc
 
     async def assert_no_sibling_outlived_the_raise(self) -> None:
-        assert all(
-            e.is_set() for e in self.finished
-        ), "a sibling's thread was still running when the failure propagated"
+        assert all(e.is_set() for e in self.finished), (
+            "a sibling's thread was still running when the failure propagated"
+        )
         await asyncio.sleep(_SIBLING_THREAD_SECONDS * 2)
         assert self.completed == [], "a sibling completed after the raise"
 

@@ -593,9 +593,9 @@ async def test_current_state_holds_only_the_latest_runs_keys(
         k.removeprefix(f"{_STALE_S3}/current-state/")
         for k in await list_data_keys(f"{_STALE_S3}/current-state", store)
     }
-    assert in_store == committed | {
-        ".sdk-manifest"
-    }, f"stale keys from run 1 survive in current-state: {sorted(in_store - committed)}"
+    assert in_store == committed | {".sdk-manifest"}, (
+        f"stale keys from run 1 survive in current-state: {sorted(in_store - committed)}"
+    )
 
 
 @pytest.mark.integration
