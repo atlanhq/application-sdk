@@ -15,6 +15,37 @@ contract/app.pkl (developer writes)
     └─▶ app/generated/_input.py           — Python AppInputContract
 ```
 
+**Generated Python is ruff-stable.** Every generated `.py` file
+(`_input.py`, `_e2e_base.py`, `_e2e_credential.py`, `_e2e_substitutions.py`
+and their per-entrypoint copies in a bundle) is passed through
+`src/PyFormat.pkl` before it is written. That module lays the file out exactly
+as ruff does with its default settings:
+
+- **Imports** are sorted the way ruff's isort rules (`I001`) sort them:
+  `__future__`, standard library, then third-party sections; `import x` before
+  `from x import ...`; modules in order; names ordered constants, then classes,
+  then the rest; one module imported once. `application_sdk` is third-party, as
+  it is in an app repo, so it shares a block with `pydantic` and `orjson`.
+- **Lines over 88 columns** are wrapped in ruff's order of preference. First,
+  split the value's own brackets, with the arguments on one indented line if
+  they fit, else one per line with a trailing comma. Next, wrap the value in
+  parentheses. Next, split the annotation (`Literal[...]`, `Annotated[...]`,
+  or `X | None` in parentheses). Last, split both. Width is measured as ruff
+  measures it: East Asian wide characters count as two columns.
+- **Strings** use double quotes, unless a string holds more `"` than `'`; then
+  it is single-quoted (`'say "hi"'`), as ruff writes it.
+- **Docstrings:** a nested object's class docstring is laid out as ruff lays
+  out docstrings (first line trimmed, continuation lines indented to the class
+  body). Field docstrings are written as given, including multi-line ones,
+  because ruff does not treat them as docstrings.
+
+What changes: nothing in what the files declare, only their layout. Running
+`ruff check --fix` and `ruff format` on them changes nothing. What does not
+change: an app with a non-default ruff config (another `line-length`, isort
+`known-*` sections) may still see ruff rewrite them; the toolkit renders for
+the defaults. `scripts/check-ruff-stable.py` checks every example against the
+SDK's locked ruff.
+
 **Consumption flow:**
 ```
 pkl eval --project-dir contract -m . contract/app.pkl

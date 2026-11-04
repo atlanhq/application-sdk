@@ -178,16 +178,17 @@ facts {
     // orjson (third-party) is the sanctioned JSON entrypoint (O001); the
     // module-level logger backs the coercion validator's observable fallback
     // (E007). Both are emitted only because the full example has a
-    // JSON-object-string coercion field.
+    // JSON-object-string coercion field. In an app `application_sdk` is
+    // third-party, so ruff sorts it into one block with orjson and pydantic.
     fullInputPy.contains(
       "from __future__ import annotations\n\n" +
       "from typing import Annotated, Any, ClassVar\n\n" +
       "import orjson\n" +
-      "from pydantic import Field, field_validator\n\n" +
       "from application_sdk.contracts.types import MaxItems\n" +
       "from application_sdk.credentials.ref import CredentialRef\n" +
       "from application_sdk.observability.logger_adaptor import get_logger\n" +
-      "from application_sdk.templates.contracts import ExtractionInput\n\n" +
+      "from application_sdk.templates.contracts import ExtractionInput\n" +
+      "from pydantic import Field, field_validator\n\n" +
       "logger = get_logger(__name__)\n\n\n" +
       "class AppInputContract(ExtractionInput):"
     )

@@ -19,9 +19,15 @@ local function withInput(name: String, field: App.InputField) = (bare) {
   inputs { [name] = field }
 }
 
+/// The field's statement as rendered: its line plus any continuation lines
+/// the formatter wrapped it onto.
 local function inputLine(app, name: String): String =
-  app.output.files["app/generated/_input.py"].text.split("\n")
-    .filter((l) -> l.startsWith("    \(name):")).first
+  let (lines = app.output.files["app/generated/_input.py"].text.split("\n"))
+  let (start = lines.findIndex((l) -> l.startsWith("    \(name):")))
+  let (rest = lines.drop(start + 1))
+  let (more = rest.findIndexOrNull((l) ->
+    !(l.startsWith("        ") || l.startsWith("    )") || l.startsWith("    ]"))) ?? rest.length)
+  lines.drop(start).take(more + 1).join("\n")
 
 local setupForm = new App.UIConfig {
   tasks {
@@ -100,7 +106,19 @@ facts {
     inputLine(systemApp, "window_days") == "    window_days: int = Field(default=30, ge=1)"
     inputLine(withInput("n", new App.IntField { required = true; min = 1 }), "n") == "    n: int = Field(ge=1)"
     inputLine(withInput("old", new App.BoolField { default = false; lifecycle = "sunset" }), "old")
-      == "    old: bool = Field(default=False, deprecated=True, json_schema_extra={\"x-lifecycle\": \"sunset\"})"
+      // 97 columns on one line, so it is wrapped as ruff would.
+      == "    old: bool = Field(\n        default=False, deprecated=True, json_schema_extra={\"x-lifecycle\": \"sunset\"}\n    )"
+  }
+
+  ["A multi-line object doc is laid out as ruff lays out a class docstring"] {
+    // First line trimmed, trailing spaces dropped, continuation lines indented
+    // to the class body with their relative indentation kept.
+    let (py = withInput("m", new App.ObjectField {
+      className = "Window"
+      doc = "  Summary.  \n\nDetail.\n  Indented more."
+      fields { ["a"] = new App.StringField { default = "" } }
+    }).output.files["app/generated/_input.py"].text)
+    py.contains("class Window(BaseModel):\n    \"\"\"Summary.\n\n    Detail.\n      Indented more.\"\"\"\n")
   }
 
   ["Enum and list defaults are checked against their types"] {
@@ -165,7 +183,8 @@ facts {
         } } } }
       }
     })
-    inputLine(formApp, "old") == "    old: str = Field(default=\"\", deprecated=\"use \\\"new\\\" instead\")"
+    // More `"` than `'`, so ruff (and so the toolkit) single-quotes the string.
+    inputLine(formApp, "old") == "    old: str = Field(default=\"\", deprecated='use \"new\" instead')"
   }
 
   ["Distinct objects sharing a className are refused; one reused value is not"] {

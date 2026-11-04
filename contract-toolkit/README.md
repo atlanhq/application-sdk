@@ -727,6 +727,17 @@ Avoid the older per-app variant that evals into a subfolder and copies `*.json`
 up: outputs it doesn't copy (`_input.py`, `atlan.yaml`, nested entrypoint dirs)
 go stale without a diff.
 
+**Generated Python is already ruff-clean.** Every `app/generated/*.py` file is
+written the way `ruff check --fix` and `ruff format` leave it under ruff's
+default settings (88 columns, default import sorting, `application_sdk` as a
+third-party package). So an app's pre-commit ruff hooks change nothing in them,
+and `poe generate` output matches what is committed. Don't add a formatting
+step to `generate`, and don't exclude `app/generated/` from ruff. If ruff does
+change a generated file, that is a toolkit bug: report it with the file and the
+diff. One limit: an app whose ruff config differs from the defaults
+(`line-length`, isort `known-first-party` / `known-third-party`, quote style)
+can still see ruff rewrite these files.
+
 ### App playground
 
 For local UI validation in consuming app repos:
@@ -757,7 +768,13 @@ After modifying any PKL module, regenerate all examples and verify no breakage:
 ./scripts/check-invariants.sh          # invariant checks on generated output
 pkl test tests/*.pkl                   # Pkl behavior tests
 python scripts/test-sdk-import.py      # imports every generated _input.py against SDK deps
+uv run python scripts/check-ruff-stable.py  # ruff (default settings) changes no generated .py
 ```
+
+`regenerate-all.sh` does not run ruff: the committed examples are exactly what
+the toolkit writes. `src/PyFormat.pkl` lays the Python out; when
+`check-ruff-stable.py` reports a diff, fix the renderer or `PyFormat.pkl`,
+never the output.
 
 Every PR that touches `src/` must pass generation for all examples.
 
@@ -790,7 +807,7 @@ Releases are **automatic** — no manual trigger required.
   your `PATH` with `python -m application_sdk.dev.pkl check`, or `brew install pkl` for
   exploration only.
 - Python 3 for invariant checks and SDK import validation
-- `ruff` or `uvx` for formatting generated `_input.py` files during `./scripts/regenerate-all.sh`
+- `uv` (the SDK's locked ruff) for `scripts/check-ruff-stable.py`
 - Application SDK import dependencies for `python scripts/test-sdk-import.py`
 - Atlan CLI for consuming app workflows (`atlan app contract validate`, `atlan app contract generate`, `atlan app run -p .`)
 - Node.js with `npm` / `npx` only when installing the app playground
