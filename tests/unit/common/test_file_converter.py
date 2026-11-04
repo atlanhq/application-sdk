@@ -200,34 +200,27 @@ class TestConvertJsonToParquet:
         assert result is None
         mock_logger.assert_called_once()
 
-    @patch("pandas.read_json")
-    def test_json_to_parquet_write_error_returns_none(self, mock_read_json):
-        """Test that write errors return None and are logged."""
-        # Arrange
-        mock_df = MagicMock()
-        mock_filtered_df = MagicMock()
+    def test_json_to_parquet_write_error_returns_none(self, tmp_path):
+        """A failing Parquet write returns None and is logged.
 
-        # Mock the column filtering chain
-        mock_df.where.return_value = mock_df
-        mock_df.astype.return_value = mock_df
-        mock_df.isna.return_value = mock_df
-        mock_df.all.return_value = MagicMock()
-        mock_df.loc.__getitem__.return_value = mock_filtered_df
+        The JSON is real, so conversion succeeds and the failure comes from the
+        writer itself rather than from converting a mock.
+        """
+        source = tmp_path / "input.json"
+        source.write_text('{"id": 1, "name": "a"}\n')
 
-        # Make to_parquet raise an exception
-        mock_filtered_df.to_parquet.side_effect = Exception("File write error")
+        with (
+            patch(
+                "pyarrow.parquet.write_table", side_effect=OSError("disk full")
+            ) as mock_write,
+            patch("application_sdk.common.file_converter.logger.error") as mock_logger,
+        ):
+            result = convert_json_to_parquet(str(source))
 
-        mock_read_json.return_value = mock_df
-
-        file_path = "/path/input.json"
-
-        # Act
-        with patch("application_sdk.common.file_converter.logger.error") as mock_logger:
-            result = convert_json_to_parquet(file_path)
-
-        # Assert
         assert result is None
+        mock_write.assert_called_once()
         mock_logger.assert_called_once()
+        assert not (tmp_path / "input.parquet").exists()
 
     def test_json_to_parquet_column_filtering(self, tmp_path):
         """A column with no truthy value is dropped from the Parquet output."""

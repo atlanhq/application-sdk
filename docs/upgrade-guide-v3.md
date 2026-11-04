@@ -83,9 +83,17 @@ reads SDK DataFrames (for example `ParquetFileReader.read()` and
   `df["col"][mask] = value` no longer changes `df`. Use
   `df.loc[mask, "col"] = value`.
 
-The Parquet files the SDK writes keep the same schema under either pandas
-version: text columns are written as Arrow `string`, as they were under
-pandas 2, rather than the `large_string` pandas 3 converts to by default.
+`ParquetFileWriter`, the JSON-to-Parquet file converter and the scale data
+generator keep the same Parquet schema under either pandas version: text
+columns are written as Arrow `string`, as they were under pandas 2, rather
+than the `large_string` pandas 3 converts to by default. Two exceptions:
+
+- A text column holding more than 2 GiB of text in one chunk does not fit
+  Arrow's `string` type, so it is written as `large_string`. The SDK's readers
+  merge `string` and `large_string` shards.
+- A `flush_fn` you pass to `RollingFileWriter` serializes the data itself, so
+  its schema is yours. `DataFrame.to_parquet` under pandas 3 writes text as
+  `large_string`.
 
 ### Install by app type
 
