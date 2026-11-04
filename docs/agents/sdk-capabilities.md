@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.52.0
-source-sha:    ceb8a22d9d759347423105132ab8c83faa44127d
-source-date:   2026-10-27T15:56:40+05:30
+sdk-version:   3.54.0
+source-sha:    b064da8150ed9231a52fc5687f9a4389fc9d59ca
+source-date:   2026-11-04T19:39:30+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 48 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 56 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 57 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -811,6 +811,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `prepare_query(query: str | None, ...)`
 - **Summary:** Prepare a SQL query by applying include/exclude filters.
 - **Defined in:** `application_sdk/common/sql_filters.py`
+
+#### `probe_local_write_roots`
+
+- **Import:** `from application_sdk.common.atomic import probe_local_write_roots`
+- **Signature:** `probe_local_write_roots() -> list[LocalVolumeUnwritableError]`
+- **Summary:** Probe every local write root and return one typed error per unwritable one.
+- **Defined in:** `application_sdk/common/atomic.py`
 
 #### `process_marker_timestamp`
 
