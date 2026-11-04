@@ -563,6 +563,35 @@ local warehouseBase: String = warehouseApp.output.files["app/generated/_e2e_base
 local selfNamedBase: String = selfNamedApp.output.files["app/generated/_e2e_base.py"].text
 local overrideBase: String = overrideApp.output.files["app/generated/_e2e_base.py"].text
 local widgetSubs: String = widgetApp.output.files["app/generated/_e2e_substitutions.py"].text
+
+// Substitution fields too long for one line, in each layout ruff gives them.
+// Every expected string below is what ruff 0.17.3 (default settings) leaves
+// unchanged when run on this app's generated file.
+local longSubsApp = (App) {
+  name = "long-subs"
+  displayName = "Long Subs"
+  icon = "https://assets.atlan.com/assets/fullscreen-open.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Configuration"] {
+        inputs {
+          ["extraction_strategy_for_everything"] = new App.Radio {
+            title = "Strategy"
+            possibleValues { ["alpha"] = "A"; ["beta"] = "B"; ["gamma"] = "G"; ["delta"] = "D"; ["epsilon"] = "E"; ["zeta"] = "Z" }
+            default = "alpha"
+          }
+          ["long_text_default"] = new App.TextInput {
+            title = "T"
+            default = "a default value that is long enough that the default line is over the limit xx"
+          }
+        }
+      }
+    }
+  }
+}
+local longSubs: String = longSubsApp.output.files["app/generated/_e2e_substitutions.py"].text
 local singleAuthCred: String = singleAuthApp.output.files["app/generated/_e2e_credential.py"].text
 local multiAuthCred: String = multiAuthApp.output.files["app/generated/_e2e_credential.py"].text
 local authDefaultCred: String = authDefaultApp.output.files["app/generated/_e2e_credential.py"].text
@@ -900,6 +929,16 @@ facts {
   ["Long Literal field is wrapped to multi-line (>88 chars)"] {
     // output_format: Literal["parquet", "json"] + alias exceeds 88 chars
     fullSubsPy.contains("output_format: Literal[\"parquet\", \"json\"] = Field(\n        default=\"parquet\",\n        alias=\"{{output_format}}\",\n    )")
+  }
+
+  ["A Literal too long for its Field( line splits the annotation, as ruff does"] {
+    // `name: Literal[...] = Field(` alone exceeds 88 columns, so ruff splits the
+    // Literal and keeps the call whole; one argument per line would not be stable.
+    longSubs.contains("    extraction_strategy_for_everything: Literal[\n        \"alpha\", \"beta\", \"gamma\", \"delta\", \"epsilon\", \"zeta\"\n    ] = Field(default=\"alpha\", alias=\"{{extraction_strategy_for_everything}}\")\n")
+  }
+
+  ["A default too long for its own line keeps the one-per-line layout"] {
+    longSubs.contains("    long_text_default: str = Field(\n        default=\"a default value that is long enough that the default line is over the limit xx\",\n        alias=\"{{long_text_default}}\",\n    )\n")
   }
 
   ["Short field stays single-line (≤88 chars)"] {

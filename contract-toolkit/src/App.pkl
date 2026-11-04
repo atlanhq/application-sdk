@@ -4013,11 +4013,14 @@ local function e2eSubsSkip(): Set<String> =
 // per line with a trailing comma, not left to `PyFormatPkg.format` (which would
 // hug the arguments). ruff keeps a layout that ends in a trailing comma, so this
 // one is ruff-stable too, and keeping it leaves every app's committed
-// `_e2e_substitutions.py` unchanged.
+// `_e2e_substitutions.py` unchanged. When even `name: type = Field(` is too
+// long (a `Literal` with many values), ruff splits the annotation instead, so
+// the flat line goes to the formatter.
 local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String, k: String): String =
   let (inline = "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")")
-  if (inline.length <= 88) inline
-  else "    \(pyName): \(typeStr) = Field(\n        \(defaultExpr),\n        alias=\"{{\(k)}}\",\n    )"
+  let (head = "    \(pyName): \(typeStr) = Field(")
+  if (inline.length <= 88 || head.length > 88) inline
+  else "\(head)\n        \(defaultExpr),\n        alias=\"{{\(k)}}\",\n    )"
 
 // Returns a typed pydantic Field line for a substitution field, or null to skip.
 local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
