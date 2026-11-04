@@ -144,7 +144,8 @@ _WORKER_RUNTIME_PACKAGES = ("temporalio", "grpc")
 
 #: Env vars that switch OTLP log export on. With export on, the adaptor loads
 #: the gRPC exporter on purpose, so the probe clears them; whatever the host
-#: running the suite has set must not decide the result.
+#: running the suite has set, in its environment or its ``.env``, must not
+#: decide the result.
 _OTLP_EXPORT_ENV = (
     "ENABLE_OTLP_LOGS",
     "ENABLE_OTLP_WORKFLOW_LOGS",
@@ -163,6 +164,9 @@ def test_importing_the_handler_loads_neither_temporal_nor_grpc() -> None:
     out: the ``/workflows/v1/start`` route imports ``temporalio.client``.
     """
     env = {k: v for k, v in os.environ.items() if k not in _OTLP_EXPORT_ENV}
+    # ``application_sdk.constants`` loads the checkout's ``.env``, which would
+    # put the cleared settings straight back.
+    env["PYTHON_DOTENV_DISABLED"] = "1"
     result = subprocess.run(
         [
             sys.executable,

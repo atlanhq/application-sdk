@@ -495,9 +495,12 @@ def _temporal_failure_message(exc_value: object) -> str | None:
     exception, and at module level on every import of this module (FND-4257).
     """
     exceptions_module = sys.modules.get("temporalio.exceptions")
-    if exceptions_module is None:
-        return None
-    if not isinstance(exc_value, exceptions_module.FailureError):
+    # ``getattr``, not attribute access: Python registers a module in
+    # ``sys.modules`` before running its body, so another thread's first import
+    # can expose it here before ``FailureError`` is bound. No instance can
+    # exist yet in that window either.
+    failure_error = getattr(exceptions_module, "FailureError", None)
+    if failure_error is None or not isinstance(exc_value, failure_error):
         return None
     message: str = exc_value.message
     return message

@@ -1790,6 +1790,24 @@ class TestExtractExceptionAttributes:
             assert "temporalio.exceptions" not in sys.modules
         assert attrs["exception.message"] == "boom"
 
+    def test_a_half_imported_temporal_module_is_not_a_failure(self):
+        """``sys.modules`` holds a module before its body has run. Another
+        thread's first import of ``temporalio.exceptions`` can expose it with no
+        ``FailureError`` bound yet; the record must still be exported, with
+        ``str()`` as its message, not dropped on an ``AttributeError``."""
+        import types
+
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            t, v, tb = sys.exc_info()
+        half_imported = types.ModuleType("temporalio.exceptions")
+        with mock.patch.dict(sys.modules, {"temporalio.exceptions": half_imported}):
+            attrs = _extract_exception_attributes(
+                mock.Mock(type=t, value=v, traceback=tb)
+            )
+        assert attrs["exception.message"] == "boom"
+
 
 class TestFormatExceptionStacktrace:
     def test_none_returns_empty_string(self):
