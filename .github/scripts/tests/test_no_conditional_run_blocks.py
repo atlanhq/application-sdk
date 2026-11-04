@@ -37,7 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 ALLOWLIST = REPO_ROOT / ".github/scripts/conditional_run_allowlist.txt"
 
 #: Entries the allowlist may hold. Only ever lower this.
-ALLOWLIST_CEILING = 57
+ALLOWLIST_CEILING = 39
 
 _EXPR = re.compile(r"\$\{\{.*?\}\}", re.S)
 _DQ = re.compile(r'"(?:\\.|[^"\\\n])*"')

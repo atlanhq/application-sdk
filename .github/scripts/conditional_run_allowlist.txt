@@ -21,24 +21,6 @@
 .github/actions/secure-build-push-apps/action.yaml::runs.decision
 .github/actions/setup-deps/action.yaml::runs.Install dependencies
 .github/actions/twingate-connect/action.yml::runs.connect
-.github/workflows/build-and-publish-app.yaml::jobs.certify.Certification verdict
-.github/workflows/build-and-publish-app.yaml::jobs.certify.Seed pkl CA bundle from system trust store
-.github/workflows/build-and-publish-app.yaml::jobs.certify.check_migration
-.github/workflows/build-and-publish-app.yaml::jobs.certify.contract_drift
-.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.Creds-into-logs report (run summary)
-.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.Notify Slack on hardcoded-secret block
-.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.Notify Slack on warnings
-.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.credscan
-.github/workflows/build-and-publish-app.yaml::jobs.leak-scan.gitleaks
-.github/workflows/build-and-publish-app.yaml::jobs.merge.Create and push multi-arch manifest
-.github/workflows/build-and-publish-app.yaml::jobs.prepare.Validate SDR secrets
-.github/workflows/build-and-publish-app.yaml::jobs.prepare.Validate publish secrets
-.github/workflows/build-and-publish-app.yaml::jobs.prepare.app_configs
-.github/workflows/build-and-publish-app.yaml::jobs.prepare.tags
-.github/workflows/build-and-publish-app.yaml::jobs.publish.Publish version
-.github/workflows/build-and-publish-app.yaml::jobs.unit-tests-gate.prepare
-.github/workflows/build-and-publish-app.yaml::jobs.unit-tests-gate.wait
-.github/workflows/build-and-publish-app.yaml::jobs.validate-channel.Enforce main-branch invariant for channel='all'
 .github/workflows/build-and-scan.yaml::jobs.build.meta
 .github/workflows/capability-manifest-check.yaml::jobs.drift-check.ctx
 .github/workflows/capability-manifest-check.yaml::jobs.drift-check.drift
