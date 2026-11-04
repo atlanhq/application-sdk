@@ -41,6 +41,11 @@ def root_cause(exc: BaseException) -> BaseException:
 # misses it. Match the driver phrasings explicitly.
 _TIMEOUT_MSG_HINTS = ("timed out", "login timeout", "timeout expired", "hyt00")
 
+# Oracle connect errors and explicit TCP connect timeouts identify an unreachable
+# source, not a generic probe overrun. Check these before the timeout hints so
+# the hard preflight gate can block after its source-unavailable retries.
+_UNREACHABLE_MSG_HINTS = ("ora-12170", "dpy-6005", "tcp connect timeout")
+
 # Driver error_type for MySQL ``Access denied`` is ``OperationalError`` — that
 # class is overloaded across both auth and network failures, so message content
 # has to be the tiebreaker.
@@ -88,13 +93,16 @@ _NETWORK_CLASS_HINTS = (
 def classify_sql_failure(error_type: str, error_message: str) -> SqlFailureKind:
     """Map a driver exception's class name and message to a failure kind.
 
-    Checked in order — timeout, then auth, then network — because the classes
-    overlap: a login timeout is an ``OperationalError`` and so is a rejected
-    password, and the message is what tells them apart.
+    Explicit unreachable-source messages take precedence over timeout hints.
+    Then check timeout, auth, and network because the classes overlap: a login
+    timeout is an ``OperationalError`` and so is a rejected password, and the
+    message is what tells them apart.
     """
     type_lower = error_type.lower()
     msg_lower = error_message.lower()
 
+    if any(h in msg_lower for h in _UNREACHABLE_MSG_HINTS):
+        return SqlFailureKind.SOURCE_UNAVAILABLE
     if "timeout" in type_lower or any(h in msg_lower for h in _TIMEOUT_MSG_HINTS):
         return SqlFailureKind.TIMEOUT
     if any(h in type_lower for h in _AUTH_CLASS_HINTS) or any(
