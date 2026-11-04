@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import conformance_resync as lane  # noqa: E402
@@ -499,7 +501,11 @@ def test_lane_subprocesses_are_bounded():
 
 
 def _process(
-    monkeypatch, *, keep: dict | None, staged: list[str], prose: str = ""
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    keep: dict | None,
+    staged: list[str],
+    prose: str = "",
 ) -> FakeRunner:
     lock = f'[[package]]\nname = "{gate.CONFORMANCE_PACKAGE}"\nversion = "0.39.0"\n'
     monkeypatch.setattr(
@@ -599,16 +605,7 @@ def test_refusal_with_nothing_else_to_sync_holds_the_repo(monkeypatch):
 
 
 def test_refusal_does_not_hold_back_the_files_that_did_resync(monkeypatch):
-    runner = _process(monkeypatch, keep=None, staged=["a.yaml"], prose=_REFUSAL)
-
-    def opened(cmd, **kwargs):
-        if cmd[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"]:
-            return subprocess.CompletedProcess(
-                cmd, 0, json.dumps({"number": 9, "html_url": "u", "state": "open"}), ""
-            )
-        return FakeRunner.__call__(runner, cmd, **kwargs)
-
-    result = _drive(opened)
+    result, _ = _drive_opening(monkeypatch, prose=_REFUSAL)
     assert result["action"] == "pr_opened"
     assert list(result["refused"]) == [".github/workflows/tests.yaml"]
     assert "not resynced: .github/workflows/tests.yaml" in lane._summary(
@@ -658,8 +655,10 @@ def _label_calls(calls: list[list[str]]) -> list[list[str]]:
     ]
 
 
-def _drive_opening(monkeypatch) -> tuple[dict, FakeRunner]:
-    runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
+def _drive_opening(
+    monkeypatch: pytest.MonkeyPatch, prose: str = ""
+) -> tuple[dict, FakeRunner]:
+    runner = _process(monkeypatch, keep=None, staged=["a.yaml"], prose=prose)
 
     def opened(cmd, **kwargs):
         if cmd[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"]:

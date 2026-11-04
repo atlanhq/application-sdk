@@ -631,11 +631,11 @@ def process_repo(
             # Nothing the lane can sync, but main is NOT in sync: the refused
             # file needs a human. Held, so the summary says so, never in_sync.
             step("HELD — nothing else differs; the refused file needs a hand edit.")
-            result.update(
-                action="held",
-                reason="bootstrap refused to resync "
+            result["action"] = "held"
+            result["reason"] = (
+                "bootstrap refused to resync "
                 + ", ".join(sorted(refused))
-                + " — fix by hand",
+                + " — fix by hand"
             )
             withdraw_lane_pr(
                 repo,
@@ -835,9 +835,11 @@ def _summary(results: list[dict], dry_run: bool) -> str:
         "|---|---|---|---|---|---|",
     ]
     for r in results:
-        notes = [r.get("reason") or ""]
-        if r.get("refused") and r.get("action") != "held":
-            notes.append("not resynced: " + ", ".join(sorted(r["refused"])))
+        notes: list[str] = [r.get("reason") or ""]
+        refused: dict[str, str] = r["refused"] if "refused" in r else {}
+        held = "action" in r and r["action"] == "held"
+        if refused and not held:
+            notes.append("not resynced: " + ", ".join(sorted(refused)))
         if r.get("duplicatesClosed"):
             notes.append(
                 "closed duplicates: "
