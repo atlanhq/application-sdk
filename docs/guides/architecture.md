@@ -303,7 +303,7 @@ application_sdk/
 │   ├── models.py           # DatabaseConfig and shared client models
 │   ├── redis.py            # RedisClient, RedisClientAsync (lazy via [distributed_lock] extra)
 │   ├── sql.py              # BaseSQLClient (load, run_query, run_count_query)
-│   └── ssl_utils.py        # Custom CA certificate loading for httpx/aiohttp
+│   └── ssl_utils.py        # Custom CA certificate loading for httpx
 │
 ├── common/                 # Shared utilities (not SDK-specific)
 │   ├── aws_utils.py        # AWS credential and session helpers

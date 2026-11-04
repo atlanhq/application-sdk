@@ -17,8 +17,7 @@ A connector that:
 
 ```bash
 uv init my-connector && cd my-connector
-uv add "atlan-application-sdk"
-uv add httpx  # or aiohttp, requests — your HTTP client of choice
+uv add "atlan-application-sdk"  # brings httpx, the SDK's HTTP client
 mkdir -p app
 ```
 

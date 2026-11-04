@@ -61,15 +61,15 @@ def skip_if_no_server():
             # Test will be skipped if server not available
             ...
     """
-    import requests
+    import httpx
 
     server_url = os.getenv("APP_SERVER_URL", "http://localhost:8000")
 
     try:
-        response = requests.get(f"{server_url}/server/health", timeout=5)
+        response = httpx.get(f"{server_url}/server/health", timeout=5)
         if response.status_code != 200:
             pytest.skip(f"Server not healthy at {server_url}")
-    except requests.RequestException:
+    except httpx.HTTPError:
         pytest.skip(f"Server not available at {server_url}")
 
 

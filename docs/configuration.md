@@ -254,7 +254,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_VALIDATE_ASSETS_ON_UPLOAD` | `true` | Validate transformed assets against the pyatlan_v9 backbone before the SDR→Atlan upload handoff. Warn-only — invalid/orphaned assets are logged, never block the upload. Set to `false` to disable the check entirely. |
 | `ATLAN_VALIDATE_ASSETS_TIMEOUT_SECONDS` | `600` | Upper bound in seconds for one upload's asset-validation scan. The scan runs in an isolated child process (CNCT-85); past this bound the child is killed and the upload proceeds with a warning, so warn-only validation can neither stall nor crash a handoff. |
 | `ATLAN_FAULT_ISOLATION_IDLE_SECONDS` | `30` | Seconds a fault-isolation process pool (`run_fault_isolated` / `run_best_effort`, which the asset-validation scans use) keeps its spawn children after its last call finishes. Past it the children exit and their memory returns to the pod; the next call spawns afresh. `0` shuts the pool down as soon as it goes idle. Read when a pool goes idle, so a change applies from the next idle period. A value that isn't a non-negative number is ignored, with one warning. See [ADR-0017](adr/0017-native-execution-isolation.md#addendum-idle-children-are-reaped-fnd-4278). |
-| `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by `httpx` and `aiohttp` clients when set. |
+| `SSL_CERT_DIR` | _(empty)_ | Directory of custom CA certificates (`.pem`, `.crt`, `.cer`, `.ca-bundle`). Used by the SDK's `httpx` clients when set. |
 
 ---
 

@@ -12,8 +12,8 @@ It wraps the existing APIServerClient and provides:
 from typing import Any
 from urllib.parse import urljoin
 
+import httpx
 import orjson
-import requests
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.integration._errors import (
@@ -164,7 +164,7 @@ class IntegrationTestClient:
 
         Raises:
             HttpClientInputError: If the API type is not supported.
-            requests.RequestException: If the HTTP request fails.
+            httpx.HTTPError: If the HTTP request fails.
         """
         api_lower = api.lower()
 
@@ -439,15 +439,15 @@ class IntegrationTestClient:
             Dict[str, Any]: The response as a dictionary.
 
         Raises:
-            requests.RequestException: If the request fails.
+            httpx.HTTPError: If the request fails.
         """
         url = f"{self.base_url}{endpoint}"
         logger.debug("GET %s", url)
 
         try:
-            response = requests.get(url, timeout=self.timeout)
+            response = httpx.get(url, timeout=self.timeout, follow_redirects=True)
             return self._handle_response(response)
-        except requests.ConnectionError as e:
+        except httpx.ConnectError as e:
             logger.error(
                 "GET request failed - cannot connect to %s", url, exc_info=True
             )
@@ -462,7 +462,7 @@ class IntegrationTestClient:
                     "details": str(e),
                 },
             }
-        except requests.Timeout as e:
+        except httpx.TimeoutException as e:
             logger.error("GET request timed out after %ss", self.timeout, exc_info=True)
             return {
                 "success": False,
@@ -472,7 +472,7 @@ class IntegrationTestClient:
                     "details": str(e),
                 },
             }
-        except requests.RequestException as e:
+        except (httpx.HTTPError, httpx.InvalidURL) as e:
             logger.error("GET request failed", exc_info=True)
             return {
                 "success": False,
@@ -493,15 +493,17 @@ class IntegrationTestClient:
             Dict[str, Any]: The response as a dictionary.
 
         Raises:
-            requests.RequestException: If the request fails.
+            httpx.HTTPError: If the request fails.
         """
         url = f"{self.base_url}{endpoint}"
         logger.debug("POST %s", url)
 
         try:
-            response = requests.post(url, json=data, timeout=self.timeout)
+            response = httpx.post(
+                url, json=data, timeout=self.timeout, follow_redirects=True
+            )
             return self._handle_response(response)
-        except requests.ConnectionError as e:
+        except httpx.ConnectError as e:
             logger.error(
                 "POST request failed - cannot connect to %s", url, exc_info=True
             )
@@ -516,7 +518,7 @@ class IntegrationTestClient:
                     "details": str(e),
                 },
             }
-        except requests.Timeout as e:
+        except httpx.TimeoutException as e:
             logger.error(
                 "POST request timed out after %ss", self.timeout, exc_info=True
             )
@@ -528,7 +530,7 @@ class IntegrationTestClient:
                     "details": str(e),
                 },
             }
-        except requests.RequestException as e:
+        except (httpx.HTTPError, httpx.InvalidURL) as e:
             logger.error("POST request failed", exc_info=True)
             return {
                 "success": False,
@@ -538,11 +540,11 @@ class IntegrationTestClient:
                 },
             }
 
-    def _handle_response(self, response: requests.Response) -> dict[str, Any]:
+    def _handle_response(self, response: httpx.Response) -> dict[str, Any]:
         """Handle the HTTP response and convert to dictionary.
 
         Args:
-            response: The requests Response object.
+            response: The httpx Response object.
 
         Returns:
             Dict[str, Any]: The response as a dictionary with status info.

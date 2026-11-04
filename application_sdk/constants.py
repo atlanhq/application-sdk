@@ -1061,7 +1061,7 @@ WINDOWS_EXTENDED_PATH_PREFIX = "\\\\?\\"
 
 # SSL Configuration
 #: Custom SSL certificate directory path.
-#: When set, httpx and aiohttp clients will use certificates from this directory.
+#: When set, the SDK's httpx clients will use certificates from this directory.
 SSL_CERT_DIR = os.getenv("SSL_CERT_DIR", "")
 
 

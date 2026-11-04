@@ -224,11 +224,11 @@ dev = [
 
 Keep the `[tests]` extra in the `dev` group, never in `[project].dependencies`:
 the image installs with `uv sync --no-dev`, which skips dependency groups but
-not extras on a runtime requirement, so `[tests]` there ships pytest,
-pytest-order and pandera in the production image.
+not extras on a runtime requirement, so `[tests]` there ships
+pandera and httpx in the production image.
 
 The `[incremental]` extra brings in:
-- `duckdb` + `duckdb-engine` — file-backed SQL engine
+- `duckdb` — file-backed SQL engine
 - `pyarrow` — columnar data I/O
 - `pandas` — tabular helpers
 - `sqlalchemy[asyncio]` — async DB connectivity
