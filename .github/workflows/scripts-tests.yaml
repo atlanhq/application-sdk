@@ -102,5 +102,9 @@ jobs:
       # pyright is the exact pin in the locked `dev` group, equal to the
       # pre-commit hook's rev. `--extra workflows` installs what the scripts
       # import, so pyright resolves them instead of reporting missing imports.
+      # --base-sha also holds the PR's baseline to the base revision's, so a PR
+      # cannot add a finding and raise the baseline to match in one change.
       - name: Check pyright findings against the baseline
-        run: uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py --base-sha "$BASE_SHA"

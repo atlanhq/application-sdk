@@ -31,6 +31,9 @@ _PYPROJECT = """\
 name = "x"
 requires-python = ">=3.11"
 
+[dependency-groups]
+dev = ["pyright==1.2.3"]
+
 [tool.pyright]
 typeCheckingMode = "standard"
 exclude = [".github/**"]
@@ -101,13 +104,32 @@ class TestPins:
     def test_committed_baseline_is_in_canonical_form(self) -> None:
         # Hand edits that desync totals from the per-file counts show up here.
         text = cpb.BASELINE.read_text(encoding="utf-8")
-        assert cpb.render_baseline(cpb.load_baseline(cpb.BASELINE)) == text
+        baseline = cpb.load_baseline(cpb.BASELINE)
+        assert baseline.pyright_version is not None
+        assert cpb.render_baseline(baseline.files, baseline.pyright_version) == text
+
+    def test_committed_baseline_records_the_dev_pin(self) -> None:
+        pin = cpb.pyright_pin(REPO_ROOT / "pyproject.toml")
+        assert cpb.load_baseline(cpb.BASELINE).pyright_version == pin
+
+    def test_workflow_passes_the_pr_base_sha(self) -> None:
+        wf = yaml.safe_load(
+            (REPO_ROOT / ".github/workflows/scripts-tests.yaml").read_text()
+        )
+        (step,) = [
+            s
+            for s in wf["jobs"]["pyright"]["steps"]
+            if "check_pyright_baseline.py" in s.get("run", "")
+        ]
+        assert '--base-sha "$BASE_SHA"' in step["run"]
+        assert step["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
 
 
 class TestBuildConfig:
     def test_scopes_to_scripts_and_keeps_repo_rules(self, tmp_path: Path) -> None:
-        config = cpb.build_config(_repo(tmp_path) / "pyproject.toml")
-        assert config["include"] == [".github/scripts"]
+        repo = _repo(tmp_path)
+        config = cpb.build_config(repo / "pyproject.toml", repo)
+        assert config["include"] == ["."]
         assert config["exclude"] == ["**/__pycache__"]
         assert config["typeCheckingMode"] == "standard"
         assert config["reportArgumentType"] == "warning"
@@ -192,7 +214,7 @@ class TestMain:
     ) -> tuple[int, Path]:
         path = repo / ".github/scripts/pyright_baseline.json"
         if baseline is not None:
-            path.write_text(cpb.render_baseline(baseline), encoding="utf-8")
+            path.write_text(cpb.render_baseline(baseline, "1.2.3"), encoding="utf-8")
         rc = cpb.main(list(argv), runner=stub, repo_root=repo, baseline_path=path)
         return rc, path
 
@@ -202,11 +224,12 @@ class TestMain:
         stub = _Stub(_report([_diag(a, "error", "x")]))
         rc, _ = self._run(repo, stub, {".github/scripts/a.py": {"error:x": 1}})
         assert rc == 0
-        # The config lived at the repo root (pyright ignores an absolute include)
-        # and is gone afterwards.
-        assert stub.config_path is not None and stub.config_path.parent == repo
+        # The config lived inside .github/scripts (pyright auto-excludes dot
+        # directories below a config's root) and is gone afterwards.
+        assert stub.config_path is not None
+        assert stub.config_path.parent == repo / ".github/scripts"
         assert not stub.config_path.exists()
-        assert stub.config is not None and stub.config["include"] == [".github/scripts"]
+        assert stub.config is not None and stub.config["include"] == ["."]
 
     def test_regression_fails(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -246,6 +269,7 @@ class TestMain:
         assert rc == 0
         doc = json.loads(path.read_text())
         assert doc["totals"] == {"error": 0, "warning": 1}
+        assert doc["pyright_version"] == "1.2.3"
         assert doc["files"] == {".github/scripts/a.py": {"warning:y": 1}}
 
     def test_summary_written_when_requested(
@@ -256,6 +280,147 @@ class TestMain:
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
         self._run(repo, _Stub(_report([]), 0), {})
         assert re.search(r"\| error \| 0 \| 0 \|", summary.read_text())
+
+
+def _git_in(cwd: Path) -> cpb.Runner:
+    def run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *cmd], capture_output=True, text=True, cwd=cwd, check=False
+        )
+
+    return run
+
+
+class TestBaseRevision:
+    """``--base-sha``: the PR's baseline may not rise above the base's.
+
+    Real git against a throwaway repo that is its own ``origin``, so the fetch,
+    the existence probe and rename detection all run for real.
+    """
+
+    BASELINE_REL = ".github/scripts/pyright_baseline.json"
+
+    def _init(self, tmp_path: Path) -> tuple[Path, cpb.Runner]:
+        repo = _repo(tmp_path)
+        git = _git_in(repo)
+        for cmd in (
+            ["init", "-q", "-b", "main"],
+            ["config", "user.email", "t@example.com"],
+            ["config", "user.name", "t"],
+            ["config", "uploadpack.allowAnySHA1InWant", "true"],
+            ["remote", "add", "origin", str(repo)],
+        ):
+            assert git(cmd).returncode == 0
+        return repo, git
+
+    def _commit(
+        self,
+        repo: Path,
+        git: cpb.Runner,
+        baseline: dict[str, dict[str, int]] | None,
+        version: str = "1.2.3",
+    ) -> str:
+        path = repo / self.BASELINE_REL
+        if baseline is not None:
+            path.write_text(cpb.render_baseline(baseline, version), encoding="utf-8")
+        assert git(["add", "-A"]).returncode == 0
+        assert git(["commit", "-q", "--allow-empty", "-m", "c"]).returncode == 0
+        return git(["rev-parse", "HEAD"]).stdout.strip()
+
+    def _main(
+        self, repo: Path, git: cpb.Runner, head: dict[str, dict[str, int]], base_sha: str
+    ) -> int:
+        a = repo / ".github/scripts/a.py"
+        diags = [
+            _diag(Path(str(a).replace("a.py", f)), key.split(":")[0], key.split(":")[1])
+            for f_path, rules in head.items()
+            for key, n in rules.items()
+            for f in [Path(f_path).name]
+            for _ in range(n)
+        ]
+        return cpb.main(
+            ["--base-sha", base_sha],
+            runner=_Stub(_report(diags)),
+            repo_root=repo,
+            baseline_path=repo / self.BASELINE_REL,
+            git=git,
+        )
+
+    def test_base_without_baseline_is_the_introducing_pr(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo, git = self._init(tmp_path)
+        base = self._commit(repo, git, None)
+        head = {".github/scripts/a.py": {"error:x": 1}}
+        self._commit(repo, git, head)
+        assert self._main(repo, git, head, base) == 0
+        assert "this PR introduces it" in capsys.readouterr().out
+
+    def test_raising_the_baseline_with_the_finding_fails(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The bug lens found: head baseline == head findings, both raised.
+        repo, git = self._init(tmp_path)
+        base = self._commit(repo, git, {".github/scripts/a.py": {"error:x": 1}})
+        head = {".github/scripts/a.py": {"error:x": 2}}
+        self._commit(repo, git, head)
+        assert self._main(repo, git, head, base) == 1
+        out = capsys.readouterr().out
+        assert "rose above the base revision" in out
+        assert ".github/scripts/a.py: error:x 1 -> 2" in out
+
+    def test_shrinking_the_baseline_passes(self, tmp_path: Path) -> None:
+        repo, git = self._init(tmp_path)
+        base = self._commit(repo, git, {".github/scripts/a.py": {"error:x": 2}})
+        head = {".github/scripts/a.py": {"error:x": 1}}
+        self._commit(repo, git, head)
+        assert self._main(repo, git, head, base) == 0
+
+    def test_pyright_version_change_may_raise_counts(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo, git = self._init(tmp_path)
+        base = self._commit(
+            repo, git, {".github/scripts/a.py": {"error:x": 1}}, version="1.0.0"
+        )
+        head = {".github/scripts/a.py": {"error:x": 2}}
+        self._commit(repo, git, head)
+        assert self._main(repo, git, head, base) == 0
+        assert "::warning::pyright changed 1.0.0 -> 1.2.3" in capsys.readouterr().out
+
+    def test_rename_carries_counts_to_the_new_path(self, tmp_path: Path) -> None:
+        repo, git = self._init(tmp_path)
+        script = repo / ".github/scripts/a.py"
+        script.write_text("x = 1\n" * 20, encoding="utf-8")
+        base = self._commit(repo, git, {".github/scripts/a.py": {"error:x": 1}})
+        assert git(["mv", ".github/scripts/a.py", ".github/scripts/b.py"]).returncode == 0
+        head = {".github/scripts/b.py": {"error:x": 1}}
+        self._commit(repo, git, head)
+        assert self._main(repo, git, head, base) == 0
+
+    def test_new_file_cannot_add_findings_via_the_baseline(self, tmp_path: Path) -> None:
+        repo, git = self._init(tmp_path)
+        base = self._commit(repo, git, {})
+        (repo / ".github/scripts/b.py").write_text("y = 2\n", encoding="utf-8")
+        head = {".github/scripts/b.py": {"error:x": 1}}
+        self._commit(repo, git, head)
+        assert self._main(repo, git, head, base) == 1
+
+    @pytest.mark.parametrize("base_sha", ["", "0" * 40])
+    def test_unreadable_base_fails_closed(self, tmp_path: Path, base_sha: str) -> None:
+        repo, git = self._init(tmp_path)
+        head = {".github/scripts/a.py": {"error:x": 1}}
+        self._commit(repo, git, head)
+        assert self._main(repo, git, head, base_sha) == 1
+
+    def test_baseline_from_another_pyright_fails(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        repo, git = self._init(tmp_path)
+        head = {".github/scripts/a.py": {"error:x": 1}}
+        base = self._commit(repo, git, head, version="9.9.9")
+        assert self._main(repo, git, head, base) == 1
+        assert "but the dev pin is 1.2.3" in capsys.readouterr().out
 
 
 @pytest.mark.skipif(shutil.which("pyright") is None, reason="pyright not installed")

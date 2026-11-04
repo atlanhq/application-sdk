@@ -70,9 +70,15 @@ sees the CI scripts. The `pyright .github/scripts` job runs
 pinned to Linux and the `requires-python` floor) and compares the result,
 per file and per rule, with `.github/scripts/pyright_baseline.json`:
 
-- **A count above the baseline fails.** Fix the new finding. Do not raise the
-  baseline to make room for it; a reviewer sees any baseline increase in the diff.
+- **A count above the baseline fails.** Fix the new finding.
 - **A count below the baseline also fails.** You fixed something: lock it in.
+- **A baseline count above the base revision's fails.** CI passes
+  `--base-sha` (the PR's base), so raising the baseline with `--update` to make
+  room for a new finding does not get past the check. Two exceptions are handled
+  explicitly: a renamed file carries its counts to the new path, and a PR that
+  changes the pinned pyright version (recorded as `pyright_version` in the
+  baseline, which must equal the `dev` pin) may raise counts. The increases are
+  printed as warnings for the reviewer.
 
 ```bash
 uv run --frozen --extra workflows python .github/scripts/check_pyright_baseline.py           # check
@@ -83,6 +89,11 @@ Counts are per (file, rule), so fixing one finding does not pay for a different
 new one in the same file. A new script starts at zero: it must be pyright-clean.
 A pyright upgrade (the `dev`-group pin, kept equal to the pre-commit hook's rev)
 may move counts either way; regenerate the baseline in that PR.
+
+The generated pyright config is written inside `.github/scripts`, not at the repo
+root. pyright auto-excludes `**/.*` below a config's root whatever `exclude`
+says, so a repo-root config can never reach `.github/`. If pyright reports 0
+files analysed, the check fails rather than matching an empty baseline.
 
 ## An artifact upload retry must use a DIFFERENT artifact name
 
