@@ -14,7 +14,9 @@ same roster ``renovate.yaml`` builds) it:
   3. stages only the paths the manifest's ``touched`` list names, set-compares
      every ``.bak`` against its replacement (a resync that would drop a
      per-repo setting HOLDS the repo — no PR opened or updated) and never
-     commits a ``.bak``;
+     commits a ``.bak``. A scaffold bootstrap refused to rewrite (its
+     ``skipped: <path> …`` line) is reported, and HOLDS the repo when nothing
+     else differs — such a repo is never reported ``in_sync``;
   4. keeps exactly one PR per repo on ``resync_approval_conditions.RESYNC_BRANCH``,
      authored by ``resync_approval_conditions.RESYNC_AUTHOR``: force-pushed in
      place from the fresh render, closed when main already carries the
@@ -587,6 +589,18 @@ def process_repo(
         if symlinked:
             result["symlinkSkipped"] = symlinked
             step(f"Not synced, under a symlinked directory: {symlinked}.")
+        # A scaffold bootstrap refused to rewrite sits in the manifest's
+        # `unchanged` list, indistinguishable from a canonical one, so read the
+        # refusal off its output: otherwise the repo reports `in_sync` while
+        # its file stays stale for ever (FND-4540).
+        refused = gate.refused_scaffolds(out)
+        if refused:
+            result["refused"] = refused
+            step(
+                "Bootstrap refused to resync: "
+                + "; ".join(f"{p} ({why})" for p, why in sorted(refused.items()))
+                + "."
+            )
 
         if lost:
             step(f"HELD — settings would be lost: {lost}.")
@@ -612,6 +626,26 @@ def process_repo(
             result["diffStat"] = git(
                 ["diff", "--cached", "--shortstat"], work, runner
             ).strip()
+
+        if not staged and refused:
+            # Nothing the lane can sync, but main is NOT in sync: the refused
+            # file needs a human. Held, so the summary says so, never in_sync.
+            step("HELD — nothing else differs; the refused file needs a hand edit.")
+            result.update(
+                action="held",
+                reason="bootstrap refused to resync "
+                + ", ".join(sorted(refused))
+                + " — fix by hand",
+            )
+            withdraw_lane_pr(
+                repo,
+                keep,
+                "bootstrap refused to resync a scaffold that needs a hand edit",
+                dry_run,
+                runner,
+                result,
+            )
+            return result
 
         if not staged:
             if keep and not dry_run:
@@ -802,6 +836,8 @@ def _summary(results: list[dict], dry_run: bool) -> str:
     ]
     for r in results:
         notes = [r.get("reason") or ""]
+        if r.get("refused") and r.get("action") != "held":
+            notes.append("not resynced: " + ", ".join(sorted(r["refused"])))
         if r.get("duplicatesClosed"):
             notes.append(
                 "closed duplicates: "
