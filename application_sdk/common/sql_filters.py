@@ -416,6 +416,22 @@ def normalize_legacy_filter_value(value: str) -> str:
     return normalised
 
 
+def normalize_empty_json_list_filter(value: Any) -> Any:
+    """Map an empty JSON-list filter string (``"[]"``) to ``""``, no filter.
+
+    A setup form sends an empty picker as the JSON text ``"[]"``. As a regex it
+    is an unterminated character class that no dialect compiles, so left as-is
+    it is rejected at submission and, if it got past that, would be rendered
+    into extraction SQL verbatim. Every reader means "no filter" by it
+    (``filter_matching`` resolves it to match-all), and ``""`` is how the
+    filter fields spell that. Any other value, including a non-empty
+    bracketed regex like ``[A-Z]+``, is returned unchanged.
+    """
+    if isinstance(value, str) and value.strip() == "[]":
+        return ""
+    return value
+
+
 def extract_database_names_from_regex_common(
     normalized_regex: str,
     empty_default: str,
@@ -691,9 +707,12 @@ def parse_filter_input(
         if not filter_input.strip():
             return {}
         try:
-            return orjson.loads(filter_input)
+            parsed = orjson.loads(filter_input)
         except json.JSONDecodeError as e:
             raise InvalidSqlFilterError(cause=e) from e
+        # An empty JSON list (an empty picker) is no filter, like ``{}``;
+        # downstream ``normalize_filters`` needs a mapping.
+        return {} if parsed == [] else parsed
 
 
 def prepare_filters(
