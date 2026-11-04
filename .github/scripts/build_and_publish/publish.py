@@ -232,12 +232,15 @@ def publish() -> int:
             f"{environ.get('BASE_URL', '')}{PUBLISH_PATH}",
             "-H",
             "Content-Type: application/json",
+            # The bearer token is read from stdin (`-H @-`), never placed in
+            # argv where any process on the runner could read it.
             "-H",
-            f"Authorization: Bearer {environ.get('APP_PUBLISH_TOKEN', '')}",
+            "@-",
             "-d",
             body,
         ],
         capture=True,
+        input=f"Authorization: Bearer {environ.get('APP_PUBLISH_TOKEN', '')}\n",
     )
     response = (proc.stdout or "").rstrip("\n")
     if proc.returncode != 0:

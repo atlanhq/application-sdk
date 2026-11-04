@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -283,3 +284,43 @@ def test_no_change_and_no_open_pr_writes_an_empty_number(
     _open_pr(monkeypatch, version_file, {_LS_REMOTE: (0, ""), _DIFF: (0, "")})
     # The approve step is gated on pr_number != '', so empty must stay empty.
     assert _parse(outputs) == {"pr_number": ""}
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+@pytest.mark.parametrize(("listing", "want"), [("[]", ""), ('[{"number": 7}]', "7")])
+def test_pr_list_jq_emits_nothing_for_no_open_pr(
+    monkeypatch: pytest.MonkeyPatch, listing: str, want: str
+) -> None:
+    """`.[0].number` alone prints `null` on an empty list, which reads as a PR
+    number and sends the approve step after PR "null". Run the real filter."""
+    fake = FakeRun({})
+    monkeypatch.setattr(sdv, "_run", fake)
+    sdv._open_pr_number("chore/sync-daprd-1.20.0")
+    (cmd,) = fake.calls
+    jq_filter = cmd[cmd.index("--jq") + 1]
+    out = subprocess.run(
+        ["jq", jq_filter], input=listing, text=True, capture_output=True, check=True
+    ).stdout.strip()
+    assert out == want
+
+
+def test_a_stalled_command_times_out_as_a_step_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sdv, "COMMAND_TIMEOUT_S", 0.2)
+    with pytest.raises(sdv.SyncError, match=r"`sleep 5` timed out after 0.2s"):
+        sdv._run(["sleep", "5"])
+
+
+def test_docker_pull_gets_the_longer_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen["timeout"] = kwargs["timeout"]
+        return subprocess.CompletedProcess(args, 0, "", None)
+
+    monkeypatch.setattr(sdv.subprocess, "run", fake_run)
+    sdv._run(["docker", "pull", "img:3"])
+    assert seen["timeout"] == sdv.PULL_TIMEOUT_S
+    sdv._run(["git", "push"])
+    assert seen["timeout"] == sdv.COMMAND_TIMEOUT_S

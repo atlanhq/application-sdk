@@ -60,10 +60,25 @@ def _class_by_scenario() -> dict[str, str]:
             classname = (tc.get("classname") or "").rsplit(".", 1)[-1]
             scenario = (tc.get("name") or "").removeprefix("test_")
             if classname and scenario:
+                # Keeps one class per name, so it is only the fallback for the
+                # shared summary file; a per-class file names its own class
+                # (_summary_class), which is what keeps two classes' same-named
+                # scenarios apart.
                 class_by_scenario[scenario] = classname
     except Exception as exc:  # JUnit XML missing → fall through to ungrouped list
         print(f"No JUnit results to group links by ({type(exc).__name__}).")
     return class_by_scenario
+
+
+def _summary_class(summary_file: Path) -> str:
+    """Class named by a per-class summary file, "" for the shared one.
+
+    application_sdk.testing.sdr.base writes
+    ``integration-test-summary-<cls.__name__>.json`` per class.
+    """
+    if summary_file.stem == "integration-test-summary":
+        return ""
+    return summary_file.stem.removeprefix("integration-test-summary-")
 
 
 def render_workflow_links(tenant: str) -> str:
@@ -85,6 +100,7 @@ def render_workflow_links(tenant: str) -> str:
     for summary_file in summary_files:
         if not tenant:
             break
+        file_class = _summary_class(summary_file)
         data = json.loads(summary_file.read_text())
         for s in data.get("scenarios", []):
             if s.get("api") != "workflow":
@@ -96,7 +112,7 @@ def render_workflow_links(tenant: str) -> str:
             if not (wf and run):
                 continue
             icon = icons.get(s.get("status", ""), "❓")
-            cls = class_by_scenario.get(s["name"], "")
+            cls = file_class or class_by_scenario.get(s["name"], "")
             by_class.setdefault(cls, []).append(
                 f"{icon} [{s['name']}]({_temporal_url(tenant, wf, run)})"
             )

@@ -88,8 +88,18 @@ def _severe(verdict: object) -> list[dict]:
     ]
 
 
+def _curl_url_config(url: str) -> str:
+    """A curl ``--config`` line naming ``url``, quoted for curl's config syntax."""
+    return 'url = "' + url.replace("\\", "\\\\").replace('"', '\\"') + '"\n'
+
+
 def _post_to_slack(webhook: str, text: str) -> None:
-    """POST ``text``; a failure is a warning, never a job failure."""
+    """POST ``text``; a failure is a warning, never a job failure.
+
+    The webhook URL is its own credential, so it reaches curl on stdin
+    (``--config -``), never in argv where any process on the runner can read
+    it. The payload holds file:line locations only, so it may sit in argv.
+    """
     proc = _bap.run(
         [
             "curl",
@@ -102,10 +112,11 @@ def _post_to_slack(webhook: str, text: str) -> None:
             "-H",
             "Content-type: application/json",
             "--data",
-            "@-",
-            webhook,
+            json.dumps({"text": text}),
+            "--config",
+            "-",
         ],
-        input=json.dumps({"text": text}),
+        input=_curl_url_config(webhook),
     )
     if proc.returncode != 0:
         print("::warning::Slack notification failed (non-blocking).")
@@ -166,7 +177,21 @@ def gitleaks(scan_dir: str = GITLEAKS_SCAN_DIR, report: str = GITLEAKS_REPORT) -
         ],
         cwd=scan_dir,
     ).returncode
-    count = _gitleaks_count(report) or 0
+    count = _gitleaks_count(report)
+    if count is None:
+        # A clean exit with no readable report is an incomplete scan, not a
+        # clean one: fail closed rather than read it as zero findings.
+        _bap.summary(
+            "### ❌ Publish blocked — gitleaks report unreadable",
+            "",
+            f"gitleaks exited {rc} but `{report}` is missing or not valid JSON, "
+            "so the scan result cannot be confirmed. Re-run the job.",
+        )
+        print(
+            "::error title=Publish blocked::gitleaks report missing or unreadable; "
+            "the hardcoded-secret scan is incomplete."
+        )
+        return 1
     if rc == 0 and count == 0:
         print("gitleaks: no hardcoded secrets found.")
         return 0

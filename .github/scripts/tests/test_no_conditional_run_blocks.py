@@ -9,18 +9,22 @@ This walks every workflow under ``.github/workflows/`` and every composite
 ``action.y*ml`` under ``.github/actions/``, and fails on a conditional ``run:``
 block that is not in ``.github/scripts/conditional_run_allowlist.txt``.
 
-The allowlist is a ratchet. It was seeded with the blocks that existed when the
-guard landed, and it may only shrink:
+The allowlist was seeded with the blocks that existed when the guard landed:
 
 * an entry whose block is gone or no longer branches fails as stale, so a
   migration has to delete its line;
-* the file may not grow past ``ALLOWLIST_CEILING``, so adding an entry means
-  editing this test as well, in plain sight of review. Lower the ceiling when
-  you remove entries.
+* the entry count must equal ``ALLOWLIST_CEILING``, so removing an entry means
+  lowering the ceiling in the same PR, and the ceiling only ever goes down.
 
-Detection is lexical, not a shell parser. Quoted strings, comments and
-``${{ … }}`` expressions are blanked first so prose like ``echo "…; if it ran"``
-does not count. Inline interpreters (``python3 - <<EOF``) are scanned too: a
+That makes the list a shrinking size cap. It does not stop a PR that deletes
+a migrated entry and adds a different one in its place without changing the
+count; that shows up as an added line in the allowlist diff, and review has to
+refuse it.
+
+Detection is lexical, not a shell parser. Quoted strings, comments (whole-line
+and trailing) and ``${{ … }}`` expressions are blanked, and backslash line
+continuations joined, first, so prose like ``echo "…; if it ran"`` does not
+count and ``[ -f x ] \\`` + ``&& y`` on the next line does. Inline interpreters (``python3 - <<EOF``) are scanned too: a
 heredoc that branches is still untested logic living in YAML.
 """
 
@@ -36,12 +40,15 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ALLOWLIST = REPO_ROOT / ".github/scripts/conditional_run_allowlist.txt"
 
-#: Entries the allowlist may hold. Only ever lower this.
+#: Entries the allowlist holds, exactly. Lower it with every removal.
 ALLOWLIST_CEILING = 39
 
 _EXPR = re.compile(r"\$\{\{.*?\}\}", re.S)
 _DQ = re.compile(r'"(?:\\.|[^"\\\n])*"')
 _SQ = re.compile(r"'[^'\n]*'")
+# A comment: `#` at line start or after whitespace (so `$#` and `${#x}` stay).
+_COMMENT = re.compile(r"(^|\s)#[^\n]*", re.M)
+_CONTINUATION = re.compile(r"\\\n")
 # A shell compound keyword in command position: line start, after a command
 # separator / opening group, or after another keyword that starts a list.
 _KEYWORD = re.compile(
@@ -59,10 +66,12 @@ _TEST_CHAIN = re.compile(
 
 def _blank(script: str) -> str:
     """Drop comments, expressions and quoted text, keeping the shell skeleton."""
-    lines = [ln for ln in script.splitlines() if not ln.lstrip().startswith("#")]
-    text = _EXPR.sub("X", "\n".join(lines))
+    text = _EXPR.sub("X", script)
     text = _DQ.sub('""', text)
-    return _SQ.sub("''", text)
+    text = _SQ.sub("''", text)
+    # Quotes go first, so a `#` inside a string is already gone here.
+    text = _COMMENT.sub(r"\1", text)
+    return _CONTINUATION.sub(" ", text)
 
 
 def conditional_reason(script: str) -> str | None:
@@ -157,10 +166,11 @@ def test_allowlist_has_no_duplicates() -> None:
 
 def test_allowlist_only_shrinks() -> None:
     entries = _allowlist()
-    assert len(entries) <= ALLOWLIST_CEILING, (
-        f"The allowlist holds {len(entries)} entries, above the ceiling of "
-        f"{ALLOWLIST_CEILING}. New conditional run: blocks are not allowed; "
-        "put the logic in a script instead."
+    assert len(entries) == ALLOWLIST_CEILING, (
+        f"The allowlist holds {len(entries)} entries; ALLOWLIST_CEILING is "
+        f"{ALLOWLIST_CEILING}. If you removed entries, lower the ceiling to "
+        f"{len(entries)}. New conditional run: blocks are not allowed; put the "
+        "logic in a script instead."
     )
 
 
@@ -177,6 +187,9 @@ def test_allowlist_only_shrinks() -> None:
         '[[ "$X" == y ]] || exit 1',
         'test -n "$REF" || {\n  echo missing\n  exit 1\n}',
         "python3 - <<EOF\nif x:\n    pass\nEOF",
+        "[ -f x ] \\\n  && echo present",
+        'test -n "$X" \\\n  || exit 1',
+        "echo ok\nif true; then :; fi  # trailing comment",
     ],
 )
 def test_branching_scripts_are_flagged(script: str) -> None:
@@ -195,6 +208,10 @@ def test_branching_scripts_are_flagged(script: str) -> None:
         "chmod +x /tmp/x.sh || true",
         "make build && make test",
         "python3 .github/scripts/do_the_thing.py --verify-if-present",
+        "echo ok # example; if x; then :; fi",
+        "make build  # [ -f x ] && echo, in a comment",
+        'echo "${#ARR[@]} items, $# args"',
+        "uv sync \\\n  --all-extras",
     ],
 )
 def test_straight_line_scripts_pass(script: str) -> None:

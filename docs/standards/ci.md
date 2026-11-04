@@ -45,19 +45,26 @@ under `.github/workflows/` and every composite `action.y*ml` under
 block that branches: an `if`/`for`/`while`/`until`/`case`/`select` in command
 position, or a test chained into the next command (`[ … ] && x`,
 `test -n "$X" || { …; }`). Comments, quoted strings and `${{ … }}` expressions
-are blanked first, so prose in an `echo` does not count. A heredoc interpreter
+are blanked first (whole-line and trailing comments alike), and backslash
+continuations are joined, so prose in an `echo` does not count and a chain
+split across lines does. A heredoc interpreter
 (`python3 - <<EOF`) is scanned too: logic in it is still untested.
 
 Blocks that predate the guard are listed in
 `.github/scripts/conditional_run_allowlist.txt`, keyed
 `<file>::jobs.<job>.<step id|name>` (or `::runs.<step>` for a composite
-action). The list only shrinks:
+action). Two checks keep it from growing:
 
 * An entry whose block is gone or no longer branches fails as stale, so a
   migration deletes its line in the same PR.
-* `ALLOWLIST_CEILING` in the test caps the list. Lower it when you remove
-  entries. Raising it is the only way to add one, and that is the change a
-  reviewer should refuse.
+* The entry count must equal `ALLOWLIST_CEILING` in the test. Removing an
+  entry means lowering the ceiling in the same PR, so the ceiling only goes
+  down.
+
+This is a shrinking size cap, not a frozen set. CI does not stop a PR that
+removes a migrated entry and adds a different one in its place at the same
+count. That shows up as an added line in the allowlist diff, and review should
+refuse it.
 
 A new step that needs to decide something gets a script, not an allowlist
 entry.

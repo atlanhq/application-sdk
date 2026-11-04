@@ -191,9 +191,13 @@ class FakeCurl:
     def __init__(self, returncode: int = 0, stdout: str = "") -> None:
         self.returncode, self.stdout = returncode, stdout
         self.calls: list[list[str]] = []
+        self.inputs: list[object] = []
 
-    def __call__(self, cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self, cmd: list[str], **kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
         self.calls.append(list(cmd))
+        self.inputs.append(kwargs.get("input"))
         return subprocess.CompletedProcess(cmd, self.returncode, self.stdout, "")
 
 
@@ -233,7 +237,10 @@ def test_publish_posts_the_body_and_summarises(
         "POST",
         "https://gm/api/service/marketplace/publish",
     ]
-    assert "Authorization: Bearer tok" in cmd
+    # The token reaches curl on stdin (`-H @-`), never in argv.
+    assert cmd[cmd.index("@-") - 1] == "-H"
+    assert curl.inputs == ["Authorization: Bearer tok\n"]
+    assert not any("tok" in arg for arg in cmd if arg != "-sS")
     assert json.loads(cmd[cmd.index("-d") + 1])["target_channel"] == "all"
     out = capsys.readouterr().out
     assert "Publishing demo (abc1234) to marketplace..." in out

@@ -88,15 +88,12 @@ def test_links_flat_for_a_single_suite(ws, monkeypatch) -> None:
 
 def test_links_grouped_by_class_for_multiple_suites(ws, monkeypatch) -> None:
     monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
-    _junit(
-        ws,
-        '<testsuite><testcase classname="tests.e2e.TestEcc" name="test_one"/>'
-        '<testcase classname="tests.e2e.TestS4" name="test_two"/></testsuite>',
-    )
-    (ws / "integration-test-summary-ecc.json").write_text(
+    # Per-class files are named after the class (application_sdk.testing.sdr.base
+    # writes integration-test-summary-<cls.__name__>.json); that name wins.
+    (ws / "integration-test-summary-TestEcc.json").write_text(
         json.dumps({"scenarios": [_scenario("one"), _scenario("orphan")]})
     )
-    (ws / "integration-test-summary-s4.json").write_text(
+    (ws / "integration-test-summary-TestS4.json").write_text(
         json.dumps({"scenarios": [_scenario("two", "skipped")]})
     )
     # The shared file is ignored once per-class files exist.
@@ -106,9 +103,52 @@ def test_links_grouped_by_class_for_multiple_suites(ws, monkeypatch) -> None:
     sdr_report.main(["workflow-links"])
     assert _output(ws, "links").split("\n") == [
         "",
-        f"  - **TestEcc:** ✅ [one]({_url()})",
-        f"  - **(unknown suite):** ✅ [orphan]({_url()})",
+        f"  - **TestEcc:** ✅ [one]({_url()}) · ✅ [orphan]({_url()})",
         f"  - **TestS4:** ⏭ [two]({_url()})",
+    ]
+
+
+def test_a_scenario_name_shared_by_two_classes_stays_with_each_class(
+    ws, monkeypatch
+) -> None:
+    """A name -> class map from JUnit keeps one class per name; the per-class
+    file is the authority, so both `create` links land under their own class."""
+    monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
+    _junit(
+        ws,
+        '<testsuite><testcase classname="tests.e2e.TestEcc" name="test_create"/>'
+        '<testcase classname="tests.e2e.TestS4" name="test_create"/></testsuite>',
+    )
+    (ws / "integration-test-summary-TestEcc.json").write_text(
+        json.dumps({"scenarios": [_scenario("create", wf="ecc")]})
+    )
+    (ws / "integration-test-summary-TestS4.json").write_text(
+        json.dumps({"scenarios": [_scenario("create", wf="s4")]})
+    )
+    sdr_report.main(["workflow-links"])
+    assert _output(ws, "links").split("\n") == [
+        "",
+        f"  - **TestEcc:** ✅ [create]({_url(wf='ecc')})",
+        f"  - **TestS4:** ✅ [create]({_url(wf='s4')})",
+    ]
+
+
+def test_shared_summary_groups_by_junit_class(ws, monkeypatch) -> None:
+    monkeypatch.setenv("SDR_TEST_TENANT", TENANT)
+    _junit(
+        ws,
+        '<testsuite><testcase classname="tests.e2e.TestEcc" name="test_one"/>'
+        '<testcase classname="tests.e2e.TestS4" name="test_two"/></testsuite>',
+    )
+    (ws / "integration-test-summary.json").write_text(
+        json.dumps({"scenarios": [_scenario("one"), _scenario("two"), _scenario("x")]})
+    )
+    sdr_report.main(["workflow-links"])
+    assert _output(ws, "links").split("\n") == [
+        "",
+        f"  - **TestEcc:** ✅ [one]({_url()})",
+        f"  - **TestS4:** ✅ [two]({_url()})",
+        f"  - **(unknown suite):** ✅ [x]({_url()})",
     ]
 
 

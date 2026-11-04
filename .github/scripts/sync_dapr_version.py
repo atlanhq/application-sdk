@@ -35,16 +35,30 @@ class SyncError(Exception):
     """A step failed; the message becomes the ``::error::`` annotation."""
 
 
+#: Upper bound for one external command (git, gh, docker run). A stalled
+#: registry or GitHub connection should fail the step, not hold it to the job
+#: timeout.
+COMMAND_TIMEOUT_S = 300
+#: ``docker pull`` of the runtime base image gets longer: it is the one large
+#: download.
+PULL_TIMEOUT_S = 900
+
+
 def _run(
     args: list[str], *, check: bool = True, capture: bool = True
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        args,
-        check=check,
-        text=True,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.STDOUT if capture else None,
-    )
+    timeout = PULL_TIMEOUT_S if args[:2] == ["docker", "pull"] else COMMAND_TIMEOUT_S
+    try:
+        return subprocess.run(
+            args,
+            check=check,
+            text=True,
+            stdout=subprocess.PIPE if capture else None,
+            stderr=subprocess.STDOUT if capture else None,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise SyncError(f"`{' '.join(args[:2])}` timed out after {timeout}s") from exc
 
 
 def _output(**values: str) -> None:
@@ -150,7 +164,7 @@ def _open_pr_number(branch: str) -> str:
         [
             "gh", "pr", "list",
             "--head", branch, "--base", BASE, "--state", "open",
-            "--json", "number", "--jq", ".[0].number",
+            "--json", "number", "--jq", ".[0].number // empty",
         ]
     ).stdout.strip()  # fmt: skip
 

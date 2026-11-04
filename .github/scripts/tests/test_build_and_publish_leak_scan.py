@@ -159,7 +159,26 @@ def test_gitleaks_error_without_report_still_blocks(
 ) -> None:
     _install(monkeypatch, Recorder(lambda cmd, kw: 2))
     assert leak_scan.gitleaks(str(tmp_path / "scan"), str(tmp_path / "none.json")) == 1
-    assert "gitleaks found 0 hardcoded secret(s)" in gh["summary"].read_text()
+    assert "gitleaks report unreadable" in gh["summary"].read_text()
+
+
+@pytest.mark.parametrize("content", [None, "not json", '{"not": "a list"'])
+def test_gitleaks_clean_exit_without_a_readable_report_fails_closed(
+    app: Path,
+    tmp_path: Path,
+    gh: dict[str, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    content: str | None,
+) -> None:
+    """Exit 0 with no readable report is an incomplete scan, not a clean one."""
+    report = tmp_path / "r.json"
+    if content is not None:
+        report.write_text(content)
+    _install(monkeypatch, Recorder(lambda cmd, kw: 0))
+    assert leak_scan.gitleaks(str(tmp_path / "scan"), str(report)) == 1
+    assert "gitleaks report unreadable" in gh["summary"].read_text()
+    assert "the hardcoded-secret scan is incomplete" in capsys.readouterr().out
 
 
 # ── Slack notifiers ───────────────────────────────────────────────────────────
@@ -193,7 +212,12 @@ def test_notifiers_refuse_missing_or_foreign_webhooks(
 
 def _posted(rec: Recorder) -> tuple[list[str], str]:
     ((cmd, kwargs),) = rec.calls
-    return cmd, json.loads(kwargs["input"])["text"]
+    # The webhook URL is a credential: it reaches curl on stdin via
+    # `--config -`, never in argv.
+    assert cmd[-2:] == ["--config", "-"]
+    assert not any("hooks.slack.com" in arg for arg in cmd)
+    assert kwargs["input"] == f'url = "{WEBHOOK}"\n'
+    return cmd, json.loads(cmd[cmd.index("--data") + 1])["text"]
 
 
 def test_notify_gitleaks_posts_top_ten_locations(
@@ -217,7 +241,7 @@ def test_notify_gitleaks_posts_top_ten_locations(
     rec = _install(monkeypatch, Recorder())
     assert leak_scan.notify_gitleaks(str(report)) == 0
     cmd, text = _posted(rec)
-    assert cmd[-1] == WEBHOOK and cmd[:3] == ["curl", "-sS", "--fail"]
+    assert cmd[:3] == ["curl", "-sS", "--fail"]
     assert text.startswith(
         ":no_entry: *Publish BLOCKED — hardcoded secret(s)*\n"
         "*App repo:* `atlanhq/demo-app`\ngitleaks found 12 secret(s)"
