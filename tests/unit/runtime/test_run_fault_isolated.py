@@ -322,3 +322,86 @@ def test_available_cpus_never_exceeds_affinity(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(runtime_cgroup, "_affinity_count", lambda: 2)
     assert runtime_cgroup.available_cpus() == 2
+
+
+# ---------------------------------------------------------------------------
+# fresh=True: a single-use child per call, never shared
+# ---------------------------------------------------------------------------
+
+
+def _pid_after(seconds: float) -> int:
+    import os
+
+    time.sleep(seconds)
+    return os.getpid()
+
+
+async def _wait_until_exited(pid: int) -> None:
+    """Wait until ``pid`` no longer exists (its parent has joined it)."""
+    import os
+
+    deadline = time.monotonic() + _REAP_DEADLINE_SECONDS
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        assert time.monotonic() < deadline, f"fresh child {pid} never exited"
+        await asyncio.sleep(0.05)
+
+
+async def test_fresh_calls_back_to_back_each_get_a_new_child(monkeypatch):
+    """The point of fresh=True: a pooled child would serve all three calls,
+    carrying each one's peak heap into the next (the idle period never elapses
+    between back-to-back steps)."""
+    monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "30")
+    pids = [await run_fault_isolated(_pid, fresh=True) for _ in range(3)]
+    assert len(set(pids)) == 3
+
+
+async def test_fresh_child_exits_as_soon_as_its_call_ends(monkeypatch):
+    # An idle period far longer than the deadline: only fresh's own retirement
+    # can make the child exit in time.
+    monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "3600")
+    pid = await run_fault_isolated(_pid, fresh=True)
+    await _wait_until_exited(pid)
+
+
+async def test_fresh_never_touches_the_shared_width_one_pool(monkeypatch):
+    monkeypatch.setenv(offload.FAULT_ISOLATION_IDLE_SECONDS_ENV, "30")
+    shared_pid = await run_fault_isolated(_pid, max_workers=1)
+    shared = offload._PROCESS_POOLS[1]
+
+    fresh_pid = await run_fault_isolated(_pid, fresh=True, max_workers=1)
+    with pytest.raises(TimeoutError):
+        await run_fault_isolated(_sleep_forever, timeout=0.5, fresh=True)
+
+    assert fresh_pid != shared_pid
+    assert offload._PROCESS_POOLS.get(1) is shared
+    assert await run_fault_isolated(_pid, max_workers=1) == shared_pid
+    offload._discard_process_pool(1, shared)
+
+
+async def test_fresh_calls_run_concurrently_on_separate_children():
+    a, b = await asyncio.gather(
+        run_fault_isolated(_pid_after, 0.5, fresh=True),
+        run_fault_isolated(_pid_after, 0.5, fresh=True),
+    )
+    assert a != b
+
+
+async def test_fresh_native_crash_surfaces_as_broken_pool():
+    with pytest.raises(BrokenProcessPool):
+        await run_fault_isolated(_segfault, fresh=True)
+    assert await run_fault_isolated(_echo, "next", fresh=True) == "echo:next"
+
+
+async def test_fresh_propagates_ordinary_exceptions():
+    with pytest.raises(ValueError, match="boom"):
+        await run_fault_isolated(_raise_value_error, fresh=True)
+
+
+@pytest.mark.parametrize("width", [0, 2, 4])
+async def test_fresh_rejects_a_width_other_than_one(width):
+    with pytest.raises(ValueError, match="max_workers"):
+        await run_fault_isolated(_echo, "x", fresh=True, max_workers=width)
