@@ -2115,8 +2115,13 @@ class App(ABC):
                     missing.append(f"{key}/ ({len(found)}/{ref.file_count} objects)")
                     continue
             elif not await exists(key, store=store, normalize=False):
-                missing.append(key)
-                continue
+                # A gateway without routes can return a bodiless HEAD 404 for
+                # an existing object. Confirm through a body-bearing listing,
+                # whose gateway errors use the storage layer's retry policy.
+                found = await list_data_keys(key, store=store, normalize=False)
+                if key not in found:
+                    missing.append(key)
+                    continue
             verified_file_count += ref.file_count
             # One store round-trip completed. A file boundary, not a record
             # boundary (ADR-0018) — and without it this loop is a run of bare

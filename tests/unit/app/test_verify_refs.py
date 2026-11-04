@@ -118,6 +118,11 @@ class TestVerifyRefs(_ResetsRegistries):
 
         with (
             mock.patch("application_sdk.storage.ops.exists", side_effect=_exists),
+            mock.patch(
+                "application_sdk.storage.batch.list_keys",
+                new_callable=mock.AsyncMock,
+                return_value=[],
+            ),
             pytest.raises(StorageHandoffIncompleteError) as exc,
         ):
             await app.verify_refs(VerifyRefsInput(refs=refs, prefix=PREFIX))
@@ -415,6 +420,11 @@ class TestVerifyRefsFeedsTheStallWatchdog(_ResetsRegistries):
                 "application_sdk.storage.ops.exists",
                 new_callable=mock.AsyncMock,
                 return_value=False,
+            ),
+            mock.patch(
+                "application_sdk.storage.batch.list_keys",
+                new_callable=mock.AsyncMock,
+                return_value=[],
             ),
             pytest.raises(StorageHandoffIncompleteError),
         ):
