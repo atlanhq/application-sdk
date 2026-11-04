@@ -2272,8 +2272,7 @@ class TestTeardownTerminatesUnsettledRuns:
         ae = _AmbiguousSubmitFakeAE(
             error=AtlanApiTimeoutError(
                 message=(
-                    "submit_workflow timed out after 1 attempt(s) "
-                    "[delivery=ambiguous]"
+                    "submit_workflow timed out after 1 attempt(s) [delivery=ambiguous]"
                 ),
                 operation="/submit",
                 delivery=RequestDelivery.AMBIGUOUS,

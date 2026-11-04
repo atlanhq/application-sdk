@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -525,11 +526,7 @@ def test_run_on_a_same_named_non_app_base_is_silent(tmp_path: Path) -> None:
     # declared in util.py, so Utility.run is not an entrypoint.
     files = _bundle_inputs()
     files["app/base.py"] = (
-        "from application_sdk.app import App\n"
-        "\n"
-        "\n"
-        "class Base(App):\n"
-        "    pass\n"
+        "from application_sdk.app import App\n\n\nclass Base(App):\n    pass\n"
     )
     files["app/util.py"] = (
         "from application_sdk.contracts.base import Output\n"

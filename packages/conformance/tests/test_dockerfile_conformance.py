@@ -288,7 +288,7 @@ def test_i001_silent_on_arg_base_image_bare_redeclare_keeps_default() -> None:
 
 
 def test_i001_fires_on_arg_base_image_without_default() -> None:
-    src = "ARG BASE_IMAGE\n" "FROM ${BASE_IMAGE}\n" "ENV ATLAN_APP_MODULE=myapp:MyApp\n"
+    src = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\nENV ATLAN_APP_MODULE=myapp:MyApp\n"
     findings = [f for f in scan_text(src, _FILE) if f.rule_id == "I001"]
     assert len(findings) == 1
     assert "no resolvable default" in findings[0].message

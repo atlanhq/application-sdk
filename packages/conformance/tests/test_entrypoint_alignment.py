@@ -26,6 +26,7 @@ from textwrap import dedent
 from typing import Literal
 
 import pytest
+
 from conformance.suite.checks.entrypoint_alignment import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -548,9 +549,9 @@ def test_p016_suppressed_by_inline_directive(tmp_path: Path) -> None:
         for f in findings
         if f.rule_id == "P016" and "'extract-metadata' is defined in code" in f.message
     ]
-    assert (
-        code_only
-    ), "expected at least one code-side P016 finding for extract-metadata"
+    assert code_only, (
+        "expected at least one code-side P016 finding for extract-metadata"
+    )
     assert all(f.suppressed for f in code_only)
 
 

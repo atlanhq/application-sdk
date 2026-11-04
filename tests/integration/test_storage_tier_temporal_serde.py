@@ -116,9 +116,9 @@ async def test_storage_tier_survives_temporal_round_trip(
             result_type=_EchoOutput,
         )
 
-    assert (
-        result.ref.tier == tier
-    ), f"Expected tier={tier!r} but got {result.ref.tier!r} after Temporal round-trip"
+    assert result.ref.tier == tier, (
+        f"Expected tier={tier!r} but got {result.ref.tier!r} after Temporal round-trip"
+    )
     assert result.ref.storage_path == storage_path
     assert result.ref.is_durable is True
     assert result.ref.file_count == 3

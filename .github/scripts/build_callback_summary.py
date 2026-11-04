@@ -53,8 +53,7 @@ def build_fallback_summary(
     # actually dropped by a failed detection.
     if detect_integration_result not in PASSING_DETECT_INTEGRATION_RESULTS:
         integration_line = (
-            f"**integration:** not run — suite detection "
-            f"{detect_integration_result}\n"
+            f"**integration:** not run — suite detection {detect_integration_result}\n"
         )
     else:
         integration_line = (

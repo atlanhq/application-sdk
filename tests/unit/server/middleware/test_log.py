@@ -66,9 +66,9 @@ def test_excluded_paths_are_not_logged(client: TestClient, path: str) -> None:
     with patch("application_sdk.server.middleware.log.logger.info") as mock_info:
         response = client.get(path)
     assert response.status_code == 200
-    assert (
-        mock_info.call_count == 0
-    ), f"path {path} unexpectedly produced log entries: {mock_info.call_args_list}"
+    assert mock_info.call_count == 0, (
+        f"path {path} unexpectedly produced log entries: {mock_info.call_args_list}"
+    )
 
 
 def test_non_excluded_path_is_logged(client: TestClient) -> None:

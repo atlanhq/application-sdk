@@ -459,6 +459,6 @@ class TestWorkflowWiring:
         )
         assert setup["uses"].split("@")[1].split()[0], "setup-node must be SHA-pinned"
         version = str(setup["with"]["node-version"])
-        assert re.fullmatch(
-            r"[1-9][0-9]*", version
-        ), f"node-version must be an exact major, got {version!r}"
+        assert re.fullmatch(r"[1-9][0-9]*", version), (
+            f"node-version must be an exact major, got {version!r}"
+        )

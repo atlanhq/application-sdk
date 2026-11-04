@@ -41,9 +41,8 @@ import ast
 import sys
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _parse_directives
+from conformance.suite.checks._ast_common import _parse_directives, make_cli_main
 from conformance.suite.checks._ast_common import discover as _shared_discover
-from conformance.suite.checks._ast_common import make_cli_main
 from conformance.suite.schema.findings import Finding
 
 from ._s001 import HardcodedCredentialChecker

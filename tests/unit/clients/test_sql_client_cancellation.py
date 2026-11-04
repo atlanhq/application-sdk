@@ -308,9 +308,9 @@ async def _assert_cancelled_at_the_driver(
     # The driver stopped well inside the time the scan would otherwise take
     # (a million ``slow()`` calls), and the connection it ran on was dropped
     # rather than pooled.
-    assert db.invalidated.wait(
-        _RELEASE_AFTER
-    ), "cancelled connection was not invalidated"
+    assert db.invalidated.wait(_RELEASE_AFTER), (
+        "cancelled connection was not invalidated"
+    )
     assert not db.release.is_set()
     assert len(client.cancel_threads) == 1
     assert client.cancel_threads[0].startswith("sdk-cancel-")

@@ -481,9 +481,9 @@ class TestS3BehaviorKnobs:
             mock_s3_cls.return_value = MagicMock()
             create_store_from_binding("objectstore", components_dir=components_dir)
             config = mock_s3_cls.call_args.kwargs["config"]
-            assert (
-                config.get("aws_virtual_hosted_style_request") == "false"
-            ), f"failed for {val!r}"
+            assert config.get("aws_virtual_hosted_style_request") == "false", (
+                f"failed for {val!r}"
+            )
 
     @patch("obstore.store.S3Store")
     def test_disable_ssl_sets_allow_http(
@@ -1907,9 +1907,9 @@ class TestS3CompatibilityKnobs:
         mock_s3_cls.return_value = MagicMock()
         create_store_from_binding("objectstore", components_dir=components_dir)
         config = mock_s3_cls.call_args.kwargs["config"]
-        assert (
-            config.get("aws_disable_tagging") == "true"
-        ), f"Expected disable_tagging for {endpoint!r}"
+        assert config.get("aws_disable_tagging") == "true", (
+            f"Expected disable_tagging for {endpoint!r}"
+        )
 
     @pytest.mark.parametrize(
         "endpoint",
@@ -1936,9 +1936,9 @@ class TestS3CompatibilityKnobs:
         mock_s3_cls.return_value = MagicMock()
         create_store_from_binding("objectstore", components_dir=components_dir)
         config = mock_s3_cls.call_args.kwargs.get("config") or {}
-        assert (
-            "aws_disable_tagging" not in config
-        ), f"Should not disable tagging for AWS endpoint {endpoint!r}"
+        assert "aws_disable_tagging" not in config, (
+            f"Should not disable tagging for AWS endpoint {endpoint!r}"
+        )
 
     @patch("obstore.store.S3Store")
     def test_explicit_disable_tagging_true_overrides_aws_endpoint(

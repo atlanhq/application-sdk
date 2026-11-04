@@ -698,9 +698,9 @@ def test_exhausted_quota_spends_no_approve_request_at_all():
 
     assert [o.action for o in outcomes] == [reconcile.DEFERRED]
     assert source.posted == []
-    assert gh.approver_calls() == [
-        argv for argv in gh.calls if is_rate_limit(argv)
-    ], "the only atlan-ci request should be the free meter read"
+    assert gh.approver_calls() == [argv for argv in gh.calls if is_rate_limit(argv)], (
+        "the only atlan-ci request should be the free meter read"
+    )
 
 
 def test_deferral_names_the_reset_and_does_not_red_the_run(capsys):

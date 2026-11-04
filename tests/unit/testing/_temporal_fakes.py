@@ -36,9 +36,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, cast
 
-from temporalio.api.common.v1 import WorkerVersionCapabilities
+from temporalio.api.common.v1 import WorkerVersionCapabilities, WorkflowType
 from temporalio.api.common.v1 import WorkflowExecution as WireWorkflowExecution
-from temporalio.api.common.v1 import WorkflowType
 from temporalio.api.deployment.v1 import WorkerDeploymentOptions
 from temporalio.api.enums.v1 import WorkflowExecutionStatus as WireStatus
 from temporalio.api.taskqueue.v1 import PollerInfo as WirePollerInfo

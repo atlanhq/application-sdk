@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.optimizations import (
     _collect_json_bindings,
     main,
@@ -312,9 +313,9 @@ def test_o001_terminal_state_licenses_stdlib_only_for_a_named_external_consumer(
         "serializes a whole entity or document does not qualify",
         "parses the document before it diffs it",
     ):
-        assert (
-            needle in terminal_state
-        ), f"O001's terminal_state does not state {needle!r}"
+        assert needle in terminal_state, (
+            f"O001's terminal_state does not state {needle!r}"
+        )
 
 
 def test_o001_terminal_state_sends_a_byte_identical_call_to_the_swap() -> None:
@@ -330,9 +331,9 @@ def test_o001_terminal_state_sends_a_byte_identical_call_to_the_swap() -> None:
         "integer above 64 bits",
         "byte-identical to `orjson.dumps(...).decode()` and makes the swap",
     ):
-        assert (
-            needle in terminal_state
-        ), f"O001's terminal_state does not state {needle!r}"
+        assert needle in terminal_state, (
+            f"O001's terminal_state does not state {needle!r}"
+        )
 
 
 def test_o001_exact_bytes_site_is_still_reported_and_suppressed_only_with_directive(

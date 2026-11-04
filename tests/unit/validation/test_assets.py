@@ -16,9 +16,13 @@ import orjson
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table, View
 
-from application_sdk.validation import AssetValidationReport, ReferentialFailure
+from application_sdk.validation import (
+    AssetValidationReport,
+    ReferentialFailure,
+    validate_asset,
+    validate_transformed_dir,
+)
 from application_sdk.validation import assets as assets_module
-from application_sdk.validation import validate_asset, validate_transformed_dir
 
 CONN = "default/snow/123"
 DB_QN = f"{CONN}/DB"
@@ -671,9 +675,9 @@ def test_prod_relationship_signature_survives_the_move(
         "this test no longer reproduces the bug"
     )
     before = validate_asset(dropped)
-    assert any(
-        prod_error in e for e in before
-    ), f"expected production error {prod_error!r}, got {before}"
+    assert any(prod_error in e for e in before), (
+        f"expected production error {prod_error!r}, got {before}"
+    )
 
     # Fixed behaviour: relationship read back, that error gone.
     decoded = assets_module._deserialize(raw)
@@ -681,9 +685,9 @@ def test_prod_relationship_signature_survives_the_move(
     assert getattr(decoded, relationship) is not msgspec.UNSET
     assert getattr(decoded, relationship).qualified_name == parent_qn
     after = validate_asset(decoded)
-    assert not any(
-        prod_error in e for e in after
-    ), f"{prod_error!r} still reported after the fix: {after}"
+    assert not any(prod_error in e for e in after), (
+        f"{prod_error!r} still reported after the fix: {after}"
+    )
 
 
 def test_prod_signature_matrix_is_not_empty():

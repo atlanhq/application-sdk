@@ -82,14 +82,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from conformance.suite.checks._ast_common import SuppressionsMap, _is_suppressed
-from conformance.suite.checks._ast_common import discover as _discover_sources
 from conformance.suite.checks._ast_common import (
+    SuppressionsMap,
+    _is_suppressed,
     is_sdk_package_name,
     make_cli_main,
     parse_toml_suppressions,
     safe_read_text,
 )
+from conformance.suite.checks._ast_common import discover as _discover_sources
 from conformance.suite.checks._ast_common._discovery import (
     EXCLUDE_DIRS as _SOURCE_EXCLUDE_DIRS,
 )
@@ -2391,8 +2392,7 @@ def _scan_default_index(text: str, rel_pyproject: str) -> list[Finding]:
     """
     suppressions = parse_toml_suppressions(text)
     canonical = (
-        '[[tool.uv.index]]\nname = "pypi"\n'
-        f'url = "{PYPI_SIMPLE_URL}"\ndefault = true'
+        f'[[tool.uv.index]]\nname = "pypi"\nurl = "{PYPI_SIMPLE_URL}"\ndefault = true'
     )
     default = _default_index(text)
 

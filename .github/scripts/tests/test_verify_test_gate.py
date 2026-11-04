@@ -638,8 +638,7 @@ def test_render_image_build_failure_shows_in_the_e2e_row() -> None:
     )
     assert out["passed"] == "false"
     assert out["e2e-status"] == "❌ e2e image build failed", (
-        "the row must not read as a benign skip when the image build is why "
-        "nothing ran"
+        "the row must not read as a benign skip when the image build is why nothing ran"
     )
 
 

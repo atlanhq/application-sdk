@@ -373,9 +373,9 @@ async def test_the_child_f_stubs_are_gone() -> None:
         (automation_engine, ("AEClient",)),
     ):
         for name in names:
-            assert not isinstance(
-                getattr(module, name, None), type(None)
-            ), f"{module.__name__}.{name} is gone, not implemented"
+            assert not isinstance(getattr(module, name, None), type(None)), (
+                f"{module.__name__}.{name} is gone, not implemented"
+            )
 
     # A stub raised on call; these do not.
     assert callable(atlas.count_assets)

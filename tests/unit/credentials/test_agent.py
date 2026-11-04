@@ -1768,8 +1768,7 @@ class TestCheckSecretStoreAccess:
         assert r.substituted == 0
         assert r.resolved is not None
         assert r.suggested_action == (
-            "Check that the configured secret keys and secret-path exist in "
-            "the store."
+            "Check that the configured secret keys and secret-path exist in the store."
         )
 
     async def test_fails_when_no_store_configured(self) -> None:

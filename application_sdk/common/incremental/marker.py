@@ -39,14 +39,14 @@ from typing_extensions import deprecated
 
 from application_sdk.common.atomic import atomic_write as _atomic_write
 from application_sdk.common.atomic import disk_full_guard as _disk_full_guard
-from application_sdk.common.incremental.helpers import download_marker_from_s3
 from application_sdk.common.incremental.helpers import (
-    get_persistent_artifacts_path as _get_persistent_artifacts_path,
-)
-from application_sdk.common.incremental.helpers import (
+    download_marker_from_s3,
     get_persistent_s3_prefix,
     normalize_marker_timestamp,
     prepone_marker_timestamp,
+)
+from application_sdk.common.incremental.helpers import (
+    get_persistent_artifacts_path as _get_persistent_artifacts_path,
 )
 from application_sdk.constants import MARKER_FILENAME, MARKER_TIMESTAMP_FORMAT
 from application_sdk.observability.logger_adaptor import get_logger

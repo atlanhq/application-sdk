@@ -14,6 +14,7 @@ import warnings
 from pathlib import Path
 
 import pytest
+
 from conformance.preflight_scenarios import SCENARIOS
 from conformance.suite.checks.preflight import discover, scan_all
 from conformance.suite.checks.preflight._common import build_registry

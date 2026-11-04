@@ -130,9 +130,9 @@ async def test_non_retryable_error_stops_immediately(
     assert cause is not None, "Expected 'Deterministic failure' in exception chain"
 
     top = exc_info.value.cause
-    assert (
-        isinstance(top, ApplicationError) and top.non_retryable
-    ), f"workflow failure must be non-retryable at the top level, got {top!r}"
+    assert isinstance(top, ApplicationError) and top.non_retryable, (
+        f"workflow failure must be non-retryable at the top level, got {top!r}"
+    )
     # One task run per workflow attempt (the task itself is never retried), so
     # this counts workflow attempts: 1, not the policy's max_attempts=5.
     assert _attempt_counters[test_id] == 1

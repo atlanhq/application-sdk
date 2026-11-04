@@ -796,9 +796,9 @@ _DISTINCT_ID_BREADCRUMB = "distinct-id ${{ inputs.distinct-id }}"
 
 def _named_step(jobs: dict, job: str, name: str) -> dict:  # type: ignore[type-arg]
     matches = [s for s in jobs[job]["steps"] if str(s.get("name", "")) == name]
-    assert (
-        len(matches) == 1
-    ), f"expected exactly one {name!r} step in {job}, found {len(matches)}"
+    assert len(matches) == 1, (
+        f"expected exactly one {name!r} step in {job}, found {len(matches)}"
+    )
     return matches[0]
 
 

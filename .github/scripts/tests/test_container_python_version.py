@@ -32,8 +32,7 @@ def test_parses_golden_tag(tmp_path: Path) -> None:
 def test_ignores_unrelated_from_lines(tmp_path: Path) -> None:
     df = _dockerfile(
         tmp_path,
-        "FROM python:3.11 AS build\n"
-        "FROM cgr.dev/atlan.com/app-framework-golden:3.13\n",
+        "FROM python:3.11 AS build\nFROM cgr.dev/atlan.com/app-framework-golden:3.13\n",
     )
     assert cpv.parse_dockerfile_version(df) == "3.13"
 

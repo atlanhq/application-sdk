@@ -300,9 +300,9 @@ def sandboxed_render(
             work,
             scratch,
             symlinks=True,
-            ignore=lambda d, names: [".git"]
-            if pathlib.Path(d) == pathlib.Path(work)
-            else [],
+            ignore=lambda d, names: (
+                [".git"] if pathlib.Path(d) == pathlib.Path(work) else []
+            ),
         )
         try:
             proc = runner(

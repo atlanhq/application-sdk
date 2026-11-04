@@ -134,15 +134,13 @@ from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-export
     WarmupInput,
     WarmupObservation,
     WarmupState,
+    unverifiable_preflight_result,
 )
 from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported
     flatten_credentials_to_pairs as _flatten_to_pairs,
 )
 from application_sdk.handler.contracts import (  # noqa: E402
     normalize_credentials as _contracts_normalize_credentials,
-)
-from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported for existing importers
-    unverifiable_preflight_result,
 )
 from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
 from application_sdk.handler.request_contract import (  # noqa: E402,F401 — re-exported
@@ -158,11 +156,6 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     _CATEGORY_TO_HTTP,
     _app_error_to_http_status,
     _import_optional_app_module,
-)
-from application_sdk.handler.routes import (  # noqa: E402
-    _normalize_preflight_request as _routes_normalize_preflight_request,
-)
-from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported for existing importers
     _preflight_failure_response,
     _preflight_response,
     _preflight_runtime_summary,
@@ -172,6 +165,9 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     has_warmup,
     include_app_routers_on,
     register_handler_routes,
+)
+from application_sdk.handler.routes import (  # noqa: E402
+    _normalize_preflight_request as _routes_normalize_preflight_request,
 )
 
 # The v2 flat top-level keys the worker treats as credential material, and the
@@ -626,8 +622,10 @@ def _decode_fe_inputs(raw: str | None) -> dict[str, Any]:
 # Allowed characters for config_id and config_type path components: one
 # pattern, defined (and enforced by ``config_key``) in ``object_routes``; the
 # worker's old private names are kept for existing importers.
-from application_sdk.handler.object_routes import _CONFIG_KEY_RE  # noqa: E402,F401
-from application_sdk.handler.object_routes import config_key  # noqa: E402
+from application_sdk.handler.object_routes import (  # noqa: E402,F401
+    _CONFIG_KEY_RE,
+    config_key,
+)
 from application_sdk.handler.object_routes import (  # noqa: E402,F401
     CONFIG_KEY_PATTERN as _CONFIG_KEY_PATTERN,
 )
@@ -1564,10 +1562,8 @@ def _register_workflow_routes(
             load_config=lambda config_id, config_type: _config_load_from_objectstore(
                 config_id, config_type=config_type
             ),
-            save_config=lambda config_id,
-            body,
-            config_type: _config_save_to_objectstore(
-                config_id, body, config_type=config_type
+            save_config=lambda config_id, body, config_type: (
+                _config_save_to_objectstore(config_id, body, config_type=config_type)
             ),
             upload_file=_upload_to_storage,
         ),

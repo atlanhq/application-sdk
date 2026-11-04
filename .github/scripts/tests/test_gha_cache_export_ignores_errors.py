@@ -83,9 +83,9 @@ def _exports() -> list[tuple[str, int, str]]:
 def test_the_guard_actually_finds_cache_exports():
     """A scan that silently matched nothing would pass the assertion below."""
     exports = _exports()
-    assert (
-        len(exports) >= 8
-    ), f"cache-export discovery collapsed — found only {len(exports)}: {exports}"
+    assert len(exports) >= 8, (
+        f"cache-export discovery collapsed — found only {len(exports)}: {exports}"
+    )
 
 
 def test_every_gha_cache_export_ignores_errors():

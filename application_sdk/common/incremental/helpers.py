@@ -40,9 +40,8 @@ from application_sdk.storage.integrity import (
     read_expected_digest,
     verification_enabled,
 )
-from application_sdk.storage.ops import _get_bytes
+from application_sdk.storage.ops import _get_bytes, normalize_key
 from application_sdk.storage.ops import download_file as _download_file
-from application_sdk.storage.ops import normalize_key
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore

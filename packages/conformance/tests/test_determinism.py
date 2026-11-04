@@ -325,9 +325,9 @@ def test_p021_storage_names_cover_every_public_async_storage_function() -> None:
     import ast
     import pathlib
 
-    from conformance.suite.checks.determinism._p021_io import _SDK_STORAGE_IO
-
     import application_sdk.storage as storage
+
+    from conformance.suite.checks.determinism._p021_io import _SDK_STORAGE_IO
 
     module_level = {
         node.name
@@ -938,7 +938,7 @@ def test_p023_silent_for_single_syscall_fs_ops() -> None:
 
 
 def test_p023_silent_for_rmtree_in_sync_def() -> None:
-    body = "import shutil\n" "def cleanup(path):\n" "    shutil.rmtree(path)\n"
+    body = "import shutil\ndef cleanup(path):\n    shutil.rmtree(path)\n"
     assert _rule(body, "P023") == []
 
 
@@ -1320,15 +1320,13 @@ def test_p031_flags_asyncio_to_thread() -> None:
 
 def test_p031_flags_to_thread_from_import() -> None:
     body = (
-        "from asyncio import to_thread\n"
-        "async def f():\n"
-        "    return await to_thread(g)\n"
+        "from asyncio import to_thread\nasync def f():\n    return await to_thread(g)\n"
     )
     assert len(_rule(body, "P031", header="")) == 1
 
 
 def test_p031_flags_run_in_executor_none() -> None:
-    body = "async def f(loop):\n" "    return await loop.run_in_executor(None, g)\n"
+    body = "async def f(loop):\n    return await loop.run_in_executor(None, g)\n"
     assert len(_rule(body, "P031", header="")) == 1
 
 
@@ -1342,9 +1340,7 @@ def test_p031_flags_get_event_loop_run_in_executor_none() -> None:
 
 
 def test_p031_silent_on_custom_executor() -> None:
-    body = (
-        "async def f(loop, pool):\n" "    return await loop.run_in_executor(pool, g)\n"
-    )
+    body = "async def f(loop, pool):\n    return await loop.run_in_executor(pool, g)\n"
     assert _rule(body, "P031", header="") == []
 
 

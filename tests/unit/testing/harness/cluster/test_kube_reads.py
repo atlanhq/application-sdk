@@ -701,9 +701,9 @@ async def test_the_bundle_is_built_once_per_thread_not_once_per_read():
 
     await asyncio.gather(*(reader.pods("conn") for _ in range(8)))
 
-    assert len(apis.builds) == len(
-        set(apis.builds)
-    ), "a thread built more than one bundle"
+    assert len(apis.builds) == len(set(apis.builds)), (
+        "a thread built more than one bundle"
+    )
     assert len(apis.calls) == 8
 
 

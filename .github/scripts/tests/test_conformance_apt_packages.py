@@ -66,9 +66,9 @@ def tests_workflow() -> dict:  # type: ignore[type-arg]
 
 def test_apt_packages_input_is_declared_and_off_by_default(workflow: dict) -> None:  # type: ignore[type-arg]
     inputs = workflow[True]["workflow_call"]["inputs"]  # `on` parses as True
-    assert (
-        "apt-packages" in inputs
-    ), "apt-packages input missing from conformance-reusable"
+    assert "apt-packages" in inputs, (
+        "apt-packages input missing from conformance-reusable"
+    )
     assert inputs["apt-packages"].get("default", "") == "", (
         "apt-packages must default to empty — the step must be a no-op for "
         "every existing caller"
@@ -183,18 +183,18 @@ def test_apt_step_routes_the_value_through_env(suite: dict) -> None:  # type: ig
     never by direct ``${{ }}`` interpolation into the script text."""
     step = _apt_step(suite)
     assert step.get("env", {}).get("APT_PACKAGES") == "${{ inputs.apt-packages }}"
-    assert (
-        "${{" not in step["run"]
-    ), "apt step interpolates an expression into the shell script"
+    assert "${{" not in step["run"], (
+        "apt step interpolates an expression into the shell script"
+    )
 
 
 def test_only_the_d_series_materialises_the_environment(suite: dict) -> None:  # type: ignore[type-arg]
     """The apt gate is only meaningful if exactly one series syncs.  The
     others run detect from an isolated `uvx` env."""
     needs_env = [entry.letter for entry in series(suite) if entry.needs_env]
-    assert needs_env == [
-        "D"
-    ], f"expected only the D series to set needs-env, got {needs_env}"
+    assert needs_env == ["D"], (
+        f"expected only the D series to set needs-env, got {needs_env}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -236,9 +236,9 @@ def test_apt_step_validates_before_it_installs(suite: dict) -> None:  # type: ig
         "a later `defaults: run: shell:` make the guard fail open "
         "(docs/standards/ci.md)"
     )
-    assert script.index("printf") < script.index(
-        "apt-get install"
-    ), "the allowlist guard must run before apt-get install"
+    assert script.index("printf") < script.index("apt-get install"), (
+        "the allowlist guard must run before apt-get install"
+    )
 
 
 def test_apt_guard_is_byte_identical_to_tests_reusable(
@@ -248,9 +248,9 @@ def test_apt_guard_is_byte_identical_to_tests_reusable(
     """One guard, two workflows: pin the copies together so a fix to one that
     misses the other fails here rather than silently half-landing."""
     tests_unit = tests_workflow["jobs"]["unit"]
-    assert _apt_guard(suite) == _apt_guard(
-        tests_unit
-    ), "conformance apt guard has drifted from the tests-reusable copy"
+    assert _apt_guard(suite) == _apt_guard(tests_unit), (
+        "conformance apt guard has drifted from the tests-reusable copy"
+    )
 
 
 # The Hive list, plus the C++/versioned names whose `+` and `.` the allowlist
@@ -301,9 +301,9 @@ def test_apt_guard_rejects_anything_that_is_not_a_package_name(
     value: str,
 ) -> None:
     proc = _run_guard(_apt_guard(suite), value)
-    assert (
-        proc.returncode != 0
-    ), f"guard accepted {value!r}, which is not a list of Debian package names"
+    assert proc.returncode != 0, (
+        f"guard accepted {value!r}, which is not a list of Debian package names"
+    )
 
 
 def test_apt_guard_rejects_an_empty_value(suite: dict) -> None:  # type: ignore[type-arg]

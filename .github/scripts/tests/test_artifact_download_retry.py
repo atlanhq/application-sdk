@@ -390,9 +390,9 @@ def test_a_companion_fetching_a_different_artifact_is_not_a_retry():
     ]
     first_attempts, retries = _classify(steps)
     companion = retries["download"][0]
-    assert _selector(companion) != _selector(
-        first_attempts[0]
-    ), "the fixture must differ in selector, or it proves nothing"
+    assert _selector(companion) != _selector(first_attempts[0]), (
+        "the fixture must differ in selector, or it proves nothing"
+    )
 
 
 def test_a_retry_in_another_job_does_not_satisfy_the_pairing():

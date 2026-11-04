@@ -81,7 +81,7 @@ RUN_EDIT_PATCH = (
 )
 
 PERMISSIONS_EDIT_PATCH = PIN_BUMP_PATCH + (
-    "@@ -3,5 +3,6 @@\n" " permissions:\n" "   contents: read\n" "+  id-token: write\n"
+    "@@ -3,5 +3,6 @@\n permissions:\n   contents: read\n+  id-token: write\n"
 )
 
 ACTION_SWAP_PATCH = (

@@ -318,9 +318,9 @@ class TestTheFlushActuallyHappens:
         ):
             sizing_sink.get_sink()
             await asyncio.sleep(0)  # let the created task run
-        assert (
-            started
-        ), "no periodic flush task was started — the buffer would never drain"
+        assert started, (
+            "no periodic flush task was started — the buffer would never drain"
+        )
         sizing_sink._reset_for_testing()
         SizingObservabilitySink._periodic_flush = real
 

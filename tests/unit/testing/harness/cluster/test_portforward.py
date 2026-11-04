@@ -394,9 +394,9 @@ async def test_concurrent_requests_open_exactly_one_tunnel():
         async with port_forward("ns", "svc", 8080) as session:
             await asyncio.gather(*(session.request("GET", "/status") for _ in range(4)))
 
-    assert (
-        len(procs) == 1
-    ), f"{len(procs)} kubectl processes spawned, {len(procs) - 1} leaked"
+    assert len(procs) == 1, (
+        f"{len(procs)} kubectl processes spawned, {len(procs) - 1} leaked"
+    )
 
 
 @pytest.mark.asyncio

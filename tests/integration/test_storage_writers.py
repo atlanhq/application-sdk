@@ -89,9 +89,9 @@ async def test_rolling_writer_writes_chunks_and_persists_to_store(
 
     # Disk: every chunk must exist under the writer-owned subdir.
     local_chunks = sorted(Path(writer.output_dir).glob("*.json"))
-    assert (
-        len(local_chunks) >= 2
-    ), f"expected ≥2 rolled chunks; got {len(local_chunks)}: {local_chunks}"
+    assert len(local_chunks) >= 2, (
+        f"expected ≥2 rolled chunks; got {len(local_chunks)}: {local_chunks}"
+    )
 
     # Persist through the FileReference boundary and confirm the store
     # mirrors the writer-owned subdir (one key per chunk + a sidecar each).
@@ -133,9 +133,9 @@ async def test_rolling_writer_file_reference_scoped_to_subdir(store, tmp_path: P
 
     # Sidecars + chunk files only — never the sibling.
     all_keys = await list_keys(durable.storage_path, store)
-    assert all(
-        "do_not_upload" not in k for k in all_keys
-    ), f"sibling leaked into store: {all_keys}"
+    assert all("do_not_upload" not in k for k in all_keys), (
+        f"sibling leaked into store: {all_keys}"
+    )
     assert any(k.endswith(".json") for k in all_keys)
 
 
@@ -176,9 +176,9 @@ async def test_parquet_writer_deferred_persists_via_file_reference(
     sidecar_keys = await list_keys(durable.storage_path, store, suffix=".sha256")
     all_keys = await list_keys(durable.storage_path, store)
     assert len(parquet_keys) >= 3, f"expected ≥3 parquet chunks; got {parquet_keys}"
-    assert any(
-        "statistics" in k for k in all_keys
-    ), f"statistics sidecar missing from {all_keys}"
+    assert any("statistics" in k for k in all_keys), (
+        f"statistics sidecar missing from {all_keys}"
+    )
     # One sidecar per file (parquet + statistics).
     assert len(sidecar_keys) == len(all_keys) - len(sidecar_keys), (
         f"sidecar count mismatch: data={len(all_keys) - len(sidecar_keys)} "
@@ -223,6 +223,6 @@ async def test_parquet_writer_default_mode_uploads_inline(infra, tmp_path: Path)
 
     # Statistics sidecar also uploaded inline.
     stat_keys = await list_keys(os.path.join(base, "orders"), infra)
-    assert any(
-        "statistics" in k for k in stat_keys
-    ), f"statistics file missing from {stat_keys}"
+    assert any("statistics" in k for k in stat_keys), (
+        f"statistics file missing from {stat_keys}"
+    )

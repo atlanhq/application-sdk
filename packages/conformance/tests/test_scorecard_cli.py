@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.scorecard.cli import _app_from_repo, main
 from conformance.scorecard.schema import Scorecard
 

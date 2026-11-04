@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.deprecation._manifest import (
     MANIFEST_PATH,
     SDK_IMPORT_ROOT,
@@ -65,9 +66,9 @@ def test_manifest_contains_legacy_transformers() -> None:
         "QueryBasedTransformer": "application_sdk.transformers.query",
     }
     for symbol, module in expected.items():
-        assert (
-            symbol in by_name
-        ), f"{symbol} missing from manifest — B001 is blind to it"
+        assert symbol in by_name, (
+            f"{symbol} missing from manifest — B001 is blind to it"
+        )
         rec = by_name[symbol]
         assert rec.module == module
         assert rec.kind == "class"

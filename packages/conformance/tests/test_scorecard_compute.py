@@ -8,6 +8,7 @@ always measured, e2e only when its junit was supplied.
 from __future__ import annotations
 
 import pytest
+
 from conformance.scorecard.compute import build_scorecard
 from conformance.scorecard.rubric import Rubric, load_rubric
 from conformance.scorecard.schema import (

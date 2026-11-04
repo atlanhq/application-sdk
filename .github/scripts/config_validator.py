@@ -654,8 +654,7 @@ def _check_keda(cfg: dict, label: str = "keda") -> list[Violation]:
                 expected=f"<= {label}.maxReplicaCount ({mx})",
                 rule="keda_min_le_max",
                 fix=(
-                    f"Lower {label}.minReplicaCount or raise "
-                    f"{label}.maxReplicaCount."
+                    f"Lower {label}.minReplicaCount or raise {label}.maxReplicaCount."
                 ),
             )
         ]

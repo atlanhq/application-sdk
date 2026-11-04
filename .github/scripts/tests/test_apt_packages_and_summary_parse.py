@@ -72,9 +72,9 @@ def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -
     step — a post-sync install would be dead code for the failure it fixes."""
     job = jobs[job_name]
     step = _apt_step(job)
-    assert "inputs.apt-packages != ''" in step.get(
-        "if", ""
-    ), f"{job_name}: apt step must self-skip when the input is empty"
+    assert "inputs.apt-packages != ''" in step.get("if", ""), (
+        f"{job_name}: apt step must self-skip when the input is empty"
+    )
     names = [s.get("name") or s.get("uses", "") for s in job["steps"]]
     apt_idx = names.index(APT_STEP_NAME)
     sync_idx = [
@@ -83,9 +83,9 @@ def test_every_runner_sync_job_installs_before_deps(jobs: dict, job_name: str) -
         if "connector-" in str(s.get("uses", "")) or "sdr-e2e" in str(s.get("uses", ""))
     ]
     assert sync_idx, f"{job_name}: no deps/composite step found to order against"
-    assert apt_idx < min(
-        sync_idx
-    ), f"{job_name}: apt step must run before the composite that performs uv sync"
+    assert apt_idx < min(sync_idx), (
+        f"{job_name}: apt step must run before the composite that performs uv sync"
+    )
 
 
 @pytest.mark.parametrize("job_name", RUNNER_SYNC_JOBS)
@@ -94,9 +94,9 @@ def test_apt_step_routes_the_value_through_env(jobs: dict, job_name: str) -> Non
     never by direct ``${{ }}`` interpolation into the script text."""
     step = _apt_step(jobs[job_name])
     assert step.get("env", {}).get("APT_PACKAGES") == "${{ inputs.apt-packages }}"
-    assert (
-        "${{" not in step["run"]
-    ), f"{job_name}: apt step interpolates an expression into the shell script"
+    assert "${{" not in step["run"], (
+        f"{job_name}: apt step interpolates an expression into the shell script"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,9 +143,9 @@ def test_apt_step_validates_before_it_installs(jobs: dict, job_name: str) -> Non
         "default lets a later `defaults: run: shell:` make the guard fail open "
         "(docs/standards/ci.md)"
     )
-    assert script.index("printf") < script.index(
-        "apt-get install"
-    ), f"{job_name}: the allowlist guard must run before apt-get install"
+    assert script.index("printf") < script.index("apt-get install"), (
+        f"{job_name}: the allowlist guard must run before apt-get install"
+    )
 
 
 def test_apt_guard_is_identical_in_every_job(jobs: dict) -> None:  # type: ignore[type-arg]
@@ -204,9 +204,9 @@ def test_apt_guard_rejects_anything_that_is_not_a_package_name(
     value: str,
 ) -> None:
     proc = _run_guard(_apt_guard(jobs["unit"]), value)
-    assert (
-        proc.returncode != 0
-    ), f"guard accepted {value!r}, which is not a list of Debian package names"
+    assert proc.returncode != 0, (
+        f"guard accepted {value!r}, which is not a list of Debian package names"
+    )
 
 
 def test_apt_guard_rejects_an_empty_value(jobs: dict) -> None:  # type: ignore[type-arg]
@@ -240,9 +240,9 @@ def _extraction_lines(action_path: Path, source_file: str) -> str:
         f"{action_path.name}: expected the ESC= and SUMMARY= pipeline lines — "
         "if the extraction was rewritten, update this test to execute the new form"
     )
-    assert (
-        source_file in lines[1]
-    ), f"{action_path.name}: SUMMARY line no longer reads {source_file}"
+    assert source_file in lines[1], (
+        f"{action_path.name}: SUMMARY line no longer reads {source_file}"
+    )
     return "\n".join(lines)
 
 

@@ -1035,9 +1035,9 @@ def test_reconcile_prefix_alignment_holds_across_helpers() -> None:
         persisted = get_object_store_prefix(
             os.path.join(base, typename, "entities.json")
         )
-        assert persisted.startswith(
-            source_dir_prefix
-        ), f"{persisted!r} not under {source_dir_prefix!r}"
+        assert persisted.startswith(source_dir_prefix), (
+            f"{persisted!r} not under {source_dir_prefix!r}"
+        )
         assert persisted.removeprefix(source_dir_prefix) == f"{typename}/entities.json"
 
 

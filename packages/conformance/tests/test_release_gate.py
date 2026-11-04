@@ -20,6 +20,7 @@ import types
 
 import pytest
 import yaml
+
 from conformance.bootstrap.render import MANAGED_ACTION_FILES, render
 
 _TEMPLATE = (

@@ -327,8 +327,7 @@ class _InOrderHasher:
                 buf = fh.read(min(self._READ_SIZE, remaining))
                 if not buf:
                     raise OSError(
-                        f"part file ended at {end - remaining} bytes, "
-                        f"expected {end}"
+                        f"part file ended at {end - remaining} bytes, expected {end}"
                     )
                 self._hash.update(buf)
                 remaining -= len(buf)

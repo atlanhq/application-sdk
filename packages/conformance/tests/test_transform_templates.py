@@ -30,6 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.transform_templates import (
     _DUCKDB_RESERVED_KEYWORDS,
     discover,
@@ -186,9 +187,7 @@ def test_p040_silent_on_dotted_identifiers_and_expressions() -> None:
 
 def test_p040_yaml_double_quotes_do_not_protect() -> None:
     # source_query: "order" parses to the same string as source_query: order.
-    text = (
-        "columns:\n" "  attributes:\n" "    someAttr:\n" '      source_query: "order"\n'
-    )
+    text = 'columns:\n  attributes:\n    someAttr:\n      source_query: "order"\n'
     findings = scan_text(text, "t.yaml")
     assert len(findings) == 1
     assert findings[0].line == 4

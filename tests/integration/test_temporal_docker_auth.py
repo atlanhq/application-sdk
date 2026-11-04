@@ -754,9 +754,9 @@ async def test_worker_crashes_with_exact_production_error(
             worker_exc = worker_task.exception()
 
         assert worker_exc is not None, "Worker task finished without an exception"
-        assert isinstance(
-            worker_exc, RuntimeError
-        ), f"Expected RuntimeError, got {type(worker_exc).__name__}: {worker_exc}"
+        assert isinstance(worker_exc, RuntimeError), (
+            f"Expected RuntimeError, got {type(worker_exc).__name__}: {worker_exc}"
+        )
 
         # _workflow.py wraps the Rust bridge error:
         #   raise RuntimeError("Workflow worker failed") from <rust_error>

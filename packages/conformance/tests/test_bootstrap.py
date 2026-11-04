@@ -15,6 +15,7 @@ import subprocess
 
 import pytest
 import yaml
+
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
@@ -485,9 +486,9 @@ def test_cmd_bootstrap_writes_all_managed_action_files(
     for dest_rel, template_name in MANAGED_ACTION_FILES:
         dest = tmp_path / dest_rel
         assert dest.exists(), f"Missing: {dest_rel}"
-        assert dest.read_text() == render(
-            template_name
-        ), f"Content mismatch: {dest_rel}"
+        assert dest.read_text() == render(template_name), (
+            f"Content mismatch: {dest_rel}"
+        )
 
 
 @pytest.mark.parametrize("dest_rel,template_name", MANAGED_ACTION_FILES)
@@ -595,9 +596,9 @@ def test_cmd_bootstrap_contract_ledger_holds_only_consumer_contracts(
 
     # Nothing from the SDK's own ledger leaked in.
     bundled = {f.contract for f in load_sdk_ledger().fields}
-    assert (
-        bundled
-    ), "the packaged SDK ledger should be non-empty for this to mean anything"
+    assert bundled, (
+        "the packaged SDK ledger should be non-empty for this to mean anything"
+    )
     assert not (contracts & bundled)
 
 

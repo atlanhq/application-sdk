@@ -38,6 +38,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.sdr import discover, scan_all, scan_path
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -935,7 +936,7 @@ def test_p037_ignores_a_shadowed_router_alias(tmp_path: Path, body: str) -> None
         "    def run(self, input_obj):\n"
         "        return route(input_obj)\n",
         # `global` refers the name back to the module import.
-        "def _call(input_obj):\n" "    global route\n" "    return route(input_obj)\n",
+        "def _call(input_obj):\n    global route\n    return route(input_obj)\n",
     ],
     ids=["nested-function", "method-skips-class-scope", "global-declaration"],
 )
@@ -2002,9 +2003,9 @@ def test_p051_silent_above_the_floor(tmp_path: Path) -> None:
             tmp_path,
             {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": _uv_lock(version)},
         )
-        assert not any(
-            f.rule_id == "P051" for f in _run(tmp_path)
-        ), f"should be silent at {version}"
+        assert not any(f.rule_id == "P051" for f in _run(tmp_path)), (
+            f"should be silent at {version}"
+        )
 
 
 def test_p051_silent_on_non_sdr_app(tmp_path: Path) -> None:

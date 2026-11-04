@@ -174,9 +174,9 @@ class TestHoldDurationExposition:
         )
         families = exposition()
 
-        assert (
-            HOLD_SERIES in families
-        ), f"The work-list panels read {HOLD_SERIES}; got {sorted(families)}."
+        assert HOLD_SERIES in families, (
+            f"The work-list panels read {HOLD_SERIES}; got {sorted(families)}."
+        )
         counts = families[HOLD_SERIES][f"{HOLD_SERIES}_count"]
         assert set(counts[0].labels) == HOLD_LABELS
 

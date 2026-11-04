@@ -2139,7 +2139,7 @@ class TestIsAzureContainerNotFound:
         from application_sdk.storage.factory import create_memory_store
 
         azure_err = RuntimeError(
-            "AzureError: ContainerNotFound — " "The specified container does not exist."
+            "AzureError: ContainerNotFound — The specified container does not exist."
         )
         store = create_memory_store()
         with patch("obstore.put_async", AsyncMock(side_effect=azure_err)):
@@ -2157,7 +2157,7 @@ class TestIsAzureContainerNotFound:
         src = tmp_path / "data.json"
         src.write_bytes(b"{}")
         azure_err = RuntimeError(
-            "AzureError: ContainerNotFound — " "The specified container does not exist."
+            "AzureError: ContainerNotFound — The specified container does not exist."
         )
         store = create_memory_store()
         with (

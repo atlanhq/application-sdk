@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from conformance.suite.checks.download_retry import (
     RULE_ID,
     is_retried,

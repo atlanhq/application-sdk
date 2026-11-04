@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.release_contract import discover, scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -32,7 +33,7 @@ _ATLAN_WITH_APP_ID = (
     "release_model: semver\n"
 )
 _ATLAN_WITHOUT_APP_ID = (
-    "name: openapi\n" "display_name: OpenAPI Spec Loader\n" "release_model: semver\n"
+    "name: openapi\ndisplay_name: OpenAPI Spec Loader\nrelease_model: semver\n"
 )
 
 _PYPROJECT_WITH_GENERATE = (
@@ -131,9 +132,7 @@ def test_k011_fires_when_top_level_app_id_is_absent(tmp_path: Path) -> None:
 def test_k011_silent_when_top_level_app_id_has_whitespace_before_colon(
     tmp_path: Path,
 ) -> None:
-    atlan = (
-        'app_id : "019e0353-57c9-7070-81d5-5a48921f1c9c"\n' "release_model: semver\n"
-    )
+    atlan = 'app_id : "019e0353-57c9-7070-81d5-5a48921f1c9c"\nrelease_model: semver\n'
     findings = _app_repo(tmp_path, atlan=atlan)
     assert "K011" not in _ids(findings)
 

@@ -101,7 +101,7 @@ def _default_user_agent() -> str:
     module into circular-import paths during package init.
     """
     try:
-        from application_sdk.version import (  # noqa: PLC0415; type: ignore[import]
+        from application_sdk.version import (  # type: ignore[import]  # noqa: PLC0415
             __version__,
         )
 

@@ -504,7 +504,7 @@ def test_without_a_lock_the_declared_range_is_kept(tmp_path: Path) -> None:
 
 def test_fix_leaves_import_text_inside_strings_alone(tmp_path: Path) -> None:
     handler = (
-        '"""Usage::\n\n    from app.client import C\n"""\n' "from app.client import C\n"
+        '"""Usage::\n\n    from app.client import C\n"""\nfrom app.client import C\n'
     )
     root = _app(tmp_path, handler)
     assert gen.main(["fix", "--root", str(root)]) == 0

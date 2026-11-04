@@ -84,8 +84,6 @@ async def read_json_object(request: Request) -> dict[str, Any]:
         raise RequestContractError(message="Request body is not valid JSON.") from exc
     if not isinstance(body, dict):
         raise RequestContractError(
-            message=(
-                "Request body must be a JSON object, got " f"{type(body).__name__}."
-            )
+            message=(f"Request body must be a JSON object, got {type(body).__name__}.")
         )
     return body

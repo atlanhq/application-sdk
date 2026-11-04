@@ -15,6 +15,7 @@ from __future__ import annotations
 import pathlib
 
 import pytest
+
 from conformance.suite.checks.gitignore_entries import (
     REQUIRED_ENTRIES,
     _is_covered,
@@ -199,9 +200,9 @@ def test_equivalent_form_is_accepted(required: str, equivalent: str) -> None:
 
 def test_exact_form_always_accepted() -> None:
     for entry in REQUIRED_ENTRIES:
-        assert _is_covered(
-            entry, frozenset({entry})
-        ), f"exact match failed for {entry!r}"
+        assert _is_covered(entry, frozenset({entry})), (
+            f"exact match failed for {entry!r}"
+        )
 
 
 def test_unrelated_entry_does_not_cover() -> None:

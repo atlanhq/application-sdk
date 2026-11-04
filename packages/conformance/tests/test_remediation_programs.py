@@ -166,9 +166,9 @@ def test_every_area_forwards_rule_ids_into_every_runner_call(area: str) -> None:
 
 @pytest.mark.parametrize("area", ALL_AREAS)
 def test_every_area_declares_rule_ids(area: str) -> None:
-    assert "`rule_ids`" in _read(
-        f"areas/{area}.prose.md"
-    ), f"{area} forwards rule_ids but never declares it as a parameter"
+    assert "`rule_ids`" in _read(f"areas/{area}.prose.md"), (
+        f"{area} forwards rule_ids but never declares it as a parameter"
+    )
 
 
 def test_o001_prescription_warns_orjson_bypasses_default() -> None:
@@ -310,9 +310,9 @@ def test_exc_info_prescriptions_carry_the_credential_contraindication(
     assert "no suppression" in text
     # The redacted form must not cost the stack trace the rule exists for:
     # the prescription has to offer safe_traceback alongside the cause.
-    assert (
-        "safe_traceback(exc)" in text
-    ), f"{area}'s credential-safe form drops the traceback; name safe_traceback"
+    assert "safe_traceback(exc)" in text, (
+        f"{area}'s credential-safe form drops the traceback; name safe_traceback"
+    )
 
 
 def test_e020_and_e007_prose_separate_a_per_object_skip_from_a_raise() -> None:
@@ -673,9 +673,9 @@ def test_uncited_fix_is_rejected_before_it_is_applied(loop: str) -> None:
     """
     evidence_at = loop.index("require_cited_evidence and")
     apply_at = loop.index("apply result.edit")
-    assert (
-        evidence_at < apply_at
-    ), "the cited-evidence check must run before the edit is applied"
+    assert evidence_at < apply_at, (
+        "the cited-evidence check must run before the edit is applied"
+    )
 
 
 def test_unverifiable_always_routes_to_residue(loop: str) -> None:

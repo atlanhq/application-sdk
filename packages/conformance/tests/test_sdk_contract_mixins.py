@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+
 from conformance.suite.checks._ast_common._sdk_app import SDK_APP_BASE_NAMES
 from conformance.suite.checks._entrypoint_contract_fields import (
     _ASSET_ARTIFACT_RE,
@@ -251,7 +252,7 @@ def test_template_registry_excludes_only_ambiguous_bare_names() -> None:
     ambiguous = _live_ambiguous_template_names()
     assert sorted(ambiguous) == ["UploadInput", "UploadOutput"], (
         "the set of ambiguous template contract bare names changed — "
-        f"now {({k: sorted(v) for k, v in ambiguous.items()})}. Register any name "
+        f"now { ({k: sorted(v) for k, v in ambiguous.items()}) }. Register any name "
         "that is no longer ambiguous, and extend the exclusion note in "
         "_sdk_contract_mixins.py for any new one."
     )

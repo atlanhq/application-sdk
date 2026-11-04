@@ -395,12 +395,12 @@ class TestBindingPlumbsClientOptions:
         kwargs = mock_s3.call_args.kwargs
         client_opts = kwargs.get("client_options") or {}
         retry_cfg = kwargs.get("retry_config") or {}
-        assert (
-            client_opts.get("timeout") == "42m"
-        ), f"timeout not plumbed into S3Store(client_options=...): {client_opts}"
-        assert (
-            retry_cfg.get("max_retries") == 7
-        ), f"retry max_retries not plumbed into S3Store(retry_config=...): {retry_cfg}"
+        assert client_opts.get("timeout") == "42m", (
+            f"timeout not plumbed into S3Store(client_options=...): {client_opts}"
+        )
+        assert retry_cfg.get("max_retries") == 7, (
+            f"retry max_retries not plumbed into S3Store(retry_config=...): {retry_cfg}"
+        )
 
 
 class TestCloudPlumbsClientOptions:
@@ -570,9 +570,9 @@ class TestAzureAmbientEnvIsolation:
                 credential_provider=fake_provider,
             )
 
-        assert (
-            captured["azure_env"] == {}
-        ), "ambient AZURE_* env must be stripped when credential_provider is supplied"
+        assert captured["azure_env"] == {}, (
+            "ambient AZURE_* env must be stripped when credential_provider is supplied"
+        )
         assert captured["kw"]["credential_provider"] is fake_provider
         # env restored after construction
         assert os.environ["AZURE_STORAGE_ACCESS_KEY"] == "host-key"

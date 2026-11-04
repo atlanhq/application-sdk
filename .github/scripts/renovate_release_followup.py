@@ -79,8 +79,7 @@ MAJORS_OPT_IN = {"atlan-application-sdk", "atlan-application-sdk-api"}
 FINAL_RELEASE = re.compile(r"^\d+(\.\d+)*$")
 
 DISPATCH_FALLBACK = (
-    "Could not trigger renovate.yaml — consumers will update on the next "
-    "scheduled run."
+    "Could not trigger renovate.yaml — consumers will update on the next scheduled run."
 )
 
 GH_TIMEOUT_SECONDS = 60

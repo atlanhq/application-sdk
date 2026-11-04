@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.prescriptions import main, scan_all, scan_text
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
@@ -611,7 +612,7 @@ def test_p003_still_fires_when_apperror_is_in_the_scanned_tree(tmp_path: Path) -
             "        return None\n"
         ),
         "leaves.py": (
-            "from base import AppError\n" "class AuthError(AppError):\n" "    pass\n"
+            "from base import AppError\nclass AuthError(AppError):\n    pass\n"
         ),
         "errors.py": (
             "from leaves import AuthError\n"
@@ -3343,11 +3344,7 @@ def test_p027_no_finding_when_populating_writer_exists(tmp_path: Path) -> None:
 
 
 def test_p027_no_finding_on_dynamic_key(tmp_path: Path) -> None:
-    src = (
-        "class MyApp:\n"
-        "    def run(self, k):\n"
-        "        return self.get_app_state(k)\n"
-    )
+    src = "class MyApp:\n    def run(self, k):\n        return self.get_app_state(k)\n"
     assert _p027_ids(_scan_one(tmp_path, src)) == []
 
 
@@ -3658,7 +3655,7 @@ def test_p052_conditional_rebinding_keeps_the_encoder_visible(src: str) -> None:
 def test_p052_unconditional_rebinding_after_a_branch_hides_it() -> None:
     # The straight-line rebinding definitely runs last, whatever the branch did.
     src = _P052_ENCODER_IMPORT + (
-        "if flag:\n" "    enc = to_atlas_format\n" "enc = other\n" "enc(asset)\n"
+        "if flag:\n    enc = to_atlas_format\nenc = other\nenc(asset)\n"
     )
     assert _p052(src) == []
 
@@ -3766,7 +3763,7 @@ def test_p052_no_finding_on_entity_bytes() -> None:
 
 def test_p052_no_finding_on_unrelated_to_atlas_format() -> None:
     # A same-named local helper is not pyatlan's encoder.
-    src = "def to_atlas_format(x):\n" "    return x\n" "to_atlas_format(1)\n"
+    src = "def to_atlas_format(x):\n    return x\nto_atlas_format(1)\n"
     assert _p052(src) == []
 
 
@@ -4028,7 +4025,7 @@ def test_p013_silent_on_the_rebinding_alias_itself(tmp_path: Path) -> None:
     unresolvable, as on main."""
     files = {
         "contracts.py": (
-            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
+            "from thirdparty import Thing\nclass Foo(Thing):\n    x: str = ''\n"
         ),
         "rebind.py": "from contracts import Foo\nThing = Foo\n",
         "connector.py": (
@@ -4051,7 +4048,7 @@ def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_cla
     """``Thing = Foo`` elsewhere must not turn ``class Foo(Thing)`` unresolvable."""
     files = {
         "contracts.py": (
-            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
+            "from thirdparty import Thing\nclass Foo(Thing):\n    x: str = ''\n"
         ),
         "rebind.py": "from contracts import Foo\nThing = Foo\n",
         "connector.py": (

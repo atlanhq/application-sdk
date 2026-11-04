@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.logging import scan_all, scan_path, scan_text
 from conformance.suite.checks.logging._constants import (
     CREDENTIAL_LABEL_SUFFIXES,
@@ -3095,9 +3096,9 @@ def test_l021_message_explains_g201_conflict(tmp_path: Path) -> None:
     msg = findings[0].message
     assert "G201" in msg and "L017" in msg, "hint must explain the G201/L017 conflict"
     assert 'extend-ignore = ["G201"]' in msg
-    assert (
-        "covers all rules in that group" not in msg
-    ), "hint must not recommend category prefixes"
+    assert "covers all rules in that group" not in msg, (
+        "hint must not recommend category prefixes"
+    )
 
 
 def test_l021_bare_g_selection_covers_rules_once_g201_ignored(
@@ -3195,7 +3196,7 @@ def test_l010_silent_for_resource_token_used_as_path_segment(body: str) -> None:
             "    logger.info('t %s', token)\n"
         ),
         # A resource-shaped name that is only logged, never a path segment.
-        ("def f(report_token):\n" "    logger.info('report %s', report_token)\n"),
+        ("def f(report_token):\n    logger.info('report %s', report_token)\n"),
         # Query-string position is not a path segment.
         (
             "def f(report_token):\n"

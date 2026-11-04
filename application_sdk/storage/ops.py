@@ -724,8 +724,7 @@ async def _past_gateway_no_route(
 
     def _log_retry(_attempt: int, _exc: Exception, delay: float) -> None:
         logger.warning(
-            "Gateway answered 'no Route matched' on %s of key '%s'; "
-            "retrying in %.1fs",
+            "Gateway answered 'no Route matched' on %s of key '%s'; retrying in %.1fs",
             op,
             key,
             delay,
@@ -1268,7 +1267,7 @@ async def upload_file(
         and chunk_size != STORAGE_UPLOAD_PART_SIZE_BYTES
     ):
         logger.debug(
-            "Using deployment part size %d instead of the requested %d " "for key '%s'",
+            "Using deployment part size %d instead of the requested %d for key '%s'",
             STORAGE_UPLOAD_PART_SIZE_BYTES,
             chunk_size,
             key,

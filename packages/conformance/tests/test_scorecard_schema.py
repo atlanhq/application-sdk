@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.scorecard.compute import build_scorecard
 from conformance.scorecard.rubric import load_rubric
 from conformance.scorecard.schema import RawTests, TierTestCounts
@@ -27,9 +28,9 @@ def test_vendored_schema_is_fresh() -> None:
           _SCHEMA_PATH.write_text(json.dumps(scorecard_json_schema(), indent=2)+chr(10))"
     """
     vendored = json.loads(Path(_SCHEMA_PATH).read_text(encoding="utf-8"))
-    assert (
-        vendored == scorecard_json_schema()
-    ), "scorecard-schema-1.0.json is stale — regenerate it from the model"
+    assert vendored == scorecard_json_schema(), (
+        "scorecard-schema-1.0.json is stale — regenerate it from the model"
+    )
 
 
 def test_built_scorecard_validates() -> None:

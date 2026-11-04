@@ -139,9 +139,9 @@ class TestDownloadAtomicPublish:
             b_may_write.set()
             await task_b
 
-        assert (
-            observed == content
-        ), f"reader-visible corruption after download A completed: {observed!r}"
+        assert observed == content, (
+            f"reader-visible corruption after download A completed: {observed!r}"
+        )
         assert path.read_bytes() == content
 
     async def test_chunked_download_never_exposes_preallocated_file(
@@ -181,9 +181,9 @@ class TestDownloadAtomicPublish:
             may_serve.set()
             await task
 
-        assert (
-            observed == old
-        ), f"reader-visible preallocated/partial file: {observed!r}"
+        assert observed == old, (
+            f"reader-visible preallocated/partial file: {observed!r}"
+        )
         assert path.read_bytes() == content
 
 
@@ -812,18 +812,18 @@ class TestDiskFullDuringDownload:
                 )
 
         assert caught.value.code == "RESOURCE_EXHAUSTED_DISK_FULL"
-        assert isinstance(
-            caught.value, StorageError
-        ), "except StorageError: blocks keep catching it"
+        assert isinstance(caught.value, StorageError), (
+            "except StorageError: blocks keep catching it"
+        )
         assert caught.value.key == "k" and caught.value.required_bytes == 64
         assert (
             isinstance(caught.value.__cause__, OSError)
             and caught.value.__cause__.errno == code
         )
         assert not path.exists(), "the destination never holds a partial file"
-        assert not list(
-            (tmp_path / PARTIAL_DIRNAME).glob("*")
-        ), "no staging file is stranded"
+        assert not list((tmp_path / PARTIAL_DIRNAME).glob("*")), (
+            "no staging file is stranded"
+        )
 
     async def test_a_full_volume_at_writeback_is_a_disk_full_error(
         self, tmp_path

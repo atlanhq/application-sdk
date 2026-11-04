@@ -1462,13 +1462,13 @@ class TestGenerateWorkflowClass:
             and c.args[0] == "warning"
             and "blocked by preflight" in str(c.args[1] if len(c.args) > 1 else "")
         ]
-        assert (
-            warning_calls
-        ), "_safe_log('warning', 'App blocked by preflight gate', ...) was not called"
+        assert warning_calls, (
+            "_safe_log('warning', 'App blocked by preflight gate', ...) was not called"
+        )
         for call in warning_calls:
-            assert not call.kwargs.get(
-                "exc_info"
-            ), "Preflight block must not include exc_info=True"
+            assert not call.kwargs.get("exc_info"), (
+                "Preflight block must not include exc_info=True"
+            )
             # The reason is the block's own line — not Temporal's rendering of
             # the wrapper, which prefixes the type or says "Activity task failed".
             assert call.kwargs.get("reason") == "source unreachable"
@@ -2131,9 +2131,9 @@ class TestUploadStoreRouting:
             result = await app.upload(UploadInput(local_path="/tmp/out"))
 
         # Called once per target store: deployment first, then upstream.
-        assert (
-            mock_upload.call_count == 2
-        ), f"Expected 2 _upload calls (deployment + upstream); got {mock_upload.call_count}"
+        assert mock_upload.call_count == 2, (
+            f"Expected 2 _upload calls (deployment + upstream); got {mock_upload.call_count}"
+        )
         stores_in_order = [call.kwargs["store"] for call in mock_upload.call_args_list]
         assert stores_in_order == [
             deployment_sentinel,

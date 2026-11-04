@@ -165,7 +165,6 @@ if TYPE_CHECKING:
         read_records,
         require_golden_corpus,
     )
-    from .lazy import Lazy, evaluate_if_lazy, is_lazy, lazy
     from .models import APIType, Scenario, ScenarioResult
     from .runner import (
         BaseIntegrationTest,

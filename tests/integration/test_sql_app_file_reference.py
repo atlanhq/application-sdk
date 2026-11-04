@@ -178,9 +178,9 @@ async def test_extract_persist_materialize_transform_round_trip(store, tmp_path)
         f"raw_file landed at file_refs/ orphan instead of canonical "
         f"transformed/<entity>/ key: {durable_raw.storage_path}"
     )
-    assert durable_raw.storage_path.endswith(
-        "/raw/database/records.json"
-    ), f"raw_file did not land at canonical key: {durable_raw.storage_path}"
+    assert durable_raw.storage_path.endswith("/raw/database/records.json"), (
+        f"raw_file did not land at canonical key: {durable_raw.storage_path}"
+    )
 
     # ── Step 3: simulate cross-worker — local raw file vanishes ─────────
     # This mimics transform landing on a different Temporal worker pod

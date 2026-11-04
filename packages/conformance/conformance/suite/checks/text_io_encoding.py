@@ -91,13 +91,11 @@ from conformance.suite.checks._ast_common import (
     EXCLUDE_DIRS,
     _IgnoreDirective,
     _parse_directives,
-)
-from conformance.suite.checks._ast_common import discover as _shared_discover
-from conformance.suite.checks._ast_common import (
     make_cli_main,
     make_finding,
     safe_read_text,
 )
+from conformance.suite.checks._ast_common import discover as _shared_discover
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"

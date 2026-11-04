@@ -128,9 +128,9 @@ async def _assert_sdr_handoff_lands_assets(store, provider: str) -> None:
             f"  expected: {sorted(expected_keys)}\n"
             f"  actual:   {sorted(data_keys)}"
         )
-        assert all(
-            f"{k}.sha256" in landed_keys for k in expected_keys
-        ), f"missing sha256 sidecar(s); landed: {sorted(landed_keys)}"
+        assert all(f"{k}.sha256" in landed_keys for k in expected_keys), (
+            f"missing sha256 sidecar(s); landed: {sorted(landed_keys)}"
+        )
 
         # 3c. INTEGRITY — each landed object is byte-for-byte the source.
         for rel, data in _FILES.items():

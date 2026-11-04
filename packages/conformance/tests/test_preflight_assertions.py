@@ -1,12 +1,12 @@
 import pytest
-from conformance.preflight_testing import assert_preflight_result, assert_probe_lifetime
-
 from application_sdk.errors import AuthError
 from application_sdk.handler.contracts import (
     PreflightCheck,
     PreflightOutput,
     PreflightStatus,
 )
+
+from conformance.preflight_testing import assert_preflight_result, assert_probe_lifetime
 
 
 def result(action="Check the configured credentials."):

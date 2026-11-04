@@ -1175,9 +1175,9 @@ class TestResponseFramingIsServerOwned:
             ]
             body = response.read()
             conn.close()
-        assert lengths == [
-            str(len(body))
-        ], f"expected exactly the server's own Content-Length, got {lengths!r}"
+        assert lengths == [str(len(body))], (
+            f"expected exactly the server's own Content-Length, got {lengths!r}"
+        )
 
     @pytest.mark.parametrize("header", ["Transfer-Encoding", "Connection"])
     def test_hop_by_hop_headers_are_dropped(self, header: str) -> None:

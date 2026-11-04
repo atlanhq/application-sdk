@@ -377,9 +377,9 @@ class TestExtractEmitsRawFileReference:
         # the local_path is under TEMPORARY_PATH, so the strip
         # yields ``<run_prefix>/raw/<entity>/records.json``.
         assert result.raw_file.storage_path is not None
-        assert result.raw_file.storage_path.endswith(
-            "/raw/database/records.json"
-        ), f"unexpected storage_path: {result.raw_file.storage_path!r}"
+        assert result.raw_file.storage_path.endswith("/raw/database/records.json"), (
+            f"unexpected storage_path: {result.raw_file.storage_path!r}"
+        )
         # Tier stays TRANSIENT (the semantically correct choice — the
         # raw file is an intermediate extract→transform handoff and
         # gets auto-cleaned at run end by ``cleanup_storage``).
@@ -612,9 +612,9 @@ class TestCanonicalStoragePaths:
                 store, result.raw_file, output_path="ignored"
             )
             assert durable.storage_path == result.raw_file.storage_path
-            assert durable.storage_path.endswith(
-                f"/raw/{entity}/records.json"
-            ), f"raw_file for {entity} not at canonical key: {durable.storage_path!r}"
+            assert durable.storage_path.endswith(f"/raw/{entity}/records.json"), (
+                f"raw_file for {entity} not at canonical key: {durable.storage_path!r}"
+            )
 
         # ── transform all 4 entities (each with its raw_file threaded in) ──
         transform_methods = {
@@ -629,9 +629,9 @@ class TestCanonicalStoragePaths:
                 raw_file=extract_results[entity].raw_file,
             )
             transform_result = await transform_methods[entity](transform_input)
-            assert (
-                transform_result.transformed_file is not None
-            ), f"transform_{entity}s returned no ref"
+            assert transform_result.transformed_file is not None, (
+                f"transform_{entity}s returned no ref"
+            )
             # Persist the transformed ref.
             durable = await persist_file_reference(
                 store, transform_result.transformed_file, output_path="ignored"
@@ -859,9 +859,9 @@ class TestCanonicalStoragePaths:
         data_keys = [k for k in all_keys if not k.endswith(".sha256")]
 
         for entity in entity_rows:
-            assert any(
-                k.endswith(f"/raw/{entity}/records.json") for k in data_keys
-            ), f"missing canonical raw key for {entity}: {data_keys}"
+            assert any(k.endswith(f"/raw/{entity}/records.json") for k in data_keys), (
+                f"missing canonical raw key for {entity}: {data_keys}"
+            )
             assert any(
                 k.endswith(f"/transformed/{entity}/entities.json") for k in data_keys
             ), f"missing canonical transformed key for {entity}: {data_keys}"
@@ -1514,7 +1514,7 @@ class TestPrepareSql:
         # include regex.  With cascading str.replace() the exclude clause would
         # be rewritten to '^prod$', making exclude == include — wrong.
         assert "NOT REGEXP '{normalized_include_regex}'" in result, (
-            "exclude clause was corrupted by cascading replacement: " f"got {result!r}"
+            f"exclude clause was corrupted by cascading replacement: got {result!r}"
         )
         assert "REGEXP '^prod$'" in result  # include clause correct
 
@@ -1532,9 +1532,9 @@ class TestPrepareSql:
         )
         result = app._prepare_sql(sql, input_)
 
-        assert (
-            "REGEXP '{normalized_exclude_regex}'" in result
-        ), "include clause was corrupted by cascading replacement"
+        assert "REGEXP '{normalized_exclude_regex}'" in result, (
+            "include clause was corrupted by cascading replacement"
+        )
         assert "NOT REGEXP '^temp$'" in result
 
     # ── Bug: regex quantifiers survive into .format()-style templates (APP-2291) ─
@@ -1564,9 +1564,9 @@ class TestPrepareSql:
         prepared = app._prepare_sql(sql, input_)
 
         # 1. The quantifier must survive verbatim so the DB engine sees it.
-        assert (
-            "^db{2}" in prepared
-        ), "_prepare_sql must not alter regex quantifiers in substituted values"
+        assert "^db{2}" in prepared, (
+            "_prepare_sql must not alter regex quantifiers in substituted values"
+        )
 
         # 2. {schema_list} is untouched — connector can substitute it.
         assert "{schema_list}" in prepared
@@ -2227,21 +2227,21 @@ class TestPrimeSqlAuth:
         ):
             await app.run(ExtractionInput(output_path="/tmp/test"))
 
-        assert (
-            call_order[0] == "prime_sql_auth"
-        ), f"prime_sql_auth must run first; got order: {call_order}"
-        assert (
-            call_order.count("prime_sql_auth") == 1
-        ), f"prime_sql_auth must run exactly once; got order: {call_order}"
+        assert call_order[0] == "prime_sql_auth", (
+            f"prime_sql_auth must run first; got order: {call_order}"
+        )
+        assert call_order.count("prime_sql_auth") == 1, (
+            f"prime_sql_auth must run exactly once; got order: {call_order}"
+        )
         for ext in (
             "extract_databases",
             "extract_schemas",
             "extract_tables",
             "extract_columns",
         ):
-            assert (
-                call_order.index(ext) > 0
-            ), f"{ext} must run after prime_sql_auth; got order: {call_order}"
+            assert call_order.index(ext) > 0, (
+                f"{ext} must run after prime_sql_auth; got order: {call_order}"
+            )
 
     async def test_prime_failure_short_circuits_run(self):
         """When ``prime_sql_auth`` reports ``success=False`` (credential

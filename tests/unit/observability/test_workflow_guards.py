@@ -173,9 +173,9 @@ class TestFlushRecordsWorkflowGuard:
         uploads = await self._flush_collecting_uploads(obs_instance, in_workflow=True)
 
         assert uploads == []
-        assert (
-            list(tmp_path.rglob("*.json.gz")) == []
-        ), "workflow-illegal file I/O ran despite the guard"
+        assert list(tmp_path.rglob("*.json.gz")) == [], (
+            "workflow-illegal file I/O ran despite the guard"
+        )
 
     @pytest.mark.asyncio
     async def test_writes_store_sink_outside_workflow(self, obs_instance, tmp_path):

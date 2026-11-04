@@ -37,9 +37,8 @@ from typing import Annotated, Any, Protocol, cast
 from uuid import uuid4
 
 import orjson
-from fastapi import FastAPI, File, Form, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi import Path as PathParam
-from fastapi import Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from application_sdk._logging import get_logger

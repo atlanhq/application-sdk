@@ -12,6 +12,7 @@ executed on either path; whether the scenarios pass is the test gate's measure.
 import json
 
 import pytest
+
 from conformance.suite.checks.preflight._common import build_registry, coverage_findings
 from conformance.suite.checks.preflight._contracts import scan as scan_contracts
 from conformance.suite.checks.preflight._untyped_failure import scan as scan_untyped
@@ -121,9 +122,9 @@ def test_dynamic_callback_binding_is_never_scenario_cleared(tmp_path, binding):
     assert all(f.cleared_by == frozenset() for f in findings)
     # It used to say "register behavioral scenarios", which clears nothing here.
     assert all("register behavioral scenarios" not in f.message for f in findings)
-    assert all(
-        "do not clear this" in f.message for f in findings
-    ), "a finding no scenario can clear must say so rather than imply otherwise"
+    assert all("do not clear this" in f.message for f in findings), (
+        "a finding no scenario can clear must say so rather than imply otherwise"
+    )
 
 
 # --- a fully defined matrix clears the value-level gap ----------------------

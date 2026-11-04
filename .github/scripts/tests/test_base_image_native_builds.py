@@ -150,9 +150,9 @@ def test_the_legs_do_not_share_a_tag(path: Path, build: str, _merge: str) -> Non
     published image is single-arch — with no error anywhere."""
     build_step = _step_with(_job(path, build), "secure-build-push-apps")
     tags = str(build_step["with"]["tags"])
-    assert (
-        "matrix.arch" in tags or "matrix.platform" in tags
-    ), f"{path.name}:{build} pushes both architectures to the same tag."
+    assert "matrix.arch" in tags or "matrix.platform" in tags, (
+        f"{path.name}:{build} pushes both architectures to the same tag."
+    )
 
 
 # ── The merge job puts them back together ────────────────────────────────────

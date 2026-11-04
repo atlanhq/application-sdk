@@ -274,9 +274,9 @@ def test_install_scopes_the_registration_to_the_one_tenant(
     app.install(_install_args())
 
     body = transport.body_for("/marketplace/publish")
-    assert body["allowed_tenants"] == [
-        "example-tenant"
-    ], "a per-PR e2e version must be reachable only by its own e2e tenant"
+    assert body["allowed_tenants"] == ["example-tenant"], (
+        "a per-PR e2e version must be reachable only by its own e2e tenant"
+    )
     assert "target_channel" not in body
     assert "commit_sha" not in body
 
@@ -831,9 +831,9 @@ def test_verify_fails_naming_both_versions(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(app.TenantAppError) as excinfo:
         app.verify(_verify_args(_VERSION))
     message = str(excinfo.value)
-    assert (
-        "sdr-test-old" in message and _VERSION in message
-    ), "the whole point is that an operator can see the drift without digging"
+    assert "sdr-test-old" in message and _VERSION in message, (
+        "the whole point is that an operator can see the drift without digging"
+    )
 
 
 def test_verify_fails_when_nothing_is_installed(
@@ -3242,9 +3242,9 @@ def test_the_orphan_path_is_unchanged_by_the_churn_path(
         ),
     )
     assert app.install(_install_args()).installed_version == _VERSION
-    assert (
-        sum("/events" in p for p in transport.paths("GET")) == 1
-    ), "the orphan path must not settle: it has its own positive evidence"
+    assert sum("/events" in p for p in transport.paths("GET")) == 1, (
+        "the orphan path must not settle: it has its own positive evidence"
+    )
 
 
 # ── The failing pod has to survive the print budget ──────────────────────────
@@ -3279,9 +3279,9 @@ def test_the_failing_pod_survives_a_healthy_pods_bulk(
         "the failing container's own state is the evidence rule (1) turns on; "
         "printing 400 lines of a healthy pod instead is how it got lost"
     )
-    assert out.index(_FAILED_POD) < out.index(
-        _HEALTHY_POD
-    ), "unhealthy pods first, or the pod budget spends itself on healthy ones"
+    assert out.index(_FAILED_POD) < out.index(_HEALTHY_POD), (
+        "unhealthy pods first, or the pod budget spends itself on healthy ones"
+    )
 
 
 def test_an_unparseable_describe_is_still_printed_whole(
@@ -3654,9 +3654,9 @@ def test_install_fails_when_it_cannot_confirm_the_version(
         app.install(_install_args())
     message = str(excinfo.value)
     assert "cannot be confirmed" in message
-    assert (
-        "no usable version" in message
-    ), "an unverifiable tenant and a wrong-version tenant need different hunts"
+    assert "no usable version" in message, (
+        "an unverifiable tenant and a wrong-version tenant need different hunts"
+    )
 
 
 def test_install_succeeds_when_the_catalog_resolves_the_version(
@@ -3904,9 +3904,9 @@ def test_the_cli_path_is_bounded_too(
     assert pod.reads <= 32, f"the pod wait did not bound itself ({pod.reads} reads)"
     out = capsys.readouterr().out
     assert "never answered the build-identity route across 300s" in out
-    assert (
-        "verified at the INSTALL-RECORD layer" in out
-    ), "the leg must still say the pod was not the thing it verified against"
+    assert "verified at the INSTALL-RECORD layer" in out, (
+        "the leg must still say the pod was not the thing it verified against"
+    )
 
 
 def test_a_stubbed_sleep_still_moves_the_clock() -> None:

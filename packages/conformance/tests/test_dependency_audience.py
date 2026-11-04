@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.error_handling import scan_path, scan_text
 from conformance.suite.checks.error_handling._dependency_category import (
     SDK_DEPENDENCY_UNAVAILABLE_CLASSES,

@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.e2e_system_app_base import (
     RULE_T026,
     discover,

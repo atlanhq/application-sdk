@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 import yaml
+
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.extract import (
     EXIT_ZERO_RE,

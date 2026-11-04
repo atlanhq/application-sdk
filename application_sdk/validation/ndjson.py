@@ -898,8 +898,7 @@ class NdjsonValidator:
                     file=file_path,
                     line=line_no,
                     errors=[
-                        f"'{check.path}' descends into an array, but "
-                        f"{trace.stopped}"
+                        f"'{check.path}' descends into an array, but {trace.stopped}"
                     ],
                 )
             )

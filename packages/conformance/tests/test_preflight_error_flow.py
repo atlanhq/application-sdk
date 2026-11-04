@@ -1,4 +1,5 @@
 import pytest
+
 from conformance.suite.checks.preflight._common import build_registry
 from conformance.suite.checks.preflight._contracts import scan
 

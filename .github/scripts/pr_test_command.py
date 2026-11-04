@@ -112,7 +112,7 @@ ROLE_REFUSAL = (
     "can request test runs"
 )
 ADMIN_REFUSAL = (
-    "only people with the Admin role on this repository can request the " "release gate"
+    "only people with the Admin role on this repository can request the release gate"
 )
 
 TRUSTED_APP_REFUSAL = (

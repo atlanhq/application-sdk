@@ -59,9 +59,9 @@ def test_fan_out_waits_for_every_first_party_package_on_main(name):
     wait = next(
         s for s in job["steps"] if "wait_for_pypi_release.py" in str(s.get("run"))
     )
-    assert (
-        wait.get("continue-on-error") is True
-    ), "a wait failure must not skip the dispatch"
+    assert wait.get("continue-on-error") is True, (
+        "a wait failure must not skip the dispatch"
+    )
     for pyproject in _PYPROJECTS:
         assert f"--pyproject {pyproject}" in wait["run"]
 

@@ -175,7 +175,7 @@ def test_p046_silent_on_the_distribution_read_text_lookalike() -> None:
     positional argument is what clears it, so no per-site exemption marker is
     needed — unlike the suite's decode-safety read guard, which needs one.
     """
-    src = "import importlib.metadata\n" 'top = dist.read_text("top_level.txt")\n'
+    src = 'import importlib.metadata\ntop = dist.read_text("top_level.txt")\n'
     assert _rule(src) == []
 
 
@@ -202,9 +202,7 @@ def test_p046_suppressed_inline() -> None:
 
 
 def test_p046_suppressed_by_the_comment_line_above() -> None:
-    src = (
-        "# conformance: ignore[P046] ASCII sidecar by construction\n" "p.read_text()\n"
-    )
+    src = "# conformance: ignore[P046] ASCII sidecar by construction\np.read_text()\n"
     (finding,) = _rule(src)
     assert finding.suppressed
 

@@ -64,13 +64,11 @@ from application_sdk.storage.ops import (
     _resolve_store,
     _safe_join_under,
     _storage_error_for,
-)
-from application_sdk.storage.ops import delete as _delete_object
-from application_sdk.storage.ops import (
     download_file_chunked,
     normalize_key,
     upload_file,
 )
+from application_sdk.storage.ops import delete as _delete_object
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore

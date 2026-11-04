@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from conformance.tools.ledger_guard import _index_fields, _index_statuses, check
 
 # ── _index_fields ─────────────────────────────────────────────────────────────

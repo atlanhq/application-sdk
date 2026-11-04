@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.preflight._common import build_registry
 from conformance.suite.checks.preflight._lifetime import scan
 

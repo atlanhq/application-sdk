@@ -11,6 +11,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+
 from conformance.suite.schema import ReportBuilder, load_catalog, validate_sarif
 from conformance.suite.schema.sarif import Suppression
 

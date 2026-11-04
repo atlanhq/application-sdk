@@ -115,7 +115,7 @@ def test_the_leg_forwards_what_discovery_resolved(e2e_step: dict[str, Any]) -> N
         "repo-wide boolean, silently"
     )
     assert with_["compose-overlay"] == "${{ matrix.compose-overlay }}", (
-        "pinning the path again silently starts every source container on " "every leg"
+        "pinning the path again silently starts every source container on every leg"
     )
 
 
@@ -154,6 +154,6 @@ def test_the_action_declares_the_inputs_the_workflow_passes(
     assert declared["source-available"]["default"] == "true"
     assert declared["source-available-overrides"]["default"] == ""
     assert declared["compose-overlay"]["default"] == ""
-    assert set(discover_step["with"]) <= set(
-        declared
-    ), "the discovery step passes an input the action does not declare"
+    assert set(discover_step["with"]) <= set(declared), (
+        "the discovery step passes an input the action does not declare"
+    )

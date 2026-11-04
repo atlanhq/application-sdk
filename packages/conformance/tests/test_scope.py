@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
 from conformance.suite.checks._ast_common import detect_scope
 from conformance.suite.runner import _rule_in_scope, _series_in_scope, main
 from conformance.suite.schema.disposition import RuleScope

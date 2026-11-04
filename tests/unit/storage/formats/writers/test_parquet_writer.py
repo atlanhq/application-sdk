@@ -252,9 +252,9 @@ class TestParquetFileWriterInit:
             for w in captured
             if issubclass(w.category, DeprecationWarning)
         ]
-        assert any(
-            "v4.0" in m for m in messages
-        ), f"Expected DeprecationWarning mentioning v4.0; got: {messages}"
+        assert any("v4.0" in m for m in messages), (
+            f"Expected DeprecationWarning mentioning v4.0; got: {messages}"
+        )
         assert any("ParquetFileWriter is deprecated" in m for m in messages)
 
     def test_init_daft_dataframe_type_emits_deprecation_and_routes_to_pandas(
@@ -1293,9 +1293,9 @@ class TestWriteChunkNullColumns:
 
         assert write_thread, "pq.write_table was never called"
         assert write_thread[0] != loop_thread, "the write ran on the event loop"
-        assert write_thread[0].startswith(
-            "sdk-blocking-"
-        ), f"the write ran on {write_thread[0]}, not the SDK blocking pool"
+        assert write_thread[0].startswith("sdk-blocking-"), (
+            f"the write ran on {write_thread[0]}, not the SDK blocking pool"
+        )
         # The loop kept running callbacks while the write was in progress, which
         # is what lets the enclosing @task's auto-heartbeat keep beating.
         probe.assert_loop_stayed_free("ParquetFileWriter._write_chunk")

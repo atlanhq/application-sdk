@@ -26,6 +26,7 @@ import pathlib
 
 import pytest
 import yaml
+
 from conformance.bootstrap.extract import (
     extract_build_publish_private_git_auth,
     extract_checks_private_git_deps,

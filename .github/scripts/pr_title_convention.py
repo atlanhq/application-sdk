@@ -141,8 +141,7 @@ _ERROR_MESSAGES = {
         "'fix(contract-toolkit):'."
     ),
     "cf-core": (
-        "conformance core changes must use 'feat(conformance):' or "
-        "'fix(conformance):'."
+        "conformance core changes must use 'feat(conformance):' or 'fix(conformance):'."
     ),
     "chore-ci": (
         "Non-source changes must use 'chore:' or 'ci:' (feat:/fix: are reserved "

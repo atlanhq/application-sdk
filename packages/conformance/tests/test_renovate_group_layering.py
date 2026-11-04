@@ -16,6 +16,7 @@ import re
 from pathlib import Path
 
 import pytest
+
 from conformance.bootstrap.render import render
 
 _PRESET = Path(__file__).resolve().parents[3] / "renovate-config" / "default.json"
