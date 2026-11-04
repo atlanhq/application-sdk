@@ -1182,3 +1182,48 @@ def test_a_customised_condition_is_held_when_the_if_goes():
     custom = NEW_CONDITION + " && github.actor != 'release-bot'"
     backup = _tests_yaml(NEW_TYPES, custom)
     assert _lost(backup, _tests_yaml(NEW_TYPES, None)) == [custom]
+
+
+# ── refused_scaffolds (FND-4540) ─────────────────────────────────────────
+
+
+def test_refused_scaffolds_reads_every_per_file_refusal():
+    out = "\n".join(
+        [
+            "ok (up to date): /w/.github/workflows/lint.yml",
+            "skipped: /w/.github/workflows/tests.yaml declares `enable-e2e`, which"
+            " the canonical template has no place for; left untouched. Reapply it.",
+            "skipped: /w/renovate.json has drifted too far to re-render safely"
+            " (its per-repo values can't be read back); left untouched",
+            "skipped: /w/x.yaml is unreadable (boom); left untouched",
+            '{"skipped": false, "touched": [], "unchanged": []}',
+        ]
+    )
+    assert resync.refused_scaffolds(out) == {
+        ".github/workflows/tests.yaml": "declares `enable-e2e`, which the canonical"
+        " template has no place for",
+        "renovate.json": "has drifted too far to re-render safely (its per-repo"
+        " values can't be read back)",
+        "x.yaml": "is unreadable (boom)",
+    }
+
+
+def test_refused_scaffolds_ignores_the_intentional_skips():
+    out = "\n".join(
+        [
+            # The review kit skips on purpose so it never blocks a resync.
+            "skipped: /w/CLAUDE.md has an unmarked block; the connector review"
+            " kit was left untouched",
+            "skipped: bootstrap is a no-op inside the application-sdk repo",
+            # Outside the render root, or escaping it: not a repo file.
+            "skipped: /elsewhere/tests.yaml declares `x`; left untouched",
+            "skipped: /w/../etc/passwd declares `x`; left untouched",
+        ]
+    )
+    assert resync.refused_scaffolds(out) == {}
+
+
+def test_render_root_is_where_the_container_mounts_the_repo():
+    argv = resync.render_argv("/scratch", "1.0.0", "2026-01-01T00:00:00Z", "n", 1, 1)
+    assert f"/scratch:{resync.RENDER_ROOT}" in argv
+    assert argv[argv.index("-w") + 1] == resync.RENDER_ROOT

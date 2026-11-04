@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import conformance_resync as lane  # noqa: E402
@@ -498,7 +500,13 @@ def test_lane_subprocesses_are_bounded():
 # ── process_repo: the successful and in-sync paths ───────────────────────
 
 
-def _process(monkeypatch, *, keep: dict | None, staged: list[str]) -> FakeRunner:
+def _process(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    keep: dict | None,
+    staged: list[str],
+    prose: str = "",
+) -> FakeRunner:
     lock = f'[[package]]\nname = "{gate.CONFORMANCE_PACKAGE}"\nversion = "0.39.0"\n'
     monkeypatch.setattr(
         lane,
@@ -510,7 +518,9 @@ def _process(monkeypatch, *, keep: dict | None, staged: list[str]) -> FakeRunner
         ),
     )
     manifest = json.dumps({"touched": staged})
-    monkeypatch.setattr(lane, "run_bootstrap", lambda *a: (0, manifest + "\n", ""))
+    monkeypatch.setattr(
+        lane, "run_bootstrap", lambda *a: (0, prose + manifest + "\n", "")
+    )
     runner = (
         _lane_runner(keep)
         if keep
@@ -567,6 +577,47 @@ def test_no_symlink_report_when_nothing_is_skipped(monkeypatch):
     assert "symlinkSkipped" not in result
 
 
+# ── a scaffold bootstrap refused is never "in sync" (FND-4540) ───────────
+# bootstrap reports a refused file under the manifest's `unchanged`, like a
+# canonical one; only its `skipped: <path> …` line tells them apart.
+
+_REFUSAL = (
+    "skipped: /w/.github/workflows/tests.yaml declares `enable-e2e`, which the"
+    " canonical template has no place for — a re-render would delete them;"
+    " left untouched. Reapply the structural update by hand, or remove those"
+    " declarations first.\n"
+)
+
+
+def test_refusal_with_nothing_else_to_sync_holds_the_repo(monkeypatch):
+    runner = _process(
+        monkeypatch, keep=_pr(7, gate.RESYNC_BRANCH), staged=[], prose=_REFUSAL
+    )
+    result = _drive(runner)
+    assert result["action"] == "held"
+    assert ".github/workflows/tests.yaml" in result["reason"]
+    assert result["refused"] == {
+        ".github/workflows/tests.yaml": "declares `enable-e2e`, which the canonical"
+        " template has no place for — a re-render would delete them"
+    }
+    assert ["gh", "pr", "close", "7", "--repo", REPO] in runner.calls
+    assert not any(c[:2] == ["git", "push"] for c in runner.calls)
+
+
+def test_refusal_does_not_hold_back_the_files_that_did_resync(monkeypatch):
+    result, _ = _drive_opening(monkeypatch, prose=_REFUSAL)
+    assert result["action"] == "pr_opened"
+    assert list(result["refused"]) == [".github/workflows/tests.yaml"]
+    assert "not resynced: .github/workflows/tests.yaml" in lane._summary(
+        [result], dry_run=False
+    )
+
+
+def test_no_refusal_report_when_bootstrap_refused_nothing(monkeypatch):
+    result = _drive(_process(monkeypatch, keep=_pr(7, gate.RESYNC_BRANCH), staged=[]))
+    assert result["action"] == "in_sync" and "refused" not in result
+
+
 def test_a_fresh_render_is_pushed_and_opened_as_the_lane_pr(monkeypatch):
     runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
 
@@ -604,8 +655,10 @@ def _label_calls(calls: list[list[str]]) -> list[list[str]]:
     ]
 
 
-def _drive_opening(monkeypatch) -> tuple[dict, FakeRunner]:
-    runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
+def _drive_opening(
+    monkeypatch: pytest.MonkeyPatch, prose: str = ""
+) -> tuple[dict, FakeRunner]:
+    runner = _process(monkeypatch, keep=None, staged=["a.yaml"], prose=prose)
 
     def opened(cmd, **kwargs):
         if cmd[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"]:
