@@ -29,8 +29,15 @@ as ruff does with its default settings:
 - **Lines over 88 columns** are wrapped in ruff's order of preference. First,
   split the value's own brackets, with the arguments on one indented line if
   they fit, else one per line with a trailing comma. Next, wrap the value in
-  parentheses. Next, split the annotation (`Literal[...]`, `Annotated[...]`).
-  Last, split both.
+  parentheses. Next, split the annotation (`Literal[...]`, `Annotated[...]`,
+  or `X | None` in parentheses). Last, split both. Width is measured as ruff
+  measures it: East Asian wide characters count as two columns.
+- **Strings** use double quotes, unless a string holds more `"` than `'`; then
+  it is single-quoted (`'say "hi"'`), as ruff writes it.
+- **Docstrings:** a nested object's class docstring is laid out as ruff lays
+  out docstrings (first line trimmed, continuation lines indented to the class
+  body). Field docstrings are written as given, including multi-line ones,
+  because ruff does not treat them as docstrings.
 
 What changes: nothing in what the files declare, only their layout. Running
 `ruff check --fix` and `ruff format` on them changes nothing. What does not

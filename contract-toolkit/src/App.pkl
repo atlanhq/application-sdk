@@ -4017,8 +4017,9 @@ local function e2eSubsSkip(): Set<String> =
 // long (a `Literal` with many values), ruff splits the annotation instead, so
 // the flat line goes to the formatter.
 local function fmtSubsField(pyName: String, typeStr: String, defaultExpr: String, k: String): String =
-  let (inline = "    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")")
-  let (head = "    \(pyName): \(typeStr) = Field(")
+  // Measured as written out: `format` may re-quote the default.
+  let (inline = PyFormatPkg.normalizeQuotes("    \(pyName): \(typeStr) = Field(\(defaultExpr), alias=\"{{\(k)}}\")"))
+  let (head = PyFormatPkg.normalizeQuotes("    \(pyName): \(typeStr) = Field("))
   if (inline.length <= 88 || head.length > 88) inline
   else "\(head)\n        \(defaultExpr),\n        alias=\"{{\(k)}}\",\n    )"
 

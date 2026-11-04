@@ -782,12 +782,13 @@ facts {
   }
 
   ["Substitution defaults escape quotes so the generated Python parses"] {
-    widgetSubs.contains("quoted_default_field: str = Field(\n        default=\"he said \\\"hi\\\"\",\n        alias=\"{{quoted_default_field}}\",\n    )")
+    // More `"` than `'`, so the string is single-quoted, as ruff writes it.
+    widgetSubs.contains("quoted_default_field: str = Field(\n        default='he said \"hi\"',\n        alias=\"{{quoted_default_field}}\",\n    )")
   }
 
   ["Input contract defaults escape quotes so the generated Python parses"] {
     widgetApp.output.files["app/generated/_input.py"].text
-      .contains("quoted_default_field: str = \"he said \\\"hi\\\"\"")
+      .contains("quoted_default_field: str = 'he said \"hi\"'")
   }
 
   ["SqlTree emits dict[str, Any] | None"] {

@@ -121,3 +121,68 @@ class AVeryLongConnectorNameThatGoesOnAndOnAndOnAndOnAndOnGeneratedE2EBase(
 
 class AVeryLongConnectorNameThatGoesOnAndOnAndOnAndOnGeneratedE2EBase(SystemAppE2ETest):
     x = 1
+
+
+class ReviewCases(Base):
+    """Class docstring, already as renderClass writes it.
+
+    Second line."""
+
+    mode: (
+        Literal["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"]
+        | None
+    ) = None
+    mode2: (
+        Literal[
+            "alpha",
+            "beta",
+            "gamma",
+            "delta",
+            "epsilon",
+            "zeta",
+            "eta",
+            "theta",
+            "iota",
+            "kappa",
+        ]
+        | None
+    ) = None
+    lst: (
+        Annotated[
+            list[Literal["alpha", "beta", "gamma", "delta", "epsilon", "zeta"]],
+            MaxItems(1000),
+        ]
+        | None
+    ) = None
+    greeting: str = 'say "hi"'
+    both: str = 'it\'s "x"'
+    path: str = "C:\\temp\\dir"
+    region: str = Field(
+        default="東京東京東京東京東京東京東京東京東京東京東京", alias="{{region}}"
+    )
+    c: str = ""
+    """Line one
+Example: configure(alpha_parameter, beta_parameter, gamma_parameter, delta_parameter_x)
+end"""
+    d: str = ""
+    """Line one
+Set value = compute(alpha_parameter, beta_parameter, gamma_parameter, delta_parameter)
+end"""
+    tables: list[str] = Field(
+        default_factory=lambda: [
+            "aaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbb",
+            "cccccccccccccccccccccc",
+        ],
+        alias="{{tables}}",
+    )
+    one: list[str] = Field(
+        default_factory=lambda: [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ],
+        alias="{{one}}",
+    )
+    quoted: str = Field(
+        default='say "hi" xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+        alias="{{quoted}}",
+    )

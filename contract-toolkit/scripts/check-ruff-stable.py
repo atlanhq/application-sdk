@@ -12,7 +12,9 @@ For every ``examples/*/app.pkl`` this script:
    third-party package there, not first-party as it is inside the SDK repo);
 2. runs ``ruff check --fix`` (default rules plus ``I``) and ``ruff format``
    with ``--isolated``, i.e. ruff's default settings;
-3. reports every generated ``.py`` file ruff changed, with a diff.
+3. reports every generated ``.py`` file ruff changed, with a diff;
+4. fails on any lint error ruff cannot fix (``F821`` undefined name, ...),
+   which an app's pre-commit would also reject.
 
 It also runs ruff on ``tests/fixtures/py_format/input.py.txt`` and compares
 the result with ``expected.py.txt``, which ``tests/py_format_test.pkl`` holds
@@ -130,6 +132,25 @@ def main(argv: list[str]) -> int:
             )
             for rel in files
         )
+        # What --fix could not fix is still an error in an app's pre-commit.
+        lint = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                "check",
+                "--isolated",
+                "--extend-select",
+                "I",
+                *map(str, files),
+            ],
+            cwd=fmt_root,
+            capture_output=True,
+            text=True,
+        )
+        if lint.returncode != 0:
+            print(lint.stdout)
+            print(lint.stderr)
         fixture_stale = _check_fixture(Path(tmp).resolve())
 
     print(f"\n{changed} of {len(files)} generated Python files are not ruff-stable.")
@@ -137,13 +158,17 @@ def main(argv: list[str]) -> int:
         print(
             "Fix the renderer in contract-toolkit/src (see src/PyFormat.pkl); do not format the output."
         )
+    if lint.returncode != 0:
+        print(
+            "Generated Python has lint errors ruff cannot fix (above). Fix the renderer."
+        )
     if fixture_stale:
         print(
             "ruff no longer lays out tests/fixtures/py_format/input.py.txt as expected.py.txt "
             "says: update expected.py.txt to ruff's output, then PyFormat.pkl until "
             "tests/py_format_test.pkl passes."
         )
-    return 1 if changed or fixture_stale else 0
+    return 1 if changed or fixture_stale or lint.returncode != 0 else 0
 
 
 if __name__ == "__main__":

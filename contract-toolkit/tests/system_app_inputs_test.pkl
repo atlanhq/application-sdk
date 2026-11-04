@@ -110,6 +110,17 @@ facts {
       == "    old: bool = Field(\n        default=False, deprecated=True, json_schema_extra={\"x-lifecycle\": \"sunset\"}\n    )"
   }
 
+  ["A multi-line object doc is laid out as ruff lays out a class docstring"] {
+    // First line trimmed, trailing spaces dropped, continuation lines indented
+    // to the class body with their relative indentation kept.
+    let (py = withInput("m", new App.ObjectField {
+      className = "Window"
+      doc = "  Summary.  \n\nDetail.\n  Indented more."
+      fields { ["a"] = new App.StringField { default = "" } }
+    }).output.files["app/generated/_input.py"].text)
+    py.contains("class Window(BaseModel):\n    \"\"\"Summary.\n\n    Detail.\n      Indented more.\"\"\"\n")
+  }
+
   ["Enum and list defaults are checked against their types"] {
     catchRender(withInput("p", new App.EnumField { values { "a"; "b" }; default = "c" }))
       .contains("not one of its values")
@@ -172,7 +183,8 @@ facts {
         } } } }
       }
     })
-    inputLine(formApp, "old") == "    old: str = Field(default=\"\", deprecated=\"use \\\"new\\\" instead\")"
+    // More `"` than `'`, so ruff (and so the toolkit) single-quotes the string.
+    inputLine(formApp, "old") == "    old: str = Field(default=\"\", deprecated='use \"new\" instead')"
   }
 
   ["Distinct objects sharing a className are refused; one reused value is not"] {

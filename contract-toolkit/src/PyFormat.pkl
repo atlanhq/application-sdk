@@ -12,14 +12,24 @@
 ///   constants, then classes, then the rest; repeated modules merged; an
 ///   import longer than 88 columns wrapped one name per line. `application_sdk`
 ///   is third-party here, as it is in an app repo.
-/// - wraps every other line longer than 88 columns, trying ruff's layouts in
-///   ruff's order (see `assignment`).
+/// - picks each string's quotes as ruff does: double, unless the string holds
+///   more `"` than `'` (see `normalizeQuotes`).
+/// - wraps every other line wider than 88 columns, trying ruff's layouts in
+///   ruff's order (see `assignment`). Width counts East Asian wide characters
+///   as two columns, as ruff does.
+/// - leaves the inside of a multi-line `"""` string alone. Re-indenting a class
+///   docstring is the renderer's job (`Inputs.pkl`'s `renderClass`).
 ///
 /// Only shapes the toolkit emits are handled: single-line imports, `class`
-/// lines, decorators, plain and annotated assignments, and expressions built
-/// from calls, subscripts, lists, dicts and atoms. A line it cannot improve is
-/// left as it is. `scripts/check-ruff-stable.py` runs ruff over every example
-/// and fails on any difference, so a new shape that needs more is caught there.
+/// lines, decorators, plain and annotated assignments (including a `X | None`
+/// annotation), one argument of a call laid out one per line, and expressions
+/// built from calls, subscripts, lists, dicts and atoms. A line it cannot
+/// improve is left as it is. Not handled because no renderer emits them:
+/// `import x as y` aliases (they would be merged), digits in imported names
+/// (sorted as text, not naturally), and a statement right after the imports
+/// with no blank line. `scripts/check-ruff-stable.py` runs ruff over every
+/// example and a fixture and fails on any difference, so a new shape that needs
+/// more is caught there.
 ///
 /// Internal to the toolkit: not re-exported from `App.pkl`.
 module com.atlan.app.contract.PyFormat
@@ -37,7 +47,42 @@ const local stdlibModules: Set<String> = Set(
 const local openers: Set<String> = Set("(", "[", "{")
 const local closers: Set<String> = Set(")", "]", "}")
 
-const local function fits(line: String): Boolean = line.length <= lineLength
+/// Code points ruff counts as two columns (East Asian Wide and Fullwidth) or
+/// zero (combining marks, zero-width spaces). Close to the `unicode-width`
+/// tables ruff uses; generated code is ASCII apart from user-supplied strings.
+const local wideRanges: List<Pair<Int, Int>> = List(
+  Pair(0x1100, 0x115F), Pair(0x231A, 0x231B), Pair(0x2329, 0x232A), Pair(0x23E9, 0x23EC),
+  Pair(0x23F0, 0x23F0), Pair(0x23F3, 0x23F3), Pair(0x25FD, 0x25FE), Pair(0x2614, 0x2615),
+  Pair(0x2648, 0x2653), Pair(0x267F, 0x267F), Pair(0x2693, 0x2693), Pair(0x26A1, 0x26A1),
+  Pair(0x26AA, 0x26AB), Pair(0x26BD, 0x26BE), Pair(0x26C4, 0x26C5), Pair(0x26CE, 0x26CE),
+  Pair(0x26D4, 0x26D4), Pair(0x26EA, 0x26EA), Pair(0x26F2, 0x26F3), Pair(0x26F5, 0x26F5),
+  Pair(0x26FA, 0x26FA), Pair(0x26FD, 0x26FD), Pair(0x2705, 0x2705), Pair(0x270A, 0x270B),
+  Pair(0x2728, 0x2728), Pair(0x274C, 0x274C), Pair(0x274E, 0x274E), Pair(0x2753, 0x2755),
+  Pair(0x2757, 0x2757), Pair(0x2795, 0x2797), Pair(0x27B0, 0x27B0), Pair(0x27BF, 0x27BF),
+  Pair(0x2B1B, 0x2B1C), Pair(0x2B50, 0x2B50), Pair(0x2B55, 0x2B55), Pair(0x2E80, 0x303E),
+  Pair(0x3041, 0x33FF), Pair(0x3400, 0x4DBF), Pair(0x4E00, 0x9FFF), Pair(0xA000, 0xA4CF),
+  Pair(0xA960, 0xA97F), Pair(0xAC00, 0xD7A3), Pair(0xF900, 0xFAFF), Pair(0xFE10, 0xFE19),
+  Pair(0xFE30, 0xFE6F), Pair(0xFF00, 0xFF60), Pair(0xFFE0, 0xFFE6), Pair(0x16FE0, 0x16FE4),
+  Pair(0x17000, 0x18AFF), Pair(0x1B000, 0x1B2FF), Pair(0x1F004, 0x1F004), Pair(0x1F0CF, 0x1F0CF),
+  Pair(0x1F18E, 0x1F18E), Pair(0x1F191, 0x1F19A), Pair(0x1F200, 0x1F251), Pair(0x1F300, 0x1F64F),
+  Pair(0x1F680, 0x1F6FF), Pair(0x1F900, 0x1F9FF), Pair(0x20000, 0x2FFFD), Pair(0x30000, 0x3FFFD)
+)
+const local zeroWidthRanges: List<Pair<Int, Int>> = List(
+  Pair(0x0300, 0x036F), Pair(0x200B, 0x200F), Pair(0x20D0, 0x20FF), Pair(0xFE00, 0xFE0F)
+)
+
+const local function inRanges(cp: Int, ranges: List<Pair<Int, Int>>): Boolean =
+  ranges.any((r) -> cp >= r.first && cp <= r.second)
+
+/// Display width in columns, as ruff measures line length.
+const local function width(s: String): Int =
+  s.codePoints.fold(0, (acc: Int, cp: Int) ->
+    acc + (if (inRanges(cp, wideRanges)) 2 else if (inRanges(cp, zeroWidthRanges)) 0 else 1))
+
+const local nonAscii: Regex = Regex(#"[^\x00-\x7F]"#)
+
+const local function fits(line: String): Boolean =
+  if (line.contains(nonAscii)) width(line) <= lineLength else line.length <= lineLength
 
 // ── bracket scanning ─────────────────────────────────────────────────────────
 
@@ -136,30 +181,52 @@ const local function expression(indent: String, s: String, trail: String): List<
   if (fits(indent + s + trail) || j == null) List(indent + s + trail)
   else group(indent, "", s, j!!, trail)
 
+/// `s` split at ` | ` outside any bracket or string.
+const local function unionParts(s: String): List<String> =
+  let (marks = scan(s).marks)
+  let (cuts = IntSeq(0, s.length - 3).toList().filter((i) -> marks[i] == 0 && s.drop(i).startsWith(" | ")))
+  let (bounds = List(-3) + cuts + List(s.length))
+  IntSeq(0, cuts.length).toList().map((k) -> s.substring(bounds[k] + 3, bounds[k + 1]))
+
+/// The value after a split annotation's closing line `closed` (`"] = "` or
+/// `") = "`): on that line if it fits, else with its own brackets split.
+const local function closeWith(indent: String, closed: String, value: String, vj: Int?): List<String> =
+  if (fits(indent + closed + value) || vj == null) List(indent + closed + value)
+  else group(indent, closed, value, vj!!, "")
+
 /// `target = value`, where `target` is a name or `name: annotation`. The
 /// layouts, in the order ruff tries them:
 ///
 /// 1. split the value's own brackets, if the line up to them fits;
 /// 2. wrap the value in parentheses, if it then fits on its own line;
-/// 3. split the annotation's brackets, keeping the value on the closing line,
-///    or splitting the value's brackets too when that line is still too long;
+/// 3. split the annotation: its own brackets (`Literal[...]`), or for a union
+///    (`X | None`) wrap it in parentheses with one operand per line. The value
+///    stays on the closing line, or its brackets split too when that line is
+///    still too long;
 /// 4. split the value's brackets anyway, or leave the line long.
 const local function assignment(indent: String, target: String, value: String): List<String> =
   let (vj = groupStart(value))
   let (colon = findTop(target, ": "))
   let (annotation = if (colon != null) target.drop(colon!! + 2) else "")
   let (aj = if (colon != null) groupStart(annotation) else null)
+  let (union = if (colon != null) unionParts(annotation) else List())
   let (lhs = indent + target + " = ")
+  let (deeper = indent + "    ")
   if (vj != null && fits(lhs + value.take(vj!! + 1)))
     group(indent, target + " = ", value, vj!!, "")
-  else if (fits(lhs + "(") && fits(indent + "    " + value))
-    List(lhs + "(", indent + "    " + value, indent + ")")
+  else if (fits(lhs + "(") && fits(deeper + value))
+    List(lhs + "(", deeper + value, indent + ")")
+  else if (union.length > 1)
+    let (name = target.take(colon!!))
+    let (operands =
+      if (fits(deeper + annotation)) List(deeper + annotation)
+      else expression(deeper, union.first, "") + union.drop(1).flatMap((op) -> expression(deeper, "| " + op, "")))
+    List(indent + name + ": (") + operands + closeWith(indent, ") = ", value, vj)
   else if (aj != null)
     let (name = target.take(colon!!))
-    let (opened = List(indent + name + ": " + annotation.take(aj!! + 1)) + contents(indent, inner(annotation, aj!!), true))
-    let (closed = annotation.takeLast(1) + " = ")
-    if (fits(indent + closed + value) || vj == null) opened + List(indent + closed + value)
-    else opened + group(indent, closed, value, vj!!, "")
+    List(indent + name + ": " + annotation.take(aj!! + 1))
+      + contents(indent, inner(annotation, aj!!), true)
+      + closeWith(indent, annotation.takeLast(1) + " = ", value, vj)
   else if (vj != null) group(indent, target + " = ", value, vj!!, "")
   else List(indent + target + " = " + value)
 
@@ -171,6 +238,8 @@ function wrapLine(line: String): List<String> =
     let (indent = line.take(line.length - body.length))
     if (body.startsWith("#") || !balanced(body)) List(line)
     else if (body.startsWith("class ") && body.endsWith(":")) expression(indent, body.dropLast(1), ":")
+    // One argument of a call already laid out one per line (`fmtSubsField`).
+    else if (body.endsWith(",")) expression(indent, body.dropLast(1), ",")
     else
       let (eq = findTop(body, " = "))
       if (eq == null) expression(indent, body, "")
@@ -231,24 +300,96 @@ function importBlock(lines: List<String>): String =
     .map((group) -> renderSection(group))
     .join("\n\n")
 
+// ── quotes ───────────────────────────────────────────────────────────────────
+
+/// Fold state while re-quoting the strings on one line.
+class QuoteState {
+  text: String
+  /// The open string's quote character, or null outside a string.
+  quote: String?
+  /// The open double-quoted string's body, as written (escapes included).
+  body: String
+  escaped: Boolean
+}
+
+const local escapeOrQuote: Regex = Regex(#"\\.|'|""#)
+
+/// A double-quoted string body, re-quoted as ruff's `quote-style = "double"`
+/// does: single quotes when the body holds more `"` than `'`, with `\"`
+/// unescaped and `'` escaped; otherwise double quotes, with `\'` unescaped.
+const local function requote(body: String): String =
+  let (marks = escapeOrQuote.findMatchesIn(body).map((m) -> m.value))
+  let (doubles = marks.filter((m) -> m == "\\\"" || m == "\"").length)
+  let (singles = marks.filter((m) -> m == "\\'" || m == "'").length)
+  if (doubles > singles)
+    "'" + body.replaceAllMapped(escapeOrQuote, (m) ->
+      if (m.value == "\\\"") "\"" else if (m.value == "'") "\\'" else m.value) + "'"
+  else
+    "\"" + body.replaceAllMapped(escapeOrQuote, (m) -> if (m.value == "\\'") "'" else m.value) + "\""
+
+const local function quoteStep(st: QuoteState, c: String): QuoteState =
+  if (st.quote == "\"")
+    if (st.escaped) (st) { body = st.body + c; escaped = false }
+    else if (c == "\\") (st) { body = st.body + c; escaped = true }
+    else if (c == "\"") (st) { text = st.text + requote(st.body); quote = null; body = "" }
+    else (st) { body = st.body + c }
+  else if (st.quote == "'")
+    if (st.escaped) (st) { text = st.text + c; escaped = false }
+    else if (c == "\\") (st) { text = st.text + c; escaped = true }
+    else if (c == "'") (st) { text = st.text + c; quote = null }
+    else (st) { text = st.text + c }
+  else if (c == "\"") (st) { quote = c }
+  else if (c == "'") (st) { text = st.text + c; quote = c }
+  else (st) { text = st.text + c }
+
+/// `line` with every single-line string literal quoted as ruff would. A line
+/// with a `"""` string, a comment, or an unterminated string is left alone.
+function normalizeQuotes(line: String): String =
+  if (!line.contains("\"") || line.contains("\"\"\"") || line.trimStart().startsWith("#")) line
+  else
+    let (st = line.chars.fold(new QuoteState { text = ""; quote = null; body = ""; escaped = false }, (st, c) -> quoteStep(st, c)))
+    if (st.quote != null) line else st.text
+
 // ── module ───────────────────────────────────────────────────────────────────
+
+/// Fold state while formatting the lines after the import block.
+class LineState {
+  lines: List<String>
+  /// Inside a multi-line `"""` string.
+  inString: Boolean
+}
+
+/// A line that opens a `"""` string it does not close.
+const local function opensString(line: String): Boolean =
+  let (t = line.trim())
+  t.startsWith("\"\"\"") && !(t.length >= 6 && t.endsWith("\"\"\""))
+
+const local function lineStep(st: LineState, line: String): LineState =
+  if (st.inString) (st) { lines = st.lines.add(line); inString = !line.trimEnd().endsWith("\"\"\"") }
+  else if (opensString(line)) (st) { lines = st.lines.add(line); inString = true }
+  else (st) { lines = st.lines + wrapLine(normalizeQuotes(line)) }
+
+const local function formatBody(lines: List<String>): List<String> =
+  lines.fold(new LineState { lines = List(); inString = false }, (st, l) -> lineStep(st, l)).lines
 
 /// A generated Python module laid out as ruff would leave it.
 ///
 /// The first run of top-level import lines (with blank lines between them) is
 /// rebuilt by `importBlock`; blank lines after it are kept as the renderer
-/// wrote them. Every other line goes through `wrapLine`.
+/// wrote them. Every other line has its quotes normalised and goes through
+/// `wrapLine`, except the inside of a multi-line `"""` string, which is kept
+/// exactly as written.
 function format(text: String): String =
   // `split` drops trailing empty strings, so the final newline(s) are put back.
   let (body = text.replaceFirst(Regex(#"\n+$"#), ""))
   let (lines = body.split("\n"))
   let (first = lines.findIndexOrNull((l) -> isImport(l)))
   let (formatted =
-    if (first == null) lines.flatMap((l) -> wrapLine(l))
+    if (first == null) formatBody(lines)
     else
       let (afterFirst = lines.drop(first!!))
       let (runLength = afterFirst.findIndexOrNull((l) -> !isImport(l) && !l.isBlank) ?? afterFirst.length)
       let (lastImport = afterFirst.take(runLength).findLastIndex((l) -> isImport(l)))
       let (block = importBlock(afterFirst.take(lastImport + 1).filter((l) -> isImport(l))))
-      lines.take(first!!) + List(block) + lines.drop(first!! + lastImport + 1).flatMap((l) -> wrapLine(l)))
+      lines.take(first!!) + List(block) + formatBody(lines.drop(first!! + lastImport + 1)))
   formatted.join("\n") + text.drop(body.length)
