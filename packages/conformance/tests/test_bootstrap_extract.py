@@ -1537,6 +1537,38 @@ def test_fnd1143_ignores_a_commented_input() -> None:
     assert "dataforge_datasource" not in extract_tests_yaml_params(text)
 
 
+# --- enable-e2e: true restates the default the template omits (FND-4540) ---
+
+
+def test_redundant_enable_e2e_is_dropped_not_refused() -> None:
+    """``enable-e2e: true`` is the reusable's default and the template renders
+    no line for it, so a repo that spelled it out was refused on every resync
+    and never received a structural update."""
+    text = _with_inputs('      app-name: "widget"', "      enable-e2e: true")
+    assert extract_mod.redundant_enable_e2e(text) == "true"
+    rendered = render("tests.yaml", **extract_tests_yaml_params(text))
+    assert "enable-e2e" not in rendered
+    assert unpreserved_tests_yaml_declarations(text, rendered) == []
+
+
+def test_enable_e2e_false_is_carried_by_its_slot() -> None:
+    """``false`` is a real opt-out: the slot keeps it, so nothing is dropped
+    and nothing is refused."""
+    text = _with_inputs('      app-name: "widget"', "      enable-e2e: false")
+    assert extract_mod.redundant_enable_e2e(text) == ""
+    rendered = render("tests.yaml", **extract_tests_yaml_params(text))
+    assert "enable-e2e: false" in rendered
+    assert unpreserved_tests_yaml_declarations(text, rendered) == []
+
+
+def test_non_boolean_enable_e2e_still_refuses() -> None:
+    """Not a decision anyone made, so not one to act on."""
+    text = _with_inputs('      app-name: "widget"', "      enable-e2e: maybe")
+    assert extract_mod.redundant_enable_e2e(text) == ""
+    rendered = render("tests.yaml", **extract_tests_yaml_params(text))
+    assert "enable-e2e" in unpreserved_tests_yaml_declarations(text, rendered)
+
+
 # --- install-app-to-tenant: the one input that got a policy drop, not a slot -
 
 

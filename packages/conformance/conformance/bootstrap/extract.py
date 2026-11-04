@@ -198,6 +198,11 @@ SDK_UNIT_COVERAGE_FLOOR = 0
 # fails in the monorepo instead of nine repos silently losing their install.
 SDK_INSTALL_APP_TO_TENANT_DEFAULT = "true"
 
+# ``tests-reusable.yaml``'s ``enable-e2e`` default, which is also the value the
+# template omits the line for. Pinned against the real input default by
+# ``test_bootstrap``, same as the install default above.
+SDK_ENABLE_E2E_DEFAULT = "true"
+
 # Conditions earlier canonical tests.yaml templates put on the `tests` caller
 # job to skip a bump-version PR's own run. They were the template's only `if:`.
 # The current template has none: the skip moved inside the reusable
@@ -916,6 +921,9 @@ def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[
     same value-conditioned terms — see ``redundant_install_app_to_tenant`` for
     why that one input gets a policy drop where the rest got slots.
 
+    ``enable-e2e: true`` is the third, on the same terms — see
+    ``redundant_enable_e2e``.
+
     ``secrets`` is added in the other direction, because for that key alone a
     shared name is *not* evidence of preservation: an inline mapping and the
     canonical ``inherit`` both spell the key ``secrets``, so the key-set
@@ -929,6 +937,8 @@ def unpreserved_tests_yaml_declarations(existing: str, rerendered: str) -> list[
         dropped = [key for key in dropped if key != "unit-coverage-fail-under"]
     if redundant_install_app_to_tenant(existing):
         dropped = [key for key in dropped if key != "install-app-to-tenant"]
+    if redundant_enable_e2e(existing):
+        dropped = [key for key in dropped if key != "enable-e2e"]
     if retired_tests_job_condition(existing):
         dropped = [key for key in dropped if key != "if"]
     if unpreservable_secrets_form(existing) and "secrets" not in dropped:
@@ -997,6 +1007,31 @@ def redundant_install_app_to_tenant(text: str) -> str:
         return ""
     value = extract_field(declaration, "install-app-to-tenant")
     if value == SDK_INSTALL_APP_TO_TENANT_DEFAULT:
+        return value
+    return ""
+
+
+def redundant_enable_e2e(text: str) -> str:
+    """Return *text*'s ``enable-e2e`` when it merely restates the reusable's
+    own default, else ``""``.
+
+    Unlike ``install-app-to-tenant`` this input has a slot, but the template
+    renders it only for ``false``: ``true`` is the default, so the canonical
+    file omits the line. A repo that spelled the default out was therefore
+    refused by the key-set guard on every ``--resync``, and frozen out of every
+    structural update since. One connector missed the ``/e2e`` e2e-only switch
+    (FND-3839) this way, and its comments were refused until it was resynced
+    by hand (FND-4540). Dropping the line changes no behaviour.
+
+    Conditioned on the value, like ``redundant_install_app_to_tenant``: an
+    explicit ``false`` is carried by the slot, and a value that is neither
+    boolean still reaches the refusal.
+    """
+    declaration = extract_with_declaration(text, "enable-e2e")
+    if not declaration:
+        return ""
+    value = extract_field(declaration, "enable-e2e")
+    if value == SDK_ENABLE_E2E_DEFAULT:
         return value
     return ""
 
