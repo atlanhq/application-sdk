@@ -62,6 +62,19 @@ def test_caller_typed_arrow_column_keeps_its_type() -> None:
     assert table.schema.field("name").type == pa.large_string()
 
 
+def test_caller_typed_string_dtype_keeps_its_type() -> None:
+    """``dtype="string"`` (missing value ``pd.NA``) is the caller's choice, not
+    the pandas 3 inferred default, so it converts exactly as pyarrow converts it.
+    """
+    dataframe = pd.DataFrame({"name": pd.Series(["a", None], dtype="string")})
+
+    table = _arrow_table_from_pandas(dataframe)
+    expected = pa.Table.from_pandas(dataframe, preserve_index=False)
+
+    assert table.schema.field("name").type == expected.schema.field("name").type
+    assert table.column("name").to_pylist() == ["a", None]
+
+
 @pytest.mark.parametrize("preserve_index", [False, None])
 def test_index_handling_matches_from_pandas(preserve_index: bool | None) -> None:
     dataframe = pd.DataFrame({"name": ["a", "b"]}, index=[5, 6])

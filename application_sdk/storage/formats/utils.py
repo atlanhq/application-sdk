@@ -240,8 +240,9 @@ def _arrow_table_from_pandas(
     for name, dtype in dataframe.dtypes.items():
         if not isinstance(dtype, pd.StringDtype):
             continue
-        # pandas 2.2's StringDtype has no na_value; its missing value is pd.NA.
-        if getattr(dtype, "na_value", pd.NA) is pd.NA:
+        # A StringDtype whose missing value is pd.NA ("string") was chosen by
+        # the caller; only the NaN-valued one is pandas 3's inferred default.
+        if dtype.na_value is pd.NA:
             continue
         index = table.schema.get_field_index(str(name))
         if index < 0 or not pa.types.is_large_string(table.schema.field(index).type):
