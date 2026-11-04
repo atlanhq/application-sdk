@@ -307,7 +307,15 @@ def read_base_baseline(
         raise BaseRevisionError(f"could not fetch base {base_sha}: {fetch.stderr.strip()}")
     if git(["cat-file", "-e", f"{base_sha}^{{commit}}"]).returncode != 0:
         raise BaseRevisionError(f"base {base_sha} is not a commit in this checkout")
-    if git(["cat-file", "-e", f"{base_sha}:{baseline_rel}"]).returncode != 0:
+    # ``cat-file -e <sha>:<path>`` cannot tell "no such path" from "tree
+    # unreadable": both exit non-zero. ``ls-tree`` can: it exits 0 with no
+    # output only when the base's (readable) tree has no entry at the path.
+    listing = git(["ls-tree", "--full-tree", base_sha, "--", baseline_rel])
+    if listing.returncode != 0:
+        raise BaseRevisionError(
+            f"could not list {baseline_rel} at {base_sha}: {listing.stderr.strip()}"
+        )
+    if not listing.stdout.strip():
         return None
     show = git(["show", f"{base_sha}:{baseline_rel}"])
     if show.returncode != 0:

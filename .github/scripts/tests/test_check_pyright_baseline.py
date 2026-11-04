@@ -413,6 +413,29 @@ class TestBaseRevision:
         self._commit(repo, git, head)
         assert self._main(repo, git, head, base_sha) == 1
 
+    def test_unreadable_base_tree_is_not_an_absent_baseline(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The commit object exists but its tree cannot be listed (a partial or
+        # corrupt fetch). That must fail, not read as "this PR introduces it",
+        # which would skip the base comparison entirely.
+        repo, git = self._init(tmp_path)
+        base = self._commit(repo, git, {".github/scripts/a.py": {"error:x": 1}})
+        head = {".github/scripts/a.py": {"error:x": 2}}
+        self._commit(repo, git, head)
+
+        def broken_tree(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            if cmd[0] == "ls-tree":
+                return subprocess.CompletedProcess(
+                    list(cmd), 128, "", "fatal: not a tree object"
+                )
+            return git(cmd)
+
+        assert self._main(repo, broken_tree, head, base) == 1
+        out = capsys.readouterr().out
+        assert "could not list" in out
+        assert "this PR introduces it" not in out
+
     def test_baseline_from_another_pyright_fails(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
