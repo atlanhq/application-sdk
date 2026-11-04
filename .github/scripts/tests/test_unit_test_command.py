@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -310,3 +311,140 @@ def test_main_never_reads_a_report_left_by_an_earlier_run(
     )
 
     assert "test_stale" not in capsys.readouterr().out
+
+
+# ── dependency-floor leg (FND-4254) ─────────────────────────────────────────
+
+_WORKFLOW = Path(__file__).parents[2] / "workflows" / "sdk-tests-reusable.yaml"
+
+_MAIN_ARGS = [
+    "--python-version",
+    "3.11",
+    "--runner-os",
+    "Linux",
+    "--coverage",
+    "false",
+    "--fail-under",
+    "85",
+]
+
+
+def _pyproject(tmp_path: Path, sql: list[str]) -> Path:
+    path = tmp_path / "pyproject.toml"
+    lines = ",\n".join(f"    {spec!r}".replace("'", '"') for spec in sql)
+    path.write_text(
+        '[project]\nname = "x"\n[project.optional-dependencies]\n'
+        f'sql = [\n{lines}\n]\nother = ["pandas>=1.0"]\n'
+    )
+    return path
+
+
+def test_floors_are_read_from_the_sql_extra(tmp_path: Path) -> None:
+    pyproject = _pyproject(
+        tmp_path, ["pandas>=2.2.3,<4.0.0", "pyarrow>=23.0.1,<27.0.0", "duckdb<2"]
+    )
+    assert utc.dependency_floors(["pandas", "pyarrow"], pyproject) == [
+        "pandas==2.2.3",
+        "pyarrow==23.0.1",
+    ]
+
+
+def test_floor_names_match_regardless_of_case_and_separator(tmp_path: Path) -> None:
+    pyproject = _pyproject(tmp_path, ["duckdb_engine[x]>=0.17.0,<0.18.0"])
+    assert utc.dependency_floors(["DuckDB-Engine"], pyproject) == [
+        "DuckDB-Engine==0.17.0"
+    ]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        pytest.param(["pyarrow>=23"], id="absent-from-the-extra"),
+        pytest.param(["pandas<4"], id="no-lower-bound"),
+    ],
+)
+def test_a_package_without_a_floor_is_refused(tmp_path: Path, sql: list[str]) -> None:
+    """Running the leg at the locked version would pass while testing nothing."""
+    with pytest.raises(utc.FloorError, match="pandas"):
+        utc.dependency_floors(["pandas"], _pyproject(tmp_path, sql))
+
+
+def test_floor_pins_are_installed_over_the_frozen_lock() -> None:
+    argv = utc.build_command(
+        python_version="3.11",
+        runner_os="Linux",
+        coverage=False,
+        fail_under="85",
+        floor_pins=["pandas==2.2.3", "pyarrow==23.0.1"],
+    )
+    assert argv[: argv.index("--import-mode=importlib")] == [
+        "uv",
+        "run",
+        "--frozen",
+        "--with",
+        "pandas==2.2.3",
+        "--with",
+        "pyarrow==23.0.1",
+        # Not the bare `pytest` script: its shebang is the project venv's
+        # python, which never sees the --with overlay, so the leg would run the
+        # locked versions. Measured: the bare script imported pandas 3.1.0
+        # with --with pandas==2.2.3; `python -m pytest` imported 2.2.3.
+        "python",
+        "-m",
+        "pytest",
+    ]
+
+
+def test_a_leg_without_floors_installs_only_the_lock() -> None:
+    assert "--with" not in _build()
+
+
+def test_main_installs_the_published_floors(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    ran: list[Sequence[str]] = []
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(utc, "_run", lambda argv: ran.append(argv) or 0)
+
+    assert utc.main([*_MAIN_ARGS, "--dependency-floors", "pandas, pyarrow"]) == 0
+
+    (argv,) = ran
+    pins = [argv[i + 1] for i, a in enumerate(argv) if a == "--with"]
+    assert pins == utc.dependency_floors(["pandas", "pyarrow"])
+
+
+def test_main_refuses_a_floor_it_cannot_find_without_running_pytest(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ran: list[Sequence[str]] = []
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setattr(utc, "_run", lambda argv: ran.append(argv) or 0)
+
+    assert utc.main([*_MAIN_ARGS, "--dependency-floors", "no-such-package"]) == 2
+    assert ran == []
+    assert "::error title=Dependency floor::" in capsys.readouterr().out
+
+
+def test_the_floor_job_names_packages_the_sdk_publishes_floors_for() -> None:
+    """The workflow's package list must resolve against the real pyproject.toml,
+    or the leg would fail at start-up on every PR."""
+    job = yaml.safe_load(_WORKFLOW.read_text())["jobs"]["unit-dependency-floors"]
+    (step,) = [
+        s for s in job["steps"] if s.get("uses") == "./.github/actions/unit-tests"
+    ]
+    packages = step["with"]["dependency-floors"].split(",")
+    assert {"pandas", "pyarrow"} <= set(packages)
+    assert len(utc.dependency_floors(packages)) == len(packages)
+
+
+def test_the_floor_job_runs_on_the_sdk_python_floor() -> None:
+    pyproject = tomllib.loads(utc._PYPROJECT.read_text())
+    floor = pyproject["project"]["requires-python"].removeprefix(">=")
+    job = yaml.safe_load(_WORKFLOW.read_text())["jobs"]["unit-dependency-floors"]
+    (step,) = [
+        s for s in job["steps"] if s.get("uses") == "./.github/actions/unit-tests"
+    ]
+    assert step["with"]["python-version"] == floor

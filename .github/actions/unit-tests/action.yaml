@@ -33,6 +33,13 @@ inputs:
       the PR. Tracing costs ~20-30% of a leg's wall time, so the SDK matrix
       turns it on for one leg only.
     default: "true"
+  dependency-floors:
+    required: false
+    description: |
+      Comma-separated packages (e.g. "pandas,pyarrow") to install at the floor
+      the SDK publishes in its [sql] extra, over the locked environment. Empty
+      runs the locked versions only.
+    default: ""
 
 runs:
   using: "composite"
@@ -61,6 +68,7 @@ runs:
         UNIT_TEST_PYTHON_VERSION: ${{ inputs.python-version }}
         UNIT_TEST_COVERAGE: ${{ inputs.coverage }}
         UNIT_TEST_FAIL_UNDER: ${{ inputs.fail-under }}
+        UNIT_TEST_DEPENDENCY_FLOORS: ${{ inputs.dependency-floors }}
       # Every per-leg decision (uv groups on 3.14, socket guard, timeout
       # method, coverage) is made by the script, which has tests; see its
       # docstring and docs/standards/ci.md.
@@ -70,6 +78,7 @@ runs:
         --runner-os "$RUNNER_OS"
         --coverage "$UNIT_TEST_COVERAGE"
         --fail-under "$UNIT_TEST_FAIL_UNDER"
+        --dependency-floors "$UNIT_TEST_DEPENDENCY_FLOORS"
 
     # Per-test timings for the leg, written by the script above, so a slow leg
     # can be broken down by file and OS without rerunning it (FND-4304).
@@ -80,7 +89,9 @@ runs:
       continue-on-error: true
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
-        name: unit-test-timings-${{ runner.os }}-${{ inputs.python-version }}
+        # A floor leg shares its OS and Python with a matrix leg; the suffix keeps
+        # the two artifacts from colliding.
+        name: unit-test-timings-${{ runner.os }}-${{ inputs.python-version }}${{ inputs.dependency-floors != '' && '-floors' || '' }}
         path: ${{ runner.temp }}/unit-tests-junit.xml
         if-no-files-found: ignore
         retention-days: 14
