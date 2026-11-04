@@ -208,7 +208,8 @@ fix.  The re-detection gate is authoritative for this area — see
   should be run on Python 3.13; a dependency that has no 3.13 build surfaces
   only there, and is the one legitimate reason to suppress instead.
 
-- **D017 DeprecatedSdkExtra** (`classification = "mechanical"`) —
+- **D017 DeprecatedSdkExtra** (`classification = "mechanical"`, except the
+  `[sql]`-widening case below) —
   `finding.line` points at an `atlan-application-sdk[...]` reference whose
   extras list names a deprecated shim; the finding message names the extra
   and its fix.  Edit **that extras list only**, keeping the version
@@ -221,9 +222,12 @@ fix.  The re-detection gate is authoritative for this area — see
   `"atlan-application-sdk[sql]>=3.33,<4"`;
   `"atlan-application-sdk[iam-auth,workflows]>=3.33,<4"` →
   `"atlan-application-sdk>=3.33,<4"`.  Never touch `[incremental]` or any
-  other extra.  State in the edit description that `uv lock` must be re-run;
-  only the lock's metadata block changes, since every package the shim named
-  is still installed by core or `[sql]`.
+  other extra.  State in the edit description that `uv lock` must be re-run
+  and its diff reviewed.  Dropping a core shim changes only the lock's
+  metadata.  Replacing `pandas` or `sqlalchemy` with `sql` keeps every package
+  the shim installed but can add others (`[pandas]` alone gains `sqlalchemy`
+  and `duckdb`), so classify that edit `judgment` and route it to residue
+  when the SDK's other extras did not already include `sql`.
 
 - **D007 NonStandardBuildBackend** — set `build-backend` to `"hatchling.build"`
   in `[build-system]` and ensure `requires = ["hatchling"]`.  Build-affecting:

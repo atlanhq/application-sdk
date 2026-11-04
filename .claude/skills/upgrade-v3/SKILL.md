@@ -1548,7 +1548,7 @@ All blocking DB calls inside the loop must be wrapped in `self.run_in_thread()` 
 
 ### Use `[sql]` or no extra, not the deprecated extras
 
-`orjson`, `temporalio`, `boto3`, `azure-identity` and `rocksdict` are core dependencies. Do not add `[workflows]`, `[storage]`, `[iam_auth]` or `[azure]` for them. Those extras, and `[sqlalchemy]`, `[pandas]` and `[daft]`, are deprecated and removed in v4.0.0 (conformance rule D017). A SQL connector uses `[sql]`; everything else needs no extra:
+`orjson`, `temporalio`, `boto3`, `azure-identity` and `rocksdict` are core dependencies. Do not add `[workflows]`, `[storage]`, `[iam_auth]` or `[azure]` for them. Those extras, and `[sqlalchemy]`, `[pandas]` and `[daft]`, are deprecated and removed in v4.0.0 (conformance rule D017). A SQL connector uses `[sql]`. Other supported extras still install real packages and stay as they are, e.g. `[distributed_lock]` (redis, for `RedisClient`), `[mcp]` and `[tests]`:
 ```toml
 "atlan-application-sdk[sql]"
 ```

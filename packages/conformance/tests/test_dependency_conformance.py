@@ -608,6 +608,40 @@ def test_d017_checks_optional_dependencies_and_dependency_groups() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "deps_block,line",
+    [
+        # multi-line array, TOML literal (single-quoted) string
+        ("dependencies = [\n    'atlan-application-sdk[workflows]>=3.33,<4',\n]\n", 5),
+        # inline array, literal string
+        ("dependencies = ['atlan-application-sdk[workflows]>=3.33,<4']\n", 4),
+    ],
+)
+def test_d017_reads_single_quoted_literal_strings(deps_block: str, line: int) -> None:
+    text = '[project]\nname = "demo-app"\nversion = "0.1.0"\n' + deps_block
+    findings = _d017(text)
+    assert [(f.line, f.discriminator) for f in findings] == [(line, "workflows")]
+
+
+def test_d017_reads_single_quoted_strings_in_dependency_groups() -> None:
+    text = (
+        _write_pyproject(deps='    "atlan-application-sdk>=3.33,<4",\n')
+        + "[dependency-groups]\n"
+        + "dev = ['atlan-application-sdk[storage]>=3.33,<4']\n"
+        + "test = [\n    'atlan-application-sdk[azure]>=3.33,<4',\n]\n"
+    )
+    assert sorted(f.discriminator for f in _d017(text)) == ["azure", "storage"]
+
+
+def test_single_quoted_sdk_pin_is_seen_by_d001() -> None:
+    """The shared reader fix: a literal-string SDK pin is a declared SDK pin."""
+    text = (
+        '[project]\nname = "demo-app"\nversion = "0.1.0"\n'
+        "dependencies = [\n    'atlan-application-sdk>=3.33,<4',\n]\n"
+    )
+    assert scan_text(text, "pyproject.toml", sdk_managed_packages=set()) == []
+
+
 def test_d017_suppressed_inline_directive() -> None:
     text = _write_pyproject(
         deps=(

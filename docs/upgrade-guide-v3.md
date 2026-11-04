@@ -64,8 +64,10 @@ Each is **deprecated and removed in v4.0.0**:
 | `[daft]` | An alias for `[sql]` (see below) | Use `[sql]` |
 
 For example, `atlan-application-sdk[iam-auth,pandas,sql,workflows]` becomes
-`atlan-application-sdk[sql]`. Then run `uv lock`. Only the lock's metadata
-changes, because every package is still installed.
+`atlan-application-sdk[sql]`. Then run `uv lock` and review the diff. Every
+package the shim installed stays installed. Dropping a core shim changes only
+the lock's metadata, but replacing `[pandas]` or `[sqlalchemy]` with `[sql]`
+can add packages: `[pandas]` alone gains `sqlalchemy` and `duckdb`.
 
 Do this before you move to v4. uv ignores an extra that no longer exists, so
 after the removal an app on `[pandas]` or `[sqlalchemy]` loses those packages

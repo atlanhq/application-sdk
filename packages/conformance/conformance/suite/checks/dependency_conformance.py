@@ -228,6 +228,24 @@ _REQ_RE = re.compile(
 )
 
 
+# A TOML string in a dependency array: a basic ``"..."`` string or a literal
+# ``'...'`` string. TOML allows both; reading only the double-quoted form let a
+# requirement spelt with single quotes skip every D-series check on it.
+_TOML_STRING_PATTERN = r'"(?P<dq>(?:[^"\\]|\\.)*)"' + r"|'(?P<sq>[^'\n]*)'"
+_TOML_STRING_RE = re.compile(_TOML_STRING_PATTERN)
+# A string entry on its own line inside an array: ``"requirement-spec",``
+# (optional comma, optional inline ``# comment``).
+_ARRAY_ENTRY_RE = re.compile(
+    r"^(?P<lead>\s*)(?:" + _TOML_STRING_PATTERN + r")\s*,?\s*(?:#.*)?$"
+)
+
+
+def _toml_string_value(match: re.Match[str]) -> str:
+    """The contents of a :data:`_TOML_STRING_RE` match, either quote style."""
+    dq = match.group("dq")
+    return dq if dq is not None else match.group("sq")
+
+
 # ---------------------------------------------------------------------------
 # Public dataclass for parsed app dependencies (used by tests)
 # ---------------------------------------------------------------------------
@@ -441,11 +459,7 @@ def _iter_dep_entries(
         r"^\s*([A-Za-z0-9_-]+)\s*=\s*\[\s*(?P<body>.*?)\s*\]\s*(?:#.*)?$"
     )
     array_close_re = re.compile(r"^\s*\]\s*(?:#.*)?$")
-    # A string entry inside an array: ``"requirement-spec",`` (optional comma,
-    # optional inline ``# comment``).
-    entry_re = re.compile(
-        r'^(?P<lead>\s*)"(?P<value>(?:[^"\\]|\\.)*)"\s*,?\s*(?:#.*)?$'
-    )
+    entry_re = _ARRAY_ENTRY_RE
 
     current_table = ""
     for lineno, raw_line in enumerate(text.splitlines(), start=1):
@@ -472,8 +486,8 @@ def _iter_dep_entries(
             if inline and current_table == "project":
                 body = inline.group("body")
                 # Match each "string" entry within the inline body.
-                for sm in re.finditer(r'"([^"\\]*(?:\\.[^"\\]*)*)"', body):
-                    entry = sm.group(1)
+                for sm in _TOML_STRING_RE.finditer(body):
+                    entry = _toml_string_value(sm)
                     parsed = _parse_requirement(entry)
                     if parsed is None:
                         continue
@@ -502,8 +516,8 @@ def _iter_dep_entries(
                     extra_name = ei.group(1)
                     inline_path = f"{extras_table}.{extra_name}"
                     body = ei.group("body")
-                    for sm in re.finditer(r'"([^"\\]*(?:\\.[^"\\]*)*)"', body):
-                        entry = sm.group(1)
+                    for sm in _TOML_STRING_RE.finditer(body):
+                        entry = _toml_string_value(sm)
                         parsed = _parse_requirement(entry)
                         if parsed is None:
                             continue
@@ -534,7 +548,7 @@ def _iter_dep_entries(
         em = entry_re.match(raw_line)
         if em is None:
             continue
-        value = em.group("value")
+        value = _toml_string_value(em)
         parsed = _parse_requirement(value)
         if parsed is None:
             continue
@@ -576,9 +590,7 @@ def _iter_dependency_group_entries(
         r"^\s*([A-Za-z0-9_-]+)\s*=\s*\[\s*(?P<body>.*?)\s*\]\s*(?:#.*)?$"
     )
     array_close_re = re.compile(r"^\s*\]\s*(?:#.*)?$")
-    entry_re = re.compile(
-        r'^(?P<lead>\s*)"(?P<value>(?:[^"\\]|\\.)*)"\s*,?\s*(?:#.*)?$'
-    )
+    entry_re = _ARRAY_ENTRY_RE
 
     in_table = False
     in_array = False
@@ -596,14 +608,13 @@ def _iter_dependency_group_entries(
             inline = group_inline_re.match(raw_line)
             if inline is not None:
                 grp = inline.group(1)
-                for sm in re.finditer(
-                    r'"([^"\\]*(?:\\.[^"\\]*)*)"', inline.group("body")
-                ):
-                    parsed = _parse_requirement(sm.group(1))
+                for sm in _TOML_STRING_RE.finditer(inline.group("body")):
+                    value = _toml_string_value(sm)
+                    parsed = _parse_requirement(value)
                     if parsed is None:
                         continue
                     yield _DepEntry(
-                        raw=sm.group(1),
+                        raw=value,
                         name=parsed[0],
                         line=lineno,
                         column=inline.start("body") + sm.start() + 2,
@@ -624,11 +635,12 @@ def _iter_dependency_group_entries(
         em = entry_re.match(raw_line)
         if em is None:
             continue  # e.g. ``{include-group = "dev"}`` — not a requirement
-        parsed = _parse_requirement(em.group("value"))
+        value = _toml_string_value(em)
+        parsed = _parse_requirement(value)
         if parsed is None:
             continue
         yield _DepEntry(
-            raw=em.group("value"),
+            raw=value,
             name=parsed[0],
             line=lineno,
             column=len(em.group("lead")) + 2,
